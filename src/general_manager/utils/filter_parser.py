@@ -221,7 +221,7 @@ def apply_lookup(value_to_check: object, lookup: str, filter_value: object) -> b
     filtering. Rich comparisons follow Python's normal dispatch: if the left
     operand returns ``NotImplemented``, the reflected method on the right
     operand may still satisfy the lookup. Comparisons that ultimately raise
-    ``TypeError`` evaluate to ``False``.
+    ``TypeError`` or return ``NotImplemented`` evaluate to ``False``.
 
     Args:
         value_to_check: Candidate value read from the object being filtered.

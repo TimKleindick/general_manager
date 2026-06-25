@@ -9,21 +9,16 @@ exposes them as thin classmethods / staticmethods for backward compatibility.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Generator, Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from typing import (
-    Any,
-    Callable,
-    Generator,
-    Literal,
-    Mapping,
     TYPE_CHECKING,
-    Type,
     cast,
     get_args,
 )
 
-import graphene  # type: ignore[import]
+import graphene
 from graphql import GraphQLError
 
 from django.utils import timezone
@@ -33,6 +28,7 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
 from general_manager.utils.type_checks import safe_issubclass
 from general_manager.search.backend_registry import get_search_backend
+from general_manager.search.backend import SearchHit
 from general_manager.search.registry import (
     get_search_config,
     validate_filter_keys,
@@ -51,8 +47,28 @@ from general_manager.api.graphql_resolvers import (
 
 if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
+    from general_manager.permission.base_permission import (
+        PermissionConstraint,
+        ReadPermissionPlan,
+    )
 
 logger = get_logger("api.graphql_search")
+
+GraphQLFilterMapping = dict[str, object]
+GraphQLSearchFilterItem = dict[str, object]
+GraphQLSearchFilterInput = (
+    GraphQLFilterMapping | str | list[GraphQLSearchFilterItem] | None
+)
+NormalizedFilterPlan = dict[str, GraphQLFilterMapping]
+PermissionBackendFilters = list[GraphQLFilterMapping] | GraphQLFilterMapping | None
+GrapheneFieldType = object
+GrapheneReadMapper = Callable[
+    [type, str, Mapping[str, object] | None],
+    GrapheneFieldType,
+]
+SearchResolverPayload = dict[str, object]
+SearchHitEntry = tuple[float | None, SearchHit, GeneralManager]
+SortableValue = float | datetime | str | None
 
 
 # ---------------------------------------------------------------------------
@@ -61,11 +77,18 @@ logger = get_logger("api.graphql_search")
 
 
 def parse_search_filters(
-    filters: dict[str, Any] | str | list[dict[str, Any]] | None,
-) -> dict[str, Any]:
+    filters: GraphQLSearchFilterInput,
+) -> GraphQLFilterMapping:
     """
     Normalise search filters supplied as a dict, JSON string, or list of filter
     objects into a single lookup dict.
+
+    Mapping inputs are returned unchanged. JSON strings may decode to either a
+    mapping or the same list-of-filter-object shape accepted directly. In list
+    entries, `values` takes precedence over `value`; when `values` is present
+    and `op` is blank, `op` becomes `in`. The lookup key is `field` when `op` is
+    blank and `field__op` otherwise. This helper does not validate operator
+    names; backend validation or filter evaluation handles unsupported lookups.
 
     Parameters:
         filters: Filters to normalise. Accepts:
@@ -75,16 +98,21 @@ def parse_search_filters(
               ``"op"``, ``"value"``, or ``"values"``.
 
     Returns:
-        dict[str, Any]: Mapping of filter lookup strings to their values.
+        Mapping of filter lookup strings to their values.
+
+    Raises:
+        No search-specific errors. Invalid JSON strings, decoded non-object
+        values, and malformed list entries are ignored and normalize to an empty
+        or partially populated mapping.
     """
-    parsed: Any = filters
+    parsed: object = filters
     if isinstance(filters, str):
         try:
             parsed = json.loads(filters)
         except (json.JSONDecodeError, ValueError):
             parsed = None
     if isinstance(parsed, list):
-        merged: dict[str, Any] = {}
+        merged: GraphQLFilterMapping = {}
         for item in parsed:
             if not isinstance(item, dict):
                 continue
@@ -100,7 +128,7 @@ def parse_search_filters(
             merged[key] = values if values is not None else value
         return merged
     if isinstance(parsed, dict):
-        return parsed
+        return cast(GraphQLFilterMapping, parsed)
     return {}
 
 
@@ -110,26 +138,35 @@ def parse_search_filters(
 
 
 def merge_permission_filters(
-    filters: dict[str, Any] | None,
-    permission_filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]],
-) -> list[dict[str, Any]] | dict[str, Any] | None:
+    filters: GraphQLFilterMapping | None,
+    permission_filters: list[PermissionConstraint],
+) -> PermissionBackendFilters:
     """
     Combine a base filter with multiple permission-derived filter sets.
 
     Parameters:
         filters: Base filter to apply to each permission set; treated as empty
             if ``None``.
-        permission_filters: Sequence of filter/exclude mappings; only the
-            filter part is merged here.
+        permission_filters: Ordered read-permission alternatives. Each optional
+            ``"filter"`` mapping is merged into the base filter for the backend
+            prefilter stage. Optional ``"exclude"`` mappings are evaluated later
+            during per-instance authorization.
 
     Returns:
         If *permission_filters* is empty, returns *filters* or ``None``.
         Otherwise returns a list of merged dicts (one per permission set), or
         ``None`` if the resulting list would be empty.
+        Permission filter keys override matching base filter keys in each merged
+        group. When *permission_filters* is empty, a non-empty *filters* mapping
+        is returned unchanged rather than copied. Empty permission constraints,
+        ``{"filter": {}}``, and ``{"exclude": {}}`` all produce a copy of the
+        base filter for that alternative; exclude-only constraints still rely on
+        later per-instance authorization. This helper raises no search-specific
+        errors.
     """
     if not permission_filters:
         return filters or None
-    groups: list[dict[str, Any]] = []
+    groups: list[GraphQLFilterMapping] = []
     for permission_filter in permission_filters:
         combined = dict(filters or {})
         combined.update(permission_filter.get("filter", {}))
@@ -139,12 +176,20 @@ def merge_permission_filters(
 
 def matches_filters(
     instance: GeneralManager,
-    filters: dict[str, Any],
+    filters: GraphQLFilterMapping,
     *,
     empty_is_match: bool = True,
 ) -> bool:
     """
     Return ``True`` if *instance* satisfies every condition in *filters*.
+
+    Lookup semantics come from ``create_filter_function``: supported final
+    lookup segments are ``exact``, ``lt``, ``lte``, ``gt``, ``gte``,
+    ``contains``, ``startswith``, ``endswith``, and ``in``. Attribute traversal
+    uses ``getattr`` only, missing attributes evaluate to ``False``, string
+    contains/starts/ends checks are case-sensitive, incompatible comparisons
+    return ``False``, and ``None`` is compared like any other value for exact
+    equality.
 
     Parameters:
         instance: The manager instance to evaluate.
@@ -167,18 +212,31 @@ def passes_permission_filters(
     instance: GeneralManager,
     info: GraphQLResolveInfo,
     *,
-    permission_plan: Any | None = None,
+    permission_plan: "ReadPermissionPlan | None" = None,
 ) -> bool:
     """
     Return ``True`` if the current user may read *instance*.
 
     Checks all per-manager read-permission filter sets.  Returns ``True`` if
     no permission filters are configured, or if at least one filter passes and
-    its corresponding exclude does not match.
+    its corresponding exclude does not match. An unrestricted permission
+    alternative such as ``{}``, ``{"filter": {}}``, or ``{"exclude": {}}``
+    counts as a matching filter alternative; when the permission plan still
+    requires an instance check, ``can_read_instance()`` must also pass.
 
     Parameters:
         instance: The manager instance to evaluate.
         info: GraphQL resolver info containing the request context / user.
+        permission_plan: Optional precomputed read-permission plan. When omitted,
+            the plan is resolved for ``instance.__class__`` and ``info``.
+
+    Returns:
+        ``True`` when the permission plan allows the instance, otherwise
+        ``False``.
+
+    Raises:
+        Exceptions from permission plan construction, filter evaluation, and
+        per-instance permission checks propagate unchanged.
     """
     if permission_plan is None:
         permission_plan = get_read_permission_filter(instance.__class__, info)
@@ -214,7 +272,8 @@ def create_search_union(
     Parameters:
         type_map: Mapping of manager name → manager class for all searchable
             managers.
-        graphql_type_registry: Registry of manager name → Graphene ObjectType.
+        graphql_type_registry: Registry keyed by manager class name and valued
+            with the generated Graphene ObjectType for that manager.
 
     Returns:
         A ``SearchResultUnion`` Graphene Union type, or ``None`` if no
@@ -281,8 +340,8 @@ def create_search_result_type(
 def get_filter_options(
     attribute_type: type,
     attribute_name: str,
-    map_field_to_graphene_read: Callable[[type, str, Mapping[str, Any] | None], Any],
-    attr_info: Mapping[str, Any] | None = None,
+    map_field_to_graphene_read: GrapheneReadMapper,
+    attr_info: Mapping[str, object] | None = None,
 ) -> Generator[
     tuple[
         str,
@@ -298,6 +357,20 @@ def get_filter_options(
     """
     Yield ``(field_name, graphene_type)`` pairs for every filter variant of
     *attribute_name* / *attribute_type*.
+
+    Emitted variants are:
+    - GeneralManager relations: the base attribute with ``None`` so relation
+      filter generation can handle it separately.
+    - ``id``: ``id``, ``id__exact``, ``id__in``, plus range variants
+      ``id__gt/gte/lt/lte`` using the normal mapper.
+    - ``Measurement``: base attribute plus ``gt/gte/lt/lte`` using
+      ``MeasurementScalar``.
+    - numeric, date, and datetime types: base attribute plus
+      ``gt/gte/lt/lte`` using the mapper.
+    - strings: base attribute plus ``exact``, ``icontains``, ``contains``,
+      ``in``, ``startswith``, and ``endswith``. The ``in`` variant uses a list
+      of the mapped base scalar, honoring a string ``graphql_scalar`` override
+      in ``attr_info``.
 
     Parameters:
         attribute_type: The Python type declared for the attribute.
@@ -361,9 +434,10 @@ def get_filter_options(
                     ),
                 )
         elif safe_issubclass(normalized_type, str):
+            graphql_scalar = attr_info.get("graphql_scalar") if attr_info else None
             base_type = map_field_to_graphene_base_type(
                 normalized_type,
-                attr_info.get("graphql_scalar") if attr_info else None,
+                graphql_scalar if isinstance(graphql_scalar, str) else None,
             )
             for option in string_options:
                 if option == "in":
@@ -380,12 +454,25 @@ def get_filter_options(
 def get_relation_filter_option(
     attribute_type: type,
     attribute_name: str,
-    attr_info: Mapping[str, Any],
+    attr_info: Mapping[str, object],
     graphql_filter_type_registry: dict[str, type[graphene.InputObjectType]],
-    map_field_to_graphene_read: Callable[[type, str, Mapping[str, Any] | None], Any],
+    map_field_to_graphene_read: GrapheneReadMapper,
     remaining_depth: int,
-) -> tuple[str, Any] | None:
-    """Build a nested relation filter field for direct and collection relations."""
+) -> tuple[str, GrapheneFieldType] | None:
+    """
+    Build a nested relation filter field for direct and collection relations.
+
+    Direct relations expose one nested input field. Collection relations expose
+    an input object with ``any`` and ``none`` nested filters. When
+    ``remaining_depth`` is exhausted, the attribute is not a manager relation,
+    the relation kind is unsupported, or the nested type has no filterable
+    fields, returns ``None``.
+
+    Relation metadata is read from the interface attribute metadata:
+    ``relation_kind="direct"`` represents a single related manager and
+    ``relation_kind="collection"`` represents a collection. ``filter_lookup``
+    is consumed later by ``normalize_filter_input()``.
+    """
     if remaining_depth <= 0:
         return None
     if not safe_issubclass(attribute_type, GeneralManager):
@@ -431,9 +518,9 @@ def get_relation_filter_option(
 
 
 def create_filter_options(
-    field_type: Type[GeneralManager],
+    field_type: type[GeneralManager],
     graphql_filter_type_registry: dict[str, type[graphene.InputObjectType]],
-    map_field_to_graphene_read: Callable[[type, str, Mapping[str, Any] | None], Any],
+    map_field_to_graphene_read: GrapheneReadMapper,
     *,
     relation_depth: int = 1,
     _remaining_depth: int | None = None,
@@ -442,6 +529,11 @@ def create_filter_options(
     Create (or retrieve from cache) a Graphene InputObjectType exposing all
     filter fields for *field_type*.
 
+    Generated type names include the manager class name and remaining relation
+    depth. The caller-owned registry is the only cache; changing interface
+    metadata or relation depth requires using a fresh registry entry/name to
+    rebuild the type.
+
     Parameters:
         field_type: Manager class whose Interface and GraphQLProperties
             determine the available filter fields.
@@ -449,17 +541,24 @@ def create_filter_options(
             generated filter types (mutated in-place).
         map_field_to_graphene_read: Callable mapping Python type + field name
             to a Graphene read type (passed to avoid circular imports).
+        relation_depth: Maximum nested manager-relation depth to generate.
+        _remaining_depth: Internal recursion counter; callers should leave it
+            unset.
 
     Returns:
         A Graphene ``InputObjectType`` for *field_type*, or ``None`` if no
         filterable fields exist.
+
+    Raises:
+        Exceptions from interface metadata access, GraphQL property metadata, or
+        Graphene dynamic type creation propagate unchanged.
     """
     remaining_depth = relation_depth if _remaining_depth is None else _remaining_depth
     graphene_filter_type_name = f"{field_type.__name__}FilterTypeDepth{remaining_depth}"
     if graphene_filter_type_name in graphql_filter_type_registry:
         return graphql_filter_type_registry[graphene_filter_type_name]
 
-    filter_fields: dict[str, Any] = {}
+    filter_fields: dict[str, GrapheneFieldType] = {}
     for attr_name, attr_info in field_type.Interface.get_attribute_types().items():
         attr_type = attr_info["type"]
         if safe_issubclass(attr_type, GeneralManager):
@@ -514,11 +613,22 @@ def create_filter_options(
 
 
 def normalize_id_filter_value(
-    field_type: Type[GeneralManager],
+    field_type: type[GeneralManager],
     lookup: str,
-    value: Any,
-) -> Any:
-    """Cast equality-style ID filter values to the manager's identifier type."""
+    value: object,
+) -> object:
+    """
+    Cast equality-style ID filter values to the manager's identifier type.
+
+    Only ``id``, ``id__exact``, and list/tuple-valued ``id__in`` lookups are
+    cast. When the interface does not expose an ``id`` input, or ``id__in`` is
+    not list/tuple-shaped, the original value is returned unchanged. Other
+    iterables are not cast specially.
+
+    Raises:
+        Exceptions from the interface input field's ``cast()`` method propagate
+        unchanged.
+    """
     if lookup not in {"id", "id__exact", "id__in"}:
         return value
 
@@ -536,17 +646,36 @@ def normalize_id_filter_value(
 
 
 def normalize_filter_input(
-    field_type: Type[GeneralManager],
-    filter_input: dict[str, Any],
-) -> dict[str, dict[str, Any]]:
-    """Flatten nested GraphQL relation filters into filter and exclude kwargs."""
+    field_type: type[GeneralManager],
+    filter_input: GraphQLFilterMapping,
+) -> NormalizedFilterPlan:
+    """
+    Flatten nested GraphQL relation filters into backend filter and exclude kwargs.
+
+    Direct relation filters are prefixed with the relation's ``filter_lookup``.
+    Collection ``any`` filters become positive filters; collection ``none``
+    filters are inverted into excludes. Nested excludes from ``none`` are
+    inverted back into positive filters. Non-relation keys and malformed nested
+    values pass through unchanged.
+
+    Direct relation metadata is expected to use ``relation_kind="direct"`` and
+    collection metadata ``relation_kind="collection"``. ``filter_lookup`` is the
+    prefix used for flattened lookup keys and defaults to the attribute name.
+
+    Returns:
+        A mapping with ``"filter"`` and ``"exclude"`` dictionaries.
+
+    Raises:
+        Exceptions from interface metadata access or ID casting propagate
+        unchanged.
+    """
     interface = getattr(field_type, "Interface", None)
     get_attribute_types = getattr(interface, "get_attribute_types", None)
     if not callable(get_attribute_types):
         return {"filter": dict(filter_input), "exclude": {}}
 
-    filters: dict[str, Any] = {}
-    excludes: dict[str, Any] = {}
+    filters: GraphQLFilterMapping = {}
+    excludes: GraphQLFilterMapping = {}
     attr_types = get_attribute_types()
 
     for key, value in filter_input.items():
@@ -598,7 +727,7 @@ def normalize_filter_input(
 
 
 def register_search_query(
-    query_fields: dict[str, Any],
+    query_fields: dict[str, GrapheneFieldType],
     manager_registry: dict[str, type[GeneralManager]],
     graphql_type_registry: dict[str, type[graphene.ObjectType]],
     search_union: type[graphene.Union] | None,
@@ -611,6 +740,16 @@ def register_search_query(
     (possibly newly created) ``search_union`` and ``search_result_type`` so
     callers can persist them as class-level state.
 
+    Manager search order follows ``manager_registry.values()`` filtered to
+    managers with search configuration, unless the resolver receives ``types``;
+    unknown names in ``types`` are ignored. ``total`` in the resolver payload is
+    the post-permission authorized total, not the backend raw total. Sorting
+    uses hit ``data[sort_by]`` when available and does not validate the sort
+    field ahead of comparison. Configured filter-key validation runs on the
+    parsed top-level search filters before permission filters or relation
+    normalizers are applied; exclude-derived permission keys are not validated
+    by this search helper.
+
     Parameters:
         query_fields: Mutable dict of registered query fields; will be updated.
         manager_registry: Mapping of manager name → manager class.
@@ -621,6 +760,13 @@ def register_search_query(
     Returns:
         ``(updated_search_union, updated_search_result_type)``; either may be
         ``None`` if no searchable managers were found.
+
+    Raises:
+        Exceptions from Graphene field/type creation, search backend lookup,
+        backend search calls, manager construction, permission checks, filter
+        validation, and sort comparison propagate unless explicitly handled by
+        the resolver. Invalid configured search filter keys are converted to
+        ``GraphQLError``.
     """
     if "search" in query_fields:
         return search_union, search_result_type
@@ -645,13 +791,23 @@ def register_search_query(
         query: str,
         index: str | None = None,
         types: list[str] | None = None,
-        filters: dict[str, Any] | str | list[dict[str, Any]] | None = None,
+        filters: GraphQLSearchFilterInput = None,
         sort_by: str | None = None,
         sort_desc: bool = False,
         page: int | None = None,
         page_size: int | None = None,
-    ) -> dict[str, Any]:
-        """Execute a cross-manager full-text search with permission filtering."""
+    ) -> SearchResolverPayload:
+        """
+        Execute a cross-manager full-text search with permission filtering.
+
+        The resolver parses user filters, validates configured filter keys,
+        searches each selected manager type, instantiates manager objects from
+        hit identification, applies read permission filters/instance checks, and
+        returns paginated authorized manager instances. ``page`` and
+        ``page_size`` values that are ``None`` or falsey fall back to ``1`` and
+        ``10`` respectively. Backend raw payloads are collected once per backend
+        request in the ``raw`` list.
+        """
         index_name = index or "global"
         limit = page_size or 10
         current_page = page or 1
@@ -669,10 +825,10 @@ def register_search_query(
         else:
             manager_classes = list(type_map.values())
 
-        hits: list[tuple[float | None, Any, GeneralManager]] = []
+        hits: list[SearchHitEntry] = []
         total = 0
         took_ms: int | None = None
-        raw: list[Any] = []
+        raw: list[object] = []
         requested_count = offset + limit
         fetch_limit = max(requested_count, limit)
         # Tracks how many authorized hits have been appended globally so far.
@@ -692,7 +848,7 @@ def register_search_query(
                 parsed_filters,
                 permission_plan.filters,
             )
-            authorized_hits: list[tuple[float | None, Any, GeneralManager]] = []
+            authorized_hits: list[SearchHitEntry] = []
             total_hits_for_manager = 0
             candidate_hits_for_manager = 0
             appended_hits_for_manager = 0
@@ -769,7 +925,7 @@ def register_search_query(
 
         if sort_by:
 
-            def _normalize_sort_value(value: Any) -> Any:
+            def _normalize_sort_value(value: object) -> SortableValue:
                 """Normalise a sort value to a comparable type."""
                 if value is None:
                     return None
@@ -794,8 +950,8 @@ def register_search_query(
                 return str(value)
 
             def _sort_key(
-                item: tuple[float | None, Any, GeneralManager],
-            ) -> tuple[bool, Any]:
+                item: SearchHitEntry,
+            ) -> tuple[bool, SortableValue]:
                 """Sort key placing None-valued items last."""
                 value = item[1].data.get(sort_by) if item[1].data else None
                 normalized = _normalize_sort_value(value)

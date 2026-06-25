@@ -22,6 +22,7 @@ from general_manager.interface.bundles.database import (
 from general_manager.interface.utils.models import (
     GeneralManagerModel,
     get_full_clean_methode,
+    model_has_field,
 )
 from general_manager.interface.utils.errors import (
     InvalidFieldTypeError,
@@ -116,6 +117,13 @@ class DummyManager(GeneralManager):
 
 PersonInterface._parent_class = DummyManager
 PersonInterface.__module__ = "general_manager.interface.orm_interface"
+
+
+class RuleExplosionError(RuntimeError):
+    """Raised by tests to verify rule exceptions propagate unchanged."""
+
+    def __init__(self):
+        super().__init__("rule exploded")
 
 
 class OrmInterfaceBaseTestCase(TransactionTestCase):
@@ -321,6 +329,32 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
         self.assertTrue(PersonModel._meta.rules[0].called)
         delattr(PersonModel._meta, "rules")
 
+    def test_rules_and_full_clean_merges_errors_for_same_field(self):
+        """
+        Verify model validation keeps Django and rule errors for the same field.
+        """
+
+        class DummyRule:
+            def evaluate(self, obj):
+                return False
+
+            def get_error_message(self):
+                return {"name": "rule name error"}
+
+        PersonModel._meta.rules = [DummyRule()]
+        cleaner = get_full_clean_methode(PersonModel)
+        invalid = PersonModel(age=1, owner=self.user, changed_by=self.user)
+
+        try:
+            with self.assertRaises(ValidationError) as context:
+                cleaner(invalid)
+
+            messages = context.exception.message_dict["name"]
+            self.assertGreaterEqual(len(messages), 2)
+            self.assertIn("rule name error", messages)
+        finally:
+            delattr(PersonModel._meta, "rules")
+
     def test_rules_and_full_clean_true(self):
         """
         Tests that model validation passes when custom rules evaluate to True and fails otherwise.
@@ -347,6 +381,60 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
         _ = cleaner(self.person)
         self.assertTrue(PersonModel._meta.rules[0].called)
         delattr(PersonModel._meta, "rules")
+
+    def test_rules_and_full_clean_none_result_passes(self):
+        """
+        Verify rules returning None do not add validation errors.
+        """
+
+        class DummyRule:
+            def __init__(self):
+                self.called = False
+
+            def evaluate(self, obj):
+                self.called = True
+                return None
+
+            def get_error_message(self):
+                return {"name": "should not be used"}
+
+        rule = DummyRule()
+        PersonModel._meta.rules = [rule]
+        cleaner = get_full_clean_methode(PersonModel)
+
+        try:
+            cleaner(self.person)
+            self.assertTrue(rule.called)
+        finally:
+            delattr(PersonModel._meta, "rules")
+
+    def test_rules_and_full_clean_propagates_rule_exceptions(self):
+        """
+        Verify rule evaluation exceptions are not converted to ValidationError.
+        """
+
+        class ExplodingRule:
+            def evaluate(self, obj):
+                raise RuleExplosionError()
+
+            def get_error_message(self):
+                return {"name": "should not be used"}
+
+        PersonModel._meta.rules = [ExplodingRule()]
+        cleaner = get_full_clean_methode(PersonModel)
+
+        try:
+            with self.assertRaisesRegex(RuleExplosionError, "rule exploded"):
+                cleaner(self.person)
+        finally:
+            delattr(PersonModel._meta, "rules")
+
+    def test_model_has_field_reports_concrete_model_fields(self):
+        """
+        Verify model_has_field returns False instead of surfacing FieldDoesNotExist.
+        """
+        self.assertTrue(model_has_field(self.person, "changed_by"))
+        self.assertFalse(model_has_field(self.person, "missing_field"))
 
     def test_handle_custom_fields(self):
         """

@@ -229,7 +229,10 @@ interface is bound to a parent manager can raise `AttributeError`.
 
 ::: general_manager.interface.capabilities.registry.CapabilityRegistry
 
-::: general_manager.interface.capabilities.core.utils.with_observability
+`general_manager.interface.capabilities.core.utils.with_observability` is a
+public helper for wrapping capability operations with optional observability
+hooks. Its full behavior is described in the Core Observability Utility section
+below.
 
 ::: general_manager.interface.bundles.calculation.CALCULATION_CORE_CAPABILITIES
 

@@ -1,7 +1,8 @@
 from django.test import TransactionTestCase
-from django.db import models, connection
+from django.db import models, connection, connections
+from django.core.exceptions import ValidationError
 from general_manager.factory.auto_factory import AutoFactory
-from typing import Any, Iterable
+from typing import Any, ClassVar, Iterable
 from unittest.mock import patch
 
 
@@ -60,6 +61,9 @@ class DummyModel2(models.Model):
 
 
 class AutoFactoryTestCase(TransactionTestCase):
+    databases: ClassVar[set[str]] = {"default"}
+    database_alias = "factory_alias"
+
     @classmethod
     def setUpClass(cls):
         """
@@ -226,6 +230,97 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertEqual(instance[1].name, "Generated Name")
         self.assertEqual(instance[100].value, 10_000)
         self.assertEqual(DummyModel.objects.count(), 101)
+
+    def test_generate_function_create_rolls_back_list_when_later_record_fails(self):
+        def custom_generate_function(**kwargs: Any) -> list[dict[str, Any]]:
+            return [
+                {"name": "saved first", "value": 1},
+                {"name": "invalid second", "value": "not an integer"},
+            ]
+
+        self.factory_class._adjustmentMethod = custom_generate_function
+
+        with self.assertRaises(ValidationError):
+            self.factory_class.create()
+
+        self.assertEqual(DummyModel.objects.count(), 0)
+
+    def test_generate_function_create_rolls_back_list_on_interface_database_alias(
+        self,
+    ):
+        alias = self.database_alias
+        original_database_config = connections.databases.get(alias)
+        had_cached_connection = hasattr(connections._connections, alias)
+        original_connection = (
+            getattr(connections._connections, alias) if had_cached_connection else None
+        )
+        if had_cached_connection:
+            delattr(connections._connections, alias)
+
+        connections.databases[alias] = {
+            **connections.databases["default"],
+            "NAME": ":memory:",
+        }
+        alias_connection = connections[alias]
+        # The alias is overridden only for this test, so opt it out of Django's
+        # default disallowed-database wrappers and restore prior state below.
+        for method_name, _ in self._disallowed_connection_methods:
+            method = getattr(alias_connection, method_name)
+            wrapped = getattr(method, "wrapped", None)
+            if wrapped is not None:
+                setattr(alias_connection, method_name, wrapped)
+        alias_connection.connect()
+
+        class AliasInterface(DummyInterface):
+            @classmethod
+            def _get_database_alias(cls) -> str:
+                return alias
+
+        factory_class = type(
+            "AliasDummyFactory",
+            (AutoFactory,),
+            {
+                "interface": AliasInterface,
+                "Meta": type("Meta", (), {"model": DummyModel}),
+            },
+        )
+
+        def custom_generate_function(**kwargs: Any) -> list[dict[str, Any]]:
+            return [
+                {"name": "saved first", "value": 1},
+                {"name": "invalid second", "value": "not an integer"},
+            ]
+
+        factory_class._adjustmentMethod = custom_generate_function
+
+        alias_table_created = False
+        try:
+            with alias_connection.schema_editor() as schema:
+                schema.create_model(DummyModel)
+                alias_table_created = True
+
+            with self.assertRaises(ValidationError):
+                factory_class.create()
+
+            self.assertEqual(
+                DummyModel.objects.using(alias).count(),
+                0,
+            )
+        finally:
+            try:
+                if alias_table_created:
+                    with alias_connection.schema_editor() as schema:
+                        schema.delete_model(DummyModel)
+            finally:
+                alias_connection.close()
+                if hasattr(connections._connections, alias):
+                    delattr(connections._connections, alias)
+                if original_database_config is None:
+                    connections.databases.pop(alias, None)
+                else:
+                    connections.databases[alias] = original_database_config
+                if had_cached_connection:
+                    setattr(connections._connections, alias, original_connection)
 
     def test_generate_instance_with_generate_function_for_one_entry(self):
         """
@@ -499,6 +594,18 @@ class FactoriesHelpersTestCase(TransactionTestCase):
         result = _ensure_model_instance(instance)
 
         self.assertIs(result, instance)
+
+    def test_ensure_model_instance_rejects_non_model_outputs(self):
+        from general_manager.factory.factories import (
+            UnableToResolveManagerInstanceError,
+            _ensure_model_instance,
+        )
+
+        with self.assertRaises(UnableToResolveManagerInstanceError):
+            _ensure_model_instance(object())
+
+    def test_coerce_single_related_value_preserves_none(self):
+        self.assertIsNone(AutoFactory._coerce_single_related_value(None))
 
     def test_missing_factory_or_instances_error_message(self):
         """

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Iterable, Mapping as TypingMapping
+from typing import Iterable
 
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.interfaces.calculation import (
@@ -32,25 +32,45 @@ from .capability_models import CapabilityPlan
 
 @dataclass(frozen=True, slots=True)
 class CapabilityManifest:
-    """Resolver that folds interface inheritance hierarchies into a single plan."""
+    """Resolve interface capability plans across an interface class hierarchy.
 
-    plans: Mapping[type, CapabilityPlan]
+    ``CapabilityManifest`` is a maintainer-facing manifest helper used by the
+    capability builder. It stores exact interface-class plans, then resolves a
+    concrete interface by walking its MRO from base class to derived class.
+    Required and optional capabilities are stored as frozensets, so duplicate
+    capability names collapse and no ordering is preserved. A capability may
+    appear in both required and optional sets if contributing plans declare it
+    both ways; the manifest does not reconcile that conflict. Later flag
+    mappings override earlier mappings with the same flag name.
+
+    The supplied ``plans`` mapping is stored by reference. The dataclass is
+    frozen, but callers that pass a mutable mapping can still mutate that mapping
+    externally and affect future resolution. Runtime non-class values or classes
+    outside the ``InterfaceBase`` family are outside the documented contract and
+    fail through ordinary Python attribute or membership errors.
+    """
+
+    plans: Mapping[type[InterfaceBase], CapabilityPlan]
 
     def resolve(self, interface_cls: type[InterfaceBase]) -> CapabilityPlan:
-        """
-        Aggregate capability requirements for an interface by folding plans from its class hierarchy.
+        """Aggregate capability requirements for an interface class.
 
-        Parameters:
-            interface_cls (type[InterfaceBase]): Interface class whose MRO is traversed from base to derived to collect matching plans.
+        Args:
+            interface_cls: Interface class whose MRO is traversed from base to
+                derived. Only classes present in ``plans`` contribute a plan.
 
         Returns:
-            CapabilityPlan: Consolidated plan where `required` and `optional` are frozensets of capability names and `flags` is the merged flag-to-capability mapping.
+            Consolidated capability plan allocated for this call. Its
+            ``required`` and ``optional`` values are frozenset unions of all
+            matching plans. Its ``flags`` mapping is copied into a new immutable
+            ``CapabilityPlan`` mapping after derived-class plans override
+            base-class plans for duplicate flag names.
         """
         required: set[CapabilityName] = set()
         optional: set[CapabilityName] = set()
         flags: dict[str, CapabilityName] = {}
         for cls in reversed(interface_cls.__mro__):
-            plan = self.plans.get(cls)  # type: ignore[arg-type]
+            plan = self.plans.get(cls)
             if plan is None:
                 continue
             required.update(plan.required)
@@ -63,11 +83,12 @@ class CapabilityManifest:
         )
 
     def __contains__(self, interface_cls: type[InterfaceBase]) -> bool:
-        """
-        Check whether a concrete capability plan is registered for the given interface class.
+        """Return whether an exact interface class has a registered plan.
 
         Returns:
-            `true` if a plan is present for the interface class, `false` otherwise.
+            ``True`` when ``interface_cls`` appears directly in ``plans``.
+            Inherited plans do not make a derived class containable unless the
+            derived class itself is registered.
         """
         return interface_cls in self.plans
 
@@ -81,14 +102,13 @@ DEFAULT_FLAG_MAPPING: dict[str, CapabilityName] = {
 
 
 def names(*values: CapabilityName) -> tuple[CapabilityName, ...]:
-    """
-    Collects the provided CapabilityName literals into a tuple.
+    """Collect capability names into a typed tuple for manifest declarations.
 
-    Parameters:
-        values: One or more CapabilityName literals to include in the result.
+    Args:
+        values: Capability names to include.
 
     Returns:
-        Tuple of the provided CapabilityName values.
+        The supplied capability names in the same order.
     """
     return values
 
@@ -97,18 +117,18 @@ def _plan(
     *,
     required: Iterable[CapabilityName],
     optional: Iterable[CapabilityName] = (),
-    flags: TypingMapping[str, CapabilityName] | None = None,
+    flags: Mapping[str, CapabilityName] | None = None,
 ) -> CapabilityPlan:
-    """
-    Constructs a CapabilityPlan from the given required, optional, and flag capability names.
+    """Construct an immutable capability plan for a manifest entry.
 
-    Parameters:
-        required (Iterable[CapabilityName]): Capability names that are required.
-        optional (Iterable[CapabilityName], optional): Capability names that are optional. Defaults to empty.
-        flags (Mapping[str, CapabilityName] | None, optional): Mapping of flag identifiers to capability names. Defaults to None.
+    Args:
+        required: Capability names that must always be attached.
+        optional: Capability names that may be enabled by configuration.
+        flags: Mapping from configuration flag names to optional capability
+            names. ``None`` means no flag mappings.
 
     Returns:
-        CapabilityPlan: A plan containing the provided required and optional capabilities and the flags mapping.
+        Capability plan with frozen required/optional sets and immutable flags.
     """
     return CapabilityPlan(
         required=frozenset(required),

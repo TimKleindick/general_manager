@@ -13,13 +13,25 @@ import importlib.abc
 import os
 import re
 import sys
-from importlib import import_module, util
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Type
+from collections.abc import Coroutine
+from importlib import import_module, machinery, util
+from types import ModuleType
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Iterable,
+    Iterator,
+    Protocol,
+    Sequence,
+    cast,
+)
 
-import graphene  # type: ignore[import]
+import graphene
 from django.conf import settings
 from django.core.checks import register
 from django.core.management.base import BaseCommand
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.urls import path, re_path
 from graphql import GraphQLDirective, specified_directives
 
@@ -31,12 +43,65 @@ from general_manager.conf import get_setting
 from general_manager.api.property import GraphQLProperty
 from general_manager.logging import get_logger
 from general_manager.interface.infrastructure.startup_hooks import (
+    DependencyResolver,
     registered_startup_hook_entries,
     order_interfaces_by_dependency,
 )
 from general_manager.interface.infrastructure.system_checks import (
     iter_interface_system_checks,
 )
+
+
+class _AppendableRoutes(Protocol):
+    """Route container shape required by ASGI subscription wiring."""
+
+    def append(self, route: object) -> None: ...
+
+    def __iter__(self) -> Iterator[object]: ...
+
+
+class _ApplicationMapping(Protocol):
+    """Channels protocol router shape used for in-place websocket insertion."""
+
+    application_mapping: dict[str, object]
+
+
+class _CreateModuleLoader(Protocol):
+    """Optional importlib loader hook for custom module creation."""
+
+    def create_module(self, spec: machinery.ModuleSpec) -> ModuleType | None: ...
+
+
+class _ExecModuleLoader(Protocol):
+    """Importlib loader hook required for deferred ASGI module execution."""
+
+    def exec_module(self, module: ModuleType) -> None: ...
+
+
+class _AsgiModuleRoutes(Protocol):
+    """ASGI module attribute patched by subscription route setup."""
+
+    websocket_urlpatterns: object
+
+
+class _GraphQLWebsocketRouteMarker(Protocol):
+    """Dynamic marker attached to generated GraphQL websocket URL patterns."""
+
+    _general_manager_graphql_ws: bool
+
+
+class _FieldDescriptorCache(Protocol):
+    """Interface classes that cache generated field descriptors."""
+
+    _field_descriptors: object | None
+
+
+class _GeneratedRelationProperty(Protocol):
+    """GraphQL property shape after attaching the generated-relation marker."""
+
+    _general_manager_generated_relation: bool
+
+
 from general_manager.metrics import build_graphql_middleware
 
 if TYPE_CHECKING:
@@ -121,12 +186,23 @@ def install_startup_hook_runner() -> None:
         should_run_hooks = command != "runserver" or run_main
         hooks_registry = registered_startup_hook_entries() if should_run_hooks else {}
         if hooks_registry:
-            resolver_map: dict[object, list[type]] = {}
+            resolver_groups: list[
+                tuple[DependencyResolver | None, list[type[object]]]
+            ] = []
+
+            def _group_for_resolver(
+                resolver: DependencyResolver | None,
+            ) -> list[type[object]]:
+                for registered_resolver, resolver_interfaces in resolver_groups:
+                    if registered_resolver is resolver:
+                        return resolver_interfaces
+                new_group: list[type[object]] = []
+                resolver_groups.append((resolver, new_group))
+                return new_group
+
             for interface_cls, entries in hooks_registry.items():
                 for entry in entries:
-                    resolver_map.setdefault(entry.dependency_resolver, []).append(
-                        interface_cls
-                    )
+                    _group_for_resolver(entry.dependency_resolver).append(interface_cls)
             logger.debug(
                 "running startup hooks",
                 context={
@@ -135,10 +211,10 @@ def install_startup_hook_runner() -> None:
                     "autoreload": not run_main if command == "runserver" else False,
                 },
             )
-            for resolver, iface_list in resolver_map.items():
+            for resolver, iface_list in resolver_groups:
                 ordered_interfaces = order_interfaces_by_dependency(
                     iface_list,
-                    resolver,  # type: ignore[arg-type]
+                    resolver,
                 )
                 for interface_cls in ordered_interfaces:
                     for entry in hooks_registry.get(interface_cls, ()):
@@ -160,7 +236,7 @@ def install_startup_hook_runner() -> None:
         result = original_run_from_argv(self, argv)
         return result
 
-    BaseCommand.run_from_argv = run_from_argv_with_startup_hooks  # type: ignore[assignment]
+    BaseCommand.run_from_argv = run_from_argv_with_startup_hooks  # type: ignore[method-assign]
     BaseCommand._gm_startup_hooks_runner_installed = True  # type: ignore[attr-defined]
     BaseCommand._gm_original_run_from_argv = original_run_from_argv  # type: ignore[attr-defined]
 
@@ -171,12 +247,12 @@ def install_startup_hook_runner() -> None:
 
 
 def _wrap_system_check(
-    interface_cls: Type[Any],
-    hook: Callable[[], list[Any]],
-) -> Callable[..., list[Any]]:
+    interface_cls: type[object],
+    hook: Callable[[], list[object]],
+) -> Callable[..., list[object]]:
     """Wrap a system-check hook so exceptions are caught and logged."""
 
-    def _check(*_: Any, **__: Any) -> list[Any]:
+    def _check(*_: object, **__: object) -> list[object]:
         try:
             return hook()
         except Exception:
@@ -194,12 +270,18 @@ def _wrap_system_check(
 _registered_system_check_interfaces: set[str] = set()
 
 
+def _interface_identity(interface_cls: type[object]) -> str:
+    """Return the module-qualified identity used for bootstrap idempotency."""
+    return f"{interface_cls.__module__}.{interface_cls.__qualname__}"
+
+
 def register_system_checks() -> None:
     """Register capability-provided system checks with Django's check framework.
 
-    Idempotent: a given interface's checks are registered at most once per
-    process lifetime, so calling ``ready()`` multiple times (common in tests)
-    does not produce duplicate check results.
+    Idempotent: a given module-qualified interface class's checks are registered
+    at most once per process lifetime, so calling ``ready()`` multiple times
+    (common in tests) does not produce duplicate check results. Distinct
+    interface classes with the same bare ``__name__`` still register separately.
     """
     hooks = list(iter_interface_system_checks())
     if not hooks:
@@ -207,7 +289,7 @@ def register_system_checks() -> None:
     new_hooks = [
         (iface, hook)
         for iface, hook in hooks
-        if iface.__name__ not in _registered_system_check_interfaces
+        if _interface_identity(iface) not in _registered_system_check_interfaces
     ]
     if not new_hooks:
         return
@@ -216,7 +298,7 @@ def register_system_checks() -> None:
         context={"count": len(new_hooks)},
     )
     for interface_cls, hook in new_hooks:
-        _registered_system_check_interfaces.add(interface_cls.__name__)
+        _registered_system_check_interfaces.add(_interface_identity(interface_cls))
         register("general_manager")(_wrap_system_check(interface_cls, hook))
 
 
@@ -225,7 +307,7 @@ def register_system_checks() -> None:
 # ---------------------------------------------------------------------------
 
 
-def check_permission_class(general_manager_class: Type[GeneralManager]) -> None:
+def check_permission_class(general_manager_class: type[GeneralManager]) -> None:
     """Validate and normalize a GeneralManager class's Permission attribute."""
     from general_manager.permission.base_permission import BasePermission
     from general_manager.permission.manager_based_permission import (
@@ -244,8 +326,8 @@ def check_permission_class(general_manager_class: Type[GeneralManager]) -> None:
 
 
 def initialize_general_manager_classes(
-    pending_attribute_initialization: list[Type[GeneralManager]],
-    all_classes: list[Type[GeneralManager]],
+    pending_attribute_initialization: list[type[GeneralManager]],
+    all_classes: list[type[GeneralManager]],
 ) -> None:
     """
     Initialize GeneralManager interface attributes, create attribute accessors,
@@ -264,17 +346,17 @@ def initialize_general_manager_classes(
     )
 
     def _build_connection_resolver(
-        attribute_key: str, manager_cls: Type[_GM]
-    ) -> Callable[[object], Any]:
-        def resolver(value: object) -> Any:
+        attribute_key: str, manager_cls: type[_GM]
+    ) -> Callable[[object], object]:
+        def resolver(value: object) -> object:
             return manager_cls.filter(**{attribute_key: value})
 
         resolver.__annotations__ = {"return": manager_cls}
         return resolver
 
     def _iter_manager_relation_fields(
-        general_manager_class: Type[_GM],
-    ) -> Iterable[tuple[str, Type[_GM]]]:
+        general_manager_class: type[_GM],
+    ) -> Iterable[tuple[str, type[_GM]]]:
         seen: set[str] = set()
         input_fields = getattr(general_manager_class.Interface, "input_fields", {})
         for attribute_name, attribute in input_fields.items():
@@ -299,8 +381,8 @@ def initialize_general_manager_classes(
                 yield attribute_name, field_type
 
     def _has_reverse_relation_attribute(
-        manager_class: Type[_GM],
-        related_manager_class: Type[_GM],
+        manager_class: type[_GM],
+        related_manager_class: type[_GM],
     ) -> bool:
         get_attribute_types = getattr(
             manager_class.Interface, "get_attribute_types", None
@@ -330,7 +412,7 @@ def initialize_general_manager_classes(
     for general_manager_class in dict.fromkeys(all_classes):
         interface = getattr(general_manager_class, "Interface", None)
         if hasattr(interface, "_field_descriptors"):
-            interface_with_cache: Any = interface
+            interface_with_cache = cast(_FieldDescriptorCache, interface)
             interface_with_cache._field_descriptors = None
 
     for general_manager_class in pending_attribute_initialization:
@@ -355,7 +437,10 @@ def initialize_general_manager_classes(
                 continue
             resolver = _build_connection_resolver(attribute_name, general_manager_class)
             relation_property = GraphQLProperty(resolver)
-            marked_relation_property: Any = relation_property
+            marked_relation_property = cast(
+                _GeneratedRelationProperty,
+                relation_property,
+            )
             marked_relation_property._general_manager_generated_relation = True
             setattr(
                 connected_manager,
@@ -367,7 +452,7 @@ def initialize_general_manager_classes(
 
 
 def handle_remote_api(
-    manager_classes: list[Type[GeneralManager]],
+    manager_classes: list[type[GeneralManager]],
 ) -> None:
     """Generate REST routes for opt-in RemoteAPI manager exposures."""
     add_remote_api_urls(manager_classes)
@@ -418,12 +503,15 @@ def _build_schema_directives(
 
 def _get_configured_graphql_directives() -> tuple[GraphQLDirective, ...]:
     """Resolve and validate custom GraphQL directives from Django settings."""
-    configured = get_setting("GRAPHQL_DIRECTIVES", ())
+    configured = cast(
+        Iterable[GraphQLDirective] | GraphQLDirective | None,
+        get_setting("GRAPHQL_DIRECTIVES", ()),
+    )
     return _normalize_graphql_directives(configured)
 
 
 def handle_graph_ql(
-    pending_graphql_interfaces: list[Type[GeneralManager]],
+    pending_graphql_interfaces: list[type[GeneralManager]],
 ) -> None:
     """
     Generate GraphQL interfaces and mutations, build a ``graphene.Schema``, and
@@ -464,7 +552,7 @@ def handle_graph_ql(
     else:
         GraphQL._subscription_class = None
 
-    schema_kwargs: dict[str, Any] = {"query": GraphQL._query_class}
+    schema_kwargs: dict[str, object] = {"query": GraphQL._query_class}
     if GraphQL._mutation_class is not None:
         schema_kwargs["mutation"] = GraphQL._mutation_class
     if GraphQL._subscription_class is not None:
@@ -484,7 +572,7 @@ def handle_graph_ql(
 
 def add_graphql_url(schema: graphene.Schema) -> None:
     """Add a GraphQL endpoint to the project's URL configuration."""
-    graph_ql_url = get_setting("GRAPHQL_URL", "graphql")
+    graph_ql_url = str(get_setting("GRAPHQL_URL", "graphql"))
     root_url_conf_path = getattr(settings, "ROOT_URLCONF", None)
     logger.debug(
         "configuring graphql http endpoint",
@@ -497,13 +585,17 @@ def add_graphql_url(schema: graphene.Schema) -> None:
         raise MissingRootUrlconfError()
     urlconf = import_module(root_url_conf_path)
     middleware = build_graphql_middleware()
-    view_kwargs: dict[str, Any] = {"graphiql": True, "schema": schema}
+    view_kwargs: dict[str, object] = {"graphiql": True, "schema": schema}
     if middleware is not None:
         view_kwargs["middleware"] = middleware
+    view = cast(
+        Callable[[HttpRequest], HttpResponseBase],
+        GeneralManagerGraphQLView.as_view(**view_kwargs),
+    )
     urlconf.urlpatterns.append(
         path(
             graph_ql_url,
-            GeneralManagerGraphQLView.as_view(**view_kwargs),
+            view,
         )
     )
     _ensure_asgi_subscription_route(graph_ql_url)
@@ -551,21 +643,29 @@ def _ensure_asgi_subscription_route(graphql_url: str) -> None:
             )
             return
 
-        def finalize(module: Any) -> None:
+        original_spec = spec
+
+        def finalize(module: ModuleType) -> None:
             _finalize_asgi_module(module, attr_name, graphql_url)
 
         class _Loader(importlib.abc.Loader):
             def __init__(self, original_loader: importlib.abc.Loader) -> None:
                 self._original_loader = original_loader
 
-            def create_module(self, spec):  # type: ignore[override]
+            def create_module(
+                self,
+                spec: machinery.ModuleSpec,
+            ) -> ModuleType | None:
                 if hasattr(self._original_loader, "create_module"):
-                    return self._original_loader.create_module(spec)  # type: ignore[attr-defined]
+                    return cast(
+                        _CreateModuleLoader,
+                        self._original_loader,
+                    ).create_module(spec)
                 return None
 
-            def exec_module(self, module):  # type: ignore[override]
+            def exec_module(self, module: ModuleType) -> None:
                 try:
-                    self._original_loader.exec_module(module)
+                    cast(_ExecModuleLoader, self._original_loader).exec_module(module)
                     finalize(module)
                 finally:
                     with contextlib.suppress(ValueError):
@@ -577,14 +677,19 @@ def _ensure_asgi_subscription_route(graphql_url: str) -> None:
             def __init__(self) -> None:
                 self._processed = False
 
-            def find_spec(self, fullname, path, target=None):  # type: ignore[override]
+            def find_spec(
+                self,
+                fullname: str,
+                path: Sequence[str] | None,
+                target: ModuleType | None = None,
+            ) -> machinery.ModuleSpec | None:
                 if fullname != module_path or self._processed:
                     return None
                 self._processed = True
                 new_spec = util.spec_from_loader(fullname, wrapped_loader)
                 if new_spec is not None:
                     new_spec.submodule_search_locations = (
-                        spec.submodule_search_locations
+                        original_spec.submodule_search_locations
                     )
                 return new_spec
 
@@ -606,11 +711,15 @@ def _ensure_asgi_subscription_route(graphql_url: str) -> None:
     _finalize_asgi_module(asgi_module, attr_name, graphql_url)
 
 
-def _finalize_asgi_module(asgi_module: Any, attr_name: str, graphql_url: str) -> None:
+def _finalize_asgi_module(
+    asgi_module: ModuleType,
+    attr_name: str,
+    graphql_url: str,
+) -> None:
     """Configure WebSocket subscription routing in an ASGI module."""
     try:
-        from channels.auth import AuthMiddlewareStack  # type: ignore[import-untyped]
-        from channels.routing import ProtocolTypeRouter, URLRouter  # type: ignore[import-untyped]
+        from channels.auth import AuthMiddlewareStack
+        from channels.routing import ProtocolTypeRouter, URLRouter
         from general_manager.api.graphql_subscription_consumer import (
             GraphQLSubscriptionConsumer,
         )
@@ -630,7 +739,7 @@ def _finalize_asgi_module(asgi_module: Any, attr_name: str, graphql_url: str) ->
     websocket_patterns = getattr(asgi_module, "websocket_urlpatterns", None)
     if websocket_patterns is None:
         websocket_patterns = []
-        asgi_module.websocket_urlpatterns = websocket_patterns
+        cast(_AsgiModuleRoutes, asgi_module).websocket_urlpatterns = websocket_patterns
 
     if not hasattr(websocket_patterns, "append"):
         logger.warning(
@@ -638,36 +747,43 @@ def _finalize_asgi_module(asgi_module: Any, attr_name: str, graphql_url: str) ->
             context={"module": asgi_module.__name__},
         )
         return
+    routes = cast(_AppendableRoutes, websocket_patterns)
 
     normalized = graphql_url.strip("/")
     escaped = re.escape(normalized)
     pattern = rf"^{escaped}/?$" if normalized else r"^$"
 
     route_exists = any(
-        getattr(route, "_general_manager_graphql_ws", False)
-        for route in websocket_patterns
+        getattr(route, "_general_manager_graphql_ws", False) for route in routes
     )
     if not route_exists:
-        websocket_route = re_path(pattern, GraphQLSubscriptionConsumer.as_asgi())  # type: ignore[arg-type]
-        websocket_route._general_manager_graphql_ws = True
-        websocket_patterns.append(websocket_route)
+        websocket_route = re_path(
+            pattern,
+            cast(
+                Callable[..., Coroutine[object, object, None]],
+                GraphQLSubscriptionConsumer.as_asgi(),
+            ),
+        )
+        cast(
+            _GraphQLWebsocketRouteMarker, websocket_route
+        )._general_manager_graphql_ws = True
+        routes.append(websocket_route)
 
     application = getattr(asgi_module, attr_name, None)
     if application is None:
         return
 
-    if hasattr(application, "application_mapping") and isinstance(
-        application.application_mapping, dict
-    ):
-        if "websocket" not in application.application_mapping:
-            application.application_mapping["websocket"] = AuthMiddlewareStack(
-                URLRouter(list(websocket_patterns))
+    if hasattr(application, "application_mapping"):
+        mapped_application = cast(_ApplicationMapping, application)
+        if "websocket" not in mapped_application.application_mapping:
+            mapped_application.application_mapping["websocket"] = AuthMiddlewareStack(
+                URLRouter(list(routes))
             )
     else:
         wrapped_application = ProtocolTypeRouter(
             {
                 "http": application,
-                "websocket": AuthMiddlewareStack(URLRouter(list(websocket_patterns))),
+                "websocket": AuthMiddlewareStack(URLRouter(list(routes))),
             }
         )
         setattr(asgi_module, attr_name, wrapped_application)

@@ -22,7 +22,7 @@ from general_manager.interface.capabilities.request import (
 )
 
 
-REMOTE_MANAGER_CAPABILITIES = CapabilitySet(
+REMOTE_MANAGER_CAPABILITIES: CapabilitySet = CapabilitySet(
     label="remote_manager",
     entries=(
         InterfaceCapabilityConfig(RequestLifecycleCapability),

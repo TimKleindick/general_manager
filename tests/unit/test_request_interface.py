@@ -9,6 +9,7 @@ from django.test import SimpleTestCase
 from general_manager.bucket.request_bucket import RequestBucket
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.bundles import REQUEST_CAPABILITIES
+from general_manager.interface.capabilities.request import RequestQueryCapability
 from general_manager.interface import RequestInterface
 from general_manager.interface.requests import (
     InvalidRequestFilterValueError,
@@ -23,6 +24,7 @@ from general_manager.interface.requests import (
     RequestTransportConfig,
     RequestTransportResponse,
     UnknownRequestFilterError,
+    apply_request_lookup,
 )
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
@@ -192,6 +194,33 @@ def _trusted_pickle_loads(data: bytes) -> Any:
 
 
 class TestRequestInterface(SimpleTestCase):
+    def test_apply_request_lookup_in_rejects_string_collections(self) -> None:
+        self.assertFalse(apply_request_lookup("A", "in", "AB"))
+        self.assertFalse(apply_request_lookup(65, "in", b"ABC"))
+        self.assertTrue(apply_request_lookup("A", "in", ("A", "B")))
+
+    def test_request_query_capability_rejects_non_result_execution_value(self) -> None:
+        class InvalidResultInterface:
+            _parent_class = type("InvalidResultProject", (), {})
+
+            @classmethod
+            def get_capability_handler(cls, name: str) -> object | None:
+                return None
+
+            @classmethod
+            def execute_request_plan(cls, plan: RequestQueryPlan) -> object:
+                return {"items": ()}
+
+        plan = RequestQueryPlan(
+            operation_name="list",
+            action="all",
+            method="GET",
+            path="/projects",
+        )
+
+        with self.assertRaises(TypeError):
+            RequestQueryCapability().execute_plan(InvalidResultInterface, plan)  # type: ignore[arg-type]
+
     def setUp(self) -> None:
         RemoteProject.Interface.calls.clear()
 
@@ -537,6 +566,14 @@ class TestRequestInterface(SimpleTestCase):
         assert item is not None
         self.assertEqual(item.name, "Alpha")
         self.assertTrue(bucket._materialized)
+
+        round_tripped = _trusted_pickle_loads(pickle.dumps(bucket))
+        restored = round_tripped.first()
+
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(restored.name, "Alpha")
+        self.assertEqual(restored._interface._request_payload_cache["name"], "Alpha")
 
     def test_materialized_request_bucket_indexes_keep_distinct_payloads(self) -> None:
         """Keep indexes for separately materialized request buckets isolated."""

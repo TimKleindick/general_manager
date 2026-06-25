@@ -7,6 +7,12 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 
+from general_manager.management.commands.search_reconcile import (
+    Command,
+    InvalidSearchReconcileOptionError,
+    _positive_float_option,
+)
+
 
 class SearchReconcileCommandTests(SimpleTestCase):
     def test_search_reconcile_once_runs_service(self) -> None:
@@ -77,6 +83,21 @@ class SearchReconcileCommandTests(SimpleTestCase):
         """Reject command execution when no run mode is provided."""
         with self.assertRaises(CommandError):
             call_command("search_reconcile")
+
+    def test_search_reconcile_rejects_non_bool_programmatic_modes(self) -> None:
+        command = Command()
+
+        with self.assertRaises(InvalidSearchReconcileOptionError):
+            command.handle(once="false", watch=False, interval=60.0, force=False)
+
+        with self.assertRaises(InvalidSearchReconcileOptionError):
+            command.handle(once=True, watch=False, interval=60.0, force=1)
+
+    def test_positive_float_option_rejects_non_finite_values(self) -> None:
+        for value in (float("inf"), float("-inf"), float("nan")):
+            with self.subTest(value=value):
+                with self.assertRaises(InvalidSearchReconcileOptionError):
+                    _positive_float_option(value, "interval")
 
     def test_search_reconcile_watch_repeats_until_interrupted(self) -> None:
         """Keep watching until the sleep loop is interrupted."""

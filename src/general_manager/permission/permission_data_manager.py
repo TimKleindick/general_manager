@@ -1,7 +1,8 @@
 """Wrapper for accessing permission-relevant data across manager operations."""
 
 from __future__ import annotations
-from typing import Callable, Optional, TypeVar, Generic, cast
+
+from typing import Callable, Generic, TypeVar
 
 from general_manager.manager.general_manager import GeneralManager
 
@@ -10,10 +11,10 @@ class InvalidPermissionDataError(TypeError):
     """Raised when the permission data manager receives unsupported input."""
 
     def __init__(self) -> None:
-        """
-        Exception raised when a permission data input is not a dict or a GeneralManager instance.
+        """Build the error for unsupported permission payload types.
 
-        The exception carries the message: "permission_data must be either a dict or an instance of GeneralManager."
+        The public message is stable:
+        ``permission_data must be either a dict or an instance of GeneralManager.``
         """
         super().__init__(
             "permission_data must be either a dict or an instance of GeneralManager."
@@ -29,17 +30,37 @@ class PermissionDataManager(Generic[GeneralManagerData]):
     def __init__(
         self,
         permission_data: dict[str, object] | GeneralManagerData,
-        manager: Optional[type[GeneralManagerData]] = None,
+        manager: type[GeneralManagerData] | None = None,
     ) -> None:
-        """
-        Wrap a mapping or GeneralManager instance to expose permission-related fields via attribute access.
+        """Wrap a permission payload and expose its fields through attributes.
 
-        Parameters:
-            permission_data (dict[str, object] | GeneralManager): Either a dict mapping field names to values or a GeneralManager instance whose attributes provide field values.
-            manager (type[GeneralManager] | None): When `permission_data` is a dict, the manager class associated with that data; otherwise ignored.
+        ``permission_data`` accepts ``dict`` instances and ``dict`` subclasses,
+        not arbitrary ``Mapping`` implementations. Dictionary payloads are used
+        for create, update, and mutation checks. Attribute access returns
+        ``dict.get(name)``, so missing keys resolve to ``None`` instead of
+        raising ``AttributeError``. ``manager`` records the manager class
+        associated with a dictionary payload so delegated permission checks can
+        resolve related manager values. ``manager=None`` is valid for
+        dictionary payloads that do not need delegated manager resolution.
+
+        Manager instance payloads are used for read/delete checks. Attribute
+        access delegates to ``getattr(instance, name)`` and propagates that
+        lookup's result or exception. For instance payloads, ``manager`` is
+        ignored and inferred from ``type(permission_data)``.
+
+        Wrapper attributes and properties take precedence over payload keys with
+        the same name. For example, a dictionary key named ``"manager"`` does
+        not shadow the :attr:`manager` property; access the original dictionary
+        through :attr:`permission_data` when such keys must be read.
+
+        Args:
+            permission_data: Dictionary of field names to permission values or
+                a ``GeneralManager`` instance whose attributes provide values.
+            manager: Manager class associated with a dictionary payload.
 
         Raises:
-            InvalidPermissionDataError: If `permission_data` is neither a dict nor an instance of GeneralManager.
+            InvalidPermissionDataError: If ``permission_data`` is neither a
+                dictionary nor a ``GeneralManager`` instance.
         """
         self.get_data: Callable[[str], object]
         self._permission_data = permission_data
@@ -51,7 +72,7 @@ class PermissionDataManager(Generic[GeneralManagerData]):
                 return getattr(gm_instance, name)
 
             self.get_data = manager_getter
-            self._manager = cast(type[GeneralManagerData], permission_data.__class__)
+            self._manager = type(permission_data)
         elif isinstance(permission_data, dict):
             data_mapping = permission_data
 
@@ -68,23 +89,33 @@ class PermissionDataManager(Generic[GeneralManagerData]):
         cls,
         base_data: GeneralManagerData,
         update_data: dict[str, object],
-    ) -> PermissionDataManager:
-        """
-        Create a PermissionDataManager representing `base_data` with `update_data` applied.
+    ) -> PermissionDataManager[GeneralManagerData]:
+        """Create a wrapper representing ``base_data`` with updates applied.
 
-        Parameters:
-            base_data (GeneralManagerData): Existing manager instance whose data will serve as the base.
-            update_data (dict[str, object]): Fields to add or override on the base data.
+        ``base_data`` must support ``dict(base_data)``. It is converted with
+        that operation and then shallowly overlaid with ``update_data``. Values
+        from ``update_data`` win on key conflicts; nested dictionaries or other
+        mutable values are not deep-merged. The returned wrapper stores
+        ``type(base_data)`` as its ``manager`` and exposes only the merged final
+        state through dictionary-style missing-key semantics. The original
+        object remains available to callers outside this wrapper if they need a
+        separate before/after comparison.
+
+        Args:
+            base_data: Existing manager instance whose iterable key/value data
+                provides the base permission state.
+            update_data: Field values to add or override for the permission
+                check.
 
         Returns:
-            PermissionDataManager: Wrapper exposing the merged data where keys in `update_data` override those from `base_data`.
+            Wrapper exposing the merged permission state.
         """
         merged_data: dict[str, object] = {**dict(base_data), **update_data}
         return cls(merged_data, base_data.__class__)
 
     @property
     def permission_data(self) -> dict[str, object] | GeneralManagerData:
-        """Return the underlying permission payload."""
+        """Return the original mapping or manager instance payload."""
         return self._permission_data
 
     @property
@@ -93,5 +124,5 @@ class PermissionDataManager(Generic[GeneralManagerData]):
         return self._manager
 
     def __getattr__(self, name: str) -> object:
-        """Proxy attribute access to the wrapped permission data."""
+        """Return the named value from the wrapped permission payload."""
         return self.get_data(name)

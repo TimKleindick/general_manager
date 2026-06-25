@@ -20,7 +20,7 @@ from general_manager.interface.capabilities.request import (
 )
 
 
-REQUEST_CORE_CAPABILITIES = CapabilitySet(
+REQUEST_CORE_CAPABILITIES: CapabilitySet = CapabilitySet(
     label="request_core",
     entries=(
         InterfaceCapabilityConfig(RequestLifecycleCapability),
@@ -31,7 +31,7 @@ REQUEST_CORE_CAPABILITIES = CapabilitySet(
     ),
 )
 
-REQUEST_MUTATION_CAPABILITIES = CapabilitySet(
+REQUEST_MUTATION_CAPABILITIES: CapabilitySet = CapabilitySet(
     label="request_mutation",
     entries=(
         InterfaceCapabilityConfig(RequestCreateCapability),
@@ -40,7 +40,7 @@ REQUEST_MUTATION_CAPABILITIES = CapabilitySet(
     ),
 )
 
-REQUEST_CAPABILITIES = REQUEST_CORE_CAPABILITIES
+REQUEST_CAPABILITIES: CapabilitySet = REQUEST_CORE_CAPABILITIES
 
 __all__ = [
     "REQUEST_CAPABILITIES",

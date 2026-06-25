@@ -64,6 +64,69 @@ class TestSeedManagerLandscapeCommand(GeneralManagerTransactionTestCase):
         with pytest.raises(CommandError, match="--all and --manager"):
             call_command("seed_manager_landscape", all=True, manager=["SeedOwner"])
 
+    def test_command_rejects_non_integer_programmatic_options(self) -> None:
+        with pytest.raises(CommandError, match="--count must be an integer"):
+            call_command(
+                "seed_manager_landscape",
+                manager=["SeedOwner"],
+                count="bad",
+            )
+
+        with pytest.raises(CommandError, match="--batch-size must be an integer"):
+            call_command(
+                "seed_manager_landscape",
+                manager=["SeedOwner"],
+                batch_size="bad",
+            )
+
+    def test_command_rejects_non_positive_programmatic_counts(self) -> None:
+        with pytest.raises(CommandError, match="--count must be greater than zero"):
+            call_command(
+                "seed_manager_landscape",
+                manager=["SeedOwner"],
+                count="0",
+            )
+
+        with pytest.raises(
+            CommandError,
+            match="--batch-size must be greater than zero",
+        ):
+            call_command(
+                "seed_manager_landscape",
+                manager=["SeedOwner"],
+                batch_size="0",
+            )
+
+    def test_command_rejects_invalid_programmatic_option_types(self) -> None:
+        invalid_calls = [
+            {"manager": [object()]},
+            {"target": [object()]},
+            {"manager": ["SeedOwner"], "count": True},
+            {"manager": ["SeedOwner"], "dry_run": "yes"},
+        ]
+
+        for kwargs in invalid_calls:
+            with pytest.raises(CommandError):
+                call_command("seed_manager_landscape", **kwargs)
+
+    def test_command_accepts_programmatic_scalar_strings_and_none(self) -> None:
+        stdout = StringIO()
+
+        call_command(
+            "seed_manager_landscape",
+            manager="SeedOwner",
+            target="SeedOwner=2",
+            count="1",
+            batch_size="1",
+            dry_run=True,
+            stdout=stdout,
+        )
+
+        assert "SeedOwner target=2" in stdout.getvalue()
+
+        with pytest.raises(CommandError, match="--manager"):
+            call_command("seed_manager_landscape", manager=None, target=None)
+
     def test_dry_run_prints_ordered_plan_without_creating_rows(self) -> None:
         stdout = StringIO()
 
@@ -150,5 +213,9 @@ class TestSeedManagerLandscapeCommand(GeneralManagerTransactionTestCase):
 
         assert str(exc_info.value) == "Seeding completed with failures"
         assert "SeedOwner created=1" in stdout.getvalue()
-        assert "Seeding completed with failures:" in stderr.getvalue()
-        assert "SeedBroken" in stderr.getvalue()
+        failure_output = stderr.getvalue()
+        assert "Seeding completed with failures:" in failure_output
+        assert "SeedBroken" in failure_output
+        assert "created=0" in failure_output
+        assert "remaining=1" in failure_output
+        assert "batch_size=1" in failure_output

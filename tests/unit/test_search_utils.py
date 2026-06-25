@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
+from types import MappingProxyType
 from typing import ClassVar
 
 from django.test import SimpleTestCase
@@ -78,6 +80,19 @@ class _Nested:
     value: str
 
 
+class _BrokenProperty:
+    @property
+    def value(self) -> str:
+        msg = "property failed"
+        raise RuntimeError(msg)
+
+
+class _BrokenList(list[str]):
+    def __iter__(self):
+        msg = "iteration failed"
+        raise RuntimeError(msg)
+
+
 class SearchUtilsTests(SimpleTestCase):
     def setUp(self) -> None:
         """
@@ -95,9 +110,25 @@ class SearchUtilsTests(SimpleTestCase):
         second = normalize_identification({"a": 1, "b": 2})
         assert first == second
 
+    def test_normalize_identification_materializes_mapping_implementations(
+        self,
+    ) -> None:
+        assert normalize_identification(MappingProxyType({"b": 2, "a": 1})) == (
+            '{"a": 1, "b": 2}'
+        )
+
+    def test_normalize_identification_uses_str_for_non_json_values(self) -> None:
+        assert normalize_identification({"day": date(2026, 6, 23)}) == (
+            '{"day": "2026-06-23"}'
+        )
+
     def test_build_document_id_includes_type(self) -> None:
         doc_id = build_document_id("Project", {"id": 1})
         assert doc_id.startswith("Project:")
+
+    def test_build_document_id_preserves_colons_in_type_label(self) -> None:
+        doc_id = build_document_id("Project:Archive", {"id": 1})
+        assert doc_id.startswith("Project:Archive:")
 
     def test_extract_value_from_mapping(self) -> None:
         data = {"nested": {"value": "alpha"}}
@@ -111,6 +142,10 @@ class SearchUtilsTests(SimpleTestCase):
         data = [{"value": "alpha"}, {"value": "beta"}]
         assert extract_value(data, "value") == ["alpha", "beta"]
 
+    def test_extract_value_from_set_with_remaining_path_returns_list(self) -> None:
+        values = {"alpha", "beta"}
+        assert extract_value(values, "upper") == [value.upper for value in values]
+
     def test_extract_value_from_bucket(self) -> None:
         items = [_DummyManager(id=1), _DummyManager(id=2)]
         bucket = SimpleBucket(_DummyManager, items)
@@ -119,3 +154,19 @@ class SearchUtilsTests(SimpleTestCase):
     def test_extract_value_missing_returns_none(self) -> None:
         data = {"value": "alpha"}
         assert extract_value(data, "missing") is None
+
+    def test_extract_value_empty_path_normalizes_root(self) -> None:
+        manager = _DummyManager(id=1)
+        assert extract_value(manager, "") == {"id": 1}
+
+    def test_extract_value_empty_path_component_is_literal_missing_key(self) -> None:
+        assert extract_value({"a": {"": "blank"}}, "a__") == "blank"
+        assert extract_value({"": {"a": "blank"}}, "__a") == "blank"
+
+    def test_extract_value_propagates_property_errors(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "property failed"):
+            extract_value(_BrokenProperty(), "value")
+
+    def test_extract_value_propagates_iteration_errors(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "iteration failed"):
+            extract_value(_BrokenList(["alpha"]), "value")

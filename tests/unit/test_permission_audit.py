@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 from typing import Any, ClassVar
 from unittest.mock import patch
 
@@ -568,6 +569,32 @@ class PermissionAuditTests(TransactionTestCase):
         logger = get_audit_logger()
         self.assertIsInstance(logger, _NoOpAuditLogger)
 
+    def test_configure_audit_logger_from_settings_nested_none_disables(self) -> None:
+        """Nested GENERAL_MANAGER audit config takes precedence over top-level settings."""
+        from general_manager.permission.audit import _NoOpAuditLogger
+
+        class DummySettings:
+            GENERAL_MANAGER: ClassVar[dict[str, object]] = {"AUDIT_LOGGER": None}
+            AUDIT_LOGGER = DummyAuditLogger()
+
+        configure_audit_logger_from_settings(DummySettings)
+        logger = get_audit_logger()
+        self.assertIsInstance(logger, _NoOpAuditLogger)
+
+    def test_configure_audit_logger_from_settings_rejects_invalid_options(self) -> None:
+        """Mapping settings must pass constructor options as a mapping."""
+
+        class DummySettings:
+            GENERAL_MANAGER: ClassVar[dict[str, object]] = {
+                "AUDIT_LOGGER": {
+                    "class": "tests.unit.test_permission_audit.DummyAuditLogger",
+                    "options": ["not", "a", "mapping"],
+                }
+            }
+
+        with self.assertRaisesRegex(TypeError, "AUDIT_LOGGER options"):
+            configure_audit_logger_from_settings(DummySettings)
+
     def test_configure_audit_logger_with_none_resets(self) -> None:
         """Test configuring with None resets to no-op logger."""
         from general_manager.permission.audit import _NoOpAuditLogger
@@ -784,3 +811,28 @@ class PermissionAuditTests(TransactionTestCase):
 
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
+
+    def test_file_logger_no_worker_close_ignores_later_records(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "audit.log"
+            logger = FileAuditLogger.__new__(FileAuditLogger)
+            logger._path = path
+            logger._batch_size = 1
+            logger._flush_interval = 0.1
+            logger._use_worker = False
+            logger._closed = Event()
+            logger._queue = None
+            logger._worker = None
+            logger._path.parent.mkdir(parents=True, exist_ok=True)
+            event = PermissionAuditEvent(
+                action="read",
+                attributes=("field",),
+                granted=True,
+                user=self.user,
+                manager="TestManager",
+            )
+
+            logger.close()
+            logger.record(event)
+
+            self.assertFalse(path.exists())

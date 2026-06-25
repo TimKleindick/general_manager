@@ -20,8 +20,9 @@ class CustomJSONEncoder(json.JSONEncoder):
         """Return a JSON-compatible value for `o`.
 
         Raises:
-            Exceptions raised by `isoformat()`, `GeneralManager.identification`,
-            or `str(o)` are allowed to propagate.
+            Exception: Errors raised by `isoformat()`,
+                `GeneralManager.identification`, or `str(o)` are allowed to
+                propagate.
         """
         if isinstance(o, (datetime, date, time)):
             return o.isoformat()

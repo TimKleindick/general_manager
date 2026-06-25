@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from collections.abc import Iterable
+from contextlib import suppress
+from typing import TYPE_CHECKING
 
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.capabilities import CapabilityName, CapabilityRegistry
 from general_manager.interface.capabilities.factory import build_capabilities
+from general_manager.interface.infrastructure.startup_hooks import (
+    clear_startup_hooks,
+    register_startup_hook,
+    registered_startup_hook_entries,
+)
+from general_manager.interface.infrastructure.system_checks import (
+    clear_system_checks,
+    register_system_check,
+    registered_system_checks,
+)
 
 from .capability_manifest import CAPABILITY_MANIFEST, CapabilityManifest
 from .capability_models import CapabilityConfig, CapabilitySelection
@@ -14,9 +26,22 @@ from .capability_models import CapabilityConfig, CapabilitySelection
 if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.capabilities.base import Capability
 
+__all__ = ["ManifestCapabilityBuilder"]
+
 
 class ManifestCapabilityBuilder:
-    """Resolve capabilities for an interface using the declarative manifest."""
+    """Resolve and bind manifest-declared capabilities for interface classes.
+
+    The builder resolves a `CapabilityManifest` for one interface class, applies
+    optional-capability configuration, creates handler instances in sorted
+    capability-name order, binds them to the interface, and mirrors the final
+    declaration plus concrete handlers into a `CapabilityRegistry`. It mutates
+    the interface class by setting its capability selection, capability-name set,
+    and handler mapping. If build fails during resolution, instantiation,
+    attachment, or registry publication, the previous interface selection,
+    names, and handlers are restored. Registry implementations own rollback for
+    any registry-side state they mutate before raising.
+    """
 
     def __init__(
         self,
@@ -24,23 +49,25 @@ class ManifestCapabilityBuilder:
         manifest: CapabilityManifest | None = None,
         registry: CapabilityRegistry | None = None,
     ) -> None:
-        """
-        Initialize the ManifestCapabilityBuilder with an optional capability manifest and registry.
+        """Initialize the builder with manifest and registry dependencies.
 
-        Parameters:
-            manifest (CapabilityManifest | None): The capability manifest to resolve interfaces from. If omitted, uses the module default `CAPABILITY_MANIFEST`.
-            registry (CapabilityRegistry | None): The registry used to register resolved capability selections and instances. If omitted, a new `CapabilityRegistry` is created.
+        Args:
+            manifest: Manifest used to resolve interface classes. `None`
+                selects the module default `CAPABILITY_MANIFEST`.
+            registry: Registry that receives resolved declarations and concrete
+                capability instances. `None` creates a fresh
+                `CapabilityRegistry` for this builder.
         """
         self._manifest = manifest or CAPABILITY_MANIFEST
         self._registry = registry or CapabilityRegistry()
 
     @property
     def registry(self) -> CapabilityRegistry:
-        """
-        Access the capability registry used by this builder.
+        """Return the registry receiving declarations and concrete handlers.
 
         Returns:
-            CapabilityRegistry: The registry containing resolved capability selections and registered capability instances.
+            The `CapabilityRegistry` object supplied to the constructor, or the
+            fresh registry created by the builder.
         """
         return self._registry
 
@@ -50,21 +77,47 @@ class ManifestCapabilityBuilder:
         *,
         config: CapabilityConfig | None = None,
     ) -> CapabilitySelection:
-        """
-        Resolve and apply capability selections for an interface class.
+        """Resolve, instantiate, attach, and register capabilities.
 
-        Builds a CapabilitySelection for the given interface by resolving the manifest with an optional CapabilityConfig, validates that no required capability is disabled, determines activated optional capabilities, instantiates and attaches capability instances to the interface, and registers the resulting capability set in the registry.
+        The manifest is resolved for `interface_cls`, required capabilities are
+        validated against the config, optional capabilities are activated by
+        flags and manual enables, and disabled optional capabilities are removed.
+        Capability instances are created from `selection.all` in sorted
+        capability-name order using the interface's `capability_overrides`, then
+        each handler is bound through `InterfaceBase._bind_capability_handler`.
+        After successful binding, the registry replaces the interface's declared
+        names and concrete handler tuple.
 
-        Parameters:
-            interface_cls (type[InterfaceBase]): The interface class whose capabilities should be resolved and attached.
-            config (CapabilityConfig | None): Optional configuration that can enable/disable capabilities and toggle flag-driven capabilities. If omitted, a default CapabilityConfig is used.
+        Args:
+            interface_cls: Interface class to mutate and register.
+            config: Optional runtime configuration. `None` uses a default
+                `CapabilityConfig` with no enabled, disabled, or flagged
+                optional capabilities.
 
         Returns:
-            CapabilitySelection: A selection containing the sets of required, optional, and activated optional capabilities.
+            The immutable selection that was attached to the interface.
 
         Raises:
-            ValueError: If any capability declared required is disabled in the provided config.
+            ValueError: If a required capability is disabled, if a flag maps to
+                a non-optional capability when enabled, or if a manual enable is
+                not declared optional for the interface.
+            KeyError: If a selected capability has no default class and no
+                override.
+            Exception: Exceptions from manifest resolution, config iterables or
+                mappings, override lookup/call, capability construction,
+                handler teardown/setup, startup-hook/system-check registration,
+                or registry publication propagate unchanged. Failures restore
+                the interface's prior capability selection, name set, and
+                handler mapping. Registry implementations own rollback for
+                registry-side state they mutate before raising.
         """
+        previous_selection = interface_cls._capability_selection
+        previous_capabilities = interface_cls._capabilities
+        previous_handlers = dict(interface_cls._capability_handlers)
+        previous_registry_binding = self._registry._bindings.get(interface_cls)
+        previous_registry_instances = self._registry._instances.get(interface_cls)
+        startup_hooks_snapshot = registered_startup_hook_entries()
+        system_checks_snapshot = registered_system_checks()
         plan = self._manifest.resolve(interface_cls)
         resolved_config = config or CapabilityConfig()
         required = set(plan.required)
@@ -84,13 +137,43 @@ class ManifestCapabilityBuilder:
             optional=frozenset(optional),
             activated_optional=frozenset(activated),
         )
-        interface_cls.set_capability_selection(selection)
-        capability_instances = self._instantiate_capabilities(
-            interface_cls, selection.all
-        )
-        self._attach_capabilities(interface_cls, capability_instances)
-        self._registry.register(interface_cls, selection.all, replace=True)
-        self._registry.bind_instances(interface_cls, capability_instances)
+        try:
+            interface_cls.set_capability_selection(selection)
+            capability_instances = self._instantiate_capabilities(
+                interface_cls, selection.all
+            )
+            self._attach_capabilities(interface_cls, capability_instances)
+            self._registry.register(interface_cls, selection.all, replace=True)
+            self._registry.bind_instances(interface_cls, capability_instances)
+        except Exception:
+            for name, handler in tuple(interface_cls._capability_handlers.items()):
+                if previous_handlers.get(name) is not handler:
+                    with suppress(Exception):
+                        handler.teardown(interface_cls)
+            interface_cls._capability_selection = previous_selection
+            interface_cls._capabilities = previous_capabilities
+            interface_cls._capability_handlers = previous_handlers
+            if previous_registry_binding is None:
+                self._registry._bindings.pop(interface_cls, None)
+            else:
+                self._registry._bindings[interface_cls] = set(previous_registry_binding)
+            if previous_registry_instances is None:
+                self._registry._instances.pop(interface_cls, None)
+            else:
+                self._registry._instances[interface_cls] = previous_registry_instances
+            clear_startup_hooks()
+            for hook_interface, entries in startup_hooks_snapshot.items():
+                for entry in entries:
+                    register_startup_hook(
+                        hook_interface,
+                        entry.hook,
+                        dependency_resolver=entry.dependency_resolver,
+                    )
+            clear_system_checks()
+            for check_interface, checks in system_checks_snapshot.items():
+                for check in checks:
+                    register_system_check(check_interface, check)
+            raise
         return selection
 
     def _resolve_optional(
@@ -99,28 +182,30 @@ class ManifestCapabilityBuilder:
         optional: set[CapabilityName],
         config: CapabilityConfig,
     ) -> set[CapabilityName]:
-        """
-        Resolve which optional capabilities should be activated for an interface.
+        """Resolve which optional capability names should be activated.
 
-        Determines the final set of activated optional capabilities by:
-        - enabling capabilities whose feature flags are set in `config`,
-        - applying manual enables from `config.enabled`,
-        - validating that any enabled capability is declared optional,
-        - removing any capabilities listed in `config.disabled`.
+        Enabled flags add their mapped capability after verifying that the
+        mapping points to an optional capability. Manual enables are then added
+        and the combined set must be a subset of `optional`. Disabled optional
+        capabilities are removed last, so a name present in both
+        `config.enabled` and `config.disabled` is not activated. A non-optional
+        manual enable still raises even when the same name is also disabled.
 
-        Parameters:
-            flagged_capabilities (Iterable[tuple[str, CapabilityName]]): Pairs of (flag_name, capability)
-                where the capability should be activated if the corresponding flag is enabled in `config`.
-            optional (set[CapabilityName]): Capability names declared optional for the interface.
-            config (CapabilityConfig): Configuration that exposes enabled/disabled sets and
-                a method `is_flag_enabled(flag_name: str)` to query feature flags.
+        Args:
+            flagged_capabilities: Iterable of `(flag_name, capability_name)`
+                pairs from the resolved plan.
+            optional: Capability names declared optional for the interface.
+            config: Runtime capability configuration.
 
         Returns:
-            set[CapabilityName]: The final set of activated optional capability names.
+            Mutable set of activated optional names.
 
         Raises:
-            ValueError: If a flag refers to a capability that is not declared optional, or if
-                any manually enabled capability is not declared optional.
+            ValueError: If an enabled flag maps to a non-optional capability or
+                any manually enabled name is not optional for the interface.
+            Exception: Exceptions from iterating `flagged_capabilities`,
+                reading config sets/mappings, or evaluating flags propagate
+                unchanged.
         """
         activated: set[CapabilityName] = set()
 
@@ -153,17 +238,21 @@ class ManifestCapabilityBuilder:
         interface_cls: type[InterfaceBase],
         capability_names: frozenset[CapabilityName],
     ) -> list["Capability"]:
-        """
-        Instantiate capability objects for an interface in a deterministic order.
+        """Instantiate selected capabilities in deterministic name order.
 
-        Parameters:
-            interface_cls (type[InterfaceBase]): Interface class for which capabilities will be built; any
-                `capability_overrides` attribute on this class will be applied.
-            capability_names (frozenset[CapabilityName]): Set of capability names to instantiate.
+        Args:
+            interface_cls: Interface class whose `capability_overrides` mapping
+                supplies per-name handler classes or zero-argument factories.
+            capability_names: Selected capability names.
 
         Returns:
-            list[Capability]: Capability instances corresponding to the given names, built in sorted order
-            and created with the interface's overrides applied.
+            Mutable list of capability instances in sorted capability-name order.
+
+        Raises:
+            KeyError: If a selected capability has no override and no default
+                handler in the capability factory.
+            Exception: Exceptions from override mapping access or handler
+                construction propagate unchanged.
         """
         ordered_names = sorted(capability_names)
         overrides = getattr(interface_cls, "capability_overrides", {}) or {}
@@ -174,12 +263,17 @@ class ManifestCapabilityBuilder:
         interface_cls: type[InterfaceBase],
         capabilities: list["Capability"],
     ) -> None:
-        """
-        Attach capability instances to an interface class by binding each capability to the interface.
+        """Bind capability instances to an interface in the supplied order.
 
-        Parameters:
-            interface_cls (type[InterfaceBase]): The interface class to attach capabilities to.
-            capabilities (list[Capability]): Capability instances to attach; each will be bound to the interface in order.
+        Args:
+            interface_cls: Interface class to mutate.
+            capabilities: Capability instances to bind.
+
+        Raises:
+            AttributeError: If a capability lacks a `name` attribute.
+            Exception: Exceptions from existing handler teardown, new handler
+                setup, startup-hook registration, or system-check registration
+                propagate unchanged.
         """
         for capability in capabilities:
             interface_cls._bind_capability_handler(capability)

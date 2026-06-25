@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, TYPE_CHECKING, ClassVar, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.db import models
 
@@ -21,7 +22,11 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 class HistoryNotSupportedError(RuntimeError):
-    """Raised when historical lookups are requested but not supported."""
+    """
+    Raised when historical lookups are requested but not supported.
+
+    The error message is ``"{interface_name} does not support historical queries."``.
+    """
 
     def __init__(self, interface_name: str) -> None:
         super().__init__(f"{interface_name} does not support historical queries.")
@@ -33,7 +38,15 @@ class OrmHistoryCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "history"
 
     @staticmethod
-    def _get_instance_pk_filter(instance: Any) -> dict[str, Any] | None:
+    def _get_instance_pk_filter(instance: object) -> dict[str, object] | None:
+        """
+        Return a primary-key filter for a history-bearing model instance.
+
+        The identifier is read from ``instance.pk`` first, then ``instance.id``.
+        The lookup key defaults to ``"id"`` and uses ``instance._meta.pk.name``
+        when that value is a string. Returns ``None`` when neither identifier is
+        present or the identifier value is ``None``.
+        """
         pk_value = None
         if hasattr(instance, "pk"):
             pk_value = instance.pk
@@ -51,8 +64,18 @@ class OrmHistoryCapability(BaseCapability):
 
     @staticmethod
     def _get_model_pk_filter(
-        interface_cls: type["OrmInterfaceBase"], instance: Any
-    ) -> dict[str, Any] | None:
+        interface_cls: type["OrmInterfaceBase[models.Model]"], instance: object
+    ) -> dict[str, object] | None:
+        """
+        Return a model primary-key filter for manager-like or model-like objects.
+
+        The identifier is read from ``instance.pk`` first, then ``instance.id``,
+        then mapping-like ``instance.identification["id"]``. The interface must
+        expose ``_model`` as a model class with a ``history`` manager. The lookup
+        key defaults to ``"id"`` and uses ``interface_cls._model._meta.pk.name``
+        when that value is a string. Returns ``None`` when no identifier is
+        available or the interface model has no history manager.
+        """
         pk_value = None
         if hasattr(instance, "pk"):
             pk_value = instance.pk
@@ -60,7 +83,7 @@ class OrmHistoryCapability(BaseCapability):
             pk_value = instance.id
         elif hasattr(instance, "identification"):
             identification = getattr(instance, "identification", None)
-            if isinstance(identification, dict):
+            if isinstance(identification, Mapping):
                 pk_value = identification.get("id")
         if pk_value is None:
             return None
@@ -79,9 +102,17 @@ class OrmHistoryCapability(BaseCapability):
 
     @staticmethod
     def _apply_database_alias(
-        interface_cls: type["OrmInterfaceBase"],
+        interface_cls: type["OrmInterfaceBase[models.Model]"],
         history_manager: SupportsHistoryQuery,
     ) -> SupportsHistoryQuery:
+        """
+        Apply the interface database alias to a history manager when configured.
+
+        The alias is read from ORM support via
+        ``get_database_alias(interface_cls)``. A truthy alias returns
+        ``history_manager.using(alias)``; a falsey alias returns the original
+        history manager.
+        """
         database_alias = get_support_capability(interface_cls).get_database_alias(
             interface_cls
         )
@@ -91,25 +122,33 @@ class OrmHistoryCapability(BaseCapability):
 
     def get_historical_record(
         self,
-        interface_cls: type["OrmInterfaceBase"],
-        instance: Any,
+        interface_cls: type["OrmInterfaceBase[models.Model]"],
+        instance: object,
         search_date: datetime | None = None,
-    ) -> Any | None:
+    ) -> models.Model | None:
         """
-        Retrieve the model's historical record for the given instance as of the specified date.
+        Retrieve the latest historical record for ``instance`` at ``search_date``.
+
+        The lookup prefers ``instance.history`` when the object exposes a
+        django-simple-history manager. Otherwise it falls back to
+        ``interface_cls._model.history`` and derives the primary key from
+        ``instance.pk``, then ``instance.id``, then ``instance.identification["id"]``.
+        A configured database alias is applied before filtering.
 
         Parameters:
-            interface_cls (type[OrmInterfaceBase]): The ORM interface class used to resolve capability-specific settings (for example, a database alias).
-            instance (Any): The object that must implement SupportsHistory; if it does not, the function returns None.
-            search_date (datetime | None): The cutoff date; the function returns the most recent historical record whose `history_date` is less than or equal to this value.
+            interface_cls: ORM interface class used to resolve the model history manager and capability settings.
+            instance: Model-like or manager-like object to identify in the history table.
+            search_date: Optional cutoff date; when provided, only records with
+                ``history_date <= search_date`` are considered.
 
         Returns:
-            Any | None: The historical model instance that was current at `search_date`, or `None` if no matching historical record exists or the instance does not support history.
+            Historical model instance, or ``None`` when no identifier, history
+            manager, or matching historical row is available.
         """
         history_manager: SupportsHistoryQuery
-        pk_filter: dict[str, Any] | None
+        pk_filter: dict[str, object] | None
         if isinstance(instance, SupportsHistory):
-            history_manager = cast(SupportsHistory, instance).history
+            history_manager = instance.history
             pk_filter = self._get_instance_pk_filter(instance)
         else:
             pk_filter = self._get_model_pk_filter(interface_cls, instance)
@@ -117,13 +156,13 @@ class OrmHistoryCapability(BaseCapability):
                 return None
             history_manager = cast(SupportsHistory, interface_cls._model).history
         history_manager = self._apply_database_alias(interface_cls, history_manager)
-        filter_kwargs: dict[str, Any] = {}
+        filter_kwargs: dict[str, object] = {}
         if search_date is not None:
             filter_kwargs["history_date__lte"] = search_date
         if pk_filter is not None:
             filter_kwargs.update(pk_filter)
         historical = (
-            cast(models.QuerySet, history_manager.filter(**filter_kwargs))
+            cast(models.QuerySet[models.Model], history_manager.filter(**filter_kwargs))
             .order_by("history_date")
             .last()
         )
@@ -131,18 +170,24 @@ class OrmHistoryCapability(BaseCapability):
 
     def get_history_queryset_for_manager(
         self,
-        interface_cls: type["OrmInterfaceBase"],
-        manager: Any,
-    ) -> models.QuerySet:
+        interface_cls: type["OrmInterfaceBase[models.Model]"],
+        manager: object,
+    ) -> models.QuerySet[models.Model]:
         """
         Return the history queryset scoped to the manager instance's primary key.
 
+        The target identifier is derived from ``manager.pk``, then
+        ``manager.id``, then mapping-like ``manager.identification["id"]``. The
+        lookup key defaults to ``"id"`` and uses the interface model primary-key
+        field name when it is available as a string. A configured database alias
+        is applied before the filtered queryset is returned.
+
         Parameters:
-            interface_cls (type["OrmInterfaceBase"]): ORM interface whose underlying model provides the history manager.
-            manager (Any): Manager-like object exposing identification or pk data for the target row.
+            interface_cls: ORM interface whose underlying model provides the history manager.
+            manager: Manager-like object exposing ``pk``, ``id``, or ``identification["id"]`` for the target row.
 
         Returns:
-            models.QuerySet: History queryset limited to records for the target object.
+            History queryset limited to records for the target object.
 
         Raises:
             HistoryNotSupportedError: If the interface does not expose a history manager or the manager cannot be scoped to a primary key.
@@ -152,61 +197,83 @@ class OrmHistoryCapability(BaseCapability):
         pk_filter = self._get_model_pk_filter(interface_cls, manager)
         if pk_filter is None:
             raise HistoryNotSupportedError(interface_cls.__name__)
-        history_manager = interface_cls._model.history  # type: ignore[attr-defined]
+        history_manager = cast(SupportsHistory, interface_cls._model).history
         history_manager = self._apply_database_alias(interface_cls, history_manager)
-        return cast(models.QuerySet, history_manager.filter(**pk_filter))
+        return cast(
+            models.QuerySet[models.Model],
+            history_manager.filter(**pk_filter),
+        )
 
     def get_historical_queryset(
         self,
-        interface_cls: type["OrmInterfaceBase"],
+        interface_cls: type["OrmInterfaceBase[models.Model]"],
         search_date: datetime,
-    ) -> models.QuerySet:
+    ) -> models.QuerySet[models.Model]:
         """
         Retrieve a queryset representing the historical state as of the given date.
 
+        A configured database alias is applied before calling
+        ``history.as_of(search_date)``.
+
         Parameters:
-            interface_cls (type["OrmInterfaceBase"]): ORM interface whose underlying model provides the historical manager.
-            search_date (datetime): Cutoff datetime for historical snapshot lookup.
+            interface_cls: ORM interface whose underlying model provides the historical manager.
+            search_date: Cutoff datetime for historical snapshot lookup.
 
         Returns:
-            models.QuerySet: QuerySet representing the state at `search_date`.
+            QuerySet representing the state at ``search_date``.
 
         Raises:
             HistoryNotSupportedError: If the model does not expose a history manager.
         """
         if not hasattr(interface_cls._model, "history"):
             raise HistoryNotSupportedError(interface_cls.__name__)
-        history_manager = interface_cls._model.history  # type: ignore[attr-defined]
+        history_manager = cast(SupportsHistory, interface_cls._model).history
         history_manager = self._apply_database_alias(interface_cls, history_manager)
-        return cast(models.QuerySet, history_manager.as_of(search_date))
+        return cast(
+            models.QuerySet[models.Model],
+            history_manager.as_of(search_date),
+        )
 
     def get_historical_record_by_pk(
         self,
-        interface_cls: type["OrmInterfaceBase"],
-        pk: Any,
+        interface_cls: type["OrmInterfaceBase[models.Model]"],
+        pk: object,
         search_date: datetime | None,
-    ) -> Any | None:
+    ) -> models.Model | None:
         """
-        Retrieve the most recent historical record for the model identified by `pk` with a history date not later than `search_date`.
+        Retrieve the latest historical record for primary key ``pk`` at ``search_date``.
+
+        The lookup uses the model's ``history`` manager, applies any configured
+        database alias, filters by the model primary-key field and
+        ``history_date <= search_date``, orders by ``history_date``, and returns
+        the last row.
 
         Parameters:
-            interface_cls (type["OrmInterfaceBase"]): ORM interface whose underlying model provides the historical manager.
-            pk (Any): Primary key of the target model record.
-            search_date (datetime | None): Cutoff datetime; only history records with `history_date` <= this value are considered. If `None`, the function returns `None`.
+            interface_cls: ORM interface whose underlying model provides the historical manager.
+            pk: Primary key of the target model record.
+            search_date: Cutoff datetime. If ``None``, no history query is run.
 
         Returns:
-            Any | None: The historical model instance with the latest `history_date` that is <= `search_date`, or `None` if no such record exists or if the model has no history manager.
+            Historical model instance, or ``None`` when ``search_date`` is
+            ``None``, the model has no history manager, or no row matches.
         """
         if search_date is None or not hasattr(interface_cls._model, "history"):
             return None
-        history_manager = interface_cls._model.history  # type: ignore[attr-defined]
+        history_manager = cast(SupportsHistory, interface_cls._model).history
         database_alias = get_support_capability(interface_cls).get_database_alias(
             interface_cls
         )
         if database_alias:
             history_manager = history_manager.using(database_alias)
+        pk_field = interface_cls._model._meta.pk
+        pk_field_name = pk_field.name if pk_field is not None else "pk"
         historical = (
-            history_manager.filter(id=pk, history_date__lte=search_date)
+            cast(
+                models.QuerySet[models.Model],
+                history_manager.filter(
+                    **{pk_field_name: pk, "history_date__lte": search_date}
+                ),
+            )
             .order_by("history_date")
             .last()
         )

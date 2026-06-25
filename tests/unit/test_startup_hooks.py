@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 from typing import Callable, ClassVar
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 from django.core.management.base import BaseCommand
 
+from general_manager import bootstrap as gm_bootstrap
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.interfaces.read_only import (
@@ -28,6 +30,7 @@ from general_manager.interface.infrastructure.startup_hooks import (
 )
 from general_manager.interface.infrastructure.system_checks import (
     clear_system_checks,
+    register_system_check,
     registered_system_checks,
 )
 
@@ -321,6 +324,7 @@ class SystemCheckRegistryTests(SimpleTestCase):
         Prepare test state by clearing all registered system checks and resetting DummyStartupInterface internal state.
         """
         clear_system_checks()
+        gm_bootstrap._registered_system_check_interfaces.clear()
         _reset_dummy_interface_state()
 
     def tearDown(self) -> None:
@@ -328,6 +332,7 @@ class SystemCheckRegistryTests(SimpleTestCase):
         Restore global system check registry to an empty state after each test.
         """
         clear_system_checks()
+        gm_bootstrap._registered_system_check_interfaces.clear()
 
     def test_capability_registers_system_check(self) -> None:
         DummyStartupInterface.get_capabilities()
@@ -340,6 +345,66 @@ class SystemCheckRegistryTests(SimpleTestCase):
             DummyStartupCapability.check_calls,
             [DummyStartupInterface] * len(checks[DummyStartupInterface]),
         )
+
+    def test_registers_distinct_interfaces_with_same_class_name(self) -> None:
+        """Register checks for same-named interface classes from different modules."""
+        calls: list[str] = []
+
+        FirstInterface = type(
+            "DuplicateInterface",
+            (InterfaceBase,),
+            {
+                "__module__": "tests.first_app.interfaces",
+                "_interface_type": "first",
+                "input_fields": {},
+                "configured_capabilities": (),
+            },
+        )
+        SecondInterface = type(
+            "DuplicateInterface",
+            (InterfaceBase,),
+            {
+                "__module__": "tests.second_app.interfaces",
+                "_interface_type": "second",
+                "input_fields": {},
+                "configured_capabilities": (),
+            },
+        )
+
+        def first_check() -> list[object]:
+            calls.append("first")
+            return []
+
+        def second_check() -> list[object]:
+            calls.append("second")
+            return []
+
+        register_system_check(FirstInterface, first_check)
+        register_system_check(SecondInterface, second_check)
+
+        registered_wrappers: list[Callable[..., list[object]]] = []
+
+        def fake_register(
+            _tag: str,
+        ) -> Callable[
+            [Callable[..., list[object]]],
+            Callable[..., list[object]],
+        ]:
+            def decorator(
+                check: Callable[..., list[object]],
+            ) -> Callable[..., list[object]]:
+                registered_wrappers.append(check)
+                return check
+
+            return decorator
+
+        with patch("general_manager.bootstrap.register", side_effect=fake_register):
+            GeneralmanagerConfig.register_system_checks()
+
+        self.assertEqual(len(registered_wrappers), 2)
+        for check in registered_wrappers:
+            self.assertEqual(check(), [])
+        self.assertEqual(calls, ["first", "second"])
 
 
 class StartupHookEntryTests(SimpleTestCase):
@@ -732,3 +797,54 @@ class StartupHookRunnerDependencyOrderingTests(SimpleTestCase):
         self.assertEqual(len(execution_log), 3)
         executed_names = {log[0] for log in execution_log}
         self.assertEqual(executed_names, {"X1", "X2", "Y"})
+
+    def test_runner_does_not_skip_equal_distinct_resolver_objects(self) -> None:
+        """Verify equal resolver objects still execute their own hook entries."""
+
+        class InterfaceA(InterfaceBase):
+            _interface_type = "a"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class InterfaceB(InterfaceBase):
+            _interface_type = "b"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class EqualResolver:
+            def __call__(self, iface: object) -> set[type[InterfaceBase]]:
+                return set()
+
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, EqualResolver)
+
+            def __hash__(self) -> int:
+                return 1
+
+        execution_log: list[str] = []
+        resolver_a = EqualResolver()
+        resolver_b = EqualResolver()
+
+        register_startup_hook(
+            InterfaceA,
+            lambda: execution_log.append("A"),
+            dependency_resolver=resolver_a,
+        )
+        register_startup_hook(
+            InterfaceB,
+            lambda: execution_log.append("B"),
+            dependency_resolver=resolver_b,
+        )
+
+        def fake_run(self: BaseCommand, argv: list[str]) -> str:
+            return "ok"
+
+        BaseCommand.run_from_argv = fake_run  # type: ignore[assignment]
+        GeneralmanagerConfig.install_startup_hook_runner()
+        BaseCommand().run_from_argv(["manage.py", "test"])
+
+        self.assertEqual(sorted(execution_log), ["A", "B"])

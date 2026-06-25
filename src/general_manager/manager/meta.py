@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Type, TypeVar, cast
+from _thread import LockType
+from typing import TYPE_CHECKING, ClassVar, Iterable, TypeVar, cast
 
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.logging import get_logger
@@ -11,9 +13,14 @@ from general_manager.logging import get_logger
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
     from general_manager.interface.manifests import ManifestCapabilityBuilder
+    from django.db.models import Model
 
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
+type MetaPreCreationHook = Callable[
+    [str, dict[str, object], type[InterfaceBase]],
+    tuple[dict[str, object], type[InterfaceBase], type["Model"] | None],
+]
 
 logger = get_logger("manager.meta")
 
@@ -23,10 +30,11 @@ class InvalidInterfaceTypeError(TypeError):
 
     def __init__(self, interface_name: str) -> None:
         """
-        Initialize an InvalidInterfaceTypeError indicating a configured interface is not a subclass of InterfaceBase.
+        Initialize an error for an invalid manager ``Interface`` declaration.
 
         Parameters:
-            interface_name (str): Name of the configured interface class that is invalid; included in the exception message.
+            interface_name: Name of the configured interface class, or a best
+                effort type name for non-class declarations.
         """
         super().__init__(f"{interface_name} must be a subclass of InterfaceBase.")
 
@@ -39,8 +47,10 @@ class MissingAttributeError(AttributeError):
         Initialize the MissingAttributeError with the missing attribute and its owning class.
 
         Parameters:
-            attribute_name (str): Name of the attribute that was not found.
-            class_name (str): Name of the class where the attribute lookup occurred.
+            attribute_name: Name of the descriptor-backed manager field that was
+                absent from the instance's ``_attributes`` mapping.
+            class_name: Name of the manager class where the attribute lookup
+                occurred.
 
         The exception message is set to "`{attribute_name} not found in {class_name}.`".
         """
@@ -55,8 +65,10 @@ class AttributeEvaluationError(AttributeError):
         Initialize an AttributeEvaluationError that wraps an exception raised while evaluating a descriptor attribute.
 
         Parameters:
-            attribute_name (str): Name of the attribute whose evaluation failed.
-            error (Exception): The original exception that was raised; retained for inspection.
+            attribute_name: Name of the descriptor-backed manager field whose
+                callable value failed.
+            error: Original exception raised by the callable value; it is
+                chained as the cause by the descriptor.
         """
         super().__init__(f"Error calling attribute {attribute_name}: {error}.")
 
@@ -67,6 +79,15 @@ class InvalidManagerStateError(AttributeError):
     def __init__(
         self, manager_name: str, reason: str, attribute_name: str | None
     ) -> None:
+        """
+        Initialize an invalid-state access error.
+
+        Parameters:
+            manager_name: Concrete manager class name being accessed.
+            reason: Stored invalidation reason, usually set by delete flows.
+            attribute_name: Descriptor-backed field name being read, or
+                ``None`` when the caller is checking the whole manager.
+        """
         detail = (
             f"Cannot access attribute {attribute_name!r} on invalidated "
             f"{manager_name}: {reason}."
@@ -81,32 +102,56 @@ class _nonExistent:
 
 
 class GeneralManagerMeta(type):
-    """Metaclass responsible for wiring GeneralManager interfaces and registries."""
+    """
+    Metaclass responsible for wiring GeneralManager interfaces and registries.
 
-    all_classes: ClassVar[list[Type[GeneralManager]]] = []
-    read_only_classes: ClassVar[list[Type[GeneralManager]]] = []
-    pending_graphql_interfaces: ClassVar[list[Type[GeneralManager]]] = []
-    pending_attribute_initialization: ClassVar[list[Type[GeneralManager]]] = []
-    _attribute_initialization_lock: ClassVar[Any] = threading.Lock()
+    The metaclass validates declared ``Interface`` classes, lets interface
+    lifecycle hooks alter class creation, tracks manager classes for startup
+    initialization and GraphQL generation, and lazily installs descriptor-backed
+    fields for managers imported after startup. The process-global registries
+    are append-only for class creation; this class does not deduplicate entries
+    or lock registry mutation outside descriptor initialization.
+    """
+
+    all_classes: ClassVar[list[type[GeneralManager]]] = []
+    read_only_classes: ClassVar[list[type[GeneralManager]]] = []
+    pending_graphql_interfaces: ClassVar[list[type[GeneralManager]]] = []
+    pending_attribute_initialization: ClassVar[list[type[GeneralManager]]] = []
+    _attribute_initialization_lock: ClassVar[LockType] = threading.Lock()
     Interface: type[InterfaceBase]
 
-    def __getattribute__(cls, attribute_name: str) -> Any:
+    def __getattribute__(cls, attribute_name: str) -> object:
         """
         Initialize late-imported field descriptors before class attribute lookup.
 
         ``__getattr__`` is only reached for missing names, so inherited
         ``GeneralManager`` attributes must pass through here to let declared
         fields override inherited names the same way bootstrap initialization
-        does.
+        does. "Non-private" means the requested name does not start with
+        ``"_"`` and is not exactly ``"Interface"``. Probing an unknown public
+        name may call ``Interface.get_attributes()``, but it installs
+        descriptors only when the probed name is declared by the interface.
+
+        Parameters:
+            attribute_name: Class attribute being read.
+
+        Returns:
+            The attribute returned by ``type.__getattribute__`` after optional
+            descriptor initialization.
+
+        Raises:
+            AttributeError: Propagated from normal class attribute lookup.
+            Exception: Exceptions from ``Interface.get_attributes()`` other than
+                ``NotImplementedError`` propagate unchanged.
         """
         if not attribute_name.startswith("_") and attribute_name != "Interface":
-            manager_class = cast(Type["GeneralManager"], cls)
+            manager_class = cast(type["GeneralManager"], cls)
             GeneralManagerMeta.ensure_attributes_initialized(
                 manager_class, attribute_name
             )
         return type.__getattribute__(cls, attribute_name)
 
-    def __getattr__(cls, attribute_name: str) -> Any:
+    def __getattr__(cls, attribute_name: str) -> object:
         """
         Lazily install field descriptors for manager classes imported after startup.
 
@@ -114,9 +159,22 @@ class GeneralManagerMeta(type):
         Managers defined later, for example in an interactive shell or a test scratch
         module, still register with this metaclass but have not had descriptors
         attached yet. If the missing class attribute is a declared manager field,
-        initialize the class and retry the lookup.
+        initialize the class and retry the lookup. Unknown names may call the
+        interface attribute provider, but they do not cache ``_attributes`` or
+        install descriptors unless the name is declared.
+
+        Parameters:
+            attribute_name: Missing class attribute being resolved.
+
+        Returns:
+            The descriptor-backed attribute value after initialization.
+
+        Raises:
+            AttributeError: If the name is not an interface-backed field.
+            Exception: Exceptions from ``Interface.get_attributes()`` other than
+                ``NotImplementedError`` propagate unchanged.
         """
-        manager_class = cast(Type["GeneralManager"], cls)
+        manager_class = cast(type["GeneralManager"], cls)
         if GeneralManagerMeta.ensure_attributes_initialized(
             manager_class, attribute_name
         ):
@@ -125,7 +183,7 @@ class GeneralManagerMeta(type):
 
     @staticmethod
     def ensure_attributes_initialized(
-        manager_class: Type["GeneralManager"],
+        manager_class: type["GeneralManager"],
         attribute_name: str | None = None,
     ) -> bool:
         """
@@ -134,7 +192,31 @@ class GeneralManagerMeta(type):
         Returns ``True`` when the class exposes ``attribute_name`` after
         initialization, or when no specific attribute was requested and
         descriptors were installed. Returns ``False`` for unknown attributes or
-        classes that do not expose interface-backed fields.
+        classes that do not expose interface-backed fields. The class-level
+        ``manager_class._attributes`` cache stores the ``dict[str, object]``
+        interface attribute mapping used to build descriptors; manager
+        instances also store resolved per-instance values on
+        ``instance._attributes``. This shared attribute name is intentional
+        compatibility behavior. Attribute mapping key order is preserved when
+        descriptors are installed, empty mappings still count as successful
+        initialization when no specific ``attribute_name`` was requested, and
+        non-string keys are not validated here but are incompatible with normal
+        descriptor installation.
+
+        Parameters:
+            manager_class: Manager class whose descriptors should be installed.
+            attribute_name: Optional single field name to validate before
+                installing descriptors.
+
+        Returns:
+            ``True`` when descriptors were already present or successfully
+            installed for the requested field; otherwise ``False``. A missing
+            ``get_attributes`` method or a ``NotImplementedError`` from that
+            method returns ``False``.
+
+        Raises:
+            Exception: Exceptions from ``Interface.get_attributes()`` other than
+                ``NotImplementedError`` propagate unchanged.
         """
         try:
             interface = type.__getattribute__(manager_class, "Interface")
@@ -177,7 +259,22 @@ class GeneralManagerMeta(type):
         instance: "GeneralManager",
         attribute_name: str | None = None,
     ) -> None:
-        """Raise when descriptor-backed field access targets an invalidated manager."""
+        """
+        Raise when descriptor-backed field access targets an invalidated manager.
+
+        Missing ``_manager_state_valid`` is treated as valid. Missing
+        ``_manager_state_reason`` falls back to ``"manager state is invalid"``
+        when the manager is marked invalid.
+
+        Parameters:
+            instance: Manager instance being accessed.
+            attribute_name: Field name being read, or ``None`` for a whole
+                manager validity check.
+
+        Raises:
+            InvalidManagerStateError: If the manager carries an invalidated
+                state flag.
+        """
         if getattr(instance, "_manager_state_valid", True):
             return
         reason = getattr(instance, "_manager_state_reason", "manager state is invalid")
@@ -191,21 +288,46 @@ class GeneralManagerMeta(type):
         mcs: type["GeneralManagerMeta"],
         name: str,
         bases: tuple[type, ...],
-        attrs: dict[str, Any],
+        attrs: dict[str, object],
     ) -> type:
         """
         Create a GeneralManager subclass, integrate any declared Interface hooks, and register the class for pending initialization and GraphQL processing.
 
-        If the class body defines an `Interface`, validates it is a subclass of `InterfaceBase`, invokes the interface's `handle_interface()` pre-creation hook to allow modification of the class namespace, creates the class, then invokes the post-creation hook and registers the class for attribute initialization and global tracking. If `Interface` is not defined, creates the class directly. If `settings.AUTOCREATE_GRAPHQL` is true, registers the created class for GraphQL interface processing.
+        If the class body directly defines an `Interface` key in ``attrs``, validates it is a subclass of `InterfaceBase`, calls ``interface.handle_interface()`` on that class object, invokes the returned pre-creation hook to allow modification of the class namespace, creates the class, then invokes the returned post-creation hook and registers the class for attribute initialization and global tracking. Inherited ``Interface`` attributes are not treated as declared by this creation path; subclasses that should be managers must declare their own ``Interface`` class body entry. ``InterfaceBase`` itself satisfies the subclass check, but its default lifecycle path raises ``NotImplementedError`` unless a lifecycle capability or override is available. ``handle_interface()`` is a classmethod on ``InterfaceBase``; concrete interfaces may inherit the capability-driven implementation or override it. It must return ``(pre_creation, post_creation)`` callables. ``pre_creation`` is called with ``(name, attrs, interface)`` and must return ``(attrs, interface_cls, model)`` where ``attrs`` is a ``dict[str, object]`` namespace passed to ``type.__new__``, ``interface_cls`` is a ``type[InterfaceBase]`` used for post-creation and capability selection, and ``model`` is a Django ``Model`` subclass or ``None`` passed to ``post_creation``. The metaclass does not separately assign ``new_class.Interface = interface_cls``; the returned ``attrs`` mapping must contain the final ``"Interface"`` entry when the created class should expose that interface. ``post_creation`` is called with ``(new_class, interface_cls, model)`` and returns ``None``. ``model`` is lifecycle pass-through owned by the interface capability; the metaclass does not store or validate it except by passing it to ``post_creation``. Return values are not type-validated beyond tuple unpacking and the later calls that consume them. If `Interface` is not defined directly in ``attrs``, creates the class directly. If `settings.AUTOCREATE_GRAPHQL` is true, registers the created class for GraphQL interface processing, including plain classes without an interface; later GraphQL bootstrap owns any filtering or failure behavior. If class creation or any interface-backed setup step raises before the settings check, ``pending_graphql_interfaces`` is not appended.
+
+        Capability selection is the interface capability manifest chosen by
+        ``ManifestCapabilityBuilder`` for the returned ``interface_cls``. It is built by
+        ``ManifestCapabilityBuilder.build(interface_cls)`` and stored by
+        ``interface_cls.set_capability_selection(selection)`` for later
+        capability-handler lookup. This metaclass
+        does not append to ``read_only_classes``; the read-only lifecycle
+        capability owns that registry.
 
         Parameters:
             mcs (type): The metaclass creating the class.
             name (str): Name of the class being created.
             bases (tuple[type, ...]): Base classes for the new class.
-            attrs (dict[str, Any]): Class namespace supplied during creation.
+            attrs (dict[str, object]): Class namespace supplied during creation.
 
         Returns:
             type: The newly created subclass, possibly modified by Interface hooks.
+
+        Raises:
+            InvalidInterfaceTypeError: If a declared ``Interface`` is not an
+                ``InterfaceBase`` subclass.
+            NotImplementedError: Propagated from interfaces that cannot provide
+                lifecycle hooks through ``handle_interface()``.
+            TypeError: Propagated from malformed hook call signatures, invalid
+                class namespace values passed to ``type.__new__``, invalid
+                returned interface classes consumed by capability setup, or
+                descriptor/class creation operations.
+            ValueError: Propagated from malformed lifecycle hook return
+                unpacking.
+            NotImplementedError: Propagated from interfaces that cannot provide
+                lifecycle hooks through ``handle_interface()``.
+            Exception: Other exceptions from interface pre/post creation hooks,
+                capability selection, or setting the capability selection
+                propagate unchanged.
         """
         logger.debug(
             "creating manager class",
@@ -220,17 +342,26 @@ class GeneralManagerMeta(type):
             mcs: type["GeneralManagerMeta"],
             name: str,
             bases: tuple[type, ...],
-            attrs: dict[str, Any],
-        ) -> Type["GeneralManager"]:
+            attrs: dict[str, object],
+        ) -> type["GeneralManager"]:
             """Helper to instantiate the class via the default ``type.__new__``."""
-            return cast(Type["GeneralManager"], type.__new__(mcs, name, bases, attrs))
+            return cast(type["GeneralManager"], type.__new__(mcs, name, bases, attrs))
 
         if "Interface" in attrs:
-            interface = attrs.pop("Interface")
-            if not issubclass(interface, InterfaceBase):
-                raise InvalidInterfaceTypeError(interface.__name__)
+            interface_candidate = attrs.pop("Interface")
+            if not isinstance(interface_candidate, type) or not issubclass(
+                interface_candidate, InterfaceBase
+            ):
+                interface_name = getattr(
+                    interface_candidate,
+                    "__name__",
+                    type(interface_candidate).__name__,
+                )
+                raise InvalidInterfaceTypeError(interface_name)
+            interface = interface_candidate
             pre_creation, post_creation = interface.handle_interface()
-            attrs, interface_cls, model = pre_creation(name, attrs, interface)
+            pre_creation_for_meta = cast(MetaPreCreationHook, pre_creation)
+            attrs, interface_cls, model = pre_creation_for_meta(name, attrs, interface)
             new_class = create_new_general_manager_class(mcs, name, bases, attrs)
             post_creation(new_class, interface_cls, model)
             selection = _capability_builder().build(interface_cls)
@@ -269,21 +400,29 @@ class GeneralManagerMeta(type):
 
     @staticmethod
     def create_at_properties_for_attributes(
-        attributes: Iterable[str], new_class: Type[GeneralManager]
+        attributes: Iterable[str], new_class: type[GeneralManager]
     ) -> None:
         """
         Attach descriptor properties to new_class for each name in attributes.
 
-        Each generated descriptor returns the interface field type when accessed on the class and resolves the corresponding value from instance._attributes when accessed on an instance. If the stored value is callable it is invoked with instance._interface; a missing attribute raises MissingAttributeError and an exception raised while invoking a callable is wrapped in AttributeEvaluationError.
+        Each generated descriptor returns the interface field type when accessed on the class and resolves the corresponding value from instance._attributes when accessed on an instance. Existing attributes with the same names are overwritten unconditionally, matching bootstrap descriptor installation. Generated descriptors implement only ``__get__``; assignment to the same name on the class replaces the descriptor, and instance assignment follows normal non-data-descriptor shadowing rules. Descriptor reads do not cache resolved values. Duplicate names are processed in order, so later duplicates overwrite earlier descriptors. Non-string names or iterables that raise during iteration propagate their original exception and may leave descriptors from earlier names installed. If called through ``ensure_attributes_initialized()``, those failures can occur after ``manager_class._attributes`` is cached and before pending-initialization removal. If the stored value is callable it is always treated as a deferred evaluator and invoked with instance._interface; expose literal callables by wrapping them in a non-callable container or by using a custom descriptor path. A missing stored key raises MissingAttributeError, but a missing ``instance._attributes`` mapping or missing ``instance._interface`` attribute raises the normal ``AttributeError``. A present but malformed ``_interface`` is passed to the callable unchanged; callable failures are wrapped in ``AttributeEvaluationError``.
 
         Parameters:
             attributes (Iterable[str]): Names of attributes for which descriptors will be created.
-            new_class (Type[GeneralManager]): Class that will receive the generated descriptor attributes.
+            new_class (type[GeneralManager]): Class that will receive the generated descriptor attributes.
+
+        Raises:
+            MissingAttributeError: Later raised by generated descriptors when an
+                instance does not contain the requested attribute.
+            AttributeEvaluationError: Later raised by generated descriptors when
+                a callable attribute value fails.
+            InvalidManagerStateError: Later raised by generated descriptors when
+                reading an invalidated manager.
         """
 
         def descriptor_method(
             attr_name: str,
-            new_class: type,
+            new_class: type[GeneralManager],
         ) -> object:
             """
             Create a descriptor that provides attribute access backed by an instance's interface attributes.
@@ -292,7 +431,7 @@ class GeneralManagerMeta(type):
 
             Parameters:
                 attr_name (str): The name of the attribute the descriptor resolves.
-                new_class (type): The class that will receive the descriptor; used to access its `Interface`.
+                new_class (type[GeneralManager]): The class that will receive the descriptor; used to access its `Interface`.
 
             Returns:
                 descriptor (object): A descriptor object suitable for assigning as a class attribute.
@@ -300,16 +439,18 @@ class GeneralManagerMeta(type):
 
             class Descriptor:
                 def __init__(
-                    self, descriptor_attr_name: str, descriptor_class: Type[Any]
+                    self,
+                    descriptor_attr_name: str,
+                    descriptor_class: type[GeneralManager],
                 ) -> None:
                     self._attr_name = descriptor_attr_name
                     self._class = descriptor_class
 
                 def __get__(
                     self,
-                    instance: Any | None,
-                    owner: type | None = None,
-                ) -> Any:
+                    instance: GeneralManager | None,
+                    owner: type[GeneralManager] | None = None,
+                ) -> object:
                     """
                     Provide the class field type when accessed on the class, or resolve and return the stored attribute value for an instance.
 
@@ -321,8 +462,16 @@ class GeneralManagerMeta(type):
                         The field type (when accessed on the class) or the resolved attribute value from the instance.
 
                     Raises:
+                        KeyError: If class-level field type resolution cannot
+                            find the field in the interface metadata.
+                        InvalidManagerStateError: If the instance was
+                            invalidated before access.
                         MissingAttributeError: If the attribute is not present in instance._attributes.
-                        AttributeEvaluationError: If calling a callable attribute raises an exception; the original exception is wrapped.
+                        AttributeEvaluationError: If calling a callable
+                            attribute raises an exception; the original
+                            exception is chained as ``__cause__`` and the
+                            message starts with
+                            ``"Error calling attribute {name}:"``.
                     """
                     if instance is None:
                         return self._class.Interface.get_field_type(self._attr_name)
@@ -356,7 +505,7 @@ class GeneralManagerMeta(type):
                             raise AttributeEvaluationError(self._attr_name, e) from e
                     return attribute
 
-            return Descriptor(attr_name, cast(Type[Any], new_class))
+            return Descriptor(attr_name, new_class)
 
         for attr_name in attributes:
             setattr(new_class, attr_name, descriptor_method(attr_name, new_class))

@@ -136,6 +136,17 @@ class SearchIndexerTests(SimpleTestCase):
         """
         GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
 
+    def test_indexer_preserves_injected_falsey_backend(self) -> None:
+        class FalseyBackend(DevSearchBackend):
+            def __bool__(self) -> bool:
+                return False
+
+        backend = FalseyBackend()
+
+        indexer = SearchIndexer(backend)
+
+        assert indexer.backend is backend
+
     def test_indexer_indexes_configured_fields(self) -> None:
         """
         Verify that SearchIndexer indexes only the fields configured for the index and respects search filters.

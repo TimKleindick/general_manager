@@ -1,7 +1,8 @@
 """Utility manager that aggregates grouped GeneralManager data."""
 
 from __future__ import annotations
-from typing import Any, Generic, Iterator, Type, cast, get_args
+from collections.abc import Iterator
+from typing import Generic, cast, get_args
 from datetime import datetime, date, time
 from general_manager.api.property import GraphQLProperty
 from general_manager.measurement import Measurement
@@ -12,7 +13,7 @@ from general_manager.bucket.base_bucket import (
 )
 
 
-def _freeze_manager_value(value: Any) -> Any:
+def _freeze_manager_value(value: object) -> object:
     """Return a hashable representation for manager-backed group state."""
     if isinstance(value, GeneralManager):
         return tuple(
@@ -25,13 +26,17 @@ def _freeze_manager_value(value: Any) -> Any:
             )
         )
     if isinstance(value, dict):
+        frozen_items = (
+            (
+                _freeze_manager_value(key),
+                _freeze_manager_value(item),
+            )
+            for key, item in value.items()
+        )
         return tuple(
             sorted(
-                (
-                    _freeze_manager_value(key),
-                    _freeze_manager_value(item),
-                )
-                for key, item in value.items()
+                frozen_items,
+                key=lambda entry: (type(entry[0]).__name__, repr(entry[0])),
             )
         )
     if isinstance(value, (list, tuple)):
@@ -60,17 +65,17 @@ class GroupManager(Generic[GeneralManagerType]):
 
     def __init__(
         self,
-        manager_class: Type[GeneralManagerType],
-        group_by_value: dict[str, Any],
+        manager_class: type[GeneralManagerType],
+        group_by_value: dict[str, object],
         data: Bucket[GeneralManagerType],
     ) -> None:
         """
         Initialise a grouped manager with the underlying bucket and grouping keys.
 
         Parameters:
-            manager_class (type[GeneralManagerType]): Manager subclass whose records were grouped.
-            group_by_value (dict[str, Any]): Key values describing this group.
-            data (Bucket[GeneralManagerType]): Bucket of records belonging to the group.
+            manager_class: Manager subclass whose records were grouped.
+            group_by_value: Grouping key values describing this group.
+            data: Bucket of records belonging to the group.
 
         Returns:
             None
@@ -78,11 +83,19 @@ class GroupManager(Generic[GeneralManagerType]):
         self._manager_class = manager_class
         self._group_by_value = group_by_value
         self._data = data
-        self._grouped_data: dict[str, Any] = {}
+        self._grouped_data: dict[str, object] = {}
 
     def __hash__(self) -> int:
         """
-        Return a stable hash based on the manager class, keys, and grouped data.
+        Return a hash based on the manager class, group keys, and grouped data.
+
+        Manager instances, mappings, lists, tuples, and sets are recursively
+        frozen before hashing. Mapping entries are sorted by their frozen
+        key/value tuples; sets become `frozenset` values. The resulting hash
+        follows normal Python hash
+        stability rules: it is suitable for the lifetime of unchanged group
+        state, but it is not a cross-process persistent identifier and can
+        change if mutable grouped data changes after construction.
 
         Returns:
             int: Hash value combining class, keys, and data.
@@ -118,16 +131,22 @@ class GroupManager(Generic[GeneralManagerType]):
         Return a debug representation showing grouped keys and data.
 
         Returns:
-            str: Debug string summarising the grouped manager.
+            Debug string in the form
+            `"GroupManager(<manager_class>, <group_by_value>, <data>)"`.
         """
         return f"{self.__class__.__name__}({self._manager_class}, {self._group_by_value}, {self._data})"
 
-    def __iter__(self) -> Iterator[tuple[str, Any]]:
+    def __iter__(self) -> Iterator[tuple[str, object]]:
         """
         Iterate over attribute names and their aggregated values.
 
         Yields:
-            tuple[str, Any]: Attribute name and aggregated value pairs.
+            Attribute name and aggregated value pairs. Interface attributes are
+            the keys returned by `manager_class.Interface.get_attributes()` and
+            are yielded in that mapping's iteration order. `GraphQLProperty`
+            values declared directly on the manager class are yielded after
+            interface attributes in class `__dict__` order. Duplicate names are
+            not filtered.
         """
         for attribute in self._manager_class.Interface.get_attributes().keys():
             yield attribute, getattr(self, attribute)
@@ -135,7 +154,7 @@ class GroupManager(Generic[GeneralManagerType]):
             if isinstance(attr_value, GraphQLProperty):
                 yield attribute, getattr(self, attribute)
 
-    def __getattr__(self, item: str) -> Any:
+    def __getattr__(self, item: str) -> object:
         """
         Lazily compute aggregated attribute values when accessed.
 
@@ -143,18 +162,25 @@ class GroupManager(Generic[GeneralManagerType]):
             item (str): Attribute name requested by the caller.
 
         Returns:
-            Any: Aggregated value stored for the given attribute.
+            Group-by key value or cached aggregate for the requested attribute.
+            Cached aggregate values are stored in the private `_grouped_data`
+            dictionary under the requested attribute name and are not
+            invalidated if the underlying bucket or `group_by_value` mapping is
+            mutated after first access.
 
         Raises:
-            AttributeError: If the attribute cannot be resolved from group data.
+            MissingGroupAttributeError: If the attribute cannot be resolved
+                from group metadata or a `GraphQLProperty` return annotation.
+            Exception: Exceptions raised while iterating the underlying bucket
+                or reading grouped record attributes propagate unchanged.
         """
         if item in self._group_by_value:
             return self._group_by_value[item]
-        if item not in self._grouped_data.keys():
+        if item not in self._grouped_data:
             self._grouped_data[item] = self.combine_value(item)
         return self._grouped_data[item]
 
-    def combine_value(self, item: str) -> Any:
+    def combine_value(self, item: str) -> object:
         """
         Aggregate the values of a named attribute across all records in the group.
 
@@ -162,10 +188,27 @@ class GroupManager(Generic[GeneralManagerType]):
             item (str): Attribute name to aggregate from each grouped record.
 
         Returns:
-            Any: The aggregated value for `item` according to its type (e.g., merged Bucket/GeneralManager, concatenated list, merged dict, deduplicated comma-separated string, boolean OR, numeric sum, or latest datetime). Returns `None` if all values are `None` or if `item` is `"id"`.
+            Aggregated value for `item`: group `"id"`, empty buckets, and
+            all-`None` values return `None`; bucket/manager values are unioned
+            with `|`; lists are concatenated; dicts are merged with later values
+            overwriting earlier keys; strings are deduplicated in encounter
+            order and joined by `", "`; booleans use `any()` before numeric
+            handling; numeric and `Measurement` values are summed;
+            datetime/date/time values use `max()`. The aggregation branch is
+            selected from interface metadata or a concrete `GraphQLProperty`
+            return annotation, not from each runtime value, so mixed runtime
+            values follow the selected branch and may raise from that operation.
 
         Raises:
-            MissingGroupAttributeError: If the attribute does not exist or its type cannot be determined on the manager.
+            MissingGroupAttributeError: If the attribute does not exist or its
+                type cannot be determined on the manager. `GraphQLProperty`
+                annotations use the first `typing.get_args()` entry when
+                present, otherwise the annotation object itself; unsupported
+                non-class annotations raise this error.
+            Exception: Exceptions raised while reading grouped record
+                attributes, unioning bucket/manager values, merging containers,
+                summing values, or comparing date/time values propagate
+                unchanged.
         """
         if item == "id":
             return None
@@ -185,40 +228,43 @@ class GroupManager(Generic[GeneralManagerType]):
         if data_type is None or not isinstance(data_type, type):
             raise MissingGroupAttributeError(self.__class__.__name__, item)
 
-        total_data = []
+        total_data: list[object] = []
         for entry in self._data:
             total_data.append(getattr(entry, item))
 
-        new_data: Any = None
-        if all([i is None for i in total_data]):
+        new_data: object = None
+        if all(i is None for i in total_data):
             return new_data
         total_data = [i for i in total_data if i is not None]
 
         if issubclass(data_type, (Bucket, GeneralManager)):
-            for entry in total_data:
+            for value in total_data:
                 if new_data is None:
-                    new_data = entry
+                    new_data = value
                 else:
-                    new_data = entry | new_data
+                    new_data = value | new_data  # type: ignore[operator]
         elif issubclass(data_type, list):
-            new_data = []
-            for entry in total_data:
-                new_data.extend(entry)
+            list_data: list[object] = []
+            for value in total_data:
+                list_data.extend(cast(list[object], value))
+            new_data = list_data
         elif issubclass(data_type, dict):
-            new_data = {}
-            for entry in total_data:
-                new_data.update(entry)
+            dict_data: dict[object, object] = {}
+            for value in total_data:
+                dict_data.update(cast(dict[object, object], value))
+            new_data = dict_data
         elif issubclass(data_type, str):
-            temp_data = []
-            for entry in total_data:
-                if entry not in temp_data:
-                    temp_data.append(str(entry))
-            new_data = ", ".join(temp_data)
+            text_data: list[str] = []
+            for value in total_data:
+                text_value = str(value)
+                if text_value not in text_data:
+                    text_data.append(text_value)
+            new_data = ", ".join(text_data)
         elif issubclass(data_type, bool):
             new_data = any(total_data)
         elif issubclass(data_type, (int, float, Measurement)):
-            new_data = sum(total_data)
+            new_data = sum(cast(list[int | float | Measurement], total_data))
         elif issubclass(data_type, (datetime, date, time)):
-            new_data = max(total_data)
+            new_data = max(cast(list[datetime | date | time], total_data))
 
         return new_data

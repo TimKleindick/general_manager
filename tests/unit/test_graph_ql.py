@@ -28,6 +28,9 @@ from general_manager.manager.input import Input
 from general_manager.api.property import (
     GraphQLProperty,
     GraphQLPropertyCache,
+    GraphQLPropertyReturnAnnotationError,
+    GraphQLPropertyTimeoutConfigurationError,
+    GraphQLPropertyWarmUpConfigurationError,
     graph_ql_property,
 )
 from general_manager.interface.base_interface import InterfaceBase
@@ -66,6 +69,72 @@ class GraphQLPropertyTests(TestCase):
 
         prop = GraphQLProperty(mock_getter)
         self.assertEqual(prop.graphql_type_hint, str)
+
+    def test_graph_ql_property_direct_decorator_requires_return_annotation(self):
+        """Public decorator validates direct usage at decoration time."""
+
+        def mock_getter():
+            """Unannotated resolver used to trigger decorator validation."""
+            return "test"
+
+        with self.assertRaises(GraphQLPropertyReturnAnnotationError):
+            graph_ql_property(mock_getter)
+
+    def test_graph_ql_property_configured_decorator_sets_metadata(self):
+        """Configured public decorator stores GraphQL metadata on the descriptor."""
+
+        def mock_getter() -> str:
+            """Annotated resolver used by configured decorator validation."""
+            return "test"
+
+        prop = graph_ql_property(sortable=True, filterable=True)(mock_getter)
+
+        self.assertIsInstance(prop, GraphQLProperty)
+        self.assertTrue(prop.sortable)
+        self.assertTrue(prop.filterable)
+        self.assertEqual(prop.cache, "run")
+
+    def test_graph_ql_property_configured_decorator_defers_validation_until_applied(
+        self,
+    ):
+        """Configured decorators validate options when wrapping a function."""
+        decorator = graph_ql_property(cache="timeout")
+
+        def mock_getter() -> str:
+            """Annotated resolver used to trigger timeout validation."""
+            return "test"
+
+        with self.assertRaises(GraphQLPropertyTimeoutConfigurationError):
+            decorator(mock_getter)
+
+    def test_graph_ql_property_validation_precedence(self):
+        """Warm-up validation runs before timeout/cache decorator validation."""
+
+        def mock_getter() -> str:
+            """Annotated resolver used for validation precedence."""
+            return "test"
+
+        with self.assertRaises(GraphQLPropertyWarmUpConfigurationError):
+            GraphQLProperty(mock_getter, cache="invalid", warm_up=True)
+        with self.assertRaises(GraphQLPropertyTimeoutConfigurationError):
+            GraphQLProperty(mock_getter, cache="invalid", timeout=1)
+
+    def test_public_graphql_property_errors_are_importable_from_api_module(self):
+        """Documented GraphQL property errors are part of the API module."""
+        from general_manager import api
+
+        self.assertIs(
+            api.GraphQLPropertyReturnAnnotationError,
+            GraphQLPropertyReturnAnnotationError,
+        )
+        self.assertIs(
+            api.GraphQLPropertyTimeoutConfigurationError,
+            GraphQLPropertyTimeoutConfigurationError,
+        )
+        self.assertIs(
+            api.GraphQLPropertyWarmUpConfigurationError,
+            GraphQLPropertyWarmUpConfigurationError,
+        )
 
     def test_graphql_property_cache_options_exclude_auto(self):
         """GraphQL property cache scopes expose only user-selectable values."""
@@ -977,6 +1046,32 @@ class TestGrapQlMutation(TestCase):
     @patch("general_manager.api.graphql.GraphQL.generate_create_mutation_class")
     @patch("general_manager.api.graphql.GraphQL.generate_update_mutation_class")
     @patch("general_manager.api.graphql.GraphQL.generate_delete_mutation_class")
+    def test_create_graphql_mutation_skips_none_factory_results(
+        self, mock_delete: MagicMock, mock_update: MagicMock, mock_create: MagicMock
+    ):
+        """Mutation registration skips failed factories and keeps later mutations."""
+
+        class UpdateMutation(graphene.Mutation):
+            """Minimal mutation class used as a registry sentinel."""
+
+            @staticmethod
+            def mutate(_root: object, _info: object) -> "UpdateMutation":
+                return UpdateMutation()
+
+        mock_create.return_value = None
+        mock_update.return_value = UpdateMutation
+        mock_delete.return_value = None
+
+        GraphQL.create_graphql_mutation(self.manager)
+
+        mock_create.assert_called_once()
+        mock_update.assert_called_once()
+        mock_delete.assert_called_once()
+        self.assertEqual(GraphQL._mutations, {"updateDummyManager": UpdateMutation})
+
+    @patch("general_manager.api.graphql.GraphQL.generate_create_mutation_class")
+    @patch("general_manager.api.graphql.GraphQL.generate_update_mutation_class")
+    @patch("general_manager.api.graphql.GraphQL.generate_delete_mutation_class")
     def test_create_graphql_mutation_with_undefined_create_update_delete(
         self, mock_delete: MagicMock, mock_update: MagicMock, mock_create: MagicMock
     ):
@@ -1272,6 +1367,20 @@ class TestGrapQlMutation(TestCase):
                             "is_derived": False,
                             "default": None,
                         },
+                        "member_list": {
+                            "type": GeneralManager,
+                            "is_required": False,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                        },
+                        "member_id_list": {
+                            "type": list,
+                            "is_required": False,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                        },
                     }
 
         default_return_values = {"success": graphene.Boolean()}
@@ -1286,9 +1395,13 @@ class TestGrapQlMutation(TestCase):
         self.assertIn("relation", create_mutation._meta.arguments)
         self.assertNotIn("relation_id", create_mutation._meta.arguments)
         self.assertIn("external_id", create_mutation._meta.arguments)
+        self.assertIn("member_list", create_mutation._meta.arguments)
+        self.assertNotIn("member_id_list", create_mutation._meta.arguments)
         self.assertIn("relation", update_mutation._meta.arguments)
         self.assertNotIn("relation_id", update_mutation._meta.arguments)
         self.assertIn("external_id", update_mutation._meta.arguments)
+        self.assertIn("member_list", update_mutation._meta.arguments)
+        self.assertNotIn("member_id_list", update_mutation._meta.arguments)
 
     def test_create_mutation_excludes_non_editable_canonical_relation(self):
         class DummyManager:
@@ -1314,6 +1427,49 @@ class TestGrapQlMutation(TestCase):
         )
 
         self.assertNotIn("relation", mutation_class._meta.arguments)
+
+    def test_generate_create_mutation_class_forwards_history_comment(self):
+        class DummyManager:
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {
+                        "field1": {
+                            "type": str,
+                            "is_required": False,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                        }
+                    }
+
+            @classmethod
+            def create(cls, *_args, **_kwargs):
+                return DummyManager()
+
+        mutation_class = GraphQL.generate_create_mutation_class(
+            DummyManager, {"success": graphene.Boolean()}
+        )
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with patch.object(
+            DummyManager, "create", return_value=DummyManager()
+        ) as create_mock:
+            mutation_class.mutate(
+                None,
+                info,
+                field1="test_value",
+                history_comment="created through GraphQL",
+            )
+
+        create_mock.assert_called_once_with(
+            creator_id=info.context.user.id,
+            history_comment="created through GraphQL",
+            field1="test_value",
+        )
 
     def test_generate_update_mutation_class(self):
         """
@@ -1427,6 +1583,52 @@ class TestGrapQlMutation(TestCase):
 
         update_mock.assert_called_once_with(creator_id=info.context.user.id)
 
+    def test_generate_update_mutation_class_forwards_history_comment(self):
+        class DummyManager:
+            def __init__(self, *_, **_kwargs):
+                pass
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {
+                        "field1": {
+                            "type": str,
+                            "is_required": False,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                        }
+                    }
+
+            def update(self, **_kwargs):
+                return self
+
+        mutation_class = GraphQL.generate_update_mutation_class(
+            DummyManager, {"success": graphene.Boolean()}
+        )
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with patch.object(
+            DummyManager, "update", return_value=DummyManager()
+        ) as update_mock:
+            mutation_class.mutate(
+                None,
+                info,
+                id="1",
+                field1="test_value",
+                history_comment="updated through GraphQL",
+            )
+
+        update_mock.assert_called_once_with(
+            creator_id=info.context.user.id,
+            history_comment="updated through GraphQL",
+            field1="test_value",
+        )
+
     def test_generate_delete_mutation_class(self):
         """
         Test that the delete mutation class generated by GraphQL has the correct fields and behavior.
@@ -1497,6 +1699,7 @@ class TestGrapQlMutation(TestCase):
         )
         self.assertTrue(issubclass(mutation_class, graphene.Mutation))
         self.assertIn("success", mutation_class._meta.fields)
+        self.assertIn("history_comment", mutation_class._meta.arguments)
 
         info = MagicMock()
         info.context.user = AnonymousUser()
@@ -1508,6 +1711,40 @@ class TestGrapQlMutation(TestCase):
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info)
 
+    def test_generate_delete_mutation_class_forwards_history_comment(self):
+        class DummyManager:
+            def __init__(self, *_, **_kwargs):
+                pass
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {"id": None}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {}
+
+            def delete(self, **_kwargs):
+                return None
+
+        mutation_class = GraphQL.generate_delete_mutation_class(
+            DummyManager, {"success": graphene.Boolean()}
+        )
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with patch.object(DummyManager, "delete", return_value=None) as delete_mock:
+            mutation_class.mutate(
+                None,
+                info,
+                id="1",
+                history_comment="deleted through GraphQL",
+            )
+
+        delete_mock.assert_called_once_with(
+            creator_id=info.context.user.id,
+            history_comment="deleted through GraphQL",
+        )
+
 
 class GraphQLPropertyTypeHintTests(TestCase):
     def test_graphql_property_stores_return_type(self):
@@ -1516,6 +1753,28 @@ class GraphQLPropertyTypeHintTests(TestCase):
 
         prop = GraphQLProperty(getter)
         self.assertEqual(prop.graphql_type_hint, int)
+
+    def test_graphql_property_preserves_explicit_none_return_type(self):
+        def getter() -> None:
+            return None
+
+        prop = GraphQLProperty(getter)
+        self.assertIs(prop.graphql_type_hint, type(None))
+
+    def test_graphql_property_caches_failed_type_hint_resolution(self):
+        def getter() -> int:
+            return 1
+
+        prop = GraphQLProperty(getter)
+
+        with patch(
+            "general_manager.api.property.get_type_hints",
+            side_effect=NameError("MissingType"),
+        ) as get_hints:
+            self.assertIsNone(prop.graphql_type_hint)
+            self.assertIsNone(prop.graphql_type_hint)
+
+        get_hints.assert_called_once()
 
     def test_graphql_property_non_callable_raises_typeerror(self):
         with self.assertRaises(TypeError):
