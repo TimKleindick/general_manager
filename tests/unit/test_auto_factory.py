@@ -249,13 +249,21 @@ class AutoFactoryTestCase(TransactionTestCase):
         self,
     ):
         alias = self.database_alias
+        original_database_config = connections.databases.get(alias)
+        had_cached_connection = hasattr(connections._connections, alias)
+        original_connection = (
+            getattr(connections._connections, alias) if had_cached_connection else None
+        )
+        if had_cached_connection:
+            delattr(connections._connections, alias)
+
         connections.databases[alias] = {
             **connections.databases["default"],
             "NAME": ":memory:",
         }
         alias_connection = connections[alias]
-        # The alias is created only for this test, so opt it out of Django's
-        # default disallowed-database wrappers and clean it up below.
+        # The alias is overridden only for this test, so opt it out of Django's
+        # default disallowed-database wrappers and restore prior state below.
         for method_name, _ in self._disallowed_connection_methods:
             method = getattr(alias_connection, method_name)
             wrapped = getattr(method, "wrapped", None)
@@ -299,13 +307,20 @@ class AutoFactoryTestCase(TransactionTestCase):
                 0,
             )
         finally:
-            if alias_table_created:
-                with alias_connection.schema_editor() as schema:
-                    schema.delete_model(DummyModel)
-            alias_connection.close()
-            del connections.databases[alias]
-            if hasattr(connections._connections, alias):
-                delattr(connections._connections, alias)
+            try:
+                if alias_table_created:
+                    with alias_connection.schema_editor() as schema:
+                        schema.delete_model(DummyModel)
+            finally:
+                alias_connection.close()
+                if hasattr(connections._connections, alias):
+                    delattr(connections._connections, alias)
+                if original_database_config is None:
+                    connections.databases.pop(alias, None)
+                else:
+                    connections.databases[alias] = original_database_config
+                if had_cached_connection:
+                    setattr(connections._connections, alias, original_connection)
 
     def test_generate_instance_with_generate_function_for_one_entry(self):
         """
