@@ -8,6 +8,8 @@ from general_manager.rule.rule import (
 from typing import cast
 from general_manager.rule.handler import BaseRuleHandler
 
+NONE_VALUE = None
+
 
 class DummyObject:
     """Generic helper object that accepts arbitrary attributes for tests."""
@@ -247,6 +249,27 @@ class RuleTests(TestCase):
             ):
                 Rule(func)
 
+    def test_rule_handler_entries_must_be_non_empty_strings(self):
+        """Invalid RULE_HANDLERS entries fail before import_string() is called."""
+
+        invalid_entries = [
+            None,
+            123,
+            CustomLenHandler,
+            "",
+        ]
+
+        def func(item: DummyObject) -> bool:
+            return item.value > 1
+
+        for entry in invalid_entries:
+            with (
+                self.subTest(entry=entry),
+                override_settings(GENERAL_MANAGER={"RULE_HANDLERS": [entry]}),
+                self.assertRaises(InvalidRuleHandlerConfigurationError),
+            ):
+                Rule(func)
+
     def test_rule_with_floats(self):
         """
         Verifies that a Rule comparing a float field produces a failing evaluation and the correct error message.
@@ -420,6 +443,19 @@ class RuleTests(TestCase):
             {"username": "[username] (a) is too short (min length 2)!"},
         )
 
+    def test_rule_with_chained_standard_comparison_reports_failing_leg(self):
+        def func(item: DummyObject) -> bool:
+            return 1 < item.score < 5
+
+        x = DummyObject(score=0)
+        rule = Rule(func)
+
+        self.assertFalse(rule.evaluate(x))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"score": "1 must be < [score] (0)!"},
+        )
+
     def test_rule_with_lists(self):
         """
         Verifies that a Rule based on list length marks an empty list as invalid and produces the expected error message.
@@ -524,11 +560,11 @@ class RuleTests(TestCase):
         self.assertFalse(result)
         error_message = rule.get_error_message()
         expected_error_a = {
-            "age": "[age] (20) must be >= 18!",
+            "age": "[age], [has_permission] combination is not valid",
             "has_permission": "[age], [has_permission] combination is not valid",
         }
         expected_error_b = {
-            "age": "[age] (20) must be >= 18!",
+            "age": "[has_permission], [age] combination is not valid",
             "has_permission": "[has_permission], [age] combination is not valid",
         }
         self.assertIn(error_message, [expected_error_a, expected_error_b])
@@ -865,6 +901,38 @@ class RuleTests(TestCase):
         self.assertFalse(Rule(func_is_not, ignore_if_none=False).evaluate(x))
         self.assertTrue(Rule(func_is_not, ignore_if_none=False).evaluate(y))
 
+    def test_evaluate_comparison_leg_handles_none_safe_operations(self):
+        """None-safe comparison operators evaluate before unknown-operand fallback."""
+
+        def func(item: DummyObject) -> bool:
+            return item.value is None
+
+        x = DummyObject(value=None, values=[None])
+        rule = Rule(func, ignore_if_none=False)
+        rule.evaluate(x)
+
+        cases = [
+            ("item.value is None", True),
+            ("item.value is not None", False),
+            ("item.value == NONE_VALUE", True),
+            ("item.value != NONE_VALUE", False),
+            ("item.value in item.values", True),
+            ("item.value not in item.values", False),
+        ]
+
+        for expression, expected in cases:
+            node = ast.parse(expression, mode="eval").body
+            assert isinstance(node, ast.Compare)
+            with self.subTest(expression=expression):
+                self.assertIs(
+                    rule._evaluate_comparison_leg(
+                        node.left,
+                        node.comparators[0],
+                        node.ops[0],
+                    ),
+                    expected,
+                )
+
     def test_rule_with_in_and_not_in_operators(self):
         """Test rules using 'in' and 'not in' membership operators."""
 
@@ -882,3 +950,21 @@ class RuleTests(TestCase):
 
         self.assertFalse(Rule(func_not_in).evaluate(x))
         self.assertTrue(Rule(func_not_in).evaluate(y))
+
+    def test_eval_known_call_only_handles_unqualified_builtins(self):
+        """Qualified helper calls are not evaluated with built-in call semantics."""
+
+        def func(item: DummyObject) -> bool:
+            return item.value > 1
+
+        x = DummyObject(value=0, values=[1, 2])
+        rule = Rule(func)
+        rule.evaluate(x)
+
+        direct_call = ast.parse("sum(item.values)", mode="eval").body
+        qualified_call = ast.parse("helpers.sum(item.values)", mode="eval").body
+        assert isinstance(direct_call, ast.Call)
+        assert isinstance(qualified_call, ast.Call)
+
+        self.assertEqual(rule._eval_known_call(direct_call), 3)
+        self.assertIsNone(rule._eval_known_call(qualified_call))

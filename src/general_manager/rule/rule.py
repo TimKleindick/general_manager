@@ -169,7 +169,8 @@ class Rule(Generic[GeneralManagerType]):
             raise InvalidRuleHandlerConfigurationError("RULE_HANDLERS")
         handler_paths = cast(Sequence[object], handler_paths_setting)
         for path in handler_paths:
-            path = str(path)
+            if not isinstance(path, str) or path.strip() == "":
+                raise InvalidRuleHandlerConfigurationError(repr(path))
             imported_handler = import_string(path)
             if not isinstance(imported_handler, type) or not issubclass(
                 imported_handler, BaseRuleHandler
@@ -518,6 +519,10 @@ class Rule(Generic[GeneralManagerType]):
                             current_left = right
                             continue
 
+                    if leg_result is True:
+                        current_left = right
+                        continue
+
                     # Standard error message
                     lnm = self._get_node_name(current_left)
                     rnm = self._get_node_name(right)
@@ -554,15 +559,6 @@ class Rule(Generic[GeneralManagerType]):
     ) -> bool | None:
         left_value = self._eval_node(left)
         right_value = self._eval_node(right)
-        if left_value is None or right_value is None:
-            return None
-
-        evaluator = _COMPARISON_EVALUATORS.get(type(op))
-        if evaluator is not None:
-            try:
-                return evaluator(left_value, right_value)
-            except TypeError:
-                return None
 
         if isinstance(op, ast.Is):
             return left_value is right_value
@@ -576,6 +572,22 @@ class Rule(Generic[GeneralManagerType]):
         if isinstance(op, ast.NotIn):
             try:
                 return left_value not in cast(Container[object], right_value)
+            except TypeError:
+                return None
+
+        evaluator = _COMPARISON_EVALUATORS.get(type(op))
+        if evaluator is not None and isinstance(op, (ast.Eq, ast.NotEq)):
+            try:
+                return evaluator(left_value, right_value)
+            except TypeError:
+                return None
+
+        if left_value is None or right_value is None:
+            return None
+
+        if evaluator is not None:
+            try:
+                return evaluator(left_value, right_value)
             except TypeError:
                 return None
         return None
@@ -671,8 +683,10 @@ class Rule(Generic[GeneralManagerType]):
     def _eval_known_call(self, node: ast.Call) -> Optional[object]:
         if len(node.args) != 1 or node.keywords:
             return None
+        if not isinstance(node.func, ast.Name):
+            return None
 
-        function_name = self._get_node_name(node.func)
+        function_name = node.func.id
         value = self._eval_node(node.args[0])
         try:
             if function_name == "len":
