@@ -11,7 +11,7 @@ from django.core.cache import cache
 from django.test.utils import override_settings
 from django.utils import timezone
 
-from general_manager.chat.consumer import ChatConsumer
+from general_manager.chat.consumer import ChatConsumer, _has_tool_after_last_user
 from general_manager.chat.providers.base import (
     DoneEvent,
     TextChunkEvent,
@@ -396,6 +396,15 @@ class ChatConsumerConnectTests(unittest.TestCase):
 
 
 class ChatConsumerMessageTests(unittest.TestCase):
+    def test_has_tool_after_last_user_returns_false_without_user_or_tool(self) -> None:
+        assert _has_tool_after_last_user([]) is False
+        assert (
+            _has_tool_after_last_user(
+                [SimpleNamespace(role="assistant", content="hello")]
+            )
+            is False
+        )
+
     def test_receive_json_streams_text_and_done_events(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
@@ -479,6 +488,59 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
             mock_send_json.assert_awaited_once_with(
                 {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            )
+            assert consumer.provider.calls == []
+
+        asyncio.run(run())
+
+    def test_receive_json_rejects_message_while_confirmation_pending(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _Provider()
+        consumer._pending_confirmation = {"id": "tool-1"}
+
+        async def run() -> None:
+            with patch.object(
+                consumer, "send_json", new_callable=AsyncMock
+            ) as mock_send_json:
+                await consumer.receive_json({"type": "message", "text": "hello"})
+
+            mock_send_json.assert_awaited_once_with(
+                {
+                    "type": "error",
+                    "message": "A mutation confirmation is still pending.",
+                    "code": "confirmation_pending",
+                }
+            )
+            assert consumer.provider.calls == []
+
+        asyncio.run(run())
+
+    def test_receive_json_rejects_blank_message_text(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _Provider()
+
+        async def run() -> None:
+            with patch.object(
+                consumer, "send_json", new_callable=AsyncMock
+            ) as mock_send_json:
+                await consumer.receive_json({"type": "message", "text": "  "})
+
+            mock_send_json.assert_awaited_once_with(
+                {
+                    "type": "error",
+                    "message": "Message text is required.",
+                    "code": "bad_message",
+                }
             )
             assert consumer.provider.calls == []
 
@@ -798,6 +860,54 @@ class ChatConsumerMessageTests(unittest.TestCase):
         finally:
             cache.clear()
 
+    def test_load_history_returns_cache_when_database_read_fails(self) -> None:
+        consumer = ChatConsumer()
+        consumer.conversation = SimpleNamespace(pk=1)
+        consumer._history_cache = [{"role": "assistant", "content": "cached"}]
+
+        async def run() -> None:
+            with patch(
+                "general_manager.chat.models.get_conversation_messages",
+                side_effect=RuntimeError("db unavailable"),
+            ):
+                history = await consumer._load_history()
+
+            assert history == [{"role": "assistant", "content": "cached"}]
+
+        asyncio.run(run())
+
+    def test_record_message_persists_and_updates_cache(self) -> None:
+        consumer = ChatConsumer()
+        consumer.conversation = SimpleNamespace(pk=1)
+        consumer._history_cache = None
+
+        async def run() -> None:
+            with patch(
+                "general_manager.chat.models.append_chat_message",
+                return_value=None,
+            ) as append_message:
+                await consumer._record_message(
+                    role="assistant",
+                    content="Saved answer",
+                    tool_name="query",
+                    tool_args={"manager": "PartManager"},
+                    tool_result={"data": []},
+                )
+
+            append_message.assert_called_once_with(
+                consumer.conversation,
+                role="assistant",
+                content="Saved answer",
+                tool_name="query",
+                tool_args={"manager": "PartManager"},
+                tool_result={"data": []},
+            )
+            assert consumer._history_cache == [
+                {"role": "assistant", "content": "Saved answer"}
+            ]
+
+        asyncio.run(run())
+
     def test_receive_json_executes_tool_calls_and_resumes_provider(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
@@ -860,6 +970,39 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 )
 
         asyncio.run(run())
+
+    def test_stream_provider_turn_stops_when_retry_limit_already_reached(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _InfiniteToolProvider()
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.get_chat_settings",
+                    return_value={"max_retries_per_message": 1},
+                ),
+            ):
+                await consumer._stream_provider_turn(
+                    [SimpleNamespace(role="user", content="List parts")],
+                    [],
+                    tool_retries=1,
+                )
+
+            mock_send_json.assert_awaited_once_with(
+                {
+                    "type": "error",
+                    "message": "Chat tool retry limit exceeded.",
+                    "code": "tool_retry_limit",
+                }
+            )
 
     def test_receive_json_stops_after_maximum_tool_retries(self) -> None:
         consumer = ChatConsumer()
@@ -1506,5 +1649,70 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 )
                 assert consumer._pending_confirmation is None
                 assert consumer._confirmation_timeout_task is None
+
+        asyncio.run(run())
+
+    def test_confirmation_request_with_expired_pending_forces_timeout_cancel(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer._pending_confirmation = {
+            "id": "tool-expired",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() - timedelta(seconds=1),
+        }
+
+        async def run() -> None:
+            with patch.object(
+                consumer, "_resolve_pending_confirmation", new_callable=AsyncMock
+            ) as resolve:
+                await consumer._handle_confirmation_response(
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "tool-expired",
+                        "confirmed": True,
+                    }
+                )
+
+            resolve.assert_awaited_once()
+            assert resolve.await_args.kwargs["confirmed"] is False
+            assert (
+                resolve.await_args.kwargs["cancellation_reason"]
+                == "confirmation_timed_out"
+            )
+
+        asyncio.run(run())
+
+    def test_confirmation_request_rejects_unknown_pending_payload(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+
+        async def run() -> None:
+            with patch.object(
+                consumer, "send_json", new_callable=AsyncMock
+            ) as mock_send_json:
+                await consumer._handle_confirmation_response(
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "missing",
+                        "confirmed": True,
+                    }
+                )
+
+            mock_send_json.assert_awaited_once_with(
+                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            )
 
         asyncio.run(run())

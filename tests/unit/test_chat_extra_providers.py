@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from importlib import import_module
+from types import ModuleType
 from types import SimpleNamespace
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -13,12 +15,20 @@ from general_manager.chat.providers import (
     GeminiProvider,
     OpenAIProvider,
 )
+from general_manager.chat.providers._shared import (
+    StreamingToolCallBuilder,
+    get_attr,
+    parse_tool_arguments,
+)
+from general_manager.chat.providers.anthropic import AnthropicDependencyImportError
 from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
     TextChunkEvent,
     ToolCallEvent,
 )
+from general_manager.chat.providers.google import GoogleDependencyImportError
+from general_manager.chat.providers.openai import OpenAIDependencyImportError
 
 
 class _AsyncIterator:
@@ -304,6 +314,133 @@ class AdditionalProviderTests(unittest.TestCase):
         assert providers.AnthropicProvider is anthropic_module.AnthropicProvider
         assert providers.GeminiProvider is google_module.GeminiProvider
         assert providers.GoogleProvider is google_module.GoogleProvider
+
+    def test_shared_tool_argument_helpers_handle_invalid_and_missing_payloads(
+        self,
+    ) -> None:
+        assert parse_tool_arguments({"manager": "PartManager"}) == {
+            "manager": "PartManager"
+        }
+        assert parse_tool_arguments("[1, 2]") == {}
+        assert parse_tool_arguments("{bad json") == {}
+        assert parse_tool_arguments(None) == {}
+
+        builder = StreamingToolCallBuilder(call_id="tool-1")
+        assert builder.build() is None
+        builder.append(name="query", arguments={"manager": "PartManager"})
+
+        event = builder.build()
+
+        assert event == ToolCallEvent(
+            id="tool-1",
+            name="query",
+            args={"manager": "PartManager"},
+        )
+        assert get_attr(SimpleNamespace(child=None), "child", "name") is None
+
+    def test_provider_configuration_checks_report_missing_optional_sdks(self) -> None:
+        with (
+            patch("general_manager.chat.providers.openai.find_spec", return_value=None),
+            patch(
+                "general_manager.chat.providers.anthropic.find_spec",
+                return_value=None,
+            ),
+            patch("general_manager.chat.providers.google.find_spec", return_value=None),
+        ):
+            with self.assertRaises(OpenAIDependencyImportError):
+                OpenAIProvider.check_configuration()
+            with self.assertRaises(AnthropicDependencyImportError):
+                AnthropicProvider.check_configuration()
+            with self.assertRaises(GoogleDependencyImportError):
+                GeminiProvider.check_configuration()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider_config": {
+                    "timeout_seconds": 12,
+                    "base_url": "http://openai.local",
+                    "api_key": "openai-key",
+                }
+            }
+        }
+    )
+    def test_openai_client_uses_timeout_base_url_and_api_key(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs: object) -> None:
+                calls.append(kwargs)
+
+        openai_module = ModuleType("openai")
+        openai_module.AsyncOpenAI = FakeAsyncOpenAI  # type: ignore[attr-defined]
+
+        with patch.dict(sys.modules, {"openai": openai_module}):
+            client = OpenAIProvider._build_async_client()
+
+        assert isinstance(client, FakeAsyncOpenAI)
+        assert calls == [
+            {
+                "timeout": 12.0,
+                "base_url": "http://openai.local",
+                "api_key": "openai-key",
+            }
+        ]
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider_config": {
+                    "timeout_seconds": 9,
+                    "api_key": "anthropic-key",
+                }
+            }
+        }
+    )
+    def test_anthropic_client_uses_timeout_and_api_key(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class FakeAsyncAnthropic:
+            def __init__(self, **kwargs: object) -> None:
+                calls.append(kwargs)
+
+        anthropic_module = ModuleType("anthropic")
+        anthropic_module.AsyncAnthropic = FakeAsyncAnthropic  # type: ignore[attr-defined]
+
+        with patch.dict(sys.modules, {"anthropic": anthropic_module}):
+            client = AnthropicProvider._build_async_client()
+
+        assert isinstance(client, FakeAsyncAnthropic)
+        assert calls == [{"timeout": 9.0, "api_key": "anthropic-key"}]
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider_config": {
+                    "api_key": "google-key",
+                }
+            }
+        }
+    )
+    def test_gemini_client_uses_api_key(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class FakeClient:
+            def __init__(self, **kwargs: object) -> None:
+                calls.append(kwargs)
+
+        google_module = ModuleType("google")
+        genai_module = ModuleType("google.genai")
+        genai_module.Client = FakeClient  # type: ignore[attr-defined]
+
+        with patch.dict(
+            sys.modules,
+            {"google": google_module, "google.genai": genai_module},
+        ):
+            client = GeminiProvider._build_async_client()
+
+        assert isinstance(client, FakeClient)
+        assert calls == [{"api_key": "google-key"}]
 
     @override_settings(
         GENERAL_MANAGER={

@@ -152,6 +152,10 @@ class ChatSchemaIndexTests(SimpleTestCase):
         assert [result["manager"] for result in results] == ["MaterialManager"]
         assert results[0]["description"] == "Materials used by parts."
 
+    def test_search_managers_returns_empty_for_blank_or_unmatched_query(self) -> None:
+        assert search_manager_summaries("") == []
+        assert search_manager_summaries("zzzz unmatched") == []
+
     def test_search_managers_returns_bounded_ranked_results_for_large_registry(
         self,
     ) -> None:
@@ -194,6 +198,14 @@ class ChatSchemaIndexTests(SimpleTestCase):
 
     def test_find_exposed_path_discovers_reverse_multi_hop_paths(self) -> None:
         assert find_exposed_path("MaterialManager", "PartManager") == ["material"]
+
+    def test_find_exposed_path_returns_identity_path(self) -> None:
+        assert find_exposed_path("PartManager", "PartManager") == []
+
+    def test_find_exposed_path_falls_back_to_schema_relations(self) -> None:
+        PathMap.mapping.clear()
+
+        assert find_exposed_path("PartManager", "MaterialManager") == ["material"]
 
     def test_tool_wrappers_delegate_to_schema_index(self) -> None:
         assert search_managers("inventory")[0]["manager"] == "PartManager"
