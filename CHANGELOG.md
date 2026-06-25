@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v0.56.1 (2026-06-25)
+
+### Bug Fixes
+
+- Address core cache review feedback
+  ([`16da39e`](https://github.com/TimKleindick/general_manager/commit/16da39e4159c362edba0c40a5745b672e51b3690))
+
+- Address rule comparison review feedback
+  ([`8372995`](https://github.com/TimKleindick/general_manager/commit/8372995e5886d47ef652e1e34f929dcc04cf5b67))
+
+- Address rule review feedback
+  ([`99b43ca`](https://github.com/TimKleindick/general_manager/commit/99b43caf0d6946358ff46de3a51c271592fb78d3))
+
+- Restore request public exports
+  ([`181f4bc`](https://github.com/TimKleindick/general_manager/commit/181f4bc0450c4f853c2dcd148b52b9be19016ecb))
+
+### Chores
+
+- Enable strict mypy checks
+  ([`8c76a04`](https://github.com/TimKleindick/general_manager/commit/8c76a042c3ad1f1ab6aa598f803c41dedde0c61b))
+
+### Documentation
+
+- Align graphql review contracts
+  ([`615227f`](https://github.com/TimKleindick/general_manager/commit/615227fd128811bd8ac653096e2c281f2ec8702e))
+
+- Document audited public surfaces
+  ([`baa69d7`](https://github.com/TimKleindick/general_manager/commit/baa69d7266c4e8a193a38767e904bd92e9f6200b))
+
+### Refactoring
+
+- Harden cache and bucket internals
+  ([`60a658a`](https://github.com/TimKleindick/general_manager/commit/60a658ae3bbd4238f967aaeeee005c9d2d82661e))
+
+- Harden core utilities and measurements
+  ([`5f922e3`](https://github.com/TimKleindick/general_manager/commit/5f922e3f34df52906ed35d4acc4a090e6d55a7f9))
+
+- Harden general manager audit surfaces
+  ([`614f22e`](https://github.com/TimKleindick/general_manager/commit/614f22e9fbfb50104d2e658e252ce91971389993))
+
+
 ## v0.56.0 (2026-06-19)
 
 ### Bug Fixes
