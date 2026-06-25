@@ -38,11 +38,8 @@ the same fallbacks for slicing; `currentPage` is `page || 1`. The reported
 `pageSize` is the original argument value, not the effective slicing default, so
 it can be `null` when only `page` is supplied and `0` when `pageSize: 0` is
 supplied. `totalPages` is `1` when the original `pageSize` is omitted or falsey.
-Generated fields do not validate negative pagination values beyond Graphene
-integer coercion, so negative slicing is legacy/internal behavior rather than a
-public pagination contract; current behavior passes negative numbers directly
-into the offset formula, bucket slice, `currentPage`, and `totalPages`
-calculation. Do not import generated/internal Python pagination classes
+Negative `page` or `pageSize` values raise a GraphQL `BAD_USER_INPUT` error
+before slicing. Do not import generated/internal Python pagination classes
 directly.
 
 ::: general_manager.api.mutation.graph_ql_mutation

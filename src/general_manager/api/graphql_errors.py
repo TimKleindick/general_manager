@@ -516,9 +516,10 @@ def get_read_permission_filter(
     Args:
         generalManagerClass: Manager class whose optional ``Permission``
             attribute is read with ``getattr(generalManagerClass, "Permission",
-            None)``. Inherited class attributes therefore apply. ``None`` and
-            non-callable values are treated as no permission factory by this
-            helper. Callable permission factories are invoked positionally as
+            None)``. Inherited class attributes therefore apply. ``None`` means
+            no permission factory is configured. Non-callable non-``None``
+            values raise ``InvalidReadPermissionConfigurationError``. Callable
+            permission factories are invoked positionally as
             ``Permission(generalManagerClass, info.context.user)``.
         info: Resolver info object with a context exposing ``user``.
 
