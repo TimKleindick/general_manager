@@ -374,6 +374,10 @@ class ChatConsumerConnectTests(unittest.TestCase):
                     "general_manager.chat.consumer.get_chat_permission",
                     return_value=None,
                 ),
+                patch(
+                    "general_manager.chat.consumer.import_provider",
+                    return_value=_Provider,
+                ),
                 patch.object(
                     consumer,
                     "_get_persistent_conversation",
