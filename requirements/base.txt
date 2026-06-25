@@ -17,6 +17,7 @@ Pint==0.25.3
 platformdirs==4.9.6
 promise==2.3
 python-dateutil==2.9.0.post0
+PyYAML==6.0.3
 setuptools==80.0.0
 six==1.17.0
 smmap==5.0.3

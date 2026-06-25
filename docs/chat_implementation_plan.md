@@ -1,6 +1,6 @@
 # LLM Chat Endpoint — Implementation Plan
 
-> Companion to [ADR 0007](adr/0007-llm-chat-endpoint.md).
+> Companion to [ADR 0008](adr/0008-llm-chat-endpoint.md).
 
 ## Overview
 
