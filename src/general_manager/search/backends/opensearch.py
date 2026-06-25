@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 from general_manager.search.backend import (
     SearchBackendNotImplementedError,
@@ -12,9 +12,14 @@ from general_manager.search.backend import (
 
 
 class OpenSearchBackend:
-    """OpenSearch/Elasticsearch implementation stub."""
+    """OpenSearch/Elasticsearch backend placeholder.
 
-    def __init__(self, *_: Any, **__: Any) -> None:
+    The adapter is publicly importable for configuration compatibility, but it
+    is not implemented. Construction and every backend operation raise
+    `SearchBackendNotImplementedError`.
+    """
+
+    def __init__(self, *_: object, **__: object) -> None:
         """
         Initialize the OpenSearch backend stub which always fails construction.
 
@@ -23,13 +28,19 @@ class OpenSearchBackend:
         """
         raise SearchBackendNotImplementedError("OpenSearch/Elasticsearch")
 
-    def ensure_index(self, index_name: str, settings: Mapping[str, Any]) -> None:
+    def ensure_index(self, index_name: str, settings: Mapping[str, object]) -> None:
         """
         Ensure the named index exists with the provided settings.
 
         Parameters:
             index_name (str): The name of the index to create or verify.
-            settings (Mapping[str, Any]): Index configuration (for example mappings, analyzers, and other OpenSearch/Elasticsearch settings).
+            settings: Index configuration, such as mappings, analyzers, and
+                other OpenSearch/Elasticsearch settings. The value is accepted
+                for protocol compatibility but never inspected.
+
+        Raises:
+            SearchBackendNotImplementedError: Always raised because this backend
+                is not implemented.
         """
         raise SearchBackendNotImplementedError("OpenSearch")
 
@@ -78,7 +89,7 @@ class OpenSearchBackend:
         index_name: str,
         query: str,
         *,
-        filters: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+        filters: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
         filter_expression: str | None = None,
         sort_by: str | None = None,
         sort_desc: bool = False,
@@ -92,7 +103,8 @@ class OpenSearchBackend:
         Parameters:
             index_name (str): Name of the index to search.
             query (str): Full-text query string to match documents.
-            filters (Mapping[str, Any] | Sequence[Mapping[str, Any]] | None): Optional filter(s) to restrict results; can be a single mapping or a sequence of mappings representing filter clauses.
+            filters: Optional structured filters. Accepted for protocol
+                compatibility but never inspected.
             filter_expression (str | None): Optional boolean-style filter expression string to further constrain results.
             sort_by (str | None): Optional field name to sort results by.
             sort_desc (bool): If true, sort results in descending order; otherwise sort ascending.

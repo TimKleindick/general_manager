@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
 
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.search.config import (
     IndexConfig,
@@ -15,7 +16,15 @@ from general_manager.search.config import (
 
 @dataclass(frozen=True)
 class SearchIndexSettings:
-    """Aggregated index settings derived from manager configurations."""
+    """Aggregated index settings derived from manager configurations.
+
+    Attributes:
+        searchable_fields: Search document field names in first-seen order.
+        filterable_fields: Alphabetically sorted filterable field names,
+            including the synthetic `"type"` field.
+        sortable_fields: Alphabetically sorted sortable field names.
+        field_boosts: Highest configured boost per field name.
+    """
 
     searchable_fields: tuple[str, ...]
     filterable_fields: tuple[str, ...]
@@ -23,11 +32,18 @@ class SearchIndexSettings:
     field_boosts: Mapping[str, float]
 
 
-def iter_searchable_managers() -> Iterable[type]:
+def iter_searchable_managers() -> Iterable[type[GeneralManager]]:
     """
-    Iterate manager classes that define a SearchConfig with at least one index.
+    Iterate manager classes that define at least one search index.
 
-    @returns An iterable of manager classes that have a configured `SearchConfig` containing one or more indexes.
+    Yields:
+        Manager classes from `GeneralManagerMeta.all_classes` whose resolved
+        `SearchConfig` is present and contains one or more `IndexConfig` values,
+        preserving `GeneralManagerMeta.all_classes` order.
+
+    Raises:
+        Exception: Errors from `resolve_search_config()` propagate for
+            malformed manager search configuration.
     """
     for manager_class in GeneralManagerMeta.all_classes:
         config = resolve_search_config(getattr(manager_class, "SearchConfig", None))
@@ -36,26 +52,41 @@ def iter_searchable_managers() -> Iterable[type]:
         yield manager_class
 
 
-def get_search_config(manager_class: type) -> SearchConfigSpec | None:
+def get_search_config(
+    manager_class: type[GeneralManager],
+) -> SearchConfigSpec | None:
     """
     Obtain the manager's configured search specification.
 
     Returns:
-        The resolved SearchConfigSpec for the manager, or `None` if the manager does not define a `SearchConfig`.
+        The resolved `SearchConfigSpec` for the manager, or `None` if the
+        manager does not define `SearchConfig`.
+
+    Raises:
+        Exception: Errors from `resolve_search_config()` propagate for
+            malformed manager search configuration.
     """
     return resolve_search_config(getattr(manager_class, "SearchConfig", None))
 
 
-def get_index_config(manager_class: type, index_name: str) -> IndexConfig | None:
+def get_index_config(
+    manager_class: type[GeneralManager],
+    index_name: str,
+) -> IndexConfig | None:
     """
-    Get the IndexConfig for the given manager class and index name.
+    Return the first configured index matching `index_name`.
 
-    Parameters:
-        manager_class (type): Manager class whose search configuration will be inspected.
-        index_name (str): Name of the index to retrieve.
+    Args:
+        manager_class: Manager class whose search configuration is inspected.
+        index_name: Index name to retrieve.
 
     Returns:
-        The matching IndexConfig if configured, `None` otherwise.
+        The first matching `IndexConfig`, or `None` when the manager has no
+        search config or no index with that name.
+
+    Raises:
+        Exception: Errors from `resolve_search_config()` propagate through
+            `get_search_config()` for malformed manager search configuration.
     """
     config = get_search_config(manager_class)
     if config is None:
@@ -66,15 +97,23 @@ def get_index_config(manager_class: type, index_name: str) -> IndexConfig | None
     return None
 
 
-def iter_index_configs(index_name: str) -> Iterable[tuple[type, IndexConfig]]:
+def iter_index_configs(
+    index_name: str,
+) -> Iterable[tuple[type[GeneralManager], IndexConfig]]:
     """
-    Yield (manager_class, IndexConfig) pairs for every manager that defines the given index name.
+    Yield manager/index pairs for every searchable manager declaring an index.
 
-    Parameters:
-        index_name (str): Name of the index to search for across registered managers.
+    Args:
+        index_name: Index name to search for across registered managers.
 
-    Returns:
-        Iterable[tuple[type, IndexConfig]]: An iterator yielding tuples of the manager class and its matching IndexConfig for each manager that declares the index.
+    Yields:
+        `(manager_class, index_config)` for each manager whose first matching
+        `IndexConfig` has `name == index_name`, preserving searchable manager
+        order.
+
+    Raises:
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     for manager_class in iter_searchable_managers():
         index_config = get_index_config(manager_class, index_name)
@@ -83,12 +122,17 @@ def iter_index_configs(index_name: str) -> Iterable[tuple[type, IndexConfig]]:
         yield manager_class, index_config
 
 
-def get_type_label(manager_class: type) -> str:
+def get_type_label(manager_class: type[GeneralManager]) -> str:
     """
-    Get the type label for a manager class.
+    Return the searchable type label for a manager class.
 
     Returns:
-        The configured type label for the manager if present, otherwise the manager class's `__name__`.
+        The resolved `SearchConfig.type_label` when configured; otherwise the
+        manager class name.
+
+    Raises:
+        Exception: Errors from `resolve_search_config()` propagate through
+            `get_search_config()` for malformed manager search configuration.
     """
     config = get_search_config(manager_class)
     if config and config.type_label:
@@ -96,30 +140,43 @@ def get_type_label(manager_class: type) -> str:
     return manager_class.__name__
 
 
-def get_searchable_type_map() -> dict[str, type]:
+def get_searchable_type_map() -> dict[str, type[GeneralManager]]:
     """
     Map searchable type labels to their manager classes.
 
     Returns:
-        mapping (dict[str, type]): Mapping from a manager's searchable type label to its manager class.
-        Only managers that define search indexes are included.
+        Mapping from a manager's searchable type label to its manager class.
+        Only managers that define search indexes are included. If multiple
+        managers resolve to the same type label, the later manager in
+        `GeneralManagerMeta.all_classes` overwrites the earlier one without a
+        warning or error.
+
+    Raises:
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     return {get_type_label(manager): manager for manager in iter_searchable_managers()}
 
 
 def collect_index_settings(index_name: str) -> SearchIndexSettings:
     """
-    Collect aggregated field roles and boost values for the specified index across all searchable managers.
+    Collect aggregate field roles and boost values for an index name.
 
-    Parameters:
-        index_name (str): Name of the index to collect settings for.
+    Args:
+        index_name: Index name to collect settings for.
 
     Returns:
-        SearchIndexSettings: Aggregated settings containing:
-                - searchable_fields: tuple of field names in the order they were first encountered.
-                - filterable_fields: tuple of filterable field names sorted alphabetically (always includes "type").
-                - sortable_fields: tuple of sortable field names sorted alphabetically.
-                - field_boosts: mapping from field name to the highest boost value found (defaults to 1.0 when unspecified).
+        Aggregated settings. Searchable fields preserve first-seen order across
+        matching manager configs. Filterable and sortable fields are sorted
+        alphabetically. The synthetic `"type"` filter is always included.
+        Duplicate boosts keep the highest configured value; missing boosts do
+        not create a field boost entry. Boosts are collected only from
+        `IndexConfig.iter_fields()` entries and therefore correspond to fields
+        included in `searchable_fields`.
+
+    Raises:
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     searchable_fields: list[str] = []
     filterable_fields: set[str] = {"type"}
@@ -131,8 +188,12 @@ def collect_index_settings(index_name: str) -> SearchIndexSettings:
             if field_config.name not in searchable_fields:
                 searchable_fields.append(field_config.name)
             if field_config.boost is not None:
-                existing = field_boosts.get(field_config.name, 1.0)
-                field_boosts[field_config.name] = max(existing, field_config.boost)
+                existing = field_boosts.get(field_config.name)
+                field_boosts[field_config.name] = (
+                    field_config.boost
+                    if existing is None
+                    else max(existing, field_config.boost)
+                )
         for filter_field in index_config.filters:
             filterable_fields.add(filter_field)
         for sort_field in index_config.sorts:
@@ -151,7 +212,11 @@ def get_index_names() -> set[str]:
     List all configured search index names across searchable managers.
 
     Returns:
-        A set of configured index name strings.
+        Unique configured index name strings from every searchable manager.
+
+    Raises:
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     names: set[str] = set()
     for manager_class in iter_searchable_managers():
@@ -168,22 +233,33 @@ def get_filterable_fields(index_name: str) -> set[str]:
     Get filterable field names for the given index.
 
     Returns:
-        filterable_fields (set[str]): Field names allowed for filtering for the index.
+        Field names allowed for filtering for the index, including the synthetic
+        `"type"` field.
+
+    Raises:
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     settings = collect_index_settings(index_name)
     return set(settings.filterable_fields)
 
 
-def validate_filter_keys(index_name: str, filters: Mapping[str, Any]) -> None:
+def validate_filter_keys(index_name: str, filters: Mapping[str, object]) -> None:
     """
     Ensure the provided filter keys are allowed for the specified index.
 
-    Parameters:
-        index_name (str): The index name whose configured filterable fields are used for validation.
-        filters (Mapping[str, Any]): Mapping of filter keys to values; keys may include lookup suffixes separated by '__'. Only the portion before the first '__' (the base field name) is validated.
+    Args:
+        index_name: Index name whose configured filterable fields are used for
+            validation.
+        filters: Mapping of filter keys to arbitrary values. Values are not
+            inspected. Keys may include lookup suffixes separated by `"__"`;
+            only the portion before the first `"__"` is validated.
 
     Raises:
-        InvalidFilterFieldError: If a base filter field is not configured as filterable for the given index.
+        InvalidFilterFieldError: If a base filter field is not configured as
+            filterable for the given index.
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     allowed = get_filterable_fields(index_name)
     for key in filters.keys():
@@ -197,11 +273,11 @@ class InvalidFilterFieldError(ValueError):
 
     def __init__(self, field_name: str, index_name: str) -> None:
         """
-        Initialize the InvalidFilterFieldError for a filter field not allowed on a given index.
+        Initialize the error for a filter field not allowed on an index.
 
-        Parameters:
-            field_name (str): Name of the filter field that is not allowed.
-            index_name (str): Name of the index for which the filter field is invalid.
+        Args:
+            field_name: Name of the filter field that is not allowed.
+            index_name: Name of the index for which the filter field is invalid.
         """
         super().__init__(
             f"Filter field '{field_name}' is not allowed for '{index_name}'."

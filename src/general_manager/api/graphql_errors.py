@@ -9,28 +9,98 @@ without introducing circular dependencies.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, TYPE_CHECKING, Type
+from typing import TYPE_CHECKING, Protocol, TypeAlias, TypedDict, cast
 
-import graphene  # type: ignore[import]
-from graphql.language import ast
 from graphql import GraphQLError
+from graphql.language import ast
 from django.core.exceptions import ValidationError
 
 from general_manager.logging import get_logger
 from general_manager.measurement.measurement import Measurement
 
 if TYPE_CHECKING:
-    from general_manager.permission.base_permission import (
-        BasePermission,
-        ReadPermissionPlan,
-    )
-    from graphene import ResolveInfo as GraphQLResolveInfo
+
+    class _GrapheneMountedType:
+        def __init__(self, *args: object, **kwargs: object) -> None: ...
+
+    class ObjectType:
+        """Typed stand-in for Graphene's untyped ``ObjectType`` base."""
+
+    class Scalar(_GrapheneMountedType):
+        """Typed stand-in for Graphene's untyped ``Scalar`` base."""
+
+    class Boolean(_GrapheneMountedType): ...
+
+    class Date(_GrapheneMountedType): ...
+
+    class DateTime(_GrapheneMountedType): ...
+
+    class Float(_GrapheneMountedType): ...
+
+    class Int(_GrapheneMountedType): ...
+
+    class String(_GrapheneMountedType): ...
+
+    class GraphQLContext(Protocol):
+        user: object
+
+    class GraphQLResolveInfo(Protocol):
+        context: GraphQLContext
+
     from general_manager.manager.general_manager import GeneralManager
+    from general_manager.permission.base_permission import ReadPermissionPlan
+else:
+    from graphene import (  # type: ignore[import-untyped]
+        Boolean,
+        Date,
+        DateTime,
+        Float,
+        Int,
+        ObjectType,
+        Scalar,
+        String,
+    )
 
 logger = get_logger("api.graphql")
+
+GrapheneBaseType: TypeAlias = "_GrapheneMountedType"
+GrapheneBaseTypeClass: TypeAlias = type[GrapheneBaseType]
+PermissionFilter: TypeAlias = dict[str, object]
+
+
+class PermissionConstraint(TypedDict, total=False):
+    """Optional filter/exclude mappings for one read-permission alternative."""
+
+    filter: PermissionFilter
+    exclude: PermissionFilter
+
+
+PermissionFilterPlan: TypeAlias = list[PermissionConstraint]
+ReadPermissionPlanMethod: TypeAlias = Callable[[], object]
+BigIntCoercible: TypeAlias = str | bytes | bytearray | int | float | Decimal
+GraphQLSubscriptionAction: TypeAlias = str
+
+
+class _ReadPermissionProvider(Protocol):
+    """Runtime permission object shape consumed by the GraphQL read helper."""
+
+    def get_permission_filter(self) -> PermissionFilterPlan: ...
+
+    def get_read_permission_plan(self) -> ReadPermissionPlan: ...
+
+
+class _PermissionFactory(Protocol):
+    """Callable permission class shape used by ``get_read_permission_filter``."""
+
+    def __call__(
+        self,
+        instance: type[GeneralManager],
+        request_user: object,
+    ) -> _ReadPermissionProvider: ...
 
 
 # ---------------------------------------------------------------------------
@@ -40,10 +110,20 @@ logger = get_logger("api.graphql")
 
 @dataclass(slots=True)
 class SubscriptionEvent:
-    """Payload delivered to GraphQL subscription resolvers."""
+    """Payload delivered to GraphQL subscription resolvers.
 
-    item: Any | None
-    action: str
+    Args:
+        item: Changed manager object or ``None`` when the snapshot or channel
+            message cannot be instantiated. Delete-style events may still carry
+            an instantiated item when the channel payload includes enough
+            identification data.
+        action: Open channel-layer action string. Generated detail subscriptions
+            first yield ``"snapshot"`` and then forward subsequent data-change
+            action strings such as ``"update"`` or ``"delete"`` unchanged.
+    """
+
+    item: object | None
+    action: GraphQLSubscriptionAction
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +132,12 @@ class SubscriptionEvent:
 
 
 class InvalidMeasurementValueError(TypeError):
-    """Raised when a scalar receives a value that is not a Measurement instance."""
+    """Internal scalar error for serializing a non-``Measurement`` value.
+
+    This exception is documented so maintainers can preserve scalar behavior, but
+    it is not exported from ``general_manager.api`` and has no stable public
+    import path.
+    """
 
     def __init__(self, value: object) -> None:
         super().__init__(f"Expected Measurement, got {type(value).__name__}.")
@@ -94,11 +179,31 @@ class MissingManagerIdentifierError(ValueError):
         super().__init__("id is required.")
 
 
-class InvalidBigIntScalarValueError(TypeError):
-    """Raised when BigIntScalar receives a value it should not coerce."""
+_BIG_INT_ERROR_VALUE_UNSET = object()
 
-    def __init__(self) -> None:
-        super().__init__("BigIntScalar cannot accept boolean values.")
+
+class InvalidBigIntScalarValueError(TypeError):
+    """Internal scalar error for BigInt values rejected before ``int(...)``.
+
+    This exception is documented so maintainers can preserve scalar behavior, but
+    it is not exported from ``general_manager.api`` and has no stable public
+    import path.
+    """
+
+    def __init__(self, value: object = _BIG_INT_ERROR_VALUE_UNSET) -> None:
+        if value is _BIG_INT_ERROR_VALUE_UNSET:
+            super().__init__("BigIntScalar cannot accept boolean values.")
+        else:
+            super().__init__(
+                f"BigIntScalar cannot coerce {type(value).__name__} values."
+            )
+
+
+class InvalidReadPermissionConfigurationError(TypeError):
+    """Raised when a manager declares an unusable GraphQL Permission class."""
+
+    def __init__(self, manager_name: str) -> None:
+        super().__init__(f"{manager_name}.Permission must be callable when set.")
 
 
 # ---------------------------------------------------------------------------
@@ -112,19 +217,20 @@ EXPECTED_MANAGER_ERRORS: tuple[type[Exception], ...] = (
     LookupError,
     GraphQLError,
 )
-"""Errors arising from normal business logic (bad input, missing objects, denied access)."""
+"""Internal handling tuple for ``PermissionError``, Django ``ValidationError``, ``ValueError``, ``LookupError``, and ``GraphQLError``."""
 
 SUSPICIOUS_MANAGER_ERRORS: tuple[type[Exception], ...] = (
     TypeError,
     AttributeError,
     RuntimeError,
 )
-"""Errors that *may* indicate real bugs rather than user mistakes."""
+"""Internal handling tuple for suspicious ``TypeError``, ``AttributeError``, and ``RuntimeError`` cases."""
 
 HANDLED_MANAGER_ERRORS: tuple[type[Exception], ...] = (
     *EXPECTED_MANAGER_ERRORS,
     *SUSPICIOUS_MANAGER_ERRORS,
 )
+"""Expected manager errors followed by suspicious manager errors for internal handling."""
 
 
 # ---------------------------------------------------------------------------
@@ -132,16 +238,43 @@ HANDLED_MANAGER_ERRORS: tuple[type[Exception], ...] = (
 # ---------------------------------------------------------------------------
 
 
-class MeasurementType(graphene.ObjectType):
-    value = graphene.Float()
-    unit = graphene.String()
+class MeasurementType(ObjectType):
+    """GraphQL object wrapper exposing measurement magnitude and Pint unit text.
+
+    ``value`` is emitted through Graphene ``Float`` and may lose Decimal
+    precision. ``unit`` is the measurement's canonical Pint unit string.
+    """
+
+    value = Float()
+    unit = String()
 
 
-class MeasurementScalar(graphene.Scalar):
-    """A measurement in format "value unit", e.g. "12.5 m/s"."""
+class MeasurementScalar(Scalar):
+    """Serialize and parse ``Measurement`` values as ``"<value> <unit>"`` text.
+
+    Stable user imports are available from ``general_manager.api`` and
+    ``general_manager.api.graphql``. The published direct-call contract is
+    exactly ``parse_value(value: str) -> Measurement`` even though Graphene may
+    call scalar hooks dynamically at runtime. Non-string Graphene runtime calls
+    are outside the documented user API.
+
+    ``serialize()`` accepts only ``Measurement`` instances and returns their
+    canonical string representation; it raises ``InvalidMeasurementValueError``
+    for every other value. ``parse_value()`` is the public variable-input parser,
+    accepts a string, and returns a ``Measurement``. Type checkers should reject
+    non-string direct calls. Runtime non-string calls are unsupported; their
+    exact exception class is unspecified and Graphene reports them to clients as
+    scalar input coercion failures on the supplied variable. Valid strings are
+    delegated to ``Measurement.from_string()``,
+    so ``InvalidDimensionlessValueError`` and ``InvalidMeasurementStringError``
+    from the measurement module propagate unchanged for malformed text.
+    ``parse_literal()`` accepts ``graphql.language.ast.StringValueNode`` only and
+    returns ``Measurement | None``; other literal nodes return ``None`` so
+    Graphene can treat the literal as invalid.
+    """
 
     @staticmethod
-    def serialize(value: Measurement) -> str:
+    def serialize(value: object) -> str:
         if not isinstance(value, Measurement):
             raise InvalidMeasurementValueError(value)
         return str(value)
@@ -151,29 +284,54 @@ class MeasurementScalar(graphene.Scalar):
         return Measurement.from_string(value)
 
     @staticmethod
-    def parse_literal(node: Any) -> Measurement | None:
+    def parse_literal(node: object) -> Measurement | None:
         if isinstance(node, ast.StringValueNode):
             return Measurement.from_string(node.value)
         return None
 
 
-class BigIntScalar(graphene.Scalar):
-    """GraphQL scalar for integers outside the built-in GraphQL Int range."""
+class BigIntScalar(Scalar):
+    """GraphQL scalar for integers outside the built-in GraphQL ``Int`` range.
+
+    Stable user imports are available from ``general_manager.api.graphql``.
+
+    ``serialize()`` returns a string so clients do not lose precision beyond
+    GraphQL's built-in ``Int`` range. ``parse_value()`` returns an ``int``.
+    Runtime values accepted by both methods are strings, bytes, bytearrays,
+    integers, floats, or ``Decimal`` values; they are coerced with Python
+    ``int(value)`` after rejecting booleans. Accepted string/bytes/bytearray
+    grammar, whitespace, signs, base-10 parsing, ``NaN``, and infinities therefore
+    follow Python ``int(value)`` exactly. Prefixes such as ``"0x10"`` are not
+    auto-detected because no explicit base is passed. Invalid numeric text and
+    non-finite floats/decimals propagate Python ``ValueError`` or ``OverflowError``
+    rather than being normalized to ``InvalidBigIntScalarValueError``. Fractional floats
+    and ``Decimal`` values are accepted only for compatibility, not as
+    integral-value validation; that truncation behavior is an intentional
+    compatibility guarantee for current releases. For example,
+    ``Decimal("1.9")`` and ``1.9`` both parse as ``1``. Booleans and objects
+    outside the accepted coercible types raise
+    ``InvalidBigIntScalarValueError``. ``parse_literal()`` accepts
+    ``graphql.language.ast.IntValueNode`` and ``StringValueNode`` only and
+    returns ``int | None``; invalid accepted literal values propagate Python
+    coercion errors, while unsupported AST node types return ``None``.
+    """
 
     @staticmethod
-    def serialize(value: int) -> str:
+    def serialize(value: object) -> str:
         if isinstance(value, bool):
             raise InvalidBigIntScalarValueError()
+        if not isinstance(value, (str, bytes, bytearray, int, float, Decimal)):
+            raise InvalidBigIntScalarValueError(value)
         return str(int(value))
 
     @staticmethod
-    def parse_value(value: str | int) -> int:
+    def parse_value(value: BigIntCoercible) -> int:
         if isinstance(value, bool):
             raise InvalidBigIntScalarValueError()
         return int(value)
 
     @staticmethod
-    def parse_literal(node: Any) -> int | None:
+    def parse_literal(node: object) -> int | None:
         if isinstance(node, ast.IntValueNode):
             return int(node.value)
         if isinstance(node, ast.StringValueNode):
@@ -181,11 +339,33 @@ class BigIntScalar(graphene.Scalar):
         return None
 
 
-class PageInfo(graphene.ObjectType):
-    total_count = graphene.Int(required=True)
-    page_size = graphene.Int(required=False)
-    current_page = graphene.Int(required=True)
-    total_pages = graphene.Int(required=True)
+class PageInfo(ObjectType):
+    """Pagination metadata returned by generated list/page GraphQL fields.
+
+    This is a generated/internal Graphene object type and is not a stable public
+    import path. It may appear in generated schema/reference output because
+    generated page fields expose it, but callers should not import it directly.
+
+    ``total_count`` is counted after permission filters, client filters, excludes,
+    sorting, and grouping, but before slicing the current page. Out-of-range pages
+    therefore return empty ``items`` with the same filtered ``total_count``.
+    ``current_page`` is 1-based and defaults to ``1`` when the client omits a
+    page argument. ``page_size`` is nullable and remains ``None`` when no explicit
+    page size was requested. ``total_pages`` is computed from ``page_size`` when
+    present; without ``page_size`` it is ``1``, including empty result sets.
+    Pagination argument validation belongs to generated field/resolver code, not
+    this metadata type. Generated fields currently add no validation beyond
+    Graphene's integer coercion. Non-positive values are not normalized here.
+    ``page_size=0`` behaves as omitted pagination for ``total_pages`` because it
+    is falsy. Negative ``page_size`` or ``current_page`` values are passed to
+    resolver slicing unchanged and should be treated as internal/legacy behavior
+    rather than a public pagination contract.
+    """
+
+    total_count = Int(required=True)
+    page_size = Int(required=False)
+    current_page = Int(required=True)
+    total_pages = Int(required=True)
 
 
 # ---------------------------------------------------------------------------
@@ -194,20 +374,42 @@ class PageInfo(graphene.ObjectType):
 
 
 def map_field_to_graphene_base_type(
-    field_type: type,
+    field_type: object,
     graphql_scalar: str | None = None,
-) -> Type[Any]:
-    """
-    Map a Python interface type to the corresponding Graphene scalar or custom scalar.
+) -> GrapheneBaseTypeClass:
+    """Map a Python interface type to a Graphene scalar class.
 
-    Parameters:
-        field_type (type): Python type from the interface to map.
+    This is a private extracted helper used by the canonical GraphQL module; it
+    is documented here so maintainers can preserve behavior, not as a stable
+    import path.
+
+    Args:
+        field_type: Python annotation or concrete type from interface metadata.
+            ``typing`` aliases are reduced with ``typing.get_origin()`` before
+            subclass checks run. ``Optional[T]``, ``Union``, ``Annotated``, and
+            ``Literal`` currently fall back to ``String`` unless their origin is
+            one of the supported concrete classes below. For example,
+            ``Optional[int]``/``int | None``, ``Annotated[int, ...]``, and
+            ``list[int]`` all fall back to ``String`` here; optional handling,
+            annotation unwrapping, and list wrapping are handled by higher-level
+            GraphQL builders before they call this helper.
+        graphql_scalar: Optional scalar override from interface metadata. The
+            only recognized override is ``"bigint"``, which returns
+            ``BigIntScalar`` regardless of ``field_type``. Unknown override
+            strings are ignored.
 
     Returns:
-        Type[Any]: The Graphene scalar type used to represent the input type.
+        A Graphene scalar class type that callers instantiate to build fields.
+        Supported mappings are ``str`` to ``String``,
+        ``bool`` to ``Boolean``, ``int`` to ``Int``, ``float``/``Decimal`` to
+        ``Float``, ``datetime`` to ``DateTime``, ``date`` to ``Date``, and
+        ``Measurement`` to ``MeasurementScalar``. Subclasses follow the same
+        mappings. Unknown and non-class inputs fall back to ``String``.
 
     Raises:
-        UnsupportedGraphQLFieldTypeError: If ``field_type`` is ``dict``.
+        UnsupportedGraphQLFieldTypeError: If ``field_type`` is ``dict`` or a
+        ``dict`` subclass. Other unsupported types fall back to ``String`` for
+        backwards compatibility.
     """
     from typing import get_origin
 
@@ -215,40 +417,61 @@ def map_field_to_graphene_base_type(
     if graphql_scalar == "bigint":
         return BigIntScalar
     if not isinstance(base_type, type):
-        return graphene.String
+        return String
     if issubclass(base_type, dict):
-        raise UnsupportedGraphQLFieldTypeError(field_type)
+        raise UnsupportedGraphQLFieldTypeError(base_type)
     if issubclass(base_type, str):
-        return graphene.String
+        return String
     elif issubclass(base_type, bool):
-        return graphene.Boolean
+        return Boolean
     elif issubclass(base_type, int):
-        return graphene.Int
+        return Int
     elif issubclass(base_type, (float, Decimal)):
-        return graphene.Float
+        return Float
     elif issubclass(base_type, datetime):
-        return graphene.DateTime
+        return DateTime
     elif issubclass(base_type, date):
-        return graphene.Date
+        return Date
     elif issubclass(base_type, Measurement):
         return MeasurementScalar
     else:
-        return graphene.String
+        return String
 
 
 def handle_graph_ql_error(error: Exception) -> GraphQLError:
-    """
-    Convert an exception into a GraphQL error with an appropriate ``extensions['code']``.
+    """Convert an exception into a GraphQL error with an extensions code.
 
-    Maps:
-        ``PermissionError``  → ``"PERMISSION_DENIED"``
-        ``ValueError``, ``ValidationError`` → ``"BAD_USER_INPUT"``
-        ``TypeError``, ``AttributeError``, ``RuntimeError`` → ``"INTERNAL_SERVER_ERROR"`` (warning)
-        other → ``"INTERNAL_SERVER_ERROR"`` (error)
+    This private extracted helper is used by the canonical GraphQL module and is
+    not a stable import path. The behavior documented here is a
+    generated-resolver compatibility note, not a stable direct-import guarantee.
+
+    Explicit ``GraphQLError`` instances are returned as the same object,
+    preserving their message and entire existing ``extensions`` mapping. For
+    converted exceptions, the returned ``GraphQLError.extensions`` mapping
+    contains a single ``"code"`` key. The original exception message is
+    intentionally exposed as the GraphQL error message; this is a stable
+    generated-response compatibility guarantee for
+    ``{"code": "INTERNAL_SERVER_ERROR"}`` responses as well as user-error
+    responses, even though the helper itself remains a private import.
+    ``PermissionError`` uses ``{"code": "PERMISSION_DENIED"}`` and is
+    logged at info level. ``ValueError`` and Django ``ValidationError`` use
+    ``{"code": "BAD_USER_INPUT"}`` and are logged as warnings. ``TypeError``,
+    ``AttributeError``, and ``RuntimeError`` are treated as suspicious handled
+    errors, logged with traceback information, and returned as
+    ``{"code": "INTERNAL_SERVER_ERROR"}``. Exceptions outside those explicit
+    branches are logged as unexpected internal errors and also returned as
+    ``INTERNAL_SERVER_ERROR``. Logging level/category is diagnostic behavior of
+    the internal ``api.graphql`` logger and is not a public API contract.
     """
     message = str(error)
     error_name = type(error).__name__
-    if isinstance(error, PermissionError):
+    if isinstance(error, GraphQLError):
+        logger.warning(
+            "graphql explicit error",
+            context={"error": error_name, "message": message},
+        )
+        return error
+    elif isinstance(error, PermissionError):
         logger.info(
             "graphql permission error",
             context={"error": error_name, "message": message},
@@ -277,38 +500,88 @@ def handle_graph_ql_error(error: Exception) -> GraphQLError:
 
 
 def get_read_permission_filter(
-    generalManagerClass: Type[GeneralManager],
+    generalManagerClass: type[GeneralManager],
     info: GraphQLResolveInfo,
 ) -> ReadPermissionPlan:
-    """
-    Produce a list of permission-derived filter and exclude mappings.
+    """Build the read-permission plan for a generated GraphQL resolver.
 
-    Parameters:
-        generalManagerClass: Manager class to derive permission filters for.
-        info: GraphQL resolver info whose context provides the current user.
+    This private extracted helper is used by generated resolvers and is not a
+    stable import path. The behavior documented here is a generated-resolver
+    compatibility note, not a stable direct-import guarantee.
+
+    The function name is legacy: it now returns the full ``ReadPermissionPlan``
+    instead of only a filter list. Internal compatibility callers that expected a
+    list should read ``get_read_permission_filter(...).filters``.
+
+    Args:
+        generalManagerClass: Manager class whose optional ``Permission``
+            attribute is read with ``getattr(generalManagerClass, "Permission",
+            None)``. Inherited class attributes therefore apply. ``None`` and
+            non-callable values are treated as no permission factory by this
+            helper. Callable permission factories are invoked positionally as
+            ``Permission(generalManagerClass, info.context.user)``.
+        info: Resolver info object with a context exposing ``user``.
 
     Returns:
-        A read-permission plan consisting of queryset/search prefilters plus a
-        flag indicating whether per-instance authorization must still run.
+        A ``ReadPermissionPlan`` with ``filters``, ``requires_instance_check``,
+        and ``instance_check_reasons`` fields. ``ReadPermissionPlan`` is an
+        internal adapter from ``general_manager.permission.base_permission``, not
+        a stable public import path, but generated resolvers rely on these
+        fields.
+
+        The custom ``ReadPermissionPlan`` returned by the zero-argument
+        permission instance method ``get_read_permission_plan()`` when it returns
+        a ``ReadPermissionPlan`` instance. Other return values are ignored and
+        the helper falls back to the zero-argument permission instance method
+        ``get_permission_filter()``. If ``get_permission_filter`` is missing,
+        the resulting ``AttributeError`` propagates. ``get_permission_filter()``
+        must return the legacy ``list[PermissionConstraint]`` shape accepted by
+        ``ReadPermissionPlan.filters``. Each legacy entry may include optional
+        ``"filter"`` and ``"exclude"`` mappings of lookup names to values.
+        Missing keys are later treated as empty mappings by generated resolvers.
+        This helper does not validate malformed legacy constraints; non-mapping
+        values or invalid lookup keys fail later when resolver code applies them
+        to the bucket/search backend. The fallback plan requires a per-instance
+        read check and sets ``instance_check_reasons`` to exactly
+        ``("no_prefilter_backend",)``.
+
+        Managers without a permission factory receive an empty filter plan and
+        do not require instance checks. This is a default-allow read policy for
+        managers that do not define ``Permission``; no additional GraphQL
+        permission filtering or per-object read authorization is applied by this
+        helper. More generally, ``filters=[]`` with
+        ``requires_instance_check=True`` means generated resolvers start with the
+        original queryset and then run per-object read checks for every
+        candidate row. That later row gate instantiates the same Permission class
+        with ``(instance, info.context.user)`` and calls ``can_read_instance()``;
+        false returns deny that row, and exceptions propagate to the generated
+        resolver's normal error handling.
+
+    Raises:
+        AttributeError: If ``info.context`` has no ``user`` attribute.
+        TypeError: If the manager ``Permission`` attribute exists but is not
+            callable in the expected two-argument form.
+        Exception: Exceptions raised by the permission constructor,
+            ``get_read_permission_plan()``, or ``get_permission_filter()``
+            propagate unchanged.
     """
     from general_manager.permission.base_permission import ReadPermissionPlan
 
-    PermissionClass: type[BasePermission] | None = getattr(
-        generalManagerClass, "Permission", None
-    )
-    if PermissionClass:
+    permission_attribute: object = getattr(generalManagerClass, "Permission", None)
+    if callable(permission_attribute):
+        PermissionClass = cast(_PermissionFactory, permission_attribute)
         permission = PermissionClass(generalManagerClass, info.context.user)
-        plan_method = getattr(permission, "get_read_permission_plan", None)
+        plan_method: object = getattr(permission, "get_read_permission_plan", None)
         if callable(plan_method):
-            plan = plan_method()
-            if isinstance(getattr(plan, "filters", None), list) and isinstance(
-                getattr(plan, "requires_instance_check", None),
-                bool,
-            ):
+            get_plan = cast(ReadPermissionPlanMethod, plan_method)
+            plan = get_plan()
+            if isinstance(plan, ReadPermissionPlan):
                 return plan
         return ReadPermissionPlan(
             filters=permission.get_permission_filter(),
             requires_instance_check=True,
             instance_check_reasons=("no_prefilter_backend",),
         )
+    if permission_attribute is not None:
+        raise InvalidReadPermissionConfigurationError(generalManagerClass.__name__)
     return ReadPermissionPlan(filters=[], requires_instance_check=False)

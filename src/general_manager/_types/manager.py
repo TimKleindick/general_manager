@@ -10,6 +10,8 @@ __all__ = [
     "Input",
     "InputDomain",
     "NumericRangeDomain",
+    "TrustedOrmHydrationNotSupportedError",
+    "UnsupportedUnionOperandError",
     "graph_ql_property",
 ]
 
@@ -20,4 +22,6 @@ from general_manager.manager.group_manager import GroupManager
 from general_manager.manager.input import Input
 from general_manager.manager.input import InputDomain
 from general_manager.manager.input import NumericRangeDomain
+from general_manager.manager.general_manager import TrustedOrmHydrationNotSupportedError
+from general_manager.manager.general_manager import UnsupportedUnionOperandError
 from general_manager.api.property import graph_ql_property

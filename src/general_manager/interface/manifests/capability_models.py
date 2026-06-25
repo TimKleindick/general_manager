@@ -2,26 +2,39 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Mapping
 
 from general_manager.interface.capabilities import CapabilityName
+
+__all__ = ["CapabilityConfig", "CapabilityPlan", "CapabilitySelection"]
 
 
 @dataclass(frozen=True, slots=True)
 class CapabilityPlan:
-    """Declarative plan describing required and optional capabilities."""
+    """Immutable manifest entry for one interface family.
+
+    `CapabilityName` is the public string-literal capability identifier type
+    exported by `general_manager.interface.capabilities`.
+    `required` and `optional` are normalized to `frozenset` values and duplicate
+    capability names collapse. A capability may appear in both sets; manifest
+    resolution and builder validation decide how to interpret that combination.
+    `flags` maps runtime flag names to optional capability names, is copied to a
+    plain `dict`, and is exposed through a read-only mapping proxy.
+    """
 
     required: frozenset[CapabilityName] = field(default_factory=frozenset)
     optional: frozenset[CapabilityName] = field(default_factory=frozenset)
     flags: Mapping[str, CapabilityName] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """
-        Normalize and freeze the dataclass fields for immutability.
+        """Normalize required, optional, and flag mapping attributes.
 
-        Converts `required` and `optional` to `frozenset` and wraps `flags` in a read-only mapping so that all exposed attributes are immutable after initialization.
+        Raises:
+            TypeError: If `required` or `optional` cannot be iterated, if any
+                capability name is unhashable, or if `flags` cannot be
+                converted with `dict(...)`.
         """
         object.__setattr__(self, "required", frozenset(self.required))
         object.__setattr__(self, "optional", frozenset(self.optional))
@@ -30,38 +43,75 @@ class CapabilityPlan:
 
 @dataclass(slots=True)
 class CapabilityConfig:
-    """Runtime configuration used to enable or disable optional capabilities."""
+    """Mutable runtime toggles for optional capability activation.
+
+    Capability names use the public `CapabilityName` string-literal type from
+    `general_manager.interface.capabilities`.
+    `enabled` and `disabled` are mutable sets consumed by
+    `ManifestCapabilityBuilder`. `enabled` requests optional capabilities,
+    while `disabled` removes optional capabilities after flag and manual enables
+    have been validated. If the same optional name appears in both sets,
+    disabled wins; manually enabling a non-optional name still raises in the
+    builder even if that name is also disabled. `flags` stores arbitrary
+    truth-tested values, not only booleans: `is_flag_enabled()` applies Python
+    `bool(...)` coercion and treats missing flags as disabled.
+    """
 
     enabled: set[CapabilityName] = field(default_factory=set)
     disabled: set[CapabilityName] = field(default_factory=set)
-    flags: Mapping[str, bool] = field(default_factory=dict)
+    flags: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Normalize mutable containers owned by this config instance.
+
+        The config remains mutable after construction, but external set or
+        mapping objects passed to the constructor are copied so later caller-side
+        mutation does not affect builder resolution.
+
+        Raises:
+            TypeError: If `enabled` or `disabled` cannot be iterated, if any
+                capability name is unhashable, or if `flags` cannot be
+                converted with `dict(...)`.
+        """
+        self.enabled = set(self.enabled)
+        self.disabled = set(self.disabled)
+        self.flags = dict(self.flags)
 
     def is_flag_enabled(self, flag_name: str) -> bool:
-        """
-        Determine if a named flag is enabled.
+        """Return whether `flag_name` is present with a truthy value.
 
-        Parameters:
-            flag_name (str): Name of the flag to check.
+        Args:
+            flag_name: Flag key to check.
 
         Returns:
-            True if the named flag evaluates to truthy, False otherwise.
+            `True` when the stored value is truthy, otherwise `False`. Missing
+            flags return `False`.
         """
         return bool(self.flags.get(flag_name, False))
 
 
 @dataclass(frozen=True, slots=True)
 class CapabilitySelection:
-    """Result of resolving a plan against configuration toggles."""
+    """Immutable result of resolving a plan against runtime config.
+
+    Capability names use the public `CapabilityName` string-literal type from
+    `general_manager.interface.capabilities`.
+    `required`, `optional`, and `activated_optional` are normalized to
+    frozensets and duplicate capability names collapse. The model intentionally
+    does not validate that activated optional names are present in `optional`;
+    `ManifestCapabilityBuilder` owns that validation.
+    """
 
     required: frozenset[CapabilityName]
     optional: frozenset[CapabilityName]
     activated_optional: frozenset[CapabilityName]
 
     def __post_init__(self) -> None:
-        """
-        Normalize the dataclass fields to immutable frozenset instances after initialization.
+        """Normalize all selection sets to immutable frozensets.
 
-        Converts `required`, `optional`, and `activated_optional` attributes to `frozenset` to enforce immutability and consistent types for downstream consumers.
+        Raises:
+            TypeError: If any field cannot be iterated or contains unhashable
+                values.
         """
         object.__setattr__(self, "required", frozenset(self.required))
         object.__setattr__(self, "optional", frozenset(self.optional))
@@ -71,10 +121,10 @@ class CapabilitySelection:
 
     @property
     def all(self) -> frozenset[CapabilityName]:
-        """
-        Combined set of capabilities to attach to the interface.
+        """Return required plus activated optional capability names.
 
         Returns:
-            frozenset[CapabilityName]: The union of `required` and `activated_optional` capabilities.
+            Fresh `frozenset` containing every required capability and every
+            activated optional capability. Inactive optional names are excluded.
         """
         return frozenset((*self.required, *self.activated_optional))

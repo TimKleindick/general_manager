@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 from general_manager.search.backend import (
     SearchBackendNotImplementedError,
@@ -12,9 +12,14 @@ from general_manager.search.backend import (
 
 
 class TypesenseBackend:
-    """Typesense implementation stub."""
+    """Typesense backend placeholder.
 
-    def __init__(self, *_: Any, **__: Any) -> None:
+    The adapter is publicly importable for configuration compatibility, but it
+    is not implemented. Construction and every backend operation raise
+    `SearchBackendNotImplementedError`.
+    """
+
+    def __init__(self, *_: object, **__: object) -> None:
         """
         Constructor for TypesenseBackend that indicates the backend is not implemented.
 
@@ -23,13 +28,14 @@ class TypesenseBackend:
         """
         raise SearchBackendNotImplementedError("Typesense")
 
-    def ensure_index(self, index_name: str, settings: Mapping[str, Any]) -> None:
+    def ensure_index(self, index_name: str, settings: Mapping[str, object]) -> None:
         """
         Ensure an index with the given name and settings exists in the backend.
 
         Parameters:
             index_name (str): Name of the index to create or ensure.
-            settings (Mapping[str, Any]): Index configuration to apply.
+            settings: Index configuration to apply. The value is accepted for
+                protocol compatibility but never inspected.
 
         Raises:
             SearchBackendNotImplementedError: Always raised because the Typesense backend is not implemented.
@@ -81,7 +87,7 @@ class TypesenseBackend:
         index_name: str,
         query: str,
         *,
-        filters: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+        filters: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
         filter_expression: str | None = None,
         sort_by: str | None = None,
         sort_desc: bool = False,
@@ -95,7 +101,9 @@ class TypesenseBackend:
         Parameters:
             index_name (str): Name of the index to search.
             query (str): Query string to match documents.
-            filters (Mapping[str, Any] | Sequence[Mapping[str, Any]] | None): Filter criteria as a single mapping or a sequence of mappings; each mapping represents field-value constraints to apply.
+            filters: Filter criteria as a single mapping or a sequence of
+                mappings. Accepted for protocol compatibility but never
+                inspected.
             filter_expression (str | None): A raw filter expression string to apply instead of or in addition to `filters`.
             sort_by (str | None): Field name to sort results by.
             sort_desc (bool): If `True`, sort results in descending order; ascending otherwise.
@@ -105,5 +113,9 @@ class TypesenseBackend:
 
         Returns:
             SearchResult: Search results including matched documents and metadata such as total hits and pagination info.
+
+        Raises:
+            SearchBackendNotImplementedError: Always raised because the Typesense
+                backend is not implemented.
         """
         raise SearchBackendNotImplementedError("Typesense")

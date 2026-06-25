@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
-from typing import Any, TYPE_CHECKING, Callable, ClassVar, Type, cast
+from typing import TYPE_CHECKING, Callable, ClassVar, Type, cast
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
@@ -13,7 +13,7 @@ from django.db.models import Subquery
 from django.utils import timezone
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.cache.run_context import current_calculation_run_context
-from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.capabilities.orm_utils.django_manager_utils import (
@@ -37,6 +37,11 @@ if TYPE_CHECKING:  # pragma: no cover
         SupportsHistory,
     )
     from .history import OrmHistoryCapability
+    from general_manager.manager.general_manager import GeneralManager
+
+type OrmInterfaceClass = type["OrmInterfaceBase[models.Model]"]
+type OrmInterfaceInstance = "OrmInterfaceBase[models.Model]"
+type FilterKwargs = dict[str, object]
 
 
 class OrmPersistenceSupportCapability(BaseCapability):
@@ -44,7 +49,7 @@ class OrmPersistenceSupportCapability(BaseCapability):
 
     name: ClassVar[CapabilityName] = "orm_support"
 
-    def get_database_alias(self, interface_cls: type["OrmInterfaceBase"]) -> str | None:
+    def get_database_alias(self, interface_cls: OrmInterfaceClass) -> str | None:
         """
         Retrieve the database alias declared on an ORM interface class.
 
@@ -58,10 +63,10 @@ class OrmPersistenceSupportCapability(BaseCapability):
 
     def get_manager(
         self,
-        interface_cls: type["OrmInterfaceBase"],
+        interface_cls: OrmInterfaceClass,
         *,
         only_active: bool = True,
-    ) -> models.Manager:
+    ) -> models.Manager[models.Model]:
         """
         Obtain the Django manager for the interface's model, selecting between the active (soft-delete filtered) or all manager and honoring the interface's database alias.
 
@@ -83,10 +88,12 @@ class OrmPersistenceSupportCapability(BaseCapability):
             cached_active=getattr(interface_cls, "_active_manager", None),
         )
         manager = selector.active_manager() if only_active else selector.all_manager()
-        interface_cls._active_manager = selector.cached_active  # type: ignore[attr-defined]
+        interface_cls._active_manager = selector.cached_active
         return manager
 
-    def get_queryset(self, interface_cls: type["OrmInterfaceBase"]) -> models.QuerySet:
+    def get_queryset(
+        self, interface_cls: OrmInterfaceClass
+    ) -> models.QuerySet[models.Model]:
         """
         Retrieve an active queryset for the interface's model.
 
@@ -97,11 +104,10 @@ class OrmPersistenceSupportCapability(BaseCapability):
             models.QuerySet: A Django QuerySet containing the model's active records.
         """
         manager = self.get_manager(interface_cls, only_active=True)
-        queryset: models.QuerySet = manager.all()  # type: ignore[assignment]
-        return queryset
+        return manager.all()
 
     def get_payload_normalizer(
-        self, interface_cls: type["OrmInterfaceBase"]
+        self, interface_cls: OrmInterfaceClass
     ) -> PayloadNormalizer:
         """
         Return a PayloadNormalizer configured for the interface's Django model.
@@ -112,10 +118,10 @@ class OrmPersistenceSupportCapability(BaseCapability):
         Returns:
             PayloadNormalizer: A normalizer instance bound to the interface's Django `models.Model`.
         """
-        return PayloadNormalizer(cast(Type[models.Model], interface_cls._model))
+        return PayloadNormalizer(interface_cls._model)
 
     def get_field_descriptors(
-        self, interface_cls: type["OrmInterfaceBase"]
+        self, interface_cls: OrmInterfaceClass
     ) -> dict[str, FieldDescriptor]:
         """
         Get or build cached field descriptors for the given ORM interface class.
@@ -135,15 +141,15 @@ class OrmPersistenceSupportCapability(BaseCapability):
                 interface_cls,
                 resolve_many=self.resolve_many_to_many,
             )
-            interface_cls._field_descriptors = descriptors  # type: ignore[attr-defined]
+            interface_cls._field_descriptors = descriptors
         return descriptors
 
     def resolve_many_to_many(
         self,
-        interface_instance: "OrmInterfaceBase",
+        interface_instance: OrmInterfaceInstance,
         field_call: str,
         field_name: str,
-    ) -> models.QuerySet[Any]:
+    ) -> models.QuerySet[models.Model]:
         """
         Resolve a many-to-many relationship for an interface instance and return a queryset of the related target records, using historical snapshots when applicable.
 
@@ -159,50 +165,64 @@ class OrmPersistenceSupportCapability(BaseCapability):
             field_name (str): Field name on the interface's model corresponding to the relation target.
 
         Returns:
-            models.QuerySet[Any]: A queryset of the related target records or their historical snapshots when applicable.
+            models.QuerySet[models.Model]: A queryset of the related target records or their historical snapshots when applicable.
+
+        Raises:
+            AttributeError: If ``field_call`` is not a related-manager
+                attribute on the wrapped ORM instance.
+            FieldDoesNotExist: If ``field_name`` is not a field on the
+                interface model.
         """
         manager = getattr(interface_instance._instance, field_call)
         queryset = manager.all()
         model_cls = getattr(queryset, "model", None)
         interface_cls = interface_instance.__class__
         if isinstance(model_cls, type) and issubclass(model_cls, HistoricalChanges):
-            target_field = interface_cls._model._meta.get_field(field_name)  # type: ignore[attr-defined]
+            historical_model_cls = cast(type[models.Model], model_cls)
+            target_field = interface_cls._model._meta.get_field(field_name)
             target_model = getattr(target_field, "related_model", None)
             if target_model is None:
-                return manager.none()
+                return cast(models.QuerySet[models.Model], manager.none())
             django_target_model = cast(Type[models.Model], target_model)
             related_attr = None
-            for rel_field in model_cls._meta.get_fields():  # type: ignore[attr-defined]
+            for rel_field in historical_model_cls._meta.get_fields():
                 related_model = getattr(rel_field, "related_model", None)
                 if related_model == target_model:
                     related_attr = rel_field.name
                     break
             if related_attr is None:
-                return django_target_model._default_manager.none()
+                return cast(
+                    models.QuerySet[models.Model],
+                    django_target_model._default_manager.none(),
+                )
             related_id_field = f"{related_attr}_id"
             related_ids_query = queryset.values_list(related_id_field, flat=True)
             if (
                 not hasattr(target_model, "history")
-                or interface_instance._search_date is None  # type: ignore[attr-defined]
+                or interface_instance._search_date is None
             ):
-                return django_target_model._default_manager.filter(
-                    pk__in=Subquery(related_ids_query)
+                return cast(
+                    models.QuerySet[models.Model],
+                    django_target_model._default_manager.filter(
+                        pk__in=Subquery(related_ids_query)
+                    ),
                 )
             target_history_model = cast("Type[SupportsHistory]", target_model)
 
             related_ids = list(related_ids_query)
             if not related_ids:
-                return django_target_model._default_manager.none()  # type: ignore[return-value]
+                return cast(
+                    models.QuerySet[models.Model],
+                    django_target_model._default_manager.none(),
+                )
             return cast(
-                models.QuerySet[Any],
+                models.QuerySet[models.Model],
                 target_history_model.history.as_of(
                     interface_instance._search_date
-                ).filter(  # type: ignore[attr-defined]
-                    pk__in=related_ids
-                ),
+                ).filter(pk__in=related_ids),
             )
 
-        return queryset
+        return cast(models.QuerySet[models.Model], queryset)
 
 
 class OrmReadCapability(BaseCapability):
@@ -210,7 +230,7 @@ class OrmReadCapability(BaseCapability):
 
     name: ClassVar[CapabilityName] = "read"
 
-    def get_data(self, interface_instance: "OrmInterfaceBase") -> Any:
+    def get_data(self, interface_instance: OrmInterfaceInstance) -> models.Model:
         """
         Retrieve the current model instance or a historical snapshot for the given ORM interface instance.
 
@@ -224,7 +244,7 @@ class OrmReadCapability(BaseCapability):
             model.DoesNotExist: If no matching live instance or historical record exists.
         """
 
-        def _perform() -> Any:
+        def _perform() -> models.Model:
             interface_cls = interface_instance.__class__
             support = get_support_capability(interface_cls)
             only_active = not is_soft_delete_enabled(interface_cls)
@@ -234,11 +254,11 @@ class OrmReadCapability(BaseCapability):
             )
             model_cls = interface_cls._model
             pk = interface_instance.pk
-            instance: Any | None
+            instance: models.Model | None
             missing_error: Exception | None = None
             try:
                 instance = manager.get(pk=pk)
-            except model_cls.DoesNotExist as error:  # type: ignore[attr-defined]
+            except model_cls.DoesNotExist as error:
                 instance = None
                 missing_error = error
             search_date = interface_instance._search_date
@@ -246,7 +266,7 @@ class OrmReadCapability(BaseCapability):
                 if search_date <= timezone.now() - timedelta(
                     seconds=interface_cls.historical_lookup_buffer_seconds
                 ):
-                    historical: Any | None
+                    historical: models.Model | None
                     history_handler = _history_capability_for(interface_cls)
                     if instance is not None:
                         historical = history_handler.get_historical_record(
@@ -264,12 +284,12 @@ class OrmReadCapability(BaseCapability):
                         return historical
                     if missing_error is not None:
                         raise missing_error
-                    raise model_cls.DoesNotExist  # type: ignore[attr-defined]
+                    raise model_cls.DoesNotExist
             if instance is not None:
                 return instance
             if missing_error is not None:
                 raise missing_error
-            raise model_cls.DoesNotExist  # type: ignore[attr-defined]
+            raise model_cls.DoesNotExist
 
         context = current_calculation_run_context()
         read_func = (
@@ -290,8 +310,8 @@ class OrmReadCapability(BaseCapability):
 
     def get_attribute_types(
         self,
-        interface_cls: type["OrmInterfaceBase"],
-    ) -> dict[str, dict[str, Any]]:
+        interface_cls: OrmInterfaceClass,
+    ) -> dict[str, AttributeTypedDict]:
         """
         Return a mapping of field names to copies of their field descriptor metadata.
 
@@ -299,19 +319,20 @@ class OrmReadCapability(BaseCapability):
             interface_cls (type[OrmInterfaceBase]): The ORM interface class whose field descriptors will be queried.
 
         Returns:
-            dict[str, dict[str, Any]]: A dict mapping each field name to a shallow copy of that field's `metadata` dictionary.
+            dict[str, AttributeTypedDict]: A dict mapping each field name to a shallow copy of that field's `metadata` dictionary.
         """
         descriptors = get_support_capability(interface_cls).get_field_descriptors(
             interface_cls
         )
         return {
-            name: dict(descriptor.metadata) for name, descriptor in descriptors.items()
+            name: cast(AttributeTypedDict, dict(descriptor.metadata))
+            for name, descriptor in descriptors.items()
         }
 
     def get_attributes(
         self,
-        interface_cls: type["OrmInterfaceBase"],
-    ) -> dict[str, Callable[[Any], Any]]:
+        interface_cls: OrmInterfaceClass,
+    ) -> dict[str, Callable[[OrmInterfaceInstance], object]]:
         """
         Return a mapping of field names to their accessor callables for the given ORM interface class.
 
@@ -319,7 +340,7 @@ class OrmReadCapability(BaseCapability):
             interface_cls (type[OrmInterfaceBase]): The interface class whose model field descriptors will be used.
 
         Returns:
-            dict[str, Callable[[Any], Any]]: A dictionary mapping each field name to a callable that, given an instance, returns that field's value.
+            dict[str, Callable[[OrmInterfaceBase[models.Model]], object]]: A dictionary mapping each field name to a callable that, given an instance, returns that field's value.
         """
         descriptors = get_support_capability(interface_cls).get_field_descriptors(
             interface_cls
@@ -328,9 +349,9 @@ class OrmReadCapability(BaseCapability):
 
     def get_field_type(
         self,
-        interface_cls: type["OrmInterfaceBase"],
+        interface_cls: OrmInterfaceClass,
         field_name: str,
-    ) -> type:
+    ) -> type[object]:
         """
         Determine the effective type associated with a model field.
 
@@ -340,8 +361,12 @@ class OrmReadCapability(BaseCapability):
 
         Returns:
             type: The Django field class for stored model fields, the related
-            model's `_general_manager_class` for managed relations, or descriptor
-            metadata for synthetic interface fields.
+            model's `_general_manager_class` for managed relations, or the
+            descriptor metadata ``"type"`` value for synthetic interface fields.
+
+        Raises:
+            FieldDoesNotExist: If the field is not present on the model and no
+                synthetic descriptor exists for ``field_name``.
         """
         try:
             field = interface_cls._model._meta.get_field(field_name)
@@ -366,12 +391,16 @@ class OrmReadCapability(BaseCapability):
             and field.related_model
             and hasattr(field.related_model, "_general_manager_class")
         ):
-            return field.related_model._general_manager_class  # type: ignore[attr-defined]
+            return cast(type[object], field.related_model._general_manager_class)
         return type(field)
 
 
 class InvalidSearchDateTypeError(TypeError):
-    """Raised when a search_date does not match the expected type."""
+    """Compatibility error for callers that validate search_date with a custom message.
+
+    The built-in ORM query path raises ``SearchDateInputError`` for invalid raw
+    values and ``SearchDateNormalizationError`` for invalid normalized values.
+    """
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
@@ -482,10 +511,10 @@ def _build_reverse_filter_alias_map(
 
 def _translate_reverse_filter_aliases(
     model: type[models.Model],
-    kwargs: dict[str, Any],
-) -> dict[str, Any]:
+    kwargs: FilterKwargs,
+) -> FilterKwargs:
     """Rewrite snake_case reverse-relation filter segments to Django's native lookup roots."""
-    translated: dict[str, Any] = {}
+    translated: FilterKwargs = {}
 
     for key, value in kwargs.items():
         translated[_translate_reverse_filter_key(model, key)] = value
@@ -526,7 +555,7 @@ def _translate_reverse_filter_key(model: type[models.Model], key: str) -> str:
 def _resolve_filter_segment(
     model: type[models.Model],
     segment: str,
-) -> tuple[str, models.Field | models.ForeignObjectRel | None]:
+) -> tuple[str, models.Field[object, object] | models.ForeignObjectRel | None]:
     """Resolve a lookup segment to a real Django field or reverse relation."""
     meta = getattr(model, "_meta", None)
     get_field = getattr(meta, "get_field", None)
@@ -539,12 +568,18 @@ def _resolve_filter_segment(
         raise AmbiguousReverseFilterAliasError(segment, targets)
 
     try:
-        field = cast(models.Field | models.ForeignObjectRel, get_field(segment))
+        field = cast(
+            "models.Field[object, object] | models.ForeignObjectRel",
+            get_field(segment),
+        )
     except FieldDoesNotExist:
         actual_name = alias_map.get(segment)
         if actual_name is None:
             return segment, None
-        field = cast(models.Field | models.ForeignObjectRel, get_field(actual_name))
+        field = cast(
+            "models.Field[object, object] | models.ForeignObjectRel",
+            get_field(actual_name),
+        )
         return actual_name, field
     else:
         return segment, field
@@ -556,20 +591,20 @@ class OrmQueryCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "query"
 
     @staticmethod
-    def _ensure_search_date_input(search_date: Any) -> None:
+    def _ensure_search_date_input(search_date: object) -> None:
         if not isinstance(search_date, (datetime, date)):
             raise SearchDateInputError
 
     @staticmethod
-    def _ensure_search_date_normalized(search_date: Any) -> None:
+    def _ensure_search_date_normalized(search_date: object) -> None:
         if not isinstance(search_date, datetime):
             raise SearchDateNormalizationError
 
     def filter(
         self,
-        interface_cls: type["OrmInterfaceBase"],
-        **kwargs: Any,
-    ) -> DatabaseBucket:
+        interface_cls: OrmInterfaceClass,
+        **kwargs: object,
+    ) -> DatabaseBucket["GeneralManager"]:
         """
         Builds a DatabaseBucket representing a queryset filtered by the provided lookup kwargs.
 
@@ -582,7 +617,7 @@ class OrmQueryCapability(BaseCapability):
         """
         payload_snapshot = {"kwargs": dict(kwargs)}
 
-        def _perform() -> DatabaseBucket:
+        def _perform() -> DatabaseBucket["GeneralManager"]:
             """
             Builds a DatabaseBucket for the given interface class using the provided filter kwargs.
 
@@ -608,9 +643,9 @@ class OrmQueryCapability(BaseCapability):
 
     def exclude(
         self,
-        interface_cls: type["OrmInterfaceBase"],
-        **kwargs: Any,
-    ) -> DatabaseBucket:
+        interface_cls: OrmInterfaceClass,
+        **kwargs: object,
+    ) -> DatabaseBucket["GeneralManager"]:
         """
         Builds a DatabaseBucket representing a queryset that excludes records matching the provided filter criteria.
 
@@ -623,7 +658,7 @@ class OrmQueryCapability(BaseCapability):
         """
         payload_snapshot = {"kwargs": dict(kwargs)}
 
-        def _perform() -> DatabaseBucket:
+        def _perform() -> DatabaseBucket["GeneralManager"]:
             """
             Builds a DatabaseBucket for an exclude query by normalizing the provided filter kwargs.
 
@@ -652,15 +687,15 @@ class OrmQueryCapability(BaseCapability):
 
     def _normalize_kwargs(
         self,
-        interface_cls: type["OrmInterfaceBase"],
-        kwargs: dict[str, Any],
-    ) -> tuple[bool, dict[str, Any], datetime | None]:
+        interface_cls: OrmInterfaceClass,
+        kwargs: FilterKwargs,
+    ) -> tuple[bool, FilterKwargs, datetime | None]:
         """
         Extracts an `include_inactive` flag from the provided kwargs and returns it alongside the remaining filter kwargs normalized for the interface's model.
 
         Parameters:
             interface_cls (type[OrmInterfaceBase]): Interface class whose model and payload normalizer are used for normalization.
-            kwargs (dict[str, Any]): Filter keyword arguments; may include the key `"include_inactive"`.
+            kwargs: Filter keyword arguments; may include the key `"include_inactive"`.
 
         Returns:
             tuple: A tuple containing: (1) a boolean indicating whether inactive records are included, (2) the normalized filter kwargs, and (3) an optional `search_date` used to scope historical lookups.
@@ -677,6 +712,7 @@ class OrmQueryCapability(BaseCapability):
             search_date = normalize_date(search_date)
         if search_date is not None:
             self._ensure_search_date_normalized(search_date)
+            search_date = cast(datetime, search_date)
         support = get_support_capability(interface_cls)
         normalizer = support.get_payload_normalizer(interface_cls)
         translated_payload = _translate_reverse_filter_aliases(
@@ -688,20 +724,20 @@ class OrmQueryCapability(BaseCapability):
 
     def _build_bucket(
         self,
-        interface_cls: type["OrmInterfaceBase"],
+        interface_cls: OrmInterfaceClass,
         *,
         include_inactive: bool,
-        normalized_kwargs: dict[str, Any],
+        normalized_kwargs: FilterKwargs,
         exclude: bool = False,
         search_date: datetime | None = None,
-    ) -> DatabaseBucket:
+    ) -> DatabaseBucket["GeneralManager"]:
         """
         Builds a DatabaseBucket containing a queryset for the given interface class filtered or excluded by the provided normalized query kwargs.
 
         Parameters:
             interface_cls (type[OrmInterfaceBase]): Interface class whose model/queryset is used.
             include_inactive (bool): If True, use the interface's manager that includes inactive (soft-deleted) records.
-            normalized_kwargs (dict[str, Any]): Normalized lookup kwargs to apply to the queryset.
+            normalized_kwargs: Normalized lookup kwargs to apply to the queryset.
             exclude (bool): If True, remove records matching `normalized_kwargs`; otherwise include them.
 
         Returns:
@@ -710,10 +746,13 @@ class OrmQueryCapability(BaseCapability):
         support = get_support_capability(interface_cls)
         queryset_base = support.get_queryset(interface_cls)
         if include_inactive:
-            queryset_base = support.get_manager(
-                interface_cls,
-                only_active=False,
-            ).all()
+            queryset_base = cast(
+                models.QuerySet[models.Model],
+                support.get_manager(
+                    interface_cls,
+                    only_active=False,
+                ).all(),
+            )
         if search_date is not None and search_date <= timezone.now() - timedelta(
             seconds=interface_cls.historical_lookup_buffer_seconds
         ):
@@ -733,10 +772,10 @@ class OrmQueryCapability(BaseCapability):
             else queryset_base.filter(**normalized_kwargs)
         )
         return DatabaseBucket(
-            cast(models.QuerySet[models.Model], queryset),
+            queryset,
             interface_cls._parent_class,
-            {} if exclude else dict(normalized_kwargs),
-            dict(normalized_kwargs) if exclude else {},
+            {} if exclude else cast("dict[str, list[object]]", dict(normalized_kwargs)),
+            cast("dict[str, list[object]]", dict(normalized_kwargs)) if exclude else {},
             search_date=search_date,
         )
 
@@ -795,7 +834,7 @@ class SoftDeleteCapability(BaseCapability):
 
 
 def get_support_capability(
-    interface_cls: type["OrmInterfaceBase"],
+    interface_cls: OrmInterfaceClass,
 ) -> OrmPersistenceSupportCapability:
     """
     Resolve and return the "orm_support" capability instance for the given interface class.
@@ -806,13 +845,16 @@ def get_support_capability(
     Returns:
         OrmPersistenceSupportCapability: The resolved persistence support capability instance.
     """
-    return interface_cls.require_capability(  # type: ignore[return-value]
-        "orm_support",
-        expected_type=OrmPersistenceSupportCapability,
+    return cast(
+        OrmPersistenceSupportCapability,
+        interface_cls.require_capability(
+            "orm_support",
+            expected_type=OrmPersistenceSupportCapability,
+        ),
     )
 
 
-def is_soft_delete_enabled(interface_cls: type["OrmInterfaceBase"]) -> bool:
+def is_soft_delete_enabled(interface_cls: OrmInterfaceClass) -> bool:
     """
     Determine whether soft-delete behavior is enabled for the given interface class.
 
@@ -837,7 +879,7 @@ def is_soft_delete_enabled(interface_cls: type["OrmInterfaceBase"]) -> bool:
 
 
 def _history_capability_for(
-    interface_cls: type["OrmInterfaceBase"],
+    interface_cls: OrmInterfaceClass,
 ) -> OrmHistoryCapability:
     """
     Retrieve the history capability instance associated with the given ORM interface class.
@@ -850,13 +892,18 @@ def _history_capability_for(
     """
     from .history import OrmHistoryCapability
 
-    return interface_cls.require_capability(  # type: ignore[return-value]
-        "history",
-        expected_type=OrmHistoryCapability,
+    return cast(
+        OrmHistoryCapability,
+        interface_cls.require_capability(
+            "history",
+            expected_type=OrmHistoryCapability,
+        ),
     )
 
 
-def _orm_instance_cache_key(interface_instance: "OrmInterfaceBase") -> tuple[Any, ...]:
+def _orm_instance_cache_key(
+    interface_instance: OrmInterfaceInstance,
+) -> tuple[object, ...]:
     interface_cls = interface_instance.__class__
     support = get_support_capability(interface_cls)
     only_active = not is_soft_delete_enabled(interface_cls)
@@ -871,9 +918,23 @@ def _orm_instance_cache_key(interface_instance: "OrmInterfaceBase") -> tuple[Any
 
 
 def discard_orm_instance_cache(
-    interface_cls: type["OrmInterfaceBase"],
-    pk: Any,
+    interface_cls: OrmInterfaceClass,
+    pk: object,
 ) -> None:
+    """Discard cached ORM reads for one interface class and primary key.
+
+    This helper only acts when a calculation run context is active. It removes
+    every cached read prefix for ``("orm_instance", interface_cls, pk)`` so
+    subsequent reads in the same run can reload changed or deleted rows. Outside
+    a calculation run it is a no-op.
+
+    Parameters:
+        interface_cls: ORM interface class whose read cache should be cleared.
+        pk: Primary-key value used in the cached read key.
+
+    Returns:
+        None.
+    """
     context = current_calculation_run_context()
     if context is not None:
         context.discard_prefix(("orm_instance", interface_cls, pk))

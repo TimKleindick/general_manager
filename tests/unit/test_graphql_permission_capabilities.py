@@ -220,6 +220,24 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         self.assertFalse(context.evaluate(declaration, second))
         self.assertEqual(calls, 0)
 
+    def test_object_capability_batch_mapping_preserves_string_identity_keys(
+        self,
+    ) -> None:
+        """String identity keys from batch evaluators are used as-is."""
+        instance = DummyManager({"code": "ALPHA"})
+        declaration = object_capability(
+            "canRename",
+            lambda _instance, _user: False,
+            batch_evaluator=lambda _instances, _user: {
+                "(('code', 'ALPHA'),)": True,
+            },
+        )
+        context = CapabilityEvaluationContext(user=AnonymousUser())
+
+        context.warm([declaration], [instance])
+
+        self.assertTrue(context.evaluate(declaration, instance))
+
     def test_permission_capability_allows_manager_without_permission(self) -> None:
         """
         Verify permission-backed capabilities allow managers without Permission classes.

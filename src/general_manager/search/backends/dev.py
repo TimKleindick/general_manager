@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence, cast
 
 from general_manager.search.backend import SearchDocument, SearchHit, SearchResult
 from general_manager.utils.filter_parser import apply_lookup
@@ -14,11 +14,11 @@ from general_manager.utils.filter_parser import apply_lookup
 class _IndexStore:
     documents: dict[str, SearchDocument] = field(default_factory=dict)
     token_index: dict[str, dict[str, set[str]]] = field(default_factory=dict)
-    settings: Mapping[str, Any] = field(default_factory=dict)
+    settings: Mapping[str, object] = field(default_factory=dict)
 
 
 class DevSearchBackend:
-    """Simple in-memory search backend intended for development."""
+    """Simple process-local in-memory search backend intended for development."""
 
     def __init__(self) -> None:
         """
@@ -26,13 +26,15 @@ class DevSearchBackend:
         """
         self._indexes: dict[str, _IndexStore] = {}
 
-    def ensure_index(self, index_name: str, settings: Mapping[str, Any]) -> None:
+    def ensure_index(self, index_name: str, settings: Mapping[str, object]) -> None:
         """
         Ensure an index exists and update its settings.
 
         Parameters:
             index_name (str): Name of the index to create or retrieve.
-            settings (Mapping[str, Any]): Settings to assign to the index; replaces any existing settings.
+            settings: Settings to assign to the index; replaces any existing
+                settings. The dev backend stores the mapping but does not
+                inspect it.
         """
         store = self._indexes.setdefault(index_name, _IndexStore())
         store.settings = settings
@@ -87,7 +89,7 @@ class DevSearchBackend:
         index_name: str,
         query: str,
         *,
-        filters: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+        filters: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
         filter_expression: str | None = None,
         sort_by: str | None = None,
         sort_desc: bool = False,
@@ -98,22 +100,71 @@ class DevSearchBackend:
         """
         Search an index for documents matching a query and return scored, optionally filtered and sorted hits.
 
+        The backend reads and writes documents under the `index_name` argument;
+        `SearchDocument.index` is stored but not validated. Document IDs are
+        unique only inside one in-memory index. Duplicate IDs inside one
+        `upsert()` call are processed in order, so the last document wins.
+        Deletes are best-effort and duplicate IDs are harmless. `ensure_index()`
+        is idempotent and replaces the stored settings mapping for the index.
+        Operations are not transactional; mutations completed before an
+        exception remain in memory. Queries are lowercased and split on
+        whitespace. Indexed tokens are built from every top-level
+        `SearchDocument.data` value: `None` yields no tokens, strings split on
+        whitespace, lists/tuples/sets are processed recursively, and all other
+        values become `str(value).lower().split()`. Dict values are not
+        traversed; they are tokenized from their string representation. A
+        document matches when each query token equals or prefixes a token
+        extracted from any indexed field. Empty queries match every document
+        that passes type and structured filters. The operation
+        order is type filtering, structured filtering, query scoring/matching,
+        sorting, and then pagination with `results[offset:offset + limit]`;
+        negative values intentionally follow Python slice behavior.
+        Scores sum matching field boosts, then multiply by `index_boost` when
+        set. Results sort by score descending unless `sort_by` is provided.
+        Sorting reads one raw document data field only. `None` and missing
+        fields are treated as missing and kept last for both ascending and
+        descending sorts. `bool` values use Python's numeric ordering because
+        `bool` is an `int` subclass. Other numeric values sort numerically,
+        and every non-numeric, non-missing value is compared as `str(value)`.
+        Python's stable sort preserves insertion order for otherwise equal
+        keys, including equal-score default ordering. The backend stores
+        document and settings objects by reference, returns hit data from the
+        stored `SearchDocument.data` mapping, is
+        process-local memory only, and does not provide persistence or
+        synchronization for concurrent reads/writes.
+
         Parameters:
             index_name (str): Name of the index to search.
             query (str): Query string to tokenize and match against indexed documents.
-            filters (Mapping[str, Any] | Sequence[Mapping[str, Any]] | None): Field-based filters to apply; may be a single mapping or a sequence of alternative filter groups.
+            filters: Field-based filters to apply; may be a single mapping or
+                a sequence of alternative filter groups. Mapping keys target
+                `SearchDocument.data` field names, optionally followed by one
+                lookup suffix separated by `__`. Supported lookup suffixes are
+                `exact`, `lt`, `lte`, `gt`, `gte`, `contains`, `startswith`,
+                `endswith`, and `in`; no nested data traversal is supported.
+                A key without a suffix uses `exact`. Within one mapping fields
+                are ANDed; between mappings groups are ORed. Comparisons use
+                the shared `apply_lookup()` helper: string operations are
+                case-sensitive, missing fields behave like `None`, incompatible
+                mixed-type comparisons and invalid lookup/value combinations
+                return `False`, and `None` compares only through `exact`.
             filter_expression (str | None): Unsupported in this backend; passing a value raises NotImplementedError.
-            sort_by (str | None): Document field name to sort results by; if omitted results are sorted by score.
+            sort_by (str | None): One document data field name to sort results by; if omitted results are sorted by score.
             sort_desc (bool): If True, sort results in descending order for the chosen sort key.
-            limit (int): Maximum number of hits to return.
-            offset (int): Number of matching results to skip before collecting hits.
+            limit (int): Maximum number of hits to return. Native slice
+                semantics apply, including for negative values.
+            offset (int): Number of matching results to skip before collecting hits. Native slice semantics apply, including for negative values.
             types (Sequence[str] | None): If provided, restrict results to documents whose type is in this sequence.
 
         Returns:
-            SearchResult: Object containing `hits` (list of SearchHit), `total` (number of matching documents), and `took_ms` (search time in milliseconds).
+            SearchResult: Object containing `hits` (the returned page with
+            data fields included), `total` (matching documents before
+            pagination), and `took_ms` (search time in milliseconds).
 
         Raises:
-            NotImplementedError: If `filter_expression` is not None.
+            NotImplementedError: If `filter_expression` is not None. Other
+                operational failures are not normalized and may surface as
+                ordinary Python exceptions.
         """
         if filter_expression is not None:
             raise NotImplementedError(
@@ -198,12 +249,15 @@ class DevSearchBackend:
             token_map[field_name] = self._tokenize_value(value)
         return token_map
 
-    def _tokenize_value(self, value: Any) -> set[str]:
+    def _tokenize_value(self, value: object) -> set[str]:
         """
         Extract lowercase whitespace-separated tokens from a value.
 
         Parameters:
-            value (Any): The input to tokenize. If None, returns an empty set. Strings are split on whitespace. Iterables (list/tuple/set) are tokenized recursively; other values are converted to string before tokenization.
+            value: The input to tokenize. If None, returns an empty set.
+                Strings are split on whitespace. Lists, tuples, and sets are
+                tokenized recursively; other values are converted to string
+                before tokenization.
 
         Returns:
             set[str]: A set of lowercase tokens extracted from the input.
@@ -257,7 +311,7 @@ class DevSearchBackend:
     def _passes_filters(
         self,
         document: SearchDocument,
-        filters: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+        filters: Mapping[str, object] | Sequence[Mapping[str, object]],
     ) -> bool:
         """
         Determine whether a document satisfies the provided filter or filter groups.
@@ -266,15 +320,20 @@ class DevSearchBackend:
 
         Parameters:
             document (SearchDocument): Document to test against the filters.
-            filters (Mapping[str, Any] | Sequence[Mapping[str, Any]]): A filter mapping or a sequence of filter mappings.
+            filters: A filter mapping or a sequence of filter mappings.
 
         Returns:
             bool: `true` if the document matches the filters, `false` otherwise.
         """
-        if isinstance(filters, (list, tuple)):
+        if not isinstance(filters, Mapping):
+            if not isinstance(filters, Sequence) or isinstance(
+                filters, str | bytes | bytearray
+            ):
+                return False
+            if not all(isinstance(group, Mapping) for group in filters):
+                return False
             return any(self._passes_filters(document, group) for group in filters)
-        mapping = cast(Mapping[str, Any], filters)
-        for key, value in mapping.items():
+        for key, value in filters.items():
             if "__" in key:
                 field_name, lookup = key.split("__", 1)
             else:
@@ -285,7 +344,11 @@ class DevSearchBackend:
                     if not set(doc_value).intersection(value):
                         return False
                     continue
-            if lookup == "in" and isinstance(doc_value, (list, tuple, set)):
+            if (
+                lookup == "in"
+                and isinstance(doc_value, (list, tuple, set))
+                and isinstance(value, (list, tuple, set))
+            ):
                 if not set(doc_value).intersection(value):
                     return False
                 continue

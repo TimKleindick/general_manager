@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Mapping, TypedDict
+from typing import TypedDict, cast
 
 from general_manager.cache.signals import post_data_change
 from general_manager.manager.general_manager import GeneralManager
@@ -31,18 +32,24 @@ _RESERVED_KEYS = {
     "signal",
 }
 
+type SignalPayloadValue = object
+type SignalPayload = Mapping[str, SignalPayloadValue]
+type SignalPayloadDict = dict[str, SignalPayloadValue]
+
 
 class _CommonEventKwargs(TypedDict):
     manager: str
-    identification: Mapping[str, Any] | None
+    identification: SignalPayload | None
     source: str | None
-    metadata: Mapping[str, Any] | None
+    metadata: SignalPayload | None
     event_name: str
     event_id: str | None
     occurred_at: datetime | None
 
 
-def _resolve_old_value_from_history(instance: GeneralManager, field_name: str) -> Any:
+def _resolve_old_value_from_history(
+    instance: GeneralManager, field_name: str
+) -> SignalPayloadValue:
     model_instance = getattr(instance._interface, "_instance", None)
     history = getattr(model_instance, "history", None)
     if history is None:
@@ -58,15 +65,20 @@ def _resolve_old_value_from_history(instance: GeneralManager, field_name: str) -
 
 def _manager_change_to_event(
     *,
-    instance: Any,
+    instance: object,
     action: str | None,
-    old_relevant_values: Mapping[str, Any] | None,
-    kwargs: Mapping[str, Any],
+    old_relevant_values: SignalPayload | None,
+    kwargs: SignalPayload,
 ) -> WorkflowEvent | None:
+    """Convert a GeneralManager mutation signal payload into a workflow event.
+
+    Unknown actions and unsupported instances return `None`. Event ids and
+    timestamps are left to the manager event helper defaults.
+    """
     if not isinstance(instance, GeneralManager):
         return None
 
-    relevant_fields = {
+    relevant_fields: SignalPayloadDict = {
         key: value
         for key, value in kwargs.items()
         if key not in _RESERVED_KEYS and not key.startswith("_")
@@ -77,9 +89,10 @@ def _manager_change_to_event(
     identification = kwargs.get("identification")
     if identification is None:
         identification = instance.identification
+    identification_mapping = cast(SignalPayload | None, identification)
     common_kwargs: _CommonEventKwargs = {
         "manager": instance.__class__.__name__,
-        "identification": identification,
+        "identification": identification_mapping,
         "source": "general_manager.cache.signals.post_data_change",
         "metadata": {"action": action},
         "event_name": "manager_updated",
@@ -108,12 +121,18 @@ def _manager_change_to_event(
 
 
 def _handle_post_data_change(
-    sender: Any,
-    instance: Any = None,
+    sender: object,
+    instance: object | None = None,
     action: str | None = None,
-    old_relevant_values: Mapping[str, Any] | None = None,
-    **kwargs: Any,
+    old_relevant_values: SignalPayload | None = None,
+    **kwargs: SignalPayloadValue,
 ) -> None:
+    """Publish a workflow event for supported manager mutation signals.
+
+    The Django signal sender is ignored. When `instance` is missing, the bridge
+    uses `previous_instance` from the signal kwargs. Exceptions raised by
+    `publish()` propagate to the signal caller.
+    """
     del sender
     event_instance = (
         instance if instance is not None else kwargs.get("previous_instance")
@@ -130,10 +149,11 @@ def _handle_post_data_change(
 
 
 def connect_workflow_signal_bridge(*, registry: EventRegistry | None = None) -> None:
-    """
-    Connect manager mutation signal bridging into workflow events.
+    """Connect manager mutation signal bridging into workflow events.
 
-    If a registry is provided, it becomes the active global registry.
+    If `registry` is provided, it becomes the active global registry before the
+    receiver is connected. The receiver is connected with a stable dispatch uid
+    and `weak=False`, so repeated calls replace the same receiver registration.
     """
     if registry is not None:
         from general_manager.workflow.event_registry import configure_event_registry
@@ -147,12 +167,17 @@ def connect_workflow_signal_bridge(*, registry: EventRegistry | None = None) -> 
 
 
 def disconnect_workflow_signal_bridge() -> None:
-    """Disconnect manager mutation signal bridging."""
+    """Disconnect the workflow signal bridge receiver by dispatch uid."""
     post_data_change.disconnect(dispatch_uid=_DISPATCH_UID)
 
 
-def workflow_signal_bridge_enabled(django_settings: Any) -> bool:
-    """Return True when workflow signal bridge is enabled in settings."""
+def workflow_signal_bridge_enabled(django_settings: object) -> bool:
+    """Return whether workflow signal bridge is enabled in settings.
+
+    Nested `GENERAL_MANAGER["WORKFLOW_SIGNAL_BRIDGE"]` takes precedence over the
+    top-level setting when `GENERAL_MANAGER` is a mapping. Values are interpreted
+    with Python `bool(...)`; missing settings default to `False`.
+    """
     config = getattr(django_settings, _SETTINGS_KEY, {})
     if isinstance(config, Mapping):
         if _WORKFLOW_SIGNAL_BRIDGE_KEY in config:
@@ -160,8 +185,8 @@ def workflow_signal_bridge_enabled(django_settings: Any) -> bool:
     return bool(getattr(django_settings, _WORKFLOW_SIGNAL_BRIDGE_KEY, False))
 
 
-def configure_workflow_signal_bridge_from_settings(django_settings: Any) -> None:
-    """Connect or disconnect bridge based on Django settings."""
+def configure_workflow_signal_bridge_from_settings(django_settings: object) -> None:
+    """Connect or disconnect the bridge based on Django settings."""
     if workflow_signal_bridge_enabled(django_settings):
         connect_workflow_signal_bridge()
         return

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from general_manager.interface.capabilities import configuration
+from general_manager.interface.capabilities.base import Capability
 from general_manager.interface.capabilities.configuration import (
     InterfaceCapabilityConfig,
     CapabilitySet,
@@ -23,6 +25,38 @@ class AnotherCapability(BaseCapability):
     """Another test capability."""
 
     name = "another"
+
+
+class RuntimeProtocolCapability:
+    """Capability implementation that satisfies the public protocol structurally."""
+
+    name = "read"
+
+    def setup(self, interface_cls: type[object]) -> None:
+        """Attach no runtime behavior for this protocol test."""
+
+    def teardown(self, interface_cls: type[object]) -> None:
+        """Detach no runtime behavior for this protocol test."""
+
+
+class BrokenIterationError(RuntimeError):
+    """Raised by test iterables that fail during iteration."""
+
+
+def test_capability_protocol_is_runtime_checkable():
+    """The public Capability protocol supports structural runtime checks."""
+    assert isinstance(RuntimeProtocolCapability(), Capability)
+
+
+def test_configuration_module_exports_public_helpers():
+    """The module export list should expose only the public helper surface."""
+    assert configuration.__all__ == [
+        "CapabilityConfigEntry",
+        "CapabilitySet",
+        "InterfaceCapabilityConfig",
+        "flatten_capability_entries",
+        "iter_capability_entries",
+    ]
 
 
 def test_interface_capability_config_initialization():
@@ -70,6 +104,49 @@ def test_interface_capability_config_instantiate_with_options():
     assert instance.retries == 5
 
 
+def test_interface_capability_config_preserves_falsey_mapping_options():
+    """Instantiate with supplied mapping entries even when the mapping is falsey."""
+
+    class FalseyOptions(dict[str, object]):
+        def __bool__(self) -> bool:
+            return False
+
+    class ConfigurableCapability(BaseCapability):
+        name = "configurable"
+
+        def __init__(self, label: str = "default") -> None:
+            self.label = label
+
+    config = InterfaceCapabilityConfig(
+        ConfigurableCapability,
+        options=FalseyOptions(label="configured"),
+    )
+
+    instance = config.instantiate()
+
+    assert isinstance(instance, ConfigurableCapability)
+    assert instance.label == "configured"
+
+
+def test_interface_capability_config_copies_options_at_instantiate_time():
+    """Copy options only when constructing the capability instance."""
+
+    class ConfigurableCapability(BaseCapability):
+        name = "configurable"
+
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+    options = {"label": "first"}
+    config = InterfaceCapabilityConfig(ConfigurableCapability, options=options)
+    options["label"] = "second"
+
+    instance = config.instantiate()
+
+    assert isinstance(instance, ConfigurableCapability)
+    assert instance.label == "second"
+
+
 def test_interface_capability_config_frozen():
     """Test that InterfaceCapabilityConfig is immutable."""
     config = InterfaceCapabilityConfig(DummyCapability, options={"key": "value"})
@@ -100,6 +177,18 @@ def test_capability_set_entries_converted_to_tuple():
 
     assert isinstance(cap_set.entries, tuple)
     assert len(cap_set.entries) == 2
+
+
+def test_capability_set_consumes_generator_entries_once():
+    """CapabilitySet should expose an immutable tuple even for generator input."""
+    config1 = InterfaceCapabilityConfig(DummyCapability)
+    config2 = InterfaceCapabilityConfig(AnotherCapability)
+    source = (config for config in (config1, config2))
+
+    cap_set = CapabilitySet(label="generated", entries=source)
+
+    assert cap_set.entries == (config1, config2)
+    assert list(source) == []
 
 
 def test_capability_set_frozen():
@@ -210,6 +299,15 @@ def test_flatten_preserves_order():
     assert list(result) == configs
 
 
+def test_flatten_preserves_duplicate_entries():
+    """Flattening should not deduplicate repeated capability configs."""
+    config = InterfaceCapabilityConfig(DummyCapability)
+
+    result = flatten_capability_entries([config, config])
+
+    assert result == (config, config)
+
+
 def test_flatten_handles_mixed_iterables():
     """Test flattening with various iterable types."""
     config1 = InterfaceCapabilityConfig(DummyCapability)
@@ -221,6 +319,61 @@ def test_flatten_handles_mixed_iterables():
     assert len(result) == 2
     assert config1 in result
     assert config2 in result
+
+
+def test_iter_capability_entries_is_lazy_for_outer_iterable():
+    """Iterator construction should not consume the outer iterable immediately."""
+    config1 = InterfaceCapabilityConfig(DummyCapability)
+    config2 = InterfaceCapabilityConfig(AnotherCapability)
+    consumed = 0
+
+    def entries():
+        nonlocal consumed
+        consumed += 1
+        yield config1
+        consumed += 1
+        yield CapabilitySet("bundle", (config2,))
+
+    iterator = iter_capability_entries(entries())
+
+    assert consumed == 0
+    assert next(iterator) is config1
+    assert consumed == 1
+    assert next(iterator) is config2
+    assert consumed == 2
+
+
+def test_flatten_does_not_runtime_validate_entry_values():
+    """Invalid runtime entries pass through; interface binding validates later."""
+    invalid_entry = object()
+
+    result = flatten_capability_entries([invalid_entry])
+
+    assert result == (invalid_entry,)
+
+
+def test_flatten_propagates_iteration_errors():
+    """Unexpected errors from the outer iterable should propagate unchanged."""
+
+    class BrokenEntries:
+        def __iter__(self):
+            raise BrokenIterationError
+
+    with pytest.raises(BrokenIterationError):
+        flatten_capability_entries(BrokenEntries())
+
+
+def test_iter_capability_entries_propagates_iteration_errors():
+    """Iterator errors should surface when the lazy iterator is consumed."""
+
+    class BrokenEntries:
+        def __iter__(self):
+            raise BrokenIterationError
+
+    iterator = iter_capability_entries(BrokenEntries())
+
+    with pytest.raises(BrokenIterationError):
+        next(iterator)
 
 
 def test_capability_set_with_single_entry():

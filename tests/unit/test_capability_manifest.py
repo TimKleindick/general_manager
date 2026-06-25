@@ -15,6 +15,24 @@ from general_manager.interface.interfaces.existing_model import ExistingModelInt
 from general_manager.interface.interfaces.read_only import ReadOnlyInterface
 from general_manager.interface.interfaces.calculation import CalculationInterface
 from general_manager.interface.interfaces.request import RequestInterface
+from general_manager.interface.bundles.calculation import CALCULATION_CORE_CAPABILITIES
+from general_manager.interface.bundles.database import (
+    EXISTING_MODEL_CAPABILITIES,
+    ORM_PERSISTENCE_CAPABILITIES,
+    ORM_WRITABLE_CAPABILITIES,
+    READ_ONLY_CAPABILITIES,
+)
+from general_manager.interface.bundles.remote_manager import REMOTE_MANAGER_CAPABILITIES
+from general_manager.interface.bundles.request import (
+    REQUEST_CAPABILITIES,
+    REQUEST_CORE_CAPABILITIES,
+    REQUEST_MUTATION_CAPABILITIES,
+)
+from general_manager.interface.capabilities.calculation import (
+    CalculationLifecycleCapability,
+    CalculationQueryCapability,
+    CalculationReadCapability,
+)
 
 
 def test_capability_manifest_resolve_simple():
@@ -125,6 +143,120 @@ def test_default_manifest_calculation_interface():
     # Should not have ORM capabilities
     assert "orm_support" not in plan.required
     assert "orm_lifecycle" not in plan.required
+
+
+def test_calculation_core_capability_bundle_entries_are_ordered():
+    """The calculation bundle exposes the expected core capability handlers."""
+    assert CALCULATION_CORE_CAPABILITIES.label == "calculation_core"
+    assert tuple(entry.handler for entry in CALCULATION_CORE_CAPABILITIES.entries) == (
+        CalculationLifecycleCapability,
+        CalculationReadCapability,
+        CalculationQueryCapability,
+    )
+
+
+def test_database_capability_bundle_entries_are_ordered():
+    """ORM-backed bundles expose the expected ordered capability names."""
+    assert ORM_PERSISTENCE_CAPABILITIES.label == "orm_persistence_core"
+    assert tuple(
+        entry.handler.name for entry in ORM_PERSISTENCE_CAPABILITIES.entries
+    ) == (
+        "orm_support",
+        "orm_lifecycle",
+        "soft_delete",
+        "read",
+        "validation",
+        "history",
+        "query",
+        "observability",
+    )
+
+    assert ORM_WRITABLE_CAPABILITIES.label == "orm_writable_core"
+    assert tuple(entry.handler.name for entry in ORM_WRITABLE_CAPABILITIES.entries) == (
+        "orm_support",
+        "orm_lifecycle",
+        "soft_delete",
+        "read",
+        "validation",
+        "history",
+        "query",
+        "observability",
+        "orm_mutation",
+        "create",
+        "update",
+        "delete",
+    )
+
+    assert EXISTING_MODEL_CAPABILITIES.label == "existing_model_core"
+    assert tuple(
+        entry.handler.name for entry in EXISTING_MODEL_CAPABILITIES.entries
+    ) == (
+        "orm_support",
+        "orm_lifecycle",
+        "soft_delete",
+        "read",
+        "validation",
+        "history",
+        "query",
+        "observability",
+        "orm_mutation",
+        "create",
+        "update",
+        "delete",
+        "existing_model_resolution",
+    )
+
+    assert READ_ONLY_CAPABILITIES.label == "read_only_core"
+    assert tuple(entry.handler.name for entry in READ_ONLY_CAPABILITIES.entries) == (
+        "orm_support",
+        "orm_lifecycle",
+        "soft_delete",
+        "read",
+        "validation",
+        "history",
+        "query",
+        "observability",
+        "read_only_management",
+    )
+
+
+def test_remote_manager_capability_bundle_entries_are_ordered():
+    """The remote-manager bundle exposes the expected ordered capability names."""
+    assert REMOTE_MANAGER_CAPABILITIES.label == "remote_manager"
+    assert tuple(
+        entry.handler.name for entry in REMOTE_MANAGER_CAPABILITIES.entries
+    ) == (
+        "request_lifecycle",
+        "read",
+        "validation",
+        "query",
+        "create",
+        "update",
+        "delete",
+        "observability",
+    )
+
+
+def test_request_capability_bundle_entries_are_ordered():
+    """Request bundles expose the expected ordered capability names."""
+    assert REQUEST_CAPABILITIES is REQUEST_CORE_CAPABILITIES
+    assert REQUEST_CORE_CAPABILITIES.label == "request_core"
+    assert tuple(entry.handler.name for entry in REQUEST_CORE_CAPABILITIES.entries) == (
+        "request_lifecycle",
+        "read",
+        "validation",
+        "query",
+        "observability",
+    )
+
+    assert REQUEST_MUTATION_CAPABILITIES.label == "request_mutation"
+    assert tuple(
+        entry.handler.name for entry in REQUEST_MUTATION_CAPABILITIES.entries
+    ) == (
+        "create",
+        "update",
+        "delete",
+    )
 
 
 def test_default_manifest_existing_model_interface():

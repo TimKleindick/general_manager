@@ -2,6 +2,7 @@
 
 from django.test import SimpleTestCase
 
+import general_manager.interface.utils.errors as errors_module
 from general_manager.interface.utils.errors import (
     DuplicateFieldNameError,
     InvalidFieldTypeError,
@@ -17,6 +18,91 @@ from general_manager.interface.utils.errors import (
     ReadOnlyRelationLookupError,
     UnknownFieldError,
 )
+
+
+class InterfaceErrorsPublicExportsTests(SimpleTestCase):
+    """Tests for the public exception-module export contract."""
+
+    def test_module_exports_shared_interface_errors(self) -> None:
+        self.assertEqual(
+            errors_module.__all__,
+            [
+                "DuplicateFieldNameError",
+                "InvalidFieldTypeError",
+                "InvalidFieldValueError",
+                "InvalidModelReferenceError",
+                "InvalidReadOnlyDataFormatError",
+                "InvalidReadOnlyDataTypeError",
+                "MissingActivationSupportError",
+                "MissingModelConfigurationError",
+                "MissingReadOnlyBindingError",
+                "MissingReadOnlyDataError",
+                "MissingUniqueFieldError",
+                "ReadOnlyRelationLookupError",
+                "UnknownFieldError",
+            ],
+        )
+
+
+class InterfaceErrorMessageFormatTests(SimpleTestCase):
+    """Tests for the public exception message formats."""
+
+    def test_message_formats_are_stable(self) -> None:
+        cases = [
+            (InvalidFieldValueError("age", "bad"), "Invalid value for age: bad."),
+            (
+                InvalidFieldTypeError("count", TypeError("expected int")),
+                "Type error for count: expected int.",
+            ),
+            (
+                UnknownFieldError("invalid_field", "MyModel"),
+                "invalid_field does not exist in MyModel.",
+            ),
+            (DuplicateFieldNameError(), "Field name already exists."),
+            (
+                MissingActivationSupportError("Product"),
+                "Product must define an 'is_active' attribute.",
+            ),
+            (
+                MissingReadOnlyDataError("CategoryInterface"),
+                "ReadOnlyInterface 'CategoryInterface' must define a '_data' attribute.",
+            ),
+            (
+                MissingUniqueFieldError("StatusInterface"),
+                "ReadOnlyInterface 'StatusInterface' must declare at least one unique field.",
+            ),
+            (
+                ReadOnlyRelationLookupError(
+                    "ProductInterface", "category", 0, {"code": "XYZ"}
+                ),
+                "ReadOnlyInterface 'ProductInterface' could not resolve relation "
+                "'category' (expected 1 match, found 0) for lookup {'code': 'XYZ'}.",
+            ),
+            (
+                InvalidReadOnlyDataFormatError(),
+                "_data JSON must decode to a list of dictionaries.",
+            ),
+            (
+                InvalidReadOnlyDataTypeError(),
+                "_data must be a JSON string or a list of dictionaries.",
+            ),
+            (
+                MissingReadOnlyBindingError("CountryInterface"),
+                "ReadOnlyInterface 'CountryInterface' must be bound to a manager and model before syncing.",
+            ),
+            (
+                MissingModelConfigurationError("ExistingModelInterface"),
+                "ExistingModelInterface must define a 'model' attribute.",
+            ),
+            (
+                InvalidModelReferenceError("invalid.path.to.Model"),
+                "Invalid model reference 'invalid.path.to.Model'.",
+            ),
+        ]
+
+        for error, expected_message in cases:
+            with self.subTest(error=error.__class__.__name__):
+                self.assertEqual(str(error), expected_message)
 
 
 class InvalidFieldValueErrorTests(SimpleTestCase):
@@ -39,6 +125,11 @@ class InvalidFieldTypeErrorTests(SimpleTestCase):
         self.assertIn("count", str(error))
         self.assertIn("expected int", str(error))
 
+    def test_message_is_stable(self) -> None:
+        error = InvalidFieldTypeError("count", TypeError("expected int"))
+
+        self.assertEqual(str(error), "Type error for count: expected int.")
+
 
 class UnknownFieldErrorTests(SimpleTestCase):
     """Tests for UnknownFieldError."""
@@ -48,6 +139,11 @@ class UnknownFieldErrorTests(SimpleTestCase):
         error = UnknownFieldError("invalid_field", "MyModel")
         self.assertIn("invalid_field", str(error))
         self.assertIn("MyModel", str(error))
+
+    def test_message_is_stable(self) -> None:
+        error = UnknownFieldError("invalid_field", "MyModel")
+
+        self.assertEqual(str(error), "invalid_field does not exist in MyModel.")
 
 
 class DuplicateFieldNameErrorTests(SimpleTestCase):
@@ -67,6 +163,11 @@ class MissingActivationSupportErrorTests(SimpleTestCase):
         error = MissingActivationSupportError("Product")
         self.assertIn("Product", str(error))
         self.assertIn("is_active", str(error))
+
+    def test_message_is_stable(self) -> None:
+        error = MissingActivationSupportError("Product")
+
+        self.assertEqual(str(error), "Product must define an 'is_active' attribute.")
 
 
 class MissingReadOnlyDataErrorTests(SimpleTestCase):

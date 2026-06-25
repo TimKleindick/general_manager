@@ -122,6 +122,18 @@
       "general_manager.api.graphql",
       "GraphQL"
     ],
+    "GraphQLPropertyReturnAnnotationError": [
+      "general_manager.api.property",
+      "GraphQLPropertyReturnAnnotationError"
+    ],
+    "GraphQLPropertyTimeoutConfigurationError": [
+      "general_manager.api.property",
+      "GraphQLPropertyTimeoutConfigurationError"
+    ],
+    "GraphQLPropertyWarmUpConfigurationError": [
+      "general_manager.api.property",
+      "GraphQLPropertyWarmUpConfigurationError"
+    ],
     "MeasurementScalar": [
       "general_manager.api.graphql",
       "MeasurementScalar"
@@ -193,6 +205,10 @@
     "CalculationRunContext": [
       "general_manager.cache.run_context",
       "CalculationRunContext"
+    ],
+    "Dependency": [
+      "general_manager.cache.dependency_index",
+      "Dependency"
     ],
     "DependencyTracker": [
       "general_manager.cache.cache_tracker",
@@ -496,6 +512,14 @@
       "general_manager.manager.input",
       "NumericRangeDomain"
     ],
+    "TrustedOrmHydrationNotSupportedError": [
+      "general_manager.manager.general_manager",
+      "TrustedOrmHydrationNotSupportedError"
+    ],
+    "UnsupportedUnionOperandError": [
+      "general_manager.manager.general_manager",
+      "UnsupportedUnionOperandError"
+    ],
     "graph_ql_property": [
       "general_manager.api.property",
       "graph_ql_property"
@@ -548,6 +572,10 @@
       "general_manager.permission.graphql_capabilities",
       "GraphQLPermissionCapability"
     ],
+    "InvalidPermissionDataError": [
+      "general_manager.permission.permission_data_manager",
+      "InvalidPermissionDataError"
+    ],
     "ManagerBasedPermission": [
       "general_manager.permission.manager_based_permission",
       "ManagerBasedPermission"
@@ -563,6 +591,10 @@
     "PermissionAuditEvent": [
       "general_manager.permission.audit",
       "PermissionAuditEvent"
+    ],
+    "PermissionDataManager": [
+      "general_manager.permission.permission_data_manager",
+      "PermissionDataManager"
     ],
     "configure_audit_logger": [
       "general_manager.permission.audit",
@@ -597,6 +629,10 @@
     "BaseRuleHandler": [
       "general_manager.rule.handler",
       "BaseRuleHandler"
+    ],
+    "InvalidRuleHandlerConfigurationError": [
+      "general_manager.rule.rule",
+      "InvalidRuleHandlerConfigurationError"
     ],
     "Rule": [
       "general_manager.rule.rule",

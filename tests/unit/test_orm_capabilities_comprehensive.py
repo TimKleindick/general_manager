@@ -637,6 +637,7 @@ class TestOrmHistoryCapability:
 
         mock_model = Mock()
         mock_model.history = mock_history_manager
+        mock_model._meta = SimpleNamespace(pk=SimpleNamespace(name="id"))
 
         interface_cls = Mock()
         interface_cls._model = mock_model
@@ -654,6 +655,43 @@ class TestOrmHistoryCapability:
 
             mock_history_manager.filter.assert_called_once_with(
                 id=123, history_date__lte=search_date
+            )
+            assert result is mock_historical
+
+    def test_get_historical_record_by_pk_uses_model_pk_field_name(self):
+        """Custom primary-key models should query history by their actual PK field."""
+        capability = OrmHistoryCapability()
+
+        search_date = datetime.now()
+        mock_historical = Mock()
+
+        mock_history_qs = Mock()
+        mock_history_qs.order_by = Mock(return_value=mock_history_qs)
+        mock_history_qs.last = Mock(return_value=mock_historical)
+
+        mock_history_manager = Mock()
+        mock_history_manager.filter = Mock(return_value=mock_history_qs)
+
+        mock_model = Mock()
+        mock_model.history = mock_history_manager
+        mock_model._meta = SimpleNamespace(pk=SimpleNamespace(name="sku"))
+
+        interface_cls = Mock()
+        interface_cls._model = mock_model
+
+        with patch(
+            "general_manager.interface.capabilities.orm.history.get_support_capability"
+        ) as mock_get_support:
+            mock_support = Mock()
+            mock_support.get_database_alias = Mock(return_value=None)
+            mock_get_support.return_value = mock_support
+
+            result = capability.get_historical_record_by_pk(
+                interface_cls, "SKU-1", search_date
+            )
+
+            mock_history_manager.filter.assert_called_once_with(
+                sku="SKU-1", history_date__lte=search_date
             )
             assert result is mock_historical
 
@@ -675,6 +713,7 @@ class TestOrmHistoryCapability:
 
         mock_model = Mock()
         mock_model.history = mock_history_manager
+        mock_model._meta = SimpleNamespace(pk=SimpleNamespace(name="id"))
 
         interface_cls = Mock()
         interface_cls._model = mock_model

@@ -1,6 +1,7 @@
 # tests/test_factory_helpers.py
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from django.db import models
 from django.test import TestCase
@@ -413,6 +414,20 @@ class TestGetManyToManyFieldValue(TestCase):
 
         self.assertIn("test_field", str(ctx.exception))
         self.assertIn("does not have a related model", str(ctx.exception))
+
+    def test_missing_related_model_error_when_field_lacks_related_model(self):
+        """Non-relational fields should raise the documented custom error."""
+        from general_manager.factory.factories import (
+            MissingRelatedModelError,
+            get_related_model,
+        )
+
+        field = SimpleNamespace(name="plain_field", model=DummyModel)
+
+        with self.assertRaises(MissingRelatedModelError) as ctx:
+            get_related_model(field)  # type: ignore[arg-type]
+
+        self.assertIn("plain_field", str(ctx.exception))
 
     def test_invalid_related_model_type_error(self):
         """Test that InvalidRelatedModelTypeError is raised for non-model related types."""

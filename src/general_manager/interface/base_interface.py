@@ -6,7 +6,6 @@ import inspect
 from typing import (
     Type,
     TYPE_CHECKING,
-    Any,
     NotRequired,
     TypeVar,
     Iterable,
@@ -44,8 +43,9 @@ if TYPE_CHECKING:
 
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
+ResultT = TypeVar("ResultT")
 type generalManagerClassName = str
-type attributes = dict[str, Any]
+type attributes = dict[str, object]
 type interfaceBaseClass = Type[InterfaceBase]
 type newlyCreatedInterfaceClass = Type[InterfaceBase]
 type relatedClass = Type[Model] | None
@@ -74,7 +74,7 @@ class AttributeTypedDict(TypedDict):
     graphql_scalar: NotRequired[str]
     relation_kind: NotRequired[str]
     filter_lookup: NotRequired[str]
-    default: Any
+    default: object
     is_required: bool
     is_editable: bool
     is_derived: bool
@@ -195,7 +195,7 @@ class InterfaceBase(ABC):
 
     _parent_class: ClassVar[Type["GeneralManager"]]
     _interface_type: ClassVar[str]
-    input_fields: ClassVar[dict[str, "Input"]]
+    input_fields: ClassVar[dict[str, "Input[type[object]]"]]
     lifecycle_capability_name: ClassVar[CapabilityName | None] = None
     _capabilities: ClassVar[frozenset[CapabilityName]] = frozenset()
     _capability_selection: ClassVar["CapabilitySelection | None"] = None
@@ -205,11 +205,11 @@ class InterfaceBase(ABC):
     _configured_capabilities_applied: ClassVar[bool] = False
     _automatic_capability_builder: ClassVar["ManifestCapabilityBuilder | None"] = None
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs: object) -> None:
         """
         Initialize capability-related class state for newly created subclasses.
 
-        This method resets per-subclass capability registries and configuration to a clean default, merges configured capability overrides into the class's capability_overrides mapping, and clears the flag that marks configured capabilities as applied. Any keyword arguments are forwarded to the superclass implementation.
+        This method resets per-subclass capability registries and configuration to a clean default, merges configured capability overrides into the class's capability_overrides mapping, and clears the flag that marks configured capabilities as applied. Keyword arguments are forwarded to the superclass implementation.
         """
         super().__init_subclass__(**kwargs)
         cls._capabilities = frozenset()
@@ -224,7 +224,7 @@ class InterfaceBase(ABC):
             cls.capability_overrides.setdefault(name, override)
         cls._configured_capabilities_applied = False
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: object, **kwargs: object) -> None:
         """
         Initialize the interface using the provided identification inputs.
 
@@ -431,14 +431,14 @@ class InterfaceBase(ABC):
     @staticmethod
     def _make_capability_factory(
         handler_cls: type[Capability],
-        options: dict[str, Any],
+        options: dict[str, object],
     ) -> CapabilityOverride:
         """
         Create a factory callable that produces instances of a capability handler using the given options.
 
         Parameters:
             handler_cls (type[Capability]): The Capability subclass to instantiate.
-            options (dict[str, Any]): Keyword arguments to supply to the handler constructor.
+            options: Keyword arguments to supply to the handler constructor.
 
         Returns:
             CapabilityOverride: A zero-argument callable that, when invoked, returns a new instance of `handler_cls` constructed with `options`.
@@ -446,7 +446,7 @@ class InterfaceBase(ABC):
 
         def _factory(
             handler_cls: type[Capability] = handler_cls,
-            options: dict[str, Any] = options,
+            options: dict[str, object] = options,
         ) -> Capability:
             return handler_cls(**dict(options))
 
@@ -566,31 +566,38 @@ class InterfaceBase(ABC):
 
     def parse_input_fields_to_identification(
         self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Convert positional and keyword inputs into a validated identification mapping for the interface's input fields.
+
+        Positional values are assigned in `input_fields` declaration order before
+        keyword validation. A keyword named `<field>_id` is accepted only when
+        `<field>` is a declared input and the canonical field name was not
+        already supplied. Positional overflow, duplicate positional-plus-keyword
+        values, alias collisions, and unknown aliases surface as
+        `UnexpectedInputArgumentsError` through the argument-normalization path.
 
         Parameters:
             *args: Positional arguments matched, in order, to the interface's defined input fields.
             **kwargs: Keyword arguments supplying input values by name.
 
         Returns:
-            dict[str, Any]: Mapping of input field names to their validated values.
+            dict[str, object]: Mapping of input field names to their validated values.
 
         Raises:
             UnexpectedInputArgumentsError: If extra keyword arguments are provided that do not match any input field (after allowing keys suffixed with "_id").
             MissingInputArgumentsError: If one or more required input fields are not provided.
             CircularInputDependencyError: If input fields declare dependencies that form a cycle and cannot be resolved.
             InvalidInputTypeError: If a provided value does not match the declared type for an input.
+            InvalidInputConstraintError: If bounds validation or the configured
+                validator rejects a value.
             InvalidPossibleValuesTypeError: If an input's `possible_values` configuration is neither callable nor iterable.
             InvalidInputValueError: If a provided value is not in the allowed set defined by an input's `possible_values`.
         """
-        identification: dict[str, Any] = {}
-        kwargs = cast(
-            dict[str, Any], args_to_kwargs(args, self.input_fields.keys(), kwargs)
-        )
+        identification: dict[str, object] = {}
+        kwargs = args_to_kwargs(args, self.input_fields.keys(), kwargs)
         # Check for extra arguments
         extra_args = set(kwargs.keys()) - set(self.input_fields.keys())
         if extra_args:
@@ -651,22 +658,22 @@ class InterfaceBase(ABC):
     def _input_possible_values_cache_context(
         cls,
         input_name: str,
-    ) -> tuple[type[Any], str] | None:
+    ) -> tuple[type[object], str] | None:
         parent_class = getattr(cls, "_parent_class", None)
         if parent_class is None:
             return None
         return (parent_class, input_name)
 
     @staticmethod
-    def format_identification(identification: dict[str, Any]) -> dict[str, Any]:
+    def format_identification(identification: dict[str, object]) -> dict[str, object]:
         """
         Normalise identification data by replacing manager instances with their IDs.
 
         Parameters:
-            identification (dict[str, Any]): Raw identification mapping possibly containing manager instances.
+            identification: Raw identification mapping possibly containing manager instances.
 
         Returns:
-            dict[str, Any]: Identification mapping with nested managers replaced by their identifications.
+            dict[str, object]: Identification mapping with nested managers replaced by their identifications.
         """
         from general_manager.manager.general_manager import GeneralManager
 
@@ -674,27 +681,30 @@ class InterfaceBase(ABC):
             if isinstance(value, GeneralManager):
                 identification[key] = value.identification
             elif isinstance(value, (list, tuple)):
-                identification[key] = []
+                normalized_values: list[object] = []
                 for v in value:
                     if isinstance(v, GeneralManager):
-                        identification[key].append(v.identification)
+                        normalized_values.append(v.identification)
                     elif isinstance(v, dict):
-                        identification[key].append(
-                            InterfaceBase.format_identification(v)
-                        )
+                        normalized_values.append(InterfaceBase.format_identification(v))
                     else:
-                        identification[key].append(v)
+                        normalized_values.append(v)
+                identification[key] = normalized_values
             elif isinstance(value, dict):
                 identification[key] = InterfaceBase.format_identification(value)
         return identification
 
     def _process_input(
-        self, name: str, value: Any, identification: dict[str, Any]
+        self, name: str, value: object, identification: dict[str, object]
     ) -> None:
         """
         Validate a single input value against its declared Input definition.
 
-        Checks that the provided value matches the declared Python type and, when DEBUG is enabled, verifies the value is allowed by the input's `possible_values` (which may be an iterable or a callable that receives dependent input values).
+        Checks that the provided value matches the declared Python type and
+        declared constraints. ``possible_values`` membership is enforced only
+        when the ``VALIDATE_INPUT_VALUES`` setting is truthy; when that setting
+        is unset, enforcement follows ``settings.DEBUG``. Possible values may
+        be an iterable or a callable that receives dependent input values.
 
         Parameters:
             name: The input field name being validated.
@@ -703,8 +713,10 @@ class InterfaceBase(ABC):
 
         Raises:
             InvalidInputTypeError: If `value` is not an instance of the input's declared `type`.
+            InvalidInputConstraintError: If bounds validation or the configured
+                validator rejects `value`.
             InvalidPossibleValuesTypeError: If `possible_values` is neither callable nor iterable.
-            InvalidInputValueError: If `value` is not contained in the evaluated `possible_values` (only checked when DEBUG is true).
+            InvalidInputValueError: If possible-value validation is enabled and `value` is not contained in the evaluated `possible_values`.
         """
         input_field = self.input_fields[name]
         if value is None:
@@ -746,32 +758,37 @@ class InterfaceBase(ABC):
             raise InvalidInputValueError(name, value, allowed_values)
 
     @classmethod
-    def create(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    def create(cls, *args: object, **kwargs: object) -> dict[str, object]:
         """
         Create a new managed record in the underlying data store using the interface's inputs.
+
+        This base method is intentionally typed to the capability-level mutation
+        result, currently a dictionary such as `{"id": pk}`. Capability handlers
+        used with `InterfaceBase.create()` should return that mapping shape;
+        higher manager layers may convert it to a manager instance.
 
         Parameters:
             *args: Positional input values corresponding to the interface's defined input fields.
             **kwargs: Input values provided by name; unexpected extra keywords will be rejected.
 
         Returns:
-            The created record or a manager-specific representation of the newly created entity.
+            The capability-level create result mapping.
         """
         observer = cls.get_capability_handler("observability")
 
-        def _invoke() -> dict[str, Any]:
+        def _invoke() -> dict[str, object]:
             """
             Invoke the configured "create" capability handler for this interface and return its result.
 
             Returns:
-                dict[str, Any]: The payload returned by the create handler.
+                dict[str, object]: The payload returned by the create handler.
 
             Raises:
                 NotImplementedError: If no create capability is available or the handler does not implement `create`.
             """
             handler = cls.require_capability("create")
             if hasattr(handler, "create"):
-                create_handler = handler.create
+                create_handler = cast(Callable[..., dict[str, object]], handler.create)
                 return create_handler(cls, *args, **kwargs)
             raise NotImplementedError(f"{cls.__name__} does not support create.")
 
@@ -783,9 +800,15 @@ class InterfaceBase(ABC):
             observer=observer,
         )
 
-    def update(self, *args: Any, **kwargs: Any) -> Any:
+    def update(self, *args: object, **kwargs: object) -> object:
         """
         Update the underlying managed record.
+
+        Positional and keyword arguments are forwarded unchanged to the
+        configured update capability together with this interface instance. This
+        base method does not combine payload values with `identification` and
+        does not reject unexpected keywords itself; validation belongs to the
+        update capability.
 
         Returns:
             The updated record or a manager-specific result.
@@ -795,7 +818,7 @@ class InterfaceBase(ABC):
         """
         observer = self.get_capability_handler("observability")
 
-        def _invoke() -> Any:
+        def _invoke() -> object:
             """
             Invoke the update capability handler to perform an update operation.
 
@@ -807,7 +830,7 @@ class InterfaceBase(ABC):
             """
             handler = self._require_capability("update")
             if hasattr(handler, "update"):
-                update_handler = handler.update
+                update_handler = cast(Callable[..., object], handler.update)
                 return update_handler(self, *args, **kwargs)
             raise NotImplementedError(
                 f"{self.__class__.__name__} does not support update."
@@ -821,11 +844,15 @@ class InterfaceBase(ABC):
             observer=observer,
         )
 
-    def delete(self, *args: Any, **kwargs: Any) -> Any:
+    def delete(self, *args: object, **kwargs: object) -> object:
         """
         Delete the underlying record managed by this interface.
 
         Delegates the deletion to the interface's configured delete capability and executes the operation with observability hooks.
+        Positional and keyword arguments are forwarded unchanged together with
+        this interface instance. This base method does not combine payload values
+        with `identification` and does not reject unexpected keywords itself;
+        validation belongs to the delete capability.
 
         Returns:
             The result of the delete operation as returned by the delete capability.
@@ -835,7 +862,7 @@ class InterfaceBase(ABC):
         """
         observer = self.get_capability_handler("observability")
 
-        def _invoke() -> Any:
+        def _invoke() -> object:
             """
             Invoke the bound delete capability to remove the managed record.
 
@@ -847,7 +874,7 @@ class InterfaceBase(ABC):
             """
             handler = self._require_capability("delete")
             if hasattr(handler, "delete"):
-                delete_handler = handler.delete
+                delete_handler = cast(Callable[..., object], handler.delete)
                 return delete_handler(self, *args, **kwargs)
             raise NotImplementedError(
                 f"{self.__class__.__name__} does not support delete."
@@ -861,7 +888,7 @@ class InterfaceBase(ABC):
             observer=observer,
         )
 
-    def get_data(self) -> Any:
+    def get_data(self) -> object:
         """
         Get the materialized data for this manager.
 
@@ -873,7 +900,7 @@ class InterfaceBase(ABC):
         """
         observer = self.get_capability_handler("observability")
 
-        def _invoke() -> Any:
+        def _invoke() -> object:
             """
             Invoke the configured read capability to retrieve this manager's materialized data.
 
@@ -885,7 +912,7 @@ class InterfaceBase(ABC):
             """
             handler = self._require_capability("read")
             if hasattr(handler, "get_data"):
-                read_handler = handler.get_data
+                read_handler = cast(Callable[..., object], handler.get_data)
                 return read_handler(self)
             raise NotImplementedError(
                 f"{self.__class__.__name__} does not support read."
@@ -904,6 +931,9 @@ class InterfaceBase(ABC):
         """
         Retrieve metadata describing each attribute exposed by the manager.
 
+        This method delegates entirely to the read capability. It does not build
+        fallback metadata from `input_fields`.
+
         Returns:
             dict[str, AttributeTypedDict]: Mapping from attribute name to its metadata (keys include `type`, `default`, `is_required`, `is_editable`, and `is_derived`).
 
@@ -912,25 +942,36 @@ class InterfaceBase(ABC):
         """
         handler = cls.get_capability_handler("read")
         if handler is not None and hasattr(handler, "get_attribute_types"):
-            return handler.get_attribute_types(cls)  # type: ignore[return-value]
+            get_attribute_types = cast(
+                Callable[..., dict[str, AttributeTypedDict]],
+                handler.get_attribute_types,
+            )
+            return get_attribute_types(cls)
         raise NotImplementedError(
             f"{cls.__name__} must provide a read capability implementing get_attribute_types."
         )
 
     @classmethod
-    def get_attributes(cls) -> dict[str, Any]:
+    def get_attributes(cls) -> dict[str, object]:
         """
         Retrieve attribute values exposed by the interface.
 
+        This method delegates entirely to the read capability. It does not build
+        fallback values from `input_fields`.
+
         Returns:
-            dict[str, Any]: Mapping of attribute names to their current values.
+            dict[str, object]: Mapping of attribute names to their current values.
 
         Raises:
             NotImplementedError: If the interface does not provide a read capability implementing `get_attributes`.
         """
         handler = cls.get_capability_handler("read")
         if handler is not None and hasattr(handler, "get_attributes"):
-            return handler.get_attributes(cls)  # type: ignore[return-value]
+            get_attributes = cast(
+                Callable[..., dict[str, object]],
+                handler.get_attributes,
+            )
+            return get_attributes(cls)
         raise NotImplementedError(
             f"{cls.__name__} must provide a read capability implementing get_attributes."
         )
@@ -952,57 +993,66 @@ class InterfaceBase(ABC):
         }
 
     @classmethod
-    def filter(cls, **kwargs: Any) -> Bucket[Any]:
+    def filter(cls, **kwargs: object) -> "Bucket[GeneralManager]":
         """
-        Filter records using the provided lookup expressions and return a Bucket of matches.
+        Filter records through the query capability and return its Bucket of matches.
 
         Parameters:
             **kwargs: Lookup expressions mapping field lookups (e.g., "name__icontains") to values.
 
         Returns:
-            Bucket[Any]: Bucket containing records that match the lookup expressions.
+            Bucket[GeneralManager]: Bucket returned by the query capability, containing records that match the lookup expressions.
 
         Raises:
             NotImplementedError: If the interface's query capability does not implement filtering.
         """
         handler = cls.require_capability("query")
         if hasattr(handler, "filter"):
-            return handler.filter(cls, **kwargs)
+            filter_handler = cast(
+                Callable[..., "Bucket[GeneralManager]"],
+                handler.filter,
+            )
+            return filter_handler(cls, **kwargs)
         raise NotImplementedError
 
     @classmethod
-    def exclude(cls, **kwargs: Any) -> Bucket[Any]:
+    def exclude(cls, **kwargs: object) -> "Bucket[GeneralManager]":
         """
-        Obtain a Bucket of records excluding those that match the given lookup expressions.
+        Exclude records through the query capability and return its Bucket of matches.
 
         Parameters:
             **kwargs: Lookup expressions accepted by the query capability (e.g., field=value, field__lookup=value).
 
         Returns:
-            Bucket[Any]: A Bucket containing records that do not match the provided lookup expressions.
+            Bucket[GeneralManager]: Bucket returned by the query capability, containing records that do not match the provided lookup expressions.
 
         Raises:
             NotImplementedError: If the interface's query capability does not implement an `exclude` operation.
         """
         handler = cls.require_capability("query")
         if hasattr(handler, "exclude"):
-            return handler.exclude(cls, **kwargs)
+            exclude_handler = cast(
+                Callable[..., "Bucket[GeneralManager]"],
+                handler.exclude,
+            )
+            return exclude_handler(cls, **kwargs)
         raise NotImplementedError
 
     @classmethod
-    def all(cls) -> Bucket[Any]:
+    def all(cls) -> "Bucket[GeneralManager]":
         """
-        Retrieve a Bucket containing all records for this interface.
+        Retrieve all records through the query capability and return its Bucket.
 
         Returns:
-            Bucket[Any]: A Bucket containing every record accessible via this interface.
+            Bucket[GeneralManager]: Bucket returned by the query capability, containing every record accessible via this interface.
 
         Raises:
             NotImplementedError: If the configured query capability does not implement `all`.
         """
         handler = cls.require_capability("query")
         if hasattr(handler, "all"):
-            return handler.all(cls)
+            all_handler = cast(Callable[..., "Bucket[GeneralManager]"], handler.all)
+            return all_handler(cls)
         raise NotImplementedError
 
     @staticmethod
@@ -1010,25 +1060,30 @@ class InterfaceBase(ABC):
         *,
         target: object,
         operation: str,
-        payload: dict[str, Any],
-        func: Callable[[], Any],
+        payload: dict[str, object],
+        func: Callable[[], ResultT],
         observer: "Capability | None",
-    ) -> Any:
+    ) -> ResultT:
         """
         Execute a callable while invoking optional observer lifecycle hooks before, after, and on error.
 
         Parameters:
             target (object): The subject of the operation (passed to observer hooks).
             operation (str): A short name of the operation (passed to observer hooks).
-            payload (dict[str, Any]): Contextual data about the operation (passed to observer hooks).
-            func (Callable[[], Any]): The callable to execute.
+            payload: Contextual data about the operation (passed to observer hooks).
+            func: The callable to execute.
             observer (Capability | None): Optional capability providing `before_operation`, `after_operation`, and/or `on_error` hooks.
 
         Returns:
-            Any: The value returned by `func`.
+            ResultT: The value returned by `func`.
 
         Notes:
-            If `func` raises an exception, the exception is propagated after calling `observer.on_error(...)` if available.
+            If `observer.before_operation(...)` raises, `func` is not called. If
+            `func` raises, the exception is propagated after calling
+            `observer.on_error(...)` if available; an `on_error` exception
+            replaces the original. If `observer.after_operation(...)` raises
+            after a successful `func`, that exception is propagated instead of
+            the result.
         """
         if observer is not None and hasattr(observer, "before_operation"):
             observer.before_operation(
@@ -1058,18 +1113,18 @@ class InterfaceBase(ABC):
 
     @staticmethod
     def _invoke_lifecycle_callable(
-        lifecycle_callable: Callable[..., Any],
-        **kwargs: Any,
-    ) -> Any:
+        lifecycle_callable: Callable[..., ResultT],
+        **kwargs: object,
+    ) -> ResultT:
         """
         Invoke a lifecycle callable using only the keyword arguments that match its signature.
 
         Parameters:
-            lifecycle_callable (Callable[..., Any]): The callable to invoke.
+            lifecycle_callable: The callable to invoke.
             **kwargs: Candidate keyword arguments; only those with names present in the callable's parameter list will be passed.
 
         Returns:
-            Any: The value returned by calling `lifecycle_callable` with the filtered arguments.
+            ResultT: The value returned by calling `lifecycle_callable` with the filtered arguments.
         """
         signature = inspect.signature(lifecycle_callable)
         allowed = {
@@ -1105,13 +1160,23 @@ class InterfaceBase(ABC):
                 - post-create callable accepting (new_class, interface_class, model) and returning None.
 
         Raises:
-            NotImplementedError: If no lifecycle capability is declared and the class does not override handle_interface.
+            NotImplementedError: If no lifecycle capability is declared, or if
+                the configured lifecycle capability does not provide callable
+                `pre_create` and `post_create` hooks.
+            Exception: Exceptions from lifecycle hooks propagate unchanged.
+                Malformed hook return values are not validated here and fail in
+                the caller that consumes the lifecycle tuple.
         """
         lifecycle = cls._lifecycle_capability()
         if lifecycle is not None:
             pre = getattr(lifecycle, "pre_create", None)
             post = getattr(lifecycle, "post_create", None)
             if callable(pre) and callable(post):
+                pre_create = cast(
+                    Callable[..., tuple[attributes, interfaceBaseClass, relatedClass]],
+                    pre,
+                )
+                post_create = cast(Callable[..., None], post)
 
                 def pre_wrapper(
                     name: generalManagerClassName,
@@ -1126,17 +1191,17 @@ class InterfaceBase(ABC):
 
                     Parameters:
                         name (str): Proposed class name for the GeneralManager.
-                        attrs (dict[str, Any]): Attribute dictionary for the class being created.
+                        attrs: Attribute dictionary for the class being created.
                         interface (Type[InterfaceBase]): Interface base class passed to the lifecycle hook.
                         base_model_class (type[GeneralManagerBasisModel] | None): Base model class to supply to the lifecycle hook; if None, the interface's default is used.
 
                     Returns:
-                        tuple[dict[str, Any], Type[InterfaceBase], Type[Model] | None]: A tuple of (attributes, interface class, related model class) as returned or transformed by the lifecycle pre-create callable.
+                        tuple[attributes, Type[InterfaceBase], Type[Model] | None]: A tuple of (attributes, interface class, related model class) as returned or transformed by the lifecycle pre-create callable.
                     """
                     if base_model_class is None:
                         base_model_class = cls._default_base_model_class()
                     return cls._invoke_lifecycle_callable(
-                        pre,
+                        pre_create,
                         name=name,
                         attrs=attrs,
                         interface=interface,
@@ -1157,7 +1222,7 @@ class InterfaceBase(ABC):
                         model (Type[Model] | None): The related Django model class, or None if not applicable.
                     """
                     cls._invoke_lifecycle_callable(
-                        post,
+                        post_create,
                         new_class=new_class,
                         interface_class=interface_class,
                         model=model,
@@ -1174,6 +1239,10 @@ class InterfaceBase(ABC):
         """
         Resolve the declared Python type for the named input field.
 
+        If a read capability implements `get_field_type()`, that capability owns
+        the result. Otherwise this method falls back only to declared
+        `input_fields`.
+
         Parameters:
             field_name (str): Name of the input field to look up.
 
@@ -1185,7 +1254,8 @@ class InterfaceBase(ABC):
         """
         handler = cls.get_capability_handler("read")
         if handler is not None and hasattr(handler, "get_field_type"):
-            return handler.get_field_type(cls, field_name)  # type: ignore[return-value]
+            get_field_type = cast(Callable[..., type], handler.get_field_type)
+            return get_field_type(cls, field_name)
         field = cls.input_fields.get(field_name)
         if field is None:
             raise KeyError(field_name)

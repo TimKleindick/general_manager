@@ -1,68 +1,140 @@
 """Convenience helpers for defining factory_boy lazy attributes."""
 
-from typing import Any, Optional
+from __future__ import annotations
 
-from factory.declarations import LazyAttribute, LazyAttributeSequence, LazyFunction
+from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from faker import Faker
-from general_manager.measurement.measurement import Measurement
 from random import SystemRandom
+from typing import TypeVar, cast
 import uuid
+
+from factory.declarations import LazyAttribute, LazyAttributeSequence, LazyFunction
+from faker import Faker
+
+from general_manager.measurement.measurement import Measurement
 
 fake = Faker()
 _RNG = SystemRandom()
+_ChoiceT = TypeVar("_ChoiceT")
+
+_LazyFunctionConstructor = cast(
+    Callable[[Callable[[], object]], LazyFunction],
+    LazyFunction,
+)
+_LazyAttributeConstructor = cast(
+    Callable[[Callable[[object], object]], LazyAttribute],
+    LazyAttribute,
+)
+_LazyAttributeSequenceConstructor = cast(
+    Callable[[Callable[[object, int], object]], LazyAttributeSequence],
+    LazyAttributeSequence,
+)
 
 _AVG_DELTA_DAYS_ERROR = "avg_delta_days must be >= 0"
-_EMPTY_OPTIONS_ERROR = "options must be a non-empty list"
+_EMPTY_OPTIONS_ERROR = "options must be a non-empty sequence"
+_NEGATIVE_PRECISION_ERROR = "precision must be >= 0"
+_NUMERIC_RANGE_ERROR = "min_value must be <= max_value"
+_TRUES_RATIO_ERROR = "trues_ratio must be between 0 and 1"
+
+
+def _lazy_function(callback: Callable[[], object]) -> LazyFunction:
+    """Create a typed LazyFunction declaration from an untyped factory_boy API."""
+    return _LazyFunctionConstructor(callback)
+
+
+def _lazy_attribute(callback: Callable[[object], object]) -> LazyAttribute:
+    """Create a typed LazyAttribute declaration from an untyped factory_boy API."""
+    return _LazyAttributeConstructor(callback)
+
+
+def _lazy_sequence(
+    callback: Callable[[object, int], object],
+) -> LazyAttributeSequence:
+    """Create a typed LazyAttributeSequence declaration from an untyped API."""
+    return _LazyAttributeSequenceConstructor(callback)
+
+
+def _ensure_numeric_range(min_value: int | float, max_value: int | float) -> None:
+    """Validate inclusive numeric bounds for public helper inputs."""
+    if min_value > max_value:
+        raise ValueError(_NUMERIC_RANGE_ERROR)
 
 
 def lazy_measurement(
     min_value: int | float, max_value: int | float, unit: str
 ) -> LazyFunction:
     """
-    Create a lazy factory that produces Measurement values with a numeric magnitude sampled between the given bounds and the specified unit.
+    Return a lazy declaration that evaluates to a `Measurement`.
+
+    The evaluated value is a `general_manager.measurement.measurement.Measurement`
+    with a magnitude sampled uniformly between the supplied inclusive bounds. The
+    sampled number is formatted as a six-decimal string before it is passed to
+    `Measurement`, so the resulting `Measurement.magnitude` follows
+    `Measurement`'s normal Decimal conversion rules.
 
     Parameters:
-        min_value (int | float): Lower bound (inclusive) for the sampled magnitude.
-        max_value (int | float): Upper bound (inclusive) for the sampled magnitude.
-        unit (str): Unit string to attach to the Measurement.
+        min_value: Lower bound for the sampled magnitude.
+        max_value: Upper bound for the sampled magnitude.
+        unit: Unit string passed directly to `Measurement`.
 
     Returns:
-        LazyFunction: A factory that yields a Measurement whose numeric value is drawn uniformly between min_value and max_value (formatted to six decimal places) and uses the provided unit.
+        A `factory.declarations.LazyFunction` declaration.
+
+    Raises:
+        ValueError: If `min_value > max_value`.
+        Exception: Errors from `Measurement` can be raised during evaluation
+            when the sampled magnitude or unit is not accepted by the
+            measurement layer.
     """
-    return LazyFunction(
+    _ensure_numeric_range(min_value, max_value)
+    return _lazy_function(
         lambda: Measurement(f"{_RNG.uniform(min_value, max_value):.6f}", unit)
     )
 
 
 def lazy_delta_date(avg_delta_days: int, base_attribute: str) -> LazyAttribute:
     """
-    Compute a date by offsetting an instance's base date attribute by a randomized number of days.
+    Return a lazy declaration that offsets another generated date-like value.
+
+    During evaluation, the declaration reads `base_attribute` from the generated
+    object. If the attribute is missing or falsey, `date.today()` is evaluated
+    and used as the base. Truthy base values must support adding a
+    `datetime.timedelta`, such as `date` or `datetime`; invalid truthy values
+    raise their normal `TypeError` during evaluation.
 
     Parameters:
-        avg_delta_days (int): Average number of days for the offset; the actual offset is randomly chosen
-            between floor(avg_delta_days / 2) and floor(avg_delta_days * 3 / 2), inclusive.
-        base_attribute (str): Name of the attribute on the instance that provides the base date. If that
-            attribute is missing or evaluates to false, today's date is used as the base.
+        avg_delta_days: Average number of days for the offset. The actual offset
+            is an integer chosen uniformly between `avg_delta_days // 2` and
+            `avg_delta_days * 3 // 2`, inclusive.
+        base_attribute: Name of the generated object's base date/datetime
+            attribute.
 
     Returns:
-        date: The base date shifted by the randomly chosen number of days.
+        A `factory.declarations.LazyAttribute` declaration. It evaluates to the
+        base value plus the random day offset.
 
     Raises:
-        ValueError: If avg_delta_days is negative.
+        ValueError: If `avg_delta_days` is negative.
     """
     if avg_delta_days < 0:
         raise ValueError(_AVG_DELTA_DAYS_ERROR)
-    return LazyAttribute(
-        lambda instance: (getattr(instance, base_attribute) or date.today())
-        + timedelta(days=_RNG.randint(avg_delta_days // 2, avg_delta_days * 3 // 2))
+    return _lazy_attribute(
+        lambda instance: (
+            (getattr(instance, base_attribute) or date.today())
+            + timedelta(days=_RNG.randint(avg_delta_days // 2, avg_delta_days * 3 // 2))
+        )
     )
 
 
 def lazy_project_name() -> LazyFunction:
-    """Return a lazy factory producing a pseudo-random project-style name."""
-    return LazyFunction(
+    """
+    Return a lazy declaration that evaluates to a pseudo-random project name.
+
+    The value uses the module-level default-locale Faker instance plus a random
+    suffix. No deterministic seed is set by this helper.
+    """
+    return _lazy_function(
         lambda: (
             f"{fake.word().capitalize()} "
             f"{fake.word().capitalize()} "
@@ -73,164 +145,242 @@ def lazy_project_name() -> LazyFunction:
 
 
 def lazy_date_today() -> LazyFunction:
-    """Return a lazy factory that yields today's date."""
-    return LazyFunction(lambda: date.today())
+    """
+    Return a lazy declaration that evaluates to `date.today()`.
+
+    The date is read from Python's local system date at declaration evaluation
+    time, not when the helper is called.
+    """
+    return _lazy_function(lambda: date.today())
 
 
 def lazy_date_between(start_date: date, end_date: date) -> LazyAttribute:
     """
-    Produce a lazy attribute that yields a date between two given dates (inclusive).
+    Return a lazy declaration that evaluates to a random date in a range.
+
+    The date is chosen uniformly at evaluation time from the inclusive day
+    range. If `start_date` is after `end_date`, the endpoints are swapped before
+    choosing the value.
 
     Parameters:
-        start_date (date): The start of the date range. If later than end_date, the range will be corrected.
-        end_date (date): The end of the date range. If earlier than start_date, the range will be corrected.
+        start_date: Start of the inclusive date range.
+        end_date: End of the inclusive date range.
 
     Returns:
-        date: A date between start_date and end_date, inclusive.
+        A `factory.declarations.LazyAttribute` declaration that evaluates to a
+        `date` between the normalized endpoints, inclusive.
     """
     delta = (end_date - start_date).days
     if delta < 0:
         start_date, end_date = end_date, start_date
         delta = -delta
-    return LazyAttribute(lambda _: start_date + timedelta(days=_RNG.randint(0, delta)))
+    return _lazy_attribute(
+        lambda _: start_date + timedelta(days=_RNG.randint(0, delta))
+    )
 
 
 def lazy_date_time_between(start: datetime, end: datetime) -> LazyAttribute:
     """
-    Produce a lazy attribute that yields a datetime within the inclusive range defined by `start` and `end`.
+    Return a lazy declaration that evaluates to a random datetime in a range.
 
-    If `start` is after `end`, the two endpoints are swapped before selecting a value.
+    The datetime is chosen uniformly at evaluation time with whole-second
+    granularity. If `start` is after `end`, the endpoints are swapped before
+    choosing the value. Python's normal datetime subtraction rules apply, so
+    mixed naive/aware inputs raise `TypeError`.
 
     Parameters:
-        start (datetime): The start of the datetime range.
-        end (datetime): The end of the datetime range.
+        start: Start of the inclusive datetime range.
+        end: End of the inclusive datetime range.
 
     Returns:
-        LazyAttribute: A lazy attribute that produces a `datetime` between `start` and `end` (inclusive).
+        A `factory.declarations.LazyAttribute` declaration that evaluates to a
+        `datetime` between the normalized endpoints, inclusive.
     """
     span = (end - start).total_seconds()
     if span < 0:
         start, end = end, start
         span = -span
-    return LazyAttribute(
+    return _lazy_attribute(
         lambda _: start + timedelta(seconds=_RNG.randint(0, int(span)))
     )
 
 
 def lazy_integer(min_value: int, max_value: int) -> LazyFunction:
     """
-    Return a lazy factory that produces an integer within the provided bounds.
+    Return a lazy declaration that evaluates to a random integer.
 
     Parameters:
-        min_value (int): Lower bound (inclusive) for generated integers.
-        max_value (int): Upper bound (inclusive) for generated integers.
+        min_value: Inclusive lower bound.
+        max_value: Inclusive upper bound.
 
     Returns:
-        int: A random integer greater than or equal to min_value and less than or equal to max_value.
+        A `factory.declarations.LazyFunction` declaration that evaluates to an
+        integer selected uniformly between `min_value` and `max_value`,
+        inclusive.
+
+    Raises:
+        ValueError: If `min_value > max_value`.
     """
-    return LazyFunction(lambda: _RNG.randint(min_value, max_value))
+    _ensure_numeric_range(min_value, max_value)
+    return _lazy_function(lambda: _RNG.randint(min_value, max_value))
 
 
 def lazy_decimal(
     min_value: float, max_value: float, precision: int = 2
 ) -> LazyFunction:
     """
-    Create a lazy factory that produces Decimal values between min_value and max_value, rounded to the specified precision.
+    Return a lazy declaration that evaluates to a random `Decimal`.
+
+    The sampled float is drawn uniformly between the supplied inclusive bounds,
+    formatted with exactly `precision` decimal places, and then converted
+    through `Decimal(str_value)`.
 
     Parameters:
-        min_value (float): Lower bound of the generated value.
-        max_value (float): Upper bound of the generated value.
-        precision (int): Number of decimal places to round the generated value to.
+        min_value: Lower bound of the generated value.
+        max_value: Upper bound of the generated value.
+        precision: Number of decimal places in the formatted value.
 
     Returns:
-        Decimal: A Decimal value between min_value and max_value (inclusive), rounded to `precision` decimal places.
+        A `factory.declarations.LazyFunction` declaration that evaluates to a
+        `Decimal`.
+
+    Raises:
+        ValueError: If `min_value > max_value`.
+        ValueError: If `precision` is negative.
     """
+    _ensure_numeric_range(min_value, max_value)
+    if precision < 0:
+        raise ValueError(_NEGATIVE_PRECISION_ERROR)
     fmt = f"{{:.{precision}f}}"
-    return LazyFunction(lambda: Decimal(fmt.format(_RNG.uniform(min_value, max_value))))
+    return _lazy_function(
+        lambda: Decimal(fmt.format(_RNG.uniform(min_value, max_value)))
+    )
 
 
-def lazy_choice(options: list[Any]) -> LazyFunction:
+def lazy_choice(options: Sequence[_ChoiceT]) -> LazyFunction:
     """
-    Create a lazy factory that selects a random element from the provided options.
+    Return a lazy declaration that evaluates to one random option.
+
+    The options are snapshotted as a tuple when this helper is called. Later
+    mutations to the caller's sequence do not affect generated values.
 
     Parameters:
-        options (list[Any]): Candidate values to choose from.
+        options: Non-empty candidate values to choose from.
 
     Returns:
-        Any: One element randomly chosen from `options`.
+        A `factory.declarations.LazyFunction` declaration that evaluates to one
+        element selected uniformly from the declaration-time options snapshot.
+
+    Raises:
+        ValueError: If `options` is empty.
     """
     if not options:
         raise ValueError(_EMPTY_OPTIONS_ERROR)
-    return LazyFunction(lambda: _RNG.choice(options))
+    choices = tuple(options)
+    return _lazy_function(lambda: _RNG.choice(choices))
 
 
 def lazy_sequence(start: int = 0, step: int = 1) -> LazyAttributeSequence:
     """
-    Produce a sequence attribute that yields successive integer values.
+    Return a sequence declaration that evaluates to successive integers.
 
-    Each produced value equals start + index * step where index is the zero-based position in the sequence.
+    Each evaluated value equals `start + index * step`, where `index` is the
+    zero-based factory_boy sequence counter for that attribute.
 
     Parameters:
-        start (int): Initial value of the sequence.
-        step (int): Increment between successive values.
+        start: Initial value of the sequence.
+        step: Increment between successive values.
 
     Returns:
-        LazyAttributeSequence: An attribute sequence that yields integers as described.
+        A `factory.declarations.LazyAttributeSequence` declaration.
     """
-    return LazyAttributeSequence(lambda _instance, index: start + index * step)
+    return _lazy_sequence(lambda _instance, index: start + index * step)
 
 
 def lazy_boolean(trues_ratio: float = 0.5) -> LazyFunction:
     """
-    Return booleans where each value is True with the specified probability.
+    Return a lazy declaration that evaluates to a random boolean.
 
     Parameters:
-        trues_ratio (float): Probability that the generated value is True; expected between 0 and 1.
+        trues_ratio: Probability that the generated value is `True`. Must be in
+            the inclusive `[0, 1]` interval.
 
     Returns:
-        bool: `True` with probability `trues_ratio`, `False` otherwise.
+        A `factory.declarations.LazyFunction` declaration that evaluates to a
+        boolean by comparing `_RNG.random() < trues_ratio`.
+
+    Raises:
+        ValueError: If `trues_ratio` is outside the inclusive `[0, 1]` interval.
     """
-    return LazyFunction(lambda: _RNG.random() < trues_ratio)
+    if not 0 <= trues_ratio <= 1:
+        raise ValueError(_TRUES_RATIO_ERROR)
+    return _lazy_function(lambda: _RNG.random() < trues_ratio)
 
 
 def lazy_uuid() -> LazyFunction:
     """
-    Create a lazy factory that yields RFC 4122 version 4 UUID strings.
+    Return a lazy declaration that evaluates to an RFC 4122 version 4 UUID string.
 
     Returns:
-        uuid_str (str): A UUID4 string in standard 36-character representation.
+        A `factory.declarations.LazyFunction` declaration that evaluates to a
+        UUID4 string in standard 36-character representation.
     """
-    return LazyFunction(lambda: str(uuid.uuid4()))
+    return _lazy_function(lambda: str(uuid.uuid4()))
 
 
 def lazy_faker_name() -> LazyFunction:
-    """Return a lazy factory producing names using Faker."""
-    return LazyFunction(lambda: fake.name())
+    """
+    Return a lazy declaration that evaluates to a Faker-generated name.
+
+    Uses the module-level default-locale Faker instance. No deterministic seed is
+    set by this helper.
+    """
+    return _lazy_function(lambda: fake.name())
 
 
 def lazy_faker_email(
-    name: Optional[str] = None, domain: Optional[str] = None
+    name: str | None = None, domain: str | None = None
 ) -> LazyFunction:
-    """Return a lazy factory producing email addresses with optional overrides."""
+    """
+    Return a lazy declaration that evaluates to an email address.
+
+    When neither override is supplied, Faker generates the full email address.
+    When `name` or `domain` is supplied, missing pieces are generated once when
+    this helper is called. The name part is converted by replacing spaces with
+    underscores, and `domain` should be a hostname without a leading `@`.
+    """
     if not name and not domain:
-        return LazyFunction(lambda: fake.email(domain=domain))
+        return _lazy_function(lambda: fake.email(domain=domain))
     if not name:
         name = fake.name()
     if not domain:
         domain = fake.domain_name()
-    return LazyFunction(lambda: name.replace(" ", "_") + "@" + domain)
+    return _lazy_function(lambda: name.replace(" ", "_") + "@" + domain)
 
 
 def lazy_faker_sentence(number_of_words: int = 6) -> LazyFunction:
-    """Return a lazy factory producing fake sentences."""
-    return LazyFunction(lambda: fake.sentence(nb_words=number_of_words))
+    """
+    Return a lazy declaration that evaluates to a Faker-generated sentence.
+
+    Uses the module-level default-locale Faker instance and requests
+    `number_of_words` words from Faker at evaluation time.
+    """
+    return _lazy_function(lambda: fake.sentence(nb_words=number_of_words))
 
 
 def lazy_faker_address() -> LazyFunction:
-    """Return a lazy factory producing fake postal addresses."""
-    return LazyFunction(lambda: fake.address())
+    """
+    Return a lazy declaration that evaluates to a Faker-generated postal address.
+
+    Uses the module-level default-locale Faker instance.
+    """
+    return _lazy_function(lambda: fake.address())
 
 
 def lazy_faker_url() -> LazyFunction:
-    """Return a lazy factory producing fake URLs."""
-    return LazyFunction(lambda: fake.url())
+    """
+    Return a lazy declaration that evaluates to a Faker-generated URL.
+
+    Uses the module-level default-locale Faker instance.
+    """
+    return _lazy_function(lambda: fake.url())

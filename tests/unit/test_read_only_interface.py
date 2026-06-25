@@ -8,6 +8,12 @@ from unittest import mock
 
 from general_manager.interface import ReadOnlyInterface
 from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.bundles.database import READ_ONLY_CAPABILITIES
+from general_manager.interface.capabilities.configuration import (
+    InterfaceCapabilityConfig,
+    flatten_capability_entries,
+)
+from general_manager.interface.interfaces import read_only as read_only_module
 from general_manager.interface.capabilities.orm import OrmLifecycleCapability
 from general_manager.interface.capabilities.read_only import (
     ReadOnlyLifecycleCapability,
@@ -18,9 +24,6 @@ from general_manager.interface.capabilities.read_only import (
 )
 from general_manager.interface.capabilities import read_only as read_only_package
 from general_manager.interface.utils.models import GeneralManagerBasisModel
-from general_manager.interface.capabilities.configuration import (
-    InterfaceCapabilityConfig,
-)
 from general_manager.interface.utils.errors import (
     InvalidReadOnlyDataFormatError,
     MissingReadOnlyBindingError,
@@ -191,6 +194,33 @@ class DummyManager:
 class DummyInterface(ReadOnlyInterface):
     _model = DummyModel
     _parent_class = DummyManager
+
+
+class ReadOnlyInterfaceShellTests(SimpleTestCase):
+    def test_read_only_interface_module_exports_interface(self) -> None:
+        self.assertEqual(read_only_module.__all__, ["ReadOnlyInterface"])
+
+    def test_read_only_interface_declares_readonly_shell_configuration(self) -> None:
+        self.assertEqual(ReadOnlyInterface._interface_type, "readonly")
+        self.assertEqual(
+            ReadOnlyInterface.configured_capabilities,
+            (READ_ONLY_CAPABILITIES,),
+        )
+        capability_names = {
+            entry.handler.name
+            for entry in flatten_capability_entries(
+                ReadOnlyInterface.configured_capabilities
+            )
+            if isinstance(entry, InterfaceCapabilityConfig)
+        }
+
+        self.assertIn("read", capability_names)
+        self.assertIn("query", capability_names)
+        self.assertIn("history", capability_names)
+        self.assertIn("read_only_management", capability_names)
+        self.assertNotIn("create", capability_names)
+        self.assertNotIn("update", capability_names)
+        self.assertNotIn("delete", capability_names)
 
 
 # ------------------------------------------------------------
@@ -727,12 +757,12 @@ class SyncDataTests(SimpleTestCase):
         """
         Ensure non-mapping payload entries do not use the fingerprint fast path.
         """
-        DummyManager._data = [[]]
+        DummyManager._data = [object()]
 
         with self.assertRaises(InvalidReadOnlyDataFormatError):
             self.capability.sync_data(DummyInterface)
 
-        self.atomic_mock.assert_called_once()
+        self.atomic_mock.assert_not_called()
 
     def test_sync_falls_back_when_payload_missing_unique_field(self):
         """
@@ -776,7 +806,7 @@ class SyncDataTests(SimpleTestCase):
         """
         DummyManager._data = [{"name": ["a"], "other": 2}]
 
-        with self.assertRaises(TypeError):
+        with self.assertRaises(InvalidReadOnlyDataFormatError):
             self.capability.sync_data(DummyInterface)
 
         self.atomic_mock.assert_called_once()

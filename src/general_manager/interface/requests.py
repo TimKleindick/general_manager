@@ -13,7 +13,17 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request as UrlRequest, urlopen as stdlib_urlopen
 from uuid import uuid4
-from typing import Any, Callable, Literal, Mapping, Protocol, cast, runtime_checkable
+from typing import (
+    Callable,
+    Iterable,
+    Literal,
+    Mapping,
+    Protocol,
+    TypeVar,
+    TypedDict,
+    cast,
+    runtime_checkable,
+)
 
 RequestAction = Literal[
     "all",
@@ -26,10 +36,60 @@ RequestAction = Literal[
 ]
 RequestLocation = Literal["query", "headers", "path", "body"]
 
-type RequestSerializer = Callable[[Any], Any]
-type RequestValidator = Callable[[Any], None]
 type RequestPayload = Mapping[str, object]
+type RequestMutablePayload = dict[str, object]
+type RequestHeaders = Mapping[str, str]
+type RequestMutableHeaders = dict[str, str]
+type RequestSerializer = Callable[[object], object]
+type RequestValidator = Callable[[object], None]
 type RequestResponse = RequestPayload | list[RequestPayload]
+type RequestInterfaceType = type[object]
+type RequestIdentification = dict[str, object]
+RequestPartValue = TypeVar("RequestPartValue")
+
+
+class SupportsRequestComparison(Protocol):
+    """Protocol for values that can be compared by request lookup helpers."""
+
+    def __lt__(self, other: object, /) -> bool:
+        """Return whether this value is less than the other value."""
+        ...
+
+    def __le__(self, other: object, /) -> bool:
+        """Return whether this value is less than or equal to the other value."""
+        ...
+
+    def __gt__(self, other: object, /) -> bool:
+        """Return whether this value is greater than the other value."""
+        ...
+
+    def __ge__(self, other: object, /) -> bool:
+        """Return whether this value is greater than or equal to the other value."""
+        ...
+
+
+class UrlopenResponse(Protocol):
+    """Small response protocol consumed by `UrllibRequestTransport`."""
+
+    status: int
+    headers: RequestHeaders
+
+    def read(self) -> bytes:
+        """Return the response body bytes."""
+        ...
+
+
+class UrlopenCallable(Protocol):
+    """Callable compatible with `urllib.request.urlopen`."""
+
+    def __call__(
+        self,
+        request: UrlRequest,
+        timeout: float | int | None = None,
+    ) -> UrlopenResponse:
+        """Execute the prepared URL request and return a readable response."""
+        ...
+
 
 SUPPORTED_REQUEST_LOOKUPS = frozenset(
     {"exact", "in", "contains", "icontains", "gt", "gte", "lt", "lte", "isnull"}
@@ -88,6 +148,7 @@ class RequestSchemaError(RequestInterfaceError):
     def serializer_must_return_mappings(
         cls, interface_name: str
     ) -> "RequestSchemaError":
+        """Return an error for serializers that produce non-mapping payloads."""
         return cls(
             f"{interface_name} response_serializer must return mapping payloads."
         )
@@ -98,6 +159,7 @@ class RequestSchemaError(RequestInterfaceError):
         interface_name: str,
         operation_name: str,
     ) -> "RequestSchemaError":
+        """Return an error for operation payloads that are not mappings."""
         return cls(
             f"{interface_name} returned a non-mapping payload for "
             f"operation '{operation_name}'."
@@ -105,14 +167,17 @@ class RequestSchemaError(RequestInterfaceError):
 
     @classmethod
     def non_mapping_json_list(cls) -> "RequestSchemaError":
+        """Return an error for JSON arrays containing non-object items."""
         return cls("HTTP transport received a non-mapping JSON list payload.")
 
     @classmethod
     def non_object_json_payload(cls) -> "RequestSchemaError":
+        """Return an error for decoded JSON that is not an object or object list."""
         return cls("HTTP transport received a non-object JSON payload.")
 
     @classmethod
     def unsupported_url_scheme(cls, url: str) -> "RequestSchemaError":
+        """Return an error for transports asked to call non-HTTP(S) URLs."""
         return cls(f"HTTP transport only supports http/https URLs, got '{url}'.")
 
 
@@ -123,6 +188,7 @@ class RequestConfigurationError(ValueError):
     def legacy_declaration(
         cls, interface_name: str, legacy_key: str
     ) -> "RequestConfigurationError":
+        """Return an error for request config declared in the legacy location."""
         return cls(
             f"{interface_name} uses legacy request declaration '{legacy_key}'. "
             "Declare request fields as class attributes and request "
@@ -133,10 +199,12 @@ class RequestConfigurationError(ValueError):
     def rules_without_mutations(
         cls, interface_name: str
     ) -> "RequestConfigurationError":
+        """Return an error for validation rules on a read-only request interface."""
         return cls(f"{interface_name} defines rules without mutation operations.")
 
     @classmethod
     def invalid_rule_type(cls, interface_name: str) -> "RequestConfigurationError":
+        """Return an error for non-Rule entries in request-interface rules."""
         return cls(f"{interface_name} rules must use Rule instances.")
 
     @classmethod
@@ -145,10 +213,12 @@ class RequestConfigurationError(ValueError):
         interface_name: str,
         serializer_name: str,
     ) -> "RequestConfigurationError":
+        """Return an error for serializer settings that are not callable."""
         return cls(f"{interface_name} {serializer_name} must be callable.")
 
     @classmethod
     def invalid_auth_provider(cls, interface_name: str) -> "RequestConfigurationError":
+        """Return an error for auth providers missing the `apply()` protocol."""
         return cls(f"{interface_name} auth_provider must define apply(...).")
 
     @classmethod
@@ -157,28 +227,33 @@ class RequestConfigurationError(ValueError):
         interface_name: str,
         reason: str,
     ) -> "RequestConfigurationError":
+        """Return an error wrapping an invalid retry policy reason."""
         return cls(f"{interface_name} retry_policy is invalid: {reason}.")
 
     @classmethod
     def unmapped_remote_error(cls, interface_name: str) -> "RequestConfigurationError":
+        """Return an error for remote error payloads without a local mapping."""
         return cls(f"{interface_name} received an unmapped remote error payload.")
 
     @classmethod
     def missing_remote_manager_fields(
         cls, interface_name: str
     ) -> "RequestConfigurationError":
+        """Return an error for remote managers without field declarations."""
         return cls(f"{interface_name} must declare request fields.")
 
     @classmethod
     def missing_remote_manager_name(
         cls, interface_name: str
     ) -> "RequestConfigurationError":
+        """Return an error for remote managers without `Meta.remote_manager`."""
         return cls(f"{interface_name} must define Meta.remote_manager.")
 
     @classmethod
     def invalid_remote_manager_name(
         cls, interface_name: str
     ) -> "RequestConfigurationError":
+        """Return an error for remote manager slugs outside the supported format."""
         return cls(
             f"{interface_name} remote_manager must be a lowercase slug using only "
             "letters, digits, and hyphens."
@@ -188,24 +263,28 @@ class RequestConfigurationError(ValueError):
     def missing_remote_base_url(
         cls, interface_name: str
     ) -> "RequestConfigurationError":
+        """Return an error for remote managers without `Meta.base_url`."""
         return cls(f"{interface_name} must define Meta.base_url.")
 
     @classmethod
     def missing_remote_protocol_version(
         cls, interface_name: str
     ) -> "RequestConfigurationError":
+        """Return an error for remote managers without a protocol version."""
         return cls(f"{interface_name} must define Meta.protocol_version.")
 
     @classmethod
     def invalid_remote_base_url(
         cls, interface_name: str
     ) -> "RequestConfigurationError":
+        """Return an error for non-absolute or non-HTTP(S) base URLs."""
         return cls(f"{interface_name} base_url must be an absolute http/https URL.")
 
     @classmethod
     def invalid_remote_base_path(
         cls, interface_name: str, reason: str
     ) -> "RequestConfigurationError":
+        """Return an error wrapping an invalid remote base path reason."""
         return cls(f"{interface_name} base_path is invalid: {reason}.")
 
 
@@ -283,7 +362,7 @@ class InvalidRequestFilterValueError(TypeError):
         self,
         lookup_key: str,
         value: object,
-        expected: type[Any] | tuple[type[Any], ...],
+        expected: type[object] | tuple[type[object], ...],
     ) -> None:
         super().__init__(
             f"Invalid value for request filter '{lookup_key}': "
@@ -375,10 +454,10 @@ class RequestRemoteError(RequestInterfaceError):
 
     status_code: int | None = None
     request: RequestTransportRequest | None = None
-    headers: Mapping[str, Any] | None = None
+    headers: RequestHeaders | None = None
     retry_count: int = 0
     error_code: str | None = None
-    details: Mapping[str, Any] | None = None
+    details: Mapping[str, object] | None = None
     request_id: str | None = None
 
 
@@ -412,17 +491,22 @@ class RequestServerError(RequestRemoteError):
 
 @dataclass(frozen=True, slots=True)
 class RequestTransportRequest:
-    """Normalized outbound request sent through a shared request transport."""
+    """Normalized outbound request passed to auth providers and transports.
+
+    `url` is the absolute base URL joined with the formatted operation path,
+    while `path` keeps the formatted path alone for tracing and adapters. The
+    mappings are copied into immutable mapping proxies during initialization.
+    """
 
     method: str
     url: str
     path: str
-    query_params: Mapping[str, Any] = field(default_factory=dict)
-    headers: Mapping[str, Any] = field(default_factory=dict)
-    body: Mapping[str, Any] | None = None
+    query_params: RequestPayload = field(default_factory=dict)
+    headers: RequestHeaders = field(default_factory=dict)
+    body: RequestPayload | None = None
     timeout: float | int | None = None
     operation_name: str | None = None
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    metadata: RequestPayload = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -436,12 +520,17 @@ class RequestTransportRequest:
 
 @dataclass(frozen=True, slots=True)
 class RequestTransportResponse:
-    """Normalized transport response before conversion into a query result."""
+    """Decoded transport response before conversion into `RequestQueryResult`.
 
-    payload: Mapping[str, Any] | list[Mapping[str, Any]]
+    `payload` must already be decoded into either one mapping or a list of
+    mappings. Use `metadata` for adapter-specific values that should survive
+    response normalization.
+    """
+
+    payload: RequestResponse
     status_code: int
-    headers: Mapping[str, Any] = field(default_factory=dict)
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    headers: RequestHeaders = field(default_factory=dict)
+    metadata: RequestPayload = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
@@ -461,7 +550,9 @@ class RequestMetricsBackend(Protocol):
         outcome: str,
         duration: float,
         retry_count: int,
-    ) -> None: ...
+    ) -> None:
+        """Record one completed transport execution in seconds."""
+        ...
 
     def record_error(
         self,
@@ -472,7 +563,9 @@ class RequestMetricsBackend(Protocol):
         error_class: str,
         status_code: int | None,
         retry_count: int,
-    ) -> None: ...
+    ) -> None:
+        """Record one failed transport execution after retries stop."""
+        ...
 
 
 class NoopRequestMetricsBackend:
@@ -489,6 +582,7 @@ class NoopRequestMetricsBackend:
         duration: float,
         retry_count: int,
     ) -> None:
+        """Accept a successful request metric without recording it."""
         return None
 
     def record_error(
@@ -501,6 +595,7 @@ class NoopRequestMetricsBackend:
         status_code: int | None,
         retry_count: int,
     ) -> None:
+        """Accept an error metric without recording it."""
         return None
 
 
@@ -514,7 +609,9 @@ class RequestTraceBackend(Protocol):
         operation: str,
         method: str,
         path: str,
-    ) -> object: ...
+    ) -> object:
+        """Start tracing for the overall request execution and return context."""
+        ...
 
     def on_request_end(
         self,
@@ -527,7 +624,9 @@ class RequestTraceBackend(Protocol):
         status_code: int,
         request_id: str | None,
         retry_count: int,
-    ) -> None: ...
+    ) -> None:
+        """Finish tracing for a successful request execution."""
+        ...
 
     def on_request_error(
         self,
@@ -540,7 +639,9 @@ class RequestTraceBackend(Protocol):
         error: Exception,
         status_code: int | None,
         retry_count: int,
-    ) -> None: ...
+    ) -> None:
+        """Finish tracing for a failed request execution."""
+        ...
 
 
 class NoopRequestTraceBackend:
@@ -554,6 +655,7 @@ class NoopRequestTraceBackend:
         method: str,
         path: str,
     ) -> object:
+        """Return an inert trace context for a request start event."""
         return None
 
     def on_request_end(
@@ -568,6 +670,7 @@ class NoopRequestTraceBackend:
         request_id: str | None,
         retry_count: int,
     ) -> None:
+        """Ignore a successful request end event."""
         return None
 
     def on_request_error(
@@ -582,6 +685,7 @@ class NoopRequestTraceBackend:
         status_code: int | None,
         retry_count: int,
     ) -> None:
+        """Ignore a failed request end event."""
         return None
 
 
@@ -593,16 +697,18 @@ class RequestAuthProvider(Protocol):
         self,
         request: RequestTransportRequest,
         *,
-        interface_cls: type[Any],
+        interface_cls: RequestInterfaceType,
         operation: "RequestOperation",
         plan: "RequestPlan",
-    ) -> RequestTransportRequest: ...
+    ) -> RequestTransportRequest:
+        """Return a request copy with authentication data applied."""
+        ...
 
 
 type RequestResponseNormalizer = Callable[
     [
         RequestTransportResponse | RequestResponse,
-        type[Any],
+        RequestInterfaceType,
         "RequestOperation",
         "RequestPlan",
     ],
@@ -612,7 +718,12 @@ type RequestResponseNormalizer = Callable[
 
 @dataclass(frozen=True, slots=True)
 class RequestTransportConfig:
-    """Static configuration used by a shared request transport."""
+    """Static configuration used by a shared request transport.
+
+    `base_url` must be an absolute HTTP(S) origin, optionally with a base path;
+    operation paths are joined with one slash. `timeout` is expressed in
+    seconds and may be overridden per operation.
+    """
 
     base_url: str
     timeout: float | int | None = 10
@@ -625,7 +736,12 @@ class RequestTransportConfig:
 
 @dataclass(frozen=True, slots=True)
 class RequestRetryPolicy:
-    """Framework retry/backoff policy for shared request transports."""
+    """Framework retry/backoff policy for shared request transports.
+
+    By default only idempotent HTTP methods are retried. Set
+    `retry_non_idempotent_methods` with an idempotency-key header/factory when
+    retrying mutation methods such as POST or PATCH.
+    """
 
     max_attempts: int = 1
     retryable_status_codes: frozenset[int] = frozenset({429, 500, 502, 503, 504})
@@ -676,6 +792,7 @@ class RequestRetryPolicy:
             raise _invalid_retry_policy(_RETRY_POLICY_NON_CALLABLE_FACTORY_ERROR)
 
     def allows_method(self, method: str) -> bool:
+        """Return whether this policy permits retrying the HTTP method."""
         if self.retry_non_idempotent_methods:
             return True
         return method.upper() in {"GET", "HEAD", "OPTIONS", "DELETE"}
@@ -686,6 +803,7 @@ class RequestRetryPolicy:
         retry_count: int,
         random_factor: float | None = None,
     ) -> float:
+        """Return the 1-based retry delay in seconds after optional jitter."""
         if self.base_backoff_seconds <= 0:
             return 0.0
         backoff = self.base_backoff_seconds * (
@@ -703,6 +821,7 @@ class RequestRetryPolicy:
         return max(backoff, 0.0)
 
     def build_idempotency_key(self) -> str:
+        """Return a caller-supplied idempotency key or generate a UUID string."""
         factory = self.idempotency_key_factory
         if factory is not None:
             return factory()
@@ -717,9 +836,10 @@ class RequestTransportStatusError(RequestTransportError):
         *,
         status_code: int,
         request: RequestTransportRequest,
-        payload: Any = None,
-        headers: Mapping[str, Any] | None = None,
+        payload: object = None,
+        headers: RequestHeaders | None = None,
     ) -> None:
+        """Store the failed request, decoded payload, response headers, and status."""
         super().__init__(f"Upstream request failed with status {status_code}.")
         self.status_code = status_code
         self.request = request
@@ -743,10 +863,11 @@ class BearerTokenAuthProvider:
         self,
         request: RequestTransportRequest,
         *,
-        interface_cls: type[Any],
+        interface_cls: RequestInterfaceType,
         operation: "RequestOperation",
         plan: "RequestPlan",
     ) -> RequestTransportRequest:
+        """Return a request copy with a `Bearer <token>` header."""
         headers = dict(request.headers)
         headers[self.header_name] = f"Bearer {_resolve_secret(self.token)}"
         return RequestTransportRequest(
@@ -773,10 +894,11 @@ class HeaderApiKeyAuthProvider:
         self,
         request: RequestTransportRequest,
         *,
-        interface_cls: type[Any],
+        interface_cls: RequestInterfaceType,
         operation: "RequestOperation",
         plan: "RequestPlan",
     ) -> RequestTransportRequest:
+        """Return a request copy with the configured header set to the API key."""
         headers = dict(request.headers)
         headers[self.header_name] = _resolve_secret(self.api_key)
         return RequestTransportRequest(
@@ -803,10 +925,11 @@ class QueryApiKeyAuthProvider:
         self,
         request: RequestTransportRequest,
         *,
-        interface_cls: type[Any],
+        interface_cls: RequestInterfaceType,
         operation: "RequestOperation",
         plan: "RequestPlan",
     ) -> RequestTransportRequest:
+        """Return a request copy with the configured query parameter set."""
         query_params = dict(request.query_params)
         query_params[self.param_name] = _resolve_secret(self.api_key)
         return RequestTransportRequest(
@@ -834,10 +957,11 @@ class BasicAuthProvider:
         self,
         request: RequestTransportRequest,
         *,
-        interface_cls: type[Any],
+        interface_cls: RequestInterfaceType,
         operation: "RequestOperation",
         plan: "RequestPlan",
     ) -> RequestTransportRequest:
+        """Return a request copy with an RFC 7617-style Basic auth header."""
         username = _resolve_secret(self.username)
         password = _resolve_secret(self.password)
         token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode(
@@ -860,11 +984,16 @@ class BasicAuthProvider:
 
 @dataclass(frozen=True, slots=True)
 class FieldMappingSerializer:
-    """Map one dictionary shape into another using declared key names."""
+    """Map one dictionary shape into another using declared key names.
+
+    The mapping is `{target_key: source_key}`. Missing source keys raise
+    `KeyError`; extra payload keys are ignored.
+    """
 
     field_map: Mapping[str, str]
 
-    def __call__(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+    def __call__(self, payload: RequestPayload) -> RequestMutablePayload:
+        """Return a new payload containing only mapped target keys."""
         return {
             target_key: payload[source_key]
             for target_key, source_key in self.field_map.items()
@@ -873,17 +1002,23 @@ class FieldMappingSerializer:
 
 @dataclass(frozen=True, slots=True)
 class RequestField:
-    """Describe a manager attribute exposed by a request-backed interface."""
+    """Describe a manager attribute exposed by a request-backed interface.
 
-    field_type: type[Any]
+    `source` may be a dotted path or tuple path inside the remote payload.
+    `default` is used by higher-level interface code when an optional value is
+    absent, and `normalizer` can convert the resolved value before assignment.
+    """
+
+    field_type: type[object]
     source: str | tuple[str, ...] | None = None
-    default: Any = None
+    default: object = None
     is_editable: bool = False
     is_required: bool = True
     is_derived: bool = False
     normalizer: RequestSerializer | None = None
 
     def value_path(self, field_name: str) -> tuple[str, ...]:
+        """Return the payload path used to resolve this field's value."""
         source = self.source
         if source is None:
             return (field_name,)
@@ -900,18 +1035,18 @@ class RequestLocalPredicate:
     """Represent a client-side predicate applied after a remote response returns."""
 
     lookup_key: str
-    value: Any
+    value: object
     action: RequestAction
 
 
 @dataclass(frozen=True, slots=True)
 class RequestPlanFragment:
-    """A partial request-plan contribution produced by a single filter mapping."""
+    """A partial request-plan contribution produced by one filter mapping."""
 
-    query_params: Mapping[str, Any] = field(default_factory=dict)
-    headers: Mapping[str, Any] = field(default_factory=dict)
-    path_params: Mapping[str, Any] = field(default_factory=dict)
-    body: Mapping[str, Any] = field(default_factory=dict)
+    query_params: RequestPayload = field(default_factory=dict)
+    headers: RequestHeaders = field(default_factory=dict)
+    path_params: RequestPayload = field(default_factory=dict)
+    body: RequestPayload = field(default_factory=dict)
     local_predicates: tuple[RequestLocalPredicate, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
@@ -928,11 +1063,17 @@ class RequestPlanFragment:
 
 @dataclass(frozen=True, slots=True)
 class RequestFilter:
-    """Declare how a single manager lookup compiles into a remote request fragment."""
+    """Declare how one manager lookup compiles into a remote request fragment.
+
+    `location` chooses whether the compiled value is written to query params,
+    headers, path params, or body. `compiler` receives a `RequestFilterBinding`
+    and may return a custom fragment. Filters without remote output must enable
+    `allow_local_fallback` so matching happens against returned items.
+    """
 
     remote_name: str | None = None
     location: RequestLocation = "query"
-    value_type: type[Any] | tuple[type[Any], ...] | None = None
+    value_type: type[object] | tuple[type[object], ...] | None = None
     serializer: RequestSerializer | None = None
     validator: RequestValidator | None = None
     supports_exclude: bool = False
@@ -943,28 +1084,35 @@ class RequestFilter:
 
     @property
     def param(self) -> str | None:
+        """Return the legacy name for `remote_name`."""
         return self.remote_name
 
     @property
     def allow_exclude(self) -> bool:
+        """Return the legacy name for `supports_exclude`."""
         return self.supports_exclude
 
     @property
     def exclude_param(self) -> str | None:
+        """Return the legacy name for `exclude_remote_name`."""
         return self.exclude_remote_name
 
     @property
     def local_fallback(self) -> bool:
+        """Return the legacy name for `allow_local_fallback`."""
         return self.allow_local_fallback
 
     @property
     def remote(self) -> bool:
+        """Return whether this filter writes a remote request parameter."""
         return self.remote_name is not None
 
     def applies_to_operation(self, operation_name: str) -> bool:
+        """Return whether this filter may be used with the named operation."""
         return not self.operation_names or operation_name in self.operation_names
 
-    def validate_value(self, filter_key: str, value: Any) -> None:
+    def validate_value(self, filter_key: str, value: object) -> None:
+        """Validate a lookup value and raise when its type or validator rejects it."""
         if self.value_type is not None and not isinstance(value, self.value_type):
             raise InvalidRequestFilterValueError(filter_key, value, self.value_type)
         if self.validator is not None:
@@ -976,7 +1124,7 @@ class RequestFilterBinding:
     """Context passed into custom request filter compilers."""
 
     lookup_key: str
-    value: Any
+    value: object
     action: RequestAction
     operation_name: str
     spec: RequestFilter
@@ -984,21 +1132,30 @@ class RequestFilterBinding:
 
 @dataclass(frozen=True, slots=True)
 class RequestOperation:
-    """Describe a named remote request operation used by a request interface."""
+    """Describe a named remote request operation used by a request interface.
+
+    The `path` can contain `{name}` placeholders populated from
+    `RequestPlan.path_params`. Static request parts are merged with the plan at
+    execution time and conflicting duplicate keys raise `RequestPlanConflictError`.
+    `filters=None` is a request-interface sentinel meaning "inherit the
+    interface-level filter mapping"; an explicit mapping, including an empty
+    mapping, is operation-specific.
+    """
 
     name: str
     path: str
     method: str = "GET"
     collection: bool = False
-    filters: Mapping[str, "RequestFilter"] = field(default_factory=dict)
-    metadata: Mapping[str, Any] = field(default_factory=dict)
-    static_query_params: Mapping[str, Any] = field(default_factory=dict)
-    static_headers: Mapping[str, Any] = field(default_factory=dict)
-    static_body: Mapping[str, Any] | None = None
+    filters: Mapping[str, "RequestFilter"] | None = field(default_factory=dict)
+    metadata: RequestPayload = field(default_factory=dict)
+    static_query_params: RequestPayload = field(default_factory=dict)
+    static_headers: RequestHeaders = field(default_factory=dict)
+    static_body: RequestPayload | None = None
     timeout: float | int | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "filters", MappingProxyType(dict(self.filters)))
+        if self.filters is not None:
+            object.__setattr__(self, "filters", MappingProxyType(dict(self.filters)))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
         object.__setattr__(
             self,
@@ -1021,25 +1178,48 @@ RequestQueryOperation = RequestOperation
 
 @dataclass(frozen=True, slots=True)
 class RequestMutationOperation(RequestOperation):
-    """Describe a named remote mutation operation used by a request interface."""
+    """Describe a named create, update, or delete operation for a request interface."""
 
 
-@dataclass(frozen=True, slots=True)
-class RequestPlan:
-    """Normalized request plan produced from declarative request operations."""
+class RequestPlanState(TypedDict):
+    """Pickle state used to rebuild immutable `RequestPlan` instances."""
 
     operation_name: str
     action: RequestAction
     method: str
     path: str
-    query_params: Mapping[str, Any] = field(default_factory=dict)
-    headers: Mapping[str, Any] = field(default_factory=dict)
-    path_params: Mapping[str, Any] = field(default_factory=dict)
-    body: Mapping[str, Any] | None = None
+    query_params: RequestMutablePayload
+    headers: RequestMutableHeaders
+    path_params: RequestMutablePayload
+    body: RequestMutablePayload | None
+    local_predicates: tuple[RequestLocalPredicate, ...]
+    filters: dict[str, tuple[object, ...]]
+    excludes: dict[str, tuple[object, ...]]
+    metadata: RequestMutablePayload
+
+
+@dataclass(frozen=True, slots=True)
+class RequestPlan:
+    """Normalized request plan produced from declarative request operations.
+
+    Transports consume this immutable value object. `query_params`, `headers`,
+    `path_params`, and `body` are outbound request fragments; `filters` and
+    `excludes` retain original manager lookup values for local fallback and
+    introspection.
+    """
+
+    operation_name: str
+    action: RequestAction
+    method: str
+    path: str
+    query_params: RequestPayload = field(default_factory=dict)
+    headers: RequestHeaders = field(default_factory=dict)
+    path_params: RequestPayload = field(default_factory=dict)
+    body: RequestPayload | None = None
     local_predicates: tuple[RequestLocalPredicate, ...] = field(default_factory=tuple)
-    filters: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
-    excludes: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    filters: Mapping[str, tuple[object, ...]] = field(default_factory=dict)
+    excludes: Mapping[str, tuple[object, ...]] = field(default_factory=dict)
+    metadata: RequestPayload = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -1068,7 +1248,10 @@ class RequestPlan:
         )
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
-    def __reduce__(self) -> tuple[Any, tuple[dict[str, Any]]]:
+    def __reduce__(
+        self,
+    ) -> tuple[Callable[[RequestPlanState], "RequestPlan"], tuple[RequestPlanState]]:
+        """Return pickle state that restores immutable mapping proxies as mappings."""
         return (
             _restore_request_plan,
             (
@@ -1094,7 +1277,8 @@ class RequestPlan:
         )
 
     @property
-    def local_filters(self) -> dict[str, Any]:
+    def local_filters(self) -> dict[str, object]:
+        """Return local filter predicates keyed by lookup name."""
         return {
             predicate.lookup_key: predicate.value
             for predicate in self.local_predicates
@@ -1105,7 +1289,7 @@ class RequestPlan:
 RequestQueryPlan = RequestPlan
 
 
-def _restore_request_plan(state: Mapping[str, Any]) -> RequestPlan:
+def _restore_request_plan(state: RequestPlanState) -> RequestPlan:
     return RequestPlan(
         operation_name=state["operation_name"],
         action=state["action"],
@@ -1124,11 +1308,15 @@ def _restore_request_plan(state: Mapping[str, Any]) -> RequestPlan:
 
 @dataclass(frozen=True, slots=True)
 class RequestQueryResult:
-    """Normalized output returned by request query execution hooks."""
+    """Normalized output returned by request query execution hooks.
 
-    items: tuple[Mapping[str, Any], ...]
+    `items` contains zero or more mapping payloads after response normalization.
+    Single-object responses are represented as a one-item tuple.
+    """
+
+    items: tuple[RequestPayload, ...]
     total_count: int | None = None
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    metadata: RequestPayload = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "items", tuple(self.items))
@@ -1142,24 +1330,32 @@ class RequestTransport(Protocol):
     def execute(
         self,
         *,
-        interface_cls: type[Any],
+        interface_cls: RequestInterfaceType,
         operation: RequestOperation,
         plan: RequestPlan,
-        identification: dict[str, Any] | None = None,
-    ) -> RequestQueryResult | RequestTransportResponse | RequestResponse: ...
+        identification: RequestIdentification | None = None,
+    ) -> RequestQueryResult | RequestTransportResponse | RequestResponse:
+        """Execute a request plan and return either raw or normalized results."""
+        ...
 
 
 class SharedRequestTransport(ABC):
-    """Base transport that builds a normalized outbound request from a request plan."""
+    """Base transport that builds and executes a request from a request plan.
+
+    `execute()` performs request construction, idempotency-key injection, auth,
+    retry handling, metrics, tracing, and response normalization. Subclasses
+    implement only `send()` for adapter-specific I/O.
+    """
 
     def execute(
         self,
         *,
-        interface_cls: type[Any],
+        interface_cls: RequestInterfaceType,
         operation: RequestOperation,
         plan: RequestPlan,
-        identification: dict[str, Any] | None = None,
+        identification: RequestIdentification | None = None,
     ) -> RequestQueryResult:
+        """Execute a plan and return normalized query results."""
         config = getattr(interface_cls, "transport_config", None)
         if config is None:
             raise MissingRequestTransportError(interface_cls.__name__)
@@ -1431,10 +1627,10 @@ class SharedRequestTransport(ABC):
         self,
         request: RequestTransportRequest,
         *,
-        interface_cls: type[Any],
+        interface_cls: RequestInterfaceType,
         operation: RequestOperation,
         plan: RequestPlan,
-        identification: dict[str, Any] | None,
+        identification: RequestIdentification | None,
     ) -> RequestTransportResponse | RequestResponse:
         """Send a normalized request and return a transport response."""
 
@@ -1515,11 +1711,11 @@ class SharedRequestTransport(ABC):
 
     @staticmethod
     def _merge_request_parts(
-        static_values: Mapping[str, Any],
-        dynamic_values: Mapping[str, Any],
+        static_values: Mapping[str, RequestPartValue],
+        dynamic_values: Mapping[str, RequestPartValue],
         *,
         location: RequestLocation,
-    ) -> dict[str, Any]:
+    ) -> dict[str, RequestPartValue]:
         merged = dict(static_values)
         for key, value in dynamic_values.items():
             if key in merged and merged[key] != value:
@@ -1530,13 +1726,18 @@ class SharedRequestTransport(ABC):
 
 def default_request_response_normalizer(
     response: RequestTransportResponse | RequestResponse,
-    interface_cls: type[Any],
+    interface_cls: RequestInterfaceType,
     operation: RequestOperation,
     plan: RequestPlan,
 ) -> RequestQueryResult:
-    """Convert raw transport responses into a normalized query result."""
+    """Convert transport responses into `RequestQueryResult`.
 
-    metadata: dict[str, Any] = dict(plan.metadata)
+    Mapping payloads become a single item; lists must contain only mappings.
+    Transport metadata, status code, response headers, retry count, and request
+    id are copied into result metadata when available.
+    """
+
+    metadata: RequestMutablePayload = dict(plan.metadata)
     payload: RequestResponse
     if isinstance(response, RequestTransportResponse):
         payload = response.payload
@@ -1560,7 +1761,7 @@ def default_request_response_normalizer(
             operation.name,
         )
     return RequestQueryResult(
-        items=cast(tuple[Mapping[str, Any], ...], items),
+        items=items,
         metadata=metadata,
     )
 
@@ -1568,7 +1769,12 @@ def default_request_response_normalizer(
 def map_request_transport_error(
     error: RequestTransportStatusError,
 ) -> RequestRemoteError:
-    """Map a low-level transport status error into a stable request exception."""
+    """Map a low-level status error into a stable request exception.
+
+    Status codes map as 401 auth, 403 authorization, 404 not found, 409
+    conflict, 429 rate limit, and 5xx server error. Mapping payload metadata may
+    fill `error_code`, `details`, and `request_id`.
+    """
 
     status_code = cast(int, error.status_code)
     if status_code == 401:
@@ -1595,7 +1801,7 @@ def map_request_transport_error(
             mapped.error_code = error_code
         details = payload.get("details")
         if isinstance(details, Mapping):
-            mapped.details = cast(Mapping[str, Any], details)
+            mapped.details = cast(Mapping[str, object], details)
         metadata = payload.get("metadata")
         if isinstance(metadata, Mapping):
             request_id = metadata.get("request_id")
@@ -1611,13 +1817,18 @@ def map_request_transport_error(
 
 
 class UrllibRequestTransport(SharedRequestTransport):
-    """First-party shared transport backed by Python's stdlib HTTP client."""
+    """First-party JSON transport backed by Python's stdlib HTTP client.
+
+    The transport supports absolute HTTP(S) URLs, JSON request bodies, decoded
+    JSON object/list responses, operation-level timeout overrides, and HTTP
+    status mapping through `RequestTransportStatusError`.
+    """
 
     def __init__(
         self,
         *,
-        urlopen: Callable[..., Any] | None = None,
-        json_dumps: Callable[[Any], str] | None = None,
+        urlopen: UrlopenCallable | None = None,
+        json_dumps: Callable[[object], str] | None = None,
     ) -> None:
         self._urlopen = urlopen or stdlib_urlopen
         self._json_dumps = json_dumps or json.dumps
@@ -1626,11 +1837,12 @@ class UrllibRequestTransport(SharedRequestTransport):
         self,
         request: RequestTransportRequest,
         *,
-        interface_cls: type[Any],
+        interface_cls: RequestInterfaceType,
         operation: RequestOperation,
         plan: RequestPlan,
-        identification: dict[str, Any] | None,
+        identification: RequestIdentification | None,
     ) -> RequestTransportResponse:
+        """Send a normalized HTTP request and return a decoded response."""
         url = self._build_url(request)
         if urlsplit(url).scheme not in {"http", "https"}:
             raise RequestSchemaError.unsupported_url_scheme(url)
@@ -1681,25 +1893,30 @@ class UrllibRequestTransport(SharedRequestTransport):
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise RequestSchemaError.non_object_json_payload() from error
         if isinstance(decoded, Mapping):
-            return cast(Mapping[str, Any], decoded)
+            return cast(RequestPayload, decoded)
         if isinstance(decoded, list):
             if not all(isinstance(item, Mapping) for item in decoded):
                 raise RequestSchemaError.non_mapping_json_list()
-            return cast(list[Mapping[str, Any]], decoded)
+            return cast(list[RequestPayload], decoded)
         raise RequestSchemaError.non_object_json_payload()
 
 
 def resolve_request_value(
-    payload: Mapping[str, Any] | object, path: tuple[str, ...]
-) -> Any:
-    """Resolve a dotted field path from a mapping/object payload."""
+    payload: RequestPayload | object, path: tuple[str, ...]
+) -> object:
+    """Resolve a field path from a mapping/object payload.
+
+    Mapping keys take precedence for mapping values; otherwise object
+    attributes are read. Empty paths raise `ValueError`, non-string path parts
+    raise `TypeError`, and missing parts raise `KeyError`.
+    """
 
     if not path:
         raise ValueError(_RESOLVE_REQUEST_EMPTY_PATH_ERROR)
     if any(not isinstance(part, str) for part in path):
         raise TypeError(_RESOLVE_REQUEST_PATH_TYPE_ERROR)
 
-    current: Any = payload
+    current: object = payload
     for part in path:
         if isinstance(current, Mapping):
             if part not in current:
@@ -1722,7 +1939,11 @@ def validate_filter_key(filter_key: str) -> None:
 
 
 def lookup_name_from_filter(filter_key: str) -> str:
-    """Extract the lookup suffix from a request filter key."""
+    """Extract the lookup suffix from a request filter key.
+
+    Bare field names and unknown suffixes resolve to `"exact"`; call
+    `validate_filter_key()` when unknown suffixes should raise.
+    """
 
     parts = filter_key.split("__")
     if parts and parts[-1] in SUPPORTED_REQUEST_LOOKUPS:
@@ -1731,11 +1952,15 @@ def lookup_name_from_filter(filter_key: str) -> str:
 
 
 def resolve_payload_value(
-    payload: Mapping[str, Any],
+    payload: RequestPayload,
     source: str | tuple[str, ...] | None,
     field_name: str,
-) -> Any:
-    """Resolve a configured payload source path for a request attribute."""
+) -> object:
+    """Resolve a configured payload source path for a request attribute.
+
+    `source=None` reads `field_name`; dotted strings and tuples are treated as
+    nested paths. Missing values raise `MissingRequestPayloadFieldError`.
+    """
 
     path = (field_name,) if source is None else source
     resolved_path = tuple(path.split(".")) if isinstance(path, str) else path
@@ -1745,25 +1970,38 @@ def resolve_payload_value(
         raise MissingRequestPayloadFieldError(field_name, resolved_path) from error
 
 
-def apply_request_lookup(value_to_check: Any, lookup: str, filter_value: Any) -> bool:
-    """Evaluate a request-filter lookup against a candidate value."""
+def apply_request_lookup(
+    value_to_check: object,
+    lookup: str,
+    filter_value: object,
+) -> bool:
+    """Evaluate a supported request-filter lookup against a candidate value.
+
+    Supported lookups are `exact`, ordering comparisons, string contains,
+    `in`, and `isnull`. Type errors during comparison return `False`.
+    """
 
     try:
         if lookup == "exact":
             return value_to_check == filter_value
+        comparable = cast(SupportsRequestComparison, value_to_check)
         if lookup == "lt":
-            return value_to_check < filter_value
+            return comparable < filter_value
         if lookup == "lte":
-            return value_to_check <= filter_value
+            return comparable <= filter_value
         if lookup == "gt":
-            return value_to_check > filter_value
+            return comparable > filter_value
         if lookup == "gte":
-            return value_to_check >= filter_value
+            return comparable >= filter_value
         if lookup == "contains" and isinstance(value_to_check, str):
             return str(filter_value) in value_to_check
         if lookup == "icontains" and isinstance(value_to_check, str):
             return str(filter_value).lower() in value_to_check.lower()
-        if lookup == "in":
+        if (
+            lookup == "in"
+            and isinstance(filter_value, Iterable)
+            and not isinstance(filter_value, (str, bytes))
+        ):
             return value_to_check in filter_value
         if lookup == "isnull":
             return (value_to_check is None) is bool(filter_value)

@@ -38,6 +38,21 @@ class SearchIndexStateModelTests(TestCase):
 
         assert duplicate_indexes == []
 
+    def test_search_index_state_index_names_match_migration(self) -> None:
+        """Keep operational index names aligned with the checked-in migration."""
+        expected_indexes = {
+            ("dirty_since", "index_name"): "general_man_dirty_s_71fc00_idx",
+            ("claim_token",): "general_man_claim_t_3aaacc_idx",
+            ("claim_expires_at",): "general_man_claim_e_1fa228_idx",
+            ("last_reconciled_at",): "general_man_last_re_81038c_idx",
+        }
+
+        actual_indexes = {
+            tuple(index.fields): index.name for index in SearchIndexState._meta.indexes
+        }
+
+        assert actual_indexes == expected_indexes
+
     def test_mark_dirty_records_reason_without_clearing_existing_timestamp(
         self,
     ) -> None:

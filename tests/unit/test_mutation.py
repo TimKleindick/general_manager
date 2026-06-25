@@ -4,11 +4,13 @@ import graphene
 from django.test import TestCase
 from django.contrib.auth.models import AnonymousUser, User
 
-from general_manager.api.mutation import graph_ql_mutation
+from general_manager.api.graphql_mutations import _normalize_mutation_kwargs_for_manager
+from general_manager.api.mutation import _sequence_argument, graph_ql_mutation
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.interface.base_interface import InterfaceBase
+from general_manager.permission.base_permission import PermissionCheckError
 from general_manager.permission.mutation_permission import MutationPermission
 from graphql import GraphQLError
 
@@ -748,6 +750,101 @@ def test_mutation_permission_empty_lists_allow() -> None:
     assert AllowEmptyPermission.check({"value": 1}, AnonymousUser()) is None
 
 
+def test_mutation_permission_global_gate_allows_fields_without_specific_gate() -> None:
+    """Fields without a field-specific list should use the global gate alone."""
+
+    class GlobalOnlyPermission(MutationPermission):
+        __mutate__: ClassVar[List[str]] = ["public"]
+
+    assert GlobalOnlyPermission.check({"value": 1}, AnonymousUser()) is None
+
+
+def test_mutation_permission_empty_payload_checks_global_gate() -> None:
+    """Empty payloads still need the class-level mutation gate."""
+
+    class DenyEmptyPayloadPermission(MutationPermission):
+        __mutate__: ClassVar[List[str]] = ["isAdmin"]
+
+    try:
+        DenyEmptyPayloadPermission.check({}, AnonymousUser())
+    except PermissionCheckError as exc:
+        assert "Mutation permission denied for attribute '__mutate__'" in str(exc)
+    else:
+        raise AssertionError
+
+
+def test_sequence_argument_treats_text_as_scalar() -> None:
+    assert _sequence_argument("abc") == ("abc",)
+    assert _sequence_argument(b"abc") == (b"abc",)
+    assert _sequence_argument(bytearray(b"abc")) == (bytearray(b"abc"),)
+
+
+def test_normalize_mutation_kwargs_maps_canonical_relation_inputs() -> None:
+    class Owner(GeneralManager):
+        pass
+
+    class Member(GeneralManager):
+        pass
+
+    class Project:
+        class Interface:
+            @staticmethod
+            def get_attribute_types() -> dict[str, dict[str, object]]:
+                return {
+                    "owner": {
+                        "type": Owner,
+                        "is_derived": False,
+                    },
+                    "owner_id": {
+                        "type": int,
+                        "is_derived": False,
+                    },
+                    "member_list": {
+                        "type": Member,
+                        "is_derived": False,
+                    },
+                }
+
+    normalized = _normalize_mutation_kwargs_for_manager(
+        Project,
+        {"owner": "1", "member_list": ["2"]},
+    )
+
+    assert normalized == {"owner_id": "1", "member_id_list": ["2"]}
+
+
+def test_mutation_permission_missing_mutate_denies() -> None:
+    """Omitting __mutate__ should deny the default mutation gate."""
+
+    class MissingMutatePermission(MutationPermission):
+        pass
+
+    try:
+        MissingMutatePermission.check({"value": 1}, AnonymousUser())
+    except PermissionCheckError as exc:
+        assert "Mutation permission denied for attribute 'value'" in str(exc)
+    else:
+        raise AssertionError
+
+
+def test_mutation_permission_invalid_mutate_shape_denies() -> None:
+    """Invalid __mutate__ declarations should deny the global gate."""
+
+    class StringMutatePermission(MutationPermission):
+        __mutate__: ClassVar[object] = "public"
+
+    class MixedMutatePermission(MutationPermission):
+        __mutate__: ClassVar[list[object]] = ["public", object()]
+
+    for permission_cls in (StringMutatePermission, MixedMutatePermission):
+        try:
+            permission_cls.check({"value": 1}, AnonymousUser())
+        except PermissionCheckError as exc:
+            assert "Mutation permission denied for attribute 'value'" in str(exc)
+        else:
+            raise AssertionError
+
+
 def test_mutation_permission_ignores_non_list_public_attributes() -> None:
     """Only list[str] class attributes should be treated as field permissions."""
 
@@ -755,6 +852,8 @@ def test_mutation_permission_ignores_non_list_public_attributes() -> None:
         __mutate__: ClassVar[List[str]] = []
         field: ClassVar[List[str]] = ["public"]
         helper_constant: ClassVar[str] = "not-a-permission-list"
+        mixed_list: ClassVar[list[object]] = ["public", object()]
+        tuple_permissions: ClassVar[tuple[str, ...]] = ("public",)
 
     permission = MixedPermission({"field": "value"}, User())
 
@@ -762,3 +861,23 @@ def test_mutation_permission_ignores_non_list_public_attributes() -> None:
     assert (
         "helper_constant" not in permission._MutationPermission__attribute_permissions
     )
+    assert "mixed_list" not in permission._MutationPermission__attribute_permissions
+    assert (
+        "tuple_permissions" not in permission._MutationPermission__attribute_permissions
+    )
+
+
+def test_mutation_permission_inherits_mutate_but_not_field_permissions() -> None:
+    """Global __mutate__ is inherited, but field permissions are concrete only."""
+
+    class ParentPermission(MutationPermission):
+        __mutate__: ClassVar[List[str]] = []
+        field: ClassVar[List[str]] = ["public"]
+
+    class ChildPermission(ParentPermission):
+        pass
+
+    permission = ChildPermission({"field": "value"}, User())
+
+    assert permission.check_permission("field")
+    assert "field" not in permission._MutationPermission__attribute_permissions

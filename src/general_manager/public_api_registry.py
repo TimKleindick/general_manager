@@ -92,6 +92,18 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
 
 API_EXPORTS: LazyExportMap = {
     "GraphQL": ("general_manager.api.graphql", "GraphQL"),
+    "GraphQLPropertyReturnAnnotationError": (
+        "general_manager.api.property",
+        "GraphQLPropertyReturnAnnotationError",
+    ),
+    "GraphQLPropertyTimeoutConfigurationError": (
+        "general_manager.api.property",
+        "GraphQLPropertyTimeoutConfigurationError",
+    ),
+    "GraphQLPropertyWarmUpConfigurationError": (
+        "general_manager.api.property",
+        "GraphQLPropertyWarmUpConfigurationError",
+    ),
     "MeasurementType": ("general_manager.api.graphql", "MeasurementType"),
     "MeasurementScalar": ("general_manager.api.graphql", "MeasurementScalar"),
     "RemoteInvalidationClient": (
@@ -155,14 +167,14 @@ UTILS_EXPORTS: LazyExportMap = {
     "none_to_zero": ("general_manager.utils.none_to_zero", "none_to_zero"),
     "args_to_kwargs": ("general_manager.utils.args_to_kwargs", "args_to_kwargs"),
     "make_cache_key": ("general_manager.utils.make_cache_key", "make_cache_key"),
+    "UnknownInputFieldError": (
+        "general_manager.utils.filter_parser",
+        "UnknownInputFieldError",
+    ),
     "parse_filters": ("general_manager.utils.filter_parser", "parse_filters"),
     "create_filter_function": (
         "general_manager.utils.filter_parser",
         "create_filter_function",
-    ),
-    "UnknownInputFieldError": (
-        "general_manager.utils.filter_parser",
-        "UnknownInputFieldError",
     ),
     "snake_to_pascal": ("general_manager.utils.format_string", "snake_to_pascal"),
     "snake_to_camel": ("general_manager.utils.format_string", "snake_to_camel"),
@@ -186,6 +198,14 @@ PERMISSION_EXPORTS: LazyExportMap = {
     "MutationPermission": (
         "general_manager.permission.mutation_permission",
         "MutationPermission",
+    ),
+    "PermissionDataManager": (
+        "general_manager.permission.permission_data_manager",
+        "PermissionDataManager",
+    ),
+    "InvalidPermissionDataError": (
+        "general_manager.permission.permission_data_manager",
+        "InvalidPermissionDataError",
     ),
     "register_permission": (
         "general_manager.permission.permission_checks",
@@ -362,6 +382,7 @@ INTERFACE_EXPORTS: LazyExportMap = {
 CACHE_EXPORTS: LazyExportMap = {
     "cached": ("general_manager.cache.cache_decorator", "cached"),
     "CacheBackend": ("general_manager.cache.cache_decorator", "CacheBackend"),
+    "Dependency": ("general_manager.cache.dependency_index", "Dependency"),
     "DependencyTracker": ("general_manager.cache.cache_tracker", "DependencyTracker"),
     "CalculationRunContext": (
         "general_manager.cache.run_context",
@@ -379,14 +400,6 @@ CACHE_EXPORTS: LazyExportMap = {
         "general_manager.cache.dependency_index",
         "record_dependencies",
     ),
-    "remove_cache_key_from_index": (
-        "general_manager.cache.dependency_index",
-        "remove_cache_key_from_index",
-    ),
-    "invalidate_cache_key": (
-        "general_manager.cache.dependency_index",
-        "invalidate_cache_key",
-    ),
     "parse_dependency_identifier": (
         "general_manager.cache.dependency_index",
         "parse_dependency_identifier",
@@ -394,6 +407,14 @@ CACHE_EXPORTS: LazyExportMap = {
     "serialize_dependency_identifier": (
         "general_manager.cache.dependency_index",
         "serialize_dependency_identifier",
+    ),
+    "remove_cache_key_from_index": (
+        "general_manager.cache.dependency_index",
+        "remove_cache_key_from_index",
+    ),
+    "invalidate_cache_key": (
+        "general_manager.cache.dependency_index",
+        "invalidate_cache_key",
     ),
 }
 
@@ -432,6 +453,14 @@ BUCKET_EXPORTS: LazyExportMap = {
 
 MANAGER_EXPORTS: LazyExportMap = {
     "GeneralManager": ("general_manager.manager.general_manager", "GeneralManager"),
+    "TrustedOrmHydrationNotSupportedError": (
+        "general_manager.manager.general_manager",
+        "TrustedOrmHydrationNotSupportedError",
+    ),
+    "UnsupportedUnionOperandError": (
+        "general_manager.manager.general_manager",
+        "UnsupportedUnionOperandError",
+    ),
     "GeneralManagerMeta": ("general_manager.manager.meta", "GeneralManagerMeta"),
     "Input": ("general_manager.manager.input", "Input"),
     "InputDomain": ("general_manager.manager.input", "InputDomain"),
@@ -444,6 +473,10 @@ MANAGER_EXPORTS: LazyExportMap = {
 
 RULE_EXPORTS: LazyExportMap = {
     "Rule": ("general_manager.rule.rule", "Rule"),
+    "InvalidRuleHandlerConfigurationError": (
+        "general_manager.rule.rule",
+        "InvalidRuleHandlerConfigurationError",
+    ),
     "BaseRuleHandler": ("general_manager.rule.handler", "BaseRuleHandler"),
 }
 
