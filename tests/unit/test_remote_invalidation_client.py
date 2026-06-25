@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import ClassVar
 from unittest import TestCase
 from unittest.mock import patch
@@ -36,6 +37,11 @@ class FakeWebSocketConnection:
 class BytesWebSocketConnection(FakeWebSocketConnection):
     async def recv(self) -> bytes:
         return json.dumps(self.payload).encode("utf-8")
+
+
+class MappingPayloadConnection(FakeWebSocketConnection):
+    async def recv(self) -> Mapping[str, object]:
+        return MappingProxyType(self.payload)
 
 
 class InvalidPayloadConnection(FakeWebSocketConnection):
@@ -105,6 +111,15 @@ class RemoteInvalidationClientTests(TestCase):
 
         with self.assertRaises(RemoteInvalidationConfigurationError):
             RemoteInvalidationClient([LocalManager])
+
+    def test_rejects_non_class_interface_values(self) -> None:
+        class InvalidManager(GeneralManager):
+            pass
+
+        InvalidManager.Interface = object()
+
+        with self.assertRaises(RemoteInvalidationConfigurationError):
+            RemoteInvalidationClient([InvalidManager])
 
     def test_rejects_remote_managers_without_websocket_support(self) -> None:
         with self.assertRaises(RemoteInvalidationConfigurationError):
@@ -234,6 +249,29 @@ class RemoteInvalidationClientTests(TestCase):
             client = RemoteInvalidationClient(
                 [RemoteProject],
                 connection_factory=lambda _url: BytesWebSocketConnection(payload),
+            )
+            await client.connect()
+            handled = await client.listen_once()
+            await client.close()
+
+            self.assertEqual(handled, 1)
+
+        asyncio.run(run_test())
+
+    def test_recv_event_accepts_mapping_payload(self) -> None:
+        payload = {
+            "protocol_version": "v1",
+            "base_path": "/remote",
+            "resource_name": "projects",
+            "action": "update",
+            "identification": {"id": 1},
+            "event_id": "evt-1",
+        }
+
+        async def run_test() -> None:
+            client = RemoteInvalidationClient(
+                [RemoteProject],
+                connection_factory=lambda _url: MappingPayloadConnection(payload),
             )
             await client.connect()
             handled = await client.listen_once()

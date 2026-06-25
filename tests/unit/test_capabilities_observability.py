@@ -239,10 +239,12 @@ def test_read_only_capability_uses_observability():
 
     _assert_observability(
         patch_target="general_manager.interface.capabilities.read_only.with_observability",
-        target_callable=lambda: ReadOnlyManagementCapability().ensure_schema_is_up_to_date(
-            interface_cls,
-            parent_cls,
-            model_cls,
+        target_callable=lambda: (
+            ReadOnlyManagementCapability().ensure_schema_is_up_to_date(
+                interface_cls,
+                parent_cls,
+                model_cls,
+            )
         ),
         expected_target=interface_cls,
         expected_operation="read_only.ensure_schema",

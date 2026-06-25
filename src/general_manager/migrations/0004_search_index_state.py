@@ -1,9 +1,35 @@
-from __future__ import annotations
+"""Create durable search reconciliation state.
+
+Django applies this historical migration with dependency
+`("general_manager", "0003_workflow_execution_correlation_constraint")` and
+performs six schema operations: create `SearchIndexState`, add
+`general_manager_search_state_manager_index_uniq`, and add four operational
+indexes for dirty-row selection, claim lookup, claim expiration, and last
+reconciliation time.
+
+`SearchIndexState` stores one row per `(manager_path, index_name)`: `id` is a
+`BigAutoField`; `manager_path`, `index_name`, and `schema_fingerprint` are
+required `CharField`s with max lengths 512, 255, and 64; `initialized_at`,
+`last_reconciled_at`, `dirty_since`, `claimed_at`, and `claim_expires_at` are
+nullable/blank `DateTimeField`s; `dirty_reason` is a blank `CharField` with
+default `""`, max length 32, and the choices `("initialization",
+"Initialization")`, `("schema_changed", "Schema changed")`, `("data_changed",
+"Data changed")`, and `("forced", "Forced")`; `claim_token` is a blank
+`CharField` with default `""` and max length 64; `last_error` is a blank
+`TextField` with default `""`; and `created_at`/`updated_at` are automatic
+timestamps.
+
+The migration exposes no public callables, accepts no application inputs,
+returns no application output, and leaves Django/database migration errors
+unwrapped.
+"""
 
 from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
+    """Django migration container for the search reconciliation state table."""
+
     dependencies = [
         ("general_manager", "0003_workflow_execution_correlation_constraint")
     ]

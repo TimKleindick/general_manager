@@ -12,9 +12,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from copy import deepcopy
-from typing import Any, Callable, Iterable, TYPE_CHECKING, cast
+from typing import Callable, Iterable, TYPE_CHECKING, cast
 
-from channels.layers import BaseChannelLayer, get_channel_layer  # type: ignore[import]
+from channels.layers import BaseChannelLayer, get_channel_layer
 
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import (
@@ -33,6 +33,12 @@ if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
 
 logger = get_logger("api.graphql_subscriptions")
+
+type Identification = dict[str, object]
+"""Manager identification payload used for subscription group wiring."""
+
+type SubscriptionMessage = dict[str, object]
+"""Channel-layer subscription event payload."""
 
 
 # ---------------------------------------------------------------------------
@@ -61,15 +67,23 @@ def get_channel_layer_safe(strict: bool = False) -> BaseChannelLayer | None:
 
 
 def group_name(
-    manager_class: type[GeneralManager], identification: dict[str, Any]
+    manager_class: type[GeneralManager], identification: Identification
 ) -> str:
     """
     Build a deterministic channel-group name for a specific manager instance.
 
     Parameters:
         manager_class: Manager class used to namespace the group.
-        identification: Identifying fields for the instance; serialised with
-            sorted keys before hashing.
+        identification: Identifying fields for the instance. The value is
+            serialized with ``serialize_dependency_identifier()``, whose
+            normalization coerces mapping keys to strings, orders mappings by
+            normalized key, preserves list/tuple order, sorts sets by string
+            form, serializes dates/datetimes with ``isoformat()``, keeps JSON
+            scalars as JSON values, and falls back to ``repr(...)`` for
+            unsupported objects before hashing.
+            If mapping keys normalize to the same string, normalization keeps
+            the last item after sorting by ``str(key)``; equal sort keys keep
+            the input mapping's iteration order.
 
     Returns:
         A stable, collision-resistant group identifier string.
@@ -114,7 +128,9 @@ async def channel_listener(
     """
     try:
         while True:
-            message = cast(dict[str, Any], await channel_layer.receive(channel_name))
+            message = cast(
+                SubscriptionMessage, await channel_layer.receive(channel_name)
+            )
             if message.get("type") != "gm.subscription.event":
                 continue
             action = cast(str | None, message.get("action"))
@@ -127,17 +143,22 @@ async def channel_listener(
 async def channel_message_listener(
     channel_layer: BaseChannelLayer,
     channel_name: str,
-    queue: asyncio.Queue[dict[str, Any]],
+    queue: asyncio.Queue[SubscriptionMessage],
 ) -> None:
     """
     Listen for subscription event messages and enqueue complete messages.
 
     Class-wide subscriptions need the event identification, not only the action,
-    so this listener preserves the full channel-layer payload.
+    so this listener preserves the full channel-layer payload. It only filters
+    on message ``type`` and action presence; malformed manager names,
+    non-string actions, and non-object identifications are filtered by the
+    class-wide subscription stream after queueing.
     """
     try:
         while True:
-            message = cast(dict[str, Any], await channel_layer.receive(channel_name))
+            message = cast(
+                SubscriptionMessage, await channel_layer.receive(channel_name)
+            )
             if message.get("type") != "gm.subscription.event":
                 continue
             if message.get("action") is not None:
@@ -184,13 +205,15 @@ def prime_graphql_properties(
 def dependencies_from_tracker(
     dependency_records: Iterable[Dependency],
     manager_registry: dict[str, type[GeneralManager]],
-) -> list[tuple[type[GeneralManager], dict[str, Any]]]:
+) -> list[tuple[type[GeneralManager], Identification]]:
     """
     Convert dependency-tracker records into ``(manager_class, identification)``
     pairs.
 
-    Records whose operation is not ``"identification"`` or whose manager name
-    is not in *manager_registry* are silently skipped.
+    Records whose operation is not ``"identification"``, whose manager name is
+    not in *manager_registry*, or whose identifier cannot be parsed into an
+    identification dictionary are silently skipped. A serialized JSON ``null`` is
+    therefore skipped the same way as malformed identifier JSON.
 
     Parameters:
         dependency_records: Iterable of ``Dependency`` records.
@@ -199,7 +222,7 @@ def dependencies_from_tracker(
     Returns:
         List of ``(manager_class, identification_dict)`` tuples.
     """
-    resolved: list[tuple[type[GeneralManager], dict[str, Any]]] = []
+    resolved: list[tuple[type[GeneralManager], Identification]] = []
     for manager_name, operation, identifier in dependency_records:
         if operation != "identification":
             continue
@@ -218,13 +241,27 @@ def resolve_subscription_dependencies(
     instance: GeneralManager,
     manager_registry: dict[str, type[GeneralManager]],
     dependency_records: Iterable[Dependency] | None = None,
-) -> list[tuple[type[GeneralManager], dict[str, Any]]]:
+) -> list[tuple[type[GeneralManager], Identification]]:
     """
     Build deduplicated ``(manager_class, identification)`` dependency pairs for
     subscription channel wiring.
 
     Combines dependency-tracker records (if provided) with the manager's
     Interface ``input_fields`` that reference other ``GeneralManager`` types.
+    Tracker-derived dependencies are emitted first in accepted tracker-record
+    order; input-field dependencies are appended afterward in
+    ``Interface.input_fields`` iteration order, with list-valued fields
+    preserving list order. Input-field references are detected with
+    ``issubclass(input_field.type, GeneralManager)``. Input-field values may be
+    manager instances, identification dictionaries, or lists containing either
+    form. ``None`` values are ignored. Returned identifications are deep-copied
+    before they are stored in the result. Dependencies are deduplicated by
+    manager type name and serialized identification, so two different manager
+    classes with the same ``__name__`` and identical serialized identification
+    collide. The changed instance itself is excluded. The helper skips malformed
+    tracker records as described in ``dependencies_from_tracker()``, but does
+    not wrap errors from malformed interface metadata, unexpected identification
+    values, ``deepcopy()``, or dependency identifier serialization.
 
     Parameters:
         manager_class: Manager type whose dependencies are being resolved.
@@ -236,7 +273,7 @@ def resolve_subscription_dependencies(
         List of ``(dep_manager_class, identification)`` pairs, excluding the
         pair matching *instance* itself.
     """
-    dep_list: list[tuple[type[GeneralManager], dict[str, Any]]] = []
+    dep_list: list[tuple[type[GeneralManager], Identification]] = []
     seen: set[tuple[str, str]] = set()
 
     if dependency_records:
@@ -272,7 +309,7 @@ def resolve_subscription_dependencies(
         for value in values:
             if isinstance(value, GeneralManager):
                 identification = deepcopy(value.identification)
-                manager_type = cast(type[GeneralManager], input_field.type)
+                manager_type = input_field.type
                 if (
                     manager_type is manager_class
                     and identification == instance.identification
@@ -287,8 +324,8 @@ def resolve_subscription_dependencies(
                 seen.add(key)
                 dep_list.append((manager_type, identification))
             elif isinstance(value, dict):
-                identification_dict = deepcopy(cast(dict[str, Any], value))
-                manager_type = cast(type[GeneralManager], input_field.type)
+                identification_dict = deepcopy(cast(Identification, value))
+                manager_type = input_field.type
                 if (
                     manager_type is manager_class
                     and identification_dict == instance.identification
@@ -320,6 +357,16 @@ def subscription_property_names(
     Return the ``GraphQLProperty`` names selected under ``item`` in the
     subscription payload.
 
+    The selected-property collector walks the resolver info's field nodes and
+    named fragments, descends through the ``item`` field, follows inline
+    fragments and fragment spreads, compares AST ``name.value`` values rather
+    than aliases, applies ``normalize_graphql_name`` to selected GraphQL field
+    names, and keeps only names present in
+    ``manager_class.Interface.get_graph_ql_properties()``. Aliases never replace
+    or add property names; an aliased ``aliasValue: propB`` selection records
+    ``prop_b``. Selections that do not include ``item`` or do not map to GraphQL
+    properties return an empty set.
+
     Parameters:
         info: GraphQL resolver info containing the parsed selection set.
         manager_class: Manager class whose Interface defines available property
@@ -345,7 +392,7 @@ def subscription_property_names(
 
 def instantiate_manager(
     manager_class: type[GeneralManager],
-    identification: dict[str, Any],
+    identification: Identification,
     *,
     collect_dependencies: bool = False,
     property_names: Iterable[str] | None = None,

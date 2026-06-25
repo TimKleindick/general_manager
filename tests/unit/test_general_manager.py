@@ -7,6 +7,7 @@ from general_manager.interface.capabilities.orm import HistoryNotSupportedError
 from general_manager.manager.general_manager import (
     GeneralManager,
     TrustedOrmHydrationNotSupportedError,
+    UnsupportedUnionOperandError,
 )
 from general_manager.manager.meta import InvalidManagerStateError
 from general_manager.permission.manager_based_permission import (
@@ -215,6 +216,25 @@ class GeneralManagerTestCase(TestCase):
             {"id": "dummy_id"},  # type: ignore
         )  # Assuming both managers have the same id
 
+    def test_or_operator_rejects_unsupported_operand(self):
+        manager = self.manager()
+
+        with self.assertRaises(UnsupportedUnionOperandError) as context:
+            _ = manager | object()  # type: ignore[operator]
+
+        self.assertIn("Unsupported type for union", str(context.exception))
+
+    def test_manager_core_errors_are_public_exports(self):
+        from general_manager.manager import (
+            TrustedOrmHydrationNotSupportedError as public_trusted_error,
+        )
+        from general_manager.manager import (
+            UnsupportedUnionOperandError as public_union_error,
+        )
+
+        self.assertIs(public_trusted_error, TrustedOrmHydrationNotSupportedError)
+        self.assertIs(public_union_error, UnsupportedUnionOperandError)
+
     def test_identification_property(self):
         # Test the identification property
         """
@@ -285,6 +305,36 @@ class GeneralManagerTestCase(TestCase):
             mock_filter.assert_called_once_with(id__in=["dummy_id", 123])
             self.assertEqual(result, [])
 
+    def test_classmethod_filter_forwards_normalized_manager_lookups(self):
+        related = self.manager()
+
+        with patch.object(DummyInterface, "filter", return_value=[]) as mock_filter:
+            result = self.manager.filter(
+                owner=related,
+                owner__in=[related, "external"],
+                reviewer__in=(related, "external"),
+            )
+
+        mock_filter.assert_called_once_with(
+            owner="dummy_id",
+            owner__in=["dummy_id", "external"],
+            reviewer__in=("dummy_id", "external"),
+        )
+        self.assertEqual(result, [])
+
+    def test_classmethod_filter_forwards_composite_manager_lookup_copy(self):
+        related = self.manager()
+        composite_identification = {"country": "DE", "number": 7}
+        related._GeneralManager__id = composite_identification
+
+        with patch.object(DummyInterface, "filter", return_value=[]) as mock_filter:
+            result = self.manager.filter(owner=related)
+
+        forwarded = mock_filter.call_args.kwargs["owner"]
+        self.assertEqual(forwarded, composite_identification)
+        self.assertIsNot(forwarded, composite_identification)
+        self.assertEqual(result, [])
+
     def test_classmethod_get(self):
         """
         Tests that the GeneralManager.get class method delegates through the
@@ -308,6 +358,31 @@ class GeneralManagerTestCase(TestCase):
             result = self.manager.exclude(id__in=("dummy_id", 123))
             mock_filter.assert_called_once_with(id__in=("dummy_id", 123))
             self.assertEqual(result, [])
+
+    def test_classmethod_exclude_forwards_normalized_manager_lookups(self):
+        related = self.manager()
+
+        with patch.object(DummyInterface, "exclude", return_value=[]) as mock_exclude:
+            result = self.manager.exclude(owner=related, owner__in=[related])
+
+        mock_exclude.assert_called_once_with(
+            owner="dummy_id",
+            owner__in=["dummy_id"],
+        )
+        self.assertEqual(result, [])
+
+    def test_classmethod_exclude_forwards_composite_manager_lookup_copy(self):
+        related = self.manager()
+        composite_identification = {"country": "DE", "number": 7}
+        related._GeneralManager__id = composite_identification
+
+        with patch.object(DummyInterface, "exclude", return_value=[]) as mock_exclude:
+            result = self.manager.exclude(owner=related)
+
+        forwarded = mock_exclude.call_args.kwargs["owner"]
+        self.assertEqual(forwarded, composite_identification)
+        self.assertIsNot(forwarded, composite_identification)
+        self.assertEqual(result, [])
 
     def test_classmethod_create(self):
         # Test the create class method

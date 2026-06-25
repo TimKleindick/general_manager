@@ -1,6 +1,7 @@
 from django.test import TestCase
 from decimal import Decimal
 from datetime import timedelta
+from types import MappingProxyType
 from unittest.mock import patch
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.input import (
@@ -656,6 +657,22 @@ class TestInput(TestCase):
             input_obj.resolve_possible_values({}),
             {"status": "active"},
         )
+
+    def test_input_from_manager_query_callable_mapping_result_filters(self):
+        filtered_result = object()
+
+        class MockManager:
+            @classmethod
+            def filter(cls, **kwargs):
+                return filtered_result
+
+        def query():
+            return MappingProxyType({"status": "active"})
+
+        with patch("general_manager.manager.input.issubclass", return_value=True):
+            input_obj = Input.from_manager_query(MockManager, query=query)
+
+        self.assertIs(input_obj.resolve_possible_values({}), filtered_result)
 
     def test_input_from_manager_query_honors_explicit_empty_dependencies(self):
         class MockManager:

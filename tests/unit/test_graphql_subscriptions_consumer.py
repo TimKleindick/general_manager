@@ -147,6 +147,17 @@ class GraphQLSubscriptionConsumerReceiveJsonTests(unittest.TestCase):
 
         asyncio.run(test_receive())
 
+    def test_receive_json_closes_on_non_object_message(self) -> None:
+        """Verify receive_json closes connection when the decoded JSON is not an object."""
+        consumer = GraphQLSubscriptionConsumer()
+
+        async def test_receive() -> None:
+            with patch.object(consumer, "close", new_callable=AsyncMock) as mock_close:
+                await consumer.receive_json(["connection_init"])
+                mock_close.assert_called_once_with(code=4400)
+
+        asyncio.run(test_receive())
+
 
 class GraphQLSubscriptionConsumerConnectionInitTests(unittest.TestCase):
     """Test connection_init message handling."""
@@ -237,6 +248,92 @@ class GraphQLSubscriptionConsumerPingTests(unittest.TestCase):
                 mock_send.assert_called_once_with({"type": "pong", "payload": payload})
 
         asyncio.run(test_ping())
+
+
+class GraphQLSubscriptionConsumerSubscribeTests(unittest.TestCase):
+    """Test subscribe message validation and setup handling."""
+
+    def test_subscribe_before_ack_closes_before_id_validation(self) -> None:
+        """Verify acknowledgement is checked before subscribe id and payload shape."""
+        consumer = GraphQLSubscriptionConsumer()
+        consumer.connection_acknowledged = False
+
+        async def test_subscribe() -> None:
+            with (
+                patch.object(consumer, "close", new_callable=AsyncMock) as mock_close,
+                patch.object(
+                    consumer, "_send_protocol_message", new_callable=AsyncMock
+                ) as mock_send,
+            ):
+                await consumer._handle_subscribe(
+                    {"type": "subscribe", "id": None, "payload": "bad"}
+                )
+                mock_close.assert_called_once_with(code=4401)
+                mock_send.assert_not_called()
+
+        asyncio.run(test_subscribe())
+
+    def test_subscribe_rejects_unexpected_non_stream_result(self) -> None:
+        """Verify unexpected setup results complete without registering a task."""
+        consumer = GraphQLSubscriptionConsumer()
+        consumer.connection_acknowledged = True
+        consumer.connection_params = {}
+        consumer.scope = {}
+        consumer.active_subscriptions = {}
+        schema = MagicMock()
+        schema.graphql_schema = MagicMock()
+        document = MagicMock()
+
+        async def test_subscribe() -> None:
+            with (
+                patch(
+                    "general_manager.api.graphql_subscription_consumer.GraphQL.get_schema",
+                    return_value=schema,
+                ),
+                patch.object(
+                    GraphQLSubscriptionConsumer,
+                    "_schema_has_no_subscription",
+                    return_value=False,
+                ),
+                patch(
+                    "general_manager.api.graphql_subscription_consumer.parse",
+                    return_value=document,
+                ),
+                patch(
+                    "general_manager.api.graphql_subscription_consumer.subscribe",
+                    new_callable=AsyncMock,
+                    return_value=object(),
+                ),
+                patch.object(
+                    consumer, "_send_protocol_message", new_callable=AsyncMock
+                ) as mock_send,
+            ):
+                await consumer._handle_subscribe(
+                    {
+                        "type": "subscribe",
+                        "id": "sub1",
+                        "payload": {"query": "subscription { field }"},
+                    }
+                )
+
+                self.assertEqual(
+                    [call.args[0] for call in mock_send.call_args_list],
+                    [
+                        {
+                            "type": "error",
+                            "id": "sub1",
+                            "payload": [
+                                {
+                                    "message": "GraphQL subscription did not return an async iterator."
+                                }
+                            ],
+                        },
+                        {"type": "complete", "id": "sub1"},
+                    ],
+                )
+                self.assertEqual(consumer.active_subscriptions, {})
+
+        asyncio.run(test_subscribe())
 
 
 class GraphQLSubscriptionConsumerBuildContextTests(unittest.TestCase):
@@ -355,6 +452,118 @@ class GraphQLSubscriptionConsumerCloseIteratorTests(unittest.TestCase):
             await GraphQLSubscriptionConsumer._close_iterator(mock_iterator)
 
         asyncio.run(test_close())
+
+    def test_close_iterator_propagates_aclose_error(self) -> None:
+        """Verify _close_iterator propagates errors raised by aclose."""
+
+        class CloseFailedError(RuntimeError):
+            """Raised by the test iterator when cleanup fails."""
+
+        class FailingCloseIterator:
+            async def aclose(self) -> None:
+                raise CloseFailedError
+
+        async def test_close() -> None:
+            with self.assertRaises(CloseFailedError):
+                await GraphQLSubscriptionConsumer._close_iterator(
+                    FailingCloseIterator()
+                )
+
+        asyncio.run(test_close())
+
+    def test_close_iterator_propagates_non_awaitable_aclose_result(self) -> None:
+        """Verify callable non-awaitable aclose results fail when awaited."""
+
+        class NonAwaitableCloseIterator:
+            def aclose(self) -> None:
+                return None
+
+        async def test_close() -> None:
+            with self.assertRaises(TypeError):
+                await GraphQLSubscriptionConsumer._close_iterator(
+                    NonAwaitableCloseIterator()
+                )
+
+        asyncio.run(test_close())
+
+
+class GraphQLSubscriptionConsumerStreamSubscriptionTests(unittest.TestCase):
+    """Test subscription stream lifecycle cleanup."""
+
+    def test_stream_subscription_sends_recoverable_iteration_error(self) -> None:
+        """Verify recoverable iteration errors are sent before completion."""
+
+        class BadStreamError(ValueError):
+            """Raised by the test iterator for recoverable stream failures."""
+
+            def __init__(self) -> None:
+                super().__init__("bad stream")
+
+        class RecoverableFailureIterator:
+            def __aiter__(self) -> "RecoverableFailureIterator":
+                return self
+
+            async def __anext__(self) -> object:
+                raise BadStreamError
+
+            async def aclose(self) -> None:
+                return None
+
+        consumer = GraphQLSubscriptionConsumer()
+        iterator = RecoverableFailureIterator()
+        consumer.active_subscriptions = {"sub1": object()}
+
+        async def test_stream() -> None:
+            with patch.object(
+                consumer, "_send_protocol_message", new_callable=AsyncMock
+            ) as mock_send:
+                await consumer._stream_subscription("sub1", iterator)
+                self.assertEqual(
+                    mock_send.call_args_list[0].args[0],
+                    {
+                        "type": "error",
+                        "id": "sub1",
+                        "payload": [{"message": "bad stream"}],
+                    },
+                )
+                self.assertEqual(
+                    mock_send.call_args_list[1].args[0],
+                    {"type": "complete", "id": "sub1"},
+                )
+                self.assertNotIn("sub1", consumer.active_subscriptions)
+
+        asyncio.run(test_stream())
+
+    def test_stream_subscription_cleans_registry_when_aclose_raises(self) -> None:
+        """Verify iterator close failures still send complete and clear active state."""
+
+        class CloseFailedError(RuntimeError):
+            """Raised by the test iterator when cleanup fails."""
+
+        class ClosingFailureIterator:
+            def __aiter__(self) -> "ClosingFailureIterator":
+                return self
+
+            async def __anext__(self) -> object:
+                raise StopAsyncIteration
+
+            async def aclose(self) -> None:
+                raise CloseFailedError
+
+        consumer = GraphQLSubscriptionConsumer()
+        iterator = ClosingFailureIterator()
+        consumer.active_subscriptions = {"sub1": object()}
+
+        async def test_stream() -> None:
+            with patch.object(
+                consumer, "_send_protocol_message", new_callable=AsyncMock
+            ) as mock_send:
+                with self.assertRaises(CloseFailedError):
+                    await consumer._stream_subscription("sub1", iterator)
+                mock_send.assert_called_once_with({"type": "complete", "id": "sub1"})
+                self.assertNotIn("sub1", consumer.active_subscriptions)
+
+        asyncio.run(test_stream())
 
 
 class GraphQLSubscriptionConsumerStopSubscriptionTests(unittest.TestCase):

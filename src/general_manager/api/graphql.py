@@ -8,16 +8,16 @@ from copy import deepcopy
 import re
 from types import UnionType
 from typing import (
-    Any,
     AsyncIterator,
     Callable,
     ClassVar,
     Generator,
     Iterable,
-    Literal,
     Mapping,
     TYPE_CHECKING,
-    Type,
+    SupportsIndex,
+    SupportsInt,
+    TypeAlias,
     TypeVar,
     Union,
     cast,
@@ -25,10 +25,11 @@ from typing import (
     get_origin,
 )
 
-import graphene  # type: ignore[import]
+import graphene
 from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import models
 from django.utils.module_loading import import_string
 
 from general_manager.bucket.base_bucket import Bucket
@@ -62,13 +63,14 @@ from general_manager.api.graphql_errors import (
     InvalidMeasurementValueError,  # noqa: F401  # re-exported
     UnsupportedGraphQLFieldTypeError,  # noqa: F401  # re-exported
     InvalidGeneralManagerClassError,
+    GrapheneBaseTypeClass,
     MissingChannelLayerError,  # noqa: F401  # re-exported
     MissingManagerIdentifierError,  # noqa: F401  # re-exported
     EXPECTED_MANAGER_ERRORS,  # noqa: F401  # re-exported
     SUSPICIOUS_MANAGER_ERRORS,  # noqa: F401  # re-exported
-    HANDLED_MANAGER_ERRORS,
-    MeasurementType,
-    MeasurementScalar,
+    HANDLED_MANAGER_ERRORS as HANDLED_MANAGER_ERRORS,
+    MeasurementType as MeasurementType,
+    MeasurementScalar as MeasurementScalar,
     PageInfo,
     get_read_permission_filter,  # noqa: F401  # re-exported
     map_field_to_graphene_base_type as _map_field_to_graphene_base_type_fn,
@@ -121,8 +123,11 @@ from general_manager.api.registry import GraphQLRegistry
 
 if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
+    from general_manager.permission.base_permission import PermissionConstraint
 
 logger = get_logger("api.graphql")
+
+IntCoercible: TypeAlias = str | bytes | bytearray | SupportsInt | SupportsIndex
 SUBSCRIPTION_HYDRATION_ERRORS: tuple[type[Exception], ...] = (
     *HANDLED_MANAGER_ERRORS,
     ObjectDoesNotExist,
@@ -130,6 +135,20 @@ SUBSCRIPTION_HYDRATION_ERRORS: tuple[type[Exception], ...] = (
 
 
 GeneralManagerT = TypeVar("GeneralManagerT", bound=GeneralManager)
+GraphQLFieldMap = dict[str, object]
+GraphQLFilterMapping = dict[str, object]
+GraphQLFilterInput = Mapping[str, object] | str | None
+GraphQLSearchFilterInput = (
+    GraphQLFilterMapping | str | list[GraphQLFilterMapping] | None
+)
+GraphQLIdentification = dict[str, object]
+GraphQLResolver = Callable[..., object]
+GraphQLListGetter = Callable[[object, bool], Bucket[GeneralManager] | None]
+GraphQLFilterNormalizer = Callable[
+    [GraphQLFilterMapping],
+    dict[str, GraphQLFilterMapping],
+]
+GraphQLMutationMap = dict[str, type[graphene.Mutation]]
 
 
 class GraphQL:
@@ -138,13 +157,15 @@ class GraphQL:
     _query_class: ClassVar[type[graphene.ObjectType] | None] = None
     _mutation_class: ClassVar[type[graphene.ObjectType] | None] = None
     _subscription_class: ClassVar[type[graphene.ObjectType] | None] = None
-    _mutations: ClassVar[dict[str, Any]] = {}
-    _query_fields: ClassVar[dict[str, Any]] = {}
-    _subscription_fields: ClassVar[dict[str, Any]] = {}
+    _mutations: ClassVar[GraphQLMutationMap] = {}
+    _query_fields: ClassVar[GraphQLFieldMap] = {}
+    _subscription_fields: ClassVar[GraphQLFieldMap] = {}
     _page_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     _subscription_payload_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
-    graphql_type_registry: ClassVar[dict[str, type]] = {}
-    graphql_filter_type_registry: ClassVar[dict[str, type]] = {}
+    graphql_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
+    graphql_filter_type_registry: ClassVar[
+        dict[str, type[graphene.InputObjectType]]
+    ] = {}
     graphql_capability_type_registry: ClassVar[
         dict[str, type[graphene.ObjectType]]
     ] = {}
@@ -155,7 +176,12 @@ class GraphQL:
 
     @staticmethod
     def _get_channel_layer(strict: bool = False) -> BaseChannelLayer | None:
-        """Retrieve the channel layer. See ``graphql_subscriptions.get_channel_layer_safe``."""
+        """
+        Compatibility wrapper for ``graphql_subscriptions.get_channel_layer_safe(strict)``.
+
+        Returns the configured Channels layer or ``None``; raises
+        ``MissingChannelLayerError`` when ``strict`` is true and no layer exists.
+        """
         return _get_channel_layer_fn(strict)
 
     @classmethod
@@ -219,14 +245,23 @@ class GraphQL:
 
     @staticmethod
     def _group_name(
-        manager_class: type[GeneralManager], identification: dict[str, Any]
+        manager_class: type[GeneralManager], identification: GraphQLIdentification
     ) -> str:
-        """Build channel group name. See ``graphql_subscriptions.group_name``."""
+        """
+        Compatibility wrapper for ``graphql_subscriptions.group_name(manager_class, identification)``.
+
+        Returns the deterministic instance channel group name for the manager
+        class and identification mapping.
+        """
         return _group_name_fn(manager_class, identification)
 
     @staticmethod
     def _class_group_name(manager_class: type[GeneralManager]) -> str:
-        """Build class-wide channel group name."""
+        """
+        Compatibility wrapper for ``graphql_subscriptions.class_group_name(manager_class)``.
+
+        Returns the deterministic class-wide channel group name.
+        """
         return _class_group_name_fn(manager_class)
 
     @staticmethod
@@ -235,16 +270,26 @@ class GraphQL:
         channel_name: str,
         queue: asyncio.Queue[str],
     ) -> None:
-        """Listen for subscription events. See ``graphql_subscriptions.channel_listener``."""
+        """
+        Compatibility wrapper for ``graphql_subscriptions.channel_listener(channel_layer, channel_name, queue)``.
+
+        Enqueues non-null action values from ``gm.subscription.event`` messages
+        and exits silently when cancelled.
+        """
         await _channel_listener_fn(channel_layer, channel_name, queue)
 
     @staticmethod
     async def _channel_message_listener(
         channel_layer: BaseChannelLayer,
         channel_name: str,
-        queue: asyncio.Queue[dict[str, Any]],
+        queue: asyncio.Queue[GraphQLFieldMap],
     ) -> None:
-        """Listen for complete subscription event messages."""
+        """
+        Compatibility wrapper for ``graphql_subscriptions.channel_message_listener(channel_layer, channel_name, queue)``.
+
+        Enqueues complete ``gm.subscription.event`` messages with a present
+        action and exits silently when cancelled.
+        """
         await _channel_message_listener_fn(channel_layer, channel_name, queue)
 
     @classmethod
@@ -252,7 +297,16 @@ class GraphQL:
         """
         Register GraphQL mutation classes for a GeneralManager and store them in the class mutation registry.
 
-        Generates and registers create/update/delete mutation classes when the manager's Interface advertises support for the corresponding operation—either by overriding the InterfaceBase method or by listing the operation in Interface.get_capabilities(). Each registered mutation is stored on the class-level registry (_mutations) under the names `create<ManagerName>`, `update<ManagerName>`, and `delete<ManagerName>` and exposes a `success` flag plus a field named for the manager that returns the affected manager instance when available.
+        If the manager class has no `Interface`, this method returns without
+        registering anything. Otherwise, it generates create/update/delete
+        mutation classes when the manager's Interface advertises support for the
+        corresponding operation: either by overriding the `InterfaceBase` method
+        or by listing the operation in `Interface.get_capabilities()`. Each
+        successfully generated mutation is stored on the class-level registry
+        (`_mutations`) under the names `create<ManagerName>`,
+        `update<ManagerName>`, and `delete<ManagerName>`. If a mutation factory
+        returns `None`, that mutation kind is skipped and later supported kinds
+        are still considered.
 
         Parameters:
             generalManagerClass (type[GeneralManager]): The GeneralManager subclass whose Interface determines which mutations are created and registered.
@@ -290,54 +344,66 @@ class GraphQL:
 
         if _supports("create", "create"):
             create_name = f"create{generalManagerClass.__name__}"
-            cls._mutations[create_name] = cls.generate_create_mutation_class(
+            create_mutation = cls.generate_create_mutation_class(
                 generalManagerClass, default_return_values
             )
-            logger.debug(
-                "registered graphql mutation",
-                context={
-                    "manager": generalManagerClass.__name__,
-                    "mutation": create_name,
-                },
-            )
+            if create_mutation is not None:
+                cls._mutations[create_name] = create_mutation
+                logger.debug(
+                    "registered graphql mutation",
+                    context={
+                        "manager": generalManagerClass.__name__,
+                        "mutation": create_name,
+                    },
+                )
 
         if _supports("update", "update"):
             update_name = f"update{generalManagerClass.__name__}"
-            cls._mutations[update_name] = cls.generate_update_mutation_class(
+            update_mutation = cls.generate_update_mutation_class(
                 generalManagerClass, default_return_values
             )
-            logger.debug(
-                "registered graphql mutation",
-                context={
-                    "manager": generalManagerClass.__name__,
-                    "mutation": update_name,
-                },
-            )
+            if update_mutation is not None:
+                cls._mutations[update_name] = update_mutation
+                logger.debug(
+                    "registered graphql mutation",
+                    context={
+                        "manager": generalManagerClass.__name__,
+                        "mutation": update_name,
+                    },
+                )
 
         if _supports("delete", "delete"):
             delete_name = f"delete{generalManagerClass.__name__}"
-            cls._mutations[delete_name] = cls.generate_delete_mutation_class(
+            delete_mutation = cls.generate_delete_mutation_class(
                 generalManagerClass, default_return_values
             )
-            logger.debug(
-                "registered graphql mutation",
-                context={
-                    "manager": generalManagerClass.__name__,
-                    "mutation": delete_name,
-                },
-            )
+            if delete_mutation is not None:
+                cls._mutations[delete_name] = delete_mutation
+                logger.debug(
+                    "registered graphql mutation",
+                    context={
+                        "manager": generalManagerClass.__name__,
+                        "mutation": delete_name,
+                    },
+                )
 
     @classmethod
     def create_graphql_interface(
-        cls, generalManagerClass: Type[GeneralManager]
+        cls, generalManagerClass: type[GeneralManager]
     ) -> None:
         """
         Create and register a Graphene ObjectType for a GeneralManager class and expose its queries and subscription.
 
-        Builds a Graphene type by mapping the manager's Interface attributes and GraphQLProperties to Graphene fields and resolvers, registers the resulting type and manager in the GraphQL registries, and adds corresponding query and subscription fields to the schema.
+        If the manager class has no `Interface`, this method returns without
+        registering anything. Otherwise it builds a Graphene type by mapping the
+        manager's Interface attributes and GraphQLProperties to Graphene fields
+        and resolvers, registers the resulting type and manager in the GraphQL
+        registries, adds corresponding list/detail query fields, adds
+        subscription fields, and adds a `capabilities` field when the manager
+        exposes GraphQL permission capabilities.
 
         Parameters:
-            generalManagerClass (Type[GeneralManager]): The manager class whose Interface and GraphQLProperties are used to generate Graphene fields and resolvers.
+            generalManagerClass (type[GeneralManager]): The manager class whose Interface and GraphQLProperties are used to generate Graphene fields and resolvers.
         """
         interface_cls: InterfaceBase | None = getattr(
             generalManagerClass, "Interface", None
@@ -351,7 +417,7 @@ class GraphQL:
         )
 
         graphene_type_name = f"{generalManagerClass.__name__}Type"
-        fields: dict[str, Any] = {}
+        fields: GraphQLFieldMap = {}
 
         # Map Attribute Types to Graphene Fields
         for field_name, field_info in interface_cls.get_attribute_types().items():
@@ -379,8 +445,8 @@ class GraphQL:
                 type_args = [t for t in get_args(raw_hint) if t is not type(None)]
 
             if origin in (list, tuple, set):
-                element = type_args[0] if type_args else Any
-                if isinstance(element, type) and issubclass(element, GeneralManager):  # type: ignore
+                element = type_args[0] if type_args else object
+                if isinstance(element, type) and issubclass(element, GeneralManager):
                     graphene_field = graphene.List(
                         lambda elem=element: GraphQL.graphql_type_registry[
                             elem.__name__
@@ -388,15 +454,15 @@ class GraphQL:
                     )
                 else:
                     base_type = GraphQL._map_field_to_graphene_base_type(
-                        cast(type, element if isinstance(element, type) else str)
+                        element if isinstance(element, type) else str
                     )
                     graphene_field = graphene.List(base_type)
-                resolved_type = cast(
-                    type, element if isinstance(element, type) else str
-                )
+                resolved_type = element if isinstance(element, type) else str
             else:
                 resolved_type = (
-                    cast(type, type_args[0]) if type_args else cast(type, raw_hint)
+                    cast(type[object], type_args[0])
+                    if type_args
+                    else cast(type[object], raw_hint)
                 )
                 graphene_field = cls._map_field_to_graphene_read(
                     resolved_type, attr_name
@@ -451,7 +517,7 @@ class GraphQL:
         if type_name in cls.graphql_capability_type_registry:
             return cls.graphql_capability_type_registry[type_name]
 
-        fields: dict[str, Any] = {}
+        fields: GraphQLFieldMap = {}
         for declaration in declarations:
             fields[declaration.name] = graphene.Boolean(
                 required=True,
@@ -477,12 +543,22 @@ class GraphQL:
 
     @classmethod
     def register_current_user_capabilities(cls) -> None:
-        """Register the optional provider-backed ``me`` GraphQL field."""
+        """
+        Register the optional provider-backed ``me`` GraphQL field.
+
+        The field is added only when `GRAPHQL_GLOBAL_CAPABILITIES_PROVIDER`
+        resolves to a provider class. Provider `graphql_fields` entries may be
+        concrete Graphene fields or Python types that map through the base
+        GraphQL scalar mapper. For each field, a provider method named
+        `resolve_<field>` is called when present; otherwise the attribute is read
+        from the current request user. Provider `graphql_capabilities` entries
+        that are not `GraphQLPermissionCapability` instances are ignored.
+        """
         provider = cls._get_current_user_capability_provider()
         if provider is None:
             return
 
-        me_fields: dict[str, Any] = {}
+        me_fields: GraphQLFieldMap = {}
         configured_fields = getattr(provider, "graphql_fields", {}) or {}
         for field_name, field_type in configured_fields.items():
             if isinstance(field_type, graphene.Field):
@@ -493,12 +569,12 @@ class GraphQL:
                 )()
 
             def field_resolver(
-                user: Any,
+                user: object,
                 info: GraphQLResolveInfo,
                 *,
-                provider_instance: Any = provider,
+                provider_instance: object = provider,
                 configured_name: str = field_name,
-            ) -> Any:
+            ) -> object:
                 resolver = getattr(
                     provider_instance,
                     f"resolve_{configured_name}",
@@ -522,8 +598,8 @@ class GraphQL:
             me_fields["capabilities"] = graphene.Field(capability_type, required=True)
 
             def resolve_capabilities(
-                user: Any, info: GraphQLResolveInfo
-            ) -> dict[str, Any]:
+                user: object, info: GraphQLResolveInfo
+            ) -> GraphQLFieldMap:
                 del info
                 return {"instance": user}
 
@@ -532,7 +608,7 @@ class GraphQL:
         me_type = type("Me", (graphene.ObjectType,), me_fields)
         cls._query_fields["me"] = graphene.Field(me_type)
 
-        def resolve_me(_root: Any, info: GraphQLResolveInfo) -> Any:
+        def resolve_me(_root: object, info: GraphQLResolveInfo) -> object:
             return getattr(info.context, "user", None)
 
         cls._query_fields["resolve_me"] = resolve_me
@@ -546,7 +622,7 @@ class GraphQL:
         if type_name in cls.graphql_capability_type_registry:
             return cls.graphql_capability_type_registry[type_name]
 
-        fields: dict[str, Any] = {}
+        fields: GraphQLFieldMap = {}
         for declaration in declarations:
             fields[declaration.name] = graphene.Boolean(
                 required=True,
@@ -554,7 +630,7 @@ class GraphQL:
             )
 
             def resolver(
-                parent: dict[str, Any],
+                parent: GraphQLFieldMap,
                 info: GraphQLResolveInfo,
                 *,
                 capability: GraphQLPermissionCapability = declaration,
@@ -571,16 +647,16 @@ class GraphQL:
         return capability_type
 
     @staticmethod
-    def _get_current_user_capability_provider() -> Any | None:
+    def _get_current_user_capability_provider() -> object | None:
         provider_path = get_setting("GRAPHQL_GLOBAL_CAPABILITIES_PROVIDER")
         if not provider_path:
             return None
-        provider_class = import_string(provider_path)
-        return provider_class()
+        provider_factory = cast(Callable[[], object], import_string(str(provider_path)))
+        return provider_factory()
 
     @staticmethod
     def _sort_by_options(
-        generalManagerClass: Type[GeneralManager],
+        generalManagerClass: type[GeneralManager],
     ) -> type[graphene.Enum] | None:
         """
         Create a Graphene Enum of sortable field names for a GeneralManager subclass.
@@ -662,23 +738,23 @@ class GraphQL:
     @classmethod
     def _parse_search_filters(
         cls,
-        filters: dict[str, Any] | str | list[dict[str, Any]] | None,
-    ) -> dict[str, Any]:
+        filters: GraphQLSearchFilterInput,
+    ) -> GraphQLFilterMapping:
         """Normalise search filters. See ``graphql_search.parse_search_filters``."""
         return _parse_search_filters_fn(filters)
 
     @staticmethod
     def _merge_permission_filters(
-        filters: dict[str, Any] | None,
-        permission_filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]],
-    ) -> list[dict[str, Any]] | dict[str, Any] | None:
+        filters: GraphQLFilterMapping | None,
+        permission_filters: list["PermissionConstraint"],
+    ) -> list[GraphQLFilterMapping] | GraphQLFilterMapping | None:
         """Merge permission filters. See ``graphql_search.merge_permission_filters``."""
         return _merge_permission_filters_fn(filters, permission_filters)
 
     @staticmethod
     def _matches_filters(
         instance: GeneralManager,
-        filters: dict[str, Any],
+        filters: GraphQLFilterMapping,
         *,
         empty_is_match: bool = True,
     ) -> bool:
@@ -714,10 +790,11 @@ class GraphQL:
 
     @staticmethod
     def _create_filter_options(
-        field_type: Type[GeneralManager],
+        field_type: type[GeneralManager],
     ) -> type[graphene.InputObjectType] | None:
         """Build filter InputObjectType for *field_type*. See ``graphql_search.create_filter_options``."""
-        relation_depth = int(get_setting("GRAPHQL_FILTER_RELATION_DEPTH", 1) or 0)
+        raw_relation_depth = get_setting("GRAPHQL_FILTER_RELATION_DEPTH", 1)
+        relation_depth = int(cast(IntCoercible, raw_relation_depth) or 0)
         return _create_filter_options_fn(
             field_type,
             GraphQL.graphql_filter_type_registry,
@@ -729,28 +806,37 @@ class GraphQL:
     def _map_field_to_graphene_read(
         field_type: type,
         field_name: str,
-        field_info: Mapping[str, Any] | None = None,
-    ) -> Any:
+        field_info: Mapping[str, object] | None = None,
+    ) -> object:
         """
         Map a field type and name to the appropriate Graphene field for reads.
+
+        `Measurement` types map to the `MeasurementType` object wrapper with a
+        `target_unit` argument. `GeneralManager` relations map to a single
+        Graphene field, while relation fields whose name ends with `_list` map to
+        a paginated list field with `reverse`, `page`, `page_size`, `group_by`,
+        generated relation filter/exclude inputs when available, and `sort_by`
+        when sortable fields exist. Other types map through the scalar base
+        mapper and may use `field_info["graphql_scalar"]` for supported scalar
+        overrides such as `"bigint"`.
 
         Parameters:
             field_type (type): Python type declared on the interface.
             field_name (str): Attribute name being exposed.
-            field_info (Mapping[str, Any] | None): Optional attribute metadata
+            field_info (Mapping[str, object] | None): Optional attribute metadata
                 from ``Interface.get_attribute_types()`` used to influence the
                 GraphQL mapping, for example by selecting a custom scalar via
                 keys such as ``graphql_scalar``. When omitted, the default
                 scalar inference for ``field_type`` is used.
 
         Returns:
-            Any: Graphene field or type configured for the attribute.
+            object: Graphene field or type configured for the attribute.
         """
         if safe_issubclass(field_type, Measurement):
             return graphene.Field(MeasurementType, target_unit=graphene.String())
         elif safe_issubclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
-                attributes: dict[str, Any] = {
+                attributes: GraphQLFieldMap = {
                     "reverse": graphene.Boolean(),
                     "page": graphene.Int(),
                     "page_size": graphene.Int(),
@@ -783,34 +869,35 @@ class GraphQL:
     @staticmethod
     def _map_field_to_graphene_base_type(
         field_type: type,
-        field_info: Mapping[str, Any] | None = None,
-    ) -> Type[Any]:
+        field_info: Mapping[str, object] | None = None,
+    ) -> GrapheneBaseTypeClass:
         """Thin wrapper - see :func:`general_manager.api.graphql_errors.map_field_to_graphene_base_type`."""
-        graphql_scalar = field_info.get("graphql_scalar") if field_info else None
+        graphql_scalar = (
+            cast(str | None, field_info.get("graphql_scalar")) if field_info else None
+        )
         return _map_field_to_graphene_base_type_fn(field_type, graphql_scalar)
 
     @staticmethod
-    def _parse_input(input_val: dict[str, Any] | str | None) -> dict[str, Any]:
+    def _parse_input(input_val: GraphQLFilterInput) -> GraphQLFilterMapping:
         """Normalise a filter/exclude input into a plain dict. See ``graphql_resolvers.parse_input``."""
         return _parse_input_fn(input_val)
 
     @staticmethod
     def _normalize_filter_input(
-        field_type: Type[GeneralManager],
-        filter_input: dict[str, Any],
-    ) -> dict[str, dict[str, Any]]:
+        field_type: type[GeneralManager],
+        filter_input: GraphQLFilterMapping,
+    ) -> dict[str, GraphQLFilterMapping]:
         """Flatten nested relation filters. See ``graphql_search.normalize_filter_input``."""
         return _normalize_filter_input_fn(field_type, filter_input)
 
     @staticmethod
     def _apply_query_parameters(
         queryset: Bucket[GeneralManager],
-        filter_input: dict[str, Any] | str | None,
-        exclude_input: dict[str, Any] | str | None,
+        filter_input: GraphQLFilterInput,
+        exclude_input: GraphQLFilterInput,
         sort_by: graphene.Enum | None,
         reverse: bool,
-        filter_normalizer: Callable[[dict[str, Any]], dict[str, dict[str, Any]]]
-        | None = None,
+        filter_normalizer: GraphQLFilterNormalizer | None = None,
     ) -> Bucket[GeneralManager]:
         """Apply filter/exclude/sort to *queryset*. See ``graphql_resolvers.apply_query_parameters``."""
         return _apply_query_parameters_fn(
@@ -840,9 +927,9 @@ class GraphQL:
 
     @staticmethod
     def _create_list_resolver(
-        base_getter: Callable[[Any, bool], Any],
+        base_getter: GraphQLListGetter,
         fallback_manager_class: type[GeneralManager],
-    ) -> Callable[..., Any]:
+    ) -> GraphQLResolver:
         """Build a list-field resolver. See ``graphql_resolvers.create_list_resolver``."""
         return _create_list_resolver_fn(
             base_getter,
@@ -867,17 +954,17 @@ class GraphQL:
         return _apply_grouping_fn(queryset, group_by)
 
     @staticmethod
-    def _create_measurement_resolver(field_name: str) -> Callable[..., Any]:
+    def _create_measurement_resolver(field_name: str) -> GraphQLResolver:
         """Build a Measurement-field resolver. See ``graphql_resolvers.create_measurement_resolver``."""
         return _create_measurement_resolver_fn(field_name)
 
     @staticmethod
-    def _create_normal_resolver(field_name: str) -> Callable[..., Any]:
+    def _create_normal_resolver(field_name: str) -> GraphQLResolver:
         """Build a scalar-field resolver. See ``graphql_resolvers.create_normal_resolver``."""
         return _create_normal_resolver_fn(field_name)
 
     @classmethod
-    def _create_resolver(cls, field_name: str, field_type: type) -> Callable[..., Any]:
+    def _create_resolver(cls, field_name: str, field_type: type) -> GraphQLResolver:
         """Dispatch to the appropriate resolver factory. See ``graphql_resolvers.create_resolver``."""
         return _create_resolver_fn(field_name, field_type, _normalize_filter_input_fn)
 
@@ -915,8 +1002,8 @@ class GraphQL:
 
     @classmethod
     def _build_identification_arguments(
-        cls, generalManagerClass: Type[GeneralManager]
-    ) -> dict[str, Any]:
+        cls, generalManagerClass: type[GeneralManager]
+    ) -> GraphQLFieldMap:
         """
         Build the GraphQL arguments required to uniquely identify an instance of the given manager class.
 
@@ -926,9 +1013,9 @@ class GraphQL:
             generalManagerClass: GeneralManager subclass whose Interface.input_fields are used to derive identification arguments.
 
         Returns:
-            dict[str, Any]: Mapping of argument name to a Graphene Argument suitable for identifying a single manager instance.
+            dict[str, object]: Mapping of argument name to a Graphene Argument suitable for identifying a single manager instance.
         """
-        identification_fields: dict[str, Any] = {}
+        identification_fields: GraphQLFieldMap = {}
         for (
             input_field_name,
             input_field,
@@ -951,14 +1038,16 @@ class GraphQL:
 
     @classmethod
     def _add_queries_to_schema(
-        cls, graphene_type: type, generalManagerClass: Type[GeneralManager]
+        cls,
+        graphene_type: type[graphene.ObjectType],
+        generalManagerClass: type[GeneralManager],
     ) -> None:
         """
         Registers list and detail GraphQL query fields for the given manager type into the class query registry.
 
         Parameters:
             graphene_type (type): The Graphene ObjectType that represents the manager's GraphQL type.
-            generalManagerClass (Type[GeneralManager]): The GeneralManager subclass to expose via queries.
+            generalManagerClass (type[GeneralManager]): The GeneralManager subclass to expose via queries.
 
         Raises:
             TypeError: If `generalManagerClass` is not a subclass of GeneralManager.
@@ -967,12 +1056,12 @@ class GraphQL:
             raise InvalidGeneralManagerClassError(generalManagerClass)
 
         if not hasattr(cls, "_query_fields"):
-            cls._query_fields = cast(dict[str, Any], {})
+            cls._query_fields = {}
 
         # resolver and field for the list query
         manager_field_name = pascal_to_snake(generalManagerClass.__name__)
         list_field_name = f"{manager_field_name}_list"
-        attributes: dict[str, Any] = {
+        attributes: GraphQLFieldMap = {
             "reverse": graphene.Boolean(),
             "page": graphene.Int(),
             "page_size": graphene.Int(),
@@ -983,7 +1072,10 @@ class GraphQL:
         )
         from general_manager.interface.orm_interface import OrmInterfaceBase
 
-        interface_cls = cast(type[OrmInterfaceBase], generalManagerClass.Interface)
+        interface_cls = cast(
+            type[OrmInterfaceBase[models.Model]],
+            generalManagerClass.Interface,
+        )
         if is_soft_delete_enabled(interface_cls):
             attributes["include_inactive"] = graphene.Boolean()
         filter_options = cls._create_filter_options(generalManagerClass)
@@ -999,7 +1091,10 @@ class GraphQL:
         )
         list_field = graphene.Field(page_type, **attributes)
 
-        def _all_items(_: Any, include_inactive: bool) -> Any:
+        def _all_items(
+            _: object,
+            include_inactive: bool,
+        ) -> Bucket[GeneralManager] | None:
             """
             Return all instances for the associated GeneralManager class.
 
@@ -1020,7 +1115,7 @@ class GraphQL:
         item_field = graphene.Field(graphene_type, **identification_fields)
 
         def resolver(
-            self: GeneralManager, info: GraphQLResolveInfo, **identification: dict
+            self: GeneralManager, info: GraphQLResolveInfo, **identification: object
         ) -> GeneralManager:
             """
             Instantiate and return a GeneralManager for the provided identification arguments.
@@ -1057,14 +1152,26 @@ class GraphQL:
     def _prime_graphql_properties(
         instance: GeneralManager, property_names: Iterable[str] | None = None
     ) -> None:
-        """Prime GraphQL property evaluation. See ``graphql_subscriptions.prime_graphql_properties``."""
+        """
+        Compatibility wrapper for ``graphql_subscriptions.prime_graphql_properties(instance, property_names)``.
+
+        Reads selected GraphQL properties on ``instance`` to trigger dependency
+        tracking; unknown requested names are ignored and property exceptions
+        propagate.
+        """
         _prime_graphql_properties_fn(instance, property_names)
 
     @classmethod
     def _dependencies_from_tracker(
         cls, dependency_records: Iterable[Dependency]
-    ) -> list[tuple[type[GeneralManager], dict[str, Any]]]:
-        """Resolve dependency records. See ``graphql_subscriptions.dependencies_from_tracker``."""
+    ) -> list[tuple[type[GeneralManager], GraphQLIdentification]]:
+        """
+        Compatibility wrapper for ``graphql_subscriptions.dependencies_from_tracker(dependency_records, manager_registry)``.
+
+        Uses ``GraphQL.manager_registry`` and returns accepted
+        ``(manager_class, identification)`` pairs from identification dependency
+        records.
+        """
         return _dependencies_from_tracker_fn(dependency_records, cls.manager_registry)
 
     @classmethod
@@ -1073,7 +1180,12 @@ class GraphQL:
         info: GraphQLResolveInfo,
         manager_class: type[GeneralManager],
     ) -> set[str]:
-        """Get selected subscription property names. See ``graphql_subscriptions.subscription_property_names``."""
+        """
+        Compatibility wrapper for ``graphql_subscriptions.subscription_property_names(info, manager_class, normalize_graphql_name)``.
+
+        Uses ``GraphQL._normalize_graphql_name`` and returns selected
+        GraphQLProperty names under the subscription payload's ``item`` field.
+        """
         return _subscription_property_names_fn(
             info, manager_class, cls._normalize_graphql_name
         )
@@ -1084,8 +1196,13 @@ class GraphQL:
         manager_class: type[GeneralManager],
         instance: GeneralManager,
         dependency_records: Iterable[Dependency] | None = None,
-    ) -> list[tuple[type[GeneralManager], dict[str, Any]]]:
-        """Resolve subscription dependencies. See ``graphql_subscriptions.resolve_subscription_dependencies``."""
+    ) -> list[tuple[type[GeneralManager], GraphQLIdentification]]:
+        """
+        Compatibility wrapper for ``graphql_subscriptions.resolve_subscription_dependencies(manager_class, instance, manager_registry, dependency_records)``.
+
+        Uses ``GraphQL.manager_registry`` and returns deduplicated dependency
+        channel targets for a subscription instance.
+        """
         return _resolve_subscription_dependencies_fn(
             manager_class, instance, cls.manager_registry, dependency_records
         )
@@ -1093,12 +1210,17 @@ class GraphQL:
     @staticmethod
     def _instantiate_manager(
         manager_class: type[GeneralManager],
-        identification: dict[str, Any],
+        identification: GraphQLIdentification,
         *,
         collect_dependencies: bool = False,
         property_names: Iterable[str] | None = None,
     ) -> tuple[GeneralManager, set[Dependency]]:
-        """Instantiate manager with optional dependency capture. See ``graphql_subscriptions.instantiate_manager``."""
+        """
+        Compatibility wrapper for ``graphql_subscriptions.instantiate_manager(manager_class, identification, collect_dependencies, property_names)``.
+
+        Constructs the manager and optionally captures dependency tracker
+        records while priming selected GraphQL properties.
+        """
         return _instantiate_manager_fn(
             manager_class,
             identification,
@@ -1110,7 +1232,7 @@ class GraphQL:
     def _add_subscription_field(
         cls,
         graphene_type: type[graphene.ObjectType],
-        generalManagerClass: Type[GeneralManager],
+        generalManagerClass: type[GeneralManager],
     ) -> None:
         """
         Register a GraphQL subscription field that publishes change events for the given manager type.
@@ -1122,7 +1244,7 @@ class GraphQL:
 
         Parameters:
             graphene_type (type[graphene.ObjectType]): GraphQL ObjectType representing the manager's item type used as the payload `item` field.
-            generalManagerClass (Type[GeneralManager]): The GeneralManager subclass whose changes the subscription will publish.
+            generalManagerClass (type[GeneralManager]): The GeneralManager subclass whose changes the subscription will publish.
 
         Notes:
         - The subscribe function requires an available channel layer and subscribes the caller to channel groups derived from the instance identification and its resolved dependencies.
@@ -1159,9 +1281,9 @@ class GraphQL:
         class_subscription_field = graphene.Field(payload_type)
 
         async def subscribe(
-            _root: Any,
+            _root: object,
             info: GraphQLResolveInfo,
-            **identification: Any,
+            **identification: object,
         ) -> AsyncIterator[SubscriptionEvent]:
             """
             Stream subscription events for a specific manager instance identified by the provided arguments.
@@ -1175,13 +1297,11 @@ class GraphQL:
                 AsyncIterator[SubscriptionEvent]: An asynchronous iterator that first yields a snapshot event and then yields update events; each event's `item` is the manager instance or `None` if it could not be instantiated.
             """
             identification_copy = deepcopy(identification)
-            property_names = cls._subscription_property_names(
-                info, cast(type[GeneralManager], generalManagerClass)
-            )
+            property_names = cls._subscription_property_names(info, generalManagerClass)
             try:
                 instance, dependency_records = await asyncio.to_thread(
                     cls._instantiate_manager,
-                    cast(type[GeneralManager], generalManagerClass),
+                    generalManagerClass,
                     identification_copy,
                     collect_dependencies=True,
                     property_names=property_names,
@@ -1200,12 +1320,12 @@ class GraphQL:
 
             group_names = {
                 cls._group_name(
-                    cast(type[GeneralManager], generalManagerClass),
+                    generalManagerClass,
                     instance.identification,
                 )
             }
             dependencies = cls._resolve_subscription_dependencies(
-                cast(type[GeneralManager], generalManagerClass),
+                generalManagerClass,
                 instance,
                 dependency_records,
             )
@@ -1239,7 +1359,7 @@ class GraphQL:
                         try:
                             item, _ = await asyncio.to_thread(
                                 cls._instantiate_manager,
-                                cast(type[GeneralManager], generalManagerClass),
+                                generalManagerClass,
                                 identification_copy,
                                 property_names=property_names,
                             )
@@ -1259,7 +1379,7 @@ class GraphQL:
         def resolve(
             payload: SubscriptionEvent,
             info: GraphQLResolveInfo,
-            **_: Any,
+            **_: object,
         ) -> SubscriptionEvent:
             """
             Passes a subscription payload through unchanged.
@@ -1274,9 +1394,9 @@ class GraphQL:
             return payload
 
         async def subscribe_class(
-            _root: Any,
+            _root: object,
             info: GraphQLResolveInfo,
-            **_: Any,
+            **_: object,
         ) -> AsyncIterator[SubscriptionEvent]:
             """
             Stream future authorized change events for any instance of a manager class.
@@ -1293,10 +1413,8 @@ class GraphQL:
             except RuntimeError as exc:
                 raise GraphQLError(str(exc)) from exc
             channel_name = cast(str, await channel_layer.new_channel())
-            queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-            group_name = cls._class_group_name(
-                cast(type[GeneralManager], generalManagerClass)
-            )
+            queue: asyncio.Queue[GraphQLFieldMap] = asyncio.Queue()
+            group_name = cls._class_group_name(generalManagerClass)
             await channel_layer.group_add(group_name, channel_name)
             listener_task = asyncio.create_task(
                 cls._channel_message_listener(channel_layer, channel_name, queue)
@@ -1308,15 +1426,17 @@ class GraphQL:
                         message = await queue.get()
                         if message.get("manager") != generalManagerClass.__name__:
                             continue
-                        action = cast(str | None, message.get("action"))
+                        action = message.get("action")
                         identification = message.get("identification")
-                        if action is None or not isinstance(identification, dict):
+                        if not isinstance(action, str) or not isinstance(
+                            identification, dict
+                        ):
                             continue
                         identification_copy = deepcopy(identification)
                         try:
                             item, _ = await asyncio.to_thread(
                                 cls._instantiate_manager,
-                                cast(type[GeneralManager], generalManagerClass),
+                                generalManagerClass,
                                 identification_copy,
                             )
                         except SUBSCRIPTION_HYDRATION_ERRORS:
@@ -1345,18 +1465,21 @@ class GraphQL:
     @classmethod
     def create_write_fields(
         cls,
-        interface_cls: InterfaceBase,
+        interface_cls: type[InterfaceBase],
         *,
         require_fields: bool = True,
-    ) -> dict[str, Any]:
+    ) -> GraphQLFieldMap:
         """Thin wrapper - see :func:`general_manager.api.graphql_mutations.create_write_fields`."""
-        return _create_write_fields_fn(interface_cls, require_fields=require_fields)
+        return cast(
+            GraphQLFieldMap,
+            _create_write_fields_fn(interface_cls, require_fields=require_fields),
+        )
 
     @classmethod
     def generate_create_mutation_class(
         cls,
         generalManagerClass: type[GeneralManager],
-        default_return_values: dict[str, Any],
+        default_return_values: GraphQLFieldMap,
     ) -> type[graphene.Mutation] | None:
         """Thin wrapper - see :func:`general_manager.api.graphql_mutations.generate_create_mutation_class`."""
         return _generate_create_mutation_class_fn(
@@ -1367,7 +1490,7 @@ class GraphQL:
     def generate_update_mutation_class(
         cls,
         generalManagerClass: type[GeneralManager],
-        default_return_values: dict[str, Any],
+        default_return_values: GraphQLFieldMap,
     ) -> type[graphene.Mutation] | None:
         """Thin wrapper - see :func:`general_manager.api.graphql_mutations.generate_update_mutation_class`."""
         return _generate_update_mutation_class_fn(
@@ -1378,7 +1501,7 @@ class GraphQL:
     def generate_delete_mutation_class(
         cls,
         generalManagerClass: type[GeneralManager],
-        default_return_values: dict[str, Any],
+        default_return_values: GraphQLFieldMap,
     ) -> type[graphene.Mutation] | None:
         """Thin wrapper - see :func:`general_manager.api.graphql_mutations.generate_delete_mutation_class`."""
         return _generate_delete_mutation_class_fn(
@@ -1397,13 +1520,21 @@ class GraphQL:
         instance: GeneralManager | None,
         action: str,
         previous_instance: GeneralManager | None = None,
-        identification: dict[str, Any] | None = None,
-        **_: Any,
+        identification: GraphQLIdentification | None = None,
+        **_: object,
     ) -> None:
         """
         Send a "gm.subscription.event" message to the channel group corresponding to a changed GeneralManager instance.
 
-        If the provided instance is a registered GeneralManager and a channel layer is configured, publish a message containing the given action to the channel group derived from the manager class and the instance's identification. If the instance is None, the manager type is not registered, or no channel layer is available, the function returns without side effects.
+        If the provided instance is a registered GeneralManager and a channel
+        layer is configured, publish a message containing the given action to the
+        instance channel group and the class-wide channel group. Identification
+        comes from the provided `identification` mapping when supplied,
+        otherwise from the changed instance, and is deep-copied before dispatch.
+        If the instance is `None`, the manager type is not registered, or no
+        channel layer is available, the function returns without dispatching.
+        Group dispatch failures are logged and do not stop attempts for the
+        remaining target groups.
 
         Parameters:
             sender (type[GeneralManager] | GeneralManager): The signal sender; either a GeneralManager subclass or an instance.

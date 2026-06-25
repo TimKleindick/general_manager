@@ -23,9 +23,9 @@ and ``get_registry_snapshot()``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-import graphene  # type: ignore[import]
+import graphene
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
@@ -39,6 +39,10 @@ class GraphQLRegistry:
     All fields mirror the ClassVars on the ``GraphQL`` class.  An instance can
     be obtained at any time via ``GraphQL.get_registry_snapshot()``, or a fresh
     empty instance can be used to reset state via ``GraphQL.reset_registry()``.
+    Snapshot dictionaries are shallow copies: mutating the dictionary on a
+    snapshot does not change the ``GraphQL`` class registry, but the generated
+    Graphene classes and field/resolver objects inside those dictionaries are
+    shared.
     """
 
     # Schema assembly output
@@ -48,17 +52,21 @@ class GraphQLRegistry:
     schema: graphene.Schema | None = None
 
     # Per-manager registries
-    mutations: dict[str, Any] = field(default_factory=dict)
-    query_fields: dict[str, Any] = field(default_factory=dict)
-    subscription_fields: dict[str, Any] = field(default_factory=dict)
+    mutations: dict[str, object] = field(default_factory=dict)
+    query_fields: dict[str, object] = field(default_factory=dict)
+    subscription_fields: dict[str, object] = field(default_factory=dict)
     page_type_registry: dict[str, type[graphene.ObjectType]] = field(
         default_factory=dict
     )
     subscription_payload_registry: dict[str, type[graphene.ObjectType]] = field(
         default_factory=dict
     )
-    graphql_type_registry: dict[str, type] = field(default_factory=dict)
-    graphql_filter_type_registry: dict[str, type] = field(default_factory=dict)
+    graphql_type_registry: dict[str, type[graphene.ObjectType]] = field(
+        default_factory=dict
+    )
+    graphql_filter_type_registry: dict[str, type[graphene.InputObjectType]] = field(
+        default_factory=dict
+    )
     graphql_capability_type_registry: dict[str, type[graphene.ObjectType]] = field(
         default_factory=dict
     )

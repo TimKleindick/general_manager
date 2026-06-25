@@ -318,6 +318,66 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         self.assertEqual(payload["action"], "create")
         self.assertEqual(payload["item"]["name"], "Visible")
 
+    def test_class_subscription_suppresses_non_string_actions(self) -> None:
+        employee = self.Employee.create(name="Malformed", creator_id=self.user.id)
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        async def fake_listener(
+            _channel_layer: object,
+            _channel_name: str,
+            queue: asyncio.Queue[dict[str, object]],
+        ) -> None:
+            await queue.put(
+                {
+                    "type": "gm.subscription.event",
+                    "manager": "Employee",
+                    "action": 123,
+                    "identification": employee.identification,
+                }
+            )
+            await queue.put(
+                {
+                    "type": "gm.subscription.event",
+                    "manager": "Employee",
+                    "action": "update",
+                    "identification": employee.identification,
+                }
+            )
+            await asyncio.sleep(10)
+
+        async def run_subscription() -> object:
+            with patch.object(
+                GraphQL,
+                "_channel_message_listener",
+                new=fake_listener,
+            ):
+                generator = await schema.subscribe(subscription, context_value=context)
+                if hasattr(generator, "errors"):
+                    raise AssertionError(generator.errors)
+                try:
+                    return await generator.__anext__()
+                finally:
+                    await generator.aclose()
+
+        event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        payload = event.data["onEmployeeClassChange"]
+        self.assertEqual(payload["action"], "update")
+        self.assertEqual(payload["item"]["name"], "Malformed")
+
     def test_class_subscription_emits_update_events(self) -> None:
         employee = self.Employee.create(name="Before", creator_id=self.user.id)
         schema = self._build_schema()

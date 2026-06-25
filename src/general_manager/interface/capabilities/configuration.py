@@ -1,47 +1,87 @@
-"""Declarative helpers for composing interface capabilities."""
+"""
+Declarative helpers for composing interface capabilities.
+
+The public exports are ``CapabilityConfigEntry``, ``CapabilitySet``,
+``InterfaceCapabilityConfig``, ``flatten_capability_entries``, and
+``iter_capability_entries``.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, Mapping, Sequence, Tuple, TypeAlias
+from typing import TypeAlias
 
 from general_manager.interface.capabilities.base import Capability
+
+CapabilityOptions: TypeAlias = Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
 class InterfaceCapabilityConfig:
-    """Configuration describing how to instantiate a specific capability."""
+    """
+    Declarative entry describing one capability handler construction.
+
+    ``handler`` is the capability class to instantiate. ``options=None`` means
+    no keyword arguments are supplied; a mapping value is converted to a plain
+    ``dict`` immediately before construction and expanded as keyword arguments.
+    The config object is immutable, but the original mapping is not copied until
+    :meth:`instantiate` is called.
+    """
 
     handler: type[Capability]
-    options: Mapping[str, Any] | None = None
+    options: CapabilityOptions | None = None
 
     def instantiate(self) -> Capability:
-        """
-        Instantiate the configured capability using the stored handler and options.
+        """Instantiate the configured capability handler.
 
         Returns:
-            Capability: An instance produced by calling the configured handler. If `options` is falsy, the handler is called with no arguments; otherwise `options` are passed as keyword arguments.
+            Capability instance produced by calling ``handler``. ``options=None``
+            calls the handler with no keyword arguments; any supplied mapping,
+            including an empty or otherwise falsey mapping, is copied into a
+            mutable ``dict`` and expanded as keyword arguments.
+
+        Raises:
+            TypeError: If ``handler`` rejects the supplied keyword arguments or
+                is otherwise not constructible. Exceptions from mapping
+                iteration while converting ``options`` with ``dict(...)``
+                propagate unchanged.
         """
-        if not self.options:
+        if self.options is None:
             return self.handler()
         # Copy options into a mutable dict to avoid mutating caller state.
         return self.handler(**dict(self.options))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class CapabilitySet:
-    """Named bundle of capability configurations."""
+    """
+    Named immutable bundle of concrete capability configuration entries.
+
+    The constructor accepts any iterable of :class:`InterfaceCapabilityConfig`
+    entries and stores it as a tuple. Entries are not copied deeply and are not
+    validated beyond normal iteration; invalid values supplied at runtime remain
+    invalid values in the tuple.
+    """
 
     label: str
-    entries: Tuple[InterfaceCapabilityConfig, ...]
+    entries: tuple[InterfaceCapabilityConfig, ...]
 
-    def __post_init__(self) -> None:
-        """
-        Ensure the `entries` field is stored as a tuple.
+    def __init__(
+        self, label: str, entries: Iterable[InterfaceCapabilityConfig]
+    ) -> None:
+        """Store bundle entries as an immutable tuple.
 
-        Runs after object initialization to convert `entries` into a tuple, enforcing an immutable sequence of capability configurations.
+        Args:
+            label: Human-readable bundle label used for documentation and
+                debugging.
+            entries: Iterable of concrete capability configuration entries.
+
+        Raises:
+            TypeError: If ``entries`` cannot be iterated.
         """
-        object.__setattr__(self, "entries", tuple(self.entries))
+        object.__setattr__(self, "label", label)
+        object.__setattr__(self, "entries", tuple(entries))
 
 
 CapabilityConfigEntry: TypeAlias = CapabilitySet | InterfaceCapabilityConfig
@@ -50,14 +90,23 @@ CapabilityConfigEntry: TypeAlias = CapabilitySet | InterfaceCapabilityConfig
 def flatten_capability_entries(
     entries: Sequence[CapabilityConfigEntry] | Iterable[CapabilityConfigEntry],
 ) -> tuple[InterfaceCapabilityConfig, ...]:
-    """
-    Expand capability bundles and return a flat tuple of capability configurations.
+    """Expand capability bundles into a flat immutable tuple.
 
-    Parameters:
-        entries: An iterable of CapabilitySet or InterfaceCapabilityConfig; any CapabilitySet encountered is expanded into its contained InterfaceCapabilityConfig entries.
+    Args:
+        entries: Iterable of ``InterfaceCapabilityConfig`` values and
+            ``CapabilitySet`` bundles. Bundles are expanded one level into their
+            configured entries. The iterable is consumed once.
 
     Returns:
-        A tuple of InterfaceCapabilityConfig containing all concrete capability configurations with bundles expanded.
+        Tuple of concrete capability configurations in input order. Entries are
+        not deduplicated or validated; repeated capability handlers remain
+        repeated entries. Invalid non-``CapabilitySet`` runtime values are
+        appended unchanged if callers bypass static typing.
+
+    Raises:
+        TypeError: If ``entries`` cannot be iterated.
+        Exception: Exceptions raised while iterating ``entries`` propagate
+            unchanged.
     """
     flattened: list[InterfaceCapabilityConfig] = []
     for entry in entries:
@@ -71,17 +120,22 @@ def flatten_capability_entries(
 def iter_capability_entries(
     entries: Sequence[CapabilityConfigEntry] | Iterable[CapabilityConfigEntry],
 ) -> Iterator[InterfaceCapabilityConfig]:
-    """
-    Yield capability configurations, expanding any CapabilitySet bundles.
+    """Yield concrete capability configurations in order.
 
-    Parameters:
-        entries: An iterable or sequence of CapabilityConfigEntry (either an InterfaceCapabilityConfig
-            or a CapabilitySet). If an entry is a CapabilitySet, its contained InterfaceCapabilityConfig
-            items are yielded individually.
+    Args:
+        entries: Iterable of ``InterfaceCapabilityConfig`` values and
+            ``CapabilitySet`` bundles. Bundles are expanded one level into their
+            configured entries. Iteration stays lazy for the outer iterable.
 
     Returns:
-        Iterator[InterfaceCapabilityConfig]: An iterator that yields InterfaceCapabilityConfig items,
-        with CapabilitySet entries expanded into their contained configurations.
+        Iterator over concrete capability configuration entries. Entries are not
+        deduplicated or validated. Invalid non-``CapabilitySet`` runtime values
+        are yielded unchanged if callers bypass static typing.
+
+    Raises:
+        TypeError: If ``entries`` cannot be iterated.
+        Exception: Exceptions raised while iterating ``entries`` propagate
+            unchanged.
     """
     for entry in entries:
         if isinstance(entry, CapabilitySet):

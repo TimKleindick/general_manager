@@ -10,6 +10,7 @@ from django.db import connection, models
 from django.test import TransactionTestCase
 
 from general_manager.interface import ExistingModelInterface
+from general_manager.interface.interfaces import existing_model as existing_model_module
 from general_manager.interface.capabilities.existing_model import (
     ExistingModelResolutionCapability,
 )
@@ -488,9 +489,7 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         class TestInterface(ExistingModelInterface):
             model = self.model
 
-        # Should be able to get field types
-        field_type = TestInterface.get_field_type("name")
-        self.assertIsNotNone(field_type)
+        self.assertIs(TestInterface.get_field_type("name"), models.CharField)
 
     def test_resolve_model_class_caches_model(self) -> None:
         """
@@ -505,6 +504,20 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         self.assertIs(TestInterface._model, self.model)
         self.assertIs(TestInterface.model, self.model)
         self.assertIs(resolved, self.model)
+
+    def test_ensure_model_loaded_uses_subclass_model_not_inherited_cache(self) -> None:
+        class ParentInterface(ExistingModelInterface):
+            model = self.model
+
+        ParentInterface._resolve_model_class()
+
+        class ChildInterface(ParentInterface):
+            model = User
+
+        self.assertNotIn("_model", ChildInterface.__dict__)
+        self.assertIs(ChildInterface._ensure_model_loaded(), User)
+        self.assertIs(ChildInterface._model, User)
+        self.assertIs(ChildInterface.model, User)
 
     def test_resolve_model_class_with_invalid_string_reference(self) -> None:
         """
@@ -556,6 +569,9 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         Tests that ExistingModelInterface has correct _interface_type.
         """
         self.assertEqual(ExistingModelInterface._interface_type, "existing")
+
+    def test_existing_model_module_exports_interface(self) -> None:
+        self.assertEqual(existing_model_module.__all__, ["ExistingModelInterface"])
 
     def test_pre_create_handles_factory_in_attrs(self) -> None:
         """

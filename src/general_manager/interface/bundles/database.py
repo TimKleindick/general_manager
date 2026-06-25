@@ -31,7 +31,7 @@ from general_manager.interface.capabilities.read_only import (
 )
 
 
-ORM_PERSISTENCE_CAPABILITIES = CapabilitySet(
+ORM_PERSISTENCE_CAPABILITIES: CapabilitySet = CapabilitySet(
     label="orm_persistence_core",
     entries=(
         InterfaceCapabilityConfig(OrmPersistenceSupportCapability),
@@ -45,7 +45,7 @@ ORM_PERSISTENCE_CAPABILITIES = CapabilitySet(
     ),
 )
 
-ORM_WRITABLE_CAPABILITIES = CapabilitySet(
+ORM_WRITABLE_CAPABILITIES: CapabilitySet = CapabilitySet(
     label="orm_writable_core",
     entries=(
         *ORM_PERSISTENCE_CAPABILITIES.entries,
@@ -56,7 +56,7 @@ ORM_WRITABLE_CAPABILITIES = CapabilitySet(
     ),
 )
 
-EXISTING_MODEL_CAPABILITIES = CapabilitySet(
+EXISTING_MODEL_CAPABILITIES: CapabilitySet = CapabilitySet(
     label="existing_model_core",
     entries=(
         *ORM_WRITABLE_CAPABILITIES.entries,
@@ -64,7 +64,7 @@ EXISTING_MODEL_CAPABILITIES = CapabilitySet(
     ),
 )
 
-READ_ONLY_CAPABILITIES = CapabilitySet(
+READ_ONLY_CAPABILITIES: CapabilitySet = CapabilitySet(
     label="read_only_core",
     entries=(
         InterfaceCapabilityConfig(OrmPersistenceSupportCapability),

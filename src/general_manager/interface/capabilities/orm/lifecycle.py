@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.db import models
 from general_manager.factory.auto_factory import AutoFactory
@@ -21,6 +21,7 @@ from .support import get_support_capability, is_soft_delete_enabled
 
 if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.orm_interface import OrmInterfaceBase
+    from general_manager.manager.general_manager import GeneralManager
 
 
 class OrmLifecycleCapability(BaseCapability):
@@ -32,11 +33,13 @@ class OrmLifecycleCapability(BaseCapability):
         self,
         *,
         name: str,
-        attrs: dict[str, Any],
-        interface: type["OrmInterfaceBase"],
+        attrs: dict[str, object],
+        interface: type["OrmInterfaceBase[models.Model]"],
         base_model_class: type[GeneralManagerBasisModel],
     ) -> tuple[
-        dict[str, Any], type["OrmInterfaceBase"], type[GeneralManagerBasisModel]
+        dict[str, object],
+        type["OrmInterfaceBase[models.Model]"],
+        type[GeneralManagerBasisModel],
     ]:
         """
         Prepare ORM model, concrete interface class, and factory before the parent class is created.
@@ -45,15 +48,23 @@ class OrmLifecycleCapability(BaseCapability):
 
         Parameters:
             name (str): The name to use for the generated model and factory.
-            attrs (dict[str, Any]): The attribute dict for the class being created; will be updated with "Interface", "Factory", and "_interface_type".
-            interface (type[OrmInterfaceBase]): The interface class that defines model fields and optional Meta/Factory configuration.
+            attrs: The attribute dict for the class being created; will be updated with "Interface", "Factory", and "_interface_type".
+            interface (type[OrmInterfaceBase[models.Model]]): The interface class that defines model fields and optional Meta/Factory configuration.
             base_model_class (type[GeneralManagerBasisModel]): Base model class to derive the generated model from (may be adjusted for soft-delete support).
 
         Returns:
-            tuple[dict[str, Any], type[OrmInterfaceBase], type[GeneralManagerBasisModel]]:
+            tuple[dict[str, object], type[OrmInterfaceBase[models.Model]], type[GeneralManagerBasisModel]]:
                 - The possibly-modified attrs mapping.
                 - The concrete interface subclass bound to the generated model.
                 - The generated Django model class.
+
+        Raises:
+            Exception: Lifecycle setup errors are not wrapped. Invalid Django
+                model bases or fields, invalid nested Meta attributes, invalid
+                Factory definitions, rule setup errors, and custom field
+                discovery errors propagate from Django, factory_boy, rule
+                construction, or the custom field implementation that raised
+                them.
         """
         model_fields, meta_class = self._collect_model_fields(interface)
         model_fields["__module__"] = attrs.get("__module__")
@@ -75,7 +86,7 @@ class OrmLifecycleCapability(BaseCapability):
         interface_cls = self._build_interface_class(interface, model, use_soft_delete)
         attrs["Interface"] = interface_cls
 
-        manager_factory = cast(type | None, attrs.pop("Factory", None))
+        manager_factory = cast(type[object] | None, attrs.pop("Factory", None))
         factory_definition = manager_factory or getattr(interface, "Factory", None)
         attrs["Factory"] = self._build_factory_class(
             name=name,
@@ -89,8 +100,8 @@ class OrmLifecycleCapability(BaseCapability):
     def post_create(
         self,
         *,
-        new_class: type,
-        interface_class: type["OrmInterfaceBase"],
+        new_class: type["GeneralManager"],
+        interface_class: type["OrmInterfaceBase[models.Model]"],
         model: type[GeneralManagerBasisModel] | None,
     ) -> None:
         """
@@ -105,20 +116,24 @@ class OrmLifecycleCapability(BaseCapability):
         """
         if model is None:
             return
-        interface_class._parent_class = new_class  # type: ignore[attr-defined]
-        model._general_manager_class = new_class  # type: ignore[attr-defined]
+        interface_class._parent_class = new_class
+        model._general_manager_class = new_class
         support = get_support_capability(interface_class)
-        new_class.objects = support.get_manager(interface_class)  # type: ignore[attr-defined]
+        type.__setattr__(new_class, "objects", support.get_manager(interface_class))
         if is_soft_delete_enabled(interface_class):
-            new_class.all_objects = support.get_manager(  # type: ignore[attr-defined]
-                interface_class,
-                only_active=False,
+            type.__setattr__(
+                new_class,
+                "all_objects",
+                support.get_manager(
+                    interface_class,
+                    only_active=False,
+                ),
             )
 
     def _collect_model_fields(
         self,
-        interface: type["OrmInterfaceBase"],
-    ) -> tuple[dict[str, Any], type | None]:
+        interface: type["OrmInterfaceBase[models.Model]"],
+    ) -> tuple[dict[str, object], type[object] | None]:
         """
         Collect model field definitions and an optional Meta class from the given interface.
 
@@ -126,12 +141,12 @@ class OrmLifecycleCapability(BaseCapability):
             interface (type[OrmInterfaceBase]): Interface class to inspect for model field definitions and an optional nested `Meta` class.
 
         Returns:
-            model_fields (dict[str, Any]): Mapping of attribute names to values to be used as model fields; excludes dunder attributes, a nested `Factory`, and any names returned by custom field handling, and includes custom fields discovered on the interface.
+            model_fields: Mapping of attribute names to values to be used as model fields; excludes dunder attributes, a nested `Factory`, and any names returned by custom field handling, and includes custom fields discovered on the interface.
             meta_class (type | None): The nested `Meta` class found on the interface, or `None` if none is present.
         """
         custom_fields, ignore_fields = self._handle_custom_fields(interface)
-        model_fields: dict[str, Any] = {}
-        meta_class: type | None = None
+        model_fields: dict[str, object] = {}
+        meta_class: type[object] | None = None
         for attr_name, attr_value in interface.__dict__.items():
             if attr_name.startswith("__"):
                 continue
@@ -148,8 +163,8 @@ class OrmLifecycleCapability(BaseCapability):
 
     def _handle_custom_fields(
         self,
-        interface: type["OrmInterfaceBase"],
-    ) -> tuple[dict[str, Any], list[str]]:
+        interface: type["OrmInterfaceBase[models.Model]"],
+    ) -> tuple[dict[str, models.Field[object, object]], list[str]]:
         """
         Collect custom Django model Field attributes defined on an interface (or its attached model) and produce a mapping of those fields plus related ignore markers.
 
@@ -160,7 +175,7 @@ class OrmLifecycleCapability(BaseCapability):
             tuple[dict[str, django.db.models.Field], list[str]]: A 2-tuple where the first element is a mapping from attribute name to the discovered `Field` instance, and the second element is a list of generated ignore names in the form `<field_name>_value` and `<field_name>_unit`.
         """
         model = getattr(interface, "_model", None) or interface
-        field_names: dict[str, models.Field] = {}
+        field_names: dict[str, models.Field[object, object]] = {}
         ignore: list[str] = []
         for attr_name, attr_value in model.__dict__.items():
             if isinstance(attr_value, models.Field):
@@ -195,26 +210,31 @@ class OrmLifecycleCapability(BaseCapability):
 
     def _apply_meta_configuration(
         self,
-        meta_class: type | None,
-    ) -> tuple[type | None, bool, list[Any] | None]:
+        meta_class: type[object] | None,
+    ) -> tuple[type[object] | None, bool, list[Rule["GeneralManager"]] | None]:
         """
         Extract soft-delete and rules configuration from a Meta class and remove those attributes from it.
+
+        This mutates the original nested Meta class by deleting
+        ``use_soft_delete`` and ``rules`` after extracting their values. The
+        generated Django model receives the remaining Meta attributes, while
+        soft-delete and rules are applied through lifecycle-specific wiring.
 
         Parameters:
             meta_class (type | None): Optional Meta class provided on an interface; may contain `use_soft_delete` and/or `rules` attributes.
 
         Returns:
-            tuple[type | None, bool, list[Any] | None]: A tuple of (meta_class, use_soft_delete, rules) where `meta_class` is the original Meta class with any extracted attributes removed, `use_soft_delete` is `true` if the Meta specified soft-delete, `false` otherwise, and `rules` is the list of rules from Meta or `None` if not present.
+            tuple[type | None, bool, list[Rule[GeneralManager]] | None]: A tuple of (meta_class, use_soft_delete, rules) where `meta_class` is the original Meta class with any extracted attributes removed, `use_soft_delete` is `true` if the Meta specified soft-delete, `false` otherwise, and `rules` is the list of rules from Meta or `None` if not present.
         """
         use_soft_delete = False
-        rules: list[Any] | None = None
+        rules: list[Rule["GeneralManager"]] | None = None
         if meta_class is None:
             return None, use_soft_delete, rules
         if hasattr(meta_class, "use_soft_delete"):
             use_soft_delete = meta_class.use_soft_delete
             delattr(meta_class, "use_soft_delete")
         if hasattr(meta_class, "rules"):
-            rules = cast(list[Rule], meta_class.rules)
+            rules = cast(list[Rule["GeneralManager"]], meta_class.rules)
             delattr(meta_class, "rules")
         return meta_class, use_soft_delete, rules
 
@@ -252,9 +272,9 @@ class OrmLifecycleCapability(BaseCapability):
         self,
         model: type[GeneralManagerBasisModel],
         *,
-        meta_class: type | None,
+        meta_class: type[object] | None,
         use_soft_delete: bool,
-        rules: list[Any] | None,
+        rules: list[Rule["GeneralManager"]] | None,
     ) -> None:
         """
         Apply final metadata and soft-delete configuration to a generated model class.
@@ -265,20 +285,20 @@ class OrmLifecycleCapability(BaseCapability):
             model (type[GeneralManagerBasisModel]): The generated ORM model class to modify.
             meta_class (type | None): The Meta class discovered during model construction; if None no metadata is applied.
             use_soft_delete (bool): Whether soft-delete semantics should be enabled on the model.
-            rules (list[Any] | None): Validation or business rules to attach to the model metadata; ignored if None.
+            rules: Validation or business rules to attach to the model metadata; ignored if None.
         """
         if meta_class and rules:
-            model._meta.rules = rules  # type: ignore[attr-defined]
-            model.full_clean = get_full_clean_methode(model)  # type: ignore[assignment]
+            object.__setattr__(model._meta, "rules", rules)
+            type.__setattr__(model, "full_clean", get_full_clean_methode(model))
         if meta_class and use_soft_delete:
-            model._meta.use_soft_delete = use_soft_delete  # type: ignore[attr-defined]
+            object.__setattr__(model._meta, "use_soft_delete", use_soft_delete)
 
     def _build_interface_class(
         self,
-        interface: type["OrmInterfaceBase"],
+        interface: type["OrmInterfaceBase[models.Model]"],
         model: type[GeneralManagerBasisModel],
         use_soft_delete: bool,
-    ) -> type["OrmInterfaceBase"]:
+    ) -> type["OrmInterfaceBase[models.Model]"]:
         """
         Create a concrete interface subclass bound to a generated ORM model.
 
@@ -292,20 +312,23 @@ class OrmLifecycleCapability(BaseCapability):
         Returns:
             type: A new interface subclass bound to `model`.
         """
-        interface_cls = type(interface.__name__, (interface,), {})
-        interface_cls._model = model  # type: ignore[attr-defined]
-        interface_cls._soft_delete_default = use_soft_delete  # type: ignore[attr-defined]
-        interface_cls._field_descriptors = None  # type: ignore[attr-defined]
+        interface_cls = cast(
+            type["OrmInterfaceBase[models.Model]"],
+            type(interface.__name__, (interface,), {}),
+        )
+        interface_cls._model = model
+        type.__setattr__(interface_cls, "_soft_delete_default", use_soft_delete)
+        interface_cls._field_descriptors = None
         return interface_cls
 
     def _build_factory_class(
         self,
         *,
         name: str,
-        factory_definition: type | None,
-        interface_cls: type["OrmInterfaceBase"],
+        factory_definition: type[object] | None,
+        interface_cls: type["OrmInterfaceBase[models.Model]"],
         model: type[GeneralManagerBasisModel],
-    ) -> type[AutoFactory]:
+    ) -> type[AutoFactory[models.Model]]:
         """
         Create a Factory subclass bound to the given interface and model.
 
@@ -318,11 +341,14 @@ class OrmLifecycleCapability(BaseCapability):
         Returns:
             type[AutoFactory]: A new Factory class (subclass of `AutoFactory`) named "<name>Factory" with the prepared attributes and Meta.model set to `model`.
         """
-        factory_attributes: dict[str, Any] = {}
+        factory_attributes: dict[str, object] = {}
         if factory_definition:
             for attr_name, attr_value in factory_definition.__dict__.items():
                 if not attr_name.startswith("__"):
                     factory_attributes[attr_name] = attr_value
         factory_attributes["interface"] = interface_cls
         factory_attributes["Meta"] = type("Meta", (), {"model": model})
-        return type(f"{name}Factory", (AutoFactory,), factory_attributes)
+        return cast(
+            type[AutoFactory[models.Model]],
+            type(f"{name}Factory", (AutoFactory,), factory_attributes),
+        )

@@ -1,22 +1,22 @@
 """Decorator utilities for building GraphQL mutations from manager functions."""
 
 import inspect
+from collections.abc import Sequence
 from typing import (
-    Any,
     Callable,
-    Optional,
     TypeVar,
     Union,
     List,
     Tuple,
     get_origin,
     get_args,
-    Type,
     get_type_hints,
-    cast,
+    TypeGuard,
     TypeAliasType,
+    Protocol,
+    cast,
 )
-import graphene  # type: ignore[import]
+import graphene
 from graphql import GraphQLResolveInfo
 
 from general_manager.api.graphql import GraphQL, HANDLED_MANAGER_ERRORS
@@ -28,7 +28,18 @@ from types import UnionType
 
 
 FuncT = TypeVar("FuncT", bound=Callable[..., object])
+type GrapheneFieldMap = dict[str, object]
+type MutationAnnotations = dict[str, object]
+type MutationKwargs = dict[str, object]
+type MutationData = dict[str, object]
 _manager_input_type_registry: dict[str, type[graphene.InputObjectType]] = {}
+
+
+class ManagerMutationInputField(Protocol):
+    """Input descriptor attributes needed to build custom mutation arguments."""
+
+    type: type[object]
+    required: bool
 
 
 class MissingParameterTypeHintError(TypeError):
@@ -92,18 +103,20 @@ class DuplicateMutationOutputNameError(ValueError):
         )
 
 
-def _is_general_manager_type(annotation: object) -> bool:
+def _is_general_manager_type(annotation: object) -> TypeGuard[type[GeneralManager]]:
     """Return True for class annotations that subclass GeneralManager."""
     return inspect.isclass(annotation) and issubclass(annotation, GeneralManager)
 
 
 def _manager_input_fields(
     manager_class: type[GeneralManager],
-) -> dict[str, Any]:
-    """Extract Interface.input_fields from a manager class."""
+) -> dict[str, ManagerMutationInputField]:
+    """Return the manager interface input-field mapping when it is dict-shaped."""
     interface = getattr(manager_class, "Interface", None)
     input_fields = getattr(interface, "input_fields", {})
-    return dict(input_fields) if isinstance(input_fields, dict) else {}
+    if not isinstance(input_fields, dict):
+        return {}
+    return cast(dict[str, ManagerMutationInputField], dict(input_fields))
 
 
 def _uses_single_id_input(manager_class: type[GeneralManager]) -> bool:
@@ -131,14 +144,14 @@ def _manager_input_type_name(manager_class: type[GeneralManager]) -> str:
 def _get_or_create_manager_input_type(
     manager_class: type[GeneralManager],
 ) -> type[graphene.InputObjectType]:
-    """Build and cache a graphene InputObjectType for nested manager inputs."""
+    """Build and cache a Graphene input object for multi-input manager arguments."""
     cache_key = _manager_input_type_identifier(manager_class)
     cached = _manager_input_type_registry.get(cache_key)
     if cached is not None:
         return cached
 
     type_name = _manager_input_type_name(manager_class)
-    fields: dict[str, Any] = {}
+    fields: GrapheneFieldMap = {}
     for input_name, input_field in _manager_input_fields(manager_class).items():
         field_type = input_field.type
         required = input_field.required
@@ -163,9 +176,9 @@ def _get_or_create_manager_input_type(
 
 def _build_manager_argument_field(
     manager_class: type[GeneralManager],
-    **kwargs: Any,
-) -> Any:
-    """Return graphene.ID or a nested manager input argument."""
+    **kwargs: object,
+) -> object:
+    """Return ``ID`` for single-id managers or a nested input argument otherwise."""
     if _uses_single_id_input(manager_class):
         return graphene.ID(**kwargs)
     return graphene.Argument(_get_or_create_manager_input_type(manager_class), **kwargs)
@@ -173,9 +186,9 @@ def _build_manager_argument_field(
 
 def _normalize_manager_argument(
     manager_class: type[GeneralManager],
-    value: Any,
+    value: object,
 ) -> GeneralManager | None:
-    """Normalize None, instances, dict input, or ID input into a manager."""
+    """Normalize ``None``, manager instances, mapping input, or ID input."""
     if value is None or isinstance(value, manager_class):
         return value
     if isinstance(value, dict):
@@ -184,9 +197,9 @@ def _normalize_manager_argument(
 
 
 def _normalize_mutation_arguments(
-    annotations: dict[str, Any],
-    kwargs: dict[str, object],
-) -> dict[str, Any]:
+    annotations: MutationAnnotations,
+    kwargs: MutationKwargs,
+) -> MutationKwargs:
     """Normalize manager-typed arguments and lists using resolver annotations."""
     normalized = dict(kwargs)
     for name, annotation in annotations.items():
@@ -199,7 +212,7 @@ def _normalize_mutation_arguments(
             if _is_general_manager_type(inner) and normalized[name] is not None:
                 normalized[name] = [
                     _normalize_manager_argument(inner, item)
-                    for item in cast(list[Any], normalized[name])
+                    for item in _sequence_argument(normalized[name])
                 ]
             continue
 
@@ -211,20 +224,78 @@ def _normalize_mutation_arguments(
     return normalized
 
 
+def _sequence_argument(value: object) -> Sequence[object]:
+    """Return a GraphQL list argument as a sequence for manager normalization."""
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return value
+    return (value,)
+
+
 def graph_ql_mutation(
     _func: FuncT | type[MutationPermission] | None = None,
-    permission: Optional[Type[MutationPermission]] = None,
+    permission: type[MutationPermission] | None = None,
 ) -> FuncT | Callable[[FuncT], FuncT]:
     """
-    Decorator that converts a function into a GraphQL mutation class for use with Graphene, automatically generating argument and output fields from the function's signature and type annotations.
+    Register a synchronous function as a Graphene GraphQL mutation.
 
-    The decorated function must provide type hints for all parameters (except `info`) and a return annotation. The decorator dynamically constructs a mutation class with appropriate Graphene fields, enforces permission checks if a `permission` class is provided, and registers the mutation for use in the GraphQL API.
+    Supported forms are ``@graph_ql_mutation``, ``@graph_ql_mutation()``,
+    ``@graph_ql_mutation(SomePermission)``, and
+    ``@graph_ql_mutation(permission=SomePermission)``. Passing both a
+    positional permission class and ``permission=`` is unsupported; the
+    positional class is treated as the permission and replaces the keyword
+    value.
+
+    Registration happens immediately when the decorator runs. A generated
+    ``graphene.Mutation`` subclass is stored in ``GraphQL._mutations`` under
+    the decorated function name converted by ``snake_to_camel``: the first
+    underscore-delimited segment is kept unchanged and later segments are
+    title-cased. The original function object is returned so it remains
+    directly callable.
+
+    The decorated function must provide type hints for all parameters except
+    the parameter named ``info``; ``info`` is skipped by name and may appear in
+    any position. Parameters become GraphQL arguments. ``Optional[T]`` marks an
+    argument as not required, default values are passed through as Graphene
+    defaults, ``list[T]`` becomes a GraphQL list, GeneralManager parameters with
+    no declared inputs or only one ``id`` input become ``ID`` arguments, and
+    multi-input GeneralManager parameters become generated nested input objects.
+    Runtime manager normalization preserves existing manager instances, returns
+    ``None`` unchanged, constructs mapping inputs with ``manager_class(**value)``,
+    and constructs non-mapping inputs with ``manager_class(value)``. For
+    ``list[Manager]`` and ``List[Manager]`` arguments, each list item follows
+    that same manager normalization before permission checks and resolver calls.
+    Other supported Python annotations are mapped through
+    ``GraphQL._map_field_to_graphene_base_type``.
+
+    The return annotation creates output fields. A single type creates one
+    output field named after that type with a lower-case first letter; a tuple
+    return annotation creates one output field per tuple member. Duplicate
+    output names are rejected. The generated mutation also includes a required
+    ``success`` field. Resolver execution normalizes GeneralManager arguments,
+    calls ``permission.check(normalized_kwargs, info.context.user)`` when a
+    permission class is configured, calls the original function, and returns the
+    generated mutation instance. Handled GeneralManager errors are converted via
+    ``GraphQL._handle_graph_ql_error``; other exceptions propagate.
 
     Parameters:
-        permission (Optional[Type[MutationPermission]]): An optional permission class to enforce access control on the mutation.
+        _func: Decorated function for bare usage, or a positional
+            ``MutationPermission`` subclass.
+        permission: Optional permission class used to enforce access control on
+            the normalized mutation arguments.
 
     Returns:
-        Callable: A decorator that registers the mutation and returns the original function.
+        The original function for bare usage, or a decorator that registers the
+        mutation and returns the original function.
+
+    Raises:
+        MissingParameterTypeHintError: A non-``info`` parameter has no type
+            annotation.
+        MissingMutationReturnAnnotationError: The decorated function has no
+            return annotation.
+        InvalidMutationReturnTypeError: The return annotation is not a concrete
+            type or supported type alias.
+        DuplicateMutationOutputNameError: Two return values would expose the
+            same output field name.
     """
     if (
         _func is not None
@@ -239,12 +310,12 @@ def graph_ql_mutation(
         Transform ``fn`` into a Graphene-compatible mutation class.
 
         Parameters:
-            fn (Callable[..., Any]): Resolver implementing the mutation behaviour.
+            fn: Resolver implementing the mutation behavior.
 
         Returns:
-            Callable[..., Any]: Original function after registration.
+            Original function after registration.
         """
-        cast(Any, fn)._general_manager_mutation_permission = permission
+        vars(fn)["_general_manager_mutation_permission"] = permission
         sig = inspect.signature(fn)
         hints = get_type_hints(fn)
 
@@ -252,8 +323,8 @@ def graph_ql_mutation(
         mutation_name = snake_to_camel(fn.__name__)
 
         # Build Arguments inner class dynamically
-        arg_fields: dict[str, Any] = {}
-        argument_annotations: dict[str, Any] = {}
+        arg_fields: GrapheneFieldMap = {}
+        argument_annotations: MutationAnnotations = {}
         for name, param in sig.parameters.items():
             if name == "info":
                 continue
@@ -265,7 +336,7 @@ def graph_ql_mutation(
             has_default = default is not inspect._empty
 
             # Prepare kwargs
-            kwargs: dict[str, Any] = {}
+            kwargs: MutationKwargs = {}
             if required:
                 kwargs["required"] = True
             if has_default:
@@ -282,7 +353,7 @@ def graph_ql_mutation(
             argument_annotations[name] = ann
 
             # Resolve list types to List scalar
-            field: Any
+            field: object
             if get_origin(ann) is list or get_origin(ann) is List:
                 inner = get_args(ann)[0]
                 if _is_general_manager_type(inner):
@@ -310,10 +381,10 @@ def graph_ql_mutation(
         Arguments = type("Arguments", (), arg_fields)
 
         # Build output fields: success + fn return types
-        outputs: dict[str, Any] = {
+        outputs: GrapheneFieldMap = {
             "success": graphene.Boolean(required=True),
         }
-        return_ann: type | tuple[type] | None = hints.get("return")
+        return_ann = hints.get("return")
         if return_ann is None:
             raise MissingMutationReturnAnnotationError(fn.__name__)
 
@@ -364,7 +435,7 @@ def graph_ql_mutation(
                 if permission:
                     permission.check(normalized_kwargs, info.context.user)
                 result = fn(info, **normalized_kwargs)
-                data: dict[str, Any] = {}
+                data: MutationData = {}
                 if isinstance(result, tuple):
                     # unpack according to outputs ordering after success
                     for (field, _), val in zip(
@@ -385,7 +456,7 @@ def graph_ql_mutation(
                 raise GraphQL._handle_graph_ql_error(error) from error
 
         # Assemble class dict
-        class_dict: dict[str, Any] = {
+        class_dict: GrapheneFieldMap = {
             "Arguments": Arguments,
             "__doc__": fn.__doc__,
             "mutate": staticmethod(_mutate),
@@ -401,5 +472,5 @@ def graph_ql_mutation(
         return fn
 
     if _func is not None and inspect.isfunction(_func):
-        return decorator(cast(FuncT, _func))
+        return decorator(_func)
     return decorator

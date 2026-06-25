@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 import re
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, cast
+from typing import TYPE_CHECKING, Callable, Iterable, Protocol, cast
 from uuid import UUID
 
 from django.apps import apps
@@ -23,13 +23,38 @@ if TYPE_CHECKING:
     from general_manager.interface.orm_interface import (
         OrmInterfaceBase,
     )
+    from general_manager.manager.general_manager import GeneralManager
 
-DescriptorAccessor = Callable[["OrmInterfaceBase"], Any]
+type OrmInterfaceInstance = "OrmInterfaceBase[models.Model]"
+type DescriptorAccessor = Callable[[OrmInterfaceInstance], object]
+type ResolveMany = Callable[[OrmInterfaceInstance, str, str], object]
+type DjangoField = models.Field[object, object]
+
+
+class ManyRelationResolver(Protocol):
+    """
+    Protocol for fallback many-to-many resolution on ORM interface instances.
+
+    Implementations receive the relation accessor name as `field_call` and the
+    generated descriptor base name as `field_name`. Exceptions from the
+    implementation are propagated to the descriptor accessor caller.
+    """
+
+    def _resolve_many_to_many(self, *, field_call: str, field_name: str) -> object: ...
 
 
 @dataclass(frozen=True)
 class FieldDescriptor:
-    """Describe an interface attribute and the callable that resolves its value."""
+    """
+    Describe one generated interface attribute and its value accessor.
+
+    `metadata` always contains `type`, `default`, `is_required`, `is_editable`,
+    and `is_derived`. Auto-integer-like fields may add `graphql_scalar`.
+    Relation descriptors may add `relation_kind` (`"direct"` or `"collection"`)
+    and `filter_lookup`. The `accessor` accepts an ORM interface instance and
+    returns the stored value, related manager object, queryset, iterable, or
+    `None` when an optional relation is missing.
+    """
 
     name: str
     metadata: AttributeTypedDict
@@ -37,7 +62,14 @@ class FieldDescriptor:
 
 
 class MissingRelatedFieldsError(RuntimeError):
-    """Raised when a GeneralManager collection relation cannot be scoped."""
+    """
+    Raised when a GeneralManager collection relation cannot be scoped.
+
+    The descriptor builder raises this from the collection accessor only when
+    no explicit `relation_filter_name` was supplied and no related field was
+    found for the `source_model`. Multiple discovered fields are all used as
+    filter constraints; explicit relation hints bypass discovery.
+    """
 
     def __init__(
         self,
@@ -53,7 +85,7 @@ class MissingRelatedFieldsError(RuntimeError):
         )
 
 
-TRANSLATION: dict[type[models.Field], type] = {
+TRANSLATION: dict[type[object], type[object]] = {
     models.fields.BigAutoField: int,
     models.AutoField: int,
     models.CharField: str,
@@ -78,7 +110,7 @@ TRANSLATION: dict[type[models.Field], type] = {
 }
 
 
-def _translate_field_type(raw_type: type) -> type:
+def _translate_field_type(raw_type: type[object]) -> type[object]:
     """Resolve a Django field class to the exposed Python metadata type."""
     for field_type, translated_type in TRANSLATION.items():
         if issubclass(raw_type, field_type):
@@ -86,7 +118,7 @@ def _translate_field_type(raw_type: type) -> type:
     return raw_type
 
 
-def _graphql_scalar_hint(raw_type: type) -> str | None:
+def _graphql_scalar_hint(raw_type: type[object]) -> str | None:
     """Return an optional GraphQL scalar hint for field families needing special handling."""
     if issubclass(raw_type, models.AutoField):
         return None
@@ -103,18 +135,35 @@ def _to_snake_case(name: str) -> str:
 
 
 def build_field_descriptors(
-    interface_cls: type["OrmInterfaceBase"],
-    resolve_many: Callable[["OrmInterfaceBase", str, str], Any] | None = None,
+    interface_cls: type["OrmInterfaceBase[models.Model]"],
+    resolve_many: ResolveMany | None = None,
 ) -> dict[str, FieldDescriptor]:
     """
     Construct field descriptors for an ORM-backed interface class.
 
     Parameters:
-        interface_cls (type[OrmInterfaceBase]): Subclass of OrmInterfaceBase whose associated model will be inspected to derive descriptors.
-        resolve_many (Callable[[OrmInterfaceBase, str, str], Any] | None): Optional resolver used to resolve many-to-many and reverse relations; called as (interface_instance, field_call, field_name). If omitted, a fallback resolver is used.
+        interface_cls: ORM interface class whose associated Django model is
+            inspected to derive descriptors. The class must expose `_model` as
+            a Django model class, as generated ORM interface classes do.
+        resolve_many: Optional resolver used for many-to-many and reverse
+            collection relations. It is called as
+            three positional arguments
+            `(interface_instance, field_call, field_name)` and must return the
+            resolved relation object, queryset, manager, or iterable. If
+            omitted, the interface instance's own `_resolve_many_to_many()`
+            method is used.
 
     Returns:
-        dict[str, FieldDescriptor]: Mapping from attribute name to its FieldDescriptor containing type metadata and an accessor.
+        Mapping from interface attribute name to its descriptor metadata and
+        value accessor.
+
+    Raises:
+        DuplicateFieldNameError: If generated descriptor names collide.
+        AttributeError: If `interface_cls` does not expose the required `_model`
+            attribute or the fallback resolver is used on an instance without
+            `_resolve_many_to_many()`.
+        Exception: Exceptions raised by the optional `resolve_many` callable are
+            not wrapped.
     """
     builder = _FieldDescriptorBuilder(
         interface_cls,
@@ -126,19 +175,24 @@ def build_field_descriptors(
 class _FieldDescriptorBuilder:
     def __init__(
         self,
-        interface_cls: type["OrmInterfaceBase"],
+        interface_cls: type["OrmInterfaceBase[models.Model]"],
         *,
-        resolve_many: Callable[["OrmInterfaceBase", str, str], Any],
+        resolve_many: ResolveMany,
     ) -> None:
         """
         Create a builder for constructing FieldDescriptor objects for an OrmInterfaceBase subclass.
 
         Parameters:
-                interface_cls (type[OrmInterfaceBase]): The interface class whose associated ORM model will be inspected to build descriptors.
-                resolve_many (Callable[[OrmInterfaceBase, str, str], Any]): Callable used to resolve collection relations (many-to-many and reverse one-to-many). It is called with (interface_instance, field_call, field_name) and must return the resolved related-manager or iterable for that relation.
+            interface_cls: The interface class whose associated ORM model is
+                inspected to build descriptors.
+            resolve_many: Callable used to resolve collection relations
+                (many-to-many and reverse one-to-many). It receives the
+                interface instance, relation accessor name, and descriptor base
+                name, and returns the resolved related manager, queryset, or
+                iterable.
         """
         self.interface_cls = interface_cls
-        self.model = interface_cls._model  # type: ignore[attr-defined]
+        self.model = interface_cls._model
         self._descriptors: dict[str, FieldDescriptor] = {}
         self._custom_fields, self._ignored_helpers = _collect_custom_fields(self.model)
         self._resolve_many = resolve_many
@@ -164,7 +218,7 @@ class _FieldDescriptorBuilder:
         For each custom field declared on the model, add a FieldDescriptor to the builder's descriptor map with metadata including the field's type, whether it is required, whether it is editable, its default value, and `is_derived=False`. The descriptor uses an accessor that reads the field value from the interface instance.
         """
         for field_name in self._custom_fields:
-            field = cast(models.Field, getattr(self.model, field_name))
+            field = cast("DjangoField", getattr(self.model, field_name))
             self._register(
                 attribute_name=field_name,
                 raw_type=type(field),
@@ -211,10 +265,10 @@ class _FieldDescriptorBuilder:
             )
             if general_manager_class:
                 accessor = _general_manager_accessor(field.name, general_manager_class)
-                relation_type = cast(type, general_manager_class)
+                relation_type = cast(type[object], general_manager_class)
             else:
                 accessor = _instance_attribute_accessor(field.name)
-                relation_type = cast(type, related_model)
+                relation_type = cast(type[object], related_model)
             default = getattr(field, "default", None)
             self._register(
                 attribute_name=field.name,
@@ -261,10 +315,10 @@ class _FieldDescriptorBuilder:
                 accessor = _general_manager_accessor(
                     accessor_name, general_manager_class
                 )
-                relation_type = cast(type, general_manager_class)
+                relation_type = cast(type[object], general_manager_class)
             else:
                 accessor = _instance_attribute_accessor(accessor_name)
-                relation_type = cast(type, related_model)
+                relation_type = cast(type[object], related_model)
             self._register(
                 attribute_name=attribute_name,
                 raw_type=relation_type,
@@ -332,7 +386,7 @@ class _FieldDescriptorBuilder:
     def _register_collection_field(
         self,
         *,
-        field: models.Field | models.ManyToManyRel | models.ManyToOneRel,
+        field: DjangoField | models.ManyToManyRel | models.ManyToOneRel,
         base_name: str,
         accessor_name: str,
         relation_field_name: str | None = None,
@@ -341,12 +395,27 @@ class _FieldDescriptorBuilder:
         """
         Register a collection relation as a FieldDescriptor under the generated "<base>_list" attribute.
 
-        If the relation's related model cannot be resolved or the field is a GenericForeignKey, registration is skipped. The descriptor's accessor and relation type are chosen from the related model's general-manager class when available; otherwise a direct-many accessor is used. The descriptor's editable flag is set only for many-to-many relations and the derived flag is set for reverse (non-many-to-many) relations.
+        If the relation's related model cannot be resolved or the field is a
+        GenericForeignKey, registration is skipped. The descriptor's accessor
+        and relation type are chosen from the related model's general-manager
+        class when available; otherwise a direct-many accessor is used. The
+        descriptor's editable flag is set only for many-to-many relations and
+        the derived flag is set for reverse (non-many-to-many) relations.
 
         Parameters:
             field (models.Field | models.ManyToManyRel | models.ManyToOneRel): The model field or relation object representing the collection relation.
             base_name (str): Candidate base name used to derive the final attribute name (final name will be "<base>_list").
             accessor_name (str): Attribute or relation name used by accessors to resolve related objects.
+            relation_field_name: Optional concrete relation field name on the
+                related model. It contributes relation-field-derived fallback
+                descriptor names and scopes GeneralManager-backed accessors.
+            relation_filter_name: Optional explicit lookup name passed to the
+                related GeneralManager filter. When set, related-field
+                discovery is skipped.
+
+        Raises:
+            DuplicateFieldNameError: If every generated descriptor name
+                candidate already exists.
         """
         related_model = self._resolve_related_model(
             getattr(field, "related_model", None)
@@ -375,14 +444,14 @@ class _FieldDescriptorBuilder:
                 relation_field_name=relation_field_name,
                 relation_filter_name=relation_filter_name,
             )
-            relation_type = cast(type, general_manager_class)
+            relation_type = cast(type[object], general_manager_class)
         else:
             accessor = _direct_many_accessor(
                 self._resolve_many,
                 accessor_name,
                 field_base,
             )
-            relation_type = cast(type, related_model)
+            relation_type = cast(type[object], related_model)
 
         self._register(
             attribute_name=attribute_name,
@@ -408,14 +477,23 @@ class _FieldDescriptorBuilder:
         Selects a non-conflicting base name for a collection field.
 
         Parameters:
-                candidate (str): Proposed base name for the collection field.
-                fallback (str): Alternative base name to use if `candidate` is already registered.
+            base_name: Preferred base name for the collection field.
+            fallback: Alternative base name used when `base_name` already has a
+                registered `<name>_list` descriptor.
+            related_model: Related model used to build the
+                `<relation_field_name>_<related_model_name>` fallback.
+            relation_field_name: Optional relation field name. When provided,
+                candidates are tried in this order: `base_name`, `fallback`,
+                `<relation_field_name>_<related_model_name>`, then
+                `relation_field_name`.
 
         Returns:
-                base_name (str): `candidate` if it is not already registered, otherwise `fallback`.
+            The first candidate whose `<candidate>_list` descriptor is not
+            already registered.
 
         Raises:
-                DuplicateFieldNameError: If both `candidate` and `fallback` are already registered.
+            DuplicateFieldNameError: If every candidate already has a
+                registered `<candidate>_list` descriptor.
         """
         candidates = [base_name, fallback]
         related_model_name = related_model._meta.model_name
@@ -432,10 +510,10 @@ class _FieldDescriptorBuilder:
         self,
         *,
         attribute_name: str,
-        raw_type: type,
+        raw_type: type[object],
         is_required: bool,
         is_editable: bool,
-        default: Any,
+        default: object,
         is_derived: bool,
         accessor: DescriptorAccessor,
         relation_kind: str | None = None,
@@ -449,7 +527,7 @@ class _FieldDescriptorBuilder:
             raw_type (type): Underlying model field type; translated via TRANSLATION when present to determine the descriptor `type`.
             is_required (bool): Whether the attribute is required.
             is_editable (bool): Whether the attribute is editable.
-            default (Any): Default value to record in the descriptor metadata.
+            default: Default value to record in the descriptor metadata.
             is_derived (bool): Whether the attribute value is derived rather than stored.
             accessor (DescriptorAccessor): Callable that resolves the attribute value from an OrmInterfaceBase instance.
 
@@ -480,33 +558,34 @@ class _FieldDescriptorBuilder:
 
     def _resolve_related_model(
         self,
-        related_model: Any,
-    ) -> Optional[type[models.Model]]:
+        related_model: object,
+    ) -> type[models.Model] | None:
         """
         Resolve a related-model reference that may use the string "self" to refer to the builder's model.
 
         Parameters:
-            related_model (Any): Either the string "self" to indicate the builder's model, a Django model class, or None.
+            related_model: Either the string "self", an app-qualified or
+                current-app model name, a Django model class, or `None`.
 
         Returns:
             Optional[type[models.Model]]: The resolved Django model class, or `None` if `related_model` is `None`.
         """
         if related_model == "self":
-            return cast(type[models.Model], self.model)
+            return self.model
         if isinstance(related_model, str):
             resolved_model = self._resolve_string_related_model(related_model)
             if resolved_model is not None:
                 return resolved_model
         if isinstance(related_model, type) and issubclass(related_model, models.Model):
-            return cast(type[models.Model], related_model)
+            return related_model
         if related_model is not None:
             return None
-        return cast(Optional[type[models.Model]], related_model)
+        return None
 
     def _resolve_string_related_model(
         self,
         related_model: str,
-    ) -> Optional[type[models.Model]]:
+    ) -> type[models.Model] | None:
         app_label: str | None
         if "." in related_model:
             app_label, model_name = related_model.split(".", 1)
@@ -523,7 +602,7 @@ class _FieldDescriptorBuilder:
         if isinstance(resolved_model, type) and issubclass(
             resolved_model, models.Model
         ):
-            return cast(type[models.Model], resolved_model)
+            return resolved_model
         return None
 
 
@@ -550,7 +629,7 @@ def _collect_custom_fields(
     return field_names, ignored_helpers
 
 
-def _iter_model_fields(model: type[models.Model]) -> Iterable[models.Field]:
+def _iter_model_fields(model: type[models.Model]) -> Iterable[DjangoField]:
     """
     Yield non-relational fields defined on the given Django model.
 
@@ -565,12 +644,12 @@ def _iter_model_fields(model: type[models.Model]) -> Iterable[models.Field]:
             continue
         if isinstance(field, GenericForeignKey):
             continue
-        yield cast(models.Field, field)
+        yield cast("DjangoField", field)
 
 
 def _iter_foreign_key_fields(
     model: type[models.Model],
-) -> Iterable[models.Field]:
+) -> Iterable[DjangoField]:
     """
     Yield the model's concrete foreign-key fields (many-to-one and one-to-one), excluding generic foreign keys.
 
@@ -590,12 +669,12 @@ def _iter_foreign_key_fields(
         if isinstance(field, GenericForeignKey):
             continue
         if getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False):
-            yield cast(models.Field, field)
+            yield cast("DjangoField", field)
 
 
 def _iter_many_to_many_fields(
     model: type[models.Model],
-) -> Iterable[models.Field]:
+) -> Iterable[DjangoField]:
     """
     Iterate over the model's ManyToMany relational fields.
 
@@ -609,7 +688,7 @@ def _iter_many_to_many_fields(
         if getattr(field, "is_relation", False) and getattr(
             field, "many_to_many", False
         ):
-            yield cast(models.Field, field)
+            yield cast("DjangoField", field)
 
 
 def _iter_reverse_one_to_one_relations(
@@ -658,7 +737,7 @@ def _instance_attribute_accessor(field_name: str) -> DescriptorAccessor:
         A callable that, given an OrmInterfaceBase, returns the value of the specified attribute from its `_instance`.
     """
 
-    def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
+    def getter(self: OrmInterfaceInstance) -> object:
         """
         Return the value of the specified field from the interface's underlying model instance.
 
@@ -674,7 +753,7 @@ def _instance_attribute_accessor(field_name: str) -> DescriptorAccessor:
 
 
 def _general_manager_accessor(
-    field_name: str, manager_class: type
+    field_name: str, manager_class: type[object]
 ) -> DescriptorAccessor:
     """
     Create an accessor that resolves a related object's manager instance from a OrmInterfaceBase.
@@ -687,7 +766,7 @@ def _general_manager_accessor(
         DescriptorAccessor: A callable that, given a OrmInterfaceBase, returns the manager instance for the related object, or `None` if the related attribute is `None`.
     """
 
-    def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
+    def getter(self: OrmInterfaceInstance) -> object:
         """
         Return a manager instance bound to the related object's primary key or None.
 
@@ -700,7 +779,8 @@ def _general_manager_accessor(
             return None
         if related is None:
             return None
-        return manager_class(related.pk)
+        manager_type = cast("type[GeneralManager]", manager_class)
+        return manager_type(related.pk)
 
     return getter
 
@@ -709,7 +789,7 @@ def _general_manager_many_accessor(
     *,
     accessor_name: str,
     related_model: type[models.Model],
-    general_manager_class: type,
+    general_manager_class: type[object],
     source_model: type[models.Model],
     relation_field_name: str | None = None,
     relation_filter_name: str | None = None,
@@ -722,24 +802,36 @@ def _general_manager_many_accessor(
         related_model (type[models.Model]): The model that contains foreign keys referencing the source model.
         general_manager_class (type): A manager-like class that provides a `filter(**kwargs)` method.
         source_model (type[models.Model]): The model class whose primary key is used to filter related objects.
+        relation_field_name: Optional concrete field name on `related_model`
+            used as the source-model lookup. When set, only that relation field
+            is used.
+        relation_filter_name: Optional lookup name passed directly to
+            `general_manager_class.filter()`. When set, field discovery is
+            skipped.
 
     Returns:
         DescriptorAccessor: A callable that accepts an OrmInterfaceBase instance and returns the manager/QuerySet of related_model instances whose foreign-key fields pointing to `source_model` match the instance's primary key.
+
+    Raises:
+        MissingRelatedFieldsError: If no explicit relation filter is supplied
+            and no related fields pointing at `source_model` can be discovered.
+        FieldDoesNotExist: If `relation_field_name` is supplied but is not a
+            field on `related_model`.
     """
     if relation_filter_name is not None:
-        related_fields: list[models.Field] = []
+        related_fields: list[DjangoField] = []
     elif relation_field_name is not None:
         related_fields = [
-            cast(models.Field, related_model._meta.get_field(relation_field_name))
+            cast("DjangoField", related_model._meta.get_field(relation_field_name))
         ]
     else:
         related_fields = [
-            cast(models.Field, rel)
+            cast("DjangoField", rel)
             for rel in related_model._meta.get_fields()
             if getattr(rel, "related_model", None) == source_model
         ]
 
-    def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
+    def getter(self: OrmInterfaceInstance) -> object:
         """
         Obtain related objects filtered by this interface instance's primary key.
 
@@ -750,7 +842,7 @@ def _general_manager_many_accessor(
             filter_kwargs = {relation_filter_name: self.pk}
         else:
             filter_kwargs = {field.name: self.pk for field in related_fields}
-        manager_cls = cast(Any, general_manager_class)
+        manager_cls = cast("type[GeneralManager]", general_manager_class)
         if not filter_kwargs:
             raise MissingRelatedFieldsError(
                 accessor_name=accessor_name,
@@ -763,7 +855,7 @@ def _general_manager_many_accessor(
 
 
 def _many_to_many_relation_filter_name(
-    field: models.Field,
+    field: DjangoField,
     source_model: type[models.Model],
 ) -> str | None:
     """Return the target-side query lookup for a direct many-to-many field."""
@@ -786,7 +878,7 @@ def _many_to_many_relation_filter_name(
 
 
 def _direct_many_accessor(
-    resolver: Callable[["OrmInterfaceBase", str, str], Any],
+    resolver: ResolveMany,
     field_call: str,
     field_name: str,
 ) -> DescriptorAccessor:
@@ -794,7 +886,9 @@ def _direct_many_accessor(
     Create an accessor that resolves a direct many-to-many relation from an OrmInterfaceBase using the provided resolver.
 
     Parameters:
-        resolver (Callable[[OrmInterfaceBase, str, str], Any]): Function that resolves the relation given (interface_instance, field_call, field_name).
+        resolver: Function that resolves the relation given
+            `(interface_instance, field_call, field_name)` and returns the
+            related manager, queryset, or iterable.
         field_call (str): Attribute or call expression used to access the related manager or relation on the underlying model.
         field_name (str): Base field name used to identify the relation when resolving many-to-many values.
 
@@ -802,7 +896,7 @@ def _direct_many_accessor(
         DescriptorAccessor: A callable that accepts an OrmInterfaceBase instance and returns the resolved collection for the specified many-to-many relation.
     """
 
-    def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
+    def getter(self: OrmInterfaceInstance) -> object:
         """
         Resolve the collection relation for the given interface instance.
 
@@ -815,10 +909,10 @@ def _direct_many_accessor(
 
 
 def _fallback_resolve_many(
-    interface_instance: "OrmInterfaceBase",
+    interface_instance: OrmInterfaceInstance,
     field_call: str,
     field_name: str,
-) -> Any:
+) -> object:
     """
     Resolve a many-to-many relation for an ORM-backed interface using its default many-to-many resolver.
 
@@ -828,9 +922,10 @@ def _fallback_resolve_many(
         field_name (str): The logical field name for the relation on the interface.
 
     Returns:
-        Any: The value used to access the related objects (for example, a manager, queryset, or iterable) as produced by the interface's many-to-many resolver.
+        object: The value used to access the related objects (for example, a manager, queryset, or iterable) as produced by the interface's many-to-many resolver.
     """
-    return interface_instance._resolve_many_to_many(  # type: ignore[attr-defined]
+    resolver = cast(ManyRelationResolver, interface_instance)
+    return resolver._resolve_many_to_many(
         field_call=field_call,
         field_name=field_name,
     )

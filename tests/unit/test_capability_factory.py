@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import Mock
 
+import pytest
+
+from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.factory import (
     build_capabilities,
     CAPABILITY_CLASS_MAP,
@@ -21,6 +23,10 @@ class DummyInterface:
     """Mock interface for testing."""
 
     pass
+
+
+class InterfaceInspectedError(AssertionError):
+    """Raised if the capability factory unexpectedly reads interface metadata."""
 
 
 def test_build_capabilities_with_builtin_names():
@@ -80,13 +86,30 @@ def test_build_capabilities_with_override_callable():
     assert result[0].custom_flag is True
 
 
+def test_build_capabilities_override_takes_precedence_for_runtime_unknown_name():
+    """Runtime override keys are honored before default-name lookup."""
+    custom_instance = ReadCapability()
+    names = ["custom"]
+    overrides = {"custom": lambda: custom_instance}
+
+    result = build_capabilities(
+        DummyInterface,
+        names,  # type: ignore[arg-type]
+        overrides,  # type: ignore[arg-type]
+    )
+
+    assert result == [custom_instance]
+
+
 def test_build_capabilities_unknown_name_raises():
     """Test that unknown capability name raises KeyError."""
     names = ["unknown_capability"]
     overrides = {}
 
-    with pytest.raises(KeyError, match="Unknown capability"):
-        build_capabilities(DummyInterface, names, overrides)
+    with pytest.raises(KeyError) as exc_info:
+        build_capabilities(DummyInterface, names, overrides)  # type: ignore[arg-type]
+
+    assert exc_info.value.args == ("Unknown capability 'unknown_capability'",)
 
 
 def test_build_capabilities_empty_names():
@@ -159,6 +182,22 @@ def test_build_capabilities_duplicate_names():
     assert result[0] is not result[1]  # Different instances
 
 
+def test_build_capabilities_duplicate_override_calls_once_per_occurrence():
+    """Callable overrides should be invoked for each matching duplicate name."""
+    calls = 0
+
+    def build_read() -> ReadCapability:
+        nonlocal calls
+        calls += 1
+        return ReadCapability()
+
+    result = build_capabilities(DummyInterface, ["read", "read"], {"read": build_read})
+
+    assert calls == 2
+    assert len(result) == 2
+    assert result[0] is not result[1]
+
+
 def test_build_capabilities_override_returns_instance():
     """Test that override callable return value is used directly."""
     mock_cap = Mock()
@@ -171,3 +210,35 @@ def test_build_capabilities_override_returns_instance():
 
     assert len(result) == 1
     assert result[0] is mock_cap
+
+
+def test_build_capabilities_does_not_inspect_interface_cls():
+    """The compatibility interface argument should not be read by the factory."""
+
+    class ExplodingInterface:
+        @property
+        def __name__(self) -> str:
+            raise InterfaceInspectedError
+
+    result = build_capabilities(ExplodingInterface, ["read"], {})
+
+    assert len(result) == 1
+    assert isinstance(result[0], ReadCapability)
+
+
+def test_capability_class_map_keys_match_public_capability_name_type():
+    """Default factory keys should stay inside the public capability vocabulary."""
+    expected: set[CapabilityName] = {
+        "read",
+        "create",
+        "update",
+        "delete",
+        "history",
+        "validation",
+        "notification",
+        "scheduling",
+        "access_control",
+        "observability",
+    }
+
+    assert set(CAPABILITY_CLASS_MAP) == expected

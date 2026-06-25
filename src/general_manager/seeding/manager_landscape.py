@@ -2,15 +2,42 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping
+from typing import Protocol, cast
 
 from django.db import models, transaction
 
 from general_manager.interface.infrastructure.startup_hooks import (
     order_interfaces_by_dependency,
 )
+
+
+class CountableSeedResult(Protocol):
+    """Object returned by manager ``all()`` during seeding."""
+
+    def count(self) -> int:
+        """Return the current row count for the manager."""
+        ...
+
+
+class SeedBatchFactory(Protocol):
+    """Factory capability used by landscape seeding."""
+
+    def create_batch(self, count: int) -> object:
+        """Create one seed batch and return the factory-specific result."""
+        ...
+
+
+class SeedableManagerRuntime(Protocol):
+    """Manager class shape required while executing a seed plan."""
+
+    Factory: SeedBatchFactory
+
+    def all(self) -> CountableSeedResult:
+        """Return a bucket-like object with the current row count."""
+        ...
 
 
 class InvalidSeedTargetError(ValueError):
@@ -73,15 +100,15 @@ class SeedableManagerCollisionError(ValueError):
     def duplicate_name(
         cls,
         name: str,
-        existing: type[Any],
-        new: type[Any],
+        existing: type[object],
+        new: type[object],
     ) -> SeedableManagerCollisionError:
         existing_name = f"{existing.__module__}.{existing.__name__}"
         new_name = f"{new.__module__}.{new.__name__}"
         return cls(
             "Multiple seedable managers share the class name "
             f"{name!r}: {existing_name} and {new_name}. Use the "
-            "module-qualified name to disambiguate."
+            "explicit manager list to avoid ambiguous class names."
         )
 
 
@@ -109,7 +136,7 @@ class ManagerSeedFailure(RuntimeError):
 
 @dataclass(frozen=True)
 class SeedTarget:
-    """Desired minimum row count for a manager."""
+    """Desired minimum row count for one selected manager."""
 
     manager_name: str
     count: int
@@ -117,7 +144,7 @@ class SeedTarget:
 
 @dataclass(frozen=True)
 class SeedPlanRow:
-    """Dry-run description for one seed target."""
+    """Dry-run description for one seed target after dependency ordering."""
 
     manager_name: str
     target_count: int
@@ -126,7 +153,7 @@ class SeedPlanRow:
 
 @dataclass(frozen=True)
 class SeedFailure:
-    """Failure captured while seeding a manager."""
+    """Failure captured while seeding a manager with continue-on-error enabled."""
 
     manager_name: str
     error: str
@@ -137,7 +164,7 @@ class SeedFailure:
 
 @dataclass(frozen=True)
 class SeedExecutionResult:
-    """Summary of a seeding run."""
+    """Summary of created rows and collected failures for a seeding run."""
 
     created: Mapping[str, int]
     failures: tuple[SeedFailure, ...]
@@ -146,7 +173,24 @@ class SeedExecutionResult:
 def parse_target_overrides(
     raw_targets: list[str] | tuple[str, ...] | None,
 ) -> dict[str, int]:
-    """Parse repeated NAME=COUNT command arguments into a mapping."""
+    """Parse repeated ``NAME=COUNT`` target override arguments.
+
+    ``None`` and empty inputs return an empty mapping. Otherwise, each raw
+    target must contain ``=``.
+    Whitespace around the manager name and count is ignored. Counts must parse
+    as positive integers, and each manager name may appear at most once.
+
+    Args:
+        raw_targets: Repeated raw command-line values, or ``None``.
+
+    Returns:
+        Mapping from manager name to target minimum count.
+
+    Raises:
+        InvalidSeedTargetError: If a value is not ``NAME=COUNT``, either side is
+            blank, the count is not an integer, the count is below one, or the
+            manager name is duplicated.
+    """
 
     parsed: dict[str, int] = {}
     for raw in raw_targets or ():
@@ -169,10 +213,22 @@ def parse_target_overrides(
     return parsed
 
 
-def discover_seedable_managers(managers: Iterable[type[Any]]) -> dict[str, type[Any]]:
-    """Return managers that expose a factory with create_batch."""
+def discover_seedable_managers(
+    managers: Iterable[type[object]],
+) -> dict[str, type[object]]:
+    """Return managers whose nested ``Factory`` exposes callable ``create_batch``.
 
-    seedable: dict[str, type[Any]] = {}
+    The returned mapping is keyed by the manager class name in input order.
+    Managers without a factory or without callable ``Factory.create_batch`` are
+    ignored. Duplicate class names are rejected because the command-line
+    selection surface accepts class-name keys.
+
+    Raises:
+        SeedableManagerCollisionError: If two different seedable managers share
+            the same class name.
+    """
+
+    seedable: dict[str, type[object]] = {}
     for manager in managers:
         factory = getattr(manager, "Factory", None)
         create_batch = getattr(factory, "create_batch", None)
@@ -191,13 +247,25 @@ def discover_seedable_managers(managers: Iterable[type[Any]]) -> dict[str, type[
 
 def select_seed_targets(
     *,
-    managers_by_name: dict[str, type[Any]],
+    managers_by_name: dict[str, type[object]],
     selected_names: list[str] | tuple[str, ...] | None,
     include_all: bool,
     default_count: int,
     overrides: dict[str, int],
 ) -> list[SeedTarget]:
-    """Resolve selected managers and desired target counts."""
+    """Resolve selected manager names and per-manager target counts.
+
+    ``--all``-style selection preserves discovery order. Explicit selection
+    preserves first occurrence order and deduplicates repeated manager names.
+    Target overrides are checked against all known manager names before
+    selection, so unknown overrides raise ``unknown_manager`` before unselected
+    override checks. Known overrides must then refer to selected managers.
+
+    Raises:
+        ManagerSelectionError: If ``default_count`` is below one, no manager is
+            selected without ``include_all``, a selected or overridden manager is
+            unknown, or an override targets an unselected manager.
+    """
 
     if default_count < 1:
         raise ManagerSelectionError.invalid_count()
@@ -233,9 +301,14 @@ def select_seed_targets(
 
 def order_targets_by_dependencies(
     targets: list[SeedTarget],
-    managers_by_name: dict[str, type[Any]],
+    managers_by_name: dict[str, type[object]],
 ) -> list[SeedTarget]:
-    """Order seed targets so selected required relation dependencies run first."""
+    """Order seed targets so selected required relation dependencies run first.
+
+    Duplicate target names keep their first target. Only dependencies that are
+    also selected affect ordering; missing dependencies are reported by
+    ``build_seed_plan`` rather than inserted automatically.
+    """
 
     ordered_targets, _dependencies_by_manager = _order_targets_by_dependencies(
         targets,
@@ -246,12 +319,12 @@ def order_targets_by_dependencies(
 
 def _order_targets_by_dependencies(
     targets: list[SeedTarget],
-    managers_by_name: dict[str, type[Any]],
-) -> tuple[list[SeedTarget], dict[type[Any], set[type[Any]]]]:
+    managers_by_name: dict[str, type[object]],
+) -> tuple[list[SeedTarget], dict[type[object], set[type[object]]]]:
     """Order seed targets and return the dependency map used for ordering."""
 
     target_by_manager_name: dict[str, SeedTarget] = {}
-    manager_order_by_name: dict[str, type[Any]] = {}
+    manager_order_by_name: dict[str, type[object]] = {}
     for target in targets:
         if target.manager_name in target_by_manager_name:
             continue
@@ -266,9 +339,9 @@ def _order_targets_by_dependencies(
     }
     manager_order = list(manager_order_by_name.values())
     selected_managers = set(manager_order)
-    dependencies_by_manager: dict[type[Any], set[type[Any]]] = {}
+    dependencies_by_manager: dict[type[object], set[type[object]]] = {}
 
-    def selected_dependencies(manager: type[Any]) -> set[type[Any]]:
+    def selected_dependencies(manager: type[object]) -> set[type[object]]:
         if manager not in dependencies_by_manager:
             dependencies_by_manager[manager] = _required_manager_dependencies(manager)
         dependencies = dependencies_by_manager[manager]
@@ -288,9 +361,15 @@ def _order_targets_by_dependencies(
 
 def build_seed_plan(
     targets: list[SeedTarget],
-    managers_by_name: dict[str, type[Any]],
+    managers_by_name: dict[str, type[object]],
 ) -> list[SeedPlanRow]:
-    """Build dry-run plan rows for ordered seed targets."""
+    """Build dry-run plan rows for ordered seed targets.
+
+    Rows are returned in dependency order. ``missing_dependencies`` lists
+    required non-null relation managers discovered for each target that are not
+    also selected, by manager class name. The planner does not create or add
+    those dependencies.
+    """
 
     ordered_targets, dependencies_by_manager = _order_targets_by_dependencies(
         targets,
@@ -316,17 +395,32 @@ def build_seed_plan(
 def execute_seed_plan(
     *,
     targets: list[SeedTarget],
-    managers_by_name: dict[str, type[Any]],
+    managers_by_name: dict[str, type[object]],
     batch_size: int,
     continue_on_error: bool,
 ) -> SeedExecutionResult:
     """Create missing rows for each seed target.
 
+    Targets are dependency-ordered again before execution. The current count is
+    read from ``manager.all().count()`` before each ordered target. Every ordered
+    target receives a ``created`` entry initialized to zero. If the existing
+    count already meets the target, no factory call is made for that manager.
+    Missing rows are created with ``Factory.create_batch(size)`` in batches of at
+    most ``batch_size``.
+
     Each batch runs in its own ``transaction.atomic()`` block with no
     cross-manager atomicity, so prior manager batches and earlier batches for a
     failing manager can remain committed regardless of ``continue_on_error``.
-    With ``continue_on_error=True``, partial progress is expected and reported
-    in the returned ``SeedExecutionResult``.
+    With ``continue_on_error=True``, the failing manager stops after its first
+    failed batch, later managers continue, and partial progress is reported in
+    the returned ``SeedExecutionResult``. The ``created`` result is a
+    ``MappingProxyType`` and ``failures`` is a tuple.
+
+    Raises:
+        ManagerSelectionError: If ``batch_size`` is below one.
+        ManagerSeedFailure: If a batch raises and ``continue_on_error`` is
+            false. The exception stores manager name, failed batch size,
+            original error, rows created before failure, and remaining count.
     """
 
     if batch_size < 1:
@@ -337,7 +431,7 @@ def execute_seed_plan(
     failures: list[SeedFailure] = []
 
     for target in ordered_targets:
-        manager = managers_by_name[target.manager_name]
+        manager = cast(SeedableManagerRuntime, managers_by_name[target.manager_name])
         existing = int(manager.all().count())
         remaining = max(target.count - existing, 0)
         created[target.manager_name] = 0
@@ -375,15 +469,23 @@ def execute_seed_plan(
     )
 
 
-def _required_manager_dependencies(manager: type[Any]) -> set[type[Any]]:
-    """Return managers required by non-null FK/O2O relations on manager's model."""
+def _required_manager_dependencies(manager: type[object]) -> set[type[object]]:
+    """Return managers required by non-null FK/O2O relations on manager's model.
+
+    Dependencies are discovered from ``manager.Interface._model._meta.get_fields()``.
+    Non-null ``ForeignKey`` and ``OneToOneField`` relations contribute
+    ``field.remote_field.model._general_manager_class`` when that value is a
+    manager class different from ``manager``. Nullable relations, self
+    relations, non-relation fields, and managers without model metadata are
+    ignored.
+    """
 
     model = getattr(getattr(manager, "Interface", None), "_model", None)
     opts = getattr(model, "_meta", None)
     if opts is None:
         return set()
 
-    dependencies: set[type[Any]] = set()
+    dependencies: set[type[object]] = set()
     for field in opts.get_fields():
         if not isinstance(field, (models.ForeignKey, models.OneToOneField)):
             continue

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 
 from .base import Capability, CapabilityName
 from .builtin import (
@@ -32,30 +31,45 @@ CAPABILITY_CLASS_MAP: dict[CapabilityName, type[Capability]] = {
     "access_control": AccessControlCapability,
     "observability": ObservabilityCapability,
 }
+"""Default capability handler classes keyed by public capability name."""
 
 
 CapabilityOverride = Callable[[], Capability] | type[Capability]
+"""Per-name override accepted by :func:`build_capabilities`."""
 
 
 def build_capabilities(
-    interface_cls: type,
+    interface_cls: type[object],
     names: Iterable[CapabilityName],
     overrides: Mapping[CapabilityName, CapabilityOverride],
 ) -> list[Capability]:
     """
-    Builds capability instances for the given capability names.
+    Instantiate capability handlers for the supplied names.
 
     Parameters:
-        interface_cls (type): Interface class the capabilities will be associated with (may be unused by built-in factories).
-        names (Iterable[CapabilityName]): Iterable of capability names to instantiate, in the desired order.
-        overrides (Mapping[CapabilityName, CapabilityOverride]): Per-name overrides; each value is either a Capability class (instantiated) or a zero-argument callable that returns a Capability.
+        interface_cls: Interface class the capabilities will be associated with.
+            This compatibility context is accepted for callers that already have
+            an interface class available; the current implementation does not
+            inspect or pass it to handlers.
+        names: Capability names to instantiate. The iterable is consumed once
+            and order is preserved. Duplicate names create duplicate handler
+            instances or call the override once per occurrence.
+        overrides: Per-name overrides. When a name exists in this mapping and
+            the value is not ``None`` at runtime, the override takes precedence
+            over :data:`CAPABILITY_CLASS_MAP`. Override values are called with no
+            arguments; class overrides are instantiated the same way as other
+            zero-argument callables.
 
     Returns:
-        list[Capability]: A list of instantiated Capability objects corresponding to `names`, in the same order.
+        A mutable list of capability instances in the same order as ``names``.
 
     Raises:
-        KeyError: If a name from `names` does not exist in CAPABILITY_CLASS_MAP and no override is provided.
+        KeyError: If a requested name has no non-``None`` override and is absent
+            from :data:`CAPABILITY_CLASS_MAP`.
+        Exception: Exceptions raised while iterating ``names``, reading
+            ``overrides``, or calling the selected handler propagate unchanged.
     """
+    del interface_cls
     instances: list[Capability] = []
     for name in names:
         override = overrides.get(name)

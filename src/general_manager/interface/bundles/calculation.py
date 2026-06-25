@@ -12,7 +12,7 @@ from general_manager.interface.capabilities.configuration import (
     InterfaceCapabilityConfig,
 )
 
-CALCULATION_CORE_CAPABILITIES = CapabilitySet(
+CALCULATION_CORE_CAPABILITIES: CapabilitySet = CapabilitySet(
     label="calculation_core",
     entries=(
         InterfaceCapabilityConfig(CalculationLifecycleCapability),

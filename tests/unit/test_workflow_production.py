@@ -17,6 +17,8 @@ from general_manager.workflow.engine import (
 from general_manager.workflow.event_registry import (
     DatabaseEventRegistry,
     InMemoryEventRegistry,
+    InvalidWorkflowEventRegistryError,
+    InvalidWorkflowEventRegistryOptionsError,
     WorkflowEvent,
     configure_event_registry,
     configure_event_registry_from_settings,
@@ -51,6 +53,34 @@ class WorkflowProductionRegistryTests(TestCase):
     def test_event_registry_defaults_to_database_in_production_mode(self) -> None:
         configure_event_registry_from_settings(settings)
         assert isinstance(get_event_registry(), DatabaseEventRegistry)
+
+    @override_settings(
+        WORKFLOW_EVENT_REGISTRY=InMemoryEventRegistry,
+        GENERAL_MANAGER={
+            "WORKFLOW_MODE": "production",
+            "WORKFLOW_EVENT_REGISTRY": None,
+        },
+    )
+    def test_namespaced_none_event_registry_uses_mode_default(self) -> None:
+        configure_event_registry_from_settings(settings)
+        assert isinstance(get_event_registry(), DatabaseEventRegistry)
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "WORKFLOW_EVENT_REGISTRY": {
+                "class": InMemoryEventRegistry,
+                "options": ["not", "a", "mapping"],
+            },
+        },
+    )
+    def test_event_registry_mapping_options_must_be_mapping(self) -> None:
+        with pytest.raises(InvalidWorkflowEventRegistryOptionsError):
+            configure_event_registry_from_settings(settings)
+
+    @override_settings(GENERAL_MANAGER={"WORKFLOW_EVENT_REGISTRY": object()})
+    def test_event_registry_setting_must_resolve_to_registry(self) -> None:
+        with pytest.raises(InvalidWorkflowEventRegistryError):
+            configure_event_registry_from_settings(settings)
 
     @override_settings(
         GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": False}
@@ -497,6 +527,53 @@ class WorkflowProductionEngineTests(TestCase):
         )
 
     @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": False}
+    )
+    def test_correlation_reuse_ignores_new_input_and_metadata(self) -> None:
+        engine = CeleryWorkflowEngine()
+        workflow = WorkflowDefinition(workflow_id="wf-dedupe-input", handler=_handler)
+
+        first = engine.start(
+            workflow,
+            {"value": 1},
+            correlation_id="corr-same-input",
+            metadata={"source": "first"},
+        )
+        second = engine.start(
+            workflow,
+            {"value": 2},
+            correlation_id="corr-same-input",
+            metadata={"source": "second"},
+        )
+
+        assert first.execution_id == second.execution_id
+        assert second.input_data == {"value": 1}
+        assert second.output_data == {"seen": 1}
+        assert second.metadata["source"] == "first"
+
+    @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": False}
+    )
+    def test_celery_engine_records_import_path_in_metadata(self) -> None:
+        engine = CeleryWorkflowEngine()
+        workflow = WorkflowDefinition(
+            workflow_id="wf-metadata-path",
+            handler=_handler,
+        )
+
+        execution = engine.start(
+            workflow,
+            {"value": 3},
+            metadata={"handler_path": "custom.path", "source": "test"},
+        )
+
+        assert (
+            execution.metadata["handler_path"]
+            == "tests.unit.test_workflow_production._handler"
+        )
+        assert execution.metadata["source"] == "test"
+
+    @override_settings(
         GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}
     )
     def test_celery_workflow_engine_allows_retry_after_failed_correlation(self) -> None:
@@ -574,6 +651,26 @@ class WorkflowProductionEngineTests(TestCase):
         assert loaded.state == "failed"
         assert loaded.error is not None
 
+    @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}
+    )
+    def test_async_start_returns_pending_snapshot_before_worker_update(self) -> None:
+        engine = CeleryWorkflowEngine()
+        workflow = WorkflowDefinition(
+            workflow_id="wf-async-snapshot",
+            handler=_handler,
+        )
+
+        with patch("general_manager.workflow.backends.celery.CELERY_AVAILABLE", True):
+            execution = engine.start(workflow, {"value": 5})
+
+        assert execution.state == "pending"
+        WorkflowExecutionRecord.objects.filter(
+            execution_id=execution.execution_id
+        ).update(state="completed", output_data={"seen": 5})
+        assert execution.state == "pending"
+        assert engine.status(execution.execution_id).state == "completed"
+
     def test_execute_workflow_handler_keeps_cancelled_state(self) -> None:
         record = WorkflowExecutionRecord.objects.create(
             execution_id="exec-cancelled",
@@ -639,6 +736,21 @@ class WorkflowProductionEngineTests(TestCase):
         assert resumed.state == "completed"
         assert resumed.metadata["resume_signal"] == {"step": "signal"}
 
+    def test_celery_workflow_engine_resume_falsey_signal_keeps_metadata(self) -> None:
+        engine = CeleryWorkflowEngine()
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-resume-empty-signal",
+            workflow_id="wf-resume-empty-signal",
+            state="waiting",
+            input_data={},
+            metadata={"existing": True},
+        )
+
+        resumed = engine.resume(record.execution_id, {})
+
+        assert resumed.state == "completed"
+        assert resumed.metadata == {"existing": True, "resume_signal": {}}
+
     def test_celery_workflow_engine_cancel_rejects_completed_state(self) -> None:
         engine = CeleryWorkflowEngine()
         record = WorkflowExecutionRecord.objects.create(
@@ -667,6 +779,21 @@ class WorkflowProductionEngineTests(TestCase):
         with pytest.raises(WorkflowCancelledError):
             engine.cancel(record.execution_id, reason="late cancel")
 
+    def test_celery_workflow_engine_cancel_stores_reason_as_error(self) -> None:
+        engine = CeleryWorkflowEngine()
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-cancel-reason",
+            workflow_id="wf-cancel-reason",
+            state="running",
+            input_data={},
+            metadata={},
+        )
+
+        cancelled = engine.cancel(record.execution_id, reason="stop now")
+
+        assert cancelled.state == "cancelled"
+        assert cancelled.error == "stop now"
+
     def test_resume_execution_task_rejects_running_state(self) -> None:
         record = WorkflowExecutionRecord.objects.create(
             execution_id="exec-resume-running",
@@ -694,6 +821,20 @@ class WorkflowProductionEngineTests(TestCase):
         record.refresh_from_db()
         assert record.state == "completed"
         assert record.metadata["resume_signal"] == {"step": "signal"}
+
+    def test_resume_execution_task_preserves_empty_signal(self) -> None:
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-resume-empty-signal-task",
+            workflow_id="wf-resume-empty-signal-task",
+            state="waiting",
+            input_data={},
+            metadata={"existing": True},
+        )
+
+        assert resume_execution_task(record.execution_id, {}) is True
+        record.refresh_from_db()
+        assert record.state == "completed"
+        assert record.metadata == {"existing": True, "resume_signal": {}}
 
     def test_cancel_execution_task_rejects_terminal_state(self) -> None:
         record = WorkflowExecutionRecord.objects.create(

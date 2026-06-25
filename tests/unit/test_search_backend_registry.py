@@ -87,6 +87,33 @@ class BackendRegistryTests(SimpleTestCase):
         backend = get_search_backend()
         assert isinstance(backend, DevSearchBackend)
 
+    def test_configure_search_backend_from_settings_nested_none_disables(self) -> None:
+        from general_manager.search import backend_registry
+
+        dummy_settings = SimpleNamespace(
+            GENERAL_MANAGER={"SEARCH_BACKEND": None},
+            SEARCH_BACKEND=_ConfigurableBackend,
+        )
+
+        configure_search_backend_from_settings(dummy_settings)
+
+        assert backend_registry._backend is None
+
+    def test_configure_search_backend_from_settings_rejects_invalid_options(
+        self,
+    ) -> None:
+        dummy_settings = SimpleNamespace(
+            GENERAL_MANAGER={
+                "SEARCH_BACKEND": {
+                    "class": _ConfigurableBackend,
+                    "options": ["not", "a", "mapping"],
+                }
+            }
+        )
+
+        with self.assertRaisesRegex(TypeError, "SEARCH_BACKEND options"):
+            configure_search_backend_from_settings(dummy_settings)
+
     @override_settings(GENERAL_MANAGER={"SEARCH_BACKEND": DevSearchBackend})
     def test_get_search_backend_uses_settings(self) -> None:
         """

@@ -1,4 +1,4 @@
-"""Exception types shared across GeneralManager interfaces."""
+"""Public exception types shared by GeneralManager interface implementations."""
 
 from __future__ import annotations
 
@@ -20,81 +20,95 @@ __all__ = [
 
 
 class InvalidFieldValueError(ValueError):
-    """Raised when assigning a value incompatible with the model field."""
+    """Raised when model-field assignment rejects a value.
+
+    Used by writable ORM capabilities after Django/model assignment raises
+    `ValueError` for a payload field.
+    """
 
     def __init__(self, field_name: str, value: object) -> None:
-        """
-        Initialize the exception indicating a value is invalid for a specific model field.
+        """Build an error message for an invalid field value.
 
-        Parameters:
-            field_name: Name of the field that received the invalid value.
-            value: The invalid value that caused the error.
+        Args:
+            field_name: Payload/model field name that rejected the value.
+            value: Rejected value included in the message with `str(value)`.
+
+        Message:
+            `Invalid value for {field_name}: {value}.`
         """
         super().__init__(f"Invalid value for {field_name}: {value}.")
 
 
 class InvalidFieldTypeError(TypeError):
-    """Raised when assigning a value with an unexpected type."""
+    """Raised when model-field assignment rejects a value type.
 
-    def __init__(self, field_name: str, error: Exception) -> None:
-        """
-        Construct an InvalidFieldTypeError describing a type-related error for a model field.
+    Used by writable ORM capabilities after Django/model assignment raises
+    `TypeError` for a payload field.
+    """
 
-        Parameters:
-            field_name (str): Name of the field that received a value with an unexpected type.
-            error (Exception): The underlying exception or error message that caused the type error; its text is included in the constructed message.
+    def __init__(self, field_name: str, error: TypeError) -> None:
+        """Build an error message for a field type failure.
+
+        Args:
+            field_name: Payload/model field name that rejected the value.
+            error: Original `TypeError`; its message is embedded unchanged.
+
+        Message:
+            `Type error for {field_name}: {error}.`
         """
         super().__init__(f"Type error for {field_name}: {error}.")
 
 
 class UnknownFieldError(ValueError):
-    """Raised when keyword arguments reference fields not present on the model."""
+    """Raised when write payloads reference fields absent from the model."""
 
     def __init__(self, field_name: str, model_name: str) -> None:
-        """
-        Initialize the exception for a missing field on a model.
+        """Build an error message for an unknown model field.
 
-        Parameters:
-            field_name (str): Name of the field that was not found.
-            model_name (str): Name of the model where the field was expected.
+        Args:
+            field_name: Payload field name that was not recognized.
+            model_name: Name of the Django model checked for that field.
+
+        Message:
+            `{field_name} does not exist in {model_name}.`
         """
         super().__init__(f"{field_name} does not exist in {model_name}.")
 
 
 class DuplicateFieldNameError(ValueError):
-    """Raised when a dynamically generated field name conflicts with an existing one."""
+    """Raised when generated interface descriptors collide on one name."""
 
     def __init__(self) -> None:
-        """
-        Initialize the DuplicateFieldNameError with a standard message indicating a field name conflict.
-
-        The exception message is "Field name already exists." and no parameters are accepted.
-        """
+        """Build the fixed `Field name already exists.` message."""
         super().__init__("Field name already exists.")
 
 
 class MissingActivationSupportError(TypeError):
-    """Raised when a model does not expose the expected `is_active` attribute."""
+    """Raised when soft delete needs model `is_active` support."""
 
     def __init__(self, model_name: str) -> None:
-        """
-        Initialize the error with a message stating that the given model must expose an `is_active` attribute.
+        """Build an error message for missing soft-delete support.
 
-        Parameters:
-            model_name (str): Name of the model missing the required `is_active` attribute.
+        Args:
+            model_name: Name of the model class missing `is_active`.
+
+        Message:
+            `{model_name} must define an 'is_active' attribute.`
         """
         super().__init__(f"{model_name} must define an 'is_active' attribute.")
 
 
 class MissingReadOnlyDataError(ValueError):
-    """Raised when a read-only manager lacks the `_data` source."""
+    """Raised when a read-only manager lacks its `_data` source."""
 
     def __init__(self, interface_name: str) -> None:
-        """
-        Error raised when a read-only interface does not declare the required `_data` attribute.
+        """Build an error message for missing read-only data.
 
-        Parameters:
-            interface_name (str): Name of the read-only interface missing the `_data` attribute; used to construct the exception message.
+        Args:
+            interface_name: Name of the read-only manager/interface owner.
+
+        Message:
+            `ReadOnlyInterface '{interface_name}' must define a '_data' attribute.`
         """
         super().__init__(
             f"ReadOnlyInterface '{interface_name}' must define a '_data' attribute."
@@ -102,14 +116,16 @@ class MissingReadOnlyDataError(ValueError):
 
 
 class MissingUniqueFieldError(ValueError):
-    """Raised when read-only models provide no unique identifiers."""
+    """Raised when read-only sync cannot determine a row identity."""
 
     def __init__(self, interface_name: str) -> None:
-        """
-        Initialize the exception raised when a read-only interface does not declare any unique identifier fields.
+        """Build an error message for missing unique field metadata.
 
-        Parameters:
-            interface_name (str): Name of the read-only interface missing a unique field; included in the exception message.
+        Args:
+            interface_name: Name of the read-only manager/interface owner.
+
+        Message:
+            `ReadOnlyInterface '{interface_name}' must declare at least one unique field.`
         """
         super().__init__(
             f"ReadOnlyInterface '{interface_name}' must declare at least one unique field."
@@ -117,23 +133,27 @@ class MissingUniqueFieldError(ValueError):
 
 
 class ReadOnlyRelationLookupError(ValueError):
-    """Raised when a read-only sync cannot resolve a related object."""
+    """Raised when read-only sync resolves zero or multiple related rows."""
 
     def __init__(
         self,
         interface_name: str,
         field_name: str,
         matches: int,
-        lookup: dict[str, object] | object,
+        lookup: object,
     ) -> None:
-        """
-        Error raised when a read-only interface cannot resolve a related object during synchronization.
+        """Build an error message for an ambiguous relation lookup.
 
-        Parameters:
-                interface_name (str): Name of the read-only interface performing the sync.
-                field_name (str): Name of the related field being resolved.
-                matches (int): Number of records found by the lookup (expected exactly 1).
-                lookup (dict[str, object] | object): Lookup payload used to search for the related record.
+        Args:
+            interface_name: Name of the read-only manager/interface owner.
+            field_name: Relation field being resolved.
+            matches: Number of matching rows; exactly one is required.
+            lookup: Lookup payload included in the message with `repr(lookup)`.
+
+        Message:
+            `ReadOnlyInterface '{interface_name}' could not resolve relation
+            '{field_name}' (expected 1 match, found {matches}) for lookup
+            {lookup!r}.`
         """
         super().__init__(
             (
@@ -145,38 +165,32 @@ class ReadOnlyRelationLookupError(ValueError):
 
 
 class InvalidReadOnlyDataFormatError(TypeError):
-    """Raised when `_data` JSON does not decode into a list of dictionaries."""
+    """Raised when read-only `_data` has an invalid row/list shape."""
 
     def __init__(self) -> None:
-        """
-        Initialize the exception with a standardized message about the expected `_data` JSON structure.
-
-        Sets the exception message to "_data JSON must decode to a list of dictionaries."
-        """
+        """Build the fixed `_data JSON must decode to a list of dictionaries.` message."""
         super().__init__("_data JSON must decode to a list of dictionaries.")
 
 
 class InvalidReadOnlyDataTypeError(TypeError):
-    """Raised when `_data` is neither JSON string nor list."""
+    """Raised when read-only `_data` is neither a JSON string nor a list."""
 
     def __init__(self) -> None:
-        """
-        Indicates that a read-only manager's `_data` is neither a JSON string nor a list of dictionaries.
-
-        The exception's message is "_data must be a JSON string or a list of dictionaries."
-        """
+        """Build the fixed `_data must be a JSON string or a list of dictionaries.` message."""
         super().__init__("_data must be a JSON string or a list of dictionaries.")
 
 
 class MissingReadOnlyBindingError(RuntimeError):
-    """Raised when a read-only interface is invoked before lifecycle wiring completes."""
+    """Raised when read-only sync runs before lifecycle binding completes."""
 
     def __init__(self, interface_name: str) -> None:
-        """
-        Create an exception indicating a read-only interface was used before being bound to a manager and model.
+        """Build an error message for missing manager/model binding.
 
-        Parameters:
-            interface_name (str): Name of the interface that has not been bound yet; used in the exception message.
+        Args:
+            interface_name: Name of the unbound read-only interface class.
+
+        Message:
+            `ReadOnlyInterface '{interface_name}' must be bound to a manager and model before syncing.`
         """
         super().__init__(
             f"ReadOnlyInterface '{interface_name}' must be bound to a manager and model before syncing."
@@ -184,29 +198,31 @@ class MissingReadOnlyBindingError(RuntimeError):
 
 
 class MissingModelConfigurationError(ValueError):
-    """Raised when an ExistingModelInterface does not declare a `model`."""
+    """Raised when an `ExistingModelInterface` does not declare `model`."""
 
     def __init__(self, interface_name: str) -> None:
-        """
-        Indicates that an interface is missing its required `model` configuration.
+        """Build an error message for missing existing-model configuration.
 
-        Parameters:
-            interface_name (str): Name of the interface that must declare a `model` attribute.
+        Args:
+            interface_name: Name of the interface class missing `model`.
 
-        Description:
-            Initializes the exception with a message stating which interface must define a `model` attribute.
+        Message:
+            `{interface_name} must define a 'model' attribute.`
         """
         super().__init__(f"{interface_name} must define a 'model' attribute.")
 
 
 class InvalidModelReferenceError(TypeError):
-    """Raised when the configured model reference cannot be resolved."""
+    """Raised when an existing-model reference cannot be resolved."""
 
     def __init__(self, reference: object) -> None:
-        """
-        Initialize the exception for an invalid model reference.
+        """Build an error message for an invalid model reference.
 
-        Parameters:
-            reference (object): The model reference that could not be resolved; its representation is included in the exception message.
+        Args:
+            reference: Invalid value from `ExistingModelInterface.model`; its
+                string form is included in the message.
+
+        Message:
+            `Invalid model reference '{reference}'.`
         """
         super().__init__(f"Invalid model reference '{reference}'.")

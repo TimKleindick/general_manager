@@ -2,78 +2,146 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Literal, ParamSpec, Protocol, TypeVar, cast, overload
 
 from django.utils.module_loading import import_string
 
 from general_manager.logging import get_logger
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.search.backend_registry import get_search_backend
 
 logger = get_logger("search.async")
+P = ParamSpec("P")
+R = TypeVar("R")
+R_co = TypeVar("R_co", covariant=True)
+SearchIndexAction = Literal["index", "delete"]
+SearchIdentification = Mapping[str, object]
+
+
+class _TaskCallable(Protocol[P, R_co]):
+    """Callable task wrapper returned by Celery's shared_task decorator."""
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R_co: ...
+
+    def delay(self, *args: P.args, **kwargs: P.kwargs) -> object: ...
+
+
+class _RawSharedTask(Protocol):
+    """Runtime callable shape of Celery's shared_task decorator."""
+
+    def __call__(self, func: object = None, **kwargs: object) -> object: ...
+
+
+class _ManagerFactory(Protocol):
+    """Callable manager class surface required by indexing tasks."""
+
+    def __call__(self, **kwargs: object) -> GeneralManager: ...
+
+
+class InvalidSearchIndexActionError(ValueError):
+    """Raised when async search indexing receives an unsupported action."""
+
+    def __init__(self, action: str) -> None:
+        """Build the validation error message."""
+        super().__init__(f"Unsupported search index action: {action}")
+
+
+class InvalidSearchManagerPathError(TypeError):
+    """Raised when a manager import path resolves to a non-callable object."""
+
+    def __init__(self) -> None:
+        """Build the validation error message."""
+        super().__init__("manager_path must resolve to a callable manager")
+
+
+_raw_shared_task: object | None = None
 
 try:
-    from celery import shared_task
+    from celery import shared_task as _celery_shared_task
 
     CELERY_AVAILABLE = True
 except ImportError:  # pragma: no cover - depends on optional dependency
     CELERY_AVAILABLE = False
+else:
+    _raw_shared_task = _celery_shared_task
 
-    def shared_task(func: Any | None = None, **_kwargs: Any):  # type: ignore[no-redef]
-        """
-        A no-op decorator compatible with Celery's `shared_task` that returns the original function unchanged.
 
-        Parameters:
-            func (callable | None): The function being decorated when used as `@shared_task`. If `None`, the function is being called with keyword arguments and this returns a decorator.
-            **_kwargs: Any:
-                Keyword arguments accepted for compatibility with Celery's `shared_task` but ignored.
+@overload
+def shared_task(
+    func: Callable[P, R],
+    **kwargs: object,
+) -> _TaskCallable[P, R]: ...
 
-        Returns:
-            callable: If `func` is provided, returns `func` unchanged; otherwise returns a decorator that returns its input function unchanged.
-        """
 
-        def decorator(inner):
-            return inner
+@overload
+def shared_task(
+    func: None = None,
+    **kwargs: object,
+) -> Callable[[Callable[P, R]], _TaskCallable[P, R]]: ...
 
+
+def shared_task(
+    func: Callable[P, R] | None = None,
+    **kwargs: object,
+) -> Callable[[Callable[P, R]], _TaskCallable[P, R]] | _TaskCallable[P, R]:
+    """Return Celery's task decorator or a typed no-op fallback."""
+
+    def decorator(inner: Callable[P, R]) -> _TaskCallable[P, R]:
+        """Return the wrapped callable unchanged."""
+        return cast(_TaskCallable[P, R], inner)
+
+    if _raw_shared_task is None:
         if func is None:
             return decorator
         return decorator(func)
+    celery_shared_task = cast(_RawSharedTask, _raw_shared_task)
+    if func is None:
+        return cast(
+            Callable[[Callable[P, R]], _TaskCallable[P, R]],
+            celery_shared_task(**kwargs),
+        )
+    return cast(_TaskCallable[P, R], celery_shared_task(func, **kwargs))
 
 
 def _async_enabled() -> bool:
     """
-    Determine whether asynchronous indexing is enabled via Django settings.
+    Return whether search index updates should be queued through Celery.
 
-    Checks GENERAL_MANAGER['SEARCH_ASYNC'] first, falling back to the top-level SEARCH_ASYNC setting.
-
-    Returns:
-        bool: `True` if GENERAL_MANAGER.SEARCH_ASYNC or SEARCH_ASYNC is truthy, `False` otherwise.
+    `GENERAL_MANAGER["SEARCH_ASYNC"]` takes precedence over the top-level
+    `SEARCH_ASYNC` setting through GeneralManager's settings resolver. Missing
+    values default to `False`; configured values use normal Python truthiness.
     """
     from general_manager.conf import get_setting
 
     return bool(get_setting("SEARCH_ASYNC", False))
 
 
-def _resolve_manager(manager_path: str):
+def _resolve_manager(manager_path: str) -> _ManagerFactory:
     """
-    Resolve a dotted Python import path to the referenced manager object.
+    Resolve a dotted Python import path to an importable manager class/callable.
 
-    Parameters:
-        manager_path (str): Dotted import path pointing to the manager (e.g., "myapp.managers.MyManager").
-
-    Returns:
-        The object referenced by `manager_path` (typically a manager class or callable).
+    Import errors from Django's `import_string(...)` propagate. The returned
+    object must be callable with identification keyword arguments; constructor
+    errors propagate from task execution.
     """
-    return import_string(manager_path)
+    manager_class = import_string(manager_path)
+    if not callable(manager_class):
+        raise InvalidSearchManagerPathError()
+    return cast(_ManagerFactory, manager_class)
 
 
 @shared_task
-def index_instance_task(manager_path: str, identification: dict[str, Any]) -> None:
+def index_instance_task(
+    manager_path: str, identification: SearchIdentification
+) -> None:
     """
     Index the instance represented by the given manager path and identification in the configured search backend.
 
-    Parameters:
-        manager_path (str): Dotted import path to the manager/class used to construct the instance.
-        identification (dict[str, Any]): Mapping of attributes used to instantiate or identify the target instance.
+    `manager_path` must resolve to a callable manager class. `identification`
+    supplies keyword arguments for that class and must contain values accepted by
+    the active Celery serializer when queued. Import, construction, backend
+    lookup, and indexing errors propagate to the Celery worker or direct caller.
     """
     manager_class = _resolve_manager(manager_path)
     instance = manager_class(**identification)
@@ -83,13 +151,16 @@ def index_instance_task(manager_path: str, identification: dict[str, Any]) -> No
 
 
 @shared_task
-def delete_instance_task(manager_path: str, identification: dict[str, Any]) -> None:
+def delete_instance_task(
+    manager_path: str, identification: SearchIdentification
+) -> None:
     """
     Remove the search index document for an instance identified by a manager path and identification data.
 
-    Parameters:
-        manager_path (str): Dotted import path to the manager class used to construct the target instance.
-        identification (dict[str, Any]): Constructor keyword arguments that identify the instance to be deleted from the index.
+    `manager_path` must resolve to a callable manager class. `identification`
+    supplies keyword arguments for that class and must contain values accepted by
+    the active Celery serializer when queued. Import, construction, backend
+    lookup, and deletion errors propagate to the Celery worker or direct caller.
     """
     manager_class = _resolve_manager(manager_path)
     instance = manager_class(**identification)
@@ -100,24 +171,23 @@ def delete_instance_task(manager_path: str, identification: dict[str, Any]) -> N
 
 def dispatch_index_update(
     *,
-    action: str,
+    action: SearchIndexAction,
     manager_path: str,
-    identification: dict[str, Any],
-    instance: Any | None = None,
+    identification: SearchIdentification,
+    instance: GeneralManager | None = None,
 ) -> None:
     """
-    Dispatches an index or delete operation either asynchronously or inline based on configuration.
+    Dispatch one search index update or delete operation.
 
-    When asynchronous updates are enabled and Celery is available, enqueues a task to perform the action.
-    If an actual model instance is provided, performs the action immediately using SearchIndexer and the current backend.
-    If neither asynchronous execution nor an instance is used, invokes the task function synchronously (inline).
-
-    Parameters:
-        action (str): Either "delete" to remove the instance from the index or any other value to index/update it.
-        manager_path (str): Python import path to the manager class used to resolve the instance when running tasks.
-        identification (dict[str, Any]): Mapping used by the manager to locate or identify the instance (e.g., primary key fields).
-        instance (Any | None): Optional in-memory instance; if provided, the operation is executed directly against it.
+    `action` must be `"index"` or `"delete"`. When async indexing is enabled and
+    Celery is available, a Celery task is enqueued and any provided `instance` is
+    ignored. Otherwise, an explicit `instance` runs inline against the current
+    backend. When no instance is supplied, the task function is called
+    synchronously and reconstructs the manager from `manager_path` and
+    `identification`. Task enqueue, import, construction, backend, and indexer
+    errors propagate.
     """
+    _validate_action(action)
     if _async_enabled() and CELERY_AVAILABLE:
         if action == "delete":
             delete_instance_task.delay(manager_path, identification)
@@ -139,3 +209,9 @@ def dispatch_index_update(
         delete_instance_task(manager_path, identification)
     else:
         index_instance_task(manager_path, identification)
+
+
+def _validate_action(action: str) -> None:
+    """Validate the public dispatch action value."""
+    if action not in {"index", "delete"}:
+        raise InvalidSearchIndexActionError(action)

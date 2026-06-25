@@ -150,7 +150,9 @@ class GroupBucketManagerMismatchError(ValueError):
 class GroupBucketKeysMismatchError(ValueError):
     """Raised when grouping buckets use different grouping keys."""
 
-    def __init__(self, first_keys: tuple[str, ...], second_keys: tuple[str, ...]) -> None:
+    def __init__(
+        self, first_keys: tuple[str, ...], second_keys: tuple[str, ...]
+    ) -> None:
         """Initialize the mismatch error with both grouping key tuples."""
         super().__init__(f"Cannot combine group keys {first_keys} and {second_keys}.")
 

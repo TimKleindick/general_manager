@@ -15,7 +15,7 @@ class _DummyInstance:
 
 
 class _DummyManager:
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object) -> None:
         """
         Initialize the manager with identification derived from provided keyword arguments.
 
@@ -80,9 +80,13 @@ class _DummyTask:
 
 
 def test_async_enabled_reads_settings() -> None:
+    with override_settings(GENERAL_MANAGER={}):
+        assert async_tasks._async_enabled() is False
     with override_settings(SEARCH_ASYNC=True):
         assert async_tasks._async_enabled() is True
     with override_settings(SEARCH_ASYNC=False):
+        assert async_tasks._async_enabled() is False
+    with override_settings(SEARCH_ASYNC=True, GENERAL_MANAGER={"SEARCH_ASYNC": False}):
         assert async_tasks._async_enabled() is False
 
 
@@ -226,6 +230,38 @@ def test_dispatch_index_update_async(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
+def test_dispatch_index_update_async_ignores_inline_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async routing wins over a provided instance when Celery is available."""
+    index_task = _DummyTask()
+
+    monkeypatch.setattr(async_tasks, "CELERY_AVAILABLE", True)
+    monkeypatch.setattr(async_tasks, "_async_enabled", lambda: True)
+    monkeypatch.setattr(async_tasks, "index_instance_task", index_task)
+
+    async_tasks.dispatch_index_update(
+        action="index",
+        manager_path="tests.unit.test_search_async_tasks._DummyManager",
+        identification={"id": 9},
+        instance=_DummyInstance(9),
+    )
+
+    assert index_task.calls == [
+        ("tests.unit.test_search_async_tasks._DummyManager", {"id": 9})
+    ]
+
+
+def test_dispatch_index_update_rejects_invalid_action() -> None:
+    """Dispatch rejects unsupported search index action strings."""
+    with pytest.raises(ValueError):
+        async_tasks.dispatch_index_update(
+            action="archive",
+            manager_path="tests.unit.test_search_async_tasks._DummyManager",
+            identification={"id": 1},
+        )
+
+
 def test_index_and_delete_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
     indexer = _DummyIndexer()
 
@@ -275,3 +311,30 @@ def test_index_and_delete_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert indexer.indexed
     assert indexer.deleted
+
+
+def test_resolve_manager_rejects_non_callable_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manager resolution rejects paths that do not resolve to callables."""
+    monkeypatch.setattr(async_tasks, "import_string", lambda _path: object())
+
+    with pytest.raises(TypeError):
+        async_tasks._resolve_manager("tests.not_callable")
+
+
+def test_index_task_propagates_manager_construction_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task execution propagates errors while reconstructing an instance."""
+
+    class BrokenManager:
+        """Manager constructor that fails."""
+
+        def __init__(self, **_kwargs: object) -> None:
+            raise RuntimeError
+
+    monkeypatch.setattr(async_tasks, "_resolve_manager", lambda _path: BrokenManager)
+
+    with pytest.raises(RuntimeError):
+        async_tasks.index_instance_task("tests.BrokenManager", {"id": 1})

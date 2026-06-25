@@ -7,6 +7,7 @@ from general_manager.manager.group_manager import (
     GroupManager,
 )
 from general_manager.bucket.group_bucket import GroupBucket
+from general_manager.bucket.group_bucket import GroupBucketKeysMismatchError
 from general_manager.measurement import Measurement
 
 
@@ -110,12 +111,30 @@ class GroupBucketTests(TestCase):
         keys = {(group.a, group.b) for group in bucket}
         self.assertSetEqual(keys, {(1, "x"), (2, "y")})
 
+    def test_grouping_dict_values_with_mixed_key_types(self):
+        items = [
+            DummyManager(items={"k": 1, 2: "two"}),
+            DummyManager(items={2: "two", "k": 1}),
+            DummyManager(items={"k": 2, 2: "two"}),
+        ]
+
+        bucket = GroupBucket(DummyManager, ("items",), ListBucket(items))
+
+        self.assertEqual(bucket.count(), 2)
+
     # Test that __or__ combines two buckets correctly
     def test_or_combines_buckets(self):
         b1 = GroupBucket(DummyManager, ("a",), ListBucket([DummyManager(a=1)]))
         b2 = GroupBucket(DummyManager, ("a",), ListBucket([DummyManager(a=2)]))
         combined = b1 | b2
         self.assertEqual(combined.count(), 2)
+
+    def test_or_rejects_different_grouping_keys(self):
+        b1 = GroupBucket(DummyManager, ("a",), ListBucket([DummyManager(a=1, b="x")]))
+        b2 = GroupBucket(DummyManager, ("b",), ListBucket([DummyManager(a=2, b="y")]))
+
+        with self.assertRaises(GroupBucketKeysMismatchError):
+            _ = b1 | b2
 
     # Test that filter and exclude delegate to underlying bucket
     def test_filter_and_exclude_delegate(self):

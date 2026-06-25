@@ -936,6 +936,18 @@ class ManagerBasedPermissionTests(TestCase):
     @override_settings(
         GENERAL_MANAGER={
             "DEFAULT_PERMISSIONS": {
+                "READ": "public",
+            }
+        }
+    )
+    def test_configured_default_permission_string_is_scalar(self) -> None:
+        permission = ManagerBasedPermission(self.mock_instance, self.user)
+
+        self.assertEqual(permission.__read__, ["public"])
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "DEFAULT_PERMISSIONS": {
                 "READ": ["isAuthenticated"],
                 "CREATE": ["isAdmin"],
                 "UPDATE": ["isAdmin"],

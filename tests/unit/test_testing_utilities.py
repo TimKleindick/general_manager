@@ -139,6 +139,51 @@ class TestingUtilityDependencyOrderingTests(SimpleTestCase):
         self.assertIn("X2", execution_log)
         self.assertIn("Y", execution_log)
 
+    def test_run_hooks_does_not_skip_equal_distinct_resolver_objects(self) -> None:
+        """Verify equal resolver objects still execute their own hook entries."""
+        from general_manager.utils.testing import run_registered_startup_hooks
+
+        class InterfaceA(InterfaceBase):
+            _interface_type = "a"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class InterfaceB(InterfaceBase):
+            _interface_type = "b"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class EqualResolver:
+            def __call__(self, iface: object) -> set[type[InterfaceBase]]:
+                return set()
+
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, EqualResolver)
+
+            def __hash__(self) -> int:
+                return 1
+
+        execution_log: list[str] = []
+
+        register_startup_hook(
+            InterfaceA,
+            lambda: execution_log.append("A"),
+            dependency_resolver=EqualResolver(),
+        )
+        register_startup_hook(
+            InterfaceB,
+            lambda: execution_log.append("B"),
+            dependency_resolver=EqualResolver(),
+        )
+
+        run_registered_startup_hooks(interfaces=[InterfaceA, InterfaceB])
+
+        self.assertEqual(sorted(execution_log), ["A", "B"])
+
     def test_run_hooks_ensures_capabilities_initialized(self) -> None:
         """Verify _run_registered_startup_hooks calls get_capabilities on interfaces."""
 

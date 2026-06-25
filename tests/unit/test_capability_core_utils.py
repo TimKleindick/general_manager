@@ -8,6 +8,22 @@ from unittest.mock import Mock
 from general_manager.interface.capabilities.core.utils import with_observability
 
 
+class PayloadCopyError(RuntimeError):
+    """Raised when a test payload is unexpectedly copied."""
+
+
+class HookError(RuntimeError):
+    """Raised by observability hook test doubles."""
+
+
+class OperationError(RuntimeError):
+    """Raised by operation test callables."""
+
+
+class HookAttributeError(RuntimeError):
+    """Raised when reading an observability hook attribute fails."""
+
+
 def test_with_observability_no_handler():
     """Test with_observability when target has no get_capability_handler."""
     target = object()
@@ -170,6 +186,106 @@ def test_with_observability_payload_copy():
     assert call_kwargs["payload"] is not original_payload
 
 
+def test_with_observability_reuses_same_payload_copy_for_all_hooks():
+    """All hooks for one invocation should receive the same shallow copy."""
+    payload_ids: list[int] = []
+
+    def remember_payload(**kwargs: object) -> None:
+        payload = kwargs["payload"]
+        assert isinstance(payload, dict)
+        payload_ids.append(id(payload))
+
+    capability = Mock()
+    capability.before_operation = Mock(side_effect=remember_payload)
+    capability.after_operation = Mock(side_effect=remember_payload)
+    capability.on_error = None
+    target = Mock()
+    target.get_capability_handler = Mock(return_value=capability)
+    original_payload = {"key": "value"}
+
+    result = with_observability(
+        target,
+        operation="test",
+        payload=original_payload,
+        func=lambda: "ok",
+    )
+
+    assert result == "ok"
+    assert len(payload_ids) == 2
+    assert payload_ids[0] == payload_ids[1]
+
+
+def test_with_observability_does_not_copy_payload_without_capability():
+    """Payload conversion should be skipped when no capability is registered."""
+
+    class BrokenMapping(dict[str, object]):
+        def __iter__(self):
+            raise PayloadCopyError
+
+    target = Mock()
+    target.get_capability_handler = Mock(return_value=None)
+
+    result = with_observability(
+        target,
+        operation="test",
+        payload=BrokenMapping({"key": "value"}),
+        func=lambda: "ok",
+    )
+
+    assert result == "ok"
+
+
+def test_with_observability_ignores_absent_hook_attributes():
+    """Missing hook attributes should behave the same as hooks set to None."""
+
+    class CapabilityWithoutHooks:
+        pass
+
+    target = Mock()
+    target.get_capability_handler = Mock(return_value=CapabilityWithoutHooks())
+
+    result = with_observability(target, operation="test", payload={}, func=lambda: "ok")
+
+    assert result == "ok"
+
+
+def test_with_observability_reads_hook_attributes_before_copying_payload():
+    """Hook attribute lookup failures should happen before payload conversion."""
+
+    class BrokenMapping(dict[str, object]):
+        def __iter__(self):
+            raise PayloadCopyError
+
+    class BrokenCapability:
+        @property
+        def before_operation(self):
+            raise HookAttributeError
+
+    target = Mock()
+    target.get_capability_handler = Mock(return_value=BrokenCapability())
+
+    with pytest.raises(HookAttributeError):
+        with_observability(
+            target,
+            operation="test",
+            payload=BrokenMapping({"key": "value"}),
+            func=lambda: "ok",
+        )
+
+
+def test_with_observability_non_callable_hook_value_raises_when_called():
+    """Non-None hook attributes are called and fail normally if not callable."""
+    capability = Mock()
+    capability.before_operation = "not-callable"
+    capability.after_operation = None
+    capability.on_error = None
+    target = Mock()
+    target.get_capability_handler = Mock(return_value=capability)
+
+    with pytest.raises(TypeError):
+        with_observability(target, operation="test", payload={}, func=lambda: "ok")
+
+
 def test_with_observability_returns_func_result():
     """Test that with_observability returns the function's result."""
     target = Mock()
@@ -181,6 +297,29 @@ def test_with_observability_returns_func_result():
         return expected_result
 
     result = with_observability(target, operation="query", payload={}, func=func)
+
+    assert result is expected_result
+
+
+def test_with_observability_returns_awaitable_unchanged():
+    """Awaitables returned by func should pass through without wrapping."""
+    target = Mock()
+    target.get_capability_handler = Mock(return_value=None)
+
+    class AwaitableResult:
+        def __await__(self):
+            if False:
+                yield None
+            return "complete"
+
+    expected_result = AwaitableResult()
+
+    result = with_observability(
+        target,
+        operation="query",
+        payload={},
+        func=lambda: expected_result,
+    )
 
     assert result is expected_result
 
@@ -223,6 +362,70 @@ def test_with_observability_exception_propagates():
 
     with pytest.raises(CustomError, match="custom message"):
         with_observability(target, operation="test", payload={}, func=func)
+
+
+def test_with_observability_handler_lookup_exception_propagates():
+    """Capability lookup errors should not be wrapped."""
+    target = Mock()
+    target.get_capability_handler = Mock(side_effect=HookError)
+
+    with pytest.raises(HookError):
+        with_observability(target, operation="test", payload={}, func=lambda: "ok")
+
+
+def test_with_observability_before_exception_skips_func():
+    """If before_operation fails, the wrapped callable is not executed."""
+    func = Mock(return_value="unreached")
+    capability = Mock()
+    capability.before_operation = Mock(side_effect=HookError)
+    capability.after_operation = Mock()
+    capability.on_error = Mock()
+    target = Mock()
+    target.get_capability_handler = Mock(return_value=capability)
+
+    with pytest.raises(HookError):
+        with_observability(target, operation="test", payload={}, func=func)
+
+    func.assert_not_called()
+    capability.after_operation.assert_not_called()
+    capability.on_error.assert_not_called()
+
+
+def test_with_observability_on_error_exception_replaces_operation_exception():
+    """An on_error failure should replace the original operation exception."""
+    operation_error = OperationError()
+    hook_error = HookError()
+    capability = Mock()
+    capability.before_operation = None
+    capability.after_operation = None
+    capability.on_error = Mock(side_effect=hook_error)
+    target = Mock()
+    target.get_capability_handler = Mock(return_value=capability)
+
+    def func() -> str:
+        raise operation_error
+
+    with pytest.raises(HookError) as exc_info:
+        with_observability(target, operation="test", payload={}, func=func)
+
+    assert exc_info.value is hook_error
+
+
+def test_with_observability_after_exception_replaces_successful_result():
+    """An after_operation failure should replace a successful return value."""
+    hook_error = HookError()
+    capability = Mock()
+    capability.before_operation = None
+    capability.after_operation = Mock(side_effect=hook_error)
+    capability.on_error = Mock()
+    target = Mock()
+    target.get_capability_handler = Mock(return_value=capability)
+
+    with pytest.raises(HookError) as exc_info:
+        with_observability(target, operation="test", payload={}, func=lambda: "ok")
+
+    assert exc_info.value is hook_error
+    capability.on_error.assert_not_called()
 
 
 def test_with_observability_missing_hooks_ignored():
