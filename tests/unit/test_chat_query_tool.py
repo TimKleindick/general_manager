@@ -509,6 +509,33 @@ class ChatQueryToolTests(SimpleTestCase):
         assert result["data"] == [{"name": "Bolt", "material": {"name": "Steel"}}]
         assert "material { name }" in str(schema.calls[0]["query"])
 
+    def test_query_rejects_nested_wildcard_field_selection_before_execute(
+        self,
+    ) -> None:
+        class MaterialType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+            material = graphene.Field(MaterialType)
+
+        GraphQL.graphql_type_registry = {
+            "PartManager": PartType,
+            "MaterialManager": MaterialType,
+        }
+        GraphQL.manager_registry.setdefault("MaterialManager", self.PartManager)
+        schema = _RecordingSchema(_Result(data={}))
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="Invalid chat query field"):
+            query(
+                manager="PartManager",
+                filters={},
+                fields=[{"material": ["*"]}],
+            )
+
+        assert schema.calls == []
+
     @override_settings(
         GENERAL_MANAGER={
             "CHAT": {

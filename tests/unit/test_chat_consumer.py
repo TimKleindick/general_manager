@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from django.contrib.auth.models import AnonymousUser
+from django.core.cache import cache
 from django.test.utils import override_settings
 from django.utils import timezone
 
@@ -17,6 +18,7 @@ from general_manager.chat.providers.base import (
     TokenUsage,
     ToolCallEvent,
 )
+from general_manager.chat.rate_limits import enforce_chat_rate_limit
 
 
 class _Session:
@@ -684,6 +686,113 @@ class ChatConsumerMessageTests(unittest.TestCase):
             }
 
         asyncio.run(run())
+
+    def test_receive_json_rejects_next_message_after_token_budget_reached(
+        self,
+    ) -> None:
+        cache.clear()
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+            "client": ("127.0.0.1", 80),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _Provider()
+        consumer.channel_name = "chat.rate-limit-token-admission"
+
+        async def run() -> None:
+            with (
+                override_settings(
+                    GENERAL_MANAGER={
+                        "CHAT": {
+                            "rate_limit": {
+                                "requests": 100,
+                                "tokens": 3,
+                                "window_seconds": 30,
+                            }
+                        }
+                    }
+                ),
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+            ):
+                await consumer.receive_json({"type": "message", "text": "hello"})
+                assert len(consumer.provider.calls) == 1
+                first_call_messages = consumer.provider.calls[0]["messages"]
+                assert first_call_messages[-1].content == "hello"
+                assert mock_send_json.await_args_list[-1].args[0] == {
+                    "type": "done",
+                    "usage": {"input_tokens": 1, "output_tokens": 2},
+                }
+
+                mock_send_json.reset_mock()
+                await consumer.receive_json({"type": "message", "text": "again"})
+
+                mock_send_json.assert_awaited_once_with(
+                    {
+                        "type": "error",
+                        "message": "Chat rate limit exceeded. Try again later.",
+                        "code": "rate_limited",
+                        "retry_after_seconds": 30,
+                    }
+                )
+                assert len(consumer.provider.calls) == 1
+                assert consumer._history_cache is not None
+                assert [
+                    item for item in consumer._history_cache if item["role"] == "user"
+                ] == [{"role": "user", "content": "hello"}]
+
+        try:
+            asyncio.run(run())
+        finally:
+            cache.clear()
+
+    def test_rate_limit_admission_checks_existing_token_counters(self) -> None:
+        try:
+            cases = [
+                ("tokens", {"input_tokens": 1, "output_tokens": 0}),
+                ("input_tokens", {"input_tokens": 1, "output_tokens": 0}),
+                ("output_tokens", {"input_tokens": 0, "output_tokens": 1}),
+            ]
+            for budget_name, usage in cases:
+                with self.subTest(budget_name=budget_name):
+                    cache.clear()
+                    scope = {
+                        "user": AnonymousUser(),
+                        "session": _Session(f"{budget_name}-session"),
+                        "client": ("127.0.0.1", 80),
+                    }
+                    with override_settings(
+                        GENERAL_MANAGER={
+                            "CHAT": {
+                                "rate_limit": {
+                                    "requests": 100,
+                                    budget_name: 1,
+                                    "window_seconds": 30,
+                                }
+                            }
+                        }
+                    ):
+                        assert (
+                            enforce_chat_rate_limit(
+                                scope,
+                                **usage,
+                                count_request=False,
+                            )
+                            is None
+                        )
+                        assert enforce_chat_rate_limit(scope) == {
+                            "scope": f"session:{budget_name}-session",
+                            "retry_after_seconds": 30,
+                        }
+        finally:
+            cache.clear()
 
     def test_receive_json_executes_tool_calls_and_resumes_provider(self) -> None:
         consumer = ChatConsumer()
