@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+from types import ModuleType
+import sys
 import unittest
 from unittest.mock import patch
 
 from django.test.utils import override_settings
 
 from general_manager.chat.providers import OllamaProvider
+from general_manager.chat.providers.ollama import OllamaBaseUrlError
 from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
     TextChunkEvent,
     ToolCallEvent,
+    ToolDefinition,
 )
 
 
@@ -157,3 +161,65 @@ class OllamaProviderTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ImportError, "ollama package is not installed"):
                 OllamaProvider.check_configuration()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider_config": {
+                    "base_url": "ftp://ollama.local",
+                }
+            }
+        }
+    )
+    def test_build_async_client_rejects_unsupported_base_url_scheme(self) -> None:
+        with self.assertRaises(OllamaBaseUrlError):
+            OllamaProvider._build_async_client()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider_config": {
+                    "base_url": "https://ollama.local/",
+                    "timeout_seconds": 7,
+                }
+            }
+        }
+    )
+    def test_build_async_client_strips_base_url_and_sets_timeout(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs: object) -> None:
+                calls.append(kwargs)
+
+        ollama_module = ModuleType("ollama")
+        ollama_module.AsyncClient = FakeAsyncClient  # type: ignore[attr-defined]
+
+        with patch.dict(sys.modules, {"ollama": ollama_module}):
+            client = OllamaProvider._build_async_client()
+
+        assert isinstance(client, FakeAsyncClient)
+        assert calls == [{"host": "https://ollama.local", "timeout": 7.0}]
+
+    def test_build_request_body_includes_tool_definitions(self) -> None:
+        body = OllamaProvider._build_request_body(
+            [Message(role="user", content="hello")],
+            [
+                ToolDefinition(
+                    name="query",
+                    description="Run a query",
+                    input_schema={"type": "object"},
+                )
+            ],
+        )
+
+        assert body["tools"] == [
+            {
+                "type": "function",
+                "function": {
+                    "name": "query",
+                    "description": "Run a query",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]

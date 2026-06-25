@@ -12,8 +12,10 @@ from typing import Any
 from unittest.mock import patch
 
 import graphene
+import pytest
 from django.test import SimpleTestCase
 from general_manager.api.graphql import GraphQL
+from general_manager.chat.evals import runner as eval_runner
 from general_manager.chat.evals.judges.answer_quality import (
     AnswerQualityScore,
     judge_answer_quality,
@@ -339,6 +341,7 @@ class DatasetLoadingTests(SimpleTestCase):
         assert [case.name for case in filter_cases(cases, tier=1, tags=["demo"])] == [
             "tier1"
         ]
+        assert filter_cases(cases, tier=0, tags=["demo"]) == []
 
     def test_result_values_are_required_in_answers(self) -> None:
         failures: list[str] = []
@@ -380,6 +383,16 @@ class DatasetLoadingTests(SimpleTestCase):
                 )
 
         assert failures == []
+
+
+def test_load_dataset_rejects_yaml_that_is_not_a_list(tmp_path) -> None:
+    (tmp_path / "bad.yaml").write_text("name: bad\n")
+
+    with (
+        patch.object(eval_runner, "DATASETS_DIR", tmp_path),
+        pytest.raises(TypeError, match="must be a YAML list"),
+    ):
+        load_dataset("bad")
 
 
 def test_trace_writer_records_case_payload(tmp_path) -> None:
@@ -784,6 +797,215 @@ class ScoringTests(SimpleTestCase):
         )
 
         assert result.passed is True
+
+
+# ---------------------------------------------------------------------------
+# Runner helper tests
+# ---------------------------------------------------------------------------
+
+
+class RunnerHelperTests(SimpleTestCase):
+    def test_collect_model_final_answer_streams_chunks(self) -> None:
+        provider = _ScriptedProvider(
+            [[TextChunkEvent(content="Apollo"), TextChunkEvent(content=" uses Gear.")]]
+        )
+        stream = io.StringIO()
+
+        answer = asyncio.run(
+            eval_runner._collect_model_final_answer(
+                provider=provider,
+                messages=[Message(role="user", content="What parts are used?")],
+                stream=stream,
+            )
+        )
+
+        assert answer == "Apollo uses Gear."
+        assert stream.getvalue() == "assistant: Apollo uses Gear.\n"
+
+    def test_execute_recovery_tool_records_tool_errors(self) -> None:
+        record = TurnRecord()
+        messages: list[Message] = []
+        stream = io.StringIO()
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=ValueError("bad query args"),
+        ):
+            eval_runner._execute_recovery_tool(
+                record=record,
+                messages=messages,
+                stream=stream,
+                tool_name="query",
+                tool_args={"manager": "PartManager"},
+            )
+
+        assert record.tool_calls == [
+            {"name": "query", "args": {"manager": "PartManager"}}
+        ]
+        assert record.tool_results == [{"error": "bad query args"}]
+        assert messages[-1].role == "tool"
+        assert "bad query args" in messages[-1].content
+        assert 'tool_call query: {"manager": "PartManager"}' in stream.getvalue()
+
+    def test_run_turn_streams_newline_before_tool_call_after_text(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    TextChunkEvent(content="Checking data"),
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={"manager": "PartManager", "fields": ["name"]},
+                    ),
+                ],
+                [TextChunkEvent(content="Bolt is available.")],
+            ]
+        )
+        stream = io.StringIO()
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value={"data": [{"name": "Bolt"}]},
+        ):
+            record = asyncio.run(
+                eval_runner._run_turn(
+                    provider,
+                    [{"role": "user", "content": "List parts"}],
+                    [{"name": "query", "description": "Query"}],
+                    stream=stream,
+                )
+            )
+
+        transcript = stream.getvalue()
+        assert "assistant: Checking data\ntool_call query" in transcript
+        assert record.answer == "Bolt is available."
+
+    def test_text_parsers_normalize_stringified_filters_and_fields(self) -> None:
+        assert eval_runner._parse_text_filter_mapping(None) == {}
+        assert eval_runner._parse_text_filter_mapping(
+            "[name: 'Steel', bad, density=7.8]"
+        ) == {"name": "Steel", "density": "7.8"}
+        assert eval_runner._parse_text_field_selection(None) == []
+        assert eval_runner._parse_text_field_selection('{"parts": ["name"]}') == [
+            {"parts": ["name"]}
+        ]
+        assert eval_runner._parse_text_field_selection('"name"') == ["name"]
+        assert eval_runner._parse_text_field_selection("[name, density]") == [
+            "name",
+            "density",
+        ]
+        assert eval_runner._parse_text_fields({"not": "text"}) == []
+
+    def test_structured_filter_retry_uses_later_successful_query_template(self) -> None:
+        record = TurnRecord(
+            tool_calls=[
+                {
+                    "name": "query",
+                    "args": {
+                        "manager": "MaterialManager",
+                        "fields": "[name, density]",
+                        "filters": "[name: Steel]",
+                    },
+                },
+                {
+                    "name": "query",
+                    "args": {
+                        "manager": "MaterialManager",
+                        "fields": ["name", "density"],
+                        "filters": {"category": "metal"},
+                    },
+                },
+            ],
+            tool_results=[
+                {"error": "'str' object has no attribute 'items'"},
+                {"data": [{"name": "Aluminum"}]},
+            ],
+        )
+
+        retry_args = eval_runner._structured_filter_retry_args(record)
+
+        assert retry_args == {
+            "manager": "MaterialManager",
+            "fields": ["name", "density"],
+            "filters": {"category": "metal", "name": "Steel"},
+        }
+
+    def test_structured_filter_retry_skips_when_later_query_already_matches(
+        self,
+    ) -> None:
+        record = TurnRecord(
+            tool_calls=[
+                {
+                    "name": "query",
+                    "args": {
+                        "manager": "MaterialManager",
+                        "filters": "[name: Steel]",
+                    },
+                },
+                {
+                    "name": "query",
+                    "args": {
+                        "manager": "MaterialManager",
+                        "filters": {"name": "Steel"},
+                    },
+                },
+            ],
+            tool_results=[
+                {"error": "'str' object has no attribute 'items'"},
+                {"data": [{"name": "Steel"}]},
+            ],
+        )
+
+        assert eval_runner._structured_filter_retry_args(record) is None
+
+    def test_structured_candidate_retry_merges_filters_and_parses_fields(
+        self,
+    ) -> None:
+        record = TurnRecord(
+            tool_calls=[
+                {
+                    "name": "query",
+                    "args": {
+                        "manager": "MaterialManager",
+                        "fields": "[name, density]",
+                        "filters": "[name: Steel]",
+                    },
+                }
+            ],
+            tool_results=[{"error": "'str' object has no attribute 'items'"}],
+        )
+
+        retry_args = eval_runner._structured_filter_retry_args_for_candidate(
+            record=record,
+            candidate_args={
+                "manager": "MaterialManager",
+                "fields": "bad",
+                "filters": {"category": "metal"},
+            },
+        )
+
+        assert retry_args == {
+            "manager": "MaterialManager",
+            "fields": ["name", "density"],
+            "filters": {"category": "metal", "name": "Steel"},
+        }
+        assert (
+            eval_runner._structured_filter_retry_args_for_candidate(
+                record=record,
+                candidate_args={
+                    "manager": "MaterialManager",
+                    "filters": {"name": "Steel"},
+                },
+            )
+            is None
+        )
+        assert (
+            eval_runner._structured_filter_retry_args_for_candidate(
+                record=record,
+                candidate_args={"manager": ""},
+            )
+            is None
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -5989,6 +6211,63 @@ class ReportingTests(SimpleTestCase):
         report = print_report(results, verbose=True)
         assert "Failures:" in report
         assert "fail_case" in report
+
+    def test_print_report_verbose_includes_all_failure_details(self) -> None:
+        result = EvalResult(
+            case=EvalCase(
+                name="detailed_fail",
+                description="Detailed failure",
+                conversation=[],
+                expectations={},
+            ),
+            error="provider offline",
+            contract_score=ProductContractScore(
+                passed=False,
+                category="reporting",
+                violations=["Required tool call missing: query"],
+                strategy_deviations=["Recommended tool call missing: search_managers"],
+                answer_sense=AnswerSenseScore(
+                    passed=False,
+                    score=0.25,
+                    issues=["Answer defers after a successful query"],
+                ),
+            ),
+            tool_score=ToolSequenceScore(
+                passed=False,
+                expected=[{"name": "query"}],
+                actual=[],
+                mismatches=["Expected tool 'query' not found in sequence"],
+            ),
+            result_score=ResultAccuracyScore(
+                passed=False,
+                missing=["Apollo"],
+                unexpected=["Mercury"],
+            ),
+            answer_score=AnswerQualityScore(
+                passed=False,
+                score=0.5,
+                missing=["Gear"],
+                unexpected=["RawQuery"],
+            ),
+        )
+
+        report = print_report([result], verbose=True)
+
+        assert "error: provider offline" in report
+        assert "contract: Required tool call missing: query" in report
+        assert "strategy: Recommended tool call missing: search_managers" in report
+        assert "answer sense: 25%" in report
+        assert "sense: Answer defers after a successful query" in report
+        assert "tool: Expected tool 'query' not found in sequence" in report
+        assert "missing results: ['Apollo']" in report
+        assert "unexpected results: ['Mercury']" in report
+        assert "answer score: 50%" in report
+        assert "missing in answer: ['Gear']" in report
+        assert "unexpected in answer: ['RawQuery']" in report
+        assert "Diagnostics:" in report
+        assert "provider: provider_error=1" in report
+        assert "Next actions:" in report
+        assert "[provider/provider_error]" in report
 
     def test_print_compare_report(self) -> None:
         results_a = [self._make_result("x")]

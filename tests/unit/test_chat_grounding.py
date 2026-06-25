@@ -42,6 +42,17 @@ def test_existing_tool_call_does_not_trigger_recovery() -> None:
     )
 
 
+def test_empty_assistant_answer_does_not_trigger_missing_tool_recovery() -> None:
+    assert (
+        should_recover_missing_tool_call(
+            user_text="List parts",
+            assistant_text="   ",
+            tool_calls=[],
+        )
+        is False
+    )
+
+
 def test_schema_only_data_answer_triggers_query_recovery() -> None:
     assert (
         should_recover_answer_without_query(
@@ -80,6 +91,30 @@ def test_no_query_recovery_after_empty_find_path_result() -> None:
             tool_calls=[{"name": "find_path", "result": {"path": []}}],
         )
         is False
+    )
+
+
+def test_no_query_recovery_after_failed_find_path_status() -> None:
+    for result in [
+        {"error": "No path"},
+        {"status": "no_path", "path": ["ignored"]},
+        {"status": "FAILED", "paths": [["ignored"]]},
+    ]:
+        assert (
+            should_recover_answer_without_query(
+                user_text="Find records in TargetManager related to SourceManager.",
+                assistant_text="No path was found between those managers.",
+                tool_calls=[{"name": "find_path", "result": result}],
+            )
+            is False
+        )
+
+
+def test_query_recovery_accepts_nested_paths_result() -> None:
+    assert should_recover_answer_without_query(
+        user_text="Find records in TargetManager related to SourceManager.",
+        assistant_text="I found a path, but no records yet.",
+        tool_calls=[{"name": "find_path", "result": {"paths": [["target"]]}}],
     )
 
 

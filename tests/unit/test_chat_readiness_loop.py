@@ -8,6 +8,7 @@ from general_manager.chat.evals.judges.tool_sequence import ToolSequenceScore
 from general_manager.chat.evals.readiness import (
     ReadinessConfig,
     build_summary,
+    compare_summary_if_requested,
     readiness_exit_code,
     write_readiness_artifacts,
 )
@@ -517,6 +518,135 @@ def test_write_readiness_artifacts_includes_forbidden_recovery_section(
     assert "Forbidden recovery:" in report
     assert "- Forbidden events: repair_contradictory_answer" in report
     assert "- Forbidden cases: recovered" in report
+
+
+def test_compare_summary_if_requested_skips_missing_baseline(tmp_path: Path) -> None:
+    summary = ReadinessSummary(
+        run_hash="hash1",
+        gate="demo",
+        provider="OllamaProvider",
+        model="glm-4.7-flash:q4_K_M",
+        fixture="toy",
+        datasets=["demo_readiness"],
+        tier=1,
+        total=1,
+        passed=1,
+        product_contract_total=1,
+        product_contract_passed=1,
+        diagnostics={},
+    )
+    config = ReadinessConfig(
+        gate="demo",
+        provider="OllamaProvider",
+        model="glm-4.7-flash:q4_K_M",
+        fixture="toy",
+        datasets=["demo_readiness"],
+        tier=1,
+        tags=[],
+        output_dir=tmp_path,
+        baseline_json=tmp_path / "missing.json",
+        fail_on_regression=True,
+        live=False,
+    )
+
+    assert compare_summary_if_requested(config=config, summary=summary) is None
+
+
+def test_write_readiness_artifacts_includes_successful_baseline_comparison(
+    tmp_path: Path,
+) -> None:
+    summary = ReadinessSummary(
+        run_hash="hash1",
+        gate="demo",
+        provider="OllamaProvider",
+        model="glm-4.7-flash:q4_K_M",
+        fixture="toy",
+        datasets=["demo_readiness"],
+        tier=1,
+        total=1,
+        passed=1,
+        product_contract_total=1,
+        product_contract_passed=1,
+        diagnostics={},
+    )
+    config = ReadinessConfig(
+        gate="demo",
+        provider="OllamaProvider",
+        model="glm-4.7-flash:q4_K_M",
+        fixture="toy",
+        datasets=["demo_readiness"],
+        tier=1,
+        tags=[],
+        output_dir=tmp_path,
+        baseline_json=None,
+        fail_on_regression=False,
+        live=False,
+    )
+    comparison = type(
+        "Comparison",
+        (),
+        {"messages": [], "regressed": False},
+    )()
+
+    write_readiness_artifacts(
+        config=config,
+        summary=summary,
+        report="Dimension report",
+        comparison=comparison,
+    )
+
+    report = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "Baseline comparison:" in report
+    assert "- No baseline regression detected." in report
+
+
+def test_readiness_exit_code_fails_on_failed_cases_and_regressions() -> None:
+    failed_summary = ReadinessSummary(
+        run_hash="hash1",
+        gate="demo",
+        provider="OllamaProvider",
+        model="glm-4.7-flash:q4_K_M",
+        fixture="toy",
+        datasets=["demo_readiness"],
+        tier=1,
+        total=2,
+        passed=1,
+        product_contract_total=2,
+        product_contract_passed=1,
+        diagnostics={},
+    )
+    passing_summary = ReadinessSummary(
+        run_hash="hash2",
+        gate="demo",
+        provider="OllamaProvider",
+        model="glm-4.7-flash:q4_K_M",
+        fixture="toy",
+        datasets=["demo_readiness"],
+        tier=1,
+        total=1,
+        passed=1,
+        product_contract_total=1,
+        product_contract_passed=1,
+        diagnostics={},
+    )
+    comparison = type("Comparison", (), {"regressed": True})()
+
+    assert (
+        readiness_exit_code(
+            summary=failed_summary,
+            comparison=None,
+            fail_on_regression=False,
+        )
+        == 1
+    )
+    assert (
+        readiness_exit_code(
+            summary=passing_summary,
+            comparison=comparison,
+            fail_on_regression=True,
+        )
+        == 1
+    )
 
 
 def test_write_readiness_artifacts_includes_failure_class_section(
