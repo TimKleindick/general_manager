@@ -663,8 +663,7 @@ def create_list_resolver(
         is ``page or 1``. ``page_size`` reports the original ``page_size``
         argument, not the effective slicing default. ``total_pages`` is computed
         from a truthy original ``page_size`` and otherwise reported as ``1``.
-        Negative pagination values are not validated; they are used directly in
-        the offset and ``total_pages`` calculations and passed through to bucket
+        Negative pagination values raise ``InvalidPaginationValueError`` before
         slicing.
     """
 
