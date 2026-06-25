@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from importlib.util import find_spec
 from typing import Any
 
@@ -84,9 +85,11 @@ class OllamaProvider(BaseLLMProvider):
         base_url = str(config["base_url"]).rstrip("/")
         if not (base_url.startswith("http://") or base_url.startswith("https://")):
             raise OllamaBaseUrlError(base_url)
-        from ollama import AsyncClient
-
-        return AsyncClient(host=base_url, timeout=float(config["timeout_seconds"]))
+        ollama = import_module("ollama")
+        return ollama.AsyncClient(
+            host=base_url,
+            timeout=float(config["timeout_seconds"]),
+        )
 
     async def complete(
         self,
