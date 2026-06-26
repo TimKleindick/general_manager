@@ -156,7 +156,7 @@ def _classify_contract_message(
                 "changing the dataset contract."
             ),
         )
-    if message.startswith("Forbidden tool called: mutate"):
+    if message.startswith("Forbidden tool called:"):
         return FailureDiagnostic(
             case=case_name,
             owner="runtime",
@@ -165,8 +165,8 @@ def _classify_contract_message(
             failure_class="eval_or_harness",
             message=message,
             next_action=(
-                "Add or verify mutation safety checks in the runtime harness and "
-                "keep the prompt's mutation safety section explicit."
+                "Add or verify forbidden tool safety checks in the runtime harness "
+                "and keep the prompt's tool safety section explicit."
             ),
         )
     if message.startswith(("Missing result value:", "Unexpected result value:")):

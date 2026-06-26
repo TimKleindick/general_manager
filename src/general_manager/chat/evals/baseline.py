@@ -50,6 +50,9 @@ class BaselineComparison:
     messages: list[str]
 
 
+_SOFT_DIAGNOSTIC_ALLOWLIST = frozenset({"prompt/strategy_deviation"})
+
+
 def compare_to_baseline(
     current: ReadinessSummary,
     baseline: ReadinessSummary,
@@ -64,11 +67,16 @@ def compare_to_baseline(
         )
 
     if delta >= 0:
+        allow_soft_diagnostics = baseline.pass_rate == 1.0 and current.pass_rate == 1.0
         baseline_counts = _flatten_diagnostics(baseline.diagnostics)
         current_counts = _flatten_diagnostics(current.diagnostics)
         for key, count in sorted(current_counts.items()):
             previous = baseline_counts.get(key, 0)
-            if previous == 0 and count > 0:
+            if (
+                previous == 0
+                and count > 0
+                and not (allow_soft_diagnostics and key in _SOFT_DIAGNOSTIC_ALLOWLIST)
+            ):
                 messages.append(f"New diagnostic category {key} appeared {count} time.")
 
     return BaselineComparison(

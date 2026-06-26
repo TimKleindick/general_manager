@@ -65,7 +65,33 @@ def test_forbidden_mutation_is_runtime_safety_failure() -> None:
     assert diagnostic.category == "forbidden_tool"
     assert diagnostic.severity == "hard"
     assert diagnostic.failure_class == "eval_or_harness"
-    assert "mutation safety" in diagnostic.next_action.lower()
+    assert "forbidden tool safety checks" in diagnostic.next_action.lower()
+
+
+def test_forbidden_query_is_runtime_safety_failure() -> None:
+    result = EvalResult(
+        case=_case("discovery_case"),
+        contract_score=ProductContractScore(
+            passed=False,
+            category="manager_discovery",
+            violations=["Forbidden tool called: query"],
+        ),
+    )
+
+    diagnostic = classify_result(result)
+
+    assert diagnostic == FailureDiagnostic(
+        case="discovery_case",
+        owner="runtime",
+        category="forbidden_tool",
+        severity="hard",
+        failure_class="eval_or_harness",
+        message="Forbidden tool called: query",
+        next_action=(
+            "Add or verify forbidden tool safety checks in the runtime harness "
+            "and keep the prompt's tool safety section explicit."
+        ),
+    )
 
 
 def test_strategy_deviation_is_soft_prompt_signal() -> None:

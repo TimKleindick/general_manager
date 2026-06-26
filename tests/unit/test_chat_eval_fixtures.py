@@ -11,8 +11,13 @@ from general_manager.utils.path_mapping import PathMap
 
 
 @pytest.fixture(autouse=True)
-def reset_eval_fixture_schema():
+def reset_eval_fixture_schema() -> None:
+    _clear_eval_schema_state()
     yield
+    _clear_eval_schema_state()
+
+
+def _clear_eval_schema_state() -> None:
     clear_schema_index_cache()
     GraphQL.reset_registry()
     GeneralManagerMeta.all_classes.clear()
@@ -55,7 +60,7 @@ def test_toy_fixture_supports_nested_relation_filters_and_paths() -> None:
     )
     path = execute_chat_tool(
         "find_path",
-        {"from_manager": "MaterialManager", "to_manager": "ProjectManager"},
+        {"from_manager": "ProjectManager", "to_manager": "MaterialManager"},
         None,
     )
 
@@ -63,7 +68,12 @@ def test_toy_fixture_supports_nested_relation_filters_and_paths() -> None:
     assert projects["data"] == [
         {"name": "Apollo", "parts": [{"name": "Gear", "material": {"name": "Cobalt"}}]}
     ]
-    assert path == ["material", "parts"]
+    assert path == ["parts", "material"]
+    assert ("MaterialManager", "ProjectManager") not in PathMap.mapping
+    assert PathMap.mapping[("ProjectManager", "MaterialManager")].path == [
+        "parts",
+        "material",
+    ]
 
 
 def test_toy_fixture_returns_empty_page_for_unmatched_exact_filter() -> None:

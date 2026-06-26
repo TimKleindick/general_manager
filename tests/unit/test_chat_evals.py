@@ -16,6 +16,7 @@ import pytest
 from django.test import SimpleTestCase
 from general_manager.api.graphql import GraphQL
 from general_manager.chat.evals import runner as eval_runner
+from general_manager.chat.evals.fingerprints import stable_hash
 from general_manager.chat.evals.judges.answer_quality import (
     AnswerQualityScore,
     judge_answer_quality,
@@ -130,6 +131,41 @@ class ToolSequenceJudgeTests(SimpleTestCase):
         ]
         score = judge_tool_sequence(expected, actual)
         assert score.passed is True
+
+    def test_direct_query_tool_satisfies_generic_query_expectation(self) -> None:
+        expected = [{"name": "query", "args_contain": {"manager": "PartManager"}}]
+        actual = [{"name": "query_partmanager", "args": {"fields": ["name"]}}]
+
+        score = judge_tool_sequence(expected, actual)
+
+        assert score.passed is True
+        assert score.mismatches == []
+
+    def test_direct_query_tool_manager_name_overrides_stray_arg(self) -> None:
+        expected = [{"name": "query", "args_contain": {"manager": "PartManager"}}]
+        actual = [
+            {
+                "name": "query_partmanager",
+                "args": {"manager": "MaterialManager", "fields": ["name"]},
+            }
+        ]
+
+        score = judge_tool_sequence(expected, actual)
+
+        assert score.passed is True
+        assert score.mismatches == []
+
+    def test_later_matching_call_clears_earlier_arg_mismatch(self) -> None:
+        expected = [{"name": "query", "args_contain": {"manager": "MaterialManager"}}]
+        actual = [
+            {"name": "query", "args": {"manager": "PartManager"}},
+            {"name": "query", "args": {"manager": "MaterialManager"}},
+        ]
+
+        score = judge_tool_sequence(expected, actual)
+
+        assert score.passed is True
+        assert score.mismatches == []
 
     def test_wrong_order_fails(self) -> None:
         expected = [{"name": "query"}, {"name": "search_managers"}]
@@ -415,6 +451,11 @@ def test_trace_writer_records_case_payload(tmp_path) -> None:
     ]
 
 
+def test_stable_hash_rejects_non_json_payloads() -> None:
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        stable_hash({"manager_names": {"PartManager", "MaterialManager"}})
+
+
 class EvalScriptTests(SimpleTestCase):
     def test_setup_test_schema_registers_query_root_fields(self) -> None:
         module = _load_run_chat_evals_module()
@@ -473,12 +514,21 @@ class EvalScriptTests(SimpleTestCase):
             result = execute_chat_tool(
                 "find_path",
                 {
-                    "from_manager": "MaterialManager",
-                    "to_manager": "ProjectManager",
+                    "from_manager": "ProjectManager",
+                    "to_manager": "MaterialManager",
                 },
                 None,
             )
-            assert result == ["material", "parts"]
+            assert result == ["parts", "material"]
+            old_seed = PathMap.mapping.get(("MaterialManager", "ProjectManager"))
+            assert not (
+                isinstance(old_seed, SimpleNamespace)
+                and old_seed.path == ["material", "parts"]
+            )
+            assert PathMap.mapping[("ProjectManager", "MaterialManager")].path == [
+                "parts",
+                "material",
+            ]
         finally:
             clear_schema_index_cache()
             GraphQL.reset_registry()
@@ -519,11 +569,16 @@ class EvalScriptTests(SimpleTestCase):
             assert execute_chat_tool(
                 "find_path",
                 {
-                    "from_manager": "MaterialManager",
-                    "to_manager": "PartManager",
+                    "from_manager": "ProjectManager",
+                    "to_manager": "MaterialManager",
                 },
                 None,
-            ) == ["material"]
+            ) == ["parts", "material"]
+            old_seed = PathMap.mapping.get(("MaterialManager", "ProjectManager"))
+            assert not (
+                isinstance(old_seed, SimpleNamespace)
+                and old_seed.path == ["material", "parts"]
+            )
             assert execute_chat_tool(
                 "find_path",
                 {

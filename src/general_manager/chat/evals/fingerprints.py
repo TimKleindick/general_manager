@@ -9,7 +9,7 @@ from typing import Any
 
 def stable_hash(payload: Any, *, length: int = 16) -> str:
     """Return a short deterministic hash for JSON-shaped data."""
-    encoded = json.dumps(payload, default=str, separators=(",", ":"), sort_keys=True)
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:length]
 
 
