@@ -426,13 +426,19 @@ def test_validate_chat_settings_rejects_unknown_allowed_mutations() -> None:
     class Query(ObjectType):
         ping = String()
 
-    GraphQL._schema = Schema(query=Query)
+    previous_schema = GraphQL._schema
 
-    with pytest.raises(
-        ChatConfigurationError,
-        match="Unknown chat allowed_mutations: missingMutation",
-    ):
-        validate_chat_settings()
+    try:
+        GraphQL._schema = Schema(query=Query)
+
+        with pytest.raises(
+            ChatConfigurationError,
+            match="Unknown chat allowed_mutations: missingMutation",
+        ):
+            validate_chat_settings()
+    finally:
+        GraphQL.reset_registry()
+        GraphQL._schema = previous_schema
 
 
 @override_settings(
@@ -469,10 +475,16 @@ def test_validate_chat_settings_suggests_close_match_for_unknown_mutation() -> N
     class MutationRoot(ObjectType):
         createPart = CreatePart.Field()
 
-    GraphQL._schema = Schema(query=Query, mutation=MutationRoot)
+    previous_schema = GraphQL._schema
 
-    with pytest.raises(
-        ChatConfigurationError,
-        match=r"Unknown chat allowed_mutations: createPrat \(did you mean: createPart\?\)",
-    ):
-        validate_chat_settings()
+    try:
+        GraphQL._schema = Schema(query=Query, mutation=MutationRoot)
+
+        with pytest.raises(
+            ChatConfigurationError,
+            match=r"Unknown chat allowed_mutations: createPrat \(did you mean: createPart\?\)",
+        ):
+            validate_chat_settings()
+    finally:
+        GraphQL.reset_registry()
+        GraphQL._schema = previous_schema

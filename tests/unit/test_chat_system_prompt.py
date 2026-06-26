@@ -27,6 +27,7 @@ def test_system_prompt_requires_query_after_successful_path_for_record_questions
 
 class ChatSystemPromptTests(SimpleTestCase):
     def setUp(self) -> None:
+        clear_schema_index_cache()
         GraphQL.reset_registry()
         GeneralManagerMeta.all_classes.clear()
         GeneralManagerMeta.pending_graphql_interfaces.clear()
@@ -87,6 +88,7 @@ class ChatSystemPromptTests(SimpleTestCase):
         )
 
     def tearDown(self) -> None:
+        clear_schema_index_cache()
         GraphQL.reset_registry()
         GeneralManagerMeta.all_classes.clear()
         GeneralManagerMeta.pending_graphql_interfaces.clear()
