@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Any, ClassVar, cast
 
 from django.conf import settings
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 
 from general_manager.chat.settings import get_chat_settings
@@ -114,6 +114,7 @@ class ChatPendingConfirmation(models.Model):
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
                 fields=["conversation", "confirmation_id"],
+                condition=models.Q(resolved_at__isnull=True),
                 name="gm_chat_pending_conv_conf_uniq",
             )
         ]
@@ -274,13 +275,22 @@ def create_pending_confirmation(
     timeout_seconds: int,
 ) -> ChatPendingConfirmation:
     """Persist a new pending confirmation for the conversation."""
-    return ChatPendingConfirmation.objects.create(
-        conversation=conversation,
-        confirmation_id=confirmation_id,
-        mutation_name=mutation_name,
-        payload=payload,
-        expires_at=timezone.now() + timedelta(seconds=timeout_seconds),
-    )
+    with transaction.atomic():
+        ChatConversation.objects.select_for_update().get(pk=conversation.pk)
+        unresolved_duplicate_exists = ChatPendingConfirmation.objects.filter(
+            conversation=conversation,
+            confirmation_id=confirmation_id,
+            resolved_at__isnull=True,
+        ).exists()
+        if unresolved_duplicate_exists:
+            raise IntegrityError
+        return ChatPendingConfirmation.objects.create(
+            conversation=conversation,
+            confirmation_id=confirmation_id,
+            mutation_name=mutation_name,
+            payload=payload,
+            expires_at=timezone.now() + timedelta(seconds=timeout_seconds),
+        )
 
 
 def cleanup_expired_chat_records(*, ttl_hours: int) -> dict[str, int]:

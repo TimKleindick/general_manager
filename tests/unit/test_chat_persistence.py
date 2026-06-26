@@ -115,7 +115,9 @@ class ChatPersistenceTests(TestCase):
         assert duplicate.confirmation_id == "tool-repeat"
         assert duplicate.conversation_id == second.pk
 
-    def test_pending_confirmation_id_stays_unique_within_conversation(self) -> None:
+    def test_unresolved_pending_confirmation_id_stays_unique_within_conversation(
+        self,
+    ) -> None:
         conversation = ChatConversation.for_actor(user=None, session_key="scoped-3")
         create_pending_confirmation(
             conversation,
@@ -134,6 +136,37 @@ class ChatPersistenceTests(TestCase):
                     payload={"input": {"name": "Nut"}},
                     timeout_seconds=30,
                 )
+
+    def test_resolved_pending_confirmation_id_can_repeat_within_conversation(
+        self,
+    ) -> None:
+        conversation = ChatConversation.for_actor(user=None, session_key="scoped-4")
+        first = create_pending_confirmation(
+            conversation,
+            confirmation_id="tool-repeat",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            timeout_seconds=30,
+        )
+
+        claimed = ChatPendingConfirmation.claim_for_conversation(
+            conversation=conversation,
+            confirmation_id="tool-repeat",
+        )
+        second = create_pending_confirmation(
+            conversation,
+            confirmation_id="tool-repeat",
+            mutation_name="createPart",
+            payload={"input": {"name": "Nut"}},
+            timeout_seconds=30,
+        )
+
+        assert claimed is not None
+        assert claimed.pk == first.pk
+        assert second.pk != first.pk
+        assert second.conversation_id == conversation.pk
+        assert second.confirmation_id == "tool-repeat"
+        assert second.resolved_at is None
 
     def test_claim_for_conversation_marks_pending_resolved_before_returning(
         self,
