@@ -118,6 +118,15 @@ def _has_tool_after_last_user(messages: list[Message]) -> bool:
     return False
 
 
+def _confirmation_unavailable_event() -> dict[str, str]:
+    """Return the terminal event for a confirmation that can no longer be claimed."""
+    return {
+        "type": "error",
+        "message": "Pending confirmation is no longer available.",
+        "code": "confirmation_unavailable",
+    }
+
+
 class ChatConsumer(_ChatConsumerBase):
     """Minimal streaming chat consumer for Phase 1 foundation work."""
 
@@ -573,14 +582,6 @@ class ChatConsumer(_ChatConsumerBase):
                     "session_key": self.session_key,
                 },
             )
-            await self.send_json(
-                {
-                    "type": "confirm_mutation",
-                    "id": event.id,
-                    "mutation": result["mutation"],
-                    "input": result["input"],
-                }
-            )
             durable = False
             if self.conversation is not None:
                 from general_manager.chat.models import create_pending_confirmation
@@ -605,8 +606,18 @@ class ChatConsumer(_ChatConsumerBase):
                             "session_key": self.session_key,
                         },
                     )
+                    await self.send_json(public_chat_error(exc).as_event())
+                    return True
                 else:
                     durable = True
+            await self.send_json(
+                {
+                    "type": "confirm_mutation",
+                    "id": event.id,
+                    "mutation": result["mutation"],
+                    "input": result["input"],
+                }
+            )
             self._pending_confirmation = {
                 "id": event.id,
                 "mutation": result["mutation"],
@@ -704,6 +715,7 @@ class ChatConsumer(_ChatConsumerBase):
                     )
                     if not claimed:
                         await self._cancel_confirmation_timeout()
+                        await self.send_json(_confirmation_unavailable_event())
                         self._pending_confirmation = None
                         return
                 await self._resolve_pending_confirmation(
@@ -881,14 +893,8 @@ class ChatConsumer(_ChatConsumerBase):
             )
             if not claimed:
                 await self._cancel_confirmation_timeout()
+                await self.send_json(_confirmation_unavailable_event())
                 self._pending_confirmation = None
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "message": "Unknown chat event.",
-                        "code": "bad_event",
-                    }
-                )
                 return
         cancellation_reason = "user_rejected"
         expires_at = pending.get("expires_at")

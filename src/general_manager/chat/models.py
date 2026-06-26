@@ -275,8 +275,15 @@ def create_pending_confirmation(
     timeout_seconds: int,
 ) -> ChatPendingConfirmation:
     """Persist a new pending confirmation for the conversation."""
+    current_time = timezone.now()
     with transaction.atomic():
         ChatConversation.objects.select_for_update().get(pk=conversation.pk)
+        ChatPendingConfirmation.objects.filter(
+            conversation=conversation,
+            confirmation_id=confirmation_id,
+            resolved_at__isnull=True,
+            expires_at__lte=current_time,
+        ).update(resolved_at=current_time)
         unresolved_duplicate_exists = ChatPendingConfirmation.objects.filter(
             conversation=conversation,
             confirmation_id=confirmation_id,
@@ -289,7 +296,7 @@ def create_pending_confirmation(
             confirmation_id=confirmation_id,
             mutation_name=mutation_name,
             payload=payload,
-            expires_at=timezone.now() + timedelta(seconds=timeout_seconds),
+            expires_at=current_time + timedelta(seconds=timeout_seconds),
         )
 
 

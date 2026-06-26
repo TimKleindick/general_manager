@@ -1483,7 +1483,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_marks_pending_non_durable_when_confirmation_persist_fails(
+    def test_receive_json_fails_closed_when_confirmation_persist_fails(
         self,
     ) -> None:
         consumer = ChatConsumer()
@@ -1516,7 +1516,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 ),
                 patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
             ):
-                await consumer._handle_tool_call(
+                should_resume = await consumer._handle_tool_call(
                     ToolCallEvent(
                         id="tool-non-durable",
                         name="mutate",
@@ -1527,8 +1527,10 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     tool_retries=0,
                 )
 
-            assert consumer._pending_confirmation is not None
-            assert consumer._pending_confirmation["durable"] is False
+            assert should_resume is True
+            assert consumer._pending_confirmation is None
+            assert consumer._confirmation_waiter is None
+            assert consumer._confirmation_timeout_task is None
             chat_error.assert_called_once_with(
                 user=consumer.scope["user"],
                 error=original_error,
@@ -1541,6 +1543,14 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 },
             )
             sent_payloads = [call.args[0] for call in mock_send_json.await_args_list]
+            assert all(
+                payload["type"] != "confirm_mutation" for payload in sent_payloads
+            )
+            assert sent_payloads[-1] == {
+                "type": "error",
+                "message": "Chat request failed.",
+                "code": "chat_error",
+            }
             assert "db unavailable" not in str(sent_payloads)
 
         asyncio.run(run())
@@ -1854,7 +1864,11 @@ class ChatConsumerMessageTests(unittest.TestCase):
             )
             execute_chat_tool.assert_not_called()
             mock_send_json.assert_awaited_once_with(
-                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+                {
+                    "type": "error",
+                    "message": "Pending confirmation is no longer available.",
+                    "code": "confirmation_unavailable",
+                }
             )
 
         asyncio.run(run())
@@ -1976,7 +1990,11 @@ class ChatConsumerMessageTests(unittest.TestCase):
             )
             resolve.assert_not_awaited()
             mock_send_json.assert_awaited_once_with(
-                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+                {
+                    "type": "error",
+                    "message": "Pending confirmation is no longer available.",
+                    "code": "confirmation_unavailable",
+                }
             )
 
         asyncio.run(run())
@@ -2459,7 +2477,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
         }
         consumer.session_key = "existing-key"
         consumer.conversation = SimpleNamespace(pk=1)
-        consumer._pending_confirmation = {
+        pending = {
             "id": "tool-timeout-claimed",
             "mutation": "createPart",
             "input": {"name": "Bolt"},
@@ -2468,6 +2486,21 @@ class ChatConsumerMessageTests(unittest.TestCase):
             "expires_at": timezone.now() + timedelta(seconds=30),
             "durable": True,
         }
+        consumer._pending_confirmation = pending
+        order: list[tuple[str, object | None]] = []
+
+        async def cancel_timeout() -> None:
+            order.append(("cancel", consumer._pending_confirmation))
+            consumer._confirmation_waiter = None
+            consumer._confirmation_timeout_task = None
+
+        async def send_json(payload: object) -> None:
+            order.append(("send", consumer._pending_confirmation))
+            assert payload == {
+                "type": "error",
+                "message": "Pending confirmation is no longer available.",
+                "code": "confirmation_unavailable",
+            }
 
         async def run() -> None:
             consumer._confirmation_waiter = asyncio.get_running_loop().create_future()
@@ -2481,6 +2514,18 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     "_resolve_pending_confirmation",
                     new_callable=AsyncMock,
                 ) as resolve,
+                patch.object(
+                    consumer,
+                    "_cancel_confirmation_timeout",
+                    new_callable=AsyncMock,
+                    side_effect=cancel_timeout,
+                ) as cancel,
+                patch.object(
+                    consumer,
+                    "send_json",
+                    new_callable=AsyncMock,
+                    side_effect=send_json,
+                ) as send,
             ):
                 await consumer._await_confirmation_timeout(
                     confirmation_id="tool-timeout-claimed",
@@ -2493,6 +2538,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 allow_expired=True,
             )
             resolve.assert_not_awaited()
+            cancel.assert_awaited_once()
+            send.assert_awaited_once()
+            assert order == [("cancel", pending), ("send", pending)]
             assert consumer._pending_confirmation is None
             assert consumer._confirmation_waiter is None
 
