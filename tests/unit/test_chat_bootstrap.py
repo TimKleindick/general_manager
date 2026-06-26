@@ -1,18 +1,38 @@
 from __future__ import annotations
 
 from importlib import import_module
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
+from channels.routing import ProtocolTypeRouter, URLRouter
 import pytest
 from django.core.checks import Error
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
+from django.urls import path
 
 from general_manager import apps as gm_apps
 from general_manager.api.graphql import GraphQL
 from general_manager.chat.bootstrap import ensure_chat_http_routes, ensure_chat_route
 from tests import test_urls, testing_asgi
+
+
+def _extract_test_urlrouter_routes(application: object) -> list[object]:
+    application_mapping = getattr(application, "application_mapping", None)
+    router = (
+        application_mapping.get("websocket")
+        if isinstance(application_mapping, dict)
+        else application
+    )
+    seen: set[int] = set()
+    while router is not None and id(router) not in seen:
+        seen.add(id(router))
+        routes = getattr(router, "routes", None)
+        if isinstance(routes, list):
+            return routes
+        router = getattr(router, "inner", None) or getattr(router, "application", None)
+    raise AssertionError
 
 
 class ChatBootstrapTests(SimpleTestCase):
@@ -213,6 +233,144 @@ class ChatBootstrapTests(SimpleTestCase):
         assert "websocket" in testing_asgi.application.application_mapping
         assert len(testing_asgi.websocket_urlpatterns) == 1
         assert testing_asgi.websocket_urlpatterns[0]._general_manager_chat_ws is True
+
+    @override_settings(
+        ASGI_APPLICATION="tests.unit.test_chat_bootstrap_fake_asgi.application",
+        GENERAL_MANAGER={"CHAT": {"url": "/chat/"}},
+    )
+    def test_ensure_chat_route_preserves_existing_urlrouter_routes_without_patterns(
+        self,
+    ) -> None:
+        module_name = "tests.unit.test_chat_bootstrap_fake_asgi"
+        fake_asgi = ModuleType(module_name)
+
+        async def existing_application(scope, receive, send):  # type: ignore[no-untyped-def]
+            del scope, receive, send
+
+        existing_route = path("existing/", existing_application)
+        fake_asgi.application = ProtocolTypeRouter(
+            {
+                "http": object(),
+                "websocket": URLRouter([existing_route]),
+            }
+        )
+        sys.modules[module_name] = fake_asgi
+
+        try:
+            ensure_chat_route()
+            ensure_chat_route()
+        finally:
+            sys.modules.pop(module_name, None)
+
+        websocket_application = fake_asgi.application.application_mapping["websocket"]
+        routes = _extract_test_urlrouter_routes(websocket_application)
+
+        assert existing_route in routes
+        assert (
+            sum(getattr(route, "_general_manager_chat_ws", False) for route in routes)
+            == 1
+        )
+        assert len(routes) == 2
+
+    @override_settings(
+        ASGI_APPLICATION="tests.unit.test_chat_bootstrap_stale_asgi.application",
+        GENERAL_MANAGER={"CHAT": {"url": "/chat/"}},
+    )
+    def test_ensure_chat_route_does_not_merge_live_routes_when_patterns_empty(
+        self,
+    ) -> None:
+        module_name = "tests.unit.test_chat_bootstrap_stale_asgi"
+        fake_asgi = ModuleType(module_name)
+
+        async def stale_application(scope, receive, send):  # type: ignore[no-untyped-def]
+            del scope, receive, send
+
+        stale_route = path("graphql/", stale_application)
+        fake_asgi.websocket_urlpatterns = []
+        fake_asgi.application = ProtocolTypeRouter(
+            {
+                "http": object(),
+                "websocket": URLRouter([stale_route]),
+            }
+        )
+        sys.modules[module_name] = fake_asgi
+
+        try:
+            ensure_chat_route()
+        finally:
+            sys.modules.pop(module_name, None)
+
+        routes = _extract_test_urlrouter_routes(fake_asgi.application)
+
+        assert stale_route not in fake_asgi.websocket_urlpatterns
+        assert stale_route not in routes
+        assert len(routes) == 1
+        assert getattr(routes[0], "_general_manager_chat_ws", False) is True
+
+    @override_settings(
+        ASGI_APPLICATION="tests.unit.test_chat_bootstrap_direct_asgi.application",
+        GENERAL_MANAGER={"CHAT": {"url": "/chat/"}},
+    )
+    def test_ensure_chat_route_preserves_direct_urlrouter_routes(self) -> None:
+        module_name = "tests.unit.test_chat_bootstrap_direct_asgi"
+        fake_asgi = ModuleType(module_name)
+
+        async def existing_application(scope, receive, send):  # type: ignore[no-untyped-def]
+            del scope, receive, send
+
+        existing_route = path("existing/", existing_application)
+        fake_asgi.application = URLRouter([existing_route])
+        sys.modules[module_name] = fake_asgi
+
+        try:
+            ensure_chat_route()
+            ensure_chat_route()
+        finally:
+            sys.modules.pop(module_name, None)
+
+        routes = _extract_test_urlrouter_routes(fake_asgi.application)
+
+        assert existing_route in routes
+        assert (
+            sum(getattr(route, "_general_manager_chat_ws", False) for route in routes)
+            == 1
+        )
+        assert len(routes) == 2
+
+    @override_settings(
+        ASGI_APPLICATION="tests.unit.test_chat_bootstrap_uninspectable_asgi.application",
+        GENERAL_MANAGER={"CHAT": {"url": "/chat/"}},
+    )
+    def test_ensure_chat_route_leaves_uninspectable_websocket_app_unmodified(
+        self,
+    ) -> None:
+        module_name = "tests.unit.test_chat_bootstrap_uninspectable_asgi"
+        fake_asgi = ModuleType(module_name)
+
+        async def existing_application(scope, receive, send):  # type: ignore[no-untyped-def]
+            del scope, receive, send
+
+        existing_route = path("existing/", existing_application)
+        websocket_application = object()
+        fake_asgi.websocket_urlpatterns = [existing_route]
+        fake_asgi.application = ProtocolTypeRouter(
+            {
+                "http": object(),
+                "websocket": websocket_application,
+            }
+        )
+        sys.modules[module_name] = fake_asgi
+
+        try:
+            ensure_chat_route()
+        finally:
+            sys.modules.pop(module_name, None)
+
+        assert fake_asgi.websocket_urlpatterns == [existing_route]
+        assert (
+            fake_asgi.application.application_mapping["websocket"]
+            is websocket_application
+        )
 
     @override_settings(ASGI_APPLICATION="tests.testing_asgi.missing")
     def test_ensure_chat_route_creates_pattern_list_without_application(self) -> None:
