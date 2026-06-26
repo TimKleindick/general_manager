@@ -79,17 +79,27 @@ def ensure_chat_route() -> None:
     if not module_path or not attr_name:
         return
     asgi_module: Any = import_module(module_path)
+    application = getattr(asgi_module, attr_name, None)
+    extracted_patterns = (
+        _extract_urlrouter_patterns(application) if application is not None else None
+    )
+    existing_websocket_application = (
+        _get_websocket_application(application) if application is not None else None
+    )
+    if existing_websocket_application is not None and extracted_patterns is None:
+        return
     websocket_patterns = getattr(asgi_module, "websocket_urlpatterns", None)
     if websocket_patterns is None:
-        websocket_patterns = []
+        websocket_patterns = list(extracted_patterns or [])
         asgi_module.websocket_urlpatterns = websocket_patterns
+    elif not isinstance(websocket_patterns, list):
+        return
     route_exists = any(
         getattr(route, "_general_manager_chat_ws", False)
         for route in websocket_patterns
     )
     if not route_exists:
         websocket_patterns.append(build_chat_ws_route(get_chat_settings()["url"]))
-    application = getattr(asgi_module, attr_name, None)
     websocket_application = build_chat_websocket_application(websocket_patterns)
     if application is None:
         return
@@ -98,8 +108,34 @@ def ensure_chat_route() -> None:
     ):
         application.application_mapping["websocket"] = websocket_application
         return
+    if extracted_patterns is not None:
+        setattr(asgi_module, attr_name, websocket_application)
+        return
     setattr(
         asgi_module,
         attr_name,
         ProtocolTypeRouter({"http": application, "websocket": websocket_application}),
     )
+
+
+def _get_websocket_application(application: Any) -> Any | None:
+    application_mapping = getattr(application, "application_mapping", None)
+    if not isinstance(application_mapping, dict):
+        return None
+    return application_mapping.get("websocket")
+
+
+def _extract_urlrouter_patterns(application: Any) -> list[Any] | None:
+    """Return URLRouter patterns from a mapped websocket app when inspectable."""
+    router = _get_websocket_application(application) or application
+    seen: set[int] = set()
+    while router is not None and id(router) not in seen:
+        seen.add(id(router))
+        routes = getattr(router, "routes", None)
+        if isinstance(routes, list):
+            return list(routes)
+        urlpatterns = getattr(router, "urlpatterns", None)
+        if isinstance(urlpatterns, list):
+            return list(urlpatterns)
+        router = getattr(router, "inner", None) or getattr(router, "application", None)
+    return None

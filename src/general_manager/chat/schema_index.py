@@ -5,12 +5,18 @@ from __future__ import annotations
 from collections import deque
 from functools import lru_cache
 import re
-from typing import Any, cast
+from typing import Any, TypeAlias, cast
 
 from general_manager.api.graphql import GraphQL
 from general_manager.utils.path_mapping import PathMap
 
 DEFAULT_SEARCH_LIMIT = 10
+GraphQLFieldSignature: TypeAlias = tuple[tuple[str, int], ...]
+SchemaIndexCacheKey: TypeAlias = tuple[
+    tuple[tuple[str, int, bool], ...],
+    tuple[tuple[str, int, str, GraphQLFieldSignature], ...],
+    tuple[tuple[str, int, GraphQLFieldSignature], ...],
+]
 
 
 def _unwrap_graphene_type(field_type: Any) -> Any:
@@ -24,6 +30,25 @@ def _is_exposed_manager(manager_class: type[Any]) -> bool:
     return bool(getattr(manager_class, "chat_exposed", True))
 
 
+def _type_description(graphene_type: Any) -> str:
+    description = getattr(graphene_type, "__doc__", None) or ""
+    return " ".join(description.strip().split())
+
+
+def _field_signature(graphene_type: Any) -> GraphQLFieldSignature:
+    graphene_meta = getattr(graphene_type, "_meta", None)
+    fields = getattr(graphene_meta, "fields", None)
+    if not isinstance(fields, dict):
+        return ()
+    return tuple(
+        (
+            field_name,
+            id(_unwrap_graphene_type(getattr(field, "type", None))),
+        )
+        for field_name, field in sorted(cast(dict[str, Any], fields).items())
+    )
+
+
 def _get_exposed_manager_names() -> set[str]:
     return {
         name
@@ -32,11 +57,27 @@ def _get_exposed_manager_names() -> set[str]:
     }
 
 
-def _schema_index_cache_key() -> tuple[int, int, int]:
+def _schema_index_cache_key() -> SchemaIndexCacheKey:
     return (
-        id(GraphQL.manager_registry),
-        id(GraphQL.graphql_type_registry),
-        id(GraphQL.graphql_filter_type_registry),
+        tuple(
+            (name, id(manager_class), _is_exposed_manager(manager_class))
+            for name, manager_class in sorted(GraphQL.manager_registry.items())
+        ),
+        tuple(
+            (
+                name,
+                id(graphql_type),
+                _type_description(graphql_type),
+                _field_signature(graphql_type),
+            )
+            for name, graphql_type in sorted(GraphQL.graphql_type_registry.items())
+        ),
+        tuple(
+            (name, id(filter_type), _field_signature(filter_type))
+            for name, filter_type in sorted(
+                GraphQL.graphql_filter_type_registry.items()
+            )
+        ),
     )
 
 
@@ -47,7 +88,7 @@ def clear_schema_index_cache() -> None:
 
 @lru_cache(maxsize=8)
 def _build_schema_index_cached(
-    _cache_key: tuple[int, int, int],
+    _cache_key: SchemaIndexCacheKey,
 ) -> dict[str, dict[str, Any]]:
     """Build a compact index of chat-exposed managers from the GraphQL registry."""
     del _cache_key
@@ -58,8 +99,7 @@ def _build_schema_index_cached(
         if graphene_type is None:
             continue
         graphene_meta = cast(Any, graphene_type)._meta
-        description = getattr(graphene_type, "__doc__", None) or ""
-        description = " ".join(description.strip().split())
+        description = _type_description(graphene_type)
         fields: list[str] = []
         relations: list[dict[str, str]] = []
         for field_name, field in sorted(
