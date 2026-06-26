@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import json
 from typing import Any
 
@@ -75,8 +76,9 @@ def emit_chat_audit_event(
         )
     event = {"event_type": event_type, **sanitized}
 
-    target = sink if sink is not None else _resolve_sink()
-    if target is None:
-        return
-    if callable(target):
-        target(event)
+    with suppress(Exception):
+        target = sink if sink is not None else _resolve_sink()
+        if target is None:
+            return
+        if callable(target):
+            target(event)
