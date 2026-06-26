@@ -10,6 +10,7 @@ from general_manager.chat.providers._shared import (
     ChatEvent,
     DoneEvent,
     Message,
+    parse_tool_arguments,
     TextChunkEvent,
     ToolCallEvent,
     TokenUsage,
@@ -24,6 +25,20 @@ class GoogleDependencyImportError(ImportError):
 
     def __init__(self) -> None:
         super().__init__("google-genai package is not installed")
+
+
+def _get_call_value(tool_call: Any, key: str, default: Any = None) -> Any:
+    if isinstance(tool_call, dict):
+        return tool_call.get(key, default)
+    return getattr(tool_call, key, default)
+
+
+def _normalize_tool_calls(chunk: Any) -> list[Any]:
+    function_calls = getattr(chunk, "function_calls", None)
+    if isinstance(function_calls, list):
+        return function_calls
+    tool_calls = getattr(chunk, "tool_calls", None)
+    return tool_calls if isinstance(tool_calls, list) else []
 
 
 class GeminiProvider(BaseLLMProvider):
@@ -88,21 +103,15 @@ class GeminiProvider(BaseLLMProvider):
             text = getattr(chunk, "text", None)
             if isinstance(text, str) and text:
                 yield TextChunkEvent(content=text)
-            tool_calls = getattr(chunk, "tool_calls", None)
-            if isinstance(tool_calls, list):
-                for index, tool_call in enumerate(tool_calls):
-                    name = (
-                        tool_call.get("name") if isinstance(tool_call, dict) else None
+            for index, tool_call in enumerate(_normalize_tool_calls(chunk)):
+                name = _get_call_value(tool_call, "name")
+                args = parse_tool_arguments(_get_call_value(tool_call, "args", {}))
+                if isinstance(name, str):
+                    yield ToolCallEvent(
+                        id=f"gemini-tool-{index}",
+                        name=name,
+                        args=args,
                     )
-                    args = (
-                        tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
-                    )
-                    if isinstance(name, str) and isinstance(args, dict):
-                        yield ToolCallEvent(
-                            id=f"gemini-tool-{index}",
-                            name=name,
-                            args=args,
-                        )
             usage_metadata = getattr(chunk, "usage_metadata", None)
             if usage_metadata is not None:
                 usage = TokenUsage(

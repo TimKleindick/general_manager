@@ -33,6 +33,20 @@ def _merge_usage(current: TokenUsage, event_usage: Any) -> TokenUsage:
     )
 
 
+def _split_system_messages(
+    messages: list[Message],
+) -> tuple[str | None, list[dict[str, str]]]:
+    system_contents: list[str] = []
+    provider_messages: list[dict[str, str]] = []
+    for message in messages:
+        if message.role == "system":
+            system_contents.append(message.content)
+        else:
+            provider_messages.append({"role": message.role, "content": message.content})
+    system = "\n\n".join(system_contents) if system_contents else None
+    return system, provider_messages
+
+
 class AnthropicDependencyImportError(ImportError):
     """Raised when the optional Anthropic dependency is unavailable."""
 
@@ -78,15 +92,13 @@ class AnthropicProvider(BaseLLMProvider):
     ) -> AsyncIterator[ChatEvent]:
         client = self._build_async_client()
         config = self._provider_config()
-        stream = await client.messages.create(
-            model=config["model"],
-            max_tokens=int(config["max_tokens"]),
-            stream=True,
-            messages=[
-                {"role": message.role, "content": message.content}
-                for message in messages
-            ],
-            tools=[
+        system, provider_messages = _split_system_messages(messages)
+        request: dict[str, Any] = {
+            "model": config["model"],
+            "max_tokens": int(config["max_tokens"]),
+            "stream": True,
+            "messages": provider_messages,
+            "tools": [
                 {
                     "name": tool.name,
                     "description": tool.description,
@@ -94,7 +106,10 @@ class AnthropicProvider(BaseLLMProvider):
                 }
                 for tool in tools
             ],
-        )
+        }
+        if system is not None:
+            request["system"] = system
+        stream = await client.messages.create(**request)
         usage = TokenUsage()
         tool_call_builders: dict[int, StreamingToolCallBuilder] = {}
         async for event in stream:
