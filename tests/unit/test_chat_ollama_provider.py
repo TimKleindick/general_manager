@@ -171,9 +171,66 @@ class OllamaProviderTests(unittest.TestCase):
             }
         }
     )
+    def test_check_configuration_rejects_unsupported_base_url_scheme(self) -> None:
+        with patch(
+            "general_manager.chat.providers.ollama.find_spec", return_value=True
+        ):
+            with self.assertRaisesRegex(OllamaBaseUrlError, "http or https"):
+                OllamaProvider.check_configuration()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider_config": {
+                    "base_url": "http://:11434",
+                }
+            }
+        }
+    )
+    def test_check_configuration_rejects_base_url_without_hostname(self) -> None:
+        with patch(
+            "general_manager.chat.providers.ollama.find_spec", return_value=True
+        ):
+            with self.assertRaises(OllamaBaseUrlError):
+                OllamaProvider.check_configuration()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider_config": {
+                    "base_url": "ftp://ollama.local",
+                }
+            }
+        }
+    )
     def test_build_async_client_rejects_unsupported_base_url_scheme(self) -> None:
         with self.assertRaises(OllamaBaseUrlError):
             OllamaProvider._build_async_client()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider_config": {
+                    "base_url": "https://:443",
+                }
+            }
+        }
+    )
+    def test_build_async_client_rejects_base_url_without_hostname(self) -> None:
+        with self.assertRaises(OllamaBaseUrlError):
+            OllamaProvider._build_async_client()
+
+    def test_validate_base_url_rejects_http_urls_without_host(self) -> None:
+        for base_url in (
+            "http:ollama.local",
+            "http:///ollama.local",
+            "https://",
+            "http:// ",
+            "http://[::1",
+        ):
+            with self.subTest(base_url=base_url):
+                with self.assertRaises(OllamaBaseUrlError):
+                    OllamaProvider._validate_base_url(base_url)
 
     @override_settings(
         GENERAL_MANAGER={

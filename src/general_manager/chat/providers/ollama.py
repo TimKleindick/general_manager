@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 from importlib.util import find_spec
 from typing import Any
+from urllib.parse import urlparse
 
 from general_manager.chat.providers._shared import (
     AsyncIterator,
@@ -28,10 +29,12 @@ class OllamaDependencyImportError(ImportError):
 
 
 class OllamaBaseUrlError(ValueError):
-    """Raised when the configured Ollama base URL uses an unsupported scheme."""
+    """Raised when the configured Ollama base URL is unsupported or malformed."""
 
     def __init__(self, base_url: str) -> None:
-        super().__init__(f"Ollama base_url must use http or https: {base_url}")
+        super().__init__(
+            f"Ollama base_url must use http or https with a host: {base_url}"
+        )
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -41,6 +44,7 @@ class OllamaProvider(BaseLLMProvider):
     def check_configuration(cls) -> None:
         if find_spec("ollama") is None:
             raise OllamaDependencyImportError()
+        cls._validate_base_url(cls._provider_config()["base_url"])
 
     @staticmethod
     def _provider_config() -> dict[str, Any]:
@@ -51,6 +55,23 @@ class OllamaProvider(BaseLLMProvider):
         config.setdefault("base_url", "http://127.0.0.1:11434")
         config.setdefault("timeout_seconds", 60)
         return config
+
+    @staticmethod
+    def _validate_base_url(base_url: Any) -> str:
+        value = str(base_url)
+        try:
+            parsed = urlparse(value)
+            hostname = parsed.hostname
+        except ValueError as exc:
+            raise OllamaBaseUrlError(value) from exc
+        if (
+            parsed.scheme not in {"http", "https"}
+            or hostname is None
+            or not hostname.strip()
+        ):
+            raise OllamaBaseUrlError(value)
+        normalized = value.rstrip("/")
+        return normalized
 
     @classmethod
     def _build_request_body(
@@ -82,9 +103,7 @@ class OllamaProvider(BaseLLMProvider):
     @classmethod
     def _build_async_client(cls) -> Any:
         config = cls._provider_config()
-        base_url = str(config["base_url"]).rstrip("/")
-        if not (base_url.startswith("http://") or base_url.startswith("https://")):
-            raise OllamaBaseUrlError(base_url)
+        base_url = cls._validate_base_url(config["base_url"])
         ollama = import_module("ollama")
         return ollama.AsyncClient(
             host=base_url,

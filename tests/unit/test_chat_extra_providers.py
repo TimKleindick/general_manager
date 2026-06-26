@@ -300,6 +300,30 @@ class _GeminiClient:
         self.aio = SimpleNamespace(models=_GeminiModels())
 
 
+class _GeminiFunctionCallModels:
+    async def generate_content_stream(self, **kwargs):  # type: ignore[no-untyped-def]
+        del kwargs
+        return _AsyncIterator(
+            [
+                SimpleNamespace(
+                    text=None,
+                    function_calls=[
+                        SimpleNamespace(
+                            name="find_path",
+                            args='{"from_manager":"A"}',
+                        ),
+                        SimpleNamespace(name="invalid_path", args="[1, 2]"),
+                    ],
+                )
+            ]
+        )
+
+
+class _GeminiFunctionCallClient:
+    def __init__(self) -> None:
+        self.aio = SimpleNamespace(models=_GeminiFunctionCallModels())
+
+
 class AdditionalProviderTests(unittest.TestCase):
     def test_provider_modules_export_same_public_classes(self) -> None:
         ollama_module = import_module("general_manager.chat.providers.ollama")
@@ -531,6 +555,46 @@ class AdditionalProviderTests(unittest.TestCase):
                 assert isinstance(events[2], DoneEvent)
                 assert events[2].usage.input_tokens == 7
                 assert events[2].usage.output_tokens == 11
+                request = client.messages.calls[0]
+                assert "system" not in request
+
+        asyncio.run(run())
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider_config": {"model": "claude-3-5-haiku-latest"},
+            }
+        }
+    )
+    def test_anthropic_provider_sends_system_messages_as_top_level_system(
+        self,
+    ) -> None:
+        client = _AnthropicClient()
+
+        async def run() -> None:
+            with patch.object(
+                AnthropicProvider, "_build_async_client", return_value=client
+            ):
+                events = [
+                    event
+                    async for event in AnthropicProvider().complete(
+                        [
+                            Message(role="system", content="Use policy A."),
+                            Message(role="user", content="hi"),
+                            Message(role="system", content="Prefer short answers."),
+                            Message(role="assistant", content="ready"),
+                        ],
+                        [],
+                    )
+                ]
+            assert isinstance(events[-1], DoneEvent)
+            request = client.messages.calls[0]
+            assert request["system"] == "Use policy A.\n\nPrefer short answers."
+            assert request["messages"] == [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "ready"},
+            ]
 
         asyncio.run(run())
 
@@ -556,6 +620,33 @@ class AdditionalProviderTests(unittest.TestCase):
             assert tool_events[0].id == "tool-1"
             assert tool_events[0].name == "search_managers"
             assert tool_events[0].args == {"query": "parts"}
+
+        asyncio.run(run())
+
+    def test_gemini_provider_emits_tool_calls_from_function_call_objects(
+        self,
+    ) -> None:
+        client = _GeminiFunctionCallClient()
+
+        async def run() -> None:
+            with patch.object(
+                GeminiProvider, "_build_async_client", return_value=client
+            ):
+                events = [
+                    event
+                    async for event in GeminiProvider().complete(
+                        [Message(role="user", content="find a path")], []
+                    )
+                ]
+            assert isinstance(events[0], ToolCallEvent)
+            assert events[0].id == "gemini-tool-0"
+            assert events[0].name == "find_path"
+            assert events[0].args == {"from_manager": "A"}
+            assert isinstance(events[1], ToolCallEvent)
+            assert events[1].id == "gemini-tool-1"
+            assert events[1].name == "invalid_path"
+            assert events[1].args == {}
+            assert isinstance(events[2], DoneEvent)
 
         asyncio.run(run())
 
