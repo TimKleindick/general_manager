@@ -276,8 +276,8 @@ def setup_test_schema() -> None:
         path=["material"]
     )
     PathMap.mapping[("ProjectManager", "PartManager")] = SimpleNamespace(path=["parts"])
-    PathMap.mapping[("MaterialManager", "ProjectManager")] = SimpleNamespace(
-        path=["material", "parts"]
+    PathMap.mapping[("ProjectManager", "MaterialManager")] = SimpleNamespace(
+        path=["parts", "material"]
     )
 
     clear_schema_index_cache()

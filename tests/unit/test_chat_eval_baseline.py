@@ -72,3 +72,35 @@ def test_compare_to_baseline_detects_new_hard_failure_category() -> None:
     assert comparison.messages == [
         "New diagnostic category runtime/forbidden_tool appeared 1 time."
     ]
+
+
+def test_compare_to_baseline_allows_new_soft_strategy_deviation() -> None:
+    baseline = _summary(passed=5, total=5, diagnostics={})
+    current = _summary(
+        passed=5,
+        total=5,
+        diagnostics={"prompt": {"strategy_deviation": 1}},
+    )
+
+    comparison = compare_to_baseline(current, baseline)
+
+    assert comparison.regressed is False
+    assert comparison.pass_rate_delta == 0.0
+    assert comparison.messages == []
+
+
+def test_compare_to_baseline_detects_new_soft_category_when_not_perfect() -> None:
+    baseline = _summary(passed=4, total=5, diagnostics={})
+    current = _summary(
+        passed=4,
+        total=5,
+        diagnostics={"prompt": {"strategy_deviation": 1}},
+    )
+
+    comparison = compare_to_baseline(current, baseline)
+
+    assert comparison.regressed is True
+    assert comparison.pass_rate_delta == 0.0
+    assert comparison.messages == [
+        "New diagnostic category prompt/strategy_deviation appeared 1 time."
+    ]

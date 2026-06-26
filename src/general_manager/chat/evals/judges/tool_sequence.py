@@ -33,35 +33,71 @@ def judge_tool_sequence(
     mismatches: list[str] = []
     actual_idx = 0
     for exp in expected:
-        exp_name = exp.get("name", "")
-        args_contain = exp.get("args_contain", {})
+        exp_name = _tool_kind(str(exp.get("name", "")))
+        args_contain = _as_dict(exp.get("args_contain"))
         matched = False
+        candidate_mismatches: list[str] = []
         while actual_idx < len(actual):
-            act = actual[actual_idx]
+            act = _normalized_tool_call(actual[actual_idx])
             actual_idx += 1
             if act.get("name") != exp_name:
                 continue
-            # Name matches — check args_contain
-            act_args = act.get("args", {})
-            arg_ok = True
-            for key, value in args_contain.items():
-                if key not in act_args:
-                    mismatches.append(f"Tool '{exp_name}': missing arg '{key}'")
-                    arg_ok = False
-                elif act_args[key] != value:
-                    mismatches.append(
-                        f"Tool '{exp_name}': arg '{key}' expected "
-                        f"{value!r}, got {act_args[key]!r}"
-                    )
-                    arg_ok = False
-            if not arg_ok:
+            act_args = _as_dict(act.get("args"))
+            candidate_mismatches = _arg_mismatches(exp_name, args_contain, act_args)
+            if candidate_mismatches:
                 continue
             matched = True
             break
         if not matched:
-            mismatches.append(f"Expected tool '{exp_name}' not found in sequence")
+            if candidate_mismatches:
+                mismatches.extend(candidate_mismatches)
+            else:
+                mismatches.append(f"Expected tool '{exp_name}' not found in sequence")
 
     passed = len(mismatches) == 0
     return ToolSequenceScore(
         passed=passed, expected=expected, actual=actual, mismatches=mismatches
     )
+
+
+def _normalized_tool_call(call: dict[str, Any]) -> dict[str, Any]:
+    name = str(call.get("name", ""))
+    normalized_name = _tool_kind(name)
+    args = _as_dict(call.get("args")).copy()
+    if normalized_name == "query" and name.startswith("query_"):
+        args["manager"] = name.removeprefix("query_")
+    return {"name": normalized_name, "args": args}
+
+
+def _tool_kind(name: str) -> str:
+    if name.startswith("query_"):
+        return "query"
+    return name
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _arg_mismatches(
+    tool_name: str,
+    args_contain: dict[str, Any],
+    actual_args: dict[str, Any],
+) -> list[str]:
+    mismatches: list[str] = []
+    for key, expected in args_contain.items():
+        if key not in actual_args:
+            mismatches.append(f"Tool '{tool_name}': missing arg '{key}'")
+            continue
+        actual = actual_args[key]
+        if not _arg_matches(actual, expected, key=key):
+            mismatches.append(
+                f"Tool '{tool_name}': arg '{key}' expected {expected!r}, got {actual!r}"
+            )
+    return mismatches
+
+
+def _arg_matches(actual: Any, expected: Any, *, key: str) -> bool:
+    if key == "manager" and isinstance(actual, str) and isinstance(expected, str):
+        return actual.casefold() == expected.casefold()
+    return bool(actual == expected)

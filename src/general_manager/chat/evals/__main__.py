@@ -68,8 +68,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.settings:
-        os.environ.setdefault("DJANGO_SETTINGS_MODULE", args.settings)
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "")
+        os.environ["DJANGO_SETTINGS_MODULE"] = args.settings
+    else:
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tests.test_settings")
 
     import django
 
@@ -112,6 +113,12 @@ def main(argv: list[str] | None = None) -> None:
             results_by_provider[label] = results
         report = print_compare_report(results_by_provider)
         print(report)
+        if not all(
+            result.passed
+            for results in results_by_provider.values()
+            for result in results
+        ):
+            sys.exit(1)
         return
 
     if args.provider:

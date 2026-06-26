@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -29,6 +30,58 @@ def test_instantiate_provider_without_model_uses_current_settings() -> None:
     provider = eval_cli._instantiate_provider(_Provider)
 
     assert isinstance(provider, _Provider)
+
+
+def test_main_defaults_django_settings_module_when_unset(capsys, monkeypatch) -> None:
+    result = SimpleNamespace(passed=True)
+    monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
+
+    with (
+        patch("django.setup") as django_setup,
+        patch(
+            "general_manager.chat.settings.import_provider",
+            return_value=_Provider,
+        ),
+        patch(
+            "general_manager.chat.evals.runner.run_eval_suite_sync",
+            return_value=[result],
+        ),
+        patch(
+            "general_manager.chat.evals.runner.print_report",
+            return_value="all good",
+        ),
+    ):
+        eval_cli.main([])
+
+    django_setup.assert_called_once_with()
+    assert os.environ["DJANGO_SETTINGS_MODULE"] == "tests.test_settings"
+    assert capsys.readouterr().out == "all good\n"
+
+
+def test_main_explicit_settings_overrides_existing_env(capsys, monkeypatch) -> None:
+    result = SimpleNamespace(passed=True)
+    monkeypatch.setenv("DJANGO_SETTINGS_MODULE", "existing.settings")
+
+    with (
+        patch("django.setup") as django_setup,
+        patch(
+            "general_manager.chat.settings.import_provider",
+            return_value=_Provider,
+        ),
+        patch(
+            "general_manager.chat.evals.runner.run_eval_suite_sync",
+            return_value=[result],
+        ),
+        patch(
+            "general_manager.chat.evals.runner.print_report",
+            return_value="all good",
+        ),
+    ):
+        eval_cli.main(["--settings", "custom.settings"])
+
+    django_setup.assert_called_once_with()
+    assert os.environ["DJANGO_SETTINGS_MODULE"] == "custom.settings"
+    assert capsys.readouterr().out == "all good\n"
 
 
 def test_main_runs_default_provider_with_fixture_filters_and_trace(capsys, tmp_path):
@@ -92,7 +145,7 @@ def test_main_runs_default_provider_with_fixture_filters_and_trace(capsys, tmp_p
 
 def test_main_compare_mode_runs_each_provider_and_prints_report(capsys):
     first_result = SimpleNamespace(passed=True)
-    second_result = SimpleNamespace(passed=False)
+    second_result = SimpleNamespace(passed=True)
 
     with (
         patch("django.setup"),
@@ -131,6 +184,35 @@ def test_main_compare_mode_runs_each_provider_and_prints_report(capsys):
     assert run_eval_suite_sync.call_count == 2
     assert run_eval_suite_sync.call_args_list[0].args[1] is None
     assert run_eval_suite_sync.call_args_list[0].kwargs["tags"] == ["regression"]
+    print_compare_report.assert_called_once_with(
+        {"FirstProvider": [first_result], "SecondProvider": [second_result]}
+    )
+    assert capsys.readouterr().out == "comparison\n"
+
+
+def test_main_compare_mode_exits_on_failed_result(capsys):
+    first_result = SimpleNamespace(passed=True)
+    second_result = SimpleNamespace(passed=False)
+
+    with (
+        patch("django.setup"),
+        patch(
+            "django.utils.module_loading.import_string",
+            side_effect=[_Provider, _OtherProvider],
+        ),
+        patch(
+            "general_manager.chat.evals.runner.run_eval_suite_sync",
+            side_effect=[[first_result], [second_result]],
+        ),
+        patch(
+            "general_manager.chat.evals.runner.print_compare_report",
+            return_value="comparison",
+        ) as print_compare_report,
+    ):
+        with pytest.raises(SystemExit) as exit_info:
+            eval_cli.main(["--compare", "demo.FirstProvider,demo.SecondProvider"])
+
+    assert exit_info.value.code == 1
     print_compare_report.assert_called_once_with(
         {"FirstProvider": [first_result], "SecondProvider": [second_result]}
     )

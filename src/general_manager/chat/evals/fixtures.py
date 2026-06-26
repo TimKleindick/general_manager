@@ -227,8 +227,8 @@ def setup_toy_schema() -> None:
     cast(Any, PathMap.mapping)[("ProjectManager", "PartManager")] = SimpleNamespace(
         path=["parts"]
     )
-    cast(Any, PathMap.mapping)[("MaterialManager", "ProjectManager")] = SimpleNamespace(
-        path=["material", "parts"]
+    cast(Any, PathMap.mapping)[("ProjectManager", "MaterialManager")] = SimpleNamespace(
+        path=["parts", "material"]
     )
     clear_schema_index_cache()
 
