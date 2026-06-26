@@ -35,7 +35,7 @@ def test_build_schema_index_cache_key_changes_when_registry_contents_change() ->
     GraphQL.reset_registry()
 
     class PartManager:
-        pass
+        chat_exposed = True
 
     class PartType(graphene.ObjectType):
         """Inventory part."""
@@ -48,7 +48,7 @@ def test_build_schema_index_cache_key_changes_when_registry_contents_change() ->
     first = build_schema_index()
 
     class ProjectManager:
-        pass
+        chat_exposed = True
 
     class ProjectType(graphene.ObjectType):
         """Tracked project."""
@@ -66,10 +66,10 @@ def test_build_schema_index_cache_key_changes_when_registry_contents_change() ->
 
 def test_build_schema_index_cache_key_changes_when_graphql_metadata_changes() -> None:
     class MaterialManager:
-        pass
+        chat_exposed = True
 
     class PartManager:
-        pass
+        chat_exposed = True
 
     class MaterialType(graphene.ObjectType):
         """Inventory material."""

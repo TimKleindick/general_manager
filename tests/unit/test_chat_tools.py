@@ -46,6 +46,7 @@ class ChatSchemaIndexTests(SimpleTestCase):
 
         class MaterialManager(GeneralManager):
             Interface = MaterialInterface
+            chat_exposed = True
 
         class PartInterface(BaseTestInterface):
             @staticmethod
@@ -54,6 +55,7 @@ class ChatSchemaIndexTests(SimpleTestCase):
 
         class PartManager(GeneralManager):
             Interface = PartInterface
+            chat_exposed = True
 
         class SecretInterface(BaseTestInterface):
             @staticmethod
@@ -130,6 +132,37 @@ class ChatSchemaIndexTests(SimpleTestCase):
 
         assert set(index.keys()) == {"MaterialManager", "PartManager"}
         assert "SecretManager" not in index
+
+    def test_build_schema_index_hides_managers_without_explicit_chat_exposure(
+        self,
+    ) -> None:
+        class DefaultHiddenInterface(BaseTestInterface):
+            @staticmethod
+            def get_attribute_types() -> dict[str, dict[str, object]]:
+                return {"name": {"type": str}}
+
+        class DefaultHiddenManager(GeneralManager):
+            Interface = DefaultHiddenInterface
+
+        class DefaultHiddenType(graphene.ObjectType):
+            name = graphene.String()
+
+        assert "chat_exposed" not in DefaultHiddenManager.__dict__
+
+        GraphQL.manager_registry["DefaultHiddenManager"] = DefaultHiddenManager
+        GraphQL.graphql_type_registry["DefaultHiddenManager"] = DefaultHiddenType
+        clear_schema_index_cache()
+
+        index = build_schema_index()
+
+        assert "DefaultHiddenManager" not in index
+
+    def test_build_schema_index_keeps_explicitly_exposed_managers(self) -> None:
+        assert self.MaterialManager.chat_exposed is True
+
+        index = build_schema_index()
+
+        assert "MaterialManager" in index
 
     def test_build_schema_index_is_cached_until_explicitly_cleared(self) -> None:
         """Registry content changes refresh the cache without manual clear."""

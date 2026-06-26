@@ -78,6 +78,7 @@ def setup_test_schema() -> None:
 
     class MaterialManager(GeneralManager):
         Interface = MaterialInterface
+        chat_exposed = True
 
     class PartInterface(BaseTestInterface):
         @staticmethod
@@ -86,6 +87,7 @@ def setup_test_schema() -> None:
 
     class PartManager(GeneralManager):
         Interface = PartInterface
+        chat_exposed = True
 
     class ProjectInterface(BaseTestInterface):
         @staticmethod
@@ -94,6 +96,7 @@ def setup_test_schema() -> None:
 
     class ProjectManager(GeneralManager):
         Interface = ProjectInterface
+        chat_exposed = True
 
     materials = [
         {"id": 1, "name": "Steel", "density": 7.8},

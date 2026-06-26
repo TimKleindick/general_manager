@@ -41,12 +41,14 @@ class ChatSystemPromptTests(SimpleTestCase):
 
         class PartManager(GeneralManager):
             Interface = PartInterface
+            chat_exposed = True
 
         class MaterialInterface(BaseTestInterface):
             pass
 
         class MaterialManager(GeneralManager):
             Interface = MaterialInterface
+            chat_exposed = True
 
         class SecretInterface(BaseTestInterface):
             pass

@@ -395,7 +395,7 @@ def _list_query_field_name(manager: str) -> str:
 
 def _ensure_exposed_manager(manager: str) -> None:
     manager_class = GraphQL.manager_registry.get(manager)
-    if manager_class is None or not getattr(manager_class, "chat_exposed", True):
+    if manager_class is None or not getattr(manager_class, "chat_exposed", False):
         raise ManagerNotChatExposedError(manager)
 
 

@@ -1125,6 +1125,7 @@ class RunnerIntegrationTests(SimpleTestCase):
 
         class MatManager(GeneralManager):
             Interface = MatInterface
+            chat_exposed = True
 
         class PartInterface(BaseTestInterface):
             @staticmethod
@@ -1133,6 +1134,7 @@ class RunnerIntegrationTests(SimpleTestCase):
 
         class PartManager(GeneralManager):
             Interface = PartInterface
+            chat_exposed = True
 
         self.MatManager = MatManager
         self.PartManager = PartManager

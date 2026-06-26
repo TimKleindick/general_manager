@@ -9,7 +9,12 @@ from django.test import SimpleTestCase
 from django.test.utils import override_settings
 
 from general_manager.api.graphql import GraphQL
-from general_manager.chat.tools import execute_chat_tool, get_tool_definitions, query
+from general_manager.chat.tools import (
+    ManagerNotChatExposedError,
+    execute_chat_tool,
+    get_tool_definitions,
+    query,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 
@@ -38,7 +43,7 @@ class ChatQueryToolTests(SimpleTestCase):
         GeneralManagerMeta.pending_attribute_initialization.clear()
 
         class PartManager(GeneralManager):
-            pass
+            chat_exposed = True
 
         class HiddenManager(GeneralManager):
             chat_exposed = False
@@ -107,6 +112,19 @@ class ChatQueryToolTests(SimpleTestCase):
             ValueError, match=r"Manager 'HiddenManager' is not chat-exposed\."
         ):
             query(manager="HiddenManager", filters={}, fields=["name"])
+
+    def test_query_rejects_manager_without_chat_exposed_before_execute(self) -> None:
+        class DefaultHiddenManager:
+            pass
+
+        schema = _RecordingSchema(_Result(data={}))
+        GraphQL.manager_registry["DefaultHiddenManager"] = DefaultHiddenManager  # type: ignore[assignment]
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        with pytest.raises(ManagerNotChatExposedError):
+            query(manager="DefaultHiddenManager", filters={}, fields=["name"])
+
+        assert schema.calls == []
 
     def test_query_surfaces_graphql_errors(self) -> None:
         GraphQL._schema = _RecordingSchema(  # type: ignore[assignment]
