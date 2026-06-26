@@ -40,12 +40,18 @@ def setup_toy_schema() -> None:
     _reset_eval_schema()
 
     class MaterialManager:
+        """Toy manager exposing material records to chat evals."""
+
         chat_exposed = True
 
     class PartManager:
+        """Toy manager exposing part records to chat evals."""
+
         chat_exposed = True
 
     class ProjectManager:
+        """Toy manager exposing project records to chat evals."""
+
         chat_exposed = True
 
     materials = [
@@ -84,32 +90,46 @@ def setup_toy_schema() -> None:
         parts = graphene.List(PartType)
 
     class MaterialFilter(_GrapheneInputObjectType):
+        """Filter input for material query evals."""
+
         name = graphene.String()
         density__gt = graphene.Float()
 
     class PartFilter(_GrapheneInputObjectType):
+        """Filter input for part query evals."""
+
         name = graphene.String()
         material__name = graphene.String()
         material__name__icontains = graphene.String()
 
     class ProjectFilter(_GrapheneInputObjectType):
+        """Filter input for project and nested part/material evals."""
+
         name = graphene.String()
         parts__name = graphene.String()
         parts__material__name = graphene.String()
         parts__material__name__icontains = graphene.String()
 
     class PageInfoType(_GrapheneObjectType):
+        """Pagination metadata returned by eval fixture lists."""
+
         total_count = graphene.Int(required=True)
 
     class MaterialPageType(_GrapheneObjectType):
+        """Paged material query result for chat eval fixtures."""
+
         items = graphene.List(MaterialType, required=True)
         page_info = graphene.Field(PageInfoType, required=True)
 
     class PartPageType(_GrapheneObjectType):
+        """Paged part query result for chat eval fixtures."""
+
         items = graphene.List(PartType, required=True)
         page_info = graphene.Field(PageInfoType, required=True)
 
     class ProjectPageType(_GrapheneObjectType):
+        """Paged project query result for chat eval fixtures."""
+
         items = graphene.List(ProjectType, required=True)
         page_info = graphene.Field(PageInfoType, required=True)
 
@@ -162,6 +182,8 @@ def setup_toy_schema() -> None:
         }
 
     class Query(_GrapheneObjectType):
+        """Root query exposing the toy manager fixture lists."""
+
         materialmanager_list = graphene.Field(
             MaterialPageType,
             filter=graphene.Argument(MaterialFilter),
@@ -181,6 +203,7 @@ def setup_toy_schema() -> None:
         def resolve_materialmanager_list(  # type: ignore[no-untyped-def]
             self, info, filter=None, page_size=None
         ):
+            """Return material fixture rows matching the provided filters."""
             del self, info
             rows = [item for item in materials if _matches_filter(item, filter)]
             return _page_payload(rows, page_size)
@@ -188,6 +211,7 @@ def setup_toy_schema() -> None:
         def resolve_partmanager_list(  # type: ignore[no-untyped-def]
             self, info, filter=None, page_size=None
         ):
+            """Return part fixture rows matching the provided filters."""
             del self, info
             rows = [item for item in parts if _matches_filter(item, filter)]
             return _page_payload(rows, page_size)
@@ -195,6 +219,7 @@ def setup_toy_schema() -> None:
         def resolve_projectmanager_list(  # type: ignore[no-untyped-def]
             self, info, filter=None, page_size=None
         ):
+            """Return project fixture rows matching the provided filters."""
             del self, info
             rows = [item for item in projects if _matches_filter(item, filter)]
             return _page_payload(rows, page_size)
@@ -287,6 +312,8 @@ def setup_large_schema(*, manager_count: int = 150, chain_length: int = 8) -> No
     }
 
     class PageInfoType(_GrapheneObjectType):
+        """Pagination metadata returned by synthetic large-schema lists."""
+
         total_count = graphene.Int(required=True)
 
     page_types = {

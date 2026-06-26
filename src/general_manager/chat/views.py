@@ -709,6 +709,7 @@ async def _execute_confirmation_request(
 @csrf_protect
 @require_POST
 def chat_http_view(request: HttpRequest) -> JsonResponse:
+    """Handle one non-streaming chat request over HTTP."""
     try:
         denial = _check_permission(request)
         if denial is not None:
@@ -724,6 +725,7 @@ def chat_http_view(request: HttpRequest) -> JsonResponse:
 @csrf_protect
 @require_POST
 def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
+    """Stream one chat request over server-sent events."""
     try:
         denial = _check_permission(request)
         if denial is not None:
@@ -749,6 +751,7 @@ def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
 @csrf_protect
 @require_POST
 def chat_confirm_view(request: HttpRequest) -> JsonResponse:
+    """Resolve a pending mutation confirmation over HTTP."""
     try:
         denial = _check_permission(request)
         if denial is not None:

@@ -8,6 +8,7 @@ import sys
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Parse CLI arguments, configure Django, and run chat eval cases."""
     parser = argparse.ArgumentParser(
         description="Run the GeneralManager chat evaluation suite.",
     )

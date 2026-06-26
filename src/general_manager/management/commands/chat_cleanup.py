@@ -1,3 +1,5 @@
+"""Management command for pruning expired chat persistence rows."""
+
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand
@@ -7,9 +9,12 @@ from general_manager.chat.settings import get_chat_settings
 
 
 class Command(BaseCommand):
+    """Delete expired chat conversations and pending confirmations."""
+
     help = "Remove expired chat conversations and pending confirmations."
 
     def handle(self, *args, **options) -> None:  # type: ignore[no-untyped-def]
+        """Run the cleanup using the configured chat retention period."""
         del args, options
         ttl_hours = int(get_chat_settings().get("ttl_hours", 24))
         deleted = cleanup_expired_chat_records(ttl_hours=ttl_hours)

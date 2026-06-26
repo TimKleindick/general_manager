@@ -34,6 +34,7 @@ class OpenAIProvider(BaseLLMProvider):
 
     @classmethod
     def check_configuration(cls) -> None:
+        """Validate that the OpenAI SDK is available before use."""
         if find_spec("openai") is None:
             raise OpenAIDependencyImportError()
 
@@ -65,6 +66,7 @@ class OpenAIProvider(BaseLLMProvider):
         messages: list[Message],
         tools: list[ToolDefinition],
     ) -> AsyncIterator[ChatEvent]:
+        """Stream OpenAI text, tool calls, and usage events for one chat turn."""
         client = self._build_async_client()
         config = self._provider_config()
         stream = await client.chat.completions.create(

@@ -11,12 +11,14 @@ class EvalTraceWriter:
     """Append deterministic JSONL records for eval case inspection."""
 
     def __init__(self, path: Path | str, *, append: bool = False) -> None:
+        """Create or truncate the trace file before writing cases."""
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not append:
             self.path.write_text("", encoding="utf-8")
 
     def write_case(self, payload: dict[str, Any]) -> None:
+        """Append one sorted JSON trace record for an eval case."""
         encoded = json.dumps(
             payload, default=str, separators=(",", ":"), sort_keys=True
         )
