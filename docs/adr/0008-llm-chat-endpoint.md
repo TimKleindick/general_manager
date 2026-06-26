@@ -267,14 +267,30 @@ the chat framework.
 execution. When the LLM calls a mutation that is in the confirm list, the
 framework intercepts the tool call and:
 
-1. Sends a `{"type": "confirm_mutation", "name": "...", "args": {...}}`
-   event to the client instead of executing immediately.
-2. Waits for a `{"type": "confirm", "confirmed": true}` or
-   `{"type": "confirm", "confirmed": false}` response from the client,
-   with a configurable timeout (`confirm_timeout_seconds`, default: 30).
-3. If confirmed, executes the mutation. If rejected or timed out, returns a
-   cancellation result to the LLM and sends an error event to the client
-   (on timeout).
+1. Sends
+   `{"type": "confirm_mutation", "id": "tool-create", "mutation": "createPart", "input": {"name": "Bolt"}}`
+   to the client instead of executing immediately.
+2. Waits for a confirmation response, with a configurable timeout
+   (`confirm_timeout_seconds`, default: 30).
+   - WebSocket clients respond on the socket with
+     `{"type": "confirm", "confirmation_id": "tool-create", "confirmed": true}`
+     or
+     `{"type": "confirm", "confirmation_id": "tool-create", "confirmed": false}`.
+   - SSE/HTTP clients send a separate POST to `/chat/confirm/` with
+     `{"confirmation_id": "tool-create", "confirmed": true}` or
+     `{"confirmation_id": "tool-create", "confirmed": false}`.
+3. If confirmed, executes the mutation, emits
+   `{"type": "tool_result", "id": "tool-create", "name": "mutate", "result": {"ok": true}}`,
+   and resumes the provider turn with that tool result.
+4. If rejected before timeout, emits a `tool_result` for the same `id` and
+   `name` with `result.status` set to `"cancelled"` (for example,
+   `{"status": "cancelled", "reason": "user_rejected"}`), then resumes the
+   provider turn with the cancellation result.
+5. Timeout handling is transport-specific. WebSocket timeouts emit a cancelled
+   `tool_result` with reason `"confirmation_timed_out"` and resume the provider
+   turn. Expired or missing SSE `/chat/confirm/` requests return
+   `{"type": "error", "message": "Unknown chat event.", "code": "bad_event"}`
+   instead of emitting a `tool_result` or resumed provider events.
 
 Mutations **not** in `confirm_mutations` execute immediately (subject to the
 allow-list and permission checks). This separates the "which mutations are
@@ -284,16 +300,18 @@ dangerous" decision (`confirm_mutations`).
 **Transport-specific behaviour**:
 
 - **WebSocket**: confirmation works as described above — the server sends a
-  `confirm_mutation` event and waits for a `confirm` response.
-- **SSE**: confirmation works the same way. The SSE stream sends a
-  `confirm_mutation` event and pauses. The client sends a separate POST to a
-  `/chat/confirm/` endpoint with the `confirmation_id` and `confirmed` flag.
-  The SSE stream resumes after receiving the response or timing out.
+  `confirm_mutation` event and waits for a `confirm` response carrying the
+  matching `confirmation_id`.
+- **SSE**: the stream sends a `confirm_mutation` event and stores a pending
+  confirmation. The client sends a separate POST to `/chat/confirm/` with the
+  `confirmation_id` and `confirmed` flag. A valid confirmation POST response
+  returns the `tool_result` and resumed provider events for both accepted and
+  rejected confirmations. An expired or missing pending confirmation returns
+  `{"type": "error", "message": "Unknown chat event.", "code": "bad_event"}`.
 - **HTTP POST (non-streaming)**: confirmed mutations are **rejected**. The
-  response returns an error: `"Mutations requiring confirmation are not
-  supported on the non-streaming HTTP transport. Use WebSocket or SSE."` This
-  is because one-shot HTTP has no mechanism for a mid-request confirmation
-  round-trip.
+  response returns an error because one-shot HTTP has no mechanism for a
+  mid-request confirmation round-trip. HTTP still hosts the `/chat/confirm/`
+  endpoint used to resolve pending SSE confirmations.
 
 ```python
 "allowed_mutations": ["createOrder", "deleteProject", "archiveProject"],
@@ -353,15 +371,18 @@ Per-user budgets configured in settings:
 ```
 Client -> Server:
   {"type": "message", "text": "List parts containing cobalt"}
-  {"type": "confirm", "confirmation_id": "abc123", "confirmed": true}
+  {"type": "confirm", "confirmation_id": "tool-create", "confirmed": true}
 
 Server -> Client (streamed):
   {"type": "tool_call",        "name": "search_managers", "args": {...}}
   {"type": "tool_result",      "name": "search_managers", "data": [...]}
   {"type": "tool_call",        "name": "query", "args": {...}}
   {"type": "tool_result",      "name": "query", "data": [...]}
-  {"type": "confirm_mutation",  "confirmation_id": "abc123",
-                                "name": "deleteProject", "args": {...}}
+  {"type": "confirm_mutation",  "id": "tool-create",
+                                "mutation": "createPart",
+                                "input": {"name": "Bolt"}}
+  {"type": "tool_result",      "id": "tool-create",
+                                "name": "mutate", "result": {"ok": true}}
   {"type": "text_chunk",       "content": "I found 3 parts..."}
   {"type": "text_chunk",       "content": " containing cobalt:\n1. ..."}
   {"type": "error",            "message": "Rate limit exceeded", "code": "..."}
@@ -369,8 +390,9 @@ Server -> Client (streamed):
 ```
 
 Tool calls and results are streamed to the client for transparency.
-`confirm_mutation` pauses execution until the client responds with a `confirm`
-message.
+`confirm_mutation` pauses the provider turn until the client confirms or rejects
+the pending mutation. WebSocket clients send a `confirm` message on the socket;
+SSE clients resolve the pending mutation through `/chat/confirm/`.
 
 ### 14. System prompt
 
