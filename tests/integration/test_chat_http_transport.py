@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest.mock import patch
 
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import Client, TestCase
@@ -20,6 +21,26 @@ GENERIC_CHAT_ERROR_EVENT = {
     "message": "Chat request failed.",
     "code": "chat_error",
 }
+
+
+async def _first_streaming_chunk_from_stream(stream: Any) -> bytes:
+    if hasattr(stream, "__aiter__"):
+        return await anext(stream)
+    return next(iter(stream))
+
+
+async def _collect_streaming_content_from_stream(stream: Any) -> bytes:
+    if hasattr(stream, "__aiter__"):
+        return b"".join([chunk async for chunk in stream])
+    return b"".join(stream)
+
+
+async def _first_streaming_chunk(response: Any) -> bytes:
+    return await _first_streaming_chunk_from_stream(response.streaming_content)
+
+
+async def _collect_streaming_content(response: Any) -> bytes:
+    return await _collect_streaming_content_from_stream(response.streaming_content)
 
 
 class HttpIntegrationProvider:
@@ -390,7 +411,7 @@ class ChatHttpTransportTests(TestCase):
         assert "secret permission detail" not in http_response.content.decode()
 
         assert sse_response.status_code == 200
-        sse_body = b"".join(sse_response.streaming_content).decode()
+        sse_body = async_to_sync(_collect_streaming_content)(sse_response).decode()
         assert sse_body == f"data: {json.dumps(GENERIC_CHAT_ERROR_EVENT)}\n\n"
         assert "secret permission detail" not in sse_body
 
@@ -448,7 +469,7 @@ class ChatHttpTransportTests(TestCase):
             )
 
             assert response.status_code == 200
-            body = b"".join(response.streaming_content).decode()
+            body = async_to_sync(_collect_streaming_content)(response).decode()
             assert body == f"data: {json.dumps(GENERIC_CHAT_ERROR_EVENT)}\n\n"
             assert "secret setup detail" not in body
             chat_error.assert_called_once()
@@ -475,10 +496,22 @@ class ChatHttpTransportTests(TestCase):
         assert response.status_code == 200
         assert LazySseProvider.started is False
 
-        first_chunk = next(iter(response.streaming_content)).decode()
+        observed_after_first: list[tuple[bool, bool]] = []
+
+        async def consume_stream() -> bytes:
+            stream = response.streaming_content
+            first = await _first_streaming_chunk_from_stream(stream)
+            observed_after_first.append(
+                (LazySseProvider.started, LazySseProvider.yielded)
+            )
+            await _collect_streaming_content_from_stream(stream)
+            return first
+
+        first_chunk = async_to_sync(consume_stream)().decode()
 
         assert '"type": "text_chunk"' in first_chunk
-        assert LazySseProvider.started is True
+        assert observed_after_first == [(True, False)]
+        assert LazySseProvider.yielded is True
 
     def test_http_post_rejects_confirmed_mutations(self) -> None:
         with patch(
@@ -627,7 +660,7 @@ class ChatHttpTransportTests(TestCase):
             )
 
             assert response.status_code == 200
-            body = b"".join(response.streaming_content).decode()
+            body = async_to_sync(_collect_streaming_content)(response).decode()
             assert '"type": "confirm_mutation"' in body
             pending = (
                 ChatPendingConfirmation.objects.filter(confirmation_id="tool-create")
@@ -662,7 +695,7 @@ class ChatHttpTransportTests(TestCase):
             )
 
         assert response.status_code == 200
-        body = b"".join(response.streaming_content).decode()
+        body = async_to_sync(_collect_streaming_content)(response).decode()
         assert '"type": "confirm_mutation"' in body
         pending = (
             ChatPendingConfirmation.objects.filter(confirmation_id="tool-create")
