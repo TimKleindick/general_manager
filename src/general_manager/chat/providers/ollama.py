@@ -42,6 +42,7 @@ class OllamaProvider(BaseLLMProvider):
 
     @classmethod
     def check_configuration(cls) -> None:
+        """Validate that the Ollama SDK and base URL are usable."""
         if find_spec("ollama") is None:
             raise OllamaDependencyImportError()
         cls._validate_base_url(cls._provider_config()["base_url"])
@@ -115,6 +116,7 @@ class OllamaProvider(BaseLLMProvider):
         messages: list[Message],
         tools: list[ToolDefinition],
     ) -> AsyncIterator[ChatEvent]:
+        """Stream Ollama text, tool calls, and usage events for one chat turn."""
         client = self._build_async_client()
         stream = await client.chat(**self._build_request_body(messages, tools))
         async for chunk in stream:

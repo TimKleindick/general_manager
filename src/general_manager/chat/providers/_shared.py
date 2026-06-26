@@ -34,11 +34,13 @@ class StreamingToolCallBuilder:
     """Accumulate streamed tool-call name and JSON argument fragments."""
 
     def __init__(self, *, call_id: str) -> None:
+        """Initialize an accumulator for one provider tool-call stream."""
         self.call_id = call_id
         self.name_parts: list[str] = []
         self.argument_parts: list[str] = []
 
     def append(self, *, name: Any = None, arguments: Any = None) -> None:
+        """Append streamed name and argument fragments from a provider chunk."""
         if isinstance(name, str) and name:
             self.name_parts.append(name)
         if isinstance(arguments, str) and arguments:
@@ -47,6 +49,7 @@ class StreamingToolCallBuilder:
             self.argument_parts = [json.dumps(arguments)]
 
     def build(self) -> ToolCallEvent | None:
+        """Build a tool-call event when enough stream fragments were received."""
         name = "".join(self.name_parts).strip()
         if not name:
             return None

@@ -48,6 +48,7 @@ class GeminiProvider(BaseLLMProvider):
 
     @classmethod
     def check_configuration(cls) -> None:
+        """Validate that the Google GenAI SDK is available before use."""
         if find_spec("google.genai") is None:
             raise GoogleDependencyImportError()
 
@@ -75,6 +76,7 @@ class GeminiProvider(BaseLLMProvider):
         messages: list[Message],
         tools: list[ToolDefinition],
     ) -> AsyncIterator[ChatEvent]:
+        """Stream Gemini text, tool calls, and usage events for one chat turn."""
         client = self._build_async_client()
         config = self._provider_config()
         stream = await client.aio.models.generate_content_stream(

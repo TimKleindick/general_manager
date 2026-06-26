@@ -52,22 +52,27 @@ class ChatConfigurationError(ValueError):
 
     @classmethod
     def invalid_settings_mapping(cls) -> ChatConfigurationError:
+        """Build the error for a non-mapping chat settings value."""
         return cls("GENERAL_MANAGER['CHAT'] must be a mapping.")
 
     @classmethod
     def invalid_permission(cls) -> ChatConfigurationError:
+        """Build the error for an invalid chat permission setting."""
         return cls("Chat permission must be a callable or dotted path.")
 
     @classmethod
     def missing_graphql_schema(cls) -> ChatConfigurationError:
+        """Build the error for chat startup without a GraphQL schema."""
         return cls("GeneralManager chat requires an initialized GraphQL schema.")
 
     @classmethod
     def unknown_allowed_mutations(cls, names: str) -> ChatConfigurationError:
+        """Build the error for configured mutations not present in GraphQL."""
         return cls(f"Unknown chat allowed_mutations: {names}")
 
     @classmethod
     def invalid_confirm_mutations(cls, names: str) -> ChatConfigurationError:
+        """Build the error for confirmed mutations not allowed for chat."""
         return cls(f"confirm_mutations must also be in allowed_mutations: {names}")
 
 
@@ -75,11 +80,13 @@ class ProviderDependencyError(Exception):
     """Describe a provider import/configuration dependency failure."""
 
     def __init__(self, provider_name: str, extra_name: str) -> None:
+        """Store the provider and package extra needed to enable it."""
         self.provider_name = provider_name
         self.extra_name = extra_name
         super().__init__(provider_name, extra_name)
 
     def __str__(self) -> str:
+        """Return the installation hint shown to users."""
         return (
             f"To use {self.provider_name}, install: "
             f"pip install general-manager[{self.extra_name}]"

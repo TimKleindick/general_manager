@@ -50,18 +50,30 @@ if TYPE_CHECKING:
     from general_manager.chat.models import ChatConversation
 
     class _ChatConsumerBase:
+        """Typed subset of the Channels websocket consumer base."""
+
         scope: dict[str, Any]
 
         @classmethod
-        def as_asgi(cls, **initkwargs: Any) -> Any: ...
+        def as_asgi(cls, **initkwargs: Any) -> Any:
+            """Build an ASGI application callable for the consumer."""
+            ...
 
-        async def accept(self, subprotocol: str | None = None) -> None: ...
+        async def accept(self, subprotocol: str | None = None) -> None:
+            """Accept the websocket connection."""
+            ...
 
-        async def close(self, code: int | None = None) -> None: ...
+        async def close(self, code: int | None = None) -> None:
+            """Close the websocket connection with an optional code."""
+            ...
 
-        async def send_json(self, content: Any, close: bool = False) -> None: ...
+        async def send_json(self, content: Any, close: bool = False) -> None:
+            """Send a JSON-serializable websocket message."""
+            ...
 
-        async def disconnect(self, code: int) -> None: ...
+        async def disconnect(self, code: int) -> None:
+            """Handle websocket disconnection from the base class."""
+            ...
 
 else:
     _ChatConsumerBase = AsyncJsonWebsocketConsumer
@@ -198,6 +210,7 @@ class ChatConsumer(_ChatConsumerBase):
         self._history_cache.append({"role": role, "content": content})
 
     async def connect(self) -> None:
+        """Initialize provider, permissions, and persistent chat state."""
         try:
             permission = get_chat_permission()
             if (
@@ -232,6 +245,7 @@ class ChatConsumer(_ChatConsumerBase):
             await self.close(code=1011)
 
     async def disconnect(self, code: int) -> None:
+        """Cancel in-flight chat work before closing the websocket."""
         provider_task = getattr(self, "_provider_task", None)
         if provider_task is not None and not provider_task.done():
             provider_task.cancel()
@@ -243,6 +257,7 @@ class ChatConsumer(_ChatConsumerBase):
         await super().disconnect(code)
 
     async def receive_json(self, content: Any, **_kwargs: Any) -> None:
+        """Route incoming websocket payloads to chat or confirmation handlers."""
         if not isinstance(content, dict):
             await self.send_json(
                 {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
