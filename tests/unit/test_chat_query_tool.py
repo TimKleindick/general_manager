@@ -189,6 +189,7 @@ class ChatQueryToolTests(SimpleTestCase):
 
         query_mock.assert_not_called()
 
+    @override_settings(GENERAL_MANAGER={"CHAT": {"tool_strategy": "direct"}})
     def test_execute_chat_tool_validates_direct_query_pagination_before_dispatch(
         self,
     ) -> None:

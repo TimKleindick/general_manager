@@ -129,6 +129,16 @@ class ChatPersistenceTests(TestCase):
 
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
+                ChatPendingConfirmation.objects.create(
+                    conversation=conversation,
+                    confirmation_id="tool-repeat",
+                    mutation_name="createPart",
+                    payload={"input": {"name": "Washer"}},
+                    expires_at=timezone.now() + timedelta(seconds=30),
+                )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
                 create_pending_confirmation(
                     conversation,
                     confirmation_id="tool-repeat",
@@ -167,6 +177,32 @@ class ChatPersistenceTests(TestCase):
         assert second.conversation_id == conversation.pk
         assert second.confirmation_id == "tool-repeat"
         assert second.resolved_at is None
+
+    def test_expired_pending_confirmation_id_can_repeat_within_conversation(
+        self,
+    ) -> None:
+        conversation = ChatConversation.for_actor(user=None, session_key="scoped-5")
+        expired = ChatPendingConfirmation.objects.create(
+            conversation=conversation,
+            confirmation_id="tool-repeat",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            expires_at=timezone.now() - timedelta(seconds=1),
+        )
+
+        replacement = create_pending_confirmation(
+            conversation,
+            confirmation_id="tool-repeat",
+            mutation_name="createPart",
+            payload={"input": {"name": "Nut"}},
+            timeout_seconds=30,
+        )
+
+        expired.refresh_from_db()
+        assert expired.resolved_at is not None
+        assert replacement.pk != expired.pk
+        assert replacement.confirmation_id == "tool-repeat"
+        assert replacement.resolved_at is None
 
     def test_claim_for_conversation_marks_pending_resolved_before_returning(
         self,
