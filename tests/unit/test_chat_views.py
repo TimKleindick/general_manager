@@ -4,7 +4,7 @@ import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 from asgiref.sync import async_to_sync
 from django.http import HttpRequest, JsonResponse
@@ -427,6 +427,10 @@ class ChatViewHelperTests(SimpleTestCase):
                 return_value=conversation,
             ),
             patch(
+                "general_manager.chat.views.ChatPendingConfirmation.claim_for_conversation",
+                return_value=None,
+            ) as claim_pending,
+            patch(
                 "general_manager.chat.views.ChatPendingConfirmation.active_for_conversation",
                 return_value=None,
             ),
@@ -434,11 +438,14 @@ class ChatViewHelperTests(SimpleTestCase):
             returned, events = async_to_sync(_execute_confirmation_request)(request)
 
         assert returned is conversation
+        claim_pending.assert_called_once()
+        assert claim_pending.call_args.kwargs["conversation"] is conversation
+        assert claim_pending.call_args.kwargs["confirmation_id"] == "missing"
         assert events == [
             {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
         ]
 
-    def test_execute_confirmation_request_records_cancelled_mutation_result(
+    def test_execute_confirmation_request_claims_pending_before_recording_result(
         self,
     ) -> None:
         request = self.factory.post(
@@ -459,6 +466,10 @@ class ChatViewHelperTests(SimpleTestCase):
                 "general_manager.chat.views._conversation_for_request",
                 return_value=conversation,
             ),
+            patch(
+                "general_manager.chat.views.ChatPendingConfirmation.claim_for_conversation",
+                return_value=pending,
+            ) as claim_pending,
             patch(
                 "general_manager.chat.views.ChatPendingConfirmation.active_for_conversation",
                 return_value=pending,
@@ -482,14 +493,89 @@ class ChatViewHelperTests(SimpleTestCase):
             returned, events = async_to_sync(_execute_confirmation_request)(request)
 
         assert returned is conversation
+        claim_pending.assert_called_once_with(
+            conversation=conversation,
+            confirmation_id="confirm-1",
+            now=ANY,
+        )
         assert events[0] == {
             "type": "tool_result",
             "id": "confirm-1",
             "name": "mutate",
             "result": {"status": "cancelled", "reason": "user_rejected"},
         }
-        pending.save.assert_called_once_with(update_fields=["resolved_at"])
+        pending.save.assert_not_called()
         append_message.assert_called_once()
+
+    def test_execute_confirmation_request_claims_before_confirmed_mutation(
+        self,
+    ) -> None:
+        request = self.factory.post(
+            "/chat/confirm/",
+            data=json.dumps({"confirmation_id": "confirm-2", "confirmed": True}),
+            content_type="application/json",
+        )
+        conversation = object()
+        pending = SimpleNamespace(
+            confirmation_id="confirm-2",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+        )
+        calls: list[str] = []
+
+        def claim_pending(**_kwargs: object) -> object:
+            calls.append("claim")
+            return pending
+
+        def execute_confirmed_mutation(*_args: object) -> dict[str, object]:
+            calls.append("execute")
+            return {"status": "executed"}
+
+        with (
+            patch(
+                "general_manager.chat.views._conversation_for_request",
+                return_value=conversation,
+            ),
+            patch(
+                "general_manager.chat.views.ChatPendingConfirmation.claim_for_conversation",
+                side_effect=claim_pending,
+            ) as claim_pending_mock,
+            patch(
+                "general_manager.chat.views.execute_chat_tool",
+                side_effect=execute_confirmed_mutation,
+            ) as execute_tool,
+            patch("general_manager.chat.views.emit_chat_tool_called"),
+            patch("general_manager.chat.views.emit_chat_mutation_executed"),
+            patch("general_manager.chat.views.append_chat_message"),
+            patch(
+                "general_manager.chat.views.import_provider",
+                return_value=Mock(return_value=object()),
+            ),
+            patch(
+                "general_manager.chat.views._build_messages",
+                new=AsyncMock(return_value=[Message(role="system", content="system")]),
+            ),
+            patch(
+                "general_manager.chat.views._run_provider_turn",
+                new=AsyncMock(return_value=[{"type": "done"}]),
+            ),
+        ):
+            returned, events = async_to_sync(_execute_confirmation_request)(request)
+
+        assert returned is conversation
+        claim_pending_mock.assert_called_once_with(
+            conversation=conversation,
+            confirmation_id="confirm-2",
+            now=ANY,
+        )
+        execute_tool.assert_called_once()
+        assert calls == ["claim", "execute"]
+        assert events[0] == {
+            "type": "tool_result",
+            "id": "confirm-2",
+            "name": "mutate",
+            "result": {"status": "executed"},
+        }
 
     def test_http_and_confirm_views_return_permission_denial(self) -> None:
         denial = JsonResponse({"detail": "Forbidden"}, status=403)

@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Any, ClassVar, cast
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 from general_manager.chat.settings import get_chat_settings
@@ -98,7 +98,7 @@ class ChatPendingConfirmation(models.Model):
         on_delete=models.CASCADE,
         related_name="pending_confirmations",
     )
-    confirmation_id: Any = models.CharField(max_length=128, unique=True)
+    confirmation_id: Any = models.CharField(max_length=128)
     mutation_name: Any = models.CharField(max_length=255)
     payload: Any = models.JSONField(default=dict)
     expires_at: Any = models.DateTimeField()
@@ -110,6 +110,12 @@ class ChatPendingConfirmation(models.Model):
         indexes: ClassVar[list[models.Index]] = [
             models.Index(fields=["expires_at"]),
             models.Index(fields=["resolved_at"]),
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["conversation", "confirmation_id"],
+                name="gm_chat_pending_conv_conf_uniq",
+            )
         ]
 
     @classmethod
@@ -131,6 +137,31 @@ class ChatPendingConfirmation(models.Model):
             .order_by("-created_at", "-id")
             .first()
         )
+
+    @classmethod
+    def claim_for_conversation(
+        cls,
+        *,
+        conversation: ChatConversation,
+        confirmation_id: str,
+        now: Any | None = None,
+        allow_expired: bool = False,
+    ) -> ChatPendingConfirmation | None:
+        current_time = now if now is not None else timezone.now()
+        with transaction.atomic():
+            queryset = cls.objects.select_for_update().filter(
+                conversation=conversation,
+                confirmation_id=confirmation_id,
+                resolved_at__isnull=True,
+            )
+            if not allow_expired:
+                queryset = queryset.filter(expires_at__gt=current_time)
+            pending = queryset.order_by("-created_at", "-id").first()
+            if pending is None:
+                return None
+            pending.resolved_at = current_time
+            pending.save(update_fields=["resolved_at"])
+            return pending
 
 
 def append_chat_message(
