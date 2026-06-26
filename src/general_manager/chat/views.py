@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -63,7 +63,7 @@ from general_manager.chat.tools import (
 
 @dataclass(frozen=True)
 class _PreparedMessageRequest:
-    conversation: ChatConversation
+    conversation: ChatConversation | None
     scope: dict[str, Any]
     provider: Any | None
     messages: list[Message] | None
@@ -166,7 +166,7 @@ def _chat_error_events(
     return [public_chat_error(exc).as_event()]
 
 
-async def _run_provider_turn(
+async def _iter_provider_turn_events(
     *,
     scope: dict[str, Any],
     conversation: ChatConversation,
@@ -176,9 +176,8 @@ async def _run_provider_turn(
     tool_retries: int = 0,
     tool_calls: list[dict[str, Any]] | None = None,
     recovered_missing_tools: bool = False,
-) -> list[dict[str, Any]]:
+) -> AsyncIterator[dict[str, Any]]:
     tool_calls = list(tool_calls or [])
-    events: list[dict[str, Any]] = []
     assistant_chunks: list[str] = []
     settings = get_chat_settings()
     max_retries = int(settings.get("max_retries_per_message", 8))
@@ -190,18 +189,16 @@ async def _run_provider_turn(
         if isinstance(event, TextChunkEvent):
             assistant_chunks.append(event.content)
             if not recover_missing_tools:
-                events.append({"type": "text_chunk", "content": event.content})
+                yield {"type": "text_chunk", "content": event.content}
             continue
         if isinstance(event, ToolCallEvent):
-            events.append(
-                {
-                    "type": "tool_call",
-                    "id": event.id,
-                    "name": event.name,
-                    "args": event.args,
-                }
-            )
-            result = execute_chat_tool(
+            yield {
+                "type": "tool_call",
+                "id": event.id,
+                "name": event.name,
+                "args": event.args,
+            }
+            result = await sync_to_async(execute_chat_tool)(
                 event.name, event.args, ScopeChatContext.from_scope(scope)
             )
             tool_calls.append(
@@ -219,14 +216,12 @@ async def _run_provider_turn(
                 and event.name == "mutate"
             ):
                 if transport == "http":
-                    events.append(
-                        {
-                            "type": "error",
-                            "message": "Confirmed mutations require WebSocket or SSE transport.",
-                            "code": "confirmation_required_transport",
-                        }
-                    )
-                    return events
+                    yield {
+                        "type": "error",
+                        "message": "Confirmed mutations require WebSocket or SSE transport.",
+                        "code": "confirmation_required_transport",
+                    }
+                    return
                 await sync_to_async(create_pending_confirmation)(
                     conversation,
                     confirmation_id=event.id,
@@ -236,23 +231,19 @@ async def _run_provider_turn(
                         get_chat_settings().get("confirm_timeout_seconds", 30)
                     ),
                 )
-                events.append(
-                    {
-                        "type": "confirm_mutation",
-                        "id": event.id,
-                        "mutation": result["mutation"],
-                        "input": result["input"],
-                    }
-                )
-                return events
-            events.append(
-                {
-                    "type": "tool_result",
+                yield {
+                    "type": "confirm_mutation",
                     "id": event.id,
-                    "name": event.name,
-                    "result": result,
+                    "mutation": result["mutation"],
+                    "input": result["input"],
                 }
-            )
+                return
+            yield {
+                "type": "tool_result",
+                "id": event.id,
+                "name": event.name,
+                "result": result,
+            }
             if event.name == "mutate":
                 emit_chat_mutation_executed(
                     user=scope.get("user"),
@@ -281,27 +272,24 @@ async def _run_provider_turn(
             messages.append(Message(role="tool", content=tool_content))
             next_retries = tool_retries + (0 if event.name == "mutate" else 1)
             if event.name != "mutate" and next_retries >= max_retries:
-                events.append(
-                    {
-                        "type": "error",
-                        "message": "Chat tool retry limit exceeded.",
-                        "code": "tool_retry_limit",
-                    }
-                )
-                return events
-            events.extend(
-                await _run_provider_turn(
-                    scope=scope,
-                    conversation=conversation,
-                    provider=provider,
-                    messages=messages,
-                    transport=transport,
-                    tool_retries=next_retries,
-                    tool_calls=tool_calls,
-                    recovered_missing_tools=recovered_missing_tools,
-                )
-            )
-            return events
+                yield {
+                    "type": "error",
+                    "message": "Chat tool retry limit exceeded.",
+                    "code": "tool_retry_limit",
+                }
+                return
+            async for next_event in _iter_provider_turn_events(
+                scope=scope,
+                conversation=conversation,
+                provider=provider,
+                messages=messages,
+                transport=transport,
+                tool_retries=next_retries,
+                tool_calls=tool_calls,
+                recovered_missing_tools=recovered_missing_tools,
+            ):
+                yield next_event
+            return
         if isinstance(event, DoneEvent):
             if assistant_chunks:
                 assistant_message = "".join(assistant_chunks)
@@ -323,7 +311,7 @@ async def _run_provider_turn(
                             ),
                         )
                     )
-                    return await _run_provider_turn(
+                    async for recovery_event in _iter_provider_turn_events(
                         scope=scope,
                         conversation=conversation,
                         provider=provider,
@@ -332,7 +320,9 @@ async def _run_provider_turn(
                         tool_retries=tool_retries,
                         tool_calls=tool_calls,
                         recovered_missing_tools=True,
-                    )
+                    ):
+                        yield recovery_event
+                    return
                 if (
                     recover_missing_tools
                     and not recovered_missing_tools
@@ -350,7 +340,7 @@ async def _run_provider_turn(
                             ),
                         )
                     )
-                    return await _run_provider_turn(
+                    async for recovery_event in _iter_provider_turn_events(
                         scope=scope,
                         conversation=conversation,
                         provider=provider,
@@ -359,12 +349,12 @@ async def _run_provider_turn(
                         tool_retries=tool_retries,
                         tool_calls=tool_calls,
                         recovered_missing_tools=True,
-                    )
+                    ):
+                        yield recovery_event
+                    return
                 if recover_missing_tools:
-                    events.extend(
-                        {"type": "text_chunk", "content": chunk}
-                        for chunk in assistant_chunks
-                    )
+                    for chunk in assistant_chunks:
+                        yield {"type": "text_chunk", "content": chunk}
                 await sync_to_async(append_chat_message)(
                     conversation,
                     role="assistant",
@@ -383,7 +373,7 @@ async def _run_provider_turn(
                         ),
                     )
                 )
-                return await _run_provider_turn(
+                async for recovery_event in _iter_provider_turn_events(
                     scope=scope,
                     conversation=conversation,
                     provider=provider,
@@ -392,24 +382,49 @@ async def _run_provider_turn(
                     tool_retries=tool_retries,
                     tool_calls=tool_calls,
                     recovered_missing_tools=True,
-                )
-            enforce_chat_rate_limit(
+                ):
+                    yield recovery_event
+                return
+            await sync_to_async(enforce_chat_rate_limit)(
                 scope,
                 input_tokens=event.usage.input_tokens,
                 output_tokens=event.usage.output_tokens,
                 count_request=False,
             )
-            events.append(
-                {
-                    "type": "done",
-                    "usage": {
-                        "input_tokens": event.usage.input_tokens,
-                        "output_tokens": event.usage.output_tokens,
-                    },
-                }
-            )
-            return events
-    return events
+            yield {
+                "type": "done",
+                "usage": {
+                    "input_tokens": event.usage.input_tokens,
+                    "output_tokens": event.usage.output_tokens,
+                },
+            }
+            return
+
+
+async def _run_provider_turn(
+    *,
+    scope: dict[str, Any],
+    conversation: ChatConversation,
+    provider: Any,
+    messages: list[Message],
+    transport: str,
+    tool_retries: int = 0,
+    tool_calls: list[dict[str, Any]] | None = None,
+    recovered_missing_tools: bool = False,
+) -> list[dict[str, Any]]:
+    return [
+        event
+        async for event in _iter_provider_turn_events(
+            scope=scope,
+            conversation=conversation,
+            provider=provider,
+            messages=messages,
+            transport=transport,
+            tool_retries=tool_retries,
+            tool_calls=tool_calls,
+            recovered_missing_tools=recovered_missing_tools,
+        )
+    ]
 
 
 def _build_tool_definitions() -> list[Any]:
@@ -458,13 +473,12 @@ async def _prepare_message_request(
     *,
     provider_importer: Callable[[], type[Any]] | None = None,
 ) -> _PreparedMessageRequest:
-    conversation = await sync_to_async(_conversation_for_request)(request)
     scope: dict[str, Any] = {}
     payload = _parse_json_body(request)
     text = payload.get("text")
     if not isinstance(text, str) or not text.strip():
         return _PreparedMessageRequest(
-            conversation=conversation,
+            conversation=None,
             scope=scope,
             provider=None,
             messages=None,
@@ -476,11 +490,12 @@ async def _prepare_message_request(
                 }
             ],
         )
-    scope = _request_scope(request)
-    rate_limited = enforce_chat_rate_limit(scope)
+    await sync_to_async(_ensure_session_key)(request)
+    scope = await sync_to_async(_request_scope)(request)
+    rate_limited = await sync_to_async(enforce_chat_rate_limit)(scope)
     if rate_limited is not None:
         return _PreparedMessageRequest(
-            conversation=conversation,
+            conversation=None,
             scope=scope,
             provider=None,
             messages=None,
@@ -493,6 +508,7 @@ async def _prepare_message_request(
                 }
             ],
         )
+    conversation = await sync_to_async(_conversation_for_request)(request)
     await sync_to_async(append_chat_message)(conversation, role="user", content=text)
     provider_cls = (
         provider_importer() if provider_importer is not None else import_provider()
@@ -522,7 +538,11 @@ async def _execute_message_request(
         prepared = await _prepare_message_request(request)
         if prepared.early_events is not None:
             return prepared.conversation, prepared.early_events
-        if prepared.provider is None or prepared.messages is None:
+        if (
+            prepared.provider is None
+            or prepared.messages is None
+            or prepared.conversation is None
+        ):
             return prepared.conversation, []
         events = await _run_provider_turn(
             scope=prepared.scope,
@@ -552,16 +572,19 @@ async def _stream_message_events(
             for event in prepared.early_events:
                 yield event
             return
-        if prepared.provider is None or prepared.messages is None:
+        if (
+            prepared.provider is None
+            or prepared.messages is None
+            or prepared.conversation is None
+        ):
             return
-        events = await _run_provider_turn(
+        async for event in _iter_provider_turn_events(
             scope=prepared.scope,
             conversation=prepared.conversation,
             provider=prepared.provider,
             messages=prepared.messages,
             transport=transport,
-        )
-        for event in events:
+        ):
             yield event
     except Exception as exc:  # noqa: BLE001
         for event in _chat_error_events(exc, request, transport=transport):
@@ -572,31 +595,16 @@ def _encode_sse_event(event: dict[str, Any]) -> bytes:
     return f"data: {json.dumps(event)}\n\n".encode()
 
 
-async def _collect_stream_events(
+async def _async_sse_stream(
     request: HttpRequest,
     *,
     provider_importer: Callable[[], type[Any]] | None = None,
-) -> list[dict[str, Any]]:
-    return [
-        event
-        async for event in _stream_message_events(
-            request,
-            transport="sse",
-            provider_importer=provider_importer,
-        )
-    ]
-
-
-def _sync_sse_stream(
-    request: HttpRequest,
-    *,
-    provider_importer: Callable[[], type[Any]] | None = None,
-) -> Iterator[bytes]:
-    events = async_to_sync(_collect_stream_events)(
+) -> AsyncIterator[bytes]:
+    async for event in _stream_message_events(
         request,
+        transport="sse",
         provider_importer=provider_importer,
-    )
-    for event in events:
+    ):
         yield _encode_sse_event(event)
 
 
@@ -628,7 +636,7 @@ async def _execute_confirmation_request(
 
         scope = _request_scope(request)
         if confirmed:
-            result = execute_chat_tool(
+            result = await sync_to_async(execute_chat_tool)(
                 "mutate",
                 {
                     "mutation": pending.mutation_name,
@@ -733,7 +741,7 @@ def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
         )
 
     return StreamingHttpResponse(
-        _sync_sse_stream(request, provider_importer=provider_importer),
+        _async_sse_stream(request, provider_importer=provider_importer),
         content_type="text/event-stream",
     )
 

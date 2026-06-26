@@ -529,7 +529,7 @@ class ChatConsumer(_ChatConsumerBase):
                 "args": event.args,
             }
         )
-        result = execute_chat_tool(
+        result = await sync_to_async(execute_chat_tool)(
             event.name, event.args, ScopeChatContext.from_scope(self.scope)
         )
         tool_calls.append(
@@ -742,71 +742,83 @@ class ChatConsumer(_ChatConsumerBase):
         cancellation_reason: str,
     ) -> None:
         confirmation_id = str(pending["id"])
-        await self._cancel_confirmation_timeout()
-        self._pending_confirmation = None
-        if confirmed:
-            result = execute_chat_tool(
-                "mutate",
+        previous_active_turn = getattr(self, "_active_turn", None)
+        followup_turn = asyncio.get_running_loop().create_future()
+        self._active_turn = followup_turn
+        try:
+            await self._cancel_confirmation_timeout()
+            self._pending_confirmation = None
+            if confirmed:
+                result = await sync_to_async(execute_chat_tool)(
+                    "mutate",
+                    {
+                        "mutation": pending["mutation"],
+                        "input": pending["input"],
+                        "confirmed": True,
+                    },
+                    ScopeChatContext.from_scope(self.scope),
+                )
+            else:
+                result = {"status": "cancelled", "reason": cancellation_reason}
+            emit_chat_tool_called(
+                user=self.scope.get("user"),
+                tool_name="mutate",
+                args={"mutation": pending["mutation"], "input": pending["input"]},
+                result=result,
+            )
+            emit_chat_mutation_executed(
+                user=self.scope.get("user"),
+                mutation=pending["mutation"],
+                input=pending["input"],
+                result=result,
+            )
+            emit_chat_audit_event(
+                "tool_result",
                 {
-                    "mutation": pending["mutation"],
-                    "input": pending["input"],
-                    "confirmed": True,
+                    "tool_name": "mutate",
+                    "args": {
+                        "mutation": pending["mutation"],
+                        "input": pending["input"],
+                    },
+                    "result": result,
+                    "session_key": self.session_key,
                 },
-                ScopeChatContext.from_scope(self.scope),
             )
-        else:
-            result = {"status": "cancelled", "reason": cancellation_reason}
-        emit_chat_tool_called(
-            user=self.scope.get("user"),
-            tool_name="mutate",
-            args={"mutation": pending["mutation"], "input": pending["input"]},
-            result=result,
-        )
-        emit_chat_mutation_executed(
-            user=self.scope.get("user"),
-            mutation=pending["mutation"],
-            input=pending["input"],
-            result=result,
-        )
-        emit_chat_audit_event(
-            "tool_result",
-            {
-                "tool_name": "mutate",
-                "args": {"mutation": pending["mutation"], "input": pending["input"]},
-                "result": result,
-                "session_key": self.session_key,
-            },
-        )
-        tool_content = self._serialize_tool_result(result)
-        await self.send_json(
-            {
-                "type": "tool_result",
-                "id": confirmation_id,
-                "name": "mutate",
-                "result": result,
-            }
-        )
-        messages = list(pending["messages"])
-        messages.append(
-            Message(
-                role="assistant",
-                content=(
-                    "Called tool mutate. The next message is the tool result; "
-                    "answer from it exactly."
-                ),
+            tool_content = self._serialize_tool_result(result)
+            await self.send_json(
+                {
+                    "type": "tool_result",
+                    "id": confirmation_id,
+                    "name": "mutate",
+                    "result": result,
+                }
             )
-        )
-        messages.append(Message(role="tool", content=tool_content))
-        await self._record_message(
-            role="tool",
-            content=tool_content,
-            tool_name="mutate",
-            tool_args={"mutation": pending["mutation"], "input": pending["input"]},
-            tool_result=result,
-        )
-        await self._stream_provider_turn(
-            messages, list(pending["history"]), tool_retries=0
-        )
+            messages = list(pending["messages"])
+            messages.append(
+                Message(
+                    role="assistant",
+                    content=(
+                        "Called tool mutate. The next message is the tool result; "
+                        "answer from it exactly."
+                    ),
+                )
+            )
+            messages.append(Message(role="tool", content=tool_content))
+            await self._record_message(
+                role="tool",
+                content=tool_content,
+                tool_name="mutate",
+                tool_args={"mutation": pending["mutation"], "input": pending["input"]},
+                tool_result=result,
+            )
+            await self._stream_provider_turn(
+                messages, list(pending["history"]), tool_retries=0
+            )
+        finally:
+            if not followup_turn.done():
+                followup_turn.set_result(None)
+            if self._active_turn is followup_turn:
+                self._active_turn = previous_active_turn
 
     async def _handle_confirmation_response(self, content: dict[str, Any]) -> None:
         pending = self._pending_confirmation

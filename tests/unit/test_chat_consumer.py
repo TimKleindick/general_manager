@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
+from typing import Any
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -21,6 +22,20 @@ from general_manager.chat.providers.base import (
     ToolCallEvent,
 )
 from general_manager.chat.rate_limits import enforce_chat_rate_limit
+
+
+EXECUTE_TOOL_EVENT_LOOP_ERROR = "execute_chat_tool ran in the event loop"
+
+
+def _execute_tool_off_event_loop(result: Any) -> Any:
+    def _execute(*_args: object) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return result
+        raise AssertionError(EXECUTE_TOOL_EVENT_LOOP_ERROR)
+
+    return _execute
 
 
 class _Session:
@@ -1026,6 +1041,56 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_handle_tool_call_executes_tool_off_event_loop(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ToolLoopProvider()
+        consumer.channel_name = "chat.tools.async"
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    side_effect=_execute_tool_off_event_loop(
+                        [{"manager": "PartManager"}]
+                    ),
+                ) as execute_chat_tool,
+                patch.object(
+                    consumer,
+                    "_stream_provider_turn",
+                    new_callable=AsyncMock,
+                ) as stream_turn,
+            ):
+                should_resume = await consumer._handle_tool_call(
+                    ToolCallEvent(
+                        id="tool-async",
+                        name="search_managers",
+                        args={"query": "parts"},
+                    ),
+                    [SimpleNamespace(role="user", content="hello")],
+                    [],
+                    tool_retries=0,
+                )
+
+            assert should_resume is True
+            execute_chat_tool.assert_called_once()
+            assert mock_send_json.await_args_list[1].args[0] == {
+                "type": "tool_result",
+                "id": "tool-async",
+                "name": "search_managers",
+                "result": [{"manager": "PartManager"}],
+            }
+            stream_turn.assert_awaited_once()
+
+        asyncio.run(run())
+
     def test_stream_provider_turn_stops_when_retry_limit_already_reached(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
@@ -1539,6 +1604,136 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 }
                 assert consumer._pending_confirmation is None
                 assert consumer._confirmation_timeout_task is None
+
+        asyncio.run(run())
+
+    def test_resolve_pending_confirmation_executes_mutation_off_event_loop(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ConfirmResumeProvider()
+        consumer.channel_name = "chat.resume.async"
+        pending = {
+            "id": "tool-async",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() + timedelta(seconds=30),
+        }
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    side_effect=_execute_tool_off_event_loop({"status": "executed"}),
+                ) as execute_chat_tool,
+                patch.object(
+                    consumer,
+                    "_stream_provider_turn",
+                    new_callable=AsyncMock,
+                ) as stream_turn,
+            ):
+                await consumer._resolve_pending_confirmation(
+                    pending=pending,
+                    confirmed=True,
+                    cancellation_reason="user_rejected",
+                )
+
+            execute_chat_tool.assert_called_once()
+            assert mock_send_json.await_args_list[0].args[0] == {
+                "type": "tool_result",
+                "id": "tool-async",
+                "name": "mutate",
+                "result": {"status": "executed"},
+            }
+            stream_turn.assert_awaited_once()
+
+        asyncio.run(run())
+
+    def test_receive_json_rejects_message_during_confirmation_followup_stream(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ConfirmResumeProvider()
+        consumer.channel_name = "chat.resume.exclusive"
+        consumer._pending_confirmation = {
+            "id": "tool-exclusive",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() + timedelta(seconds=30),
+        }
+
+        async def run() -> None:
+            stream_entered = asyncio.Event()
+            release_stream = asyncio.Event()
+            second_stream_started = asyncio.Event()
+            stream_calls = 0
+
+            async def stream_turn(*_args: object, **_kwargs: object) -> None:
+                nonlocal stream_calls
+                stream_calls += 1
+                if stream_calls == 1:
+                    stream_entered.set()
+                    await release_stream.wait()
+                    return
+                second_stream_started.set()
+
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    return_value={"status": "executed"},
+                ),
+                patch(
+                    "general_manager.chat.consumer.enforce_chat_rate_limit",
+                    return_value=None,
+                ),
+                patch.object(
+                    consumer,
+                    "_stream_provider_turn",
+                    side_effect=stream_turn,
+                ),
+            ):
+                confirm_task = asyncio.create_task(
+                    consumer.receive_json(
+                        {
+                            "type": "confirm",
+                            "confirmation_id": "tool-exclusive",
+                            "confirmed": True,
+                        }
+                    )
+                )
+                try:
+                    await asyncio.wait_for(stream_entered.wait(), timeout=1)
+                    await consumer.receive_json({"type": "message", "text": "second"})
+
+                    assert {
+                        "type": "error",
+                        "message": "A chat turn is already in progress.",
+                        "code": "turn_in_progress",
+                    } in [call.args[0] for call in mock_send_json.await_args_list]
+                    assert second_stream_started.is_set() is False
+                finally:
+                    release_stream.set()
+                    await confirm_task
 
         asyncio.run(run())
 
