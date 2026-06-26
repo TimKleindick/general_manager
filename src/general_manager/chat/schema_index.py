@@ -27,7 +27,7 @@ def _unwrap_graphene_type(field_type: Any) -> Any:
 
 
 def _is_exposed_manager(manager_class: type[Any]) -> bool:
-    return bool(getattr(manager_class, "chat_exposed", True))
+    return bool(getattr(manager_class, "chat_exposed", False))
 
 
 def _type_description(graphene_type: Any) -> str:

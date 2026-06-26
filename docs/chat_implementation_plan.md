@@ -139,12 +139,15 @@ The `query` tool:
 - Returns `{"data": [...], "total_count": N, "has_more": bool}`.
 
 All discovery surfaces use the same exposed-manager filter:
-- `chat_exposed = False` removes a manager from `search_managers`,
-  `get_manager_schema`, `find_path`, the generated system prompt, and all tool
-  execution.
+- Managers are hidden from chat by default.
+- A manager must set `chat_exposed = True` to appear in `search_managers`,
+  `get_manager_schema`, `find_path`, direct/generated tools, the generated
+  system prompt, relationship graph/path lookup, and query execution.
+- `chat_exposed = False` may be set as an explicit hide/override for managers
+  that should remain unavailable to chat.
 - `find_path` only returns paths within the chat-exposed manager graph.
-- `excluded_managers` is not part of the contract. Manager-level opt-out is
-  `chat_exposed = False`.
+- `excluded_managers` is not part of the contract. Manager-level chat exposure
+  is controlled by `chat_exposed = True`.
 
 The `mutate` tool:
 - Accepts `mutation` (GraphQL mutation field name) and `input` (dict).
@@ -180,7 +183,7 @@ Auto-generate from two sources:
 - System prompt stays under 4k tokens for the example project.
 - Relationship graph includes paths across all interface types (Database,
   Calculation, ReadOnly, etc.).
-- Managers with `chat_exposed = False` are excluded from the generated prompt
+- Only managers with `chat_exposed = True` are included in the generated prompt
   and relationship graph.
 
 ### 1.5 WebSocket consumer + conversation identity bootstrap
@@ -661,7 +664,7 @@ For deployments with <30 managers, implement `"tool_strategy": "direct"`:
 **Acceptance criteria**:
 - `"direct"` strategy generates one query tool per exposed manager.
 - `"direct"` strategy passes the same eval datasets as `"discovery"`.
-- Managers with `chat_exposed = False` are excluded from tool generation.
+- Only managers with `chat_exposed = True` are included in tool generation.
 
 ---
 
@@ -710,7 +713,7 @@ conversations work without any check failure.
   managers. Parameterised across providers using a mock LLM that returns
   scripted tool calls.
 - **Permission tests**: verify chat respects manager permissions, mutation
-  allow-list, and `chat_exposed = False`.
+  allow-list, and explicit chat exposure via `chat_exposed = True`.
 - **Load/stress tests**: verify rate limiting, query timeouts, result capping
   under concurrent connections.
 
@@ -744,7 +747,7 @@ Eval datasets grow with each phase:
 
 Minimal changes to existing codebase:
 
-- `GeneralManager` base class: add `chat_exposed: ClassVar[bool] = True`.
+- `GeneralManager` base class: add `chat_exposed: ClassVar[bool] = False`.
 - `src/general_manager/apps.py` / `src/general_manager/bootstrap.py`: initialize
   chat from the existing app config when enabled; no separate `ChatConfig`.
 - `settings.py` / app config: register `GENERAL_MANAGER["CHAT"]` defaults and

@@ -18,7 +18,8 @@ Key requirements gathered from design discussions:
 - **Pluggable LLM providers**: Ollama (local), Anthropic, OpenAI, and Google
   Gemini shipped by default, with a protocol-based interface for custom providers.
 - **Permission-aware**: the LLM operates with the requesting user's permissions.
-  Mutations require explicit allow-listing; managers can opt out of chat exposure.
+  Mutations require explicit allow-listing; managers must explicitly opt in to
+  chat exposure.
 - **WebSocket streaming** with SSE/HTTP fallback for environments that block WS.
 - **Conversation persistence**: tied to authenticated user or anonymous session,
   with context window management (recent messages in full, older summarised).
@@ -232,12 +233,14 @@ GENERAL_MANAGER = {
 - `allowed_mutations` is configured as a list of GraphQL mutation field names on
   the schema mutation root. This supports both auto-generated CRUD mutations and
   custom project-defined mutations through one consistent contract.
-- Managers set `chat_exposed = False` to opt out entirely.
-- `chat_exposed = False` removes a manager from all chat discovery surfaces:
-  schema indexing, system prompt generation, relationship graph generation, and
-  every tool.
-- `excluded_managers` is not part of the contract. `chat_exposed = False`
-  replaces it as the manager-level opt-out.
+- Managers are hidden from chat by default.
+- Managers must set `chat_exposed = True` to appear in chat schema discovery,
+  direct/generated tools, prompts, relationship graph/path lookup, and query
+  execution.
+- `chat_exposed = False` may be set as an explicit hide/override for managers
+  that should remain unavailable to chat.
+- `excluded_managers` is not part of the contract. Manager-level chat exposure
+  is controlled by `chat_exposed = True`.
 
 ### 9. Mutation safety
 
@@ -424,9 +427,13 @@ GENERAL_MANAGER = {
 }
 ```
 
-Manager-level opt-out:
+Manager-level chat exposure:
 
 ```python
+class PartConfig(GeneralManager):
+    chat_exposed = True
+
+
 class SecretConfig(GeneralManager):
     chat_exposed = False
 ```
@@ -544,8 +551,9 @@ or policy enforcement without subclassing any chat component.
 - **Database tables**: conversation, message, and pending-confirmation storage
   adds new Django models under the existing `general_manager` app.
 - **Existing code impact**: minimal. A `chat_exposed` class attribute is added to
-  the `GeneralManager` base class (defaults to `True`). No changes to existing
-  interfaces, permissions, or GraphQL schema generation.
+  the `GeneralManager` base class (defaults to `False`). Managers that should be
+  visible in chat must set `chat_exposed = True`; no changes are required to
+  existing interfaces, permissions, or GraphQL schema generation.
 - **Mutation configuration contract**: mutation exposure is controlled by exact
   GraphQL mutation field names, so generated and custom mutations are configured
   uniformly and can be validated against the schema at startup.
