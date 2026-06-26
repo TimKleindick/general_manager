@@ -17,6 +17,7 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="chatpendingconfirmation",
             constraint=models.UniqueConstraint(
+                condition=models.Q(resolved_at__isnull=True),
                 fields=("conversation", "confirmation_id"),
                 name="gm_chat_pending_conv_conf_uniq",
             ),

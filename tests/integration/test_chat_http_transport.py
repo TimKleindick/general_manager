@@ -92,6 +92,41 @@ class HttpIntegrationProvider:
         return _stream()
 
 
+class StableConfirmationIdProvider:
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+
+        async def _stream():
+            from general_manager.chat.providers.base import (
+                DoneEvent,
+                TextChunkEvent,
+                TokenUsage,
+                ToolCallEvent,
+            )
+
+            last_message = messages[-1]
+            if last_message.content == "create first stable part":
+                yield ToolCallEvent(
+                    id="tool-0",
+                    name="mutate",
+                    args={"mutation": "createPart", "input": {"name": "Bolt"}},
+                )
+                yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+                return
+            if last_message.content == "create second stable part":
+                yield ToolCallEvent(
+                    id="tool-0",
+                    name="mutate",
+                    args={"mutation": "createPart", "input": {"name": "Nut"}},
+                )
+                yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+                return
+            yield TextChunkEvent(content=f"confirmed:{last_message.content}")
+            yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+
+        return _stream()
+
+
 class ExplodingHttpProvider:
     def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         del messages, tools
@@ -682,6 +717,84 @@ class ChatHttpTransportTests(TestCase):
         assert payload["events"][0]["type"] == "tool_result"
         assert payload["events"][1]["type"] == "text_chunk"
         assert payload["events"][-1]["type"] == "done"
+
+    def test_sse_and_confirm_allow_reused_stable_tool_id_after_resolution(
+        self,
+    ) -> None:
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=StableConfirmationIdProvider,
+        ):
+            first_response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "create first stable part"}),
+                content_type="application/json",
+            )
+
+            assert first_response.status_code == 200
+            first_body = async_to_sync(_collect_streaming_content)(
+                first_response
+            ).decode()
+            assert '"type": "confirm_mutation"' in first_body
+            assert '"id": "tool-0"' in first_body
+            first_pending = ChatPendingConfirmation.objects.get(
+                confirmation_id="tool-0",
+                resolved_at__isnull=True,
+            )
+
+            first_confirm = self.client.post(
+                "/chat/confirm/",
+                data=json.dumps({"confirmation_id": "tool-0", "confirmed": True}),
+                content_type="application/json",
+            )
+
+            assert first_confirm.status_code == 200
+            assert first_confirm.json()["events"][0]["type"] == "tool_result"
+            first_pending.refresh_from_db()
+            assert first_pending.resolved_at is not None
+
+            second_response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "create second stable part"}),
+                content_type="application/json",
+            )
+
+            assert second_response.status_code == 200
+            second_body = async_to_sync(_collect_streaming_content)(
+                second_response
+            ).decode()
+            assert '"type": "confirm_mutation"' in second_body
+            assert '"id": "tool-0"' in second_body
+            second_pending = ChatPendingConfirmation.objects.get(
+                conversation=first_pending.conversation,
+                confirmation_id="tool-0",
+                resolved_at__isnull=True,
+            )
+            assert second_pending.pk != first_pending.pk
+
+            second_confirm = self.client.post(
+                "/chat/confirm/",
+                data=json.dumps({"confirmation_id": "tool-0", "confirmed": True}),
+                content_type="application/json",
+            )
+
+        assert second_confirm.status_code == 200
+        assert second_confirm.json()["events"][0]["type"] == "tool_result"
+        assert (
+            ChatPendingConfirmation.objects.filter(
+                conversation=first_pending.conversation,
+                confirmation_id="tool-0",
+            ).count()
+            == 2
+        )
+        assert (
+            ChatPendingConfirmation.objects.filter(
+                conversation=first_pending.conversation,
+                confirmation_id="tool-0",
+                resolved_at__isnull=True,
+            ).exists()
+            is False
+        )
 
     def test_confirm_errors_use_public_message(self) -> None:
         with patch(
