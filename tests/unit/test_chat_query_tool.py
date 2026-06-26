@@ -9,7 +9,7 @@ from django.test import SimpleTestCase
 from django.test.utils import override_settings
 
 from general_manager.api.graphql import GraphQL
-from general_manager.chat.tools import query
+from general_manager.chat.tools import execute_chat_tool, get_tool_definitions, query
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 
@@ -115,6 +115,92 @@ class ChatQueryToolTests(SimpleTestCase):
 
         with pytest.raises(ValueError, match="bad filter"):
             query(manager="PartManager", filters={}, fields=["name"])
+
+    def test_query_rejects_invalid_limits_before_execute(self) -> None:
+        for limit in ["5", 1.5, True, False, 0, -1]:
+            with self.subTest(limit=limit):
+                schema = _RecordingSchema(_Result(data={}))
+                GraphQL._schema = schema  # type: ignore[assignment]
+
+                with pytest.raises(
+                    ValueError, match=r"^limit must be a positive integer$"
+                ):
+                    query(
+                        manager="PartManager",
+                        filters={},
+                        fields=["name"],
+                        limit=limit,  # type: ignore[arg-type]
+                    )
+
+                assert schema.calls == []
+
+    def test_query_rejects_invalid_offsets_before_execute(self) -> None:
+        for offset in ["1", 1.5, True, False, -1]:
+            with self.subTest(offset=offset):
+                schema = _RecordingSchema(_Result(data={}))
+                GraphQL._schema = schema  # type: ignore[assignment]
+
+                with pytest.raises(
+                    ValueError, match=r"^offset must be a non-negative integer$"
+                ):
+                    query(
+                        manager="PartManager",
+                        filters={},
+                        fields=["name"],
+                        offset=offset,  # type: ignore[arg-type]
+                    )
+
+                assert schema.calls == []
+
+    def test_execute_chat_tool_validates_query_pagination_before_dispatch(
+        self,
+    ) -> None:
+        with patch("general_manager.chat.tools.query") as query_mock:
+            with pytest.raises(
+                ValueError, match=r"^offset must be a non-negative integer$"
+            ):
+                execute_chat_tool(
+                    "query",
+                    {
+                        "manager": "PartManager",
+                        "fields": ["name"],
+                        "offset": "not-an-integer",
+                    },
+                    None,
+                )
+
+        query_mock.assert_not_called()
+
+    def test_execute_chat_tool_validates_direct_query_pagination_before_dispatch(
+        self,
+    ) -> None:
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+
+        with patch("general_manager.chat.tools.query") as query_mock:
+            with pytest.raises(ValueError, match=r"^limit must be a positive integer$"):
+                execute_chat_tool(
+                    "query_partmanager",
+                    {"fields": ["name"], "limit": 0},
+                    None,
+                )
+
+        query_mock.assert_not_called()
+
+    @override_settings(GENERAL_MANAGER={"CHAT": {"tool_strategy": "direct"}})
+    def test_direct_query_tool_schema_restricts_pagination_values(self) -> None:
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+
+        tools = {tool["name"]: tool for tool in get_tool_definitions()}
+        properties = tools["query_partmanager"]["input_schema"]["properties"]
+
+        assert properties["limit"] == {"type": "integer", "minimum": 1}
+        assert properties["offset"] == {"type": "integer", "minimum": 0}
 
     def test_query_preserves_graphql_filter_keys_that_are_already_shaped(self) -> None:
         schema = _RecordingSchema(
@@ -588,6 +674,8 @@ class ChatQueryToolTests(SimpleTestCase):
         }
     )
     def test_query_sets_statement_timeout_for_postgresql(self) -> None:
+        events: list[str] = []
+
         schema = _RecordingSchema(
             _Result(
                 data={
@@ -598,6 +686,13 @@ class ChatQueryToolTests(SimpleTestCase):
                 }
             )
         )
+        original_execute = schema.execute
+
+        def execute(query_text: str, context_value=None):  # type: ignore[no-untyped-def]
+            events.append("execute")
+            return original_execute(query_text, context_value=context_value)
+
+        schema.execute = execute  # type: ignore[method-assign]
         GraphQL._schema = schema  # type: ignore[assignment]
 
         class _Cursor:
@@ -605,6 +700,7 @@ class ChatQueryToolTests(SimpleTestCase):
                 self.calls: list[tuple[str, list[int]]] = []
 
             def execute(self, sql: str, params: list[int]) -> None:
+                events.append("set_timeout")
                 self.calls.append((sql, params))
 
             def __enter__(self) -> "_Cursor":
@@ -616,11 +712,24 @@ class ChatQueryToolTests(SimpleTestCase):
 
         cursor = _Cursor()
 
-        with patch(
-            "general_manager.chat.tools.connection",
-            SimpleNamespace(vendor="postgresql", cursor=lambda: cursor),
+        class _Atomic:
+            def __enter__(self) -> None:
+                events.append("atomic_enter")
+
+            def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+                del exc_type, exc, tb
+                events.append("atomic_exit")
+                return None
+
+        with (
+            patch(
+                "general_manager.chat.tools.connection",
+                SimpleNamespace(vendor="postgresql", cursor=lambda: cursor),
+            ),
+            patch("django.db.transaction.atomic", return_value=_Atomic()),
         ):
             result = query(manager="PartManager", filters={}, fields=["name"])
 
         assert result["data"] == [{"name": "Bolt"}]
+        assert events == ["atomic_enter", "set_timeout", "execute", "atomic_exit"]
         assert cursor.calls == [("SET LOCAL statement_timeout = %s", [2000])]

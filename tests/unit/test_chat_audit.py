@@ -95,6 +95,39 @@ class ChatAuditTests(SimpleTestCase):
             "CHAT": {
                 "audit": {
                     "enabled": True,
+                    "level": "tool_calls",
+                }
+            }
+        }
+    )
+    def test_emit_chat_audit_event_fails_open_when_sink_raises(self) -> None:
+        sink = Mock(side_effect=RuntimeError("audit sink unavailable"))
+
+        emit_chat_audit_event("tool_call", {"tool_name": "query"}, sink=sink)
+
+        sink.assert_called_once()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "audit": {
+                    "enabled": True,
+                    "level": "messages",
+                    "logger": "tests.unit.test_chat_audit.missing_sink",
+                }
+            }
+        }
+    )
+    def test_emit_chat_audit_event_fails_open_when_sink_resolution_raises(
+        self,
+    ) -> None:
+        emit_chat_audit_event("assistant_message", {"message": "hello"})
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "audit": {
+                    "enabled": True,
                     "level": "messages",
                     "logger": "tests.unit.test_chat_audit._capture_audit_event",
                     "redact_fields": ["token"],

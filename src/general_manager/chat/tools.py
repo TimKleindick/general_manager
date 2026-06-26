@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager
-from contextlib import nullcontext
 import re
 from typing import Any, Protocol
 
-from django.db import connection
+from django.db import connection, transaction
 
 from general_manager.api.graphql import GraphQL
 from general_manager.chat.rate_limits import get_query_timeout_ms
@@ -23,6 +21,8 @@ from general_manager.chat.tool_metadata import TOOL_DESCRIPTIONS, TOOL_INPUT_SCH
 
 
 _GRAPHQL_IDENTIFIER_RE = re.compile(r"^[_A-Za-z][_0-9A-Za-z]*$")
+_LIMIT_ERROR = "limit must be a positive integer"
+_OFFSET_ERROR = "offset must be a non-negative integer"
 
 
 class ChatToolContext(Protocol):
@@ -155,12 +155,13 @@ def execute_chat_tool(
     """Dispatch a named chat tool."""
     direct_manager = _manager_name_from_direct_tool(name)
     if direct_manager is not None:
+        limit, offset = _normalize_query_pagination(args)
         return query(
             manager=direct_manager,
             filters=args.get("filters", {}),
             fields=args.get("fields", []),
-            limit=args.get("limit"),
-            offset=int(args.get("offset", 0)),
+            limit=limit,
+            offset=offset,
             context=context,
         )
     if name == "search_managers":
@@ -172,12 +173,13 @@ def execute_chat_tool(
             str(args.get("from_manager", "")), str(args.get("to_manager", ""))
         )
     if name == "query":
+        limit, offset = _normalize_query_pagination(args)
         return query(
             manager=str(args.get("manager", "")),
             filters=args.get("filters", {}),
             fields=args.get("fields", []),
-            limit=args.get("limit"),
-            offset=int(args.get("offset", 0)),
+            limit=limit,
+            offset=offset,
             context=context,
         )
     if name == "mutate":
@@ -200,6 +202,26 @@ def _manager_name_from_direct_tool(name: str) -> str | None:
     return None
 
 
+def _normalize_query_limit(limit: object) -> int | None:
+    if limit is None:
+        return None
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise ValueError(_LIMIT_ERROR)
+    return limit
+
+
+def _normalize_query_offset(offset: object) -> int:
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError(_OFFSET_ERROR)
+    return offset
+
+
+def _normalize_query_pagination(args: Mapping[str, Any]) -> tuple[int | None, int]:
+    return _normalize_query_limit(args.get("limit")), _normalize_query_offset(
+        args.get("offset", 0)
+    )
+
+
 def _get_direct_tool_definitions() -> list[dict[str, Any]]:
     return [
         {
@@ -213,8 +235,8 @@ def _get_direct_tool_definitions() -> list[dict[str, Any]]:
                         "type": "array",
                         "items": {"type": ["string", "object"]},
                     },
-                    "limit": {"type": "integer"},
-                    "offset": {"type": "integer"},
+                    "limit": {"type": "integer", "minimum": 1},
+                    "offset": {"type": "integer", "minimum": 0},
                 },
                 "required": ["fields"],
             },
@@ -545,6 +567,8 @@ def query(
     context: ChatToolContext | None = None,
 ) -> dict[str, Any]:
     """Execute a structured GraphQL list query for an exposed manager."""
+    limit = _normalize_query_limit(limit)
+    offset = _normalize_query_offset(offset)
     _ensure_exposed_manager(manager)
     schema = GraphQL.get_schema()
     if schema is None:
@@ -577,12 +601,12 @@ def query(
     )
 
     timeout_ms = get_query_timeout_ms()
-    timeout_context: AbstractContextManager[Any | None] = nullcontext()
     if timeout_ms is not None and getattr(connection, "vendor", None) == "postgresql":
-        timeout_context = connection.cursor()
-    with timeout_context as cursor:
-        if cursor is not None:
-            cursor.execute("SET LOCAL statement_timeout = %s", [timeout_ms])
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = %s", [timeout_ms])
+            result = schema.execute(query_text, context_value=context)
+    else:
         result = schema.execute(query_text, context_value=context)
     errors = getattr(result, "errors", None)
     if errors:
