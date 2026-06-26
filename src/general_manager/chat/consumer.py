@@ -566,6 +566,7 @@ class ChatConsumer(_ChatConsumerBase):
                     "input": result["input"],
                 }
             )
+            durable = False
             if self.conversation is not None:
                 from general_manager.chat.models import create_pending_confirmation
 
@@ -577,8 +578,20 @@ class ChatConsumer(_ChatConsumerBase):
                         payload={"input": result["input"]},
                         timeout_seconds=timeout_seconds,
                     )
-                except Exception:  # noqa: BLE001
-                    ...
+                except Exception as exc:  # noqa: BLE001
+                    emit_chat_error(
+                        user=self.scope.get("user"),
+                        error=exc,
+                        context={
+                            "transport": "websocket",
+                            "phase": "create_pending_confirmation",
+                            "confirmation_id": event.id,
+                            "conversation_id": getattr(self.conversation, "pk", None),
+                            "session_key": self.session_key,
+                        },
+                    )
+                else:
+                    durable = True
             self._pending_confirmation = {
                 "id": event.id,
                 "mutation": result["mutation"],
@@ -586,6 +599,7 @@ class ChatConsumer(_ChatConsumerBase):
                 "messages": list(messages),
                 "history": history,
                 "expires_at": timezone.now() + timedelta(seconds=timeout_seconds),
+                "durable": durable,
             }
             self._confirmation_waiter = asyncio.get_running_loop().create_future()
             self._confirmation_timeout_task = asyncio.create_task(
@@ -668,6 +682,15 @@ class ChatConsumer(_ChatConsumerBase):
         except asyncio.TimeoutError:
             pending = self._pending_confirmation
             if pending is not None and pending.get("id") == confirmation_id:
+                if bool(pending.get("durable")):
+                    claimed = await self._claim_durable_pending_confirmation(
+                        confirmation_id=confirmation_id,
+                        allow_expired=True,
+                    )
+                    if not claimed:
+                        await self._cancel_confirmation_timeout()
+                        self._pending_confirmation = None
+                        return
                 await self._resolve_pending_confirmation(
                     pending=pending,
                     confirmed=False,
@@ -693,30 +716,23 @@ class ChatConsumer(_ChatConsumerBase):
             except asyncio.CancelledError:
                 pass
 
-    async def _mark_pending_confirmation_resolved(self, confirmation_id: str) -> None:
+    async def _claim_durable_pending_confirmation(
+        self, *, confirmation_id: str, allow_expired: bool = False
+    ) -> bool:
         if self.conversation is None:
-            return
+            return False
         from general_manager.chat.models import ChatPendingConfirmation
 
-        try:
-            stored_pending = await sync_to_async(
-                ChatPendingConfirmation.objects.filter(
-                    conversation=self.conversation,
-                    confirmation_id=confirmation_id,
-                    resolved_at__isnull=True,
-                )
-                .order_by("-created_at", "-id")
-                .first
-            )()
-        except Exception:  # noqa: BLE001
-            return
-        if stored_pending is None:
-            return
-        try:
-            stored_pending.resolved_at = timezone.now()
-            await sync_to_async(stored_pending.save)(update_fields=["resolved_at"])
-        except Exception:  # noqa: BLE001
-            return
+        claim_kwargs: dict[str, Any] = {
+            "conversation": self.conversation,
+            "confirmation_id": confirmation_id,
+        }
+        if allow_expired:
+            claim_kwargs["allow_expired"] = True
+        claimed = await sync_to_async(ChatPendingConfirmation.claim_for_conversation)(
+            **claim_kwargs,
+        )
+        return claimed is not None
 
     async def _resolve_pending_confirmation(
         self,
@@ -727,6 +743,7 @@ class ChatConsumer(_ChatConsumerBase):
     ) -> None:
         confirmation_id = str(pending["id"])
         await self._cancel_confirmation_timeout()
+        self._pending_confirmation = None
         if confirmed:
             result = execute_chat_tool(
                 "mutate",
@@ -760,7 +777,6 @@ class ChatConsumer(_ChatConsumerBase):
                 "session_key": self.session_key,
             },
         )
-        await self._mark_pending_confirmation_resolved(confirmation_id)
         tool_content = self._serialize_tool_result(result)
         await self.send_json(
             {
@@ -788,7 +804,6 @@ class ChatConsumer(_ChatConsumerBase):
             tool_args={"mutation": pending["mutation"], "input": pending["input"]},
             tool_result=result,
         )
-        self._pending_confirmation = None
         await self._stream_provider_turn(
             messages, list(pending["history"]), tool_retries=0
         )
@@ -797,16 +812,18 @@ class ChatConsumer(_ChatConsumerBase):
         pending = self._pending_confirmation
         confirmation_id = content.get("confirmation_id")
         confirmed = content.get("confirmed")
+        if not isinstance(confirmation_id, str) or not isinstance(confirmed, bool):
+            await self.send_json(
+                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            )
+            return
+
         from general_manager.chat.models import ChatPendingConfirmation
 
         db_pending: Any | None = None
-        if (
-            pending is None
-            and self.conversation is not None
-            and isinstance(confirmation_id, str)
-        ):
+        if pending is None and self.conversation is not None:
             db_pending = await sync_to_async(
-                ChatPendingConfirmation.active_for_conversation
+                ChatPendingConfirmation.claim_for_conversation
             )(
                 conversation=self.conversation,
                 confirmation_id=confirmation_id,
@@ -824,17 +841,28 @@ class ChatConsumer(_ChatConsumerBase):
                     ],
                     "history": history,
                     "expires_at": db_pending.expires_at,
+                    "durable": False,
                 }
-        if (
-            pending is None
-            or not isinstance(confirmation_id, str)
-            or confirmation_id != pending.get("id")
-            or not isinstance(confirmed, bool)
-        ):
+        if pending is None or confirmation_id != pending.get("id"):
             await self.send_json(
                 {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
             )
             return
+        if bool(pending.get("durable")):
+            claimed = await self._claim_durable_pending_confirmation(
+                confirmation_id=confirmation_id
+            )
+            if not claimed:
+                await self._cancel_confirmation_timeout()
+                self._pending_confirmation = None
+                await self.send_json(
+                    {
+                        "type": "error",
+                        "message": "Unknown chat event.",
+                        "code": "bad_event",
+                    }
+                )
+                return
         cancellation_reason = "user_rejected"
         expires_at = pending.get("expires_at")
         if isinstance(expires_at, datetime) and expires_at <= timezone.now():

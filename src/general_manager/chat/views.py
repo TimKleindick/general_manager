@@ -616,7 +616,7 @@ async def _execute_confirmation_request(
                 {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
             ]
         confirmation_id = requested_confirmation_id
-        pending = await sync_to_async(ChatPendingConfirmation.active_for_conversation)(
+        pending = await sync_to_async(ChatPendingConfirmation.claim_for_conversation)(
             conversation=conversation,
             confirmation_id=confirmation_id,
             now=timezone.now(),
@@ -654,8 +654,6 @@ async def _execute_confirmation_request(
             input=pending.payload.get("input", {}),
             result=result,
         )
-        pending.resolved_at = timezone.now()
-        await sync_to_async(pending.save)(update_fields=["resolved_at"])
         tool_content = json.dumps(result, sort_keys=True)
         await sync_to_async(append_chat_message)(
             conversation,

@@ -8,10 +8,12 @@ from unittest.mock import AsyncMock, patch
 
 from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
+from django.test import TransactionTestCase
 from django.test.utils import override_settings
 from django.utils import timezone
 
 from general_manager.chat.consumer import ChatConsumer, _has_tool_after_last_user
+from general_manager.chat.models import ChatConversation, ChatPendingConfirmation
 from general_manager.chat.providers.base import (
     DoneEvent,
     TextChunkEvent,
@@ -213,6 +215,59 @@ class _NoPathRecordProvider:
 
 def _deny_permission(*_args: object, **_kwargs: object) -> bool:
     return False
+
+
+class ChatConsumerDurableTimeoutPersistenceTests(TransactionTestCase):
+    def test_expired_durable_timeout_claims_row_before_cancellation_resume(
+        self,
+    ) -> None:
+        conversation = ChatConversation.objects.create(session_key="timeout-real")
+        expired = ChatPendingConfirmation.objects.create(
+            conversation=conversation,
+            confirmation_id="tool-timeout-real",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            expires_at=timezone.now() - timedelta(seconds=1),
+        )
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.conversation = conversation
+        pending = {
+            "id": "tool-timeout-real",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": expired.expires_at,
+            "durable": True,
+        }
+        consumer._pending_confirmation = pending
+
+        async def run() -> None:
+            consumer._confirmation_waiter = asyncio.get_running_loop().create_future()
+            with patch.object(
+                consumer,
+                "_resolve_pending_confirmation",
+                new_callable=AsyncMock,
+            ) as resolve:
+                await consumer._await_confirmation_timeout(
+                    confirmation_id="tool-timeout-real",
+                    timeout_seconds=0,
+                )
+
+            resolve.assert_awaited_once_with(
+                pending=pending,
+                confirmed=False,
+                cancellation_reason="confirmation_timed_out",
+            )
+
+        asyncio.run(run())
+        expired.refresh_from_db()
+        assert expired.resolved_at is not None
 
 
 class ChatConsumerConnectTests(unittest.TestCase):
@@ -1363,6 +1418,68 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_receive_json_marks_pending_non_durable_when_confirmation_persist_fails(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ToolLoopProvider()
+        consumer.channel_name = "chat.confirm.persistence-failed"
+        consumer.conversation = SimpleNamespace(pk=1)
+        original_error = RuntimeError("db unavailable")
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    return_value={
+                        "status": "confirmation_required",
+                        "mutation": "createPart",
+                        "input": {"name": "Bolt"},
+                    },
+                ),
+                patch(
+                    "general_manager.chat.models.create_pending_confirmation",
+                    side_effect=original_error,
+                ),
+                patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
+            ):
+                await consumer._handle_tool_call(
+                    ToolCallEvent(
+                        id="tool-non-durable",
+                        name="mutate",
+                        args={"mutation": "createPart", "input": {"name": "Bolt"}},
+                    ),
+                    [SimpleNamespace(role="system", content="system prompt text")],
+                    [],
+                    tool_retries=0,
+                )
+
+            assert consumer._pending_confirmation is not None
+            assert consumer._pending_confirmation["durable"] is False
+            chat_error.assert_called_once_with(
+                user=consumer.scope["user"],
+                error=original_error,
+                context={
+                    "transport": "websocket",
+                    "phase": "create_pending_confirmation",
+                    "confirmation_id": "tool-non-durable",
+                    "conversation_id": 1,
+                    "session_key": "existing-key",
+                },
+            )
+            sent_payloads = [call.args[0] for call in mock_send_json.await_args_list]
+            assert "db unavailable" not in str(sent_payloads)
+
+        asyncio.run(run())
+
     def test_receive_json_confirm_executes_pending_mutation_and_resumes(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
@@ -1380,6 +1497,11 @@ class ChatConsumerMessageTests(unittest.TestCase):
             "history": [],
             "expires_at": timezone.now() + timedelta(seconds=30),
         }
+        pending_state_at_execution: list[dict[str, object] | None] = []
+
+        def execute_confirmed_mutation(*_args: object) -> dict[str, object]:
+            pending_state_at_execution.append(consumer._pending_confirmation)
+            return {"status": "executed", "data": {"success": True}}
 
         async def run() -> None:
             with (
@@ -1388,7 +1510,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 ) as mock_send_json,
                 patch(
                     "general_manager.chat.consumer.execute_chat_tool",
-                    return_value={"status": "executed", "data": {"success": True}},
+                    side_effect=execute_confirmed_mutation,
                 ) as execute_chat_tool,
             ):
                 await consumer.receive_json(
@@ -1403,6 +1525,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     "input": {"name": "Bolt"},
                     "confirmed": True,
                 }
+                assert pending_state_at_execution == [None]
                 assert called_context.user is consumer.scope["user"]
                 assert mock_send_json.await_args_list[0].args[0] == {
                     "type": "tool_result",
@@ -1416,6 +1539,302 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 }
                 assert consumer._pending_confirmation is None
                 assert consumer._confirmation_timeout_task is None
+
+        asyncio.run(run())
+
+    def test_receive_json_confirm_claims_in_memory_durable_pending_before_execution(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ConfirmResumeProvider()
+        consumer.channel_name = "chat.resume.durable-claim"
+        consumer.conversation = SimpleNamespace(pk=1)
+        consumer._pending_confirmation = {
+            "id": "tool-durable",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() + timedelta(seconds=30),
+            "durable": True,
+        }
+        calls: list[str] = []
+
+        def claim_pending(**_kwargs: object) -> object:
+            calls.append("claim")
+            return object()
+
+        def execute_confirmed_mutation(*_args: object) -> dict[str, object]:
+            calls.append("execute")
+            return {"status": "executed"}
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
+                    side_effect=claim_pending,
+                ) as claim_for_conversation,
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    side_effect=execute_confirmed_mutation,
+                ) as execute_chat_tool,
+            ):
+                await consumer.receive_json(
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "tool-durable",
+                        "confirmed": True,
+                    }
+                )
+
+            claim_for_conversation.assert_called_once_with(
+                conversation=consumer.conversation,
+                confirmation_id="tool-durable",
+            )
+            execute_chat_tool.assert_called_once()
+            assert calls == ["claim", "execute"]
+            assert mock_send_json.await_args_list[0].args[0] == {
+                "type": "tool_result",
+                "id": "tool-durable",
+                "name": "mutate",
+                "result": {"status": "executed"},
+            }
+
+        asyncio.run(run())
+
+    def test_receive_json_confirm_rejects_durable_pending_when_claim_missing(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ConfirmResumeProvider()
+        consumer.channel_name = "chat.resume.durable-claimed-elsewhere"
+        consumer.conversation = SimpleNamespace(pk=1)
+        consumer._pending_confirmation = {
+            "id": "tool-claimed",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() + timedelta(seconds=30),
+            "durable": True,
+        }
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
+                    return_value=None,
+                ) as claim_for_conversation,
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                ) as execute_chat_tool,
+            ):
+                await consumer.receive_json(
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "tool-claimed",
+                        "confirmed": True,
+                    }
+                )
+
+            claim_for_conversation.assert_called_once_with(
+                conversation=consumer.conversation,
+                confirmation_id="tool-claimed",
+            )
+            execute_chat_tool.assert_not_called()
+            mock_send_json.assert_awaited_once_with(
+                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            )
+
+        asyncio.run(run())
+
+    def test_receive_json_rejects_in_memory_durable_pending_after_claim(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ConfirmResumeProvider()
+        consumer.channel_name = "chat.resume.durable-reject"
+        consumer.conversation = SimpleNamespace(pk=1)
+        pending = {
+            "id": "tool-reject",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() + timedelta(seconds=30),
+            "durable": True,
+        }
+        consumer._pending_confirmation = pending
+        calls: list[str] = []
+
+        def claim_pending(**_kwargs: object) -> object:
+            calls.append("claim")
+            return object()
+
+        async def resolve_pending(**_kwargs: object) -> None:
+            calls.append("resolve")
+
+        async def run() -> None:
+            with (
+                patch.object(consumer, "send_json", new_callable=AsyncMock),
+                patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
+                    side_effect=claim_pending,
+                ) as claim_for_conversation,
+                patch.object(
+                    consumer,
+                    "_resolve_pending_confirmation",
+                    new_callable=AsyncMock,
+                    side_effect=resolve_pending,
+                ) as resolve,
+            ):
+                await consumer.receive_json(
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "tool-reject",
+                        "confirmed": False,
+                    }
+                )
+
+            claim_for_conversation.assert_called_once_with(
+                conversation=consumer.conversation,
+                confirmation_id="tool-reject",
+            )
+            resolve.assert_awaited_once_with(
+                pending=pending,
+                confirmed=False,
+                cancellation_reason="user_rejected",
+            )
+            assert calls == ["claim", "resolve"]
+
+        asyncio.run(run())
+
+    def test_receive_json_rejects_in_memory_durable_rejection_when_claim_missing(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ConfirmResumeProvider()
+        consumer.channel_name = "chat.resume.durable-reject-missing"
+        consumer.conversation = SimpleNamespace(pk=1)
+        consumer._pending_confirmation = {
+            "id": "tool-reject-missing",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() + timedelta(seconds=30),
+            "durable": True,
+        }
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
+                    return_value=None,
+                ) as claim_for_conversation,
+                patch.object(
+                    consumer,
+                    "_resolve_pending_confirmation",
+                    new_callable=AsyncMock,
+                ) as resolve,
+            ):
+                await consumer.receive_json(
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "tool-reject-missing",
+                        "confirmed": False,
+                    }
+                )
+
+            claim_for_conversation.assert_called_once_with(
+                conversation=consumer.conversation,
+                confirmation_id="tool-reject-missing",
+            )
+            resolve.assert_not_awaited()
+            mock_send_json.assert_awaited_once_with(
+                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            )
+
+        asyncio.run(run())
+
+    def test_receive_json_confirm_keeps_non_durable_in_memory_fallback(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ConfirmResumeProvider()
+        consumer.channel_name = "chat.resume.non-durable"
+        consumer.conversation = SimpleNamespace(pk=1)
+        consumer._pending_confirmation = {
+            "id": "tool-memory",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() + timedelta(seconds=30),
+            "durable": False,
+        }
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
+                ) as claim_for_conversation,
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    return_value={"status": "executed"},
+                ) as execute_chat_tool,
+            ):
+                await consumer.receive_json(
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "tool-memory",
+                        "confirmed": True,
+                    }
+                )
+
+            claim_for_conversation.assert_not_called()
+            execute_chat_tool.assert_called_once()
+            assert mock_send_json.await_args_list[0].args[0] == {
+                "type": "tool_result",
+                "id": "tool-memory",
+                "name": "mutate",
+                "result": {"status": "executed"},
+            }
 
         asyncio.run(run())
 
@@ -1491,6 +1910,10 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     consumer, "send_json", new_callable=AsyncMock
                 ) as mock_send_json,
                 patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
+                    side_effect=original_error,
+                ) as claim_pending,
+                patch(
                     "general_manager.chat.models.ChatPendingConfirmation.active_for_conversation",
                     side_effect=original_error,
                 ),
@@ -1511,6 +1934,123 @@ class ChatConsumerMessageTests(unittest.TestCase):
             assert "secret db detail" not in str(error_event)
             chat_error.assert_called_once()
             assert chat_error.call_args.kwargs["error"] is original_error
+            claim_pending.assert_called_once_with(
+                conversation=consumer.conversation,
+                confirmation_id="tool-1",
+            )
+
+        asyncio.run(run())
+
+    def test_receive_json_confirm_durable_lookup_miss_returns_bad_event(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ConfirmResumeProvider()
+        consumer.channel_name = "chat.confirm.lookup-miss"
+        consumer.conversation = SimpleNamespace(pk=1)
+        consumer._pending_confirmation = None
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
+                    return_value=None,
+                ) as claim_for_conversation,
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                ) as execute_chat_tool,
+                patch.object(
+                    consumer,
+                    "_resolve_pending_confirmation",
+                    new_callable=AsyncMock,
+                ) as resolve,
+            ):
+                await consumer.receive_json(
+                    {"type": "confirm", "confirmation_id": "missing", "confirmed": True}
+                )
+
+            claim_for_conversation.assert_called_once_with(
+                conversation=consumer.conversation,
+                confirmation_id="missing",
+            )
+            execute_chat_tool.assert_not_called()
+            resolve.assert_not_awaited()
+            mock_send_json.assert_awaited_once_with(
+                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            )
+
+        asyncio.run(run())
+
+    def test_receive_json_confirm_claims_durable_pending_before_execution(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ConfirmResumeProvider()
+        consumer.channel_name = "chat.confirm.claim"
+        consumer.conversation = SimpleNamespace(pk=1)
+        consumer._pending_confirmation = None
+        db_pending = SimpleNamespace(
+            confirmation_id="tool-db",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            expires_at=timezone.now() + timedelta(seconds=30),
+        )
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch.object(
+                    consumer,
+                    "_load_history",
+                    new_callable=AsyncMock,
+                    return_value=[],
+                ),
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+                patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
+                    return_value=db_pending,
+                ) as claim_pending,
+                patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.active_for_conversation",
+                    return_value=db_pending,
+                ),
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    return_value={"status": "executed"},
+                ),
+            ):
+                await consumer.receive_json(
+                    {"type": "confirm", "confirmation_id": "tool-db", "confirmed": True}
+                )
+
+            claim_pending.assert_called_once_with(
+                conversation=consumer.conversation,
+                confirmation_id="tool-db",
+            )
+            assert mock_send_json.await_args_list[0].args[0] == {
+                "type": "tool_result",
+                "id": "tool-db",
+                "name": "mutate",
+                "result": {"status": "executed"},
+            }
 
         asyncio.run(run())
 
@@ -1649,6 +2189,117 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 )
                 assert consumer._pending_confirmation is None
                 assert consumer._confirmation_timeout_task is None
+
+        asyncio.run(run())
+
+    def test_durable_pending_confirmation_timeout_claims_before_cancellation(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.conversation = SimpleNamespace(pk=1)
+        pending = {
+            "id": "tool-timeout-durable",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() + timedelta(seconds=30),
+            "durable": True,
+        }
+        consumer._pending_confirmation = pending
+        calls: list[str] = []
+
+        def claim_pending(**_kwargs: object) -> object:
+            calls.append("claim")
+            return object()
+
+        async def resolve_pending(**_kwargs: object) -> None:
+            calls.append("resolve")
+
+        async def run() -> None:
+            consumer._confirmation_waiter = asyncio.get_running_loop().create_future()
+            with (
+                patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
+                    side_effect=claim_pending,
+                ) as claim_for_conversation,
+                patch.object(
+                    consumer,
+                    "_resolve_pending_confirmation",
+                    new_callable=AsyncMock,
+                    side_effect=resolve_pending,
+                ) as resolve,
+            ):
+                await consumer._await_confirmation_timeout(
+                    confirmation_id="tool-timeout-durable",
+                    timeout_seconds=0,
+                )
+
+            claim_for_conversation.assert_called_once_with(
+                conversation=consumer.conversation,
+                confirmation_id="tool-timeout-durable",
+                allow_expired=True,
+            )
+            resolve.assert_awaited_once_with(
+                pending=pending,
+                confirmed=False,
+                cancellation_reason="confirmation_timed_out",
+            )
+            assert calls == ["claim", "resolve"]
+
+        asyncio.run(run())
+
+    def test_durable_pending_confirmation_timeout_skips_cancel_when_claim_missing(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.conversation = SimpleNamespace(pk=1)
+        consumer._pending_confirmation = {
+            "id": "tool-timeout-claimed",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() + timedelta(seconds=30),
+            "durable": True,
+        }
+
+        async def run() -> None:
+            consumer._confirmation_waiter = asyncio.get_running_loop().create_future()
+            with (
+                patch(
+                    "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
+                    return_value=None,
+                ) as claim_for_conversation,
+                patch.object(
+                    consumer,
+                    "_resolve_pending_confirmation",
+                    new_callable=AsyncMock,
+                ) as resolve,
+            ):
+                await consumer._await_confirmation_timeout(
+                    confirmation_id="tool-timeout-claimed",
+                    timeout_seconds=0,
+                )
+
+            claim_for_conversation.assert_called_once_with(
+                conversation=consumer.conversation,
+                confirmation_id="tool-timeout-claimed",
+                allow_expired=True,
+            )
+            resolve.assert_not_awaited()
+            assert consumer._pending_confirmation is None
+            assert consumer._confirmation_waiter is None
 
         asyncio.run(run())
 

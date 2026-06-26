@@ -5,6 +5,7 @@ from io import StringIO
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.test.utils import override_settings
 from django.utils import timezone
@@ -91,6 +92,138 @@ class ChatPersistenceTests(TestCase):
             == active.pk
         )
         assert expired.pk != active.pk
+
+    def test_pending_confirmation_id_can_repeat_across_conversations(self) -> None:
+        first = ChatConversation.for_actor(user=None, session_key="scoped-1")
+        second = ChatConversation.for_actor(user=None, session_key="scoped-2")
+
+        create_pending_confirmation(
+            first,
+            confirmation_id="tool-repeat",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            timeout_seconds=30,
+        )
+        duplicate = create_pending_confirmation(
+            second,
+            confirmation_id="tool-repeat",
+            mutation_name="createPart",
+            payload={"input": {"name": "Nut"}},
+            timeout_seconds=30,
+        )
+
+        assert duplicate.confirmation_id == "tool-repeat"
+        assert duplicate.conversation_id == second.pk
+
+    def test_pending_confirmation_id_stays_unique_within_conversation(self) -> None:
+        conversation = ChatConversation.for_actor(user=None, session_key="scoped-3")
+        create_pending_confirmation(
+            conversation,
+            confirmation_id="tool-repeat",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            timeout_seconds=30,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                create_pending_confirmation(
+                    conversation,
+                    confirmation_id="tool-repeat",
+                    mutation_name="createPart",
+                    payload={"input": {"name": "Nut"}},
+                    timeout_seconds=30,
+                )
+
+    def test_claim_for_conversation_marks_pending_resolved_before_returning(
+        self,
+    ) -> None:
+        conversation = ChatConversation.for_actor(user=None, session_key="claim-1")
+        now = timezone.now()
+        pending = create_pending_confirmation(
+            conversation,
+            confirmation_id="tool-claim",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            timeout_seconds=30,
+        )
+
+        claimed = ChatPendingConfirmation.claim_for_conversation(
+            conversation=conversation,
+            confirmation_id="tool-claim",
+            now=now,
+        )
+
+        assert claimed is not None
+        assert claimed.pk == pending.pk
+        assert claimed.resolved_at == now
+        pending.refresh_from_db()
+        assert pending.resolved_at == now
+
+    def test_claim_for_conversation_returns_none_after_first_claim(self) -> None:
+        conversation = ChatConversation.for_actor(user=None, session_key="claim-2")
+        create_pending_confirmation(
+            conversation,
+            confirmation_id="tool-claim-once",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            timeout_seconds=30,
+        )
+
+        first = ChatPendingConfirmation.claim_for_conversation(
+            conversation=conversation,
+            confirmation_id="tool-claim-once",
+        )
+        second = ChatPendingConfirmation.claim_for_conversation(
+            conversation=conversation,
+            confirmation_id="tool-claim-once",
+        )
+
+        assert first is not None
+        assert second is None
+
+    def test_claim_for_conversation_can_claim_expired_row_for_timeout(
+        self,
+    ) -> None:
+        conversation = ChatConversation.for_actor(user=None, session_key="claim-3")
+        now = timezone.now()
+        expired = ChatPendingConfirmation.objects.create(
+            conversation=conversation,
+            confirmation_id="tool-timeout",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            expires_at=now - timedelta(seconds=1),
+        )
+
+        assert (
+            ChatPendingConfirmation.claim_for_conversation(
+                conversation=conversation,
+                confirmation_id="tool-timeout",
+                now=now,
+            )
+            is None
+        )
+        claimed = ChatPendingConfirmation.claim_for_conversation(
+            conversation=conversation,
+            confirmation_id="tool-timeout",
+            now=now,
+            allow_expired=True,
+        )
+
+        assert claimed is not None
+        assert claimed.pk == expired.pk
+        assert claimed.resolved_at == now
+        expired.refresh_from_db()
+        assert expired.resolved_at == now
+        assert (
+            ChatPendingConfirmation.claim_for_conversation(
+                conversation=conversation,
+                confirmation_id="tool-timeout",
+                now=now,
+                allow_expired=True,
+            )
+            is None
+        )
 
     def test_cleanup_expired_chat_records_deletes_only_stale_records(self) -> None:
         stale = ChatConversation.objects.create(session_key="stale")
