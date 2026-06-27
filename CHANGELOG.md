@@ -2,6 +2,223 @@
 
 <!-- version list -->
 
+## v0.57.0 (2026-06-27)
+
+### Bug Fixes
+
+- Add chat eval yaml dependency
+  ([`c5652f4`](https://github.com/TimKleindick/general_manager/commit/c5652f48fe5649473fc3914e9e0804b4ace6c09c))
+
+- Align chat grounding recovery across transports
+  ([`ed0dabd`](https://github.com/TimKleindick/general_manager/commit/ed0dabd5a25631779fae85aae8038cdd1c6bd691))
+
+- Align chat provider adapters
+  ([`31e37a9`](https://github.com/TimKleindick/general_manager/commit/31e37a9b42c2c7a93d4d56fd1f1c38f6db29974d))
+
+- Align eval query recovery with path results
+  ([`36ca696`](https://github.com/TimKleindick/general_manager/commit/36ca6967981babad225dad349402d71387690e6e))
+
+- Allow chat confirmation id reuse
+  ([`09c0425`](https://github.com/TimKleindick/general_manager/commit/09c0425e04cc7f5ddb16f183bc996f5e68229720))
+
+- Assemble streamed provider tool calls
+  ([`b777b8a`](https://github.com/TimKleindick/general_manager/commit/b777b8ae9081a2b0ede86f9094a8e81c0495c1e2))
+
+- Audit websocket persistence failures
+  ([`06ecb36`](https://github.com/TimKleindick/general_manager/commit/06ecb364af55a7ebbd8600524172bb868d382e73))
+
+- Avoid double counting chat requests
+  ([`a29b5bf`](https://github.com/TimKleindick/general_manager/commit/a29b5bfb08d15010b9e8faaa0c14200d517fad43))
+
+- Avoid false path contradiction failures
+  ([`b28c231`](https://github.com/TimKleindick/general_manager/commit/b28c231a57f61658cafc29dc073d46f8b28b2273))
+
+- Claim chat confirmations atomically
+  ([`b68d341`](https://github.com/TimKleindick/general_manager/commit/b68d341411d6173999c36f94417dd66399b09a19))
+
+- Enforce chat token limits at admission
+  ([`ffa20b0`](https://github.com/TimKleindick/general_manager/commit/ffa20b0e99dfa183a266f3f191a37dbb9c9a7a03))
+
+- Harden chat confirmation recovery
+  ([`4ff5c37`](https://github.com/TimKleindick/general_manager/commit/4ff5c37095c7b20866fc70dcd346d1d21dc29270))
+
+- Harden chat eval readiness loop
+  ([`22151fe`](https://github.com/TimKleindick/general_manager/commit/22151feab71b20939eaa4260f7513a4b17b889be))
+
+- Harden chat tool runtime
+  ([`663260a`](https://github.com/TimKleindick/general_manager/commit/663260ad9dbb217183348945be360c0d465c0d9c))
+
+- Keep catch-all chat errors generic
+  ([`a56db90`](https://github.com/TimKleindick/general_manager/commit/a56db90db61562a0cb8ade16527580128bb62ff4))
+
+- Keep chat transports async safe
+  ([`3a73be4`](https://github.com/TimKleindick/general_manager/commit/3a73be481e9b6046bc18f0579c1e6b76e585575e))
+
+- Keep ollama import optional for typing
+  ([`7b750ca`](https://github.com/TimKleindick/general_manager/commit/7b750ca873b5ab1f09745ae00b6c33981bfcc6a5))
+
+- Keep path contradiction checks sentence local
+  ([`297d304`](https://github.com/TimKleindick/general_manager/commit/297d3046d160dfdf2c2dea1694c9d99ca963779a))
+
+- Let empty path block query recovery
+  ([`5c67657`](https://github.com/TimKleindick/general_manager/commit/5c676571cf95e7e1e348406b918580fa19f588f5))
+
+- Make chat sse execution lazy
+  ([`4bab0d7`](https://github.com/TimKleindick/general_manager/commit/4bab0d752be2a8a7faa9a8efb2027f123d70be9e))
+
+- Preserve anthropic stream input usage
+  ([`b391ea4`](https://github.com/TimKleindick/general_manager/commit/b391ea49956eed21d6b4b335c18b7c2858ade549))
+
+- Preserve chat routing state
+  ([`85840f9`](https://github.com/TimKleindick/general_manager/commit/85840f9ae2762997874a367863ca3c3e09b91486))
+
+- Preserve graphql-shaped chat filters
+  ([`8a023ee`](https://github.com/TimKleindick/general_manager/commit/8a023eed4d7857c6397722b9b2f5a3975ffcef82))
+
+- Recover incomplete chat grounding turns
+  ([`d48b952`](https://github.com/TimKleindick/general_manager/commit/d48b952bbe3a3e09cdacf605cfc802ae751822b4))
+
+- Recover missing chat tool calls in eval harness
+  ([`e326488`](https://github.com/TimKleindick/general_manager/commit/e326488b9d8748b72cbb6d75b3787e7f1b7b31d8))
+
+- Reject non-object websocket chat payloads
+  ([`7643946`](https://github.com/TimKleindick/general_manager/commit/7643946c45dfac9895800a7f155507aa8e25afb8))
+
+- Reject object values in scalar chat filters
+  ([`e7a8e3b`](https://github.com/TimKleindick/general_manager/commit/e7a8e3bc19f9a38c35aae117791e9e64fbc9f5da))
+
+- Reject scalar chat filter mappings
+  ([`c9e0905`](https://github.com/TimKleindick/general_manager/commit/c9e0905723ea8e7e43c6a88fed1e5bec2856cf3b))
+
+- Require explicit chat manager exposure
+  ([`2c15fe6`](https://github.com/TimKleindick/general_manager/commit/2c15fe6f531808f2189f03e4ca6a3fe3f2fac448))
+
+- Require query after successful path discovery
+  ([`0a2da25`](https://github.com/TimKleindick/general_manager/commit/0a2da250aa165af42c6b0c33e24c61bbace59810))
+
+- Require successful path before query recovery
+  ([`aa73112`](https://github.com/TimKleindick/general_manager/commit/aa73112e8fb6b00bc4eb417e2f1e0f8503945d04))
+
+- Resolve chat rebase regressions
+  ([`abd38ba`](https://github.com/TimKleindick/general_manager/commit/abd38ba73877db8d2797470b16170873599cec53))
+
+- Return public chat error events
+  ([`01703bb`](https://github.com/TimKleindick/general_manager/commit/01703bbc43d30bd6054e8dac8376b50e178f4b99))
+
+- Return public errors from chat confirmation
+  ([`6f05002`](https://github.com/TimKleindick/general_manager/commit/6f050024fa620d02bc0c43b21b917e0ba99403e5))
+
+- Satisfy strict chat typing
+  ([`5a5f3d1`](https://github.com/TimKleindick/general_manager/commit/5a5f3d1fee822bbe203aa9a21a5c183974c85a10))
+
+- Strengthen chat prompt tool grounding
+  ([`446da06`](https://github.com/TimKleindick/general_manager/commit/446da06e1a8e81fa134291c9d3ba3713e6b91b29))
+
+- Tighten chat eval contracts
+  ([`24417e1`](https://github.com/TimKleindick/general_manager/commit/24417e12c0ec896b27a4236325e7c1798b2d1f7c))
+
+- Validate chat mutation tool input
+  ([`4414848`](https://github.com/TimKleindick/general_manager/commit/44148480b82a1ea024e2de03751639dbbb22f4e3))
+
+- Validate chat query tool input
+  ([`0c0ea28`](https://github.com/TimKleindick/general_manager/commit/0c0ea2875c7f823f5fbe465af2ca7bf6ee55228b))
+
+- Validate nested chat query filters
+  ([`dee4cc5`](https://github.com/TimKleindick/general_manager/commit/dee4cc5d4a84f184e115faf41e8db8619b2512cc))
+
+- Wrap chat http setup errors
+  ([`1fc0db2`](https://github.com/TimKleindick/general_manager/commit/1fc0db2bf08c1b6d98dee1879c046a0466ba800c))
+
+- Wrap chat transport setup errors
+  ([`be45b1a`](https://github.com/TimKleindick/general_manager/commit/be45b1a47b28b30795ee877c3991976749fbdd3f))
+
+- Wrap chat websocket connect errors
+  ([`041d86b`](https://github.com/TimKleindick/general_manager/commit/041d86bc4813ef09960234a187b2eeed12ab6465))
+
+### Documentation
+
+- Add ADR for LLM chat endpoint
+  ([`bc73946`](https://github.com/TimKleindick/general_manager/commit/bc73946cd5df9596f1578161b068371b1211fcf1))
+
+- Align chat event contract
+  ([`9dd8d69`](https://github.com/TimKleindick/general_manager/commit/9dd8d69a1c4be77fce8869d5885f59a2cb8b9ce4))
+
+- Document chat production hardening gates
+  ([`ef497bd`](https://github.com/TimKleindick/general_manager/commit/ef497bdbf1ddfd64b3c8a0c5e3417fc750a054c9))
+
+- Document chat readiness loop
+  ([`b647358`](https://github.com/TimKleindick/general_manager/commit/b647358411f12e89d08b9b3313ab9b8189c672ec))
+
+- Raise chat docstring coverage
+  ([`91f3cbc`](https://github.com/TimKleindick/general_manager/commit/91f3cbc51df25f77ea0d823f85fc835de83d29bd))
+
+### Features
+
+- Add chat eval runner and tool metadata
+  ([`b156f4d`](https://github.com/TimKleindick/general_manager/commit/b156f4dbfe1be28ddb0dc40672097900bb582d80))
+
+- Add chat subsystem with persistence support
+  ([`ddfb991`](https://github.com/TimKleindick/general_manager/commit/ddfb991602dffbd2dd70d19c443a9edfb8546866))
+
+- Improve chat NLI prompt reliability
+  ([`16a4f84`](https://github.com/TimKleindick/general_manager/commit/16a4f842276c0cb7038fa457ad692a729c39fdb7))
+
+- Wire chat into app startup and public exports
+  ([`3f50f4c`](https://github.com/TimKleindick/general_manager/commit/3f50f4cb481d055229b1361d55150bfea0d27ca0))
+
+### Refactoring
+
+- Split chat providers into separate modules
+  ([`5902fde`](https://github.com/TimKleindick/general_manager/commit/5902fde108955c62c4896912c2409a248d1c458b))
+
+### Testing
+
+- Add chat readiness loop command
+  ([`01d6ccb`](https://github.com/TimKleindick/general_manager/commit/01d6ccbe1dae75c078d659abe5c76bb9851cea04))
+
+- Add coverage for chat transports tools and persistence
+  ([`f0e40c8`](https://github.com/TimKleindick/general_manager/commit/f0e40c88d160a554f8ef03b1824bb288c3aaf85c))
+
+- Catch answers that contradict path results
+  ([`6c4f85a`](https://github.com/TimKleindick/general_manager/commit/6c4f85a72e8fa7d2c8efbe154015d66be4b45176))
+
+- Classify chat readiness failures
+  ([`6170f33`](https://github.com/TimKleindick/general_manager/commit/6170f3330447ef86fa3afc5b5a6fa109bdcd85e6))
+
+- Compare chat readiness baselines
+  ([`b4d74ff`](https://github.com/TimKleindick/general_manager/commit/b4d74ff01fb433a96d4786204ea4df7ab8dfec29))
+
+- Cover chat eval fixtures and cli
+  ([`ec5d5c7`](https://github.com/TimKleindick/general_manager/commit/ec5d5c78c6792aad6468b002ba48ddd0b47f817a))
+
+- Fingerprint chat readiness runs
+  ([`d2b689a`](https://github.com/TimKleindick/general_manager/commit/d2b689a41676da2e6da0371c75b72e3f470526f1))
+
+- Harden chat eval harness
+  ([`93f6282`](https://github.com/TimKleindick/general_manager/commit/93f6282194cd31a705e13cbd9e0210b4a1d70b36))
+
+- Harden chat eval readiness contracts
+  ([`23b1d6e`](https://github.com/TimKleindick/general_manager/commit/23b1d6eee985a142f8534aa1b3bc1c2375200233))
+
+- Improve chat eval product contracts
+  ([`cf2e8c4`](https://github.com/TimKleindick/general_manager/commit/cf2e8c4a0daacfd1bf7cdc02b93497b24f0372fe))
+
+- Isolate chat consumer connect provider
+  ([`11f983e`](https://github.com/TimKleindick/general_manager/commit/11f983ec9fdb179895fab490c64234ca7d6ffb9e))
+
+- Isolate chat registry state
+  ([`be6a953`](https://github.com/TimKleindick/general_manager/commit/be6a95351fec55d3c5a1298b3f5def9977ba927f))
+
+- Raise chat coverage
+  ([`4b05515`](https://github.com/TimKleindick/general_manager/commit/4b05515cc883e4a520f4dbe671de74268509fd73))
+
+- Tighten chat eval answer contract
+  ([`82aba21`](https://github.com/TimKleindick/general_manager/commit/82aba21f60fa081d25aec25611eb078550f2fd93))
+
+- Update root model exports for chat
+  ([`1a8331a`](https://github.com/TimKleindick/general_manager/commit/1a8331accf69045d6458c200c67cac435e45c592))
+
+
 ## v0.56.1 (2026-06-25)
 
 ### Bug Fixes
