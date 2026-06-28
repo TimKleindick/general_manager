@@ -764,6 +764,32 @@ class SyncDataTests(SimpleTestCase):
 
         self.atomic_mock.assert_not_called()
 
+    def test_sync_rejects_scalar_row_payloads_as_readonly_data_format(self):
+        """
+        Ensure scalar rows raise the public read-only data format error.
+        """
+        malformed_payloads = [
+            [1],
+            [None],
+            ["bad"],
+            "[1]",
+        ]
+
+        for payload in malformed_payloads:
+            with self.subTest(payload=payload):
+                DummyManager._data = payload
+                self.atomic_mock.reset_mock()
+
+                with self.assertRaises(InvalidReadOnlyDataFormatError) as cm:
+                    self.capability.sync_data(
+                        DummyInterface,
+                        unique_fields={"name"},
+                        schema_validated=True,
+                    )
+
+                self.assertIs(type(cm.exception), InvalidReadOnlyDataFormatError)
+                self.atomic_mock.assert_not_called()
+
     def test_sync_falls_back_when_payload_missing_unique_field(self):
         """
         Ensure malformed payload rows still go through the existing validation path.
