@@ -23,12 +23,16 @@ from general_manager.interface.capabilities.orm import (
     OrmValidationCapability,
     SoftDeleteCapability,
 )
+from general_manager.interface.capabilities.orm.mutations import _normalize_payload
 from general_manager.interface.capabilities.orm.support import (
     AmbiguousReverseFilterAliasError,
     _build_reverse_filter_alias_map,
     _resolve_filter_segment,
     _translate_reverse_filter_aliases,
     _translate_reverse_filter_key,
+)
+from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
+    PayloadNormalizer,
 )
 
 
@@ -1431,11 +1435,19 @@ class TestOrmValidationCapability:
 
         interface_cls = Mock()
 
+        payload = {"name": "test", "value": 42}
         mock_normalizer = Mock()
-        mock_normalizer.validate_keys = Mock()
-        mock_normalizer.split_many_to_many = Mock(
-            return_value=({"name": "test", "value": 42}, {"tags": [1, 2]})
-        )
+
+        def validate_keys(payload_copy):
+            payload_copy["validate_mutation"] = True
+
+        mock_normalizer.validate_keys = Mock(side_effect=validate_keys)
+
+        def split_many_to_many(payload_copy):
+            payload_copy["split_mutation"] = True
+            return {"name": "test", "value": 42}, {"tags": [1, 2]}
+
+        mock_normalizer.split_many_to_many = Mock(side_effect=split_many_to_many)
         mock_normalizer.normalize_simple_values = Mock(
             return_value={"name": "test", "value_id": 42}
         )
@@ -1452,15 +1464,149 @@ class TestOrmValidationCapability:
                 "general_manager.interface.capabilities.orm.with_observability",
                 side_effect=lambda *_args, **kwargs: kwargs["func"](),
             ):
-                result = capability.normalize_payload(
-                    interface_cls, payload={"name": "test", "value": 42}
-                )
+                result = capability.normalize_payload(interface_cls, payload=payload)
 
                 mock_normalizer.validate_keys.assert_called_once()
+                validate_payload = mock_normalizer.validate_keys.call_args.args[0]
+                assert validate_payload is not payload
+                assert validate_payload["validate_mutation"] is True
                 mock_normalizer.split_many_to_many.assert_called_once()
+                split_payload = mock_normalizer.split_many_to_many.call_args.args[0]
+                assert split_payload is not payload
+                assert split_payload == {
+                    "name": "test",
+                    "value": 42,
+                    "validate_mutation": True,
+                    "split_mutation": True,
+                }
+                assert payload == {"name": "test", "value": 42}
                 mock_normalizer.normalize_simple_values.assert_called_once()
                 mock_normalizer.normalize_many_values.assert_called_once()
                 assert result == ({"name": "test", "value_id": 42}, {"tags": [1, 2]})
+
+    def test_normalize_payload_with_concrete_normalizer_preserves_payload(self):
+        """Concrete PayloadNormalizer should split M2M payloads without caller mutation."""
+
+        class OrmValidationRelatedModel(models.Model):
+            class Meta:
+                app_label = "test_orm_validation_payload"
+
+        class OrmValidationModel(models.Model):
+            name = models.CharField(max_length=32, default="")
+            tags = models.ManyToManyField(OrmValidationRelatedModel)
+
+            class Meta:
+                app_label = "test_orm_validation_payload"
+
+        capability = OrmValidationCapability()
+        interface_cls = Mock()
+        payload = {"name": "asset", "tags_list": [1, 2]}
+        normalizer = PayloadNormalizer(OrmValidationModel)
+
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.get_support_capability"
+        ) as mock_get_support:
+            mock_support = Mock()
+            mock_support.get_payload_normalizer = Mock(return_value=normalizer)
+            mock_get_support.return_value = mock_support
+
+            with patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ):
+                result = capability.normalize_payload(interface_cls, payload=payload)
+
+        assert payload == {"name": "asset", "tags_list": [1, 2]}
+        assert result == ({"name": "asset"}, {"tags_id_list": [1, 2]})
+
+    def test_normalize_payload_subclass_split_override_preserves_payload(self):
+        """PayloadNormalizer subclasses should keep split override compatibility."""
+
+        class SubclassRelatedModel(models.Model):
+            class Meta:
+                app_label = "test_orm_validation_subclass_payload"
+
+        class SubclassModel(models.Model):
+            name = models.CharField(max_length=32, default="")
+            tags = models.ManyToManyField(SubclassRelatedModel)
+
+            class Meta:
+                app_label = "test_orm_validation_subclass_payload"
+
+        class CustomPayloadNormalizer(PayloadNormalizer):
+            def split_many_to_many(self, kwargs):
+                kwargs["split_mutation"] = True
+                return (
+                    {"name": kwargs["name"], "custom": "split"},
+                    {"tags_id_list": [99]},
+                )
+
+        capability = OrmValidationCapability()
+        interface_cls = Mock()
+        payload = {"name": "asset", "tags_list": [1, 2]}
+        normalizer = CustomPayloadNormalizer(SubclassModel)
+
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.get_support_capability"
+        ) as mock_get_support:
+            mock_support = Mock()
+            mock_support.get_payload_normalizer = Mock(return_value=normalizer)
+            mock_get_support.return_value = mock_support
+
+            with patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ):
+                result = capability.normalize_payload(interface_cls, payload=payload)
+
+        assert payload == {"name": "asset", "tags_list": [1, 2]}
+        assert result == (
+            {"name": "asset", "custom": "split"},
+            {"tags_id_list": [99]},
+        )
+
+    def test_normalize_payload_fallback_copies_payload_before_custom_validation(self):
+        """Fallback normalization should isolate caller payload from custom normalizers."""
+        interface_cls = Mock()
+        interface_cls.get_capability_handler.return_value = None
+        payload = {"name": "test", "value": 42}
+        mock_normalizer = Mock()
+
+        def validate_keys(payload_copy):
+            payload_copy["validate_mutation"] = True
+
+        def split_many_to_many(payload_copy):
+            payload_copy["split_mutation"] = True
+            return {"name": "test", "value": 42}, {"tags": [1, 2]}
+
+        mock_normalizer.validate_keys = Mock(side_effect=validate_keys)
+        mock_normalizer.split_many_to_many = Mock(side_effect=split_many_to_many)
+        mock_normalizer.normalize_simple_values = Mock(
+            return_value={"name": "test", "value_id": 42}
+        )
+        mock_normalizer.normalize_many_values = Mock(return_value={"tags": [1, 2]})
+
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.get_support_capability"
+        ) as mock_get_support:
+            mock_support = Mock()
+            mock_support.get_payload_normalizer = Mock(return_value=mock_normalizer)
+            mock_get_support.return_value = mock_support
+
+            result = _normalize_payload(interface_cls, payload)
+
+        validate_payload = mock_normalizer.validate_keys.call_args.args[0]
+        split_payload = mock_normalizer.split_many_to_many.call_args.args[0]
+        assert validate_payload is not payload
+        assert split_payload is validate_payload
+        assert split_payload == {
+            "name": "test",
+            "value": 42,
+            "validate_mutation": True,
+            "split_mutation": True,
+        }
+        assert payload == {"name": "test", "value": 42}
+        assert result == ({"name": "test", "value_id": 42}, {"tags": [1, 2]})
 
 
 class TestSoftDeleteCapability:

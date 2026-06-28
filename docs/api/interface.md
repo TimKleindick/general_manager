@@ -229,6 +229,8 @@ interface is bound to a parent manager can raise `AttributeError`.
 
 ::: general_manager.interface.capabilities.registry.CapabilityRegistry
 
+::: general_manager.interface.capabilities.orm_utils.payload_normalizer.PayloadNormalizer
+
 `general_manager.interface.capabilities.core.utils.with_observability` is a
 public helper for wrapping capability operations with optional observability
 hooks. Its full behavior is described in the Core Observability Utility section
@@ -677,6 +679,12 @@ relation. If both `<relation>_list` and `<relation>_id_list` are present,
 iteration order decides the last canonical value stored in the many-to-many
 mapping.
 
+`split_many_to_many_non_mutating(kwargs)` returns new simple and many-to-many
+mappings without changing `kwargs`. It uses the same many-to-many alias
+recognition, canonical `<relation>_id_list` output keys, plain `_list` field
+preservation, and insertion-order collision behavior as the mutating
+`split_many_to_many()` helper.
+
 `normalize_simple_values(kwargs)` returns a new mapping. It converts
 manager-valued foreign-key/one-to-one values to identifiers and renames
 unsuffixed relation keys to `<relation>_id`; raw non-model values for those
@@ -690,8 +698,8 @@ keys exactly. It skips `None` and `models.NOT_PROVIDED`, treats strings and
 bytes as scalar one-item assignments, expands other iterables, consumes
 generators once, treats dictionaries as iterables over their keys, and resolves
 manager-like items to `identification["id"]` while preserving unrecognized
-values. Call `split_many_to_many()` first when canonical many-to-many keys are
-required.
+values. Call `split_many_to_many()` or `split_many_to_many_non_mutating()` first
+when canonical many-to-many keys are required.
 
 `SoftDeleteCapability` stores the effective soft-delete state for an interface.
 During setup it prefers `_soft_delete_default`, then

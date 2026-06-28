@@ -2062,6 +2062,108 @@ def test_payload_normalizer_split_many_to_many_keeps_plain_list_field() -> None:
     assert many_kwargs == {}
 
 
+def test_payload_normalizer_split_many_to_many_non_mutating_preserves_input() -> None:
+    class NonMutatingRelatedModelA(models.Model):
+        class Meta:
+            app_label = "test_payload_non_mutating_a"
+
+    class NonMutatingModelA(models.Model):
+        name = models.CharField(max_length=32, default="")
+        tags = models.ManyToManyField(NonMutatingRelatedModelA)
+
+        class Meta:
+            app_label = "test_payload_non_mutating_a"
+
+    normalizer = PayloadNormalizer(NonMutatingModelA)
+    payload = {"name": "asset", "tags_id_list": [1, 2]}
+    original_payload = dict(payload)
+
+    simple_kwargs, many_kwargs = normalizer.split_many_to_many_non_mutating(payload)
+
+    assert payload == original_payload
+    assert simple_kwargs is not payload
+    assert simple_kwargs == {"name": "asset"}
+    assert many_kwargs == {"tags_id_list": [1, 2]}
+
+
+def test_payload_normalizer_split_many_to_many_non_mutating_normalizes_list_alias() -> (
+    None
+):
+    class NonMutatingRelatedModelB(models.Model):
+        class Meta:
+            app_label = "test_payload_non_mutating_b"
+
+    class NonMutatingModelB(models.Model):
+        name = models.CharField(max_length=32, default="")
+        tags = models.ManyToManyField(NonMutatingRelatedModelB)
+
+        class Meta:
+            app_label = "test_payload_non_mutating_b"
+
+    normalizer = PayloadNormalizer(NonMutatingModelB)
+    payload = {"name": "asset", "tags_list": [1, 2]}
+
+    simple_kwargs, many_kwargs = normalizer.split_many_to_many_non_mutating(payload)
+
+    assert payload == {"name": "asset", "tags_list": [1, 2]}
+    assert simple_kwargs == {"name": "asset"}
+    assert many_kwargs == {"tags_id_list": [1, 2]}
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_many", "model_suffix"),
+    [
+        ({"tags_list": [1], "tags_id_list": [2]}, {"tags_id_list": [2]}, "a"),
+        ({"tags_id_list": [2], "tags_list": [1]}, {"tags_id_list": [1]}, "b"),
+    ],
+)
+def test_payload_normalizer_split_many_to_many_non_mutating_collision_order(
+    payload: dict[str, object],
+    expected_many: dict[str, object],
+    model_suffix: str,
+) -> None:
+    class NonMutatingRelatedModelC(models.Model):
+        class Meta:
+            app_label = f"test_payload_non_mutating_c_{model_suffix}"
+
+    class NonMutatingModelC(models.Model):
+        tags = models.ManyToManyField(NonMutatingRelatedModelC)
+
+        class Meta:
+            app_label = f"test_payload_non_mutating_c_{model_suffix}"
+
+    normalizer = PayloadNormalizer(NonMutatingModelC)
+    original_payload = dict(payload)
+
+    simple_kwargs, many_kwargs = normalizer.split_many_to_many_non_mutating(payload)
+
+    assert payload == original_payload
+    assert simple_kwargs == {}
+    assert many_kwargs == expected_many
+
+
+def test_payload_normalizer_split_many_to_many_keeps_legacy_mutation_contract() -> None:
+    class LegacyRelatedModel(models.Model):
+        class Meta:
+            app_label = "test_payload_legacy_contract"
+
+    class LegacyModel(models.Model):
+        name = models.CharField(max_length=32, default="")
+        tags = models.ManyToManyField(LegacyRelatedModel)
+
+        class Meta:
+            app_label = "test_payload_legacy_contract"
+
+    normalizer = PayloadNormalizer(LegacyModel)
+    payload = {"name": "asset", "tags_list": [1], "tags_id_list": [2]}
+
+    simple_kwargs, many_kwargs = normalizer.split_many_to_many(payload)
+
+    assert simple_kwargs is payload
+    assert payload == {"name": "asset"}
+    assert many_kwargs == {"tags_id_list": [2]}
+
+
 def test_payload_normalizer_normalize_simple_values_converts_fk_plain_id() -> None:
     class PlantModel(models.Model):
         class Meta:
