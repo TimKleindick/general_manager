@@ -1,12 +1,14 @@
 # type: ignore
 from django.test import TestCase
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import patch
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.interface import CalculationInterface
 from general_manager.manager.input import DateRangeDomain, Input
 from general_manager.manager import GeneralManager
+from tests.utils.simple_manager_interface import SimpleBucket
 from typing import ClassVar
 
 
@@ -1498,3 +1500,157 @@ class TestCalculationBucketExceptions(TestCase):
         with patch.object(bucket, "filter", return_value=bucket):
             combined = bucket | manager_instance
         self.assertIsInstance(combined, CalculationBucket)
+
+
+class TestCalculationBucketCoverageEdges(TestCase):
+    def test_equality_rejects_other_types(self):
+        """CalculationBucket equality should reject non-bucket values."""
+        bucket = CalculationBucket(DummyGeneralManager)
+
+        self.assertNotEqual(bucket, object())
+
+    def test_property_transform_resolves_union_collection_and_unknown_hints(self):
+        """Property type transformation should normalize common annotation shapes."""
+        properties = {
+            "optional_number": SimpleNamespace(graphql_type_hint=int | None),
+            "names": SimpleNamespace(graphql_type_hint=list[str]),
+            "unknown": SimpleNamespace(graphql_type_hint="not-a-type"),
+        }
+
+        inputs = CalculationBucket.transform_properties_to_input_fields(
+            properties,
+            {},
+        )
+
+        self.assertEqual(inputs["optional_number"].type, int)
+        self.assertEqual(inputs["names"].type, str)
+        self.assertEqual(inputs["unknown"].type, object)
+
+    def test_bucket_index_signature_includes_sort_and_filters(self):
+        """Bucket index signatures should include plan-defining state."""
+
+        class SignatureInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "x": Input(int, possible_values=[1]),
+                "y": Input(int, possible_values=[2]),
+            }
+
+        class SignatureManager:
+            Interface = SignatureInterface
+
+        SignatureInterface._parent_class = SignatureManager
+        bucket = CalculationBucket(
+            SignatureManager,
+            {"x": 1},
+            {"y": 2},
+            sort_key=("x",),
+            reverse=True,
+        )
+
+        signature = bucket._bucket_index_source_signature()
+
+        self.assertEqual(signature[0], "calculation")
+        self.assertIs(signature[1], SignatureManager)
+        self.assertEqual(signature[-2:], (("x",), True))
+
+    def test_topological_sort_skips_already_visited_dependencies(self):
+        """Shared dependency paths should not duplicate already visited inputs."""
+
+        class SharedDependencyInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "root": Input(int, possible_values=[1]),
+                "middle": Input(int, possible_values=[2], depends_on=["root"]),
+                "leaf": Input(int, possible_values=[3], depends_on=["root", "middle"]),
+            }
+
+        class SharedDependencyManager:
+            Interface = SharedDependencyInterface
+
+        SharedDependencyInterface._parent_class = SharedDependencyManager
+        bucket = CalculationBucket(SharedDependencyManager)
+
+        self.assertEqual(
+            bucket.topological_sort_inputs(),
+            ["root", "middle", "leaf"],
+        )
+
+    def test_required_input_without_possible_values_raises(self):
+        """Required inputs without possible values should be invalid."""
+        bucket = CalculationBucket(DummyGeneralManager)
+
+        with self.assertRaises(TypeError):
+            bucket.get_possible_values("required", Input(int), {})
+
+    def test_iter_input_combinations_covers_bucket_excludes_and_type_skips(self):
+        """Input enumeration should handle bucket sources, excludes, and bad types."""
+        typed_field = Input(int, possible_values=[1, "bad", 2])
+        typed_bucket = CalculationBucket(DummyGeneralManager)
+        typed_bucket.input_fields = {"value": typed_field}
+
+        combinations = typed_bucket._generate_input_combinations(
+            ["value"],
+            {},
+            {"value": {"filter_funcs": [lambda value: value == 2]}},
+        )
+
+        self.assertEqual(combinations, [{"value": 1}])
+
+        class BucketValueInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "manager": Input(
+                    DummyGeneralManager,
+                    possible_values=SimpleBucket(DummyGeneralManager, []),
+                )
+            }
+
+        class BucketValueManager:
+            Interface = BucketValueInterface
+
+        BucketValueInterface._parent_class = BucketValueManager
+        bucket_value_bucket = CalculationBucket(BucketValueManager)
+
+        self.assertEqual(bucket_value_bucket.generate_combinations(), [])
+
+    def test_property_preview_and_terminal_helpers(self):
+        """Lazy property previews and terminal helpers should keep expected behavior."""
+
+        class ScoreInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "score": Input(int, possible_values=[1, 2, 3]),
+            }
+
+        class ScoreManager:
+            Interface = ScoreInterface
+
+            def __init__(self, **kwargs):
+                """Store the score-backed identification for helper assertions."""
+                self.identification = dict(kwargs)
+                self.score = kwargs["score"]
+
+            def __eq__(self, other):
+                """Compare helper managers by their identification payload."""
+                return (
+                    isinstance(other, ScoreManager)
+                    and self.identification == other.identification
+                )
+
+        ScoreInterface._parent_class = ScoreManager
+        bucket = CalculationBucket(ScoreManager)
+
+        preview = list(
+            bucket._iter_prop_filtered_identifications(
+                [{"score": 1}, {"score": 2}, {"score": 3}],
+                {"score": {"filter_funcs": [lambda value: value >= 2]}},
+                {"score": {"filter_funcs": [lambda value: value == 3]}},
+            )
+        )
+        self.assertEqual(preview, [{"score": 2}])
+
+        bucket._data = [{"score": 2}]
+        self.assertIn(ScoreManager(score=2), bucket)
+        self.assertEqual(bucket.get(score=2).identification, {"score": 2})
+
+        empty = bucket.none()
+        self.assertEqual(empty.generate_combinations(), [])
+        self.assertEqual(empty.filter_definitions, {})
+        self.assertEqual(empty.exclude_definitions, {})

@@ -611,12 +611,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self,
         combinations: list[Combination],
     ) -> list[GeneralManagerType]:
+        """Instantiate managers for each raw input-combination dictionary."""
         return [self._manager_class(**combo) for combo in combinations]
 
     @staticmethod
     def _manager_identifications(
         managers: list[GeneralManagerType],
     ) -> list[Combination]:
+        """Return the identification dictionaries from manager instances."""
         return [manager.identification for manager in managers]
 
     def generate_combinations(self) -> List[Combination]:
