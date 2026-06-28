@@ -83,6 +83,7 @@ Example query:
 query SearchProjects($filters: JSONString) {
   search(index: "global", query: "alpha", filters: $filters, sortBy: "name") {
     total
+    totalIsExact
     results {
       __typename
       ... on ProjectType { id name status }
@@ -106,6 +107,51 @@ Filters can also be passed as a list of filter items:
   "filters": "[{\"field\": \"status\", \"op\": \"in\", \"values\": [\"public\", \"draft\"]}]"
 }
 ```
+
+By default, GraphQL search returns exact post-permission totals. Exact totals
+preserve existing behavior, but permission-filtered searches may need to scan
+additional backend pages after the current result page is already filled.
+
+To cap those scans per manager, enable bounded totals and choose a positive scan
+limit:
+
+```python
+GENERAL_MANAGER = {
+    **GENERAL_MANAGER,
+    "GRAPHQL_SEARCH_TOTAL_MODE": "bounded",
+    "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 1000,
+}
+```
+
+Bounded mode caps backend hit scans per manager. The effective cap is at least
+the requested page end (`page` / `pageSize`) so the current page can still be
+filled where possible. In bounded mode, `total` is the authorized count found
+before the cap and `totalIsExact` is `false` if the resolver hit the cap before
+observing an empty or partial backend page.
+
+Clients can override the setting per request:
+
+```graphql
+query {
+  search(
+    index: "global",
+    query: "alpha",
+    pageSize: 20,
+    totalMode: "bounded"
+  ) {
+    total
+    totalIsExact
+    results {
+      __typename
+      ... on ProjectType { id name status }
+    }
+  }
+}
+```
+
+Use `totalMode: "exact"` when a specific request needs the previous exact
+total behavior even if the deployment default is bounded. Invalid `totalMode`
+values are returned as GraphQL user-input errors.
 
 ## Step 5: Async indexing (optional)
 
