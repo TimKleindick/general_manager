@@ -54,7 +54,12 @@ Project.Factory.create_batch(20)
 InventoryItem.Factory.create_batch(50)
 ```
 
-Many-to-many relations are populated automatically with sensible defaults.
+`Factory.create(...)` and `Factory.create_batch(...)` save each object before
+AutoFactory assigns many-to-many relations, so explicit values and generated
+defaults can populate those relations safely. `Factory.build(...)` returns
+unsaved model instances and skips many-to-many assignment; pass scalar and
+foreign-key values to build when you need an in-memory object, then save and
+assign many-to-many relations yourself if the test needs them.
 
 ## Step 3: Customise values
 
@@ -80,14 +85,16 @@ defaults, stripped many-to-many fields from constructor kwargs, and coerced
 foreign-key/one-to-one values. Caller-supplied keyword arguments still take
 precedence over generated defaults.
 
-`Factory.create(...)` validates and saves every returned record, then wraps the
-saved models back into their `GeneralManager` class using the interface's
-identification fields. If a generated object is not a Django model instance,
-`InvalidGeneratedObjectError` is raised. If the interface has no parent manager,
-wrapping raises `MissingManagerClassError`; if an identification field cannot be
-read from the generated model, wrapping raises `MissingIdentificationFieldError`.
+`Factory.create(...)` validates and saves every returned record, assigns any
+many-to-many values after saving, then wraps the saved models back into their
+`GeneralManager` class using the interface's identification fields. If a
+generated object is not a Django model instance, `InvalidGeneratedObjectError`
+is raised. If the interface has no parent manager, wrapping raises
+`MissingManagerClassError`; if an identification field cannot be read from the
+generated model, wrapping raises `MissingIdentificationFieldError`.
 `Factory.build(...)` runs the same adjustment logic but returns unsaved model
-instances instead of manager wrappers.
+instances instead of manager wrappers and does not write many-to-many
+relations.
 
 `_adjustmentMethod` return values are not schema-validated before the factory uses
 them. A single dictionary produces one record. A list of dictionaries produces

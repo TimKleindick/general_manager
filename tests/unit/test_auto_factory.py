@@ -192,6 +192,50 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertIn(dummy_model_instance, instance.dummy_m2m.all())
         self.assertIn(dummy_model_instance2, instance.dummy_m2m.all())
 
+    def test_build_instance_with_many_to_many_values_skips_relation_assignment(self):
+        """
+        Build returns an unsaved model without assigning provided many-to-many values.
+        """
+        dummy_model_instance = self.factory_class.create()
+        dummy_model_instance2 = self.factory_class.create()
+
+        instance = self.factory_class2.build(
+            description="Test Description",
+            dummy_model=dummy_model_instance,
+            dummy_m2m=[dummy_model_instance, dummy_model_instance2],
+        )
+
+        self.assertIsInstance(instance, DummyModel2)
+        self.assertIsNone(instance.pk)
+        self.assertEqual(instance.description, "Test Description")
+        self.assertEqual(instance.dummy_model, dummy_model_instance)
+        self.assertEqual(DummyModel2.objects.count(), 0)
+        with self.assertRaises(ValueError):
+            instance.dummy_m2m.count()
+
+    def test_build_instance_without_many_to_many_values_skips_generated_relation_assignment(
+        self,
+    ):
+        """
+        Build does not assign default many-to-many values for unsaved models.
+        """
+        dummy_model_instance = self.factory_class.create()
+        available_related = self.factory_class.create()
+        self.factory_class2.dummy_m2m = [available_related]
+
+        instance = self.factory_class2.build(
+            description="Test Description",
+            dummy_model=dummy_model_instance,
+        )
+
+        self.assertIsInstance(instance, DummyModel2)
+        self.assertIsNone(instance.pk)
+        self.assertEqual(instance.description, "Test Description")
+        self.assertEqual(instance.dummy_model, dummy_model_instance)
+        self.assertEqual(DummyModel2.objects.count(), 0)
+        with self.assertRaises(ValueError):
+            instance.dummy_m2m.count()
+
     def test_generate_instance_with_generate_function(self):
         """
         Test that the factory can generate and persist multiple instances using a custom generate function that returns a list of dictionaries.

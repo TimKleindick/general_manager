@@ -54,12 +54,15 @@ and one-to-one fields with no related factory and no existing related rows
 resolve to `None`; required relations in the same situation raise
 `MissingFactoryOrInstancesError`.
 
-Many-to-many defaults are generated after the main object is built. The helper
+Many-to-many defaults are generated after the main object is created. The helper
 creates or selects related model instances, then `AutoFactory` applies them to
-the relation. `blank=True` fields may generate an empty list, while
-`blank=False` fields request at least one related instance. If a related factory
-returns a GeneralManager instance, the helper resolves it back to the underlying
-Django row before assignment. If that manager cannot be resolved to a row,
+the saved relation for `Factory.create(...)` and `Factory.create_batch(...)`.
+`Factory.build(...)` returns unsaved model instances and skips many-to-many
+assignment, even when explicit or declared many-to-many values are supplied.
+`blank=True` fields may generate an empty list, while `blank=False` fields
+request at least one related instance. If a related factory returns a
+GeneralManager instance, the helper resolves it back to the underlying Django
+row before assignment. If that manager cannot be resolved to a row,
 `UnableToResolveManagerInstanceError` is raised.
 
 See the [Factory API reference](../../api/factory.md) for signatures.

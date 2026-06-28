@@ -4,7 +4,7 @@ Factories generate many objects quickly—use them wisely to keep tests fast and
 
 ## AutoFactory shortcuts
 
-`general_manager.factory.auto_factory.AutoFactory` inspects interface metadata to populate sensible defaults. It derives values for regular fields, many-to-many relations, and handles special fields via `handle_custom_fields()`.
+`general_manager.factory.auto_factory.AutoFactory` inspects interface metadata to populate sensible defaults. It derives values for regular fields, handles special fields via `handle_custom_fields()`, and assigns many-to-many relations after saved creates. Build calls return unsaved models and do not write many-to-many relations.
 
 ```python
 class ProjectFactory(AutoFactory):
@@ -15,7 +15,7 @@ project = ProjectFactory()
 
 ## Batch creation
 
-When you need multiple objects, use `Factory.create_batch()` and wrap the call in `django.db.transaction.atomic()` to reduce database overhead. AutoFactory automatically fills many-to-many relations after creation.
+When you need multiple objects, use `Factory.create_batch()` and wrap the call in `django.db.transaction.atomic()` to reduce database overhead. AutoFactory automatically fills many-to-many relations after creation; `Factory.build()` skips those writes because the returned model is unsaved.
 
 ## Caching interactions
 
