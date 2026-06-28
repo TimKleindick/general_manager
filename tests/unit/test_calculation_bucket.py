@@ -1059,6 +1059,49 @@ class TestCalculationBucketAdditional(TestCase):
         )
 
     @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
+    def test_str_snapshots_iterables_before_dependencies(self, _mock_parse):
+        class StatefulValues:
+            def __init__(self):
+                self.remaining = [1, 2]
+
+            def __iter__(self):
+                while self.remaining:
+                    yield self.remaining.pop(0)
+
+        values = StatefulValues()
+
+        def dependent_values(_a):
+            values.remaining.clear()
+            return [10]
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "a": Input(type=int, possible_values=values),
+                "b": Input(
+                    type=int,
+                    possible_values=dependent_values,
+                    depends_on=["a"],
+                ),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+
+        s = str(bucket)
+
+        self.assertTrue(s.startswith("CalculationBucket (2)["))
+        self.assertIn("DynManager(**{'a': 1, 'b': 10})", s)
+        self.assertIn("DynManager(**{'a': 2, 'b': 10})", s)
+        self.assertNotIn("...", s)
+        self.assertIsNone(bucket._data)
+
+    @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
     def test_str_preserves_sorted_preview_order(self, _mock_parse):
         class DynInterface(CalculationInterface):
             input_fields: ClassVar[dict] = {
@@ -1583,14 +1626,21 @@ class TestCalculationBucketCoverageEdges(TestCase):
 
     def test_iter_input_combinations_covers_bucket_excludes_and_type_skips(self):
         """Input enumeration should handle bucket sources, excludes, and bad types."""
-        typed_field = Input(int, possible_values=[1, "bad", 2])
+        typed_field = Input(int, possible_values=[1, "bad", 2, 3])
         typed_bucket = CalculationBucket(DummyGeneralManager)
         typed_bucket.input_fields = {"value": typed_field}
 
         combinations = typed_bucket._generate_input_combinations(
             ["value"],
             {},
-            {"value": {"filter_funcs": [lambda value: value == 2]}},
+            {
+                "value": {
+                    "filter_funcs": [
+                        lambda value: value == 2,
+                        lambda value: value == 3,
+                    ]
+                }
+            },
         )
 
         self.assertEqual(combinations, [{"value": 1}])
