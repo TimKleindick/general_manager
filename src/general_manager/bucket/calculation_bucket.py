@@ -26,6 +26,7 @@ from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.indexing import freeze_bucket_index_value
 from general_manager.manager.input import Input, InputDomain
 from general_manager.utils.filter_parser import (
+    FilterFunction,
     ParsedFilters,
     parse_filters,
 )
@@ -46,6 +47,15 @@ class SortedFilters(TypedDict):
     input_filters: ParsedFilters
     prop_excludes: ParsedFilters
     input_excludes: ParsedFilters
+
+
+def _build_exclude_filter(exclude_func: FilterFunction) -> FilterFunction:
+    """Create a lazy predicate that keeps values an exclude does not reject."""
+
+    def includes_value(value: object) -> bool:
+        return not exclude_func(value)
+
+    return includes_value
 
 
 class InvalidCalculationInterfaceError(TypeError):
@@ -363,11 +373,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                     str(len(combinations)),
                     len(combinations) > limit,
                 )
+            snapshot_iterables = self._uses_dependent_possible_values(sorted_inputs)
             preview_iterator = self._iter_input_combinations(
                 sorted_inputs,
                 sorted_filters["input_filters"],
                 sorted_filters["input_excludes"],
-                snapshot_iterables=False,
+                snapshot_iterables=snapshot_iterables,
             )
             if sorted_filters["prop_filters"] or sorted_filters["prop_excludes"]:
                 preview_iterator = self._iter_prop_filtered_identifications(
@@ -387,6 +398,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """Return whether previewing would consume a one-shot static iterator."""
         return any(
             isinstance(self.input_fields[input_name].possible_values, Iterator)
+            for input_name in sorted_inputs
+        )
+
+    def _uses_dependent_possible_values(self, sorted_inputs: list[str]) -> bool:
+        """Return whether previewing should snapshot values before dependencies."""
+        return any(
+            bool(self.input_fields[input_name].depends_on)
+            and self.input_fields[input_name].possible_values is not None
             for input_name in sorted_inputs
         )
 
@@ -879,7 +898,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 exclude_funcs = field_excludes.get("filter_funcs", [])
                 for exclude_func in exclude_funcs:
                     possible_values = filter(
-                        lambda x: not exclude_func(x), possible_values
+                        _build_exclude_filter(exclude_func), possible_values
                     )
                 if snapshot_iterables:
                     possible_values = list(possible_values)
