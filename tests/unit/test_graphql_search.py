@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import ClassVar
-from unittest.mock import MagicMock
+from typing import Any, ClassVar
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth.models import AnonymousUser
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from graphql import GraphQLError
 
+from general_manager.api import graphql_search as graphql_search_module
 from general_manager.api.graphql import GraphQL
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
@@ -14,6 +15,7 @@ from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.permission.base_permission import BasePermission
 from general_manager.search.backends.dev import DevSearchBackend
+from general_manager.search.backend import SearchHit, SearchResult
 from general_manager.search import backend_registry
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.config import IndexConfig
@@ -127,6 +129,27 @@ class Project(GeneralManager):
         ]
 
 
+class CountingDevSearchBackend(DevSearchBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.search_calls: list[dict[str, Any]] = []
+
+    def search(self, *args: Any, **kwargs: Any):
+        self.search_calls.append({"args": args, "kwargs": dict(kwargs)})
+        return super().search(*args, **kwargs)
+
+
+class BestEffortTotalSearchBackend(CountingDevSearchBackend):
+    def search(self, *args: Any, **kwargs: Any) -> SearchResult:
+        result = super().search(*args, **kwargs)
+        return SearchResult(
+            hits=result.hits,
+            total=len(result.hits),
+            took_ms=result.took_ms,
+            raw=result.raw,
+        )
+
+
 class GraphQLSearchTests(SimpleTestCase):
     def setUp(self) -> None:
         """
@@ -141,6 +164,7 @@ class GraphQLSearchTests(SimpleTestCase):
         self._orig_manager_registry = GraphQL.manager_registry
         self._orig_search_union = GraphQL._search_union
         self._orig_search_result_type = GraphQL._search_result_type
+        self._orig_project_data_store = ProjectInterface.data_store.copy()
 
         GeneralManagerMeta.all_classes = [Project]
         GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
@@ -166,6 +190,7 @@ class GraphQLSearchTests(SimpleTestCase):
         This reverses mutations performed in setUp by restoring the previously saved search backend, GeneralManagerMeta class list and safe-class initialization, and GraphQL query/type/manager/search-related registries and caches, then delegates to the superclass tearDown.
         """
         configure_search_backend(self._orig_backend)
+        ProjectInterface.data_store = self._orig_project_data_store.copy()
         GeneralManagerMeta.all_classes = self._orig_gm_classes
         safe_classes = [
             manager_class
@@ -179,6 +204,22 @@ class GraphQLSearchTests(SimpleTestCase):
         GraphQL._search_union = self._orig_search_union
         GraphQL._search_result_type = self._orig_search_result_type
         super().tearDown()
+
+    def _configure_counting_backend_with_public_rows(
+        self,
+        public_count: int,
+        backend: CountingDevSearchBackend | None = None,
+    ) -> CountingDevSearchBackend:
+        ProjectInterface.data_store = {
+            row_id: {"name": f"Project {row_id}", "status": "public"}
+            for row_id in range(1, public_count + 1)
+        }
+        backend = backend or CountingDevSearchBackend()
+        configure_search_backend(backend)
+        indexer = SearchIndexer(backend)
+        for row_id in ProjectInterface.data_store:
+            indexer.index_instance(Project(id=row_id))
+        return backend
 
     def test_graphql_search_filters_by_permission(self) -> None:
         """
@@ -319,6 +360,285 @@ class GraphQLSearchTests(SimpleTestCase):
 
         assert response["total"] == 3
         assert [item.identification for item in response["results"]] == [{"id": 3}]
+
+    def test_graphql_search_exact_total_scans_all_matches_by_default(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=5)
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=None,
+            page=1,
+            page_size=1,
+        )
+
+        assert response["total"] == 5
+        assert response["total_is_exact"] is True
+        assert len(response["results"]) == 1
+        assert len(backend.search_calls) > 1
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "GRAPHQL_SEARCH_TOTAL_MODE": "bounded",
+            "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 1,
+        }
+    )
+    def test_graphql_search_bounded_total_stops_after_scan_limit(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=5)
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=None,
+            page=1,
+            page_size=1,
+        )
+
+        assert response["total"] == 1
+        assert response["total_is_exact"] is False
+        assert len(response["results"]) == 1
+        assert len(backend.search_calls) == 1
+
+    def test_graphql_search_exact_total_ignores_best_effort_backend_total(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(
+            public_count=5,
+            backend=BestEffortTotalSearchBackend(),
+        )
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=None,
+            page=1,
+            page_size=1,
+        )
+
+        assert response["total"] == 5
+        assert response["total_is_exact"] is True
+        assert len(response["results"]) == 1
+        assert len(backend.search_calls) == 6
+
+    def test_graphql_search_exact_total_trims_materialized_page_window(self) -> None:
+        self._configure_counting_backend_with_public_rows(public_count=12)
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+        trimmed_lengths: list[int] = []
+        real_trim = graphql_search_module.trim_search_hit_entries_to_window
+
+        def tracking_trim(*args: Any, **kwargs: Any) -> None:
+            real_trim(*args, **kwargs)
+            trimmed_lengths.append(len(args[0]))
+
+        with patch.object(
+            graphql_search_module,
+            "trim_search_hit_entries_to_window",
+            side_effect=tracking_trim,
+        ):
+            response = field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=None,
+                filters=None,
+                page=1,
+                page_size=2,
+            )
+
+        assert response["total"] == 12
+        assert len(response["results"]) == 2
+        assert trimmed_lengths
+        assert max(trimmed_lengths) == 2
+
+    def test_search_hit_window_trims_sorted_candidates(self) -> None:
+        entries = [
+            (
+                None,
+                SearchHit(
+                    id=str(row_id),
+                    type="Project",
+                    identification={"id": row_id},
+                    data={"name": name},
+                ),
+                Project(id=row_id),
+            )
+            for row_id, name in enumerate(
+                ["Zulu Project", "Alpha Project", "Beta Project"],
+                start=1,
+            )
+        ]
+
+        graphql_search_module.trim_search_hit_entries_to_window(
+            entries,
+            requested_count=2,
+            sort_by="name",
+            sort_desc=False,
+        )
+
+        assert [entry[1].data["name"] for entry in entries] == [
+            "Alpha Project",
+            "Beta Project",
+        ]
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "GRAPHQL_SEARCH_TOTAL_MODE": "bounded",
+            "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 5,
+        }
+    )
+    def test_graphql_search_bounded_total_marks_best_effort_limit_inexact(
+        self,
+    ) -> None:
+        backend = self._configure_counting_backend_with_public_rows(
+            public_count=5,
+            backend=BestEffortTotalSearchBackend(),
+        )
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=None,
+            page=1,
+            page_size=1,
+        )
+
+        assert response["total"] == 5
+        assert response["total_is_exact"] is False
+        assert len(response["results"]) == 1
+        assert len(backend.search_calls) == 5
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "GRAPHQL_SEARCH_TOTAL_MODE": "bounded",
+            "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 5,
+        }
+    )
+    def test_graphql_search_bounded_total_is_conservative_at_scan_boundary(
+        self,
+    ) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=5)
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=None,
+            page=1,
+            page_size=1,
+        )
+
+        assert response["total"] == 5
+        assert response["total_is_exact"] is False
+        assert len(response["results"]) == 1
+        assert len(backend.search_calls) == 5
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "GRAPHQL_SEARCH_TOTAL_MODE": "bounded",
+            "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 1,
+        }
+    )
+    def test_graphql_search_total_mode_exact_overrides_bounded_setting(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=5)
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=None,
+            total_mode="exact",
+            page=1,
+            page_size=1,
+        )
+
+        assert response["total"] == 5
+        assert response["total_is_exact"] is True
+        assert len(response["results"]) == 1
+        assert len(backend.search_calls) > 1
+
+    def test_graphql_search_rejects_invalid_total_mode(self) -> None:
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with self.assertRaisesRegex(
+            GraphQLError,
+            "totalMode must be one of",
+        ) as ctx:
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=None,
+                filters=None,
+                total_mode="fast",
+                page=1,
+                page_size=1,
+            )
+        assert ctx.exception.extensions["code"] == "BAD_USER_INPUT"
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "GRAPHQL_SEARCH_TOTAL_MODE": "bounded",
+            "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 0,
+        }
+    )
+    def test_graphql_search_rejects_invalid_total_scan_limit(self) -> None:
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with self.assertRaisesRegex(
+            GraphQLError,
+            "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT must be a positive integer",
+        ) as ctx:
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=None,
+                filters=None,
+                page=1,
+                page_size=1,
+            )
+        assert ctx.exception.extensions["code"] == "BAD_USER_INPUT"
 
     def test_graphql_search_rejects_zero_page(self) -> None:
         field = GraphQL._query_fields["search"]

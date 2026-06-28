@@ -3,6 +3,7 @@ from typing import ClassVar
 from unittest.mock import patch
 
 from django.db.models import CASCADE, CharField, ForeignKey
+from django.test import override_settings
 from django.core.management import call_command
 
 from general_manager.interface import DatabaseInterface
@@ -13,6 +14,7 @@ from general_manager.permission.manager_based_permission import (
     ManagerBasedPermission,
 )
 from general_manager.search.backend_registry import configure_search_backend
+from general_manager.search.backend_registry import get_search_backend
 from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.config import IndexConfig
 from general_manager.search.indexer import SearchIndexer
@@ -203,6 +205,72 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
         payload = response.json()["data"]["search"]
         names = [item["name"] for item in payload["results"]]
         self.assertEqual(names, ["Beta Project", "Beta Team"])
+
+    def test_graphql_search_sorted_pagination_includes_later_manager_hits(self):
+        self.Project.Factory.create(name="Zulu Project", status="public")
+        self.Project.Factory.create(name="Zzz Project", status="public")
+        self.ProjectTeam.Factory.create(name="Aardvark Team", status="public")
+        indexer = SearchIndexer(get_search_backend())
+        indexer.reindex_manager(self.Project)
+        indexer.reindex_manager(self.ProjectTeam)
+
+        query = """
+        query {
+            search(index: "global", query: "", sortBy: "name", pageSize: 2) {
+                results {
+                    __typename
+                    ... on ProjectType { name }
+                    ... on ProjectTeamType { name }
+                }
+            }
+        }
+        """
+        response = self.query(query)
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["search"]
+        names = [item["name"] for item in payload["results"]]
+        self.assertEqual(names, ["Aardvark Team", "Alpha Project"])
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 1})
+    def test_graphql_search_bounded_total_exposes_exactness_flag(self):
+        query = """
+        query {
+            search(
+                index: "global",
+                query: "",
+                types: ["ProjectTeam"],
+                pageSize: 1,
+                totalMode: "bounded"
+            ) {
+                total
+                totalIsExact
+                results {
+                    __typename
+                    ... on ProjectTeamType { name }
+                }
+            }
+        }
+        """
+        response = self.query(query)
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["search"]
+        self.assertEqual(payload["total"], 1)
+        self.assertFalse(payload["totalIsExact"])
+        self.assertEqual(len(payload["results"]), 1)
+
+    def test_graphql_search_invalid_total_mode_returns_bad_user_input(self):
+        query = """
+        query {
+            search(index: "global", query: "", totalMode: "fast") {
+                total
+            }
+        }
+        """
+        response = self.query(query)
+        self.assertResponseHasErrors(response)
+        error = response.json()["errors"][0]
+        self.assertIn("totalMode must be one of", error["message"])
+        self.assertEqual(error.get("extensions", {}).get("code"), "BAD_USER_INPUT")
 
     def test_graphql_search_sort_desc(self):
         query = """

@@ -111,11 +111,15 @@ When GraphQL is auto-created, a global `search` query is added. It accepts:
 - `types`: optional list of manager class names to restrict results.
 - `filters`: JSON string or list of filter items.
 - `sortBy` / `sortDesc`: optional sort field and direction.
+- `totalMode`: optional total-count mode, either `exact` or `bounded`.
 - `page` / `pageSize`: pagination controls.
 
 Results are returned as a union of manager GraphQL types:
 - `results`: nullable GraphQL list field containing the authorized manager instances as the generated union type.
 - `total`: nullable integer field containing the post-permission authorized hit count, not the backend raw total.
+- `totalIsExact`: nullable boolean field. `true` means `total` is the exact
+  post-permission count; `false` means bounded mode stopped scanning before it
+  could prove no more backend hits remain, so `total` is a lower bound.
 - `took_ms`: nullable integer field containing accumulated backend search time in milliseconds when reported.
 - `raw`: nullable JSON string field containing a list of backend-specific raw response payloads.
 
@@ -134,6 +138,29 @@ comparison errors propagate. `sortBy` is not validated ahead of time; sorting
 reads each hit's `data[sortBy]` when present and otherwise sorts that hit as
 `null`/last before applying `sortDesc`.
 
+GraphQL search totals default to exact mode for backward compatibility:
+
+```python
+GENERAL_MANAGER = {
+    "GRAPHQL_SEARCH_TOTAL_MODE": "exact",
+    "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 1000,
+}
+```
+
+Exact mode continues scanning backend pages for each manager until it can return
+the exact authorized total, even when the requested result page is already
+filled. Set `GENERAL_MANAGER["GRAPHQL_SEARCH_TOTAL_MODE"]` to `"bounded"` to
+cap each manager's backend hit scan. The scan limit must be a positive integer
+and defaults to `1000`; the effective per-manager cap is at least the requested
+page end (`page` / `pageSize`) so the current page can still be filled where
+possible. Bounded mode returns the authorized hits found before the cap and
+sets `totalIsExact` to `false` when the resolver hits the cap before observing
+an empty or partial backend page.
+
+Clients can override the configured mode per request with `totalMode:
+"exact"` or `totalMode: "bounded"`. Invalid values are rejected as GraphQL
+user-input errors.
+
 Note: GraphQL currently keys `types` off manager class names. If you override
 `type_label`, keep it aligned with the class name when using `types` filters.
 Generated search unions also look up GraphQL object types by manager class name
@@ -145,6 +172,7 @@ Example query:
 query SearchProjects($filters: JSONString) {
   search(index: "global", query: "alpha", filters: $filters, sortBy: "name") {
     total
+    totalIsExact
     results {
       __typename
       ... on ProjectType { id name status }
