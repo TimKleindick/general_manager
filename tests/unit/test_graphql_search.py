@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import date, datetime
+from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +16,7 @@ from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
+from general_manager.measurement.measurement import Measurement
 from general_manager.permission.base_permission import BasePermission
 from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.backend import SearchHit, SearchResult
@@ -894,3 +898,357 @@ class GraphQLSearchTests(SimpleTestCase):
         )
         names = [item.identification["id"] for item in response["results"]]
         assert names == [2, 3, 1]
+
+
+class GraphQLSearchHelperCoverageTests(SimpleTestCase):
+    def test_total_mode_and_sort_value_edge_cases(self) -> None:
+        with self.assertRaises(GraphQLError):
+            graphql_search_module.normalize_search_total_mode(object())  # type: ignore[arg-type]
+
+        assert graphql_search_module.normalize_search_sort_value(None) is None
+        assert graphql_search_module.normalize_search_sort_value(Decimal("1.5")) == 1.5
+
+        naive = datetime(2024, 1, 2, 3, 4, 5)
+        aware = graphql_search_module.normalize_search_sort_value(naive)
+        assert isinstance(aware, datetime)
+        assert aware.tzinfo is not None
+
+        date_value = graphql_search_module.normalize_search_sort_value(date(2024, 1, 2))
+        assert isinstance(date_value, datetime)
+        assert date_value.tzinfo is not None
+        assert graphql_search_module.normalize_search_sort_value(object()).startswith(
+            "<object object at"
+        )
+
+    def test_parse_filters_accepts_json_and_skips_malformed_items(self) -> None:
+        parsed = graphql_search_module.parse_search_filters(
+            '[{"field": "status", "values": ["public"]}, "bad", {"op": "exact"}]'
+        )
+
+        assert parsed == {"status__in": ["public"]}
+        assert graphql_search_module.parse_search_filters("{bad json") == {}
+
+    def test_permission_and_match_helpers_cover_empty_and_denied_paths(self) -> None:
+        assert graphql_search_module.merge_permission_filters(
+            {"status": "public"}, []
+        ) == {"status": "public"}
+
+        instance = SimpleNamespace(status="private")
+        assert not graphql_search_module.matches_filters(instance, {"status": "public"})
+
+        info = MagicMock()
+        project = Project(id=1)
+        permission_plan = SimpleNamespace(filters=[], requires_instance_check=True)
+        with patch.object(
+            graphql_search_module,
+            "get_read_permission_filter",
+            return_value=permission_plan,
+        ) as get_plan:
+            with patch.object(
+                graphql_search_module,
+                "can_read_instance",
+                return_value=False,
+            ) as can_read:
+                assert not graphql_search_module.passes_permission_filters(
+                    project,
+                    info,
+                )
+
+        get_plan.assert_called_once_with(Project, info)
+        can_read.assert_called_once_with(project, info)
+
+        denied_plan = SimpleNamespace(
+            filters=[{"filter": {"status": "public"}, "exclude": {}}],
+            requires_instance_check=False,
+        )
+        assert not graphql_search_module.passes_permission_filters(
+            instance, info, permission_plan=denied_plan
+        )
+
+    def test_search_union_empty_and_non_manager_resolution(self) -> None:
+        assert (
+            graphql_search_module.create_search_union({"Project": Project}, {}) is None
+        )
+
+        union = graphql_search_module.create_search_union(
+            {"Project": Project},
+            {"Project": MagicMock()},
+        )
+
+        assert union is not None
+        assert union.resolve_type(object(), MagicMock()) is None
+
+    def test_filter_options_cover_relation_measurement_and_relation_guards(
+        self,
+    ) -> None:
+        mapper = MagicMock(return_value=graphql_search_module.graphene.String())
+        relation_options = list(
+            graphql_search_module.get_filter_options(Project, "project", mapper)
+        )
+        assert relation_options == [("project", None)]
+
+        measurement_options = list(
+            graphql_search_module.get_filter_options(Measurement, "cost", mapper)
+        )
+        assert [name for name, _field in measurement_options] == [
+            "cost",
+            "cost__exact",
+            "cost__gt",
+            "cost__gte",
+            "cost__lt",
+            "cost__lte",
+        ]
+
+        registry: dict[str, type[graphql_search_module.graphene.InputObjectType]] = {}
+        assert (
+            graphql_search_module.get_relation_filter_option(
+                str,
+                "owner",
+                {"relation_kind": "direct"},
+                registry,
+                mapper,
+                remaining_depth=1,
+            )
+            is None
+        )
+        assert (
+            graphql_search_module.get_relation_filter_option(
+                Project,
+                "owner",
+                {"relation_kind": "unsupported"},
+                registry,
+                mapper,
+                remaining_depth=1,
+            )
+            is None
+        )
+        with patch.object(
+            graphql_search_module, "create_filter_options", return_value=None
+        ):
+            assert (
+                graphql_search_module.get_relation_filter_option(
+                    Project,
+                    "owner",
+                    {"relation_kind": "direct"},
+                    registry,
+                    mapper,
+                    remaining_depth=1,
+                )
+                is None
+            )
+
+    def test_create_filter_options_skips_unfilterable_props_and_empty_types(
+        self,
+    ) -> None:
+        class EmptyInterface(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):
+                """Return no filterable attributes."""
+                return {}
+
+            @classmethod
+            def get_graph_ql_properties(cls):
+                """Return no filterable GraphQL properties."""
+                return {}
+
+        class EmptyManager(GeneralManager):
+            Interface = EmptyInterface
+
+        EmptyInterface._parent_class = EmptyManager
+        mapper = MagicMock(return_value=graphql_search_module.graphene.String())
+        assert (
+            graphql_search_module.create_filter_options(EmptyManager, {}, mapper)
+            is None
+        )
+
+        prop = SimpleNamespace(filterable=False, graphql_type_hint=str)
+        with patch.object(
+            Project.Interface, "get_graph_ql_properties", return_value={"x": prop}
+        ):
+            filter_type = graphql_search_module.create_filter_options(
+                Project, {}, mapper
+            )
+
+        assert filter_type is not None
+        assert "x" not in filter_type._meta.fields
+
+    def test_normalize_id_and_relation_filter_edges(self) -> None:
+        assert (
+            graphql_search_module.normalize_id_filter_value(Project, "name", "A") == "A"
+        )
+
+        class NoIdInterface(BaseTestInterface):
+            input_fields: ClassVar[dict[str, Input]] = {}
+
+        class NoIdManager(GeneralManager):
+            Interface = NoIdInterface
+
+        NoIdInterface._parent_class = NoIdManager
+        assert (
+            graphql_search_module.normalize_id_filter_value(NoIdManager, "id", "1")
+            == "1"
+        )
+        assert (
+            graphql_search_module.normalize_id_filter_value(Project, "id__in", "1")
+            == "1"
+        )
+
+        class NoAttributeInterface(BaseTestInterface):
+            input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
+
+        class NoAttributeManager(GeneralManager):
+            Interface = NoAttributeInterface
+
+        NoAttributeInterface._parent_class = NoAttributeManager
+        assert graphql_search_module.normalize_filter_input(
+            NoAttributeManager,
+            {"status": "public"},
+        ) == {"filter": {"status": "public"}, "exclude": {}}
+
+        class LeafInterface(BaseTestInterface):
+            input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
+
+            @classmethod
+            def get_attribute_types(cls):
+                """Return simple leaf attributes for nested relation filters."""
+                return {"id": {"type": int}, "status": {"type": str}}
+
+        class LeafManager(GeneralManager):
+            Interface = LeafInterface
+
+        LeafInterface._parent_class = LeafManager
+
+        class RelationInterface(BaseTestInterface):
+            input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
+
+            @classmethod
+            def get_attribute_types(cls):
+                """Return direct, collection, and unsupported relation metadata."""
+                return {
+                    "owner": {
+                        "type": LeafManager,
+                        "relation_kind": "direct",
+                        "filter_lookup": "owner",
+                    },
+                    "members": {
+                        "type": LeafManager,
+                        "relation_kind": "collection",
+                        "filter_lookup": "members",
+                    },
+                    "legacy": {
+                        "type": LeafManager,
+                        "relation_kind": "legacy",
+                    },
+                    "plain_relation": {"type": LeafManager},
+                }
+
+        class RelationManager(GeneralManager):
+            Interface = RelationInterface
+
+        RelationInterface._parent_class = RelationManager
+
+        normalized = graphql_search_module.normalize_filter_input(
+            RelationManager,
+            {
+                "owner": {"status": "public", "id": "2"},
+                "members": {
+                    "any": {"status": "active"},
+                    "none": {"status": "inactive"},
+                },
+                "legacy": {"status": "ignored"},
+                "plain_relation": {"status": "plain"},
+            },
+        )
+
+        assert normalized == {
+            "filter": {
+                "owner__status": "public",
+                "owner__id": 2,
+                "members__status": "active",
+                "legacy": {"status": "ignored"},
+                "plain_relation": {"status": "plain"},
+            },
+            "exclude": {"members__status": "inactive"},
+        }
+
+    def test_register_search_query_guard_paths_and_resolver_errors(self) -> None:
+        existing_union = MagicMock()
+        existing_result = MagicMock()
+        query_fields = {"search": object()}
+
+        assert graphql_search_module.register_search_query(
+            query_fields,
+            {},
+            {},
+            existing_union,
+            existing_result,
+        ) == (existing_union, existing_result)
+
+        with patch.object(
+            graphql_search_module, "create_search_union", return_value=None
+        ):
+            assert graphql_search_module.register_search_query(
+                {},
+                {"Project": Project},
+                {"Project": MagicMock()},
+                None,
+                existing_result,
+            ) == (None, existing_result)
+
+        with patch.object(
+            graphql_search_module,
+            "validate_filter_keys",
+            side_effect=ValueError("bad filter"),
+        ):
+            query_fields = {}
+            graphql_search_module.register_search_query(
+                query_fields,
+                {"Project": Project},
+                {"Project": MagicMock()},
+                None,
+                None,
+            )
+            with self.assertRaises(GraphQLError):
+                query_fields["search"].resolver(
+                    None,
+                    MagicMock(),
+                    query="",
+                    filters={"status": "public"},
+                )
+
+    def test_resolver_logs_instantiation_failures(self) -> None:
+        query_fields = {}
+        graphql_search_module.register_search_query(
+            query_fields,
+            {"Project": Project},
+            {"Project": MagicMock()},
+            None,
+            None,
+        )
+        backend = MagicMock()
+        backend.search.side_effect = [
+            SearchResult(
+                hits=[
+                    SearchHit(
+                        id="bad",
+                        type="Project",
+                        identification={},
+                        score=1.0,
+                        data={"name": "Bad"},
+                    )
+                ],
+                total=1,
+                took_ms=1,
+                raw={},
+            ),
+            SearchResult(hits=[], total=0, took_ms=1, raw={}),
+        ]
+        info = MagicMock()
+        with patch.object(
+            graphql_search_module, "get_search_backend", return_value=backend
+        ):
+            with patch.object(graphql_search_module.logger, "debug") as debug:
+                response = query_fields["search"].resolver(None, info, query="")
+
+        assert response["results"] == []
+        debug.assert_called_once()

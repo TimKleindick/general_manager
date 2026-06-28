@@ -83,6 +83,7 @@ SEARCH_TOTAL_SCAN_LIMIT_ERROR = (
 
 
 def _bad_user_input_error(message: str) -> GraphQLError:
+    """Build a GraphQL user-input error with the shared extension code."""
     return GraphQLError(message, extensions={"code": _BAD_USER_INPUT_CODE})
 
 
@@ -109,11 +110,13 @@ def _resolve_search_pagination(
 
 
 def _invalid_search_total_mode_error(setting_label: str) -> GraphQLError:
+    """Build the validation error for an invalid total-mode value."""
     message = f"{setting_label} {SEARCH_TOTAL_MODE_ERROR}"
     return _bad_user_input_error(message)
 
 
 def normalize_search_total_mode(total_mode: str | None = None) -> SearchTotalMode:
+    """Resolve and validate the requested GraphQL search total-count mode."""
     if total_mode is None:
         raw_mode = get_setting("GRAPHQL_SEARCH_TOTAL_MODE", "exact")
         setting_label = 'GENERAL_MANAGER["GRAPHQL_SEARCH_TOTAL_MODE"]'
@@ -131,6 +134,7 @@ def normalize_search_total_mode(total_mode: str | None = None) -> SearchTotalMod
 
 
 def get_graphql_search_total_scan_limit() -> int:
+    """Return the configured positive scan limit for bounded total counts."""
     raw_limit = get_setting(
         "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT",
         DEFAULT_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT,
@@ -175,6 +179,7 @@ def sort_search_hit_entries(
         def _sort_key(
             item: SearchHitEntry,
         ) -> tuple[bool, SortableValue]:
+            """Return a null-last comparable key for an indexed search hit."""
             value = item[1].data.get(sort_by) if item[1].data else None
             normalized = normalize_search_sort_value(value)
             return (normalized is None, normalized)
