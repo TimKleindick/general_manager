@@ -1,7 +1,12 @@
 from django.test import TransactionTestCase
 from django.db import models, connection, connections
 from django.core.exceptions import ValidationError
-from general_manager.factory.auto_factory import AutoFactory
+from general_manager.factory.auto_factory import (
+    AutoFactory,
+    InvalidGeneratedObjectError,
+    UndefinedAdjustmentMethodError,
+)
+from types import SimpleNamespace
 from typing import Any, ClassVar, Iterable
 from unittest.mock import patch
 
@@ -235,6 +240,36 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertEqual(DummyModel2.objects.count(), 0)
         with self.assertRaises(ValueError):
             instance.dummy_m2m.count()
+
+    def test_edge_helpers_cover_error_and_fallback_paths(self):
+        """
+        AutoFactory helper edge paths should preserve their documented fallback behavior.
+        """
+        self.assertEqual(
+            str(InvalidGeneratedObjectError()),
+            "Generated object is not a Django model instance.",
+        )
+
+        with self.assertRaises(UndefinedAdjustmentMethodError):
+            self.factory_class._AutoFactory__create_with_generate_func(
+                use_creation_method=False,
+                params={},
+            )
+
+        relation_stub = SimpleNamespace(dummy_model_id=123)
+        self.assertEqual(
+            self.factory_class2._resolve_identification_value(
+                relation_stub,
+                "dummy_model",
+            ),
+            123,
+        )
+
+        raw_value = object()
+        self.assertEqual(
+            self.factory_class2._coerce_many_to_many_values(raw_value),
+            [raw_value],
+        )
 
     def test_generate_instance_with_generate_function(self):
         """
