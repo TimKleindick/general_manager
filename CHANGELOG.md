@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.58.0 (2026-06-28)
+
+### Bug Fixes
+
+- Keep search sort nulls last
+  ([`9f7a715`](https://github.com/TimKleindick/general_manager/commit/9f7a7158569f5ea13b3899502d05cbc29e960a85))
+
+### Features
+
+- Add bounded GraphQL search totals
+  ([`de82413`](https://github.com/TimKleindick/general_manager/commit/de82413f904f7889e9f19b3ede6de3fa418d00f1))
+
+### Testing
+
+- Raise graphql search coverage
+  ([`9248f93`](https://github.com/TimKleindick/general_manager/commit/9248f9392a3aa207da29b765af7bfc81f447bf26))
+
+
 ## v0.57.4 (2026-06-28)
 
 ### Bug Fixes
