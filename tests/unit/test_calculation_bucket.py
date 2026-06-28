@@ -52,6 +52,17 @@ class DummyGeneralManager:
 DummyCalculationInterface._parent_class = DummyGeneralManager
 
 
+class CountingIterable:
+    def __init__(self, values):
+        self.values = values
+        self.yield_count = 0
+
+    def __iter__(self):
+        for value in self.values:
+            self.yield_count += 1
+            yield value
+
+
 @patch(
     "general_manager.bucket.calculation_bucket.parse_filters",
     return_value={"dummy": {"filter_kwargs": {}}},
@@ -904,6 +915,170 @@ class TestCalculationBucketAdditional(TestCase):
         s = str(bucket)
         self.assertTrue(s.startswith("CalculationBucket (5)["))
         self.assertNotIn("...", s)
+
+    @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
+    def test_str_uses_cached_combinations_with_exact_count(self, _mock_parse):
+        bucket = CalculationBucket(DummyGeneralManager)
+        bucket._data = [{"x": i} for i in range(7)]
+
+        with patch.object(
+            bucket,
+            "generate_combinations",
+            side_effect=AssertionError("str should use cached combinations directly"),
+        ):
+            s = str(bucket)
+
+        self.assertTrue(s.startswith("CalculationBucket (7)["))
+        self.assertIn("DummyGeneralManager(**{'x': 0})", s)
+        self.assertIn("...", s)
+
+    @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
+    def test_str_counts_uncached_small_preview_exactly_without_caching(
+        self, _mock_parse
+    ):
+        values = CountingIterable(range(3))
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "n": Input(type=int, possible_values=values),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+
+        s = str(bucket)
+
+        self.assertTrue(s.startswith("CalculationBucket (3)["))
+        self.assertIn("DynManager(**{'n': 0})", s)
+        self.assertIn("DynManager(**{'n': 2})", s)
+        self.assertNotIn("...", s)
+        self.assertIsNone(bucket._data)
+        self.assertEqual(values.yield_count, 3)
+
+    @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
+    def test_str_bounds_uncached_large_preview_without_caching(self, _mock_parse):
+        values = CountingIterable(range(1000))
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "n": Input(type=int, possible_values=values),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+
+        s = str(bucket)
+
+        self.assertTrue(s.startswith("CalculationBucket (5+)["))
+        self.assertIn("DynManager(**{'n': 0})", s)
+        self.assertIn("DynManager(**{'n': 4})", s)
+        self.assertNotIn("DynManager(**{'n': 5})", s)
+        self.assertIn("...", s)
+        self.assertIsNone(bucket._data)
+        self.assertLessEqual(values.yield_count, 6)
+
+    @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
+    def test_str_preserves_static_iterator_possible_values(self, _mock_parse):
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "n": Input(type=int, possible_values=iter(range(10))),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+
+        s = str(bucket)
+        combinations = bucket.generate_combinations()
+
+        self.assertTrue(s.startswith("CalculationBucket (10)["))
+        self.assertEqual(combinations, [{"n": value} for value in range(10)])
+
+    @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
+    def test_generate_combinations_snapshots_iterables_before_dependencies(
+        self,
+        _mock_parse,
+    ):
+        class StatefulValues:
+            def __init__(self):
+                self.remaining = [1, 2]
+
+            def __iter__(self):
+                while self.remaining:
+                    yield self.remaining.pop(0)
+
+        values = StatefulValues()
+
+        def dependent_values(_a):
+            values.remaining.clear()
+            return [10]
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "a": Input(type=int, possible_values=values),
+                "b": Input(
+                    type=int,
+                    possible_values=dependent_values,
+                    depends_on=["a"],
+                ),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+
+        combinations = bucket.generate_combinations()
+
+        self.assertEqual(
+            combinations,
+            [{"a": 1, "b": 10}, {"a": 2, "b": 10}],
+        )
+
+    @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
+    def test_str_preserves_sorted_preview_order(self, _mock_parse):
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "n": Input(type=int, possible_values=[3, 1, 2]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager, sort_key="n")
+
+        s = str(bucket)
+
+        first = s.index("DynManager(**{'n': 1})")
+        second = s.index("DynManager(**{'n': 2})")
+        third = s.index("DynManager(**{'n': 3})")
+        self.assertLess(first, second)
+        self.assertLess(second, third)
 
     @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
     def test_generate_combinations_callable_returning_empty(self, _mock_parse):
