@@ -503,6 +503,39 @@ class GraphQLSearchTests(SimpleTestCase):
             "Beta Project",
         ]
 
+    def test_search_hit_window_keeps_null_sort_values_last_when_descending(
+        self,
+    ) -> None:
+        entries = [
+            (
+                None,
+                SearchHit(
+                    id=str(row_id),
+                    type="Project",
+                    identification={"id": row_id},
+                    data=data,
+                ),
+                Project(id=row_id),
+            )
+            for row_id, data in [
+                (1, {"rank": 10}),
+                (2, {}),
+                (3, {"rank": 5}),
+            ]
+        ]
+
+        graphql_search_module.trim_search_hit_entries_to_window(
+            entries,
+            requested_count=2,
+            sort_by="rank",
+            sort_desc=True,
+        )
+
+        assert [entry[2].identification for entry in entries] == [
+            {"id": 1},
+            {"id": 3},
+        ]
+
     @override_settings(
         GENERAL_MANAGER={
             "GRAPHQL_SEARCH_TOTAL_MODE": "bounded",
@@ -902,8 +935,9 @@ class GraphQLSearchTests(SimpleTestCase):
 
 class GraphQLSearchHelperCoverageTests(SimpleTestCase):
     def test_total_mode_and_sort_value_edge_cases(self) -> None:
+        bad_mode: Any = object()
         with self.assertRaises(GraphQLError):
-            graphql_search_module.normalize_search_total_mode(object())  # type: ignore[arg-type]
+            graphql_search_module.normalize_search_total_mode(bad_mode)
 
         assert graphql_search_module.normalize_search_sort_value(None) is None
         assert graphql_search_module.normalize_search_sort_value(Decimal("1.5")) == 1.5
@@ -1244,6 +1278,7 @@ class GraphQLSearchHelperCoverageTests(SimpleTestCase):
             SearchResult(hits=[], total=0, took_ms=1, raw={}),
         ]
         info = MagicMock()
+        info.context.user = AnonymousUser()
         with patch.object(
             graphql_search_module, "get_search_backend", return_value=backend
         ):
