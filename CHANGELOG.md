@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.57.1 (2026-06-28)
+
+### Bug Fixes
+
+- Validate tuple mutation return length
+  ([`c3aac7b`](https://github.com/TimKleindick/general_manager/commit/c3aac7b44d7d43a8a3632f27112e27a8e3435627))
+
+
 ## v0.57.0 (2026-06-27)
 
 ### Bug Fixes
