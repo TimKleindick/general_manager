@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.57.2 (2026-06-28)
+
+### Bug Fixes
+
+- Validate graphql search pagination
+  ([`f358064`](https://github.com/TimKleindick/general_manager/commit/f358064d853881e36d718d720a743c634fb97762))
+
+
 ## v0.57.1 (2026-06-28)
 
 ### Bug Fixes
