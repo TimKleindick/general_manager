@@ -103,6 +103,29 @@ class DuplicateMutationOutputNameError(ValueError):
         )
 
 
+class MutationTupleReturnLengthMismatchError(ValueError):
+    """Raised when a tuple-annotated mutation returns the wrong number of values."""
+
+    def __init__(
+        self,
+        function_name: str,
+        expected_count: int,
+        received_count: int,
+    ) -> None:
+        """
+        Initialize the exception indicating a tuple return length mismatch.
+
+        Parameters:
+            function_name (str): Name of the mutation function that returned values.
+            expected_count (int): Number of tuple values declared by the annotation.
+            received_count (int): Number of tuple values returned by the resolver.
+        """
+        super().__init__(
+            f"Mutation {function_name} expected {expected_count} "
+            f"tuple return values but received {received_count}."
+        )
+
+
 def _is_general_manager_type(annotation: object) -> TypeGuard[type[GeneralManager]]:
     """Return True for class annotations that subclass GeneralManager."""
     return inspect.isclass(annotation) and issubclass(annotation, GeneralManager)
@@ -389,11 +412,9 @@ def graph_ql_mutation(
             raise MissingMutationReturnAnnotationError(fn.__name__)
 
         # Unpack tuple return or single
-        out_types = (
-            list(get_args(return_ann))
-            if get_origin(return_ann) in (tuple, Tuple)
-            else [return_ann]
-        )
+        return_origin = get_origin(return_ann)
+        is_tuple_return = return_origin in (tuple, Tuple)
+        out_types = list(get_args(return_ann)) if is_tuple_return else [return_ann]
         for out in out_types:
             is_named_type = isinstance(out, TypeAliasType)
             is_type = isinstance(out, type)
@@ -436,16 +457,22 @@ def graph_ql_mutation(
                     permission.check(normalized_kwargs, info.context.user)
                 result = fn(info, **normalized_kwargs)
                 data: MutationData = {}
-                if isinstance(result, tuple):
+                if is_tuple_return:
+                    result_values = result if isinstance(result, tuple) else (result,)
+                    expected_count = len(out_types)
+                    received_count = len(result_values)
+                    if received_count != expected_count:
+                        raise MutationTupleReturnLengthMismatchError(
+                            fn.__name__,
+                            expected_count,
+                            received_count,
+                        )
                     # unpack according to outputs ordering after success
-                    for (field, _), val in zip(
-                        outputs.items(),
-                        [None, *list(result)],
-                        strict=False,  # None for success field to be set later
+                    for field, val in zip(
+                        (field for field in outputs if field != "success"),
+                        result_values,
+                        strict=True,
                     ):
-                        # skip success
-                        if field == "success":
-                            continue
                         data[field] = val
                 else:
                     only = next(k for k in outputs if k != "success")
