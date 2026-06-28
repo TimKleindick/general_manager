@@ -105,12 +105,12 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     The factory inspects the bound ORM interface, fills missing model fields with
     generated values or declared defaults, applies many-to-many relations after
-    model construction, and wraps created objects back into GeneralManager
-    instances. Build strategy returns Django model instances; create strategy
-    returns manager wrappers. Subclasses are generated with an ORM interface that
-    provides ``handle_custom_fields()``, ``input_fields``,
-    ``format_identification()``, and ``_parent_class`` for created-object
-    wrapping.
+    saved creation, and wraps created objects back into GeneralManager instances.
+    Build strategy returns unsaved Django model instances and skips
+    many-to-many assignment; create strategy returns manager wrappers.
+    Subclasses are generated with an ORM interface that provides
+    ``handle_custom_fields()``, ``input_fields``, ``format_identification()``,
+    and ``_parent_class`` for created-object wrapping.
     """
 
     interface: type[OrmInterfaceBase[models.Model]]
@@ -127,14 +127,11 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         caller-supplied values already present in `params` win. factory_boy then
         dispatches to `_build()` or `_create()`, where many-to-many values are
         stripped from constructor kwargs and foreign-key/one-to-one values are
-        coerced before `_adjustmentMethod` is called. After model construction,
-        this hook applies many-to-many assignments from the original `params`
-        and wraps created models into manager instances for create strategy.
-
-        Many-to-many assignment is attempted for both build and create strategy.
-        Django requires saved instances for many-to-many `.set(...)`; therefore
-        build calls with explicit or generated many-to-many values are
-        unsupported and may raise Django's unsaved-instance relation error.
+        coerced before `_adjustmentMethod` is called. Create strategy then
+        applies many-to-many assignments from the original `params` to saved
+        models and wraps them into manager instances. Build strategy returns the
+        unsaved model instance(s) without attempting many-to-many assignment,
+        even when explicit or declared many-to-many values were supplied.
 
         Parameters:
             strategy (Literal["build", "create"]): "build" returns unsaved model instance(s); "create" saves model instance(s) and returns GeneralManager wrapper(s).
@@ -202,8 +199,10 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             for item in obj:
                 if not isinstance(item, models.Model):
                     raise InvalidGeneratedObjectError()
-                cls._handle_many_to_many_fields_after_creation(item, params)
-        else:
+            if strategy == "create":
+                for item in obj:
+                    cls._handle_many_to_many_fields_after_creation(item, params)
+        elif strategy == "create":
             cls._handle_many_to_many_fields_after_creation(obj, params)
         if strategy == "create":
             return cls._wrap_generated_objects(obj)
@@ -214,7 +213,11 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         cls, obj: models.Model, attrs: FactoryParams
     ) -> None:
         """
-        Assign related objects to many-to-many fields after creation/building.
+        Assign related objects to many-to-many fields after saved creation.
+
+        Build strategy returns unsaved models and must skip this method because
+        Django many-to-many managers require the source instance to have a
+        primary key before `.set(...)` can be used.
 
         Parameters:
             obj (models.Model): Instance whose many-to-many relations should be populated.

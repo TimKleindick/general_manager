@@ -208,6 +208,44 @@ class AutoFactoryIntegrationTest(GeneralManagerTransactionTestCase):
         bucket_ids = {manager.identification["id"] for manager in options_bucket}
         self.assertSetEqual(bucket_ids, expected_option_ids)
 
+    def test_factory_build_with_many_to_many_values_returns_unsaved_model_without_assignment(
+        self,
+    ) -> None:
+        """
+        AutoFactory build returns an unsaved model and skips provided many-to-many assignments.
+        """
+        manufacturer = self.Manufacturer.create(
+            creator_id=None,
+            name="Build Manufacturer",
+            country="US",
+            ignore_permission=True,
+        )
+        option_a = self.CarOption.create(
+            creator_id=None,
+            label="Build Comfort Package",
+            ignore_permission=True,
+        )
+        option_b = self.CarOption.create(
+            creator_id=None,
+            label="Build Safety Package",
+            ignore_permission=True,
+        )
+
+        car = self.Car.Factory.build(
+            name="Built Car With Packages",
+            manufacturer=manufacturer,
+            options=[option_a, option_b],
+            changed_by=self.user,
+        )
+
+        self.assertIsInstance(car, self.Car.Interface._model)
+        self.assertIsNone(car.pk)
+        self.assertEqual(car.name, "Built Car With Packages")
+        self.assertEqual(car.manufacturer_id, manufacturer.identification["id"])
+        self.assertEqual(self.Car.Interface._model.objects.count(), 0)
+        with self.assertRaises(ValueError):
+            car.options.count()
+
     def test_factory_adjustment_method_returns_managers(self) -> None:
         """
         Factories using _adjustmentMethod should return GeneralManager instances and persist each record.
