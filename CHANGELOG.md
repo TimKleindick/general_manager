@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.57.4 (2026-06-28)
+
+### Bug Fixes
+
+- Bound calculation bucket string preview
+  ([`328528d`](https://github.com/TimKleindick/general_manager/commit/328528d7be790c5681f5bcfcc924454b84ab5ac0))
+
+- Preserve calculation preview dependencies
+  ([`7dfd3ec`](https://github.com/TimKleindick/general_manager/commit/7dfd3ec046472ab23162ea125426ebee24a42879))
+
+### Testing
+
+- Cover readonly scalar row validation
+  ([`aeee5e7`](https://github.com/TimKleindick/general_manager/commit/aeee5e7b1c0c1cf724cddd5f2c8deb4e3b565cbe))
+
+- Raise calculation bucket coverage
+  ([`1589fd5`](https://github.com/TimKleindick/general_manager/commit/1589fd5c1fb464cce6955bb7ecb36a550ac9902b))
+
+
 ## v0.57.3 (2026-06-28)
 
 ### Bug Fixes
