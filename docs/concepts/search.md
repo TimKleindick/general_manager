@@ -119,19 +119,20 @@ Results are returned as a union of manager GraphQL types:
 - `took_ms`: nullable integer field containing accumulated backend search time in milliseconds when reported.
 - `raw`: nullable JSON string field containing a list of backend-specific raw response payloads.
 
-`page` defaults to `1` and `pageSize` defaults to `10`; falsey values such as
-`0` currently fall back to those defaults. The resolver searches each selected
-manager type, instantiates managers from hit identification, then applies read
-permission filters and any required per-instance read checks before counting
-and returning results. Manager search order follows GraphQL's manager registry
-order filtered to managers with search config. When `types` is supplied,
-unknown manager class names are ignored. Malformed hit identification that
-raises `TypeError`, `ValueError`, or `KeyError` while constructing the manager
-is skipped. Invalid configured filter keys are reported as GraphQL errors.
-Backend lookup/search errors, other manager construction errors, permission
-errors, and sort comparison errors propagate. `sortBy` is not validated ahead of
-time; sorting reads each hit's `data[sortBy]` when present and otherwise sorts
-that hit as `null`/last before applying `sortDesc`.
+Omitted `page` defaults to `1` and omitted `pageSize` defaults to `10`.
+Explicit `0` or negative pagination values are rejected as GraphQL
+`BAD_USER_INPUT` errors. The resolver searches each selected manager type,
+instantiates managers from hit identification, then applies read permission
+filters and any required per-instance read checks before counting and returning
+results. Manager search order follows GraphQL's manager registry order filtered
+to managers with search config. When `types` is supplied, unknown manager class
+names are ignored. Malformed hit identification that raises `TypeError`,
+`ValueError`, or `KeyError` while constructing the manager is skipped. Invalid
+configured filter keys are reported as GraphQL errors. Backend lookup/search
+errors, other manager construction errors, permission errors, and sort
+comparison errors propagate. `sortBy` is not validated ahead of time; sorting
+reads each hit's `data[sortBy]` when present and otherwise sorts that hit as
+`null`/last before applying `sortDesc`.
 
 Note: GraphQL currently keys `types` off manager class names. If you override
 `type_label`, keep it aligned with the class name when using `types` filters.

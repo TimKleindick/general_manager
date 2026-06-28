@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 from django.contrib.auth.models import AnonymousUser
 from django.test import SimpleTestCase
+from graphql import GraphQLError
 
 from general_manager.api.graphql import GraphQL
 from general_manager.apps import GeneralmanagerConfig
@@ -255,6 +256,153 @@ class GraphQLSearchTests(SimpleTestCase):
         assert len(response["results"]) == 1
         ProjectInterface.data_store.pop(3, None)
         ProjectInterface.data_store.pop(4, None)
+
+    def test_graphql_search_omitted_pagination_uses_first_page_default_size(
+        self,
+    ) -> None:
+        added_ids = range(3, 14)
+        for item_id in added_ids:
+            self.addCleanup(ProjectInterface.data_store.pop, item_id, None)
+            ProjectInterface.data_store[item_id] = {
+                "name": f"Project {item_id}",
+                "status": "public",
+            }
+        indexer = SearchIndexer(backend_registry.get_search_backend())
+        for item_id in added_ids:
+            indexer.index_instance(Project(id=item_id))
+
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=None,
+            page=None,
+            page_size=None,
+        )
+
+        assert response["total"] == 12
+        assert len(response["results"]) == 10
+
+    def test_graphql_search_positive_pagination_returns_requested_page(self) -> None:
+        added_rows = {
+            3: {"name": "Gamma", "status": "public"},
+            4: {"name": "Delta", "status": "public"},
+        }
+        for item_id, row in added_rows.items():
+            self.addCleanup(ProjectInterface.data_store.pop, item_id, None)
+            ProjectInterface.data_store[item_id] = row
+        indexer = SearchIndexer(backend_registry.get_search_backend())
+        for item_id in added_rows:
+            indexer.index_instance(Project(id=item_id))
+
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=None,
+            sort_by="name",
+            page=2,
+            page_size=2,
+        )
+
+        assert response["total"] == 3
+        assert [item.identification for item in response["results"]] == [{"id": 3}]
+
+    def test_graphql_search_rejects_zero_page(self) -> None:
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with self.assertRaisesRegex(
+            GraphQLError,
+            "page must be a positive integer",
+        ) as ctx:
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=None,
+                filters=None,
+                page=0,
+                page_size=10,
+            )
+        assert ctx.exception.extensions["code"] == "BAD_USER_INPUT"
+
+    def test_graphql_search_rejects_zero_page_size(self) -> None:
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with self.assertRaisesRegex(
+            GraphQLError,
+            "pageSize must be a positive integer",
+        ) as ctx:
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=None,
+                filters=None,
+                page=1,
+                page_size=0,
+            )
+        assert ctx.exception.extensions["code"] == "BAD_USER_INPUT"
+
+    def test_graphql_search_rejects_negative_page(self) -> None:
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with self.assertRaisesRegex(
+            GraphQLError,
+            "page must be a positive integer",
+        ) as ctx:
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=None,
+                filters=None,
+                page=-1,
+                page_size=10,
+            )
+        assert ctx.exception.extensions["code"] == "BAD_USER_INPUT"
+
+    def test_graphql_search_rejects_negative_page_size(self) -> None:
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with self.assertRaisesRegex(
+            GraphQLError,
+            "pageSize must be a positive integer",
+        ) as ctx:
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=None,
+                filters=None,
+                page=1,
+                page_size=-1,
+            )
+        assert ctx.exception.extensions["code"] == "BAD_USER_INPUT"
 
     def test_graphql_search_permission_filters_override_user_filters(self) -> None:
         field = GraphQL._query_fields["search"]

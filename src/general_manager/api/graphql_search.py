@@ -69,6 +69,31 @@ GrapheneReadMapper = Callable[
 SearchResolverPayload = dict[str, object]
 SearchHitEntry = tuple[float | None, SearchHit, GeneralManager]
 SortableValue = float | datetime | str | None
+_BAD_USER_INPUT_CODE = "BAD_USER_INPUT"
+_PAGE_MUST_BE_POSITIVE = "page must be a positive integer."
+_PAGE_SIZE_MUST_BE_POSITIVE = "pageSize must be a positive integer."
+
+
+def _resolve_search_pagination(
+    page: int | None,
+    page_size: int | None,
+) -> tuple[int, int]:
+    """
+    Resolve omitted search pagination arguments and reject non-positive values.
+    """
+    current_page = 1 if page is None else page
+    limit = 10 if page_size is None else page_size
+    if current_page <= 0:
+        raise GraphQLError(
+            _PAGE_MUST_BE_POSITIVE,
+            extensions={"code": _BAD_USER_INPUT_CODE},
+        )
+    if limit <= 0:
+        raise GraphQLError(
+            _PAGE_SIZE_MUST_BE_POSITIVE,
+            extensions={"code": _BAD_USER_INPUT_CODE},
+        )
+    return current_page, limit
 
 
 # ---------------------------------------------------------------------------
@@ -803,15 +828,14 @@ def register_search_query(
         The resolver parses user filters, validates configured filter keys,
         searches each selected manager type, instantiates manager objects from
         hit identification, applies read permission filters/instance checks, and
-        returns paginated authorized manager instances. ``page`` and
-        ``page_size`` values that are ``None`` or falsey fall back to ``1`` and
-        ``10`` respectively. Backend raw payloads are collected once per backend
-        request in the ``raw`` list.
+        returns paginated authorized manager instances. Omitted ``page`` and
+        ``page_size`` values default to ``1`` and ``10`` respectively. Supplied
+        non-positive values raise a ``GraphQLError``. Backend raw payloads are
+        collected once per backend request in the ``raw`` list.
         """
         index_name = index or "global"
-        limit = page_size or 10
-        current_page = page or 1
-        offset = max(current_page - 1, 0) * limit
+        current_page, limit = _resolve_search_pagination(page, page_size)
+        offset = (current_page - 1) * limit
         parsed_filters = parse_search_filters(filters)
         if parsed_filters:
             try:
