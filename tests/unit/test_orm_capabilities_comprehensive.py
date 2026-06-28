@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime, timedelta
@@ -14,6 +15,7 @@ from django.utils import timezone
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.capabilities.orm import (
     HistoryNotSupportedError,
+    OrmDeleteCapability,
     OrmHistoryCapability,
     OrmLifecycleCapability,
     OrmMutationCapability,
@@ -23,7 +25,10 @@ from general_manager.interface.capabilities.orm import (
     OrmValidationCapability,
     SoftDeleteCapability,
 )
-from general_manager.interface.capabilities.orm.mutations import _normalize_payload
+from general_manager.interface.capabilities.orm.mutations import (
+    _assign_history_actor,
+    _normalize_payload,
+)
 from general_manager.interface.capabilities.orm.support import (
     AmbiguousReverseFilterAliasError,
     _build_reverse_filter_alias_map,
@@ -33,6 +38,10 @@ from general_manager.interface.capabilities.orm.support import (
 )
 from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
     PayloadNormalizer,
+)
+from general_manager.interface.utils.errors import (
+    InvalidFieldTypeError,
+    InvalidFieldValueError,
 )
 
 
@@ -1689,6 +1698,187 @@ class TestOrmMutationCapability:
 
             assert mock_instance.name == "test"
             # Should not have set 'skipped' attribute
+
+    def test_assign_simple_attributes_wraps_assignment_errors(self):
+        """Test that assignment ValueError and TypeError are wrapped consistently."""
+        capability = OrmMutationCapability()
+        interface_cls = Mock()
+
+        class ValueRejectingInstance:
+            def __setattr__(self, key, value):
+                """Raise ValueError for the field used by this test."""
+                if key == "bad":
+                    raise ValueError("invalid")
+                super().__setattr__(key, value)
+
+        class TypeRejectingInstance:
+            def __setattr__(self, key, value):
+                """Raise TypeError for the field used by this test."""
+                if key == "bad":
+                    raise TypeError("invalid")
+                super().__setattr__(key, value)
+
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.call_with_observability",
+            side_effect=lambda *_args, **kwargs: kwargs["func"](),
+        ):
+            with pytest.raises(InvalidFieldValueError):
+                capability.assign_simple_attributes(
+                    interface_cls,
+                    ValueRejectingInstance(),
+                    {"bad": "value"},
+                )
+            with pytest.raises(InvalidFieldTypeError):
+                capability.assign_simple_attributes(
+                    interface_cls,
+                    TypeRejectingInstance(),
+                    {"bad": "value"},
+                )
+
+    def test_save_with_history_uses_database_alias(self):
+        """Test that save_with_history stores and uses the configured database alias."""
+        capability = OrmMutationCapability()
+        interface_cls = Mock()
+        instance = Mock()
+        instance.pk = 42
+        instance._state = SimpleNamespace(db=None)
+        support = Mock()
+        support.get_database_alias.return_value = "replica"
+
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.call_with_observability",
+            side_effect=lambda *_args, **kwargs: kwargs["func"](),
+        ):
+            with patch(
+                "general_manager.interface.capabilities.orm.mutations.get_support_capability",
+                return_value=support,
+            ):
+                with patch(
+                    "general_manager.interface.capabilities.orm.mutations._assign_history_actor"
+                ):
+                    with patch(
+                        "general_manager.interface.capabilities.orm.mutations.call_update_change_reason"
+                    ):
+                        with patch(
+                            "general_manager.interface.capabilities.orm.mutations.model_has_field",
+                            return_value=False,
+                        ):
+                            with patch(
+                                "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
+                                return_value=nullcontext(),
+                            ):
+                                result = capability.save_with_history(
+                                    interface_cls,
+                                    instance,
+                                    creator_id=7,
+                                    history_comment="saved",
+                                )
+
+        assert result == 42
+        assert instance._state.db == "replica"
+        instance.save.assert_called_once_with(using="replica")
+
+    def test_delete_hard_deletes_with_database_alias(self):
+        """Test that hard delete records metadata and deletes via the configured alias."""
+        capability = OrmDeleteCapability()
+        interface_instance = SimpleNamespace(pk=5)
+        model_instance = Mock()
+        support = Mock()
+        manager = Mock()
+        support.get_manager.return_value = manager
+        support.get_database_alias.return_value = "archive"
+        manager.get.return_value = model_instance
+
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.call_with_observability",
+            side_effect=lambda *_args, **kwargs: kwargs["func"](),
+        ):
+            with patch(
+                "general_manager.interface.capabilities.orm.mutations.get_support_capability",
+                return_value=support,
+            ):
+                with patch(
+                    "general_manager.interface.capabilities.orm.mutations._mutation_capability_for",
+                    return_value=OrmMutationCapability(),
+                ):
+                    with patch(
+                        "general_manager.interface.capabilities.orm.mutations.is_soft_delete_enabled",
+                        return_value=False,
+                    ):
+                        with patch(
+                            "general_manager.interface.capabilities.orm.mutations._assign_history_actor"
+                        ) as assign_actor:
+                            with patch(
+                                "general_manager.interface.capabilities.orm.mutations.model_has_field",
+                                return_value=True,
+                            ):
+                                with patch(
+                                    "general_manager.interface.capabilities.orm.mutations.call_update_change_reason"
+                                ) as update_reason:
+                                    with patch(
+                                        "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
+                                        return_value=nullcontext(),
+                                    ):
+                                        with patch(
+                                            "general_manager.interface.capabilities.orm.mutations.discard_orm_instance_cache"
+                                        ) as discard_cache:
+                                            result = capability.delete(
+                                                interface_instance,
+                                                creator_id=9,
+                                                history_comment="remove",
+                                            )
+
+        assert result == {"id": 5}
+        assign_actor.assert_called_once_with(
+            model_instance,
+            creator_id=9,
+            database_alias="archive",
+        )
+        assert model_instance.changed_by_id == 9
+        update_reason.assert_called_once_with(model_instance, "remove (deleted)")
+        model_instance.delete.assert_called_once_with(using="archive")
+        discard_cache.assert_called_once_with(interface_instance.__class__, 5)
+
+    def test_assign_history_actor_handles_none_and_database_alias(self):
+        """Test history actor assignment with no creator and an aliased creator lookup."""
+        instance_without_creator = SimpleNamespace()
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.model_has_field",
+            return_value=False,
+        ):
+            _assign_history_actor(
+                instance_without_creator,
+                creator_id=None,
+                database_alias=None,
+            )
+
+        assert instance_without_creator._history_user is None
+
+        instance_with_creator = SimpleNamespace()
+        user = object()
+        alias_manager = Mock()
+        alias_manager.get.return_value = user
+        manager = Mock()
+        manager.db_manager.return_value = alias_manager
+        user_model = SimpleNamespace(_default_manager=manager)
+
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.model_has_field",
+            return_value=False,
+        ):
+            with patch(
+                "general_manager.interface.capabilities.orm.mutations.get_user_model",
+                return_value=user_model,
+            ):
+                _assign_history_actor(
+                    instance_with_creator,
+                    creator_id=11,
+                    database_alias="replica",
+                )
+
+        manager.db_manager.assert_called_once_with("replica")
+        alias_manager.get.assert_called_once_with(pk=11)
+        assert instance_with_creator._history_user is user
 
 
 class TestOrmLifecycleCapability:
