@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.57.3 (2026-06-28)
+
+### Bug Fixes
+
+- Skip m2m assignment for auto factory build
+  ([`b6fc58b`](https://github.com/TimKleindick/general_manager/commit/b6fc58bcde9b4709db114d827991d75151b885e8))
+
+### Testing
+
+- Cover autofactory build list m2m skip
+  ([`15c6b61`](https://github.com/TimKleindick/general_manager/commit/15c6b610b65031e3699306c905ad345ec529f0fc))
+
+- Raise autofactory coverage
+  ([`c6fc58e`](https://github.com/TimKleindick/general_manager/commit/c6fc58ece5f32c51d609a67f21deebc41eeb7b1b))
+
+
 ## v0.57.2 (2026-06-28)
 
 ### Bug Fixes
