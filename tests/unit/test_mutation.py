@@ -306,6 +306,40 @@ class MutationDecoratorTests(TestCase):
         self.assertEqual(res.bool, True)
         self.assertEqual(res.str, "Success")
 
+    def test_tuple_return_length_mismatch_too_short_raises_graphql_error(self):
+        @graph_ql_mutation()
+        def too_short(info, value: int) -> tuple[bool, str]:
+            _ = info, value
+            return (True,)  # type: ignore[return-value]
+
+        mutation = GraphQL._mutations["tooShort"]
+        Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        with self.assertRaises(GraphQLError) as ctx:
+            mutation.mutate(None, Info, value=1)
+
+        self.assertEqual(ctx.exception.extensions["code"], "BAD_USER_INPUT")
+        message = str(ctx.exception)
+        self.assertIn("expected 2", message)
+        self.assertIn("received 1", message)
+
+    def test_tuple_return_length_mismatch_too_long_raises_graphql_error(self):
+        @graph_ql_mutation()
+        def too_long(info, value: int) -> tuple[bool, str]:
+            _ = info, value
+            return True, "Success", "extra"  # type: ignore[return-value]
+
+        mutation = GraphQL._mutations["tooLong"]
+        Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        with self.assertRaises(GraphQLError) as ctx:
+            mutation.mutate(None, Info, value=1)
+
+        self.assertEqual(ctx.exception.extensions["code"], "BAD_USER_INPUT")
+        message = str(ctx.exception)
+        self.assertIn("expected 2", message)
+        self.assertIn("received 3", message)
+
     def test_mutation_execution_and_auth(self):
         class addPermission(MutationPermission):
             __mutate__: ClassVar[List[str]] = ["isAuthenticated"]
