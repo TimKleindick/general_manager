@@ -1,8 +1,9 @@
 """Bucket implementation that enumerates calculation interface combinations."""
 
 from __future__ import annotations
-from collections.abc import Hashable, Iterable
+from collections.abc import Hashable, Iterable, Iterator
 from types import UnionType
+from itertools import islice
 from typing import (
     Type,
     TYPE_CHECKING,
@@ -308,25 +309,86 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __str__(self) -> str:
         """
-        Return a compact preview of the generated combinations.
+        Return a compact preview of generated combinations.
+
+        Cached buckets include the exact combination count. Uncached buckets avoid
+        materializing all combinations for string formatting; when more than the
+        preview limit exists, the count is reported as a lower-bound label.
 
         Returns:
             str: Human-readable summary of up to five combinations.
         """
         PRINT_MAX = 5
-        combinations = self.generate_combinations()
-        prefix = f"CalculationBucket ({len(combinations)})["
+        combinations, count_label, has_more = self._str_combinations_preview(PRINT_MAX)
+        prefix = f"CalculationBucket ({count_label})["
         main = ",".join(
-            [
-                f"{self._manager_class.__name__}(**{comb})"
-                for comb in combinations[:PRINT_MAX]
-            ]
+            [f"{self._manager_class.__name__}(**{comb})" for comb in combinations]
         )
-        sufix = "]"
-        if len(combinations) > PRINT_MAX:
-            sufix = ", ...]"
+        suffix = "]"
+        if has_more:
+            suffix = ", ...]"
 
-        return f"{prefix}{main}{sufix}"
+        return f"{prefix}{main}{suffix}"
+
+    def _str_combinations_preview(
+        self, limit: int
+    ) -> tuple[list[Combination], str, bool]:
+        """
+        Return combinations, count label, and overflow flag for ``__str__``.
+
+        Sorted or reversed buckets use normal materialization so the preview
+        reflects the final global ordering. Unsorted uncached buckets read at
+        most ``limit + 1`` matching combinations and leave ``_data`` untouched.
+        """
+        if self._data is not None:
+            return self._data[:limit], str(len(self._data)), len(self._data) > limit
+
+        if self._normalized_sort_key() is not None or self.reverse:
+            combinations = self.generate_combinations()
+            return (
+                combinations[:limit],
+                str(len(combinations)),
+                len(combinations) > limit,
+            )
+
+        from general_manager.cache.run_context import ensure_calculation_run_context
+
+        with ensure_calculation_run_context():
+            sorted_inputs = self.topological_sort_inputs()
+            sorted_filters = self._sort_filters(sorted_inputs)
+            if self._uses_static_iterator_possible_values(sorted_inputs):
+                combinations = self.generate_combinations()
+                return (
+                    combinations[:limit],
+                    str(len(combinations)),
+                    len(combinations) > limit,
+                )
+            preview_iterator = self._iter_input_combinations(
+                sorted_inputs,
+                sorted_filters["input_filters"],
+                sorted_filters["input_excludes"],
+                snapshot_iterables=False,
+            )
+            if sorted_filters["prop_filters"] or sorted_filters["prop_excludes"]:
+                preview_iterator = self._iter_prop_filtered_identifications(
+                    preview_iterator,
+                    sorted_filters["prop_filters"],
+                    sorted_filters["prop_excludes"],
+                )
+            preview = list(islice(preview_iterator, limit + 1))
+
+        has_more = len(preview) > limit
+        if has_more:
+            preview = preview[:limit]
+        count_label = f"{limit}+" if has_more else str(len(preview))
+        return preview, count_label, has_more
+
+    def _uses_static_iterator_possible_values(self, sorted_inputs: list[str]) -> bool:
+        """Return whether previewing would consume a one-shot static iterator."""
+        return any(
+            isinstance(self.input_fields[input_name].possible_values, Iterator)
+            for input_name in sorted_inputs
+        )
 
     def __repr__(self) -> str:
         """
@@ -730,22 +792,25 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             raise InvalidPossibleValuesError(key_name)
         return possible_values
 
-    def _generate_input_combinations(
+    def _iter_input_combinations(
         self,
         sorted_inputs: List[str],
         filters: ParsedFilters,
         excludes: ParsedFilters,
-    ) -> List[Combination]:
+        *,
+        snapshot_iterables: bool,
+    ) -> Generator[Combination, None, None]:
         """
-        Generate all valid assignments of input fields that satisfy the provided per-field filters and exclusions.
+        Yield valid assignments of input fields satisfying filters and excludes.
 
         Parameters:
             sorted_inputs (list[str]): Input names in dependency-respecting order.
             filters (dict[str, dict]): Per-input filter definitions (may include `filter_funcs` or `filter_kwargs`).
             excludes (dict[str, dict]): Per-input exclusion definitions (may include `filter_funcs` or `filter_kwargs`).
 
-        Returns:
-            list[Combination]: Completed input-to-value mappings that meet the filters and excludes.
+        Yields:
+            Combination: Completed input-to-value mappings that meet the
+                filters and excludes.
         """
 
         def input_passes_filters(
@@ -814,8 +879,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                     possible_values = filter(
                         lambda x: not exclude_func(x), possible_values
                     )
-
-                possible_values = list(possible_values)
+                if snapshot_iterables:
+                    possible_values = list(possible_values)
 
             for value in possible_values:
                 if not isinstance(value, input_field.type):
@@ -824,7 +889,52 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 yield from helper(index + 1, current_combo)
                 del current_combo[input_name]
 
-        return list(helper(0, {}))
+        yield from helper(0, {})
+
+    def _generate_input_combinations(
+        self,
+        sorted_inputs: List[str],
+        filters: ParsedFilters,
+        excludes: ParsedFilters,
+    ) -> List[Combination]:
+        """
+        Generate all valid assignments of input fields that satisfy filters.
+
+        Parameters:
+            sorted_inputs (list[str]): Input names in dependency-respecting order.
+            filters (dict[str, dict]): Per-input filter definitions.
+            excludes (dict[str, dict]): Per-input exclusion definitions.
+
+        Returns:
+            list[Combination]: Completed input-to-value mappings that meet the
+                filters and excludes.
+        """
+        return list(
+            self._iter_input_combinations(
+                sorted_inputs,
+                filters,
+                excludes,
+                snapshot_iterables=True,
+            )
+        )
+
+    def _iter_prop_filtered_identifications(
+        self,
+        combinations: Iterable[Combination],
+        prop_filters: ParsedFilters,
+        prop_excludes: ParsedFilters,
+    ) -> Generator[Combination, None, None]:
+        """
+        Lazily apply property filters and yield manager identifications.
+
+        This mirrors the property-filter materialization path used by
+        :meth:`generate_combinations`, but lets ``__str__`` stop after enough
+        matching combinations have been found.
+        """
+        for combo in combinations:
+            manager = self._manager_class(**combo)
+            if self._filter_prop_combinations([manager], prop_filters, prop_excludes):
+                yield manager.identification
 
     def _filter_prop_combinations(
         self,
