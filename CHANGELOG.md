@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.59.0 (2026-06-28)
+
+### Features
+
+- Add non-mutating payload m2m split
+  ([`7c56e6b`](https://github.com/TimKleindick/general_manager/commit/7c56e6bbb68c8a80a468db422645fc1a55aa916b))
+
+### Testing
+
+- Raise orm mutation coverage
+  ([`aaaf6d0`](https://github.com/TimKleindick/general_manager/commit/aaaf6d0ed27ffc2017da460e743fd7774d506bf7))
+
+
 ## v0.58.0 (2026-06-28)
 
 ### Bug Fixes
