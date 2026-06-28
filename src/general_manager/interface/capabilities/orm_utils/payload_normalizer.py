@@ -88,7 +88,7 @@ class PayloadNormalizer:
         self, kwargs: PayloadMapping
     ) -> tuple[PayloadMapping, PayloadMapping]:
         """
-        Separate many-to-many related entries from a kwargs mapping.
+        Mutate a kwargs mapping by moving many-to-many related entries out of it.
 
         Parameters:
             kwargs: Mapping of field lookups where keys for many-to-many relations are expected to end with `_id_list`.
@@ -105,6 +105,39 @@ class PayloadNormalizer:
             if base_key in self._many_to_many_fields:
                 many_kwargs[f"{base_key}_id_list"] = kwargs.pop(key)
         return kwargs, many_kwargs
+
+    def split_many_to_many_non_mutating(
+        self, kwargs: PayloadMapping
+    ) -> tuple[PayloadMapping, PayloadMapping]:
+        """
+        Return separated many-to-many entries without mutating the input mapping.
+
+        Parameters:
+            kwargs: Mapping of field lookups where keys for many-to-many
+                relations may use either `<relation>_list` or
+                `<relation>_id_list`.
+
+        Returns:
+            tuple: A pair `(remaining_kwargs, many_kwargs)` where both mappings
+                are new dictionaries. `remaining_kwargs` contains non-matching
+                entries from `kwargs`, and `many_kwargs` contains matching
+                many-to-many entries under canonical `<relation>_id_list` keys.
+
+        Notes:
+            This is the non-mutating counterpart to `split_many_to_many()`. If
+            both `<relation>_list` and `<relation>_id_list` are present,
+            iteration order decides the last canonical value stored in
+            `many_kwargs`.
+        """
+        remaining_kwargs: PayloadMapping = {}
+        many_kwargs: PayloadMapping = {}
+        for key, value in kwargs.items():
+            base_key = self._m2m_alias_base_key(key)
+            if base_key in self._many_to_many_fields:
+                many_kwargs[f"{base_key}_id_list"] = value
+            else:
+                remaining_kwargs[key] = value
+        return remaining_kwargs, many_kwargs
 
     def normalize_simple_values(self, kwargs: PayloadMapping) -> PayloadMapping:
         """

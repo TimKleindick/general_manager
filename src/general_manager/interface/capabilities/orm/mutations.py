@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
@@ -10,6 +10,9 @@ from django.db.models import NOT_PROVIDED
 
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.builtin import BaseCapability
+from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
+    PayloadNormalizer,
+)
 from general_manager.interface.utils.database_interface_protocols import (
     SupportsActivation,
 )
@@ -581,10 +584,8 @@ class OrmValidationCapability(BaseCapability):
             """
             support = get_support_capability(interface_cls)
             normalizer = support.get_payload_normalizer(interface_cls)
-            payload_copy = dict(payload)
-            normalizer.validate_keys(payload_copy)
-            simple_kwargs, many_to_many_kwargs = normalizer.split_many_to_many(
-                payload_copy
+            simple_kwargs, many_to_many_kwargs = _validate_and_split_payload(
+                normalizer, payload
             )
             normalized_simple = normalizer.normalize_simple_values(simple_kwargs)
             normalized_many = normalizer.normalize_many_values(many_to_many_kwargs)
@@ -629,14 +630,39 @@ def _normalize_payload(
         )
     support = get_support_capability(interface_cls)
     normalizer = support.get_payload_normalizer(interface_cls)
-    payload_copy = dict(payload)
-    normalizer.validate_keys(payload_copy)
-    simple_kwargs, many_to_many_kwargs = normalizer.split_many_to_many(payload_copy)
+    simple_kwargs, many_to_many_kwargs = _validate_and_split_payload(
+        normalizer, payload
+    )
     normalized_simple = normalizer.normalize_simple_values(simple_kwargs)
     normalized_many = normalizer.normalize_many_values(many_to_many_kwargs)
     return dict(normalized_simple), {
         key: list(value) for key, value in normalized_many.items()
     }
+
+
+def _validate_and_split_payload(
+    normalizer: Any,
+    payload: MutationPayload,
+) -> tuple[MutationPayload, MutationPayload]:
+    """Validate and split payloads without exposing caller mappings to mutation."""
+    normalizer_payload = (
+        payload if type(normalizer) is PayloadNormalizer else dict(payload)
+    )
+    normalizer.validate_keys(normalizer_payload)
+    return _split_many_to_many_payload(normalizer, normalizer_payload)
+
+
+def _split_many_to_many_payload(
+    normalizer: Any,
+    payload: MutationPayload,
+) -> tuple[MutationPayload, MutationPayload]:
+    """Split concrete normalizer payloads without mutation; copy for custom normalizers."""
+    if type(normalizer) is PayloadNormalizer:
+        return normalizer.split_many_to_many_non_mutating(payload)
+    return cast(
+        tuple[MutationPayload, MutationPayload],
+        normalizer.split_many_to_many(payload),
+    )
 
 
 def _assign_history_actor(
