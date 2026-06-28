@@ -241,6 +241,49 @@ class AutoFactoryTestCase(TransactionTestCase):
         with self.assertRaises(ValueError):
             instance.dummy_m2m.count()
 
+    def test_build_list_with_many_to_many_values_skips_relation_assignment(self):
+        """
+        Build list results skip many-to-many assignment for every unsaved model.
+        """
+        dummy_model_instance = self.factory_class.create()
+        dummy_model_instance2 = self.factory_class.create()
+
+        def custom_generate_function(**kwargs: Any) -> list[dict[str, Any]]:
+            """
+            Return multiple DummyModel2 payloads without many-to-many records.
+            """
+            return [
+                {
+                    "description": f"{kwargs['description']} {index}",
+                    "dummy_model": kwargs["dummy_model"],
+                }
+                for index in range(2)
+            ]
+
+        self.factory_class2._adjustmentMethod = custom_generate_function
+
+        with patch.object(
+            self.factory_class2,
+            "_coerce_many_to_many_values",
+            side_effect=AssertionError("build list should not process dummy_m2m"),
+        ):
+            instances = self.factory_class2.build(
+                description="Generated Description",
+                dummy_model=dummy_model_instance,
+                dummy_m2m=[dummy_model_instance, dummy_model_instance2],
+            )
+
+        self.assertIsInstance(instances, list)
+        self.assertEqual(len(instances), 2)
+        self.assertEqual(DummyModel2.objects.count(), 0)
+        for index, instance in enumerate(instances):
+            self.assertIsInstance(instance, DummyModel2)
+            self.assertIsNone(instance.pk)
+            self.assertEqual(instance.description, f"Generated Description {index}")
+            self.assertEqual(instance.dummy_model, dummy_model_instance)
+            with self.assertRaises(ValueError):
+                instance.dummy_m2m.count()
+
     def test_edge_helpers_cover_error_and_fallback_paths(self):
         """
         AutoFactory helper edge paths should preserve their documented fallback behavior.
