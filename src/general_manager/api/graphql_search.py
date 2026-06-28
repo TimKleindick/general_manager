@@ -184,7 +184,13 @@ def sort_search_hit_entries(
             normalized = normalize_search_sort_value(value)
             return (normalized is None, normalized)
 
-        entries.sort(key=_sort_key, reverse=sort_desc)
+        entries.sort(key=_sort_key)
+        if sort_desc:
+            null_start = next(
+                (index for index, item in enumerate(entries) if _sort_key(item)[0]),
+                len(entries),
+            )
+            entries[:null_start] = reversed(entries[:null_start])
     else:
         entries.sort(key=lambda item: item[0] or 0, reverse=True)
 
