@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.59.1 (2026-06-29)
+
+### Bug Fixes
+
+- Bump django for security advisories
+  ([`a6fe6d8`](https://github.com/TimKleindick/general_manager/commit/a6fe6d8a9711215ba82487d927968d64c8faaf92))
+
+
 ## v0.59.0 (2026-06-28)
 
 ### Features
