@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.59.2 (2026-06-29)
+
+### Bug Fixes
+
+- Reuse existing related factory rows
+  ([`98561a8`](https://github.com/TimKleindick/general_manager/commit/98561a841fa77bf5e2850b8a84a8528db76652a1))
+
+
 ## v0.59.1 (2026-06-29)
 
 ### Bug Fixes
