@@ -1,6 +1,10 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
 from django.test import TransactionTestCase
 from django.db import models, connection, connections
 from django.core.exceptions import ValidationError
+from factory.django import DjangoModelFactory
+from factory.declarations import LazyAttributeSequence
 from general_manager.factory.auto_factory import (
     AutoFactory,
     InvalidGeneratedObjectError,
@@ -8,7 +12,7 @@ from general_manager.factory.auto_factory import (
 )
 from types import SimpleNamespace
 from typing import Any, ClassVar, Iterable
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 class DummyInterface:
@@ -65,6 +69,20 @@ class DummyModel2(models.Model):
         app_label = "general_manager"
 
 
+class DummyModel3(models.Model):
+    """
+    A model with a one-to-one relation for AutoFactory relation reuse tests.
+    """
+
+    description = models.TextField()
+    dummy_model = models.OneToOneField(
+        DummyModel, on_delete=models.CASCADE, related_name="one_to_one_model"
+    )
+
+    class Meta:
+        app_label = "general_manager"
+
+
 class AutoFactoryTestCase(TransactionTestCase):
     databases: ClassVar[set[str]] = {"default"}
     database_alias = "factory_alias"
@@ -83,6 +101,7 @@ class AutoFactoryTestCase(TransactionTestCase):
         with connection.schema_editor() as schema:
             schema.create_model(DummyModel)
             schema.create_model(DummyModel2)
+            schema.create_model(DummyModel3)
 
     @classmethod
     def tearDownClass(cls):
@@ -92,8 +111,45 @@ class AutoFactoryTestCase(TransactionTestCase):
         super().tearDownClass()
         cls._wrap_patcher.stop()
         with connection.schema_editor() as schema:
-            schema.delete_model(DummyModel)
+            schema.delete_model(DummyModel3)
             schema.delete_model(DummyModel2)
+            schema.delete_model(DummyModel)
+
+    @contextmanager
+    def _temporary_database_alias(self, alias: str) -> Iterator[Any]:
+        original_database_config = connections.databases.get(alias)
+        had_cached_connection = hasattr(connections._connections, alias)
+        original_connection = (
+            getattr(connections._connections, alias) if had_cached_connection else None
+        )
+        if had_cached_connection:
+            delattr(connections._connections, alias)
+
+        connections.databases[alias] = {
+            **connections.databases["default"],
+            "NAME": ":memory:",
+        }
+        alias_connection = connections[alias]
+        # The alias is created only for this test, so opt it out of Django's
+        # default disallowed-database wrappers and restore prior state below.
+        for method_name, _ in self._disallowed_connection_methods:
+            method = getattr(alias_connection, method_name)
+            wrapped = getattr(method, "wrapped", None)
+            if wrapped is not None:
+                setattr(alias_connection, method_name, wrapped)
+        alias_connection.connect()
+        try:
+            yield alias_connection
+        finally:
+            alias_connection.close()
+            if hasattr(connections._connections, alias):
+                delattr(connections._connections, alias)
+            if original_database_config is None:
+                connections.databases.pop(alias, None)
+            else:
+                connections.databases[alias] = original_database_config
+            if had_cached_connection:
+                setattr(connections._connections, alias, original_connection)
 
     def setUp(self) -> None:
         """
@@ -110,6 +166,91 @@ class AutoFactoryTestCase(TransactionTestCase):
         factory_attributes["interface"] = DummyInterface
         factory_attributes["Meta"] = type("Meta", (), {"model": DummyModel2})
         self.factory_class2 = type("DummyFactory2", (AutoFactory,), factory_attributes)
+
+        factory_attributes = {}
+        factory_attributes["interface"] = DummyInterface
+        factory_attributes["Meta"] = type("Meta", (), {"model": DummyModel3})
+        self.factory_class3 = type("DummyFactory3", (AutoFactory,), factory_attributes)
+
+    def test_setup_next_sequence_uses_super_for_non_django_model(self):
+        factory_class = type(
+            "ObjectFactory",
+            (AutoFactory,),
+            {
+                "interface": DummyInterface,
+                "Meta": type("Meta", (), {"model": object}),
+            },
+        )
+
+        with patch.object(
+            DjangoModelFactory, "_setup_next_sequence", return_value=37
+        ) as setup_next_sequence:
+            next_sequence = factory_class._setup_next_sequence()
+
+        self.assertEqual(next_sequence, 37)
+        setup_next_sequence.assert_called_once_with()
+
+    def test_setup_next_sequence_counts_using_interface_database_alias(self):
+        alias = "factory_alias"
+        alias_manager = Mock()
+        alias_manager.count.return_value = 12
+        manager = Mock()
+        manager.using.return_value = alias_manager
+
+        class AliasInterface(DummyInterface):
+            @classmethod
+            def _get_database_alias(cls) -> str:
+                return alias
+
+        factory_class = type(
+            "AliasSequenceFactory",
+            (AutoFactory,),
+            {
+                "interface": AliasInterface,
+                "Meta": type("Meta", (), {"model": DummyModel}),
+            },
+        )
+
+        with (
+            patch.object(DummyModel._meta, "default_manager", manager),
+            patch.object(DjangoModelFactory, "_setup_next_sequence", return_value=3),
+        ):
+            next_sequence = factory_class._setup_next_sequence()
+
+        self.assertEqual(next_sequence, 12)
+        manager.using.assert_called_once_with(alias)
+        alias_manager.count.assert_called_once_with()
+        manager.count.assert_not_called()
+
+    def test_setup_next_sequence_returns_super_value_when_it_exceeds_count(self):
+        manager = Mock()
+        manager.count.return_value = 4
+
+        with (
+            patch.object(DummyModel._meta, "default_manager", manager),
+            patch.object(DjangoModelFactory, "_setup_next_sequence", return_value=10),
+        ):
+            next_sequence = self.factory_class._setup_next_sequence()
+
+        self.assertEqual(next_sequence, 10)
+        manager.count.assert_called_once_with()
+        manager.using.assert_not_called()
+
+    def test_setup_next_sequence_uses_super_when_count_raises(self):
+        manager = Mock()
+        manager.count.side_effect = RuntimeError("count failed")
+
+        with (
+            patch.object(DummyModel._meta, "default_manager", manager),
+            patch.object(
+                DjangoModelFactory, "_setup_next_sequence", return_value=23
+            ) as setup_next_sequence,
+        ):
+            next_sequence = self.factory_class._setup_next_sequence()
+
+        self.assertEqual(next_sequence, 23)
+        manager.count.assert_called_once_with()
+        setup_next_sequence.assert_called_once_with()
 
     def test_generate_instance(self):
         """
@@ -179,23 +320,344 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertEqual(instance.description, "Test Description")  # type: ignore
         self.assertEqual(instance.dummy_model, dummy_model_instance)  # type: ignore
 
+    def test_generate_instance_reuses_existing_foreign_key_by_default(self):
+        existing = self.factory_class.create(name="Existing", value=1)
+        factory_calls = 0
+
+        class GMC:
+            pass
+
+        def related_factory(**_kwargs: object) -> DummyModel:
+            nonlocal factory_calls
+            factory_calls += 1
+            return self.factory_class.create(name="Created", value=2)
+
+        def deterministic_choice(values: object) -> object:
+            options = list(values)  # type: ignore[arg-type]
+            if options == [True, True, False]:
+                return True
+            return options[0]
+
+        GMC.Factory = related_factory  # type: ignore[attr-defined]
+        DummyModel._general_manager_class = GMC  # type: ignore[attr-defined]
+        try:
+            with patch(
+                "general_manager.factory.factories._RNG.choice",
+                side_effect=deterministic_choice,
+            ):
+                instance = self.factory_class2.create(description="Uses existing")
+        finally:
+            delattr(DummyModel, "_general_manager_class")
+
+        self.assertEqual(DummyModel.objects.count(), 1)
+        self.assertEqual(instance.dummy_model_id, existing.pk)
+        self.assertEqual(factory_calls, 0)
+
+    def test_generate_instance_can_force_foreign_key_creation(self):
+        existing = self.factory_class.create(name="Existing", value=1)
+        factory_calls = 0
+
+        class GMC:
+            pass
+
+        def related_factory(**_kwargs: object) -> DummyModel:
+            nonlocal factory_calls
+            factory_calls += 1
+            return self.factory_class.create(name="Created", value=2)
+
+        def deterministic_choice(values: object) -> object:
+            options = list(values)  # type: ignore[arg-type]
+            if options == [True, True, False]:
+                return False
+            return options[0]
+
+        GMC.Factory = related_factory  # type: ignore[attr-defined]
+        DummyModel._general_manager_class = GMC  # type: ignore[attr-defined]
+        self.factory_class2._related_factory_modes = {"dummy_model": "create"}
+        try:
+            with patch(
+                "general_manager.factory.factories._RNG.choice",
+                side_effect=deterministic_choice,
+            ):
+                instance = self.factory_class2.create(description="Creates related")
+        finally:
+            delattr(DummyModel, "_general_manager_class")
+            delattr(self.factory_class2, "_related_factory_modes")
+
+        self.assertEqual(DummyModel.objects.count(), 2)
+        self.assertEqual(factory_calls, 1)
+        self.assertIsNotNone(instance.dummy_model_id)
+        self.assertNotEqual(instance.dummy_model_id, existing.pk)
+
+    def test_generate_instance_reuses_foreign_key_from_interface_database_alias(
+        self,
+    ):
+        alias = self.database_alias
+
+        class AliasInterface(DummyInterface):
+            @classmethod
+            def _get_database_alias(cls) -> str:
+                return alias
+
+        factory_class = type(
+            "AliasDummyFactory2",
+            (AutoFactory,),
+            {
+                "interface": AliasInterface,
+                "Meta": type("Meta", (), {"model": DummyModel2}),
+            },
+        )
+
+        with self._temporary_database_alias(alias) as alias_connection:
+            alias_tables_created = False
+            try:
+                with alias_connection.schema_editor() as schema:
+                    schema.create_model(DummyModel)
+                    schema.create_model(DummyModel2)
+                    alias_tables_created = True
+
+                existing = DummyModel.objects.using(alias).create(
+                    name="Alias Existing",
+                    value=1,
+                )
+
+                instance = factory_class.create(description="Uses alias relation")
+
+                self.assertEqual(instance._state.db, alias)
+                self.assertEqual(instance.dummy_model_id, existing.pk)
+                self.assertEqual(DummyModel.objects.count(), 0)
+                self.assertEqual(DummyModel2.objects.using(alias).count(), 1)
+            finally:
+                if alias_tables_created:
+                    with alias_connection.schema_editor() as schema:
+                        schema.delete_model(DummyModel2)
+                        schema.delete_model(DummyModel)
+
+    def test_generate_instance_filters_one_to_one_links_on_interface_database_alias(
+        self,
+    ):
+        alias = self.database_alias
+
+        class AliasInterface(DummyInterface):
+            @classmethod
+            def _get_database_alias(cls) -> str:
+                return alias
+
+        factory_class = type(
+            "AliasDummyFactory3",
+            (AutoFactory,),
+            {
+                "interface": AliasInterface,
+                "Meta": type("Meta", (), {"model": DummyModel3}),
+            },
+        )
+
+        with self._temporary_database_alias(alias) as alias_connection:
+            alias_tables_created = False
+            try:
+                with alias_connection.schema_editor() as schema:
+                    schema.create_model(DummyModel)
+                    schema.create_model(DummyModel3)
+                    alias_tables_created = True
+
+                linked = DummyModel.objects.using(alias).create(
+                    name="Already linked",
+                    value=1,
+                )
+                available = DummyModel.objects.using(alias).create(
+                    name="Available",
+                    value=2,
+                )
+                DummyModel3.objects.using(alias).create(
+                    description="Existing link",
+                    dummy_model=linked,
+                )
+
+                instance = factory_class.create(description="Uses available relation")
+
+                self.assertEqual(instance._state.db, alias)
+                self.assertEqual(instance.dummy_model_id, available.pk)
+                self.assertEqual(DummyModel3.objects.using(alias).count(), 2)
+            finally:
+                if alias_tables_created:
+                    with alias_connection.schema_editor() as schema:
+                        schema.delete_model(DummyModel3)
+                        schema.delete_model(DummyModel)
+
+    def test_related_factory_modes_do_not_leak_between_generated_factories(self):
+        original_modes = dict(AutoFactory._related_factory_modes)
+        try:
+            factory_a = type(
+                "DummyFactory2A",
+                (AutoFactory,),
+                {
+                    "interface": DummyInterface,
+                    "Meta": type("Meta", (), {"model": DummyModel2}),
+                },
+            )
+            factory_b = type(
+                "DummyFactory2B",
+                (AutoFactory,),
+                {
+                    "interface": DummyInterface,
+                    "Meta": type("Meta", (), {"model": DummyModel2}),
+                },
+            )
+
+            factory_a._related_factory_modes["dummy_model"] = "create"
+
+            self.assertEqual(
+                factory_a._get_related_factory_mode("dummy_model"),
+                "create",
+            )
+            self.assertEqual(
+                factory_b._get_related_factory_mode("dummy_model"),
+                "reuse_existing",
+            )
+        finally:
+            AutoFactory._related_factory_modes = original_modes
+
+    def test_sequence_starts_after_existing_rows(self):
+        DummyModel.objects.create(name="Sequenced 0", value=0)
+
+        class SequencedFactory(AutoFactory):
+            interface = DummyInterface
+            name = LazyAttributeSequence(lambda _obj, n: f"Sequenced {n}")
+            value = LazyAttributeSequence(lambda _obj, n: n)
+
+            class Meta:
+                model = DummyModel
+
+        instance = SequencedFactory.create()
+
+        self.assertEqual(instance.name, "Sequenced 1")
+        self.assertEqual(instance.value, 1)
+
     def test_generate_instance_with_many_to_many(self):
         """
         Tests that the factory can create a DummyModel2 instance with ManyToMany relationships assigned to multiple DummyModel instances.
         """
         dummy_model_instance = self.factory_class.create()
         dummy_model_instance2 = self.factory_class.create()
-        self.factory_class2.create(
+        instance = self.factory_class2.create(
             description="Test Description",
             dummy_model=dummy_model_instance,
             dummy_m2m=[dummy_model_instance, dummy_model_instance2],
         )
-        instance = DummyModel2.objects.get(id=1)
         self.assertIsInstance(instance, DummyModel2)
         self.assertEqual(instance.description, "Test Description")
         self.assertEqual(instance.dummy_model, dummy_model_instance)
         self.assertIn(dummy_model_instance, instance.dummy_m2m.all())
         self.assertIn(dummy_model_instance2, instance.dummy_m2m.all())
+
+    def test_generate_instance_without_many_to_many_value_leaves_blank_m2m_empty(
+        self,
+    ):
+        dummy_model_instance = self.factory_class.create()
+        self.factory_class.create(name="Existing M2M", value=2)
+
+        with patch(
+            "general_manager.factory.factories._RNG.randint",
+            return_value=1,
+        ):
+            instance = self.factory_class2.create(
+                description="Test Description",
+                dummy_model=dummy_model_instance,
+            )
+
+        self.assertEqual(list(instance.dummy_m2m.all()), [])
+
+    def test_generate_instance_without_required_many_to_many_value_generates_relation(
+        self,
+    ):
+        dummy_model_instance = self.factory_class.create(name="FK", value=1)
+        self.factory_class.create(name="Existing M2M", value=2)
+        field = DummyModel2._meta.get_field("dummy_m2m")
+        original_blank = field.blank
+        field.blank = False
+        try:
+            with patch(
+                "general_manager.factory.factories._RNG.randint",
+                return_value=1,
+            ):
+                instance = self.factory_class2.create(
+                    description="Required M2M",
+                    dummy_model=dummy_model_instance,
+                )
+        finally:
+            field.blank = original_blank
+
+        self.assertEqual(instance.dummy_m2m.count(), 1)
+
+    def test_generate_instance_omitted_many_to_many_create_mode_assigns_created(
+        self,
+    ):
+        dummy_model_instance = self.factory_class.create(name="FK", value=1)
+        self.factory_class.create(name="Existing M2M", value=2)
+        factory_calls = 0
+
+        class GMC:
+            pass
+
+        def related_factory(**_kwargs: object) -> DummyModel:
+            nonlocal factory_calls
+            factory_calls += 1
+            return self.factory_class.create(name="Created M2M", value=3)
+
+        original_modes = dict(self.factory_class2._related_factory_modes)
+        GMC.Factory = related_factory  # type: ignore[attr-defined]
+        DummyModel._general_manager_class = GMC  # type: ignore[attr-defined]
+        self.factory_class2._related_factory_modes = {"dummy_m2m": "create"}
+        try:
+            with patch(
+                "general_manager.factory.factories._RNG.randint",
+                return_value=1,
+            ):
+                instance = self.factory_class2.create(
+                    description="Creates M2M",
+                    dummy_model=dummy_model_instance,
+                )
+        finally:
+            delattr(DummyModel, "_general_manager_class")
+            self.factory_class2._related_factory_modes = original_modes
+
+        assigned = list(instance.dummy_m2m.all())
+        self.assertEqual(factory_calls, 1)
+        self.assertEqual(len(assigned), 1)
+        self.assertEqual(assigned[0].name, "Created M2M")
+
+    def test_generate_instance_omitted_many_to_many_create_mode_with_no_params(
+        self,
+    ):
+        self.factory_class.create(name="Existing", value=1)
+        factory_calls = 0
+
+        class GMC:
+            pass
+
+        def related_factory(**_kwargs: object) -> DummyModel:
+            nonlocal factory_calls
+            factory_calls += 1
+            return self.factory_class.create(name="Created M2M", value=2)
+
+        original_modes = dict(self.factory_class2._related_factory_modes)
+        GMC.Factory = related_factory  # type: ignore[attr-defined]
+        DummyModel._general_manager_class = GMC  # type: ignore[attr-defined]
+        self.factory_class2._related_factory_modes = {"dummy_m2m": "create"}
+        try:
+            with patch(
+                "general_manager.factory.factories._RNG.randint",
+                return_value=1,
+            ):
+                instance = self.factory_class2.create()
+        finally:
+            delattr(DummyModel, "_general_manager_class")
+            self.factory_class2._related_factory_modes = original_modes
+
+        assigned = list(instance.dummy_m2m.all())
+        self.assertEqual(factory_calls, 1)
+        self.assertEqual(len(assigned), 1)
+        self.assertEqual(assigned[0].name, "Created M2M")
 
     def test_build_instance_with_many_to_many_values_skips_relation_assignment(self):
         """

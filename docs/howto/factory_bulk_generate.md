@@ -55,10 +55,12 @@ InventoryItem.Factory.create_batch(50)
 ```
 
 `Factory.create(...)` and `Factory.create_batch(...)` save each object before
-AutoFactory assigns many-to-many relations, so explicit values and generated
-defaults can populate those relations safely. `Factory.build(...)` returns
-unsaved model instances and skips many-to-many assignment; pass scalar and
-foreign-key values to build when you need an in-memory object, then save and
+AutoFactory assigns many-to-many relations, so explicit many-to-many values can
+populate those relations safely. Omitted `blank=True` many-to-many fields stay
+empty by default; configure field-specific create mode when an omitted
+many-to-many field should generate and assign values. `Factory.build(...)`
+returns unsaved model instances and skips many-to-many assignment; pass scalar
+and foreign-key values to build when you need an in-memory object, then save and
 assign many-to-many relations yourself if the test needs them.
 
 ## Step 3: Customise values
@@ -70,6 +72,71 @@ Project.Factory(name="Launch Project", start_date=date.today())
 ```
 
 For complex scenarios, define `@classmethod` helpers that produce pre-wired object graphs (projects with members, factories with related measurements, etc.).
+
+## Reuse or create related objects
+
+Generated foreign-key and one-to-one defaults reuse existing related rows before
+creating new ones. This keeps bulk generation from creating duplicate lookup
+data when a reusable row already exists. For factories configured with a
+database alias, reuse looks for related rows on that alias.
+
+For example, suppose each delivery manager belongs to a project:
+
+```python
+from django.db.models import CASCADE, CharField, ForeignKey
+
+from general_manager.interface import DatabaseInterface
+from general_manager.manager import GeneralManager
+
+class DeliveryManager(GeneralManager):
+    name: str
+    project: Project
+
+    class Interface(DatabaseInterface):
+        name = CharField(max_length=80)
+        project = ForeignKey(Project.Interface._model, on_delete=CASCADE)
+```
+
+If at least one `Project` row already exists, omitting `project` reuses one of
+those rows:
+
+```python
+Project.Factory.create(name="Existing Project")
+
+manager = DeliveryManager.Factory.create(name="Ava")
+```
+
+Add a field-specific related factory mode when the manager should always receive
+a newly created project instead:
+
+```python
+class DeliveryManager(GeneralManager):
+    name: str
+    project: Project
+
+    class Interface(DatabaseInterface):
+        name = CharField(max_length=80)
+        project = ForeignKey(Project.Interface._model, on_delete=CASCADE)
+
+        class Factory:
+            _related_factory_modes = {"project": "create"}
+```
+
+`_related_factory_mode = "create"` applies the same behavior to every generated
+relation on the factory. `_related_factory_mode = "random"` keeps the legacy
+foreign-key behavior that may create a new related row or reuse an existing one.
+Nullable/default-`None` relations keep their nullable behavior in default mode;
+create mode bypasses that shortcut when the related model has a factory.
+
+## Sequences with existing rows
+
+AutoFactory starts factory_boy sequence counters after the target model's
+current row count and respects the interface database alias when counting. If a
+table already has one row, the first generated sequence index is `1`.
+
+Override `_setup_next_sequence()` when a factory needs stronger uniqueness than
+a row count can provide, such as parsing the highest numeric suffix already
+present in existing names or codes.
 
 ## Use `_adjustmentMethod` for complex data creation
 

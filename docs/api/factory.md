@@ -5,17 +5,21 @@
 `AutoFactory` is the generated factory base attached to ORM-backed managers as
 `Manager.Factory`. It fills missing fields from interface metadata, strips
 many-to-many values before model construction, applies many-to-many assignments
-after build/create, and uses the interface's `input_fields` plus
+after saved creation, and uses the interface's `input_fields` plus
 `format_identification()` to wrap saved objects back into manager instances.
 `build()` returns unsaved Django model instances; `create()` validates, saves,
 and returns GeneralManager wrappers. Batch calls keep the same distinction:
 build batches return model lists and create batches return manager lists.
+Factory relation reuse and sequence counters use the interface database alias
+when one is configured, so factories query and save against the same database.
 
 The generation order is:
 
 1. `_generate()` validates `Meta.model`, asks the interface for custom-field
    metadata, and adds missing generated or declared defaults. Caller-supplied
    keyword arguments already present in the payload win over generated defaults.
+   Missing foreign-key and one-to-one values use the configured related-factory
+   mode.
 2. factory_boy dispatches to `_build()` or `_create()`.
 3. `_adjust_kwargs()` removes many-to-many values from constructor kwargs and
    coerces foreign-key/one-to-one values.
@@ -24,21 +28,42 @@ The generation order is:
    more record payloads. Otherwise the normalized kwargs are assigned directly.
 5. Create strategy calls `full_clean()` and `save()` for each record; build
    strategy only constructs unsaved model instances.
-6. `_generate()` applies many-to-many assignments from the original payload and
-   wraps create-strategy model instances into manager instances.
+6. `_generate()` applies many-to-many assignments to saved create-strategy
+   model instances, then wraps those model instances into manager instances.
 
 Call-time keyword arguments override generated defaults. Foreign-key and
 one-to-one values are normalized through the related model resolver, so callers
 may pass a Django model instance, a GeneralManager wrapper, or an identifier
-value that Django accepts. Many-to-many keyword values are removed before
-instantiation and assigned afterward. A manager/queryset/list/tuple/set is
-expanded to a list; a scalar is treated as a one-item assignment. Values that
-cannot be resolved to Django model instances are passed through to Django's
-relation manager, so normal Django validation or assignment errors surface.
-Many-to-many assignment is attempted for both `build()` and `create()`. Because
-Django requires a saved primary key for many-to-many `.set(...)`, `build()` with
-explicit or generated many-to-many values is unsupported and may raise Django's
-unsaved-instance relation error.
+value that Django accepts.
+
+Automatic relation defaults use `reuse_existing` mode unless configured
+otherwise. Foreign-key and one-to-one defaults prefer reusable existing related
+rows; one-to-one reuse excludes rows already linked through that one-to-one
+field. If no reusable row exists and the related model exposes a
+GeneralManager factory, AutoFactory creates a related row through that factory.
+Nullable relations and relations with a declared default of `None` keep their
+nullable behavior in default mode and may remain `None` even when related rows
+or factories are available. When the factory interface defines a database alias,
+existing-row lookup and one-to-one linked-row filtering use that alias.
+
+Factories can change automatic relation generation with `_related_factory_mode`
+for all generated relations or `_related_factory_modes` for individual fields.
+`"create"` forces a new related object when a related factory exists and
+bypasses nullable/default-`None` relation short-circuiting. If no related
+factory exists, nullable relations may still resolve to `None` and required
+relations raise `MissingFactoryOrInstancesError`. `"random"` restores the
+legacy foreign-key behavior that may create through the related factory or reuse
+an existing related row.
+
+Many-to-many keyword values are removed before instantiation and assigned after
+saved `create()` calls. A manager/queryset/list/tuple/set is expanded to a
+list; a scalar is treated as a one-item assignment. Values that cannot be
+resolved to Django model instances are passed through to Django's relation
+manager, so normal Django validation or assignment errors surface. Omitted
+blank many-to-many fields stay empty in default `reuse_existing` mode. A
+field-specific `_related_factory_modes = {"field_name": "create"}` entry can
+generate and assign many-to-many values after creation. `build()` returns
+unsaved model instances and skips many-to-many assignment.
 
 `Factory._adjustmentMethod`, when defined, receives the normalized keyword
 arguments and returns either one `dict[str, object]` record payload or a
@@ -62,6 +87,14 @@ class attributes are used as declared defaults only when they are present and
 not callable, `classmethod`, or `staticmethod`. A declared value of `None` is
 treated the same as no declared default by the current generation path.
 
+`AutoFactory._setup_next_sequence()` returns at least the target model's current
+row count, using `interface._get_database_alias()` when the interface provides a
+database alias. For example, if one row already exists, the first generated
+factory_boy sequence index is `1`. Override `_setup_next_sequence()` in a custom
+factory when uniqueness depends on parsing existing field values, such as
+extracting numeric suffixes from names or codes, rather than on the simple row
+count.
+
 `general_manager.factory.factories` contains lower-level generation helpers used
 by `AutoFactory`. They are importable for advanced factory customization, but
 application factory classes should prefer the exported lazy helpers below when a
@@ -75,20 +108,27 @@ fields, foreign keys, and one-to-one relations. It does not generate
 many-to-many assignment lists; if a many-to-many field is passed here it returns
 `None`, and callers should use `get_many_to_many_field_value()` for
 `ManyToManyField` values. Unsupported scalar or custom Django field classes also
-return `None`. Related fields use the related model's GeneralManager factory
-when one is registered, otherwise they select an existing related row when
-possible. Nullable fields have a small chance to return `None`; nullable
-foreign-key and one-to-one fields with no factory and no existing rows return
-`None`, while non-nullable relation fields in the same situation raise
+return `None`. Relation fields default to `relation_generation="reuse_existing"`:
+nullable/default-`None` relations may return `None`, reusable existing rows are
+preferred, and a related GeneralManager factory is used only when no reusable
+row exists. `relation_generation="create"` forces related-factory creation when
+available; `relation_generation="random"` provides legacy foreign-key behavior
+that may create or reuse. The optional `database_alias` argument scopes existing
+related-row lookup to a specific Django database alias. Nullable foreign-key and
+one-to-one fields with no factory and no existing rows return `None`, while
+non-nullable relation fields in the same situation raise
 `MissingFactoryOrInstancesError`. Missing relation metadata raises
 `MissingRelatedModelError`; non-model relation targets and non-relational scalar
 fields passed to relation helpers raise `InvalidRelatedModelTypeError`.
 
 `get_many_to_many_field_value(field)` accepts a Django `ManyToManyField` and
-returns related model instances for assignment after object creation. It creates
-new related rows through the related GeneralManager factory when available,
-mixes in existing rows when present, and raises `MissingFactoryOrInstancesError`
-when no related factory or existing rows are available. GeneralManager factory
+returns related model instances for assignment after object creation. In default
+mode it samples existing related rows when any exist; if no existing rows are
+available, it creates rows through the related GeneralManager factory when one
+is registered. `relation_generation="create"` bypasses existing rows and uses
+the related factory. The optional `database_alias` argument scopes existing-row
+sampling to that alias. The helper raises `MissingFactoryOrInstancesError` when
+no related factory or existing rows are available. GeneralManager factory
 outputs are normalized to Django model instances; if a manager output cannot be
 resolved to its model row, `UnableToResolveManagerInstanceError` is raised.
 `blank=True` fields may generate an empty list; `blank=False` fields request at

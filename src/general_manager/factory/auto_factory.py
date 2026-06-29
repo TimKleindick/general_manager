@@ -1,7 +1,7 @@
 """Auto-generating factory utilities for GeneralManager models."""
 
 from __future__ import annotations
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import (
     TYPE_CHECKING,
     ClassVar,
@@ -15,6 +15,7 @@ from django.db import models
 from django.db import transaction
 from factory.django import DjangoModelFactory
 from general_manager.factory.factories import (
+    RelationGenerationMode,
     UnableToResolveManagerInstanceError,
     get_field_value,
     get_many_to_many_field_value,
@@ -115,6 +116,53 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     interface: type[OrmInterfaceBase[models.Model]]
     _adjustmentMethod: ClassVar[AdjustmentMethod | None] = None
+    _related_factory_mode: ClassVar[RelationGenerationMode] = "reuse_existing"
+    _related_factory_modes: ClassVar[Mapping[str, RelationGenerationMode]] = {}
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        cls._related_factory_modes = dict(cls._related_factory_modes)
+
+    @classmethod
+    def _setup_next_sequence(cls) -> int:
+        """Initialize factory_boy sequences after existing persisted rows."""
+        model = cls._meta.model
+        try:
+            is_model = isinstance(model, type) and issubclass(model, models.Model)
+        except TypeError:
+            is_model = False
+        if not is_model:
+            return cls._factory_boy_next_sequence()
+
+        model_cls = cast(type[models.Model], model)
+        manager = model_cls._default_manager
+        database_alias = cls._get_database_alias()
+        if database_alias:
+            manager = manager.using(database_alias)
+        try:
+            count = manager.count()
+        except Exception:  # noqa: BLE001
+            return cls._factory_boy_next_sequence()
+        return max(cls._factory_boy_next_sequence(), count)
+
+    @classmethod
+    def _factory_boy_next_sequence(cls) -> int:
+        """Call factory_boy's untyped sequence initializer with a typed boundary."""
+        setup_next_sequence = cast(Callable[[], int], super()._setup_next_sequence)
+        return setup_next_sequence()
+
+    @classmethod
+    def _get_related_factory_mode(cls, field_name: str) -> RelationGenerationMode:
+        """Return the relation generation mode configured for a model field."""
+        return cls._related_factory_modes.get(field_name, cls._related_factory_mode)
+
+    @classmethod
+    def _get_database_alias(cls) -> str | None:
+        """Return the interface database alias, when the interface defines one."""
+        if not hasattr(cls.interface, "_get_database_alias"):
+            return None
+        database_alias = cls.interface._get_database_alias()
+        return database_alias or None
 
     @classmethod
     def _generate(
@@ -158,6 +206,8 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         if not is_model:
             raise InvalidAutoFactoryModelError
         field_name_list, to_ignore_list = cls.interface.handle_custom_fields(model)
+        supplied_field_names = set(params)
+        database_alias = cls._get_database_alias()
 
         fields = [
             field
@@ -186,6 +236,16 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             if declared_default is not None:
                 params[field.name] = declared_default
                 continue
+            if getattr(field, "is_relation", False) and (
+                getattr(field, "many_to_one", False)
+                or getattr(field, "one_to_one", False)
+            ):
+                params[field.name] = get_field_value(
+                    field,
+                    relation_generation=cls._get_related_factory_mode(field.name),
+                    database_alias=database_alias,
+                )
+                continue
             params[field.name] = get_field_value(field)
 
         generate = cast(
@@ -201,16 +261,23 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                     raise InvalidGeneratedObjectError()
             if strategy == "create":
                 for item in obj:
-                    cls._handle_many_to_many_fields_after_creation(item, params)
+                    cls._handle_many_to_many_fields_after_creation(
+                        item, params, supplied_field_names
+                    )
         elif strategy == "create":
-            cls._handle_many_to_many_fields_after_creation(obj, params)
+            cls._handle_many_to_many_fields_after_creation(
+                obj, params, supplied_field_names
+            )
         if strategy == "create":
             return cls._wrap_generated_objects(obj)
         return obj
 
     @classmethod
     def _handle_many_to_many_fields_after_creation(
-        cls, obj: models.Model, attrs: FactoryParams
+        cls,
+        obj: models.Model,
+        attrs: FactoryParams,
+        supplied_field_names: set[str] | None = None,
     ) -> None:
         """
         Assign related objects to many-to-many fields after saved creation.
@@ -223,11 +290,20 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             obj (models.Model): Instance whose many-to-many relations should be populated.
             attrs: Original attributes passed to the factory.
         """
+        if supplied_field_names is None:
+            supplied_field_names = set(attrs)
         for field in obj._meta.many_to_many:
-            if field.name in attrs:
+            relation_generation = cls._get_related_factory_mode(field.name)
+            if field.name in attrs and field.name in supplied_field_names:
                 m2m_values = attrs[field.name]
+            elif relation_generation == "reuse_existing" and field.blank:
+                continue
             else:
-                m2m_values = get_many_to_many_field_value(field)
+                m2m_values = get_many_to_many_field_value(
+                    field,
+                    relation_generation=relation_generation,
+                    database_alias=cls._get_database_alias(),
+                )
             if m2m_values:
                 normalized_values = cls._coerce_many_to_many_values(m2m_values)
                 getattr(obj, field.name).set(normalized_values)
@@ -317,10 +393,10 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         obj = model_class()
         for field, value in kwargs.items():
             setattr(obj, field, value)
+        database_alias = cls._get_database_alias()
+        if database_alias:
+            obj._state.db = database_alias
         obj.full_clean()
-        database_alias: str | None = None
-        if hasattr(cls.interface, "_get_database_alias"):
-            database_alias = cls.interface._get_database_alias()
 
         if database_alias:
             obj.save(using=database_alias)
@@ -373,9 +449,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
         created_objects: list[models.Model] = []
         if use_creation_method:
-            database_alias: str | None = None
-            if hasattr(cls.interface, "_get_database_alias"):
-                database_alias = cls.interface._get_database_alias()
+            database_alias = cls._get_database_alias()
             with transaction.atomic(using=database_alias):
                 for record in records:
                     created_objects.append(cls._model_creation(model_cls, **record))
