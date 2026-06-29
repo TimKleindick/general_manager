@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import string
-from typing import Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from factory.declarations import LazyFunction
 from factory.faker import Faker
 import exrex
 from django.apps import apps
 from django.core.validators import RegexValidator
-from django.db import models
+from django.db import DatabaseError, models
 from datetime import timezone
 from decimal import Decimal
 from random import SystemRandom
@@ -24,6 +24,7 @@ _RNG = SystemRandom()
 _NO_DEFAULT = object()
 type DjangoField = models.Field[object, object]
 type RelatedFactory = Callable[[], object]
+type RelationGenerationMode = Literal["reuse_existing", "create", "random"]
 
 _LazyFunctionConstructor = cast(
     Callable[[Callable[[], object]], LazyFunction],
@@ -137,6 +138,9 @@ class UnableToResolveManagerInstanceError(ValueError):
 
 def get_field_value(
     field: DjangoField | models.ForeignObjectRel,
+    *,
+    relation_generation: RelationGenerationMode = "reuse_existing",
+    database_alias: str | None = None,
 ) -> object:
     """
     Generate a realistic sample value appropriate for the given Django model field or relation.
@@ -164,6 +168,10 @@ def get_field_value(
             relation descriptor to generate a value for. Many-to-many fields are
             accepted by the broad type shape but intentionally return `None`
             here; pass them to `get_many_to_many_field_value()` instead.
+        relation_generation: Strategy for relation fields. Defaults to reusing
+            existing related rows before creating new related rows.
+        database_alias: Optional Django database alias used when querying
+            existing related rows.
 
     Returns:
         A value suitable for assignment to the field (scalar, string, Measurement-producing LazyFunction, model instance, LazyFunction that yields a related instance, or `None`).
@@ -173,14 +181,16 @@ def get_field_value(
         MissingRelatedModelError: When a relational field does not declare a related model.
         InvalidRelatedModelTypeError: When a relational field's related value is not a Django model class.
     """
+    field_is_relation = _is_relation_field(field)
     if (
-        getattr(field, "null", False)
+        relation_generation != "create"
+        and getattr(field, "null", False)
         and getattr(field, "default", _NO_DEFAULT) is None
-        and getattr(field, "is_relation", False)
+        and field_is_relation
     ):
         return None
 
-    if field.null:
+    if relation_generation != "create" and getattr(field, "null", False):
         if _RNG.choice([True] + 9 * [False]):
             return None
 
@@ -269,39 +279,65 @@ def get_field_value(
             return _faker("text", max_nb_chars=max_length)
     elif isinstance(field, models.OneToOneField):
         related_model = get_related_model(field)
-        if hasattr(related_model, "_general_manager_class"):
-            related_factory = _get_related_factory(related_model)
-            return _ensure_model_instance(related_factory())
-        else:
-            # If no factory exists, pick a random existing instance
-            related_instances = list(related_model.objects.all())
-            if related_instances:
-                return _lazy_function(lambda: _RNG.choice(related_instances))
+        related_factory = (
+            _get_related_factory(related_model)
+            if hasattr(related_model, "_general_manager_class")
+            else None
+        )
+        if relation_generation == "create":
+            if related_factory is not None:
+                return _ensure_model_instance(related_factory())
             if field.null:
                 return None
             raise MissingFactoryOrInstancesError(related_model)
+        related_instances = _existing_related_instances(
+            field,
+            related_model,
+            database_alias=database_alias,
+        )
+        if related_instances:
+            return _lazy_existing_choice(related_instances)
+        if related_factory is not None:
+            return _ensure_model_instance(related_factory())
+        if field.null:
+            return None
+        raise MissingFactoryOrInstancesError(related_model)
     elif isinstance(field, models.ForeignKey):
         related_model = get_related_model(field)
-        # Create or get an instance of the related model
-        if hasattr(related_model, "_general_manager_class"):
-            create_a_new_instance = _RNG.choice([True, True, False])
-            if not create_a_new_instance:
-                existing_instances = list(related_model.objects.all())
-                if existing_instances:
-                    # Pick a random existing instance
-                    return _lazy_function(lambda: _RNG.choice(existing_instances))
-
-            related_factory = _get_related_factory(related_model)
-            return _ensure_model_instance(related_factory())
-
-        else:
-            # If no factory exists, pick a random existing instance
-            related_instances = list(related_model.objects.all())
-            if related_instances:
-                return _lazy_function(lambda: _RNG.choice(related_instances))
+        related_factory = (
+            _get_related_factory(related_model)
+            if hasattr(related_model, "_general_manager_class")
+            else None
+        )
+        if relation_generation == "create":
+            if related_factory is not None:
+                return _ensure_model_instance(related_factory())
             if field.null:
                 return None
             raise MissingFactoryOrInstancesError(related_model)
+        if relation_generation == "random" and related_factory is not None:
+            create_a_new_instance = _RNG.choice([True, True, False])
+            if not create_a_new_instance:
+                related_instances = _existing_related_instances(
+                    field,
+                    related_model,
+                    database_alias=database_alias,
+                )
+                if related_instances:
+                    return _lazy_existing_choice(related_instances)
+            return _ensure_model_instance(related_factory())
+        related_instances = _existing_related_instances(
+            field,
+            related_model,
+            database_alias=database_alias,
+        )
+        if related_instances:
+            return _lazy_existing_choice(related_instances)
+        if related_factory is not None:
+            return _ensure_model_instance(related_factory())
+        if field.null:
+            return None
+        raise MissingFactoryOrInstancesError(related_model)
     else:
         return None
 
@@ -372,19 +408,26 @@ def _resolve_related_model_string(
 
 def get_many_to_many_field_value(
     field: models.ManyToManyField[models.Model, models.Model],
+    *,
+    relation_generation: RelationGenerationMode = "reuse_existing",
+    database_alias: str | None = None,
 ) -> list[models.Model]:
     """
     Generate a list of related model instances suitable for assigning to a ManyToManyField.
 
     The function selects a random number of related objects (at least one when
-    the field is not blank, up to 10). It will use the related model's factory
-    to create new instances when available, prefer a mix of created and existing
-    instances if both are present, or return existing instances when no factory
-    is available. `blank=True` allows an empty result; `blank=False` requires at
-    least one related instance.
+    the field is not blank, up to 10). Default generation samples existing
+    related rows when they are available and creates through the related model's
+    factory only when no existing rows are available. Create mode bypasses
+    existing rows and uses the related factory. `blank=True` allows an empty
+    result; `blank=False` requires at least one related instance.
 
     Parameters:
         field (models.ManyToManyField): The ManyToMany field to generate values for.
+        relation_generation: Strategy for relation values. Defaults to reusing
+            existing related rows before creating new related rows.
+        database_alias: Optional Django database alias used when querying
+            existing related rows.
 
     Returns:
         list[models.Model]: A list of related model instances to assign to the field.
@@ -400,37 +443,129 @@ def get_many_to_many_field_value(
     """
     related_factory: RelatedFactory | None = None
     related_model = get_related_model(field)
-    related_instances: list[models.Model] = list(related_model.objects.all())
     if hasattr(related_model, "_general_manager_class"):
         related_factory = _get_related_factory(related_model)
 
     min_required = 0 if field.blank else 1
     number_of_instances = _RNG.randint(min_required, 10)
-    if related_factory and related_instances:
-        number_to_create = _RNG.randint(min_required, number_of_instances)
-        number_to_pick = number_of_instances - number_to_create
-        if number_to_pick > len(related_instances):
-            number_to_pick = len(related_instances)
-        existing_instances = _RNG.sample(related_instances, number_to_pick)
-        new_factory_values = [related_factory() for _ in range(number_to_create)]
-        return existing_instances + [
-            _ensure_model_instance(instance) for instance in new_factory_values
-        ]
-    elif related_factory:
-        number_to_create = number_of_instances
-        new_instances = [
-            _ensure_model_instance(related_factory()) for _ in range(number_to_create)
-        ]
-        return new_instances
-    elif related_instances:
-        number_to_create = 0
+    if relation_generation == "create":
+        if related_factory:
+            return [
+                _ensure_model_instance(related_factory())
+                for _ in range(number_of_instances)
+            ]
+        raise MissingFactoryOrInstancesError(related_model)
+
+    related_instances = _existing_related_instances(
+        field,
+        related_model,
+        database_alias=database_alias,
+    )
+    if related_instances:
         number_to_pick = number_of_instances
         if number_to_pick > len(related_instances):
             number_to_pick = len(related_instances)
-        existing_instances = _RNG.sample(related_instances, number_to_pick)
-        return existing_instances
-    else:
-        raise MissingFactoryOrInstancesError(related_model)
+        return _RNG.sample(related_instances, number_to_pick)
+    if related_factory:
+        return [
+            _ensure_model_instance(related_factory())
+            for _ in range(number_of_instances)
+        ]
+    raise MissingFactoryOrInstancesError(related_model)
+
+
+def _is_relation_field(field: object) -> bool:
+    return (
+        isinstance(field, models.OneToOneField)
+        or isinstance(field, models.ForeignKey)
+        or getattr(field, "is_relation", False) is True
+        or getattr(field, "many_to_one", False) is True
+        or getattr(field, "one_to_one", False) is True
+        or getattr(field, "many_to_many", False) is True
+    )
+
+
+def _existing_related_instances(
+    field: object,
+    related_model: type[models.Model] | None = None,
+    *,
+    database_alias: str | None = None,
+) -> list[models.Model]:
+    """Return existing related rows that are reusable for this relation field."""
+    field_obj = cast(Any, field)
+    if related_model is None:
+        related_model = cast(type[models.Model], field_obj.related_model)
+    related_instances = list(
+        _get_model_manager(related_model, database_alias=database_alias).all()
+    )
+    if not (
+        isinstance(field, models.OneToOneField)
+        or getattr(field, "one_to_one", False) is True
+    ):
+        return related_instances
+
+    model = field_obj.model
+    attname = getattr(field_obj, "attname", field_obj.name)
+    try:
+        linked_values = set(
+            _get_model_manager(
+                model,
+                prefer_base=True,
+                database_alias=database_alias,
+            )
+            .exclude(**{attname: None})
+            .values_list(attname, flat=True)
+        )
+    except DatabaseError:
+        if getattr(getattr(model, "_meta", None), "managed", True) is not False:
+            raise
+        linked_values = set()
+    return [
+        instance
+        for instance in related_instances
+        if _related_target_value(instance, getattr(field_obj, "target_field", None))
+        not in linked_values
+    ]
+
+
+def _lazy_existing_choice(instances: list[models.Model]) -> LazyFunction:
+    return _lazy_function(lambda: _RNG.choice(instances))
+
+
+def _related_target_value(instance: object, target_field: object | None) -> object:
+    if target_field is not None:
+        target_attr = getattr(
+            target_field,
+            "attname",
+            getattr(target_field, "name", None),
+        )
+        if target_attr is not None and hasattr(instance, target_attr):
+            return getattr(instance, target_attr)
+    return getattr(instance, "pk", None)
+
+
+def _get_model_manager(
+    model: object,
+    *,
+    prefer_base: bool = False,
+    database_alias: str | None = None,
+) -> Any:
+    model_obj = cast(Any, model)
+    if prefer_base:
+        base_manager = getattr(model_obj, "_base_manager", None)
+        if base_manager is not None:
+            if database_alias:
+                return base_manager.using(database_alias)
+            return base_manager
+    default_manager = getattr(model_obj, "_default_manager", None)
+    if default_manager is not None:
+        if database_alias:
+            return default_manager.using(database_alias)
+        return default_manager
+    objects_manager = model_obj.objects
+    if database_alias:
+        return objects_manager.using(database_alias)
+    return objects_manager
 
 
 def _get_related_factory(related_model: type[models.Model]) -> RelatedFactory:

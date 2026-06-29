@@ -184,60 +184,362 @@ class TestRelationFieldValue(TestCase):
             if hasattr(M, "_general_manager_class"):
                 delattr(M, "_general_manager_class")
 
-    def test_fk_with_factory_new_instance(self):
-        # 1) _general_manager_class.Factory returns an object directly
-        dummy = DummyForeignKey(name="foo")
+    def test_fk_with_factory_prefers_existing_instances(self):
+        created = DummyForeignKey(name="created")
+        existing1 = DummyForeignKey(name="a")
+        existing2 = DummyForeignKey(name="b")
 
         class GMC:
             pass
 
-        GMC.Factory = lambda **_kwargs: dummy  # type: ignore
+        GMC.Factory = lambda **_kwargs: created  # type: ignore
         DummyForeignKey._general_manager_class = GMC  # type: ignore
-        with patch("general_manager.factory.factories._RNG.choice", return_value=True):
-            field = DummyModel._meta.get_field("dummy_fk")
-            result = get_field_value(field)
-            # In this branch we expect the factory result directly, not a LazyFunction
-            self.assertIs(result, dummy)
 
-    def test_fk_with_factory_existing_instance(self):
-        """
-        Verifies that when a related model has a factory but the random choice selects an existing instance, get_field_value returns a LazyFunction that yields one of the existing instances when evaluated.
-        The test sets up a General Manager Class (GMC) with a Factory that would create dummy1, patches the RNG to choose the "existing" branch, and patches the model manager to return [dummy1, dummy2]. It asserts the declaration is a LazyFunction and that evaluating it returns either dummy1 or dummy2.
-        """
-        dummy1 = DummyForeignKey(name="a")
-        dummy2 = DummyForeignKey(name="b")
+        def deterministic_choice(values):
+            values = list(values)
+            if values == [True, True, False]:
+                return True
+            return values[0]
+
+        with (
+            patch(
+                "general_manager.factory.factories._RNG.choice",
+                side_effect=deterministic_choice,
+            ),
+            patch.object(
+                DummyForeignKey.objects,
+                "all",
+                return_value=[existing1, existing2],
+            ),
+        ):
+            field = DummyModel._meta.get_field("dummy_fk")
+            decl = get_field_value(field)
+        self.assertIsInstance(decl, LazyFunction)
+        selected = decl.evaluate(None, None, None)  # type: ignore
+        self.assertIn(selected, (existing1, existing2))
+        self.assertIsNot(selected, created)
+
+    def test_fk_with_factory_create_mode_creates_new_instance(self):
+        created = DummyForeignKey(name="created")
         field = DummyModel._meta.get_field("dummy_fk")
 
         class GMC:
             pass
 
-        GMC.Factory = lambda **_kwargs: dummy1  # type: ignore
+        GMC.Factory = lambda **_kwargs: created  # type: ignore
+        DummyForeignKey._general_manager_class = GMC  # type: ignore
+
+        self.assertIs(
+            get_field_value(field, relation_generation="create"),
+            created,
+        )
+
+    def test_fk_with_factory_random_mode_can_create_new_instance(self):
+        created = DummyForeignKey(name="created")
+        existing = DummyForeignKey(name="existing")
+        field = DummyModel._meta.get_field("dummy_fk")
+
+        class GMC:
+            pass
+
+        GMC.Factory = lambda **_kwargs: created  # type: ignore
         DummyForeignKey._general_manager_class = GMC  # type: ignore
 
         with (
             patch(
                 "general_manager.factory.factories._RNG.choice",
-                return_value=False,
+                return_value=True,
             ),
-            patch.object(DummyForeignKey.objects, "all", return_value=[dummy1, dummy2]),
+            patch.object(DummyForeignKey.objects, "all", return_value=[existing]),
         ):
-            decl = get_field_value(field)
-            self.assertIsInstance(decl, LazyFunction)
-        inst = decl.evaluate(None, None, None)  # type: ignore
-        self.assertIn(inst, (dummy1, dummy2))
+            result = get_field_value(field, relation_generation="random")
 
-    def test_one_to_one_with_factory(self):
-        dummy = DummyForeignKey2(name="bar")
+        self.assertIs(result, created)
+
+    def test_fk_with_factory_random_mode_can_reuse_existing_instance(self):
+        created = DummyForeignKey(name="created")
+        existing = DummyForeignKey(name="existing")
+        field = DummyModel._meta.get_field("dummy_fk")
+
+        class GMC:
+            pass
+
+        GMC.Factory = lambda **_kwargs: created  # type: ignore
+        DummyForeignKey._general_manager_class = GMC  # type: ignore
+
+        def deterministic_choice(values):
+            values = list(values)
+            if values == [True, True, False]:
+                return False
+            return values[0]
+
+        with (
+            patch(
+                "general_manager.factory.factories._RNG.choice",
+                side_effect=deterministic_choice,
+            ),
+            patch.object(DummyForeignKey.objects, "all", return_value=[existing]),
+        ):
+            decl = get_field_value(field, relation_generation="random")
+
+        self.assertIsInstance(decl, LazyFunction)
+        self.assertIs(decl.evaluate(None, None, None), existing)  # type: ignore
+        self.assertIsNot(existing, created)
+
+    def test_nullable_fk_default_mode_can_return_none_with_related_available(self):
+        created = DummyForeignKey(name="created")
+        existing = DummyForeignKey(name="existing")
+        field = DummyModel._meta.get_field("dummy_fk")
+        original_null = field.null
+
+        class GMC:
+            pass
+
+        def factory(**_kwargs):
+            self.fail("default nullable relation generation should return None first")
+            return created
+
+        GMC.Factory = factory  # type: ignore
+        DummyForeignKey._general_manager_class = GMC  # type: ignore
+        field.null = True
+        try:
+            with (
+                patch(
+                    "general_manager.factory.factories._RNG.choice",
+                    return_value=True,
+                ),
+                patch.object(
+                    DummyForeignKey.objects,
+                    "all",
+                    return_value=[existing],
+                ),
+            ):
+                self.assertIsNone(get_field_value(field))
+        finally:
+            field.null = original_null
+
+    def test_nullable_one_to_one_default_mode_can_return_none_with_related_available(
+        self,
+    ):
+        created = DummyForeignKey2(name="created")
+        existing = DummyForeignKey2(id=1, name="existing")
+        field = DummyModel._meta.get_field("dummy_one_to_one")
+        original_null = field.null
 
         class GMC2:
             pass
 
-        GMC2.Factory = lambda **_kwargs: dummy  # type: ignore
+        def factory(**_kwargs):
+            self.fail("default nullable relation generation should return None first")
+            return created
+
+        GMC2.Factory = factory  # type: ignore
+        DummyForeignKey2._general_manager_class = GMC2  # type: ignore
+        field.null = True
+        try:
+            with (
+                patch(
+                    "general_manager.factory.factories._RNG.choice",
+                    return_value=True,
+                ),
+                patch.object(
+                    DummyForeignKey2.objects,
+                    "all",
+                    return_value=[existing],
+                ),
+            ):
+                self.assertIsNone(get_field_value(field))
+        finally:
+            field.null = original_null
+
+    def test_nullable_fk_default_none_create_mode_creates_new_instance(self):
+        created = DummyForeignKey(name="created")
+        field = DummyModel._meta.get_field("dummy_fk")
+        original_null = field.null
+        original_default = field.default
+
+        class GMC:
+            pass
+
+        GMC.Factory = lambda **_kwargs: created  # type: ignore
+        DummyForeignKey._general_manager_class = GMC  # type: ignore
+        field.null = True
+        field.default = None
+        try:
+            self.assertIs(
+                get_field_value(field, relation_generation="create"),
+                created,
+            )
+        finally:
+            field.null = original_null
+            field.default = original_default
+
+    def test_one_to_one_with_factory_prefers_existing_instances(self):
+        created = DummyForeignKey2(name="created")
+        existing1 = DummyForeignKey2(id=1, name="x")
+        existing2 = DummyForeignKey2(id=2, name="y")
+
+        class GMC2:
+            pass
+
+        GMC2.Factory = lambda **_kwargs: created  # type: ignore
         DummyForeignKey2._general_manager_class = GMC2  # type: ignore
 
         field = DummyModel._meta.get_field("dummy_one_to_one")
-        result = get_field_value(field)
-        self.assertIs(result, dummy)
+        with patch.object(
+            DummyForeignKey2.objects,
+            "all",
+            return_value=[existing1, existing2],
+        ):
+            decl = get_field_value(field)
+        self.assertIsInstance(decl, LazyFunction)
+        selected = decl.evaluate(None, None, None)  # type: ignore
+        self.assertIn(selected, (existing1, existing2))
+        self.assertIsNot(selected, created)
+
+    def test_one_to_one_reuse_excludes_already_linked_instances(self):
+        from general_manager.factory.factories import _existing_related_instances
+
+        available = DummyForeignKey2(id=1, name="free")
+        linked = DummyForeignKey2(id=2, name="used")
+        also_available = DummyForeignKey2(id=3, name="free2")
+        related_manager = Mock()
+        related_manager.all.return_value = [available, linked, also_available]
+        owner_manager = Mock()
+        owner_rows = owner_manager.exclude.return_value
+        owner_rows.values_list.return_value = [linked.pk]
+        owner_manager.values_list.side_effect = AssertionError(
+            "linked ids must come from the filtered owner queryset"
+        )
+        field = SimpleNamespace(
+            name="dummy_one_to_one",
+            attname="dummy_one_to_one_id",
+            one_to_one=True,
+            model=SimpleNamespace(objects=owner_manager),
+            related_model=SimpleNamespace(objects=related_manager),
+        )
+
+        result = _existing_related_instances(field)
+
+        self.assertEqual(result, [available, also_available])
+        related_manager.all.assert_called_once_with()
+        owner_manager.exclude.assert_called_once()
+        owner_rows.values_list.assert_called_once_with("dummy_one_to_one_id", flat=True)
+
+    def test_existing_related_instances_uses_default_manager_for_non_one_to_one(self):
+        from general_manager.factory.factories import _existing_related_instances
+
+        existing = [DummyForeignKey(id=1, name="available")]
+        default_manager = Mock()
+        default_manager.all.return_value = existing
+        objects_manager = Mock()
+        objects_manager.all.return_value = []
+        field = SimpleNamespace(
+            name="dummy_fk",
+            one_to_one=False,
+            related_model=SimpleNamespace(
+                _default_manager=default_manager,
+                objects=objects_manager,
+            ),
+        )
+
+        self.assertEqual(_existing_related_instances(field), existing)
+        default_manager.all.assert_called_once_with()
+        objects_manager.all.assert_not_called()
+
+    def test_existing_related_instances_uses_default_manager_for_one_to_one_owner(
+        self,
+    ):
+        from general_manager.factory.factories import _existing_related_instances
+
+        available = DummyForeignKey2(id=1, name="available")
+        linked = DummyForeignKey2(id=2, name="linked")
+        related_default_manager = Mock()
+        related_default_manager.all.return_value = [available, linked]
+        related_objects_manager = Mock()
+        related_objects_manager.all.return_value = []
+        owner_default_manager = Mock()
+        owner_rows = owner_default_manager.exclude.return_value
+        owner_rows.values_list.return_value = [linked.pk]
+        owner_objects_manager = Mock()
+        owner_objects_manager.exclude.return_value.values_list.return_value = []
+        field = SimpleNamespace(
+            name="dummy_one_to_one",
+            attname="dummy_one_to_one_id",
+            one_to_one=True,
+            model=SimpleNamespace(
+                _default_manager=owner_default_manager,
+                objects=owner_objects_manager,
+            ),
+            related_model=SimpleNamespace(
+                _default_manager=related_default_manager,
+                objects=related_objects_manager,
+            ),
+        )
+
+        self.assertEqual(_existing_related_instances(field), [available])
+        related_default_manager.all.assert_called_once_with()
+        related_objects_manager.all.assert_not_called()
+        owner_default_manager.exclude.assert_called_once()
+        owner_rows.values_list.assert_called_once_with("dummy_one_to_one_id", flat=True)
+        owner_objects_manager.exclude.assert_not_called()
+
+    def test_one_to_one_reuse_excludes_linked_to_field_value(self):
+        from general_manager.factory.factories import _existing_related_instances
+
+        available = SimpleNamespace(pk=1, code="free")
+        linked = SimpleNamespace(pk=2, code="used")
+        also_available = SimpleNamespace(pk=3, code="free2")
+        related_manager = Mock()
+        related_manager.all.return_value = [available, linked, also_available]
+        owner_manager = Mock()
+        owner_rows = owner_manager.exclude.return_value
+        owner_rows.values_list.return_value = ["used"]
+        target_field = SimpleNamespace(attname="code", name="code")
+        field = SimpleNamespace(
+            name="dummy_one_to_one",
+            attname="dummy_one_to_one_code",
+            one_to_one=True,
+            target_field=target_field,
+            model=SimpleNamespace(objects=owner_manager),
+            related_model=SimpleNamespace(objects=related_manager),
+        )
+
+        self.assertEqual(
+            _existing_related_instances(field),
+            [available, also_available],
+        )
+
+    def test_one_to_one_owner_scan_prefers_base_manager_for_linked_values(self):
+        from general_manager.factory.factories import _existing_related_instances
+
+        available = DummyForeignKey2(id=1, name="available")
+        linked = DummyForeignKey2(id=2, name="linked")
+        related_default_manager = Mock()
+        related_default_manager.all.return_value = [available, linked]
+        owner_base_manager = Mock()
+        owner_rows = owner_base_manager.exclude.return_value
+        owner_rows.values_list.return_value = [linked.pk]
+        owner_default_manager = Mock()
+        owner_default_manager.exclude.return_value.values_list.return_value = []
+        field = SimpleNamespace(
+            name="dummy_one_to_one",
+            attname="dummy_one_to_one_id",
+            one_to_one=True,
+            model=SimpleNamespace(
+                _base_manager=owner_base_manager,
+                _default_manager=owner_default_manager,
+            ),
+            related_model=SimpleNamespace(
+                _default_manager=related_default_manager,
+            ),
+        )
+
+        self.assertEqual(_existing_related_instances(field), [available])
+        related_default_manager.all.assert_called_once_with()
+        owner_base_manager.exclude.assert_called_once()
+        owner_rows.values_list.assert_called_once_with("dummy_one_to_one_id", flat=True)
+        owner_default_manager.exclude.assert_not_called()
 
     def test_fk_without_factory_with_existing_instances(self):
         # 2) No factory but existing objects → expect LazyFunction
@@ -302,25 +604,103 @@ class TestGetManyToManyFieldValue(TestCase):
         """
         dummy1 = DummyManyToMany(name="foo", id=1)
         dummy2 = DummyManyToMany(name="bar", id=2)
+        created = DummyManyToMany(name="created", id=3)
+        factory_calls = 0
 
         class GMC:
             pass
 
-        GMC.Factory = lambda **_kwargs: dummy1  # type: ignore
+        def factory(**_kwargs):
+            nonlocal factory_calls
+            factory_calls += 1
+            return created
+
+        GMC.Factory = factory  # type: ignore
         DummyManyToMany._general_manager_class = GMC  # type: ignore
 
         field = DummyModel._meta.get_field("dummy_m2m")
-        with patch.object(
-            field.related_model.objects,
-            "all",
-            return_value=[dummy1, dummy2],  # type: ignore
-        ):
-            result = get_many_to_many_field_value(field)  # type: ignore
+        original_blank = field.blank
+        field.blank = False
+        try:
+            with patch.object(
+                field.related_model.objects,
+                "all",
+                return_value=[dummy1, dummy2],  # type: ignore
+            ):
+                result = get_many_to_many_field_value(field)  # type: ignore
+        finally:
+            field.blank = original_blank
+
+        self.assertEqual(factory_calls, 0)
         self.assertIsInstance(result, list)
         self.assertTrue(
             set(result).issubset({dummy1, dummy2}),
             "Returned instances are not a subset of existing objects",
         )
+
+    def test_m2m_create_mode_uses_factory_when_existing_rows_are_available(self):
+        created = DummyManyToMany(name="created", id=2)
+        factory_calls = 0
+
+        class GMC:
+            pass
+
+        def factory(**_kwargs):
+            nonlocal factory_calls
+            factory_calls += 1
+            return created
+
+        GMC.Factory = factory  # type: ignore
+        DummyManyToMany._general_manager_class = GMC  # type: ignore
+
+        field = DummyModel._meta.get_field("dummy_m2m")
+        with (
+            patch(
+                "general_manager.factory.factories._existing_related_instances",
+                side_effect=AssertionError("create mode must not query existing rows"),
+            ) as existing_related_instances,
+            patch(
+                "general_manager.factory.factories._RNG.randint",
+                return_value=1,
+            ),
+        ):
+            result = get_many_to_many_field_value(
+                field,  # type: ignore[arg-type]
+                relation_generation="create",
+            )
+
+        self.assertEqual(factory_calls, 1)
+        existing_related_instances.assert_not_called()
+        self.assertEqual(result, [created])
+
+    def test_m2m_existing_rows_use_database_alias(self):
+        dummy1 = DummyManyToMany(name="foo", id=1)
+        dummy2 = DummyManyToMany(name="bar", id=2)
+        alias = "factory_alias"
+        alias_manager = Mock()
+        alias_manager.all.return_value = [dummy1, dummy2]
+
+        field = DummyModel._meta.get_field("dummy_m2m")
+        with (
+            patch.object(
+                field.related_model._default_manager,
+                "using",
+                return_value=alias_manager,
+            ) as using,
+            patch(
+                "general_manager.factory.factories._RNG.randint",
+                return_value=1,
+            ),
+        ):
+            result = get_many_to_many_field_value(
+                field,  # type: ignore[arg-type]
+                database_alias=alias,
+            )
+
+        using.assert_called_once_with(alias)
+        alias_manager.all.assert_called_once_with()
+        self.assertEqual(len(result), 1)
+        self.assertIn(result[0], (dummy1, dummy2))
 
     def test_m2m_with_factory(self):
         dummy1 = DummyManyToMany(name="foo", id=1)

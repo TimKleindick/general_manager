@@ -44,25 +44,57 @@ above when a value matters.
 The automatic helpers inspect Django fields and produce values that factory_boy
 can assign later. Scalar fields usually receive factory_boy `Faker`
 declarations, short text and regex-constrained text receive lazy declarations,
-measurement fields receive lazy `Measurement` values, nullable fields may return
-`None`, and relation fields return either a model instance or a lazy declaration
-that selects an existing related row. Many-to-many fields are routed through the
-dedicated many-to-many helper after the main object is built; the scalar helper
-returns `None` if called with a many-to-many field directly. Unsupported scalar
-or custom Django field classes also fall back to `None`. Nullable foreign-key
-and one-to-one fields with no related factory and no existing related rows
-resolve to `None`; required relations in the same situation raise
-`MissingFactoryOrInstancesError`.
+measurement fields receive lazy `Measurement` values, and nullable fields may
+return `None`. Foreign-key and one-to-one fields default to reusing data that is
+already in the database: reusable existing related rows are preferred, and a
+related GeneralManager factory is used only when no reusable row exists.
+One-to-one reuse skips rows that are already linked through that one-to-one
+field. If the factory interface uses a database alias, relation reuse and
+one-to-one linked-row filtering query that alias. Nullable relations, including
+relations with a default of `None`, preserve their nullable behavior in default
+mode and may remain `None`.
+Nullable foreign-key and one-to-one fields with no related factory and no
+existing related rows resolve to `None`; required relations in the same
+situation raise `MissingFactoryOrInstancesError`.
 
-Many-to-many defaults are generated after the main object is created. The helper
-creates or selects related model instances, then `AutoFactory` applies them to
-the saved relation for `Factory.create(...)` and `Factory.create_batch(...)`.
-`Factory.build(...)` returns unsaved model instances and skips many-to-many
-assignment, even when explicit or declared many-to-many values are supplied.
-`blank=True` fields may generate an empty list, while `blank=False` fields
-request at least one related instance. If a related factory returns a
-GeneralManager instance, the helper resolves it back to the underlying Django
-row before assignment. If that manager cannot be resolved to a row,
+Factories can opt into different relation generation behavior on the nested
+`Factory` class:
+
+```python
+class Factory:
+    _related_factory_mode = "create"
+    _related_factory_modes = {"owner": "create"}
+```
+
+`_related_factory_mode` applies to every generated relation unless a
+field-specific `_related_factory_modes` entry overrides it. `"create"` forces a
+new related object when the related model exposes a factory, and it bypasses the
+nullable/default-`None` shortcut for that relation. `"random"` restores the
+legacy foreign-key behavior that may create a new related row or reuse an
+existing one. The default mode is `"reuse_existing"`.
+
+Many-to-many fields are handled after the main object is saved. Explicit
+many-to-many values passed to `Factory.create(...)` or
+`Factory.create_batch(...)` are assigned to the saved relation. Omitted
+`blank=True` many-to-many fields stay empty by default; use a field-specific
+`_related_factory_modes = {"members": "create"}` entry when an omitted
+many-to-many field should generate and assign related values. `Factory.build(...)`
+returns unsaved model instances and skips many-to-many assignment, even when
+explicit or declared many-to-many values are supplied. If a related factory
+returns a GeneralManager instance, the helper resolves it back to the underlying
+Django row before assignment. If that manager cannot be resolved to a row,
 `UnableToResolveManagerInstanceError` is raised.
+
+## Sequences and existing rows
+
+`AutoFactory` initializes factory_boy sequence counters from the target model's
+current row count. The count is read through the interface database alias when
+one is configured. If a table already contains one row and a factory uses
+`lazy_sequence()` or another factory_boy sequence declaration, the first
+generated sequence index is `1` rather than `0`.
+
+This is a row-count default, not a parser for existing values. Override
+`_setup_next_sequence()` on a custom factory when uniqueness requires reading
+and parsing existing names, codes, or other sequence-bearing fields.
 
 See the [Factory API reference](../../api/factory.md) for signatures.
