@@ -28,7 +28,6 @@ _active_context: ContextVar["CalculationRunContext | None"] = ContextVar(
 ORM_BUCKET_RESULT_PREFIX = "orm_bucket_result"
 ORM_BUCKET_ROW_RESULT_PREFIX = "orm_bucket_row_result"
 BUCKET_INDEX_PREFIX = "bucket_index"
-TRUSTED_MANAGER_PREFIX = "trusted_manager"
 DEFAULT_DEPENDENCY_CACHE_PUBLISH_BATCH_SIZE = 1000
 logger = get_logger("cache.run_context")
 
@@ -300,15 +299,6 @@ class CalculationRunContext:
         """Discard all run-scoped ORM bucket result entries."""
         self.discard_prefix((ORM_BUCKET_RESULT_PREFIX,))
         self.discard_prefix((ORM_BUCKET_ROW_RESULT_PREFIX,))
-        self.discard_prefix((TRUSTED_MANAGER_PREFIX,))
-
-    def get_trusted_manager(self, key: Hashable) -> object:
-        """Return a run-scoped trusted manager instance, or `None` when absent."""
-        return self.get((TRUSTED_MANAGER_PREFIX, key))
-
-    def set_trusted_manager(self, key: Hashable, value: object) -> None:
-        """Store a run-scoped trusted manager instance."""
-        self.set((TRUSTED_MANAGER_PREFIX, key), value)
 
     def _bucket_index_cache_key(
         self,
