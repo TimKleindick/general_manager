@@ -2,6 +2,37 @@
 
 <!-- version list -->
 
+## v0.59.3 (2026-06-30)
+
+### Bug Fixes
+
+- Address performance review feedback
+  ([`9f70406`](https://github.com/TimKleindick/general_manager/commit/9f704064af8773f21e6fc446d5e528ce1c309fd6))
+
+### Performance Improvements
+
+- Cache interface input parsing metadata
+  ([`56cfae5`](https://github.com/TimKleindick/general_manager/commit/56cfae599c7f4cdf0c49e766d27044e97de1c66f))
+
+- Cache measurement offset unit checks
+  ([`d49bd27`](https://github.com/TimKleindick/general_manager/commit/d49bd27b7eba95237bc2ff2233b9cd373e947836))
+
+- Fast path initialized manager descriptors
+  ([`33a13b8`](https://github.com/TimKleindick/general_manager/commit/33a13b822545e74b32874c7cdbaae0c8d88865ab))
+
+- Fast path primitive dependency serialization
+  ([`aaad867`](https://github.com/TimKleindick/general_manager/commit/aaad86719f7c3b406fb9722241d8cd78650ba7ff))
+
+- Reuse trusted orm managers within calculation runs
+  ([`8df5530`](https://github.com/TimKleindick/general_manager/commit/8df5530bc6cf9645718651ac859012c8e47b4117))
+
+- Skip dependency serialization without active tracking
+  ([`93f2386`](https://github.com/TimKleindick/general_manager/commit/93f2386f8b3464ffee3e2e568bd42beb71a6be5c))
+
+- Skip disabled debug observability work
+  ([`912414a`](https://github.com/TimKleindick/general_manager/commit/912414a69a19e1e3c2694491e11b6d372a0c877c))
+
+
 ## v0.59.2 (2026-06-29)
 
 ### Bug Fixes
