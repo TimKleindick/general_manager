@@ -1,4 +1,4 @@
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from general_manager.bootstrap import (
     InvalidPermissionClassError,
     check_permission_class,
@@ -9,7 +9,7 @@ from general_manager.manager.general_manager import (
     TrustedOrmHydrationNotSupportedError,
     UnsupportedUnionOperandError,
 )
-from general_manager.manager.meta import InvalidManagerStateError
+from general_manager.manager.meta import GeneralManagerMeta, InvalidManagerStateError
 from general_manager.permission.manager_based_permission import (
     AdditiveManagerPermission,
     ManagerBasedPermission,
@@ -133,6 +133,27 @@ class GeneralManagerTestCase(TestCase):
         """
         post_data_change.disconnect(self.post_data_change)
         pre_data_change.disconnect(self.pre_data_change)
+
+    def _temporary_manager_class(self):
+        with override_settings(AUTOCREATE_GRAPHQL=False):
+
+            class TemporaryManager(GeneralManager):
+                pass
+
+        TemporaryManager._attributes = dict(self.manager._attributes)
+        TemporaryManager.Interface = DummyInterface  # type: ignore
+        TemporaryManager.Permission = ManagerBasedPermission  # type: ignore
+        return TemporaryManager
+
+    def test_temporary_manager_class_does_not_register_graphql_interface(self):
+        pending_graphql_interfaces = list(GeneralManagerMeta.pending_graphql_interfaces)
+
+        self._temporary_manager_class()
+
+        self.assertEqual(
+            GeneralManagerMeta.pending_graphql_interfaces,
+            pending_graphql_interfaces,
+        )
 
     @patch("general_manager.cache.cache_tracker.DependencyTracker.track")
     def test_initialization(self, mock_track):
@@ -276,6 +297,100 @@ class GeneralManagerTestCase(TestCase):
             manager,
         )
         self.assertIs(history, expected_history)
+
+    def test_initialized_manager_class_attribute_lookup_skips_attribute_initialization(
+        self,
+    ):
+        manager_class = self._temporary_manager_class()
+
+        with patch.object(DummyInterface, "get_attributes", create=True):
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+
+        with patch.object(
+            GeneralManagerMeta,
+            "ensure_attributes_initialized",
+            side_effect=AssertionError("should not re-enter initialization"),
+        ):
+            self.assertIs(manager_class.Permission, ManagerBasedPermission)
+
+    def test_descriptor_creation_marks_manager_initialized_for_class_lookup(self):
+        manager_class = self._temporary_manager_class()
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            manager_class._attributes.keys(),
+            manager_class,
+        )
+
+        with patch.object(
+            GeneralManagerMeta,
+            "ensure_attributes_initialized",
+            side_effect=AssertionError("should not re-enter initialization"),
+        ):
+            self.assertIs(manager_class.Permission, ManagerBasedPermission)
+
+    def test_initialized_manager_instance_descriptor_access_still_returns_value(self):
+        manager_class = self._temporary_manager_class()
+
+        with patch.object(DummyInterface, "get_attributes", create=True):
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+
+        instance = manager_class("dummy_id")
+
+        self.assertEqual(instance.id, "dummy_id")
+
+    def test_initialized_manager_discovers_late_added_public_field(self):
+        manager_class = self._temporary_manager_class()
+        late_attribute = "late_discovered_field"
+        had_late_attribute = late_attribute in manager_class._attributes
+        late_attribute_value = manager_class._attributes.get(late_attribute)
+
+        with (
+            patch.object(DummyInterface, "get_attributes", create=True),
+            patch.object(
+                DummyInterface,
+                "get_field_type",
+                return_value=str,
+                create=True,
+            ),
+        ):
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+            manager_class._attributes[late_attribute] = "late value"
+
+            try:
+                self.assertIs(getattr(manager_class, late_attribute), str)
+            finally:
+                if had_late_attribute:
+                    manager_class._attributes[late_attribute] = late_attribute_value
+                else:
+                    manager_class._attributes.pop(late_attribute, None)
+                if late_attribute in vars(manager_class):
+                    delattr(manager_class, late_attribute)
+
+    def test_initialized_manager_discovers_late_field_over_inherited_public_name(self):
+        manager_class = self._temporary_manager_class()
+        sentinel_type = type("SentinelFilterFieldType", (), {})
+        late_attribute = "filter"
+
+        with (
+            patch.object(DummyInterface, "get_attributes", create=True),
+            patch.object(
+                DummyInterface,
+                "get_field_type",
+                return_value=sentinel_type,
+                create=True,
+            ),
+        ):
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+            manager_class._attributes[late_attribute] = "late value"
+
+            try:
+                self.assertIs(
+                    getattr(manager_class, late_attribute),
+                    sentinel_type,
+                )
+            finally:
+                manager_class._attributes.pop(late_attribute, None)
+                if late_attribute in vars(manager_class):
+                    delattr(manager_class, late_attribute)
 
     def test_iter(self):
         # Test the __iter__ method
