@@ -163,6 +163,40 @@ MEASUREMENT_EXPORTS: LazyExportMap = {
 }
 
 
+DATAFRAME_EXPORTS: LazyExportMap = {
+    "DataFrameMeasurementError": (
+        "general_manager.dataframes.measurements",
+        "DataFrameMeasurementError",
+    ),
+    "InvalidDataFrameMeasurementValueError": (
+        "general_manager.dataframes.measurements",
+        "InvalidDataFrameMeasurementValueError",
+    ),
+    "MeasurementDataFrameColumnCollisionError": (
+        "general_manager.dataframes.measurements",
+        "MeasurementDataFrameColumnCollisionError",
+    ),
+    "MissingMeasurementDataFrameColumnError": (
+        "general_manager.dataframes.measurements",
+        "MissingMeasurementDataFrameColumnError",
+    ),
+    "PandasNotInstalledError": (
+        "general_manager.dataframes.measurements",
+        "PandasNotInstalledError",
+    ),
+    "collapse_measurements": (
+        "general_manager.dataframes.measurements",
+        "collapse_measurements",
+    ),
+    "expand_measurements": (
+        "general_manager.dataframes.measurements",
+        "expand_measurements",
+    ),
+    "from_dataframe": ("general_manager.dataframes.measurements", "from_dataframe"),
+    "to_dataframe": ("general_manager.dataframes.measurements", "to_dataframe"),
+}
+
+
 UTILS_EXPORTS: LazyExportMap = {
     "none_to_zero": ("general_manager.utils.none_to_zero", "none_to_zero"),
     "args_to_kwargs": ("general_manager.utils.args_to_kwargs", "args_to_kwargs"),
@@ -541,6 +575,7 @@ EXPORT_REGISTRY: Mapping[str, LazyExportMap] = {
     "general_manager.api": API_EXPORTS,
     "general_manager.factory": FACTORY_EXPORTS,
     "general_manager.measurement": MEASUREMENT_EXPORTS,
+    "general_manager.dataframes": DATAFRAME_EXPORTS,
     "general_manager.utils": UTILS_EXPORTS,
     "general_manager.permission": PERMISSION_EXPORTS,
     "general_manager.interface": INTERFACE_EXPORTS,

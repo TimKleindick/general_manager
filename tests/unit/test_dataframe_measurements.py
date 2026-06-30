@@ -38,6 +38,16 @@ class TruthinessDisabledIterable:
         raise TypeError
 
 
+def test_dataframe_helpers_are_available_from_public_module() -> None:
+    from general_manager.dataframes import (
+        collapse_measurements as public_collapse_measurements,
+        expand_measurements as public_expand_measurements,
+    )
+
+    assert public_expand_measurements is expand_measurements
+    assert public_collapse_measurements is collapse_measurements
+
+
 def test_expand_measurements_splits_measurement_objects() -> None:
     rows = [
         {"name": "Alice", "height": Measurement(180, "cm"), "age": 31},
