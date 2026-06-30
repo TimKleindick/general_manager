@@ -1,11 +1,12 @@
 from __future__ import annotations
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 from typing import TYPE_CHECKING, Iterator, Protocol, Self, Type, cast
 
 from general_manager.api.property import GraphQLProperty
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
+from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.cache.signals import data_change
 from general_manager.logging import get_logger
 from general_manager.manager.meta import GeneralManagerMeta, InvalidManagerStateError
@@ -123,11 +124,34 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 return cls(pk)
             return cls(pk, search_date=search_date)
 
+        context = current_calculation_run_context()
+        cache_key: Hashable | None = None
+        if context is not None:
+            cache_key = (cls, instance.pk, search_date)
+            try:
+                cached = context.get_trusted_manager(cache_key)
+            except TypeError:
+                cache_key = None
+            else:
+                if cached is not None:
+                    cached_manager = cast(Self, cached)
+                    if DependencyTracker.is_active():
+                        DependencyTracker.track(
+                            cls.__name__,
+                            "identification",
+                            serialize_dependency_identifier(
+                                cached_manager.identification
+                            ),
+                        )
+                    return cached_manager
+
         manager = cls.__new__(cls)
         manager._interface = hydrate(instance, search_date=search_date)
         manager.__id = manager._interface.identification
         manager._manager_state_valid = True
         manager._manager_state_reason = None
+        if context is not None and cache_key is not None:
+            context.set_trusted_manager(cache_key, manager)
         if DependencyTracker.is_active():
             DependencyTracker.track(
                 cls.__name__,
