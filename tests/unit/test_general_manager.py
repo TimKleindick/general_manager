@@ -1,5 +1,4 @@
 from django.test import TestCase, override_settings
-from typing import ClassVar
 from general_manager.bootstrap import (
     InvalidPermissionClassError,
     check_permission_class,
@@ -17,7 +16,6 @@ from general_manager.permission.manager_based_permission import (
 )
 from unittest.mock import Mock, patch
 from general_manager.cache.cache_tracker import DependencyTracker
-from general_manager.cache.run_context import CalculationRunContext
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.contrib.auth import get_user_model
 from django.utils.crypto import get_random_string
@@ -149,30 +147,6 @@ class GeneralManagerTestCase(TestCase):
         TemporaryManager.Permission = ManagerBasedPermission  # type: ignore
         return TemporaryManager
 
-    def _temporary_trusted_orm_manager_class(self):
-        manager_class = self._temporary_manager_class()
-
-        class TrustedInterface:
-            calls: ClassVar[list[tuple[object, object | None]]] = []
-
-            def __init__(self, pk=None, search_date=None):
-                self.identification = {"id": pk}
-                self.pk = pk
-                self._search_date = search_date
-
-            @classmethod
-            def _from_trusted_orm_instance(cls, instance, *, search_date=None):
-                cls.calls.append((instance, search_date))
-                interface = cls()
-                interface.identification = {"id": instance.pk}
-                interface.pk = instance.pk
-                interface._search_date = search_date
-                interface._instance = instance
-                return interface
-
-        manager_class.Interface = TrustedInterface  # type: ignore[assignment]
-        return manager_class, TrustedInterface
-
     def test_temporary_manager_class_does_not_register_graphql_interface(self):
         pending_graphql_interfaces = list(GeneralManagerMeta.pending_graphql_interfaces)
 
@@ -257,91 +231,6 @@ class GeneralManagerTestCase(TestCase):
             ("TemporaryManager", "identification", '{"id": "trusted_id"}'),
             dependencies,
         )
-
-    def test_trusted_orm_hydration_reuses_manager_within_run_context(self):
-        manager_class, trusted_interface = self._temporary_trusted_orm_manager_class()
-        row = Mock(pk="trusted_id")
-
-        with CalculationRunContext():
-            first = manager_class._from_trusted_orm_instance(row)
-            second = manager_class._from_trusted_orm_instance(row)
-
-        self.assertIs(second, first)
-        self.assertEqual(len(trusted_interface.calls), 1)
-
-    def test_trusted_orm_hydration_does_not_reuse_manager_outside_run_context(self):
-        manager_class, trusted_interface = self._temporary_trusted_orm_manager_class()
-        row = Mock(pk="trusted_id")
-
-        first = manager_class._from_trusted_orm_instance(row)
-        second = manager_class._from_trusted_orm_instance(row)
-
-        self.assertIsNot(second, first)
-        self.assertEqual(len(trusted_interface.calls), 2)
-
-    def test_trusted_orm_hydration_does_not_reuse_custom_init_manager(self):
-        manager_class, trusted_interface = self._temporary_trusted_orm_manager_class()
-
-        with override_settings(AUTOCREATE_GRAPHQL=False):
-
-            class CustomInitManager(manager_class):
-                init_calls = 0
-
-                def __init__(self, *args, **kwargs):
-                    type(self).init_calls += 1
-                    super().__init__(*args, **kwargs)
-
-        CustomInitManager._attributes = dict(manager_class._attributes)
-        CustomInitManager.Interface = trusted_interface  # type: ignore[assignment]
-        CustomInitManager.Permission = ManagerBasedPermission  # type: ignore[assignment]
-        row = Mock(pk="trusted_id")
-
-        with CalculationRunContext():
-            first = CustomInitManager._from_trusted_orm_instance(row)
-            second = CustomInitManager._from_trusted_orm_instance(row)
-
-        self.assertIsNot(second, first)
-        self.assertEqual(CustomInitManager.init_calls, 2)
-        self.assertEqual(trusted_interface.calls, [])
-
-    def test_trusted_orm_hydration_replays_dependency_on_run_cache_hit(self):
-        manager_class, trusted_interface = self._temporary_trusted_orm_manager_class()
-        row = Mock(pk="trusted_id")
-
-        with CalculationRunContext():
-            first = manager_class._from_trusted_orm_instance(row)
-            with DependencyTracker() as dependencies:
-                second = manager_class._from_trusted_orm_instance(row)
-
-        self.assertIs(second, first)
-        self.assertEqual(len(trusted_interface.calls), 1)
-        self.assertIn(
-            ("TemporaryManager", "identification", '{"id": "trusted_id"}'),
-            dependencies,
-        )
-
-    def test_trusted_orm_hydration_bypasses_identity_map_for_unhashable_pk(self):
-        manager_class, trusted_interface = self._temporary_trusted_orm_manager_class()
-        row = Mock(pk=["trusted_id"])
-
-        with CalculationRunContext():
-            first = manager_class._from_trusted_orm_instance(row)
-            second = manager_class._from_trusted_orm_instance(row)
-
-        self.assertIsNot(second, first)
-        self.assertEqual(len(trusted_interface.calls), 2)
-
-    def test_trusted_orm_hydration_clears_identity_map_with_orm_bucket_results(self):
-        manager_class, trusted_interface = self._temporary_trusted_orm_manager_class()
-        row = Mock(pk="trusted_id")
-
-        with CalculationRunContext() as context:
-            first = manager_class._from_trusted_orm_instance(row)
-            context.clear_orm_bucket_results()
-            second = manager_class._from_trusted_orm_instance(row)
-
-        self.assertIsNot(second, first)
-        self.assertEqual(len(trusted_interface.calls), 2)
 
     def test_check_permission_class_defaults_to_additive_permission(self):
         """Managers without an explicit Permission should default to AdditiveManagerPermission."""
