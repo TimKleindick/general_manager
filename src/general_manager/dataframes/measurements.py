@@ -1,0 +1,176 @@
+"""Helpers for expanding row-level Measurement values into dataframe columns."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+import math
+
+from general_manager.measurement import Measurement
+
+Row = Mapping[str, object]
+MutableRow = dict[str, object]
+
+__all__ = [
+    "DataFrameMeasurementError",
+    "InvalidDataFrameMeasurementValueError",
+    "MeasurementDataFrameColumnCollisionError",
+    "expand_measurements",
+]
+
+
+class DataFrameMeasurementError(ValueError):
+    """Base error for dataframe measurement expansion failures."""
+
+
+class InvalidDataFrameMeasurementValueError(DataFrameMeasurementError):
+    """Raised when a configured measurement field contains an invalid value."""
+
+    def __init__(
+        self,
+        field: str,
+        *,
+        value_type: str | None = None,
+        allows_strings: bool = False,
+    ) -> None:
+        expected = "Measurement values or nulls"
+        if allows_strings:
+            expected = "Measurement values, parseable measurement strings, or nulls"
+        details = f"; got {value_type}" if value_type else ""
+        super().__init__(f"Field {field!r} must contain {expected}{details}.")
+
+
+class MeasurementDataFrameColumnCollisionError(DataFrameMeasurementError):
+    """Raised when generated measurement columns would overwrite row data."""
+
+    def __init__(self, field: str, generated_field: str) -> None:
+        super().__init__(
+            "Expanding measurement field "
+            f"{field!r} would overwrite existing column {generated_field!r}."
+        )
+
+
+def expand_measurements(
+    rows: Iterable[Row],
+    *,
+    measurement_fields: Iterable[str] | None = None,
+) -> list[MutableRow]:
+    """Expand Measurement values in mapping-like rows into value/unit columns."""
+
+    copied_rows = [dict(row) for row in rows]
+    explicit_fields = _ordered_unique(measurement_fields or ())
+    inferred_fields = _infer_measurement_fields(copied_rows)
+    expanded_fields = _ordered_unique((*explicit_fields, *inferred_fields))
+    if not expanded_fields:
+        return copied_rows
+
+    _check_generated_column_collisions(copied_rows, expanded_fields)
+    explicit_field_names = set(explicit_fields)
+    expanded_field_names = set(expanded_fields)
+    return [
+        _expand_row(
+            row,
+            expanded_fields=expanded_fields,
+            expanded_field_names=expanded_field_names,
+            explicit_field_names=explicit_field_names,
+        )
+        for row in copied_rows
+    ]
+
+
+def _ordered_unique(fields: Iterable[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    ordered_fields: list[str] = []
+    for field in fields:
+        if field in seen:
+            continue
+        seen.add(field)
+        ordered_fields.append(field)
+    return tuple(ordered_fields)
+
+
+def _infer_measurement_fields(rows: Iterable[Row]) -> tuple[str, ...]:
+    return _ordered_unique(
+        field
+        for row in rows
+        for field, value in row.items()
+        if isinstance(value, Measurement)
+    )
+
+
+def _check_generated_column_collisions(
+    rows: Iterable[Row], measurement_fields: Iterable[str]
+) -> None:
+    for field in measurement_fields:
+        generated_fields = _generated_field_names(field)
+        for row in rows:
+            for generated_field in generated_fields:
+                if generated_field in row and generated_field != field:
+                    raise MeasurementDataFrameColumnCollisionError(
+                        field, generated_field
+                    )
+
+
+def _generated_field_names(field: str) -> tuple[str, str]:
+    return (f"{field}_value", f"{field}_unit")
+
+
+def _expand_row(
+    row: Row,
+    *,
+    expanded_fields: tuple[str, ...],
+    expanded_field_names: set[str],
+    explicit_field_names: set[str],
+) -> MutableRow:
+    expanded_row: MutableRow = {}
+    seen_measurement_fields: set[str] = set()
+
+    for field, value in row.items():
+        if field not in expanded_field_names:
+            expanded_row[field] = value
+            continue
+
+        seen_measurement_fields.add(field)
+        value_field, unit_field = _generated_field_names(field)
+        measurement = _coerce_measurement_value(
+            field,
+            value,
+            explicit_field_names=explicit_field_names,
+        )
+        expanded_row[value_field] = (
+            measurement.magnitude if measurement is not None else None
+        )
+        expanded_row[unit_field] = measurement.unit if measurement is not None else None
+
+    for field in expanded_fields:
+        if field in seen_measurement_fields:
+            continue
+        value_field, unit_field = _generated_field_names(field)
+        expanded_row[value_field] = None
+        expanded_row[unit_field] = None
+
+    return expanded_row
+
+
+def _coerce_measurement_value(
+    field: str,
+    value: object,
+    *,
+    explicit_field_names: set[str],
+) -> Measurement | None:
+    if _is_null_measurement_value(value):
+        return None
+    if isinstance(value, Measurement):
+        return value
+    if isinstance(value, str) and field in explicit_field_names:
+        try:
+            return Measurement.from_string(value)
+        except ValueError as error:
+            raise InvalidDataFrameMeasurementValueError(
+                field, allows_strings=True
+            ) from error
+
+    raise InvalidDataFrameMeasurementValueError(field, value_type=type(value).__name__)
+
+
+def _is_null_measurement_value(value: object) -> bool:
+    return value is None or (isinstance(value, float) and math.isnan(value))
