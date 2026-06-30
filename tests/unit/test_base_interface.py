@@ -659,7 +659,30 @@ class InterfaceBaseTests(SimpleTestCase):
         )
         self.assertEqual(
             parsed.identification,
-            {"parent": "parent", "child": "parent:child"},
+            {"child": "parent:child", "parent": "parent"},
+        )
+
+    def test_input_parsing_plan_preserves_input_field_order_after_dependencies(
+        self,
+    ):
+        class DependentInput(DummyInput):
+            def cast(self, value, identification=None, *, cache_context=None):
+                del cache_context
+                identification = identification or {}
+                return f"{identification['parent']}:{value}"
+
+        class DependencyInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {
+                "child": DependentInput(str, depends_on=["parent"]),
+                "parent": DummyInput(str),
+            }
+
+        parsed = DependencyInterface(child="child", parent="parent")
+
+        self.assertEqual(list(parsed.identification), ["child", "parent"])
+        self.assertEqual(
+            parsed.identification,
+            {"child": "parent:child", "parent": "parent"},
         )
 
     def test_input_parsing_plan_reflects_added_required_field_after_first_parse(self):
@@ -756,7 +779,7 @@ class InterfaceBaseTests(SimpleTestCase):
         )
         self.assertEqual(
             second.identification,
-            {"parent": "parent", "child": "parent:child"},
+            {"child": "parent:child", "parent": "parent"},
         )
 
 

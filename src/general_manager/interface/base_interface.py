@@ -697,7 +697,7 @@ class InterfaceBase(ABC):
             InvalidPossibleValuesTypeError: If an input's `possible_values` configuration is neither callable nor iterable.
             InvalidInputValueError: If a provided value is not in the allowed set defined by an input's `possible_values`.
         """
-        identification: dict[str, object] = {}
+        resolved_identification: dict[str, object] = {}
         plan = type(self)._get_input_parsing_plan()
         kwargs = args_to_kwargs(args, plan.names, kwargs)
 
@@ -727,13 +727,14 @@ class InterfaceBase(ABC):
             cache_context = type(self)._input_possible_values_cache_context(name)
             value = input_field.cast(
                 kwargs.get(name),
-                identification,
+                resolved_identification,
                 cache_context=cache_context,
             )
-            self._process_input(name, value, identification)
-            identification[name] = value
+            self._process_input(name, value, resolved_identification)
+            resolved_identification[name] = value
         if unresolved:
             raise CircularInputDependencyError(unresolved)
+        identification = {name: resolved_identification[name] for name in plan.names}
         return identification
 
     @classmethod
