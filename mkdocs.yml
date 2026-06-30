@@ -126,6 +126,7 @@ nav:
       - howto/create_project.md
       - howto/custom_user_model.md
       - howto/add_model_with_measurement.md
+      - howto/dataframe_measurements.md
       - howto/add_permission_rule.md
       - howto/permission_walkthrough.md
       - howto/expose_via_graphql.md
@@ -157,6 +158,7 @@ nav:
   - API-Reference:
       - api/core.md
       - api/measurement.md
+      - api/dataframes.md
       - api/interface.md
       - api/permission.md
       - api/graphql.md
