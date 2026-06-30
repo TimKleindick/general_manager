@@ -1,6 +1,11 @@
 # type: ignore
 from django.test import SimpleTestCase, override_settings
-from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.base_interface import (
+    InterfaceBase,
+    InvalidInputTypeError,
+    MissingInputArgumentsError,
+    UnexpectedInputArgumentsError,
+)
 from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.capabilities.configuration import (
     InterfaceCapabilityConfig,
@@ -516,6 +521,243 @@ class InterfaceBaseTests(SimpleTestCase):
         # Upper bound
         inst2 = DummyInterface(a=1, b="v", gm=DummyGM({"id": 22}), vals=3, c=1)
         self.assertEqual(inst2.identification["vals"], 3)
+
+    def test_input_parsing_plan_reused_for_repeated_instances(self):
+        class CountingFields(dict):
+            keys_calls = 0
+            items_calls = 0
+
+            def keys(self):
+                self.keys_calls += 1
+                return super().keys()
+
+            def items(self):
+                self.items_calls += 1
+                return super().items()
+
+        fields = CountingFields(
+            {
+                "a": DummyInput(int),
+                "b": DummyInput(str, depends_on=["a"]),
+                "c": DummyInput(int, required=False),
+            }
+        )
+
+        class PlannedInterface(InterfaceBase):
+            input_fields = fields
+
+        first = PlannedInterface(a=1, b="x")
+        second = PlannedInterface(a=2, b="y")
+
+        self.assertEqual(first.identification, {"a": 1, "b": "x", "c": None})
+        self.assertEqual(second.identification, {"a": 2, "b": "y", "c": None})
+        self.assertEqual(fields.keys_calls, 1)
+        self.assertEqual(fields.items_calls, 1)
+
+    def test_input_parsing_plan_accepts_id_alias_and_preserves_overwrite_behavior(
+        self,
+    ):
+        class AliasInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {
+                "owner": DummyInput(DummyGM),
+                "name": DummyInput(str),
+            }
+
+        owner = DummyGM({"id": 10})
+        alias_owner = DummyGM({"id": 11})
+        parsed = AliasInterface(owner_id=owner, name="demo")
+        overwritten = AliasInterface(owner=owner, owner_id=alias_owner, name="demo")
+
+        self.assertEqual(parsed.identification, {"owner": {"id": 10}, "name": "demo"})
+        self.assertEqual(
+            overwritten.identification,
+            {"owner": {"id": 11}, "name": "demo"},
+        )
+
+    def test_input_parsing_plan_detects_circular_dependencies(self):
+        class CircularInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {
+                "a": DummyInput(int, depends_on=["b"]),
+                "b": DummyInput(int, depends_on=["a"]),
+            }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Circular dependency detected among inputs",
+        ):
+            CircularInterface(a=1, b=2)
+
+    def test_input_validation_takes_precedence_over_separate_circular_dependencies(
+        self,
+    ):
+        class MixedCircularInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {
+                "independent": DummyInput(int),
+                "a": DummyInput(int, depends_on=["b"]),
+                "b": DummyInput(int, depends_on=["a"]),
+            }
+
+        with self.assertRaises(InvalidInputTypeError):
+            MixedCircularInterface(independent="bad", a=1, b=2)
+
+    def test_input_parsing_plan_missing_args_take_precedence_over_circular_dependencies(
+        self,
+    ):
+        class CircularInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {
+                "a": DummyInput(int, depends_on=["b"]),
+                "b": DummyInput(int, depends_on=["a"]),
+            }
+
+        with self.assertRaises(MissingInputArgumentsError):
+            CircularInterface(a=1)
+
+    def test_input_parsing_plan_extra_args_take_precedence_over_circular_dependencies(
+        self,
+    ):
+        class CircularInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {
+                "a": DummyInput(int, depends_on=["b"]),
+                "b": DummyInput(int, depends_on=["a"]),
+            }
+
+        with self.assertRaises(UnexpectedInputArgumentsError):
+            CircularInterface(a=1, b=2, extra=3)
+
+    def test_input_parsing_plan_processes_dependencies_before_dependents(self):
+        events: list[tuple[str, dict[str, object]]] = []
+
+        class ObservedInput(DummyInput):
+            def __init__(self, name, dependency=None):
+                super().__init__(str, depends_on=[dependency] if dependency else None)
+                self.name = name
+                self.dependency = dependency
+
+            def cast(self, value, identification=None, *, cache_context=None):
+                del cache_context
+                identification = identification or {}
+                events.append((self.name, dict(identification)))
+                if self.dependency is None:
+                    return value
+                dependency_value = identification[self.dependency]
+                return f"{dependency_value}:{value}"
+
+        class DependencyInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {
+                "child": ObservedInput("child", dependency="parent"),
+                "parent": ObservedInput("parent"),
+            }
+
+        parsed = DependencyInterface(child="child", parent="parent")
+
+        self.assertEqual(
+            events,
+            [
+                ("parent", {}),
+                ("child", {"parent": "parent"}),
+            ],
+        )
+        self.assertEqual(
+            parsed.identification,
+            {"parent": "parent", "child": "parent:child"},
+        )
+
+    def test_input_parsing_plan_reflects_added_required_field_after_first_parse(self):
+        fields = {
+            "a": DummyInput(int),
+        }
+
+        class MutableInterface(InterfaceBase):
+            input_fields = fields
+
+        first = MutableInterface(a=1)
+        fields["b"] = DummyInput(str)
+        second = MutableInterface(a=2, b="x")
+
+        self.assertEqual(first.identification, {"a": 1})
+        self.assertEqual(second.identification, {"a": 2, "b": "x"})
+
+    def test_input_parsing_plan_reflects_field_order_mutation_after_first_parse(self):
+        a_input = DummyInput(int)
+        b_input = DummyInput(str)
+        fields = {
+            "a": a_input,
+            "b": b_input,
+        }
+
+        class MutableInterface(InterfaceBase):
+            input_fields = fields
+
+        first = MutableInterface(1, "x")
+        MutableInterface.input_fields = {
+            "b": b_input,
+            "a": a_input,
+        }
+        second = MutableInterface("y", 2)
+
+        self.assertEqual(first.identification, {"a": 1, "b": "x"})
+        self.assertEqual(second.identification, {"b": "y", "a": 2})
+
+    def test_input_parsing_plan_reflects_required_mutation_after_first_parse(self):
+        fields = {
+            "a": DummyInput(int),
+            "maybe": DummyInput(str, required=False),
+        }
+
+        class MutableInterface(InterfaceBase):
+            input_fields = fields
+
+        first = MutableInterface(a=1)
+        fields["maybe"].required = True
+
+        self.assertEqual(first.identification, {"a": 1, "maybe": None})
+        with self.assertRaises(MissingInputArgumentsError):
+            MutableInterface(a=2)
+        parsed = MutableInterface(a=2, maybe="x")
+        self.assertEqual(parsed.identification, {"a": 2, "maybe": "x"})
+
+    def test_input_parsing_plan_reflects_dependency_mutation_after_first_parse(self):
+        events: list[tuple[str, dict[str, object]]] = []
+
+        class ObservedInput(DummyInput):
+            def __init__(self, name):
+                super().__init__(str)
+                self.name = name
+
+            def cast(self, value, identification=None, *, cache_context=None):
+                del cache_context
+                identification = identification or {}
+                events.append((self.name, dict(identification)))
+                if self.depends_on:
+                    dependency_name = self.depends_on[0]
+                    return f"{identification[dependency_name]}:{value}"
+                return value
+
+        fields = {
+            "child": ObservedInput("child"),
+            "parent": ObservedInput("parent"),
+        }
+
+        class MutableInterface(InterfaceBase):
+            input_fields = fields
+
+        first = MutableInterface(child="child", parent="parent")
+        fields["child"].depends_on = ["parent"]
+        events.clear()
+        second = MutableInterface(child="child", parent="parent")
+
+        self.assertEqual(first.identification, {"child": "child", "parent": "parent"})
+        self.assertEqual(
+            events,
+            [
+                ("parent", {}),
+                ("child", {"parent": "parent"}),
+            ],
+        )
+        self.assertEqual(
+            second.identification,
+            {"parent": "parent", "child": "parent:child"},
+        )
 
 
 # ------------------------------------------------------------
