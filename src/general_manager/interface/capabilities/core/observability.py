@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import ClassVar, Protocol
 
@@ -54,6 +55,12 @@ class LoggingObservabilityCapability(BaseCapability):
         """
         self._logger = get_logger("interface.observability")
 
+    def _debug_enabled(self) -> bool:
+        is_enabled_for = getattr(self._logger, "isEnabledFor", None)
+        if callable(is_enabled_for):
+            return bool(is_enabled_for(logging.DEBUG))
+        return True
+
     def before_operation(
         self,
         *,
@@ -64,13 +71,14 @@ class LoggingObservabilityCapability(BaseCapability):
         """
         Log the start of an interface operation with contextual metadata.
 
-        Calls ``self._logger.debug("interface operation start", context=...)``.
-        The context contains ``operation``, a string ``target`` name,
+        When debug logging is enabled, calls
+        ``self._logger.debug("interface operation start", context=...)``. The
+        context contains ``operation``, a string ``target`` name,
         ``payload_keys`` sorted from the payload keys, and selected payload
         metadata values: ``service``, ``method``, ``path``, ``status_code``,
-        ``retry_count``, and ``request_id``. Selected metadata keys are included
-        whenever they are present in the payload, including when their value is
-        ``None``.
+        ``retry_count``, and ``request_id``. Selected metadata keys are
+        included whenever they are present in the payload, including when their
+        value is ``None``.
 
         Parameters:
             operation: Operation name recorded unchanged.
@@ -80,9 +88,13 @@ class LoggingObservabilityCapability(BaseCapability):
                 metadata keys listed above.
 
         Raises:
-            Exception: Target-name lookup, payload-key sorting, payload metadata
-                lookup, and logger errors propagate unchanged.
+            Exception: Logger debug-enabled checks propagate unchanged. When
+                debug logging is enabled, target-name lookup, payload-key
+                sorting, payload metadata lookup, and logger errors propagate
+                unchanged.
         """
+        if not self._debug_enabled():
+            return
         self._logger.debug(
             "interface operation start",
             context=self._context(operation, target, payload),
@@ -99,16 +111,16 @@ class LoggingObservabilityCapability(BaseCapability):
         """
         Record the end of an interface operation.
 
-        Calls ``self._logger.debug("interface operation end", context=...)``.
-        The context starts with the same fields as ``before_operation()`` and
-        adds ``result_type`` as ``type(result).__name__``. If
-        ``result.metadata`` is a mapping, ``status_code``, ``retry_count``, and
-        ``request_id`` from that ``collections.abc.Mapping`` replace same-named
-        payload metadata values in the end-event context. Result metadata keys
-        are included whenever they are present in the mapping, including when
-        their value is ``None``. A missing ``metadata`` attribute, an
-        ``AttributeError`` raised while reading ``metadata``, or a non-mapping
-        metadata value is ignored.
+        When debug logging is enabled, calls
+        ``self._logger.debug("interface operation end", context=...)``. The
+        context starts with the same fields as ``before_operation()`` and adds
+        ``result_type`` as ``type(result).__name__``. If ``result.metadata`` is
+        a mapping, ``status_code``, ``retry_count``, and ``request_id`` from
+        that ``collections.abc.Mapping`` replace same-named payload metadata
+        values in the end-event context. Result metadata keys are included
+        whenever they are present in the mapping, including when their value is
+        ``None``. A missing ``metadata`` attribute, an ``AttributeError`` raised
+        while reading ``metadata``, or a non-mapping metadata value is ignored.
 
         Parameters:
             operation: Operation name recorded unchanged.
@@ -119,10 +131,14 @@ class LoggingObservabilityCapability(BaseCapability):
                 metadata are recorded.
 
         Raises:
-            Exception: Target-name lookup, payload-key sorting, payload metadata
-                lookup, non-``AttributeError`` result metadata lookup failures,
-                and logger errors propagate unchanged.
+            Exception: Logger debug-enabled checks propagate unchanged. When
+                debug logging is enabled, target-name lookup, payload-key
+                sorting, payload metadata lookup, non-``AttributeError`` result
+                metadata lookup failures, and logger errors propagate
+                unchanged.
         """
+        if not self._debug_enabled():
+            return
         context = self._context(operation, target, payload)
         result_metadata = getattr(result, "metadata", None)
         if isinstance(result_metadata, Mapping):

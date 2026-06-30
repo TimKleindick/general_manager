@@ -472,3 +472,46 @@ def test_logging_observability_omits_missing_error_status_code() -> None:
 
     context = fake_logger.error.call_args.kwargs["context"]
     assert "status_code" not in context
+
+
+def test_logging_observability_skips_context_when_debug_disabled() -> None:
+    fake_logger = mock.MagicMock()
+    fake_logger.isEnabledFor.return_value = False
+    with mock.patch(
+        "general_manager.interface.capabilities.core.observability.get_logger",
+        return_value=fake_logger,
+    ):
+        capability = LoggingObservabilityCapability()
+
+    target = object()
+    payload = {"expensive": object()}
+
+    with mock.patch.object(capability, "_context", side_effect=AssertionError):
+        capability.before_operation(operation="filter", target=target, payload=payload)
+        capability.after_operation(
+            operation="filter",
+            target=target,
+            payload=payload,
+            result=object(),
+        )
+
+    fake_logger.debug.assert_not_called()
+
+
+def test_logging_observability_still_builds_error_context() -> None:
+    fake_logger = mock.MagicMock()
+    fake_logger.isEnabledFor.return_value = False
+    with mock.patch(
+        "general_manager.interface.capabilities.core.observability.get_logger",
+        return_value=fake_logger,
+    ):
+        capability = LoggingObservabilityCapability()
+
+    capability.on_error(
+        operation="filter",
+        target=object(),
+        payload={"id": 1},
+        error=ValueError("boom"),
+    )
+
+    fake_logger.error.assert_called_once()
