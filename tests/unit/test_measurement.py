@@ -115,6 +115,52 @@ class MeasurementTestCase(TestCase):
         self.assertTrue(freezing_f <= freezing_c)
         self.assertTrue(freezing_f >= freezing_c)
 
+    def test_unit_uses_offset_cache_preserves_temperature_behavior(self):
+        from general_manager.measurement.measurement import _unit_uses_offset
+
+        _unit_uses_offset.cache_clear()
+
+        self.assertTrue(_unit_uses_offset("degC"))
+        first = _unit_uses_offset.cache_info()
+        self.assertTrue(_unit_uses_offset("degC"))
+        second = _unit_uses_offset.cache_info()
+
+        self.assertEqual(second.hits, first.hits + 1)
+
+    def test_unit_uses_offset_cache_preserves_pint_unit_input(self):
+        from general_manager.measurement.measurement import _unit_uses_offset
+
+        _unit_uses_offset.cache_clear()
+
+        self.assertTrue(_unit_uses_offset(ureg.degC))
+        first = _unit_uses_offset.cache_info()
+        self.assertTrue(_unit_uses_offset(ureg.degC))
+        second = _unit_uses_offset.cache_info()
+
+        self.assertEqual(second.hits, first.hits + 1)
+
+    def test_unit_uses_offset_cache_preserves_non_offset_behavior(self):
+        from general_manager.measurement.measurement import _unit_uses_offset
+
+        _unit_uses_offset.cache_clear()
+
+        self.assertFalse(_unit_uses_offset("kg"))
+        self.assertFalse(_unit_uses_offset("kg"))
+        self.assertGreaterEqual(_unit_uses_offset.cache_info().hits, 1)
+
+    def test_unit_uses_offset_cache_preserves_quantity_input(self):
+        from general_manager.measurement.measurement import _unit_uses_offset
+
+        _unit_uses_offset.cache_clear()
+        quantity = Measurement(25, "degC").quantity
+
+        self.assertTrue(_unit_uses_offset(quantity))
+        first = _unit_uses_offset.cache_info()
+        self.assertTrue(_unit_uses_offset(quantity))
+        second = _unit_uses_offset.cache_info()
+
+        self.assertEqual(second.hits, first.hits + 1)
+
     def test_addition_same_units(self):
         m1 = Measurement(1, "meter")
         m2 = Measurement(2, "meter")

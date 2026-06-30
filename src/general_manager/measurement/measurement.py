@@ -3,6 +3,7 @@
 # units.py
 from __future__ import annotations
 from collections.abc import Callable
+from functools import lru_cache
 from typing import TypeAlias, TypeGuard, cast
 import pint
 from decimal import Decimal, getcontext, InvalidOperation
@@ -63,12 +64,11 @@ def _is_numeric_scalar(value: object) -> TypeGuard[NumericScalar]:
     return not isinstance(value, bool) and isinstance(value, (Decimal, float, int))
 
 
-def _unit_uses_offset(unit: str | pint.Unit | MeasurementQuantity) -> bool:
-    """Return whether a Pint unit has offset conversion semantics."""
+@lru_cache(maxsize=256)
+def _unit_uses_offset_for_unit_string(unit: str) -> bool:
+    """Return whether a unit string has offset conversion semantics."""
 
-    parsed_unit = ureg.parse_units(
-        str(unit.units if isinstance(unit, PlainQuantity) else unit)
-    )
+    parsed_unit = ureg.parse_units(unit)
     for unit_name, power in parsed_unit._units.items():
         if power != 1:
             continue
@@ -76,6 +76,17 @@ def _unit_uses_offset(unit: str | pint.Unit | MeasurementQuantity) -> bool:
         if getattr(converter, "offset", None) is not None:
             return True
     return False
+
+
+def _unit_uses_offset(unit: str | pint.Unit | MeasurementQuantity) -> bool:
+    """Return whether a Pint unit has offset conversion semantics."""
+
+    unit_string = str(unit.units if isinstance(unit, PlainQuantity) else unit)
+    return _unit_uses_offset_for_unit_string(unit_string)
+
+
+_unit_uses_offset.cache_clear = _unit_uses_offset_for_unit_string.cache_clear  # type: ignore[attr-defined]
+_unit_uses_offset.cache_info = _unit_uses_offset_for_unit_string.cache_info  # type: ignore[attr-defined]
 
 
 def _quantity_as_float(quantity: MeasurementQuantity) -> PlainQuantity[float]:
