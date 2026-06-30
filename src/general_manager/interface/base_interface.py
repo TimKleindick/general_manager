@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 from abc import ABC
+from collections.abc import Mapping
+from dataclasses import dataclass
 import inspect
+from types import MappingProxyType
 from typing import (
     Type,
     TYPE_CHECKING,
@@ -190,12 +193,25 @@ def _should_validate_possible_values() -> bool:
     return bool(settings.DEBUG)
 
 
+@dataclass(frozen=True, slots=True)
+class _InputParsingPlan:
+    names: tuple[str, ...]
+    name_set: frozenset[str]
+    alias_to_name: Mapping[str, str]
+    required_names: frozenset[str]
+    optional_names: frozenset[str]
+    dependency_items: tuple[tuple[str, tuple[str, ...]], ...]
+    field_state: tuple[tuple[str, int, bool, tuple[str, ...]], ...]
+
+
 class InterfaceBase(ABC):
     """Common base API for interfaces backing GeneralManager classes."""
 
     _parent_class: ClassVar[Type["GeneralManager"]]
     _interface_type: ClassVar[str]
     input_fields: ClassVar[dict[str, "Input[type[object]]"]]
+    _input_parsing_plan: ClassVar[_InputParsingPlan | None] = None
+    _input_dependency_order: ClassVar[tuple[str, ...] | None] = None
     lifecycle_capability_name: ClassVar[CapabilityName | None] = None
     _capabilities: ClassVar[frozenset[CapabilityName]] = frozenset()
     _capability_selection: ClassVar["CapabilitySelection | None"] = None
@@ -212,6 +228,8 @@ class InterfaceBase(ABC):
         This method resets per-subclass capability registries and configuration to a clean default, merges configured capability overrides into the class's capability_overrides mapping, and clears the flag that marks configured capabilities as applied. Keyword arguments are forwarded to the superclass implementation.
         """
         super().__init_subclass__(**kwargs)
+        cls._input_parsing_plan = None
+        cls._input_dependency_order = None
         cls._capabilities = frozenset()
         cls._capability_selection = None
         cls._capability_handlers = {}
@@ -564,6 +582,89 @@ class InterfaceBase(ABC):
             if callable(hook):
                 register_system_check(cls, hook)
 
+    @classmethod
+    def _get_input_parsing_plan(cls) -> _InputParsingPlan:
+        plan = cls._input_parsing_plan
+        if plan is not None:
+            if cls._input_parsing_plan_is_fresh(plan):
+                return plan
+            cls._input_dependency_order = None
+
+        names = tuple(cls.input_fields.keys())
+        field_items = tuple(cls.input_fields.items())
+        name_set = frozenset(names)
+        alias_to_name = MappingProxyType({f"{name}_id": name for name in names})
+        required_names = frozenset(
+            name for name, input_field in field_items if input_field.required
+        )
+        optional_names = name_set - required_names
+        dependency_items = tuple(
+            (name, tuple(input_field.depends_on)) for name, input_field in field_items
+        )
+        field_state = tuple(
+            (name, id(input_field), input_field.required, tuple(input_field.depends_on))
+            for name, input_field in field_items
+        )
+
+        plan = _InputParsingPlan(
+            names=names,
+            name_set=name_set,
+            alias_to_name=alias_to_name,
+            required_names=required_names,
+            optional_names=optional_names,
+            dependency_items=dependency_items,
+            field_state=field_state,
+        )
+        cls._input_parsing_plan = plan
+        return plan
+
+    @classmethod
+    def _input_parsing_plan_is_fresh(cls, plan: _InputParsingPlan) -> bool:
+        if len(cls.input_fields) != len(plan.field_state):
+            return False
+        if tuple(cls.input_fields) != plan.names:
+            return False
+        for name, input_id, required, depends_on in plan.field_state:
+            input_field = cls.input_fields.get(name)
+            if input_field is None:
+                return False
+            if id(input_field) != input_id:
+                return False
+            if input_field.required != required:
+                return False
+            if tuple(input_field.depends_on) != depends_on:
+                return False
+        return True
+
+    @classmethod
+    def _get_input_dependency_order(
+        cls,
+        plan: _InputParsingPlan,
+    ) -> tuple[tuple[str, ...], frozenset[str]]:
+        ordered_names = cls._input_dependency_order
+        if ordered_names is not None:
+            return ordered_names, frozenset()
+
+        ordered: list[str] = []
+        processed: set[str] = set()
+        while len(processed) < len(plan.names):
+            progress_made = False
+            for name, depends_on in plan.dependency_items:
+                if name in processed:
+                    continue
+                if all(dependency in processed for dependency in depends_on):
+                    ordered.append(name)
+                    processed.add(name)
+                    progress_made = True
+            if not progress_made:
+                break
+
+        ordered_names = tuple(ordered)
+        unresolved = frozenset(plan.name_set - processed)
+        if not unresolved:
+            cls._input_dependency_order = ordered_names
+        return ordered_names, unresolved
+
     def parse_input_fields_to_identification(
         self,
         *args: object,
@@ -573,10 +674,10 @@ class InterfaceBase(ABC):
         Convert positional and keyword inputs into a validated identification mapping for the interface's input fields.
 
         Positional values are assigned in `input_fields` declaration order before
-        keyword validation. A keyword named `<field>_id` is accepted only when
-        `<field>` is a declared input and the canonical field name was not
-        already supplied. Positional overflow, duplicate positional-plus-keyword
-        values, alias collisions, and unknown aliases surface as
+        keyword validation. A keyword named `<field>_id` is accepted when
+        `<field>` is a declared input; if both are supplied, the `_id` alias
+        overwrites the canonical value. Positional overflow,
+        duplicate positional-plus-keyword values, and unknown aliases surface as
         `UnexpectedInputArgumentsError` through the argument-normalization path.
 
         Parameters:
@@ -597,61 +698,42 @@ class InterfaceBase(ABC):
             InvalidInputValueError: If a provided value is not in the allowed set defined by an input's `possible_values`.
         """
         identification: dict[str, object] = {}
-        kwargs = args_to_kwargs(args, self.input_fields.keys(), kwargs)
-        # Check for extra arguments
-        extra_args = set(kwargs.keys()) - set(self.input_fields.keys())
+        plan = type(self)._get_input_parsing_plan()
+        kwargs = args_to_kwargs(args, plan.names, kwargs)
+
+        extra_args = set(kwargs) - plan.name_set
         if extra_args:
             handled: set[str] = set()
             for extra_arg in list(extra_args):
-                if extra_arg.endswith("_id"):
-                    base = extra_arg[:-3]
-                    if base in self.input_fields:
-                        kwargs[base] = kwargs.pop(extra_arg)
-                        handled.add(extra_arg)
-            # recompute remaining unknown keys after handling known *_id aliases
-            remaining = (extra_args - handled) | (
-                set(kwargs.keys()) - set(self.input_fields.keys())
-            )
+                alias = plan.alias_to_name.get(extra_arg)
+                if alias is not None:
+                    kwargs[alias] = kwargs.pop(extra_arg)
+                    handled.add(extra_arg)
+            remaining = (extra_args - handled) | (set(kwargs) - plan.name_set)
             if remaining:
                 raise UnexpectedInputArgumentsError(remaining)
 
-        for name, input_field in self.input_fields.items():
-            if name not in kwargs and not input_field.required:
+        for name in plan.optional_names:
+            if name not in kwargs:
                 kwargs[name] = None
 
-        missing_args = {
-            name
-            for name, input_field in self.input_fields.items()
-            if input_field.required and name not in kwargs
-        }
+        missing_args = plan.required_names - set(kwargs)
         if missing_args:
             raise MissingInputArgumentsError(missing_args)
 
-        # process input fields with dependencies
-        processed: set[str] = set()
-        while len(processed) < len(self.input_fields):
-            progress_made = False
-            for name, input_field in self.input_fields.items():
-                if name in processed:
-                    continue
-                depends_on = input_field.depends_on
-                if all(dep in processed for dep in depends_on):
-                    cache_context = type(self)._input_possible_values_cache_context(
-                        name
-                    )
-                    value = self.input_fields[name].cast(
-                        kwargs.get(name),
-                        identification,
-                        cache_context=cache_context,
-                    )
-                    self._process_input(name, value, identification)
-                    identification[name] = value
-                    processed.add(name)
-                    progress_made = True
-            if not progress_made:
-                # detect circular dependencies
-                unresolved = set(self.input_fields.keys()) - processed
-                raise CircularInputDependencyError(unresolved)
+        ordered_names, unresolved = type(self)._get_input_dependency_order(plan)
+        for name in ordered_names:
+            input_field = self.input_fields[name]
+            cache_context = type(self)._input_possible_values_cache_context(name)
+            value = input_field.cast(
+                kwargs.get(name),
+                identification,
+                cache_context=cache_context,
+            )
+            self._process_input(name, value, identification)
+            identification[name] = value
+        if unresolved:
+            raise CircularInputDependencyError(unresolved)
         return identification
 
     @classmethod
