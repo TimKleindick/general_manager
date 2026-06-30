@@ -8,6 +8,8 @@ import pytest
 from general_manager.dataframes.measurements import (
     InvalidDataFrameMeasurementValueError,
     MeasurementDataFrameColumnCollisionError,
+    MissingMeasurementDataFrameColumnError,
+    collapse_measurements,
     expand_measurements,
 )
 from general_manager.measurement import Measurement
@@ -125,3 +127,91 @@ def test_expand_measurements_rejects_generated_column_collisions() -> None:
         expand_measurements(rows)
 
     assert "height_value" in str(exc_info.value)
+
+
+def test_collapse_measurements_rebuilds_measurement_objects() -> None:
+    rows = [
+        {
+            "name": "Alice",
+            "height_value": Decimal("180"),
+            "height_unit": "centimeter",
+            "age": 31,
+        },
+        {
+            "name": "Bob",
+            "height_value": Decimal("1.7"),
+            "height_unit": "meter",
+            "age": 29,
+        },
+    ]
+
+    collapsed = collapse_measurements(rows, measurement_fields={"height"})
+
+    assert list(collapsed[0]) == ["name", "height", "age"]
+    assert collapsed[0]["name"] == "Alice"
+    assert collapsed[0]["height"] == Measurement(180, "centimeter")
+    assert collapsed[0]["age"] == 31
+    assert collapsed[1]["name"] == "Bob"
+    assert collapsed[1]["height"] == Measurement("1.7", "meter")
+    assert collapsed[1]["age"] == 29
+    assert "height_value" in rows[0]
+    assert "height_unit" in rows[0]
+
+
+def test_collapse_measurements_restores_null_measurements() -> None:
+    rows: list[dict[str, object]] = [
+        {
+            "name": "Alice",
+            "height_value": None,
+            "height_unit": None,
+        },
+        {
+            "name": "Bob",
+            "height_value": float("nan"),
+            "height_unit": float("nan"),
+        },
+    ]
+
+    assert collapse_measurements(rows, measurement_fields={"height"}) == [
+        {"name": "Alice", "height": None},
+        {"name": "Bob", "height": None},
+    ]
+
+
+def test_collapse_measurements_rejects_partial_null_measurements() -> None:
+    rows = [
+        {
+            "name": "Alice",
+            "height_value": Decimal("180"),
+            "height_unit": None,
+        }
+    ]
+
+    with pytest.raises(InvalidDataFrameMeasurementValueError) as exc_info:
+        collapse_measurements(rows, measurement_fields={"height"})
+
+    assert "height" in str(exc_info.value)
+
+
+def test_collapse_measurements_rejects_non_string_units() -> None:
+    rows = [
+        {
+            "name": "Alice",
+            "height_value": Decimal("180"),
+            "height_unit": 1,
+        }
+    ]
+
+    with pytest.raises(InvalidDataFrameMeasurementValueError) as exc_info:
+        collapse_measurements(rows, measurement_fields={"height"})
+
+    assert "height" in str(exc_info.value)
+
+
+def test_collapse_measurements_requires_value_and_unit_columns() -> None:
+    rows = [{"name": "Alice", "height_value": Decimal("180")}]
+
+    with pytest.raises(MissingMeasurementDataFrameColumnError) as exc_info:
+        collapse_measurements(rows, measurement_fields={"height"})
+
+    assert "height_unit" in str(exc_info.value)
