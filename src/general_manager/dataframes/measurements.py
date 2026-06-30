@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping
 from decimal import Decimal, InvalidOperation
 import importlib
 import math
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pint
 
@@ -370,4 +370,29 @@ def _build_collapsed_measurement(
 
 
 def _is_null_measurement_value(value: object) -> bool:
-    return value is None or (isinstance(value, float) and math.isnan(value))
+    if value is None:
+        return True
+    if _is_nan_like(value):
+        return True
+    return _is_pandas_null_sentinel(value)
+
+
+def _is_nan_like(value: object) -> bool:
+    try:
+        if math.isnan(cast(Any, value)):
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        return bool(value != value)
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_pandas_null_sentinel(value: object) -> bool:
+    value_type = type(value)
+    return value_type.__name__ in {
+        "NAType",
+        "NaTType",
+    } and value_type.__module__.startswith("pandas.")

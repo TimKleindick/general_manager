@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import numpy as np
 
 import general_manager.dataframes.measurements as dataframe_measurements
 from general_manager.dataframes.measurements import (
@@ -356,6 +357,38 @@ def test_from_dataframe_collapses_records() -> None:
 
     assert from_dataframe(dataframe, measurement_fields={"height"}) == [
         {"height": Measurement(180, "centimeter")}
+    ]
+
+
+def test_from_dataframe_collapses_numpy_null_measurement_columns() -> None:
+    dataframe = FakeDataFrame(
+        [
+            {"height_value": np.float64("nan"), "height_unit": np.float64("nan")},
+            {
+                "height_value": np.datetime64("NaT"),
+                "height_unit": np.datetime64("NaT"),
+            },
+        ]
+    )
+
+    assert from_dataframe(dataframe, measurement_fields={"height"}) == [
+        {"height": None},
+        {"height": None},
+    ]
+
+
+def test_from_dataframe_collapses_pandas_null_measurement_columns() -> None:
+    pandas: Any = pytest.importorskip("pandas")
+    dataframe = FakeDataFrame(
+        [
+            {"height_value": pandas.NA, "height_unit": pandas.NA},
+            {"height_value": pandas.NaT, "height_unit": pandas.NaT},
+        ]
+    )
+
+    assert from_dataframe(dataframe, measurement_fields={"height"}) == [
+        {"height": None},
+        {"height": None},
     ]
 
 
