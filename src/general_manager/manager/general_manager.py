@@ -75,11 +75,12 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         self.__id: dict[str, object] = self._interface.identification
         self._manager_state_valid = True
         self._manager_state_reason = None
-        DependencyTracker.track(
-            self.__class__.__name__,
-            "identification",
-            serialize_dependency_identifier(self.__id),
-        )
+        if DependencyTracker.is_active():
+            DependencyTracker.track(
+                self.__class__.__name__,
+                "identification",
+                serialize_dependency_identifier(self.__id),
+            )
         logger.debug(
             "instantiated manager",
             context={
@@ -127,11 +128,12 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         manager.__id = manager._interface.identification
         manager._manager_state_valid = True
         manager._manager_state_reason = None
-        DependencyTracker.track(
-            cls.__name__,
-            "identification",
-            serialize_dependency_identifier(manager.__id),
-        )
+        if DependencyTracker.is_active():
+            DependencyTracker.track(
+                cls.__name__,
+                "identification",
+                serialize_dependency_identifier(manager.__id),
+            )
         logger.debug(
             "trusted orm manager hydrated",
             context={

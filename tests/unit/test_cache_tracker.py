@@ -65,6 +65,23 @@ class TestDependencyTracker(TestCase):
                 ("TestClass", "identification", "TestIdentifier"), dependencies
             )
 
+    def test_dependency_tracker_is_active_reflects_context_depth(self):
+        """Report active tracking only while at least one context is open."""
+        DependencyTracker.reset_thread_local_storage()
+        self.assertFalse(DependencyTracker.is_active())
+
+        with DependencyTracker() as dependencies:
+            self.assertTrue(DependencyTracker.is_active())
+            DependencyTracker.track("Example", "identification", '{"id": 1}')
+
+            with DependencyTracker():
+                self.assertTrue(DependencyTracker.is_active())
+
+            self.assertTrue(DependencyTracker.is_active())
+
+        self.assertEqual(dependencies, {("Example", "identification", '{"id": 1}')})
+        self.assertFalse(DependencyTracker.is_active())
+
     def test_dependency_tracker_rejects_invalid_track_values(self):
         """Reject malformed dependency tuple values before tracking."""
         with self.assertRaises(TypeError):
