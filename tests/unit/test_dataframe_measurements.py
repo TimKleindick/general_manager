@@ -63,7 +63,7 @@ def test_expand_measurements_does_not_parse_unconfigured_strings() -> None:
 
 
 def test_expand_measurements_rejects_mixed_inferred_measurement_values() -> None:
-    rows = [
+    rows: list[dict[str, object]] = [
         {"name": "Alice", "height": Measurement(180, "cm")},
         {"name": "Bob", "height": "170 cm"},
     ]
@@ -76,7 +76,7 @@ def test_expand_measurements_rejects_mixed_inferred_measurement_values() -> None
 
 
 def test_expand_measurements_expands_nulls_for_measurement_fields() -> None:
-    rows = [
+    rows: list[dict[str, object]] = [
         {"name": "Alice", "height": Measurement(180, "cm")},
         {"name": "Bob", "height": None},
         {"name": "Cara"},
