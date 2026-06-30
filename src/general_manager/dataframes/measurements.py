@@ -6,6 +6,8 @@ from collections.abc import Iterable, Mapping
 from decimal import Decimal, InvalidOperation
 import math
 
+import pint
+
 from general_manager.measurement import Measurement
 
 Row = Mapping[str, object]
@@ -43,11 +45,17 @@ class InvalidDataFrameMeasurementValueError(DataFrameMeasurementError):
 
 
 class MeasurementDataFrameColumnCollisionError(DataFrameMeasurementError):
-    """Raised when generated measurement columns would overwrite row data."""
+    """Raised when measurement expansion or collapse would overwrite row data."""
 
-    def __init__(self, field: str, generated_field: str) -> None:
+    def __init__(
+        self,
+        field: str,
+        generated_field: str,
+        *,
+        operation: str = "Expanding",
+    ) -> None:
         super().__init__(
-            "Expanding measurement field "
+            f"{operation} measurement field "
             f"{field!r} would overwrite existing column {generated_field!r}."
         )
 
@@ -204,6 +212,12 @@ def _collapse_row(
             raise MissingMeasurementDataFrameColumnError(value_field)
         if unit_field not in row:
             raise MissingMeasurementDataFrameColumnError(unit_field)
+        if field in row:
+            raise MeasurementDataFrameColumnCollisionError(
+                field,
+                field,
+                operation="Collapsing",
+            )
 
     collapsed_row: MutableRow = {}
     for column, value in row.items():
@@ -268,7 +282,18 @@ def _build_collapsed_measurement(
             field,
             value_type=type(value).__name__,
         ) from error
-    return Measurement(magnitude, unit)
+    try:
+        return Measurement(magnitude, unit)
+    except pint.errors.PintError as error:
+        raise InvalidDataFrameMeasurementValueError(
+            field,
+            value_type=type(unit).__name__,
+        ) from error
+    except (TypeError, ValueError) as error:
+        raise InvalidDataFrameMeasurementValueError(
+            field,
+            value_type=type(value).__name__,
+        ) from error
 
 
 def _is_null_measurement_value(value: object) -> bool:

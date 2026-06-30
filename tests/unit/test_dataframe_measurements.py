@@ -158,6 +158,22 @@ def test_collapse_measurements_rebuilds_measurement_objects() -> None:
     assert "height_unit" in rows[0]
 
 
+def test_collapse_measurements_rejects_existing_target_field_collision() -> None:
+    rows: list[dict[str, object]] = [
+        {
+            "name": "Alice",
+            "height": "raw",
+            "height_value": Decimal("180"),
+            "height_unit": "centimeter",
+        }
+    ]
+
+    with pytest.raises(MeasurementDataFrameColumnCollisionError) as exc_info:
+        collapse_measurements(rows, measurement_fields={"height"})
+
+    assert "height" in str(exc_info.value)
+
+
 def test_collapse_measurements_restores_null_measurements() -> None:
     rows: list[dict[str, object]] = [
         {
@@ -199,6 +215,21 @@ def test_collapse_measurements_rejects_non_string_units() -> None:
             "name": "Alice",
             "height_value": Decimal("180"),
             "height_unit": 1,
+        }
+    ]
+
+    with pytest.raises(InvalidDataFrameMeasurementValueError) as exc_info:
+        collapse_measurements(rows, measurement_fields={"height"})
+
+    assert "height" in str(exc_info.value)
+
+
+def test_collapse_measurements_rejects_invalid_unit_strings() -> None:
+    rows = [
+        {
+            "name": "Alice",
+            "height_value": Decimal("180"),
+            "height_unit": "not_a_real_unit",
         }
     ]
 
