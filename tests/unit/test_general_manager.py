@@ -15,6 +15,7 @@ from general_manager.permission.manager_based_permission import (
     ManagerBasedPermission,
 )
 from unittest.mock import Mock, patch
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.contrib.auth import get_user_model
 from django.utils.crypto import get_random_string
@@ -133,6 +134,7 @@ class GeneralManagerTestCase(TestCase):
         """
         post_data_change.disconnect(self.post_data_change)
         pre_data_change.disconnect(self.pre_data_change)
+        DependencyTracker.reset_thread_local_storage()
 
     def _temporary_manager_class(self):
         with override_settings(AUTOCREATE_GRAPHQL=False):
@@ -163,11 +165,72 @@ class GeneralManagerTestCase(TestCase):
 
         Asserts that DependencyTracker.track is called with the correct arguments and that the created object is an instance of GeneralManager.
         """
-        manager = self.manager()
+        with DependencyTracker():
+            manager = self.manager()
         mock_track.assert_called_once_with(
             "GeneralManager", "identification", '{"id": "dummy_id"}'
         )
         self.assertIsInstance(manager, GeneralManager)
+
+    def test_manager_init_does_not_serialize_identifier_without_dependency_tracker(
+        self,
+    ):
+        with patch(
+            "general_manager.manager.general_manager.serialize_dependency_identifier",
+            side_effect=AssertionError("serialization should be skipped"),
+        ):
+            self.manager("dummy_id")
+
+    def test_manager_init_serializes_identifier_with_dependency_tracker(self):
+        with DependencyTracker() as dependencies:
+            self.manager("dummy_id")
+
+        self.assertIn(
+            ("GeneralManager", "identification", '{"id": "dummy_id"}'),
+            dependencies,
+        )
+
+    def test_trusted_orm_hydration_does_not_serialize_without_dependency_tracker(self):
+        manager_class = self._temporary_manager_class()
+
+        class TrustedInterface:
+            @classmethod
+            def _from_trusted_orm_instance(cls, instance, *, search_date=None):
+                interface = cls()
+                interface.identification = {"id": instance.pk}
+                return interface
+
+        manager_class.Interface = TrustedInterface  # type: ignore[assignment]
+        row = Mock(pk="trusted_id")
+
+        with patch(
+            "general_manager.manager.general_manager.serialize_dependency_identifier",
+            side_effect=AssertionError("serialization should be skipped"),
+        ):
+            manager = manager_class._from_trusted_orm_instance(row)
+
+        self.assertEqual(manager.identification, {"id": "trusted_id"})
+
+    def test_trusted_orm_hydration_serializes_identifier_with_dependency_tracker(self):
+        manager_class = self._temporary_manager_class()
+
+        class TrustedInterface:
+            @classmethod
+            def _from_trusted_orm_instance(cls, instance, *, search_date=None):
+                interface = cls()
+                interface.identification = {"id": instance.pk}
+                return interface
+
+        manager_class.Interface = TrustedInterface  # type: ignore[assignment]
+        row = Mock(pk="trusted_id")
+
+        with DependencyTracker() as dependencies:
+            manager_class._from_trusted_orm_instance(row)
+
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "trusted_id"}'),
+            dependencies,
+        )
 
     def test_check_permission_class_defaults_to_additive_permission(self):
         """Managers without an explicit Permission should default to AdditiveManagerPermission."""

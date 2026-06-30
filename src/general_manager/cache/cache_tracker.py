@@ -143,6 +143,11 @@ class DependencyTracker:
             dep_set.add((class_name, operation, identifier))
 
     @staticmethod
+    def is_active() -> bool:
+        """Return whether dependency tracking is active for this execution context."""
+        return _dependency_storage.depth >= 0
+
+    @staticmethod
     def reset_thread_local_storage() -> None:
         """Clear all dependency tracking data for the current thread.
 
