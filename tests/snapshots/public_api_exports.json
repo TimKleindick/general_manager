@@ -247,6 +247,44 @@
       "serialize_dependency_identifier"
     ]
   },
+  "general_manager.dataframes": {
+    "DataFrameMeasurementError": [
+      "general_manager.dataframes.measurements",
+      "DataFrameMeasurementError"
+    ],
+    "InvalidDataFrameMeasurementValueError": [
+      "general_manager.dataframes.measurements",
+      "InvalidDataFrameMeasurementValueError"
+    ],
+    "MeasurementDataFrameColumnCollisionError": [
+      "general_manager.dataframes.measurements",
+      "MeasurementDataFrameColumnCollisionError"
+    ],
+    "MissingMeasurementDataFrameColumnError": [
+      "general_manager.dataframes.measurements",
+      "MissingMeasurementDataFrameColumnError"
+    ],
+    "PandasNotInstalledError": [
+      "general_manager.dataframes.measurements",
+      "PandasNotInstalledError"
+    ],
+    "collapse_measurements": [
+      "general_manager.dataframes.measurements",
+      "collapse_measurements"
+    ],
+    "expand_measurements": [
+      "general_manager.dataframes.measurements",
+      "expand_measurements"
+    ],
+    "from_dataframe": [
+      "general_manager.dataframes.measurements",
+      "from_dataframe"
+    ],
+    "to_dataframe": [
+      "general_manager.dataframes.measurements",
+      "to_dataframe"
+    ]
+  },
   "general_manager.factory": {
     "AutoFactory": [
       "general_manager.factory.auto_factory",
