@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from decimal import Decimal
 
 import pytest
@@ -10,6 +11,14 @@ from general_manager.dataframes.measurements import (
     expand_measurements,
 )
 from general_manager.measurement import Measurement
+
+
+class TruthinessDisabledIterable:
+    def __iter__(self) -> Iterator[str]:
+        return iter(["height"])
+
+    def __bool__(self) -> bool:
+        raise TypeError
 
 
 def test_expand_measurements_splits_measurement_objects() -> None:
@@ -52,6 +61,14 @@ def test_expand_measurements_parses_configured_measurement_strings() -> None:
             "height_unit": "meter",
         },
     ]
+
+
+def test_expand_measurements_accepts_truthiness_disabled_field_iterable() -> None:
+    rows = [{"height": "180 cm"}]
+
+    assert expand_measurements(
+        rows, measurement_fields=TruthinessDisabledIterable()
+    ) == [{"height_value": Decimal("180"), "height_unit": "centimeter"}]
 
 
 def test_expand_measurements_does_not_parse_unconfigured_strings() -> None:
