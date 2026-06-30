@@ -127,10 +127,15 @@ class GeneralManagerMeta(type):
         ``__getattr__`` is only reached for missing names, so inherited
         ``GeneralManager`` attributes must pass through here to let declared
         fields override inherited names the same way bootstrap initialization
-        does. "Non-private" means the requested name does not start with
-        ``"_"`` and is not exactly ``"Interface"``. Probing an unknown public
-        name may call ``Interface.get_attributes()``, but it installs
-        descriptors only when the probed name is declared by the interface.
+        does. Once a manager class has completed descriptor initialization,
+        attributes already present on that class use normal type lookup without
+        rechecking initialization. Missing names and inherited public names
+        still pass through initialization so late-discovered fields keep the
+        existing override behavior. "Non-private" means the requested name does
+        not start with ``"_"`` and is not exactly ``"Interface"``. Probing an
+        unknown public name may call ``Interface.get_attributes()``, but it
+        installs descriptors only when the probed name is declared by the
+        interface.
 
         Parameters:
             attribute_name: Class attribute being read.
@@ -145,6 +150,10 @@ class GeneralManagerMeta(type):
                 ``NotImplementedError`` propagate unchanged.
         """
         if not attribute_name.startswith("_") and attribute_name != "Interface":
+            class_dict = type.__getattribute__(cls, "__dict__")
+            initialized = class_dict.get("_gm_attributes_initialized", False)
+            if initialized and attribute_name in class_dict:
+                return type.__getattribute__(cls, attribute_name)
             manager_class = cast(type["GeneralManager"], cls)
             GeneralManagerMeta.ensure_attributes_initialized(
                 manager_class, attribute_name
@@ -234,6 +243,7 @@ class GeneralManagerMeta(type):
                     GeneralManagerMeta.create_at_properties_for_attributes(
                         attributes.keys(), manager_class
                     )
+                type.__setattr__(manager_class, "_gm_attributes_initialized", True)
                 return True
 
             try:
@@ -246,6 +256,7 @@ class GeneralManagerMeta(type):
             GeneralManagerMeta.create_at_properties_for_attributes(
                 attributes.keys(), manager_class
             )
+            type.__setattr__(manager_class, "_gm_attributes_initialized", True)
             try:
                 GeneralManagerMeta.pending_attribute_initialization.remove(
                     manager_class
@@ -509,6 +520,7 @@ class GeneralManagerMeta(type):
 
         for attr_name in attributes:
             setattr(new_class, attr_name, descriptor_method(attr_name, new_class))
+        type.__setattr__(new_class, "_gm_attributes_initialized", True)
 
 
 _CAPABILITY_BUILDER: "ManifestCapabilityBuilder | None" = None
