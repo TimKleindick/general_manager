@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from decimal import Decimal, InvalidOperation
+import importlib
 import math
+from typing import Any, Protocol
 
 import pint
 
@@ -14,17 +16,47 @@ Row = Mapping[str, object]
 MutableRow = dict[str, object]
 
 __all__ = [
+    "DataFrameLike",
     "DataFrameMeasurementError",
     "InvalidDataFrameMeasurementValueError",
     "MeasurementDataFrameColumnCollisionError",
     "MissingMeasurementDataFrameColumnError",
+    "PandasNotInstalledError",
     "collapse_measurements",
     "expand_measurements",
+    "from_dataframe",
+    "to_dataframe",
 ]
+
+
+class DataFrameLike(Protocol):
+    """Minimal dataframe interface needed to collapse measurement columns."""
+
+    def to_dict(self, orient: str = "dict") -> Any:
+        """Return dataframe rows as dictionaries."""
 
 
 class DataFrameMeasurementError(ValueError):
     """Base error for dataframe measurement expansion failures."""
+
+
+class PandasNotInstalledError(ImportError):
+    """Raised when pandas-specific dataframe helpers are used without pandas."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "pandas is required to create dataframes; install pandas to use "
+            "to_dataframe()."
+        )
+
+
+class _InvalidDataFrameRecordsError(TypeError):
+    """Raised when dataframe records are not list[Mapping[str, object]]."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "dataframe.to_dict(orient='records') must return a list of mapping rows."
+        )
 
 
 class InvalidDataFrameMeasurementValueError(DataFrameMeasurementError):
@@ -123,6 +155,48 @@ def collapse_measurements(
         )
         for row in rows
     ]
+
+
+def to_dataframe(
+    rows: Iterable[Row],
+    *,
+    measurement_fields: Iterable[str] | None = None,
+    **dataframe_kwargs: object,
+) -> Any:
+    """Expand measurement values and build a pandas DataFrame."""
+
+    pandas = _import_pandas()
+    expanded_rows = expand_measurements(rows, measurement_fields=measurement_fields)
+    return pandas.DataFrame(expanded_rows, **dataframe_kwargs)
+
+
+def from_dataframe(
+    dataframe: DataFrameLike,
+    *,
+    measurement_fields: Iterable[str],
+) -> list[MutableRow]:
+    """Collapse measurement value/unit columns from a dataframe-like object."""
+
+    records = dataframe.to_dict(orient="records")
+    if not isinstance(records, list):
+        raise _InvalidDataFrameRecordsError
+
+    row_records: list[Row] = []
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise _InvalidDataFrameRecordsError
+        row_records.append(record)
+
+    return collapse_measurements(row_records, measurement_fields=measurement_fields)
+
+
+def _import_pandas() -> Any:
+    try:
+        return importlib.import_module("pandas")
+    except ModuleNotFoundError as error:
+        if error.name != "pandas":
+            raise
+        raise PandasNotInstalledError from error
 
 
 def _ordered_unique(fields: Iterable[str]) -> tuple[str, ...]:
