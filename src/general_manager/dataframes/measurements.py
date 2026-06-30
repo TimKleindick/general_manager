@@ -57,7 +57,9 @@ def expand_measurements(
     """Expand Measurement values in mapping-like rows into value/unit columns."""
 
     copied_rows = [dict(row) for row in rows]
-    explicit_fields = _ordered_unique(measurement_fields or ())
+    explicit_fields = _ordered_unique(
+        () if measurement_fields is None else measurement_fields
+    )
     inferred_fields = _infer_measurement_fields(copied_rows)
     expanded_fields = _ordered_unique((*explicit_fields, *inferred_fields))
     if not expanded_fields:
