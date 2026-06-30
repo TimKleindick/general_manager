@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from decimal import Decimal
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -9,10 +11,23 @@ from general_manager.dataframes.measurements import (
     InvalidDataFrameMeasurementValueError,
     MeasurementDataFrameColumnCollisionError,
     MissingMeasurementDataFrameColumnError,
+    PandasNotInstalledError,
     collapse_measurements,
     expand_measurements,
+    from_dataframe,
+    to_dataframe,
 )
 from general_manager.measurement import Measurement
+
+
+class FakeDataFrame:
+    def __init__(self, rows: list[dict[str, object]], **kwargs: object) -> None:
+        self.rows = rows
+        self.kwargs = kwargs
+
+    def to_dict(self, orient: str = "dict") -> list[dict[str, object]]:
+        assert orient == "records"
+        return self.rows
 
 
 class TruthinessDisabledIterable:
@@ -246,3 +261,79 @@ def test_collapse_measurements_requires_value_and_unit_columns() -> None:
         collapse_measurements(rows, measurement_fields={"height"})
 
     assert "height_unit" in str(exc_info.value)
+
+
+def test_to_dataframe_uses_lazy_pandas_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    imported_modules: list[str] = []
+
+    def fake_import_module(module_name: str) -> Any:
+        imported_modules.append(module_name)
+        return SimpleNamespace(DataFrame=FakeDataFrame)
+
+    monkeypatch.setattr(
+        "general_manager.dataframes.measurements.importlib.import_module",
+        fake_import_module,
+    )
+
+    dataframe = to_dataframe(
+        [{"height": Measurement(180, "cm")}],
+        measurement_fields={"height"},
+        index=["row-1"],
+    )
+
+    assert imported_modules == ["pandas"]
+    assert isinstance(dataframe, FakeDataFrame)
+    assert dataframe.rows == [
+        {"height_value": Decimal("180"), "height_unit": "centimeter"}
+    ]
+    assert dataframe.kwargs == {"index": ["row-1"]}
+
+
+def test_to_dataframe_reports_missing_pandas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_import_module(module_name: str) -> Any:
+        assert module_name == "pandas"
+        raise ModuleNotFoundError(name="pandas")
+
+    monkeypatch.setattr(
+        "general_manager.dataframes.measurements.importlib.import_module",
+        fake_import_module,
+    )
+
+    with pytest.raises(PandasNotInstalledError) as exc_info:
+        to_dataframe([{"height": Measurement(180, "cm")}])
+
+    assert "pandas" in str(exc_info.value)
+
+
+def test_from_dataframe_collapses_records() -> None:
+    dataframe = FakeDataFrame(
+        [{"height_value": Decimal("180"), "height_unit": "centimeter"}]
+    )
+
+    assert from_dataframe(dataframe, measurement_fields={"height"}) == [
+        {"height": Measurement(180, "centimeter")}
+    ]
+
+
+def test_from_dataframe_rejects_non_list_records() -> None:
+    class TupleRecordsDataFrame:
+        def to_dict(self, orient: str = "dict") -> tuple[dict[str, object], ...]:
+            assert orient == "records"
+            return ({"height_value": Decimal("180"), "height_unit": "centimeter"},)
+
+    with pytest.raises(TypeError, match="list"):
+        from_dataframe(TupleRecordsDataFrame(), measurement_fields={"height"})
+
+
+def test_from_dataframe_rejects_non_mapping_records() -> None:
+    class NonMappingRecordsDataFrame:
+        def to_dict(self, orient: str = "dict") -> list[object]:
+            assert orient == "records"
+            return [object()]
+
+    with pytest.raises(TypeError, match="mapping"):
+        from_dataframe(NonMappingRecordsDataFrame(), measurement_fields={"height"})
