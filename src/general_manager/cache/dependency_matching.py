@@ -101,6 +101,12 @@ def normalize_dependency_value(value: object) -> NormalizedDependencyValue:
 
 def serialize_normalized_value(value: object) -> str:
     """Serialize dependency values in the canonical dependency format."""
+    if isinstance(value, str):
+        return json.dumps(value)
+    if value is None or isinstance(value, (int, float, bool)):
+        return json.dumps(value)
+    if isinstance(value, date):
+        return json.dumps(value.isoformat())
     return json.dumps(normalize_dependency_value(value), sort_keys=True)
 
 
