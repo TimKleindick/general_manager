@@ -16,7 +16,6 @@ Row = Mapping[str, object]
 MutableRow = dict[str, object]
 
 __all__ = [
-    "DataFrameLike",
     "DataFrameMeasurementError",
     "InvalidDataFrameMeasurementValueError",
     "MeasurementDataFrameColumnCollisionError",

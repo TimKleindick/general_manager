@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+import general_manager.dataframes.measurements as dataframe_measurements
 from general_manager.dataframes.measurements import (
     InvalidDataFrameMeasurementValueError,
     MeasurementDataFrameColumnCollisionError,
@@ -46,6 +47,10 @@ def test_dataframe_helpers_are_available_from_public_module() -> None:
 
     assert public_expand_measurements is expand_measurements
     assert public_collapse_measurements is collapse_measurements
+
+
+def test_dataframe_protocol_stays_internal() -> None:
+    assert "DataFrameLike" not in dataframe_measurements.__all__
 
 
 def test_expand_measurements_splits_measurement_objects() -> None:
