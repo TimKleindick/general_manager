@@ -11,6 +11,7 @@ from general_manager.cache.dependency_matching import (
     lookup_spec_from_key,
     matches_lookup_value,
     normalize_dependency_value,
+    serialize_normalized_value,
     stable_value_hash,
 )
 from general_manager.measurement.measurement import Measurement
@@ -88,6 +89,48 @@ def test_normalize_dependency_value_and_hash_are_stable() -> None:
             "moment": moment,
             "opaque": ReprOnly(),
         }
+    )
+
+
+def test_primitive_dependency_serialization_matches_json_contract() -> None:
+    assert serialize_normalized_value("abc") == '"abc"'
+    assert serialize_normalized_value(3) == "3"
+    assert serialize_normalized_value(True) == "true"
+    assert serialize_normalized_value(None) == "null"
+
+
+def test_nested_dependency_serialization_remains_sorted_and_recursive() -> None:
+    value = {"b": 2, "a": [date(2026, 1, 2), {"z": "last"}]}
+
+    assert normalize_dependency_value(value) == {
+        "a": ["2026-01-02", {"z": "last"}],
+        "b": 2,
+    }
+    assert serialize_normalized_value(value) == (
+        '{"a": ["2026-01-02", {"z": "last"}], "b": 2}'
+    )
+
+
+def test_datetime_dependency_serialization_uses_isoformat() -> None:
+    assert serialize_normalized_value(datetime(2026, 1, 2, 3, 4, 5)) == (
+        '"2026-01-02T03:04:05"'
+    )
+
+
+def test_stable_value_hash_is_unchanged_for_equivalent_mapping_order() -> None:
+    assert stable_value_hash({"b": 2, "a": 1}) == stable_value_hash({"a": 1, "b": 2})
+
+
+def test_collection_dependency_serialization_remains_normalized() -> None:
+    assert serialize_normalized_value(("b", date(2026, 1, 2))) == (
+        '["b", "2026-01-02"]'
+    )
+    assert serialize_normalized_value({"b", "a"}) == '["a", "b"]'
+
+
+def test_stateful_dependency_serialization_remains_normalized() -> None:
+    assert serialize_normalized_value(Measurement(1000, "EUR")) == (
+        '{"__state__": {"magnitude": "1000", "unit": "EUR"}}'
     )
 
 
