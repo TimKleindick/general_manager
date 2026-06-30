@@ -112,6 +112,7 @@ def test_nested_dependency_serialization_remains_sorted_and_recursive() -> None:
 
 
 def test_datetime_dependency_serialization_uses_isoformat() -> None:
+    assert serialize_normalized_value(date(2026, 1, 2)) == '"2026-01-02"'
     assert serialize_normalized_value(datetime(2026, 1, 2, 3, 4, 5)) == (
         '"2026-01-02T03:04:05"'
     )

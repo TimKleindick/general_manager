@@ -68,14 +68,26 @@ def _is_numeric_scalar(value: object) -> TypeGuard[NumericScalar]:
 def _unit_uses_offset_for_unit_string(unit: str) -> bool:
     """Return whether a unit string has offset conversion semantics."""
 
-    parsed_unit = ureg.parse_units(unit)
-    for unit_name, power in parsed_unit._units.items():
+    for unit_name, power in _pint_unit_components(unit):
         if power != 1:
             continue
-        converter = ureg._units[unit_name].converter
-        if getattr(converter, "offset", None) is not None:
+        if _pint_unit_component_uses_offset(unit_name):
             return True
     return False
+
+
+def _pint_unit_components(unit: str) -> tuple[tuple[str, object], ...]:
+    """Return Pint unit component names and powers for one unit expression."""
+
+    parsed_unit = ureg.parse_units(unit)
+    return tuple(parsed_unit._units.items())
+
+
+def _pint_unit_component_uses_offset(unit_name: str) -> bool:
+    """Return whether a Pint unit component has offset conversion semantics."""
+
+    converter = ureg._units[unit_name].converter
+    return getattr(converter, "offset", None) is not None
 
 
 def _unit_uses_offset(unit: str | pint.Unit | MeasurementQuantity) -> bool:

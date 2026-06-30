@@ -101,6 +101,12 @@ class MeasurementTestCase(TestCase):
         self.assertEqual(converted.unit, "degree_Fahrenheit")
         self.assertAlmostEqual(float(converted.magnitude), 77.0)
 
+    def test_offset_unit_from_string_conversion(self):
+        converted = Measurement.from_string("25 degC").to("degF")
+
+        self.assertEqual(converted.unit, "degree_Fahrenheit")
+        self.assertAlmostEqual(float(converted.magnitude), 77.0)
+
     def test_offset_unit_comparison(self):
         self.assertEqual(Measurement(25, "degC"), Measurement(298.15, "K"))
 
