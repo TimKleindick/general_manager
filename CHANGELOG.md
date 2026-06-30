@@ -2,6 +2,53 @@
 
 <!-- version list -->
 
+## v0.60.0 (2026-06-30)
+
+### Bug Fixes
+
+- Accept arbitrary measurement field iterables
+  ([`5d22f54`](https://github.com/TimKleindick/general_manager/commit/5d22f54cadf559743a5344406c8aeccd1e76c810))
+
+- Expand measurements before pandas import
+  ([`ccc4b05`](https://github.com/TimKleindick/general_manager/commit/ccc4b0598dbcd4cd7542bea7544b932892e65186))
+
+- Handle dataframe null sentinels
+  ([`200deda`](https://github.com/TimKleindick/general_manager/commit/200deda4ebae3a39cc043ccb64b64bcd9d72242d))
+
+- Keep dataframe protocol internal
+  ([`e3d7b7b`](https://github.com/TimKleindick/general_manager/commit/e3d7b7bacfa08368e58ca9f632f354037c684411))
+
+- Validate dataframe measurement collapse inputs
+  ([`89272ad`](https://github.com/TimKleindick/general_manager/commit/89272ad96e1e20238c9603ef72bffe985ba5ffa4))
+
+### Documentation
+
+- Document dataframe measurement helpers
+  ([`9610e37`](https://github.com/TimKleindick/general_manager/commit/9610e376d36e922139cc49153cb40e4bd1782074))
+
+### Features
+
+- Add optional pandas dataframe wrappers
+  ([`f5818f2`](https://github.com/TimKleindick/general_manager/commit/f5818f2558e60b24f7625070726835a54cf35427))
+
+- Collapse dataframe measurement columns
+  ([`23efc46`](https://github.com/TimKleindick/general_manager/commit/23efc46227ea18dbb2274fd70d3b8651741b3937))
+
+- Expand measurements for dataframe rows
+  ([`323d3dc`](https://github.com/TimKleindick/general_manager/commit/323d3dc5525341c46fba4e0ee289cdf852fa9dc1))
+
+- Expose dataframe measurement helpers
+  ([`085d39e`](https://github.com/TimKleindick/general_manager/commit/085d39ed1209ae285e09a1957baaeb641cc69051))
+
+### Testing
+
+- Cover dataframe measurement nan expansion
+  ([`50bfe42`](https://github.com/TimKleindick/general_manager/commit/50bfe423c14dd023c1448cfaf9be0ca8a00840e6))
+
+- Type dataframe measurement fixtures
+  ([`eef57a5`](https://github.com/TimKleindick/general_manager/commit/eef57a523406625bc31c33d7d7520e6981e09b45))
+
+
 ## v0.59.3 (2026-06-30)
 
 ### Bug Fixes
