@@ -165,8 +165,8 @@ def to_dataframe(
 ) -> Any:
     """Expand measurement values and build a pandas DataFrame."""
 
-    pandas = _import_pandas()
     expanded_rows = expand_measurements(rows, measurement_fields=measurement_fields)
+    pandas = _import_pandas()
     return pandas.DataFrame(expanded_rows, **dataframe_kwargs)
 
 

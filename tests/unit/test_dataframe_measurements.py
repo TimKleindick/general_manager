@@ -291,6 +291,31 @@ def test_to_dataframe_uses_lazy_pandas_import(
     assert dataframe.kwargs == {"index": ["row-1"]}
 
 
+def test_to_dataframe_expands_before_importing_pandas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    imported_modules: list[str] = []
+
+    def fake_import_module(module_name: str) -> Any:
+        imported_modules.append(module_name)
+        raise AssertionError
+
+    monkeypatch.setattr(
+        "general_manager.dataframes.measurements.importlib.import_module",
+        fake_import_module,
+    )
+
+    with pytest.raises(InvalidDataFrameMeasurementValueError):
+        to_dataframe(
+            [
+                {"height": Measurement(180, "cm")},
+                {"height": "170 cm"},
+            ]
+        )
+
+    assert imported_modules == []
+
+
 def test_to_dataframe_reports_missing_pandas(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
