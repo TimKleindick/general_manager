@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from decimal import Decimal, InvalidOperation
 import math
 
 from general_manager.measurement import Measurement
@@ -14,6 +15,8 @@ __all__ = [
     "DataFrameMeasurementError",
     "InvalidDataFrameMeasurementValueError",
     "MeasurementDataFrameColumnCollisionError",
+    "MissingMeasurementDataFrameColumnError",
+    "collapse_measurements",
     "expand_measurements",
 ]
 
@@ -49,6 +52,15 @@ class MeasurementDataFrameColumnCollisionError(DataFrameMeasurementError):
         )
 
 
+class MissingMeasurementDataFrameColumnError(DataFrameMeasurementError):
+    """Raised when a generated measurement column is required but absent."""
+
+    def __init__(self, column: str) -> None:
+        super().__init__(
+            f"Collapsing measurement dataframe rows requires column {column!r}."
+        )
+
+
 def expand_measurements(
     rows: Iterable[Row],
     *,
@@ -76,6 +88,32 @@ def expand_measurements(
             explicit_field_names=explicit_field_names,
         )
         for row in copied_rows
+    ]
+
+
+def collapse_measurements(
+    rows: Iterable[Row],
+    *,
+    measurement_fields: Iterable[str],
+) -> list[MutableRow]:
+    """Collapse value/unit dataframe columns back into Measurement values."""
+
+    collapsed_fields = _ordered_unique(measurement_fields)
+    value_columns: dict[str, str] = {}
+    unit_columns: set[str] = set()
+    for field in collapsed_fields:
+        value_field, unit_field = _generated_field_names(field)
+        value_columns[value_field] = field
+        unit_columns.add(unit_field)
+
+    return [
+        _collapse_row(
+            dict(row),
+            collapsed_fields=collapsed_fields,
+            value_columns=value_columns,
+            unit_columns=unit_columns,
+        )
+        for row in rows
     ]
 
 
@@ -153,6 +191,38 @@ def _expand_row(
     return expanded_row
 
 
+def _collapse_row(
+    row: MutableRow,
+    *,
+    collapsed_fields: tuple[str, ...],
+    value_columns: Mapping[str, str],
+    unit_columns: set[str],
+) -> MutableRow:
+    for field in collapsed_fields:
+        value_field, unit_field = _generated_field_names(field)
+        if value_field not in row:
+            raise MissingMeasurementDataFrameColumnError(value_field)
+        if unit_field not in row:
+            raise MissingMeasurementDataFrameColumnError(unit_field)
+
+    collapsed_row: MutableRow = {}
+    for column, value in row.items():
+        if column in value_columns:
+            field = value_columns[column]
+            _value_field, unit_field = _generated_field_names(field)
+            collapsed_row[field] = _build_collapsed_measurement(
+                field,
+                value,
+                row[unit_field],
+            )
+            continue
+        if column in unit_columns:
+            continue
+        collapsed_row[column] = value
+
+    return collapsed_row
+
+
 def _coerce_measurement_value(
     field: str,
     value: object,
@@ -172,6 +242,33 @@ def _coerce_measurement_value(
             ) from error
 
     raise InvalidDataFrameMeasurementValueError(field, value_type=type(value).__name__)
+
+
+def _build_collapsed_measurement(
+    field: str,
+    value: object,
+    unit: object,
+) -> Measurement | None:
+    value_is_null = _is_null_measurement_value(value)
+    unit_is_null = _is_null_measurement_value(unit)
+    if value_is_null and unit_is_null:
+        return None
+    if value_is_null or unit_is_null:
+        raise InvalidDataFrameMeasurementValueError(field)
+    if not isinstance(unit, str):
+        raise InvalidDataFrameMeasurementValueError(
+            field,
+            value_type=type(unit).__name__,
+        )
+
+    try:
+        magnitude = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise InvalidDataFrameMeasurementValueError(
+            field,
+            value_type=type(value).__name__,
+        ) from error
+    return Measurement(magnitude, unit)
 
 
 def _is_null_measurement_value(value: object) -> bool:
