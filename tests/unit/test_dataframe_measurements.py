@@ -80,6 +80,7 @@ def test_expand_measurements_expands_nulls_for_measurement_fields() -> None:
         {"name": "Alice", "height": Measurement(180, "cm")},
         {"name": "Bob", "height": None},
         {"name": "Cara"},
+        {"name": "Dana", "height": float("nan")},
     ]
 
     assert expand_measurements(rows) == [
@@ -90,6 +91,7 @@ def test_expand_measurements_expands_nulls_for_measurement_fields() -> None:
         },
         {"name": "Bob", "height_value": None, "height_unit": None},
         {"name": "Cara", "height_value": None, "height_unit": None},
+        {"name": "Dana", "height_value": None, "height_unit": None},
     ]
 
 
