@@ -122,8 +122,12 @@ class MeasurementTestCase(TestCase):
         self.assertTrue(freezing_f >= freezing_c)
 
     def test_unit_uses_offset_cache_preserves_temperature_behavior(self):
-        from general_manager.measurement.measurement import _unit_uses_offset
+        from general_manager.measurement.measurement import (
+            _parse_unit,
+            _unit_uses_offset,
+        )
 
+        _parse_unit.cache_clear()
         _unit_uses_offset.cache_clear()
 
         self.assertTrue(_unit_uses_offset("degC"))
@@ -153,6 +157,35 @@ class MeasurementTestCase(TestCase):
         self.assertFalse(_unit_uses_offset("kg"))
         self.assertFalse(_unit_uses_offset("kg"))
         self.assertGreaterEqual(_unit_uses_offset.cache_info().hits, 1)
+
+    def test_repeated_measurements_reuse_parsed_unit(self):
+        from unittest.mock import patch
+
+        from general_manager.measurement.measurement import (
+            _parse_unit,
+            _unit_uses_offset,
+        )
+
+        _parse_unit.cache_clear()
+        _unit_uses_offset.cache_clear()
+
+        with patch.object(ureg, "parse_units", wraps=ureg.parse_units) as mocked:
+            Measurement(1, "kg")
+            Measurement(2, "kg")
+
+        self.assertEqual(mocked.call_count, 1)
+
+    def test_measurement_reuses_canonical_values_until_quantity_is_exposed(self):
+        measurement = Measurement(Decimal("1.2300"), "kg / m ** 3")
+
+        self.assertIs(measurement.unit, measurement.unit)
+        self.assertIs(measurement.magnitude, measurement.magnitude)
+
+        exposed_quantity = measurement.quantity
+        exposed_quantity.ito("g / cm ** 3")
+
+        self.assertEqual(measurement.unit, "gram / centimeter ** 3")
+        self.assertNotEqual(measurement.magnitude, Decimal("1.23"))
 
     def test_unit_uses_offset_cache_preserves_quantity_input(self):
         from general_manager.measurement.measurement import _unit_uses_offset

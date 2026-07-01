@@ -416,7 +416,7 @@ class GeneralManagerMeta(type):
         """
         Attach descriptor properties to new_class for each name in attributes.
 
-        Each generated descriptor returns the interface field type when accessed on the class and resolves the corresponding value from instance._attributes when accessed on an instance. Existing attributes with the same names are overwritten unconditionally, matching bootstrap descriptor installation. Generated descriptors implement only ``__get__``; assignment to the same name on the class replaces the descriptor, and instance assignment follows normal non-data-descriptor shadowing rules. Descriptor reads do not cache resolved values. Duplicate names are processed in order, so later duplicates overwrite earlier descriptors. Non-string names or iterables that raise during iteration propagate their original exception and may leave descriptors from earlier names installed. If called through ``ensure_attributes_initialized()``, those failures can occur after ``manager_class._attributes`` is cached and before pending-initialization removal. If the stored value is callable it is always treated as a deferred evaluator and invoked with instance._interface; expose literal callables by wrapping them in a non-callable container or by using a custom descriptor path. A missing stored key raises MissingAttributeError, but a missing ``instance._attributes`` mapping or missing ``instance._interface`` attribute raises the normal ``AttributeError``. A present but malformed ``_interface`` is passed to the callable unchanged; callable failures are wrapped in ``AttributeEvaluationError``.
+        Each generated descriptor returns the interface field type when accessed on the class and resolves the corresponding value from instance._attributes when accessed on an instance. Existing attributes with the same names are overwritten unconditionally, matching bootstrap descriptor installation. Generated descriptors implement only ``__get__``; assignment to the same name on the class replaces the descriptor, and instance assignment follows normal non-data-descriptor shadowing rules. Descriptor reads cache resolved values on the manager instance and replay dependency tracking when returning a cached manager value. Duplicate names are processed in order, so later duplicates overwrite earlier descriptors. Non-string names or iterables that raise during iteration propagate their original exception and may leave descriptors from earlier names installed. If called through ``ensure_attributes_initialized()``, those failures can occur after ``manager_class._attributes`` is cached and before pending-initialization removal. If the stored value is callable it is always treated as a deferred evaluator and invoked with instance._interface; expose literal callables by wrapping them in a non-callable container or by using a custom descriptor path. A missing stored key raises MissingAttributeError, but a missing ``instance._attributes`` mapping or missing ``instance._interface`` attribute raises the normal ``AttributeError``. A present but malformed ``_interface`` is passed to the callable unchanged; callable failures are wrapped in ``AttributeEvaluationError``.
 
         Parameters:
             attributes (Iterable[str]): Names of attributes for which descriptors will be created.
@@ -489,6 +489,25 @@ class GeneralManagerMeta(type):
                     GeneralManagerMeta.ensure_manager_is_valid(
                         instance, self._attr_name
                     )
+                    cache = getattr(instance, "_attribute_value_cache", None)
+                    if isinstance(cache, dict) and self._attr_name in cache:
+                        cached_attribute = cache[self._attr_name]
+                        track_dependency = getattr(
+                            cached_attribute.__class__,
+                            "_track_identification_dependency",
+                            None,
+                        )
+                        identification = getattr(
+                            cached_attribute,
+                            "identification",
+                            None,
+                        )
+                        if callable(track_dependency) and isinstance(
+                            identification,
+                            dict,
+                        ):
+                            track_dependency(identification)
+                        return cached_attribute
                     attribute = instance._attributes.get(self._attr_name, _nonExistent)
                     if attribute is _nonExistent:
                         logger.warning(
@@ -514,6 +533,8 @@ class GeneralManagerMeta(type):
                                 },
                             )
                             raise AttributeEvaluationError(self._attr_name, e) from e
+                    if isinstance(cache, dict):
+                        cache[self._attr_name] = attribute
                     return attribute
 
             return Descriptor(attr_name, new_class)

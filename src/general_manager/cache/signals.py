@@ -93,6 +93,7 @@ def data_change(
         if context is not None:
             context.clear_orm_bucket_results()
             context.clear_bucket_indexes()
+            context.clear_trusted_orm_managers()
         try:
             action = func.__name__
             if func.__name__ == "create":
@@ -117,6 +118,12 @@ def data_change(
                 result = inner(*args, **kwargs)
             else:
                 result = func(*args, **kwargs)
+
+            context = current_calculation_run_context()
+            if context is not None:
+                context.clear_orm_bucket_results()
+                context.clear_bucket_indexes()
+                context.clear_trusted_orm_managers()
 
             instance = result
             identification = getattr(instance, "identification", None)

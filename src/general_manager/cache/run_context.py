@@ -27,7 +27,11 @@ _active_context: ContextVar["CalculationRunContext | None"] = ContextVar(
 )
 ORM_BUCKET_RESULT_PREFIX = "orm_bucket_result"
 ORM_BUCKET_ROW_RESULT_PREFIX = "orm_bucket_row_result"
+ORM_BUCKET_MANAGER_RESULT_PREFIX = "orm_bucket_manager_result"
+ORM_QUERY_BUCKET_PREFIX = "orm_query_bucket"
+ORM_BUCKET_EXISTS_PREFIX = "orm_bucket_exists"
 BUCKET_INDEX_PREFIX = "bucket_index"
+TRUSTED_ORM_MANAGER_PREFIX = "trusted_orm_manager"
 DEFAULT_DEPENDENCY_CACHE_PUBLISH_BATCH_SIZE = 1000
 logger = get_logger("cache.run_context")
 
@@ -295,10 +299,37 @@ class CalculationRunContext:
         """Store or overwrite ORM bucket rows for the active run."""
         self.set((ORM_BUCKET_ROW_RESULT_PREFIX, key), value)
 
+    def get_orm_bucket_managers(self, key: Hashable) -> object:
+        """Return cached ORM bucket managers for key, or `None` when absent."""
+        return self.get((ORM_BUCKET_MANAGER_RESULT_PREFIX, key))
+
+    def set_orm_bucket_managers(self, key: Hashable, value: object) -> None:
+        """Store or overwrite ORM bucket managers for the active run."""
+        self.set((ORM_BUCKET_MANAGER_RESULT_PREFIX, key), value)
+
+    def get_orm_query_bucket(self, key: Hashable) -> object:
+        """Return a cached constructed ORM query bucket, or `None` when absent."""
+        return self.get((ORM_QUERY_BUCKET_PREFIX, key))
+
+    def set_orm_query_bucket(self, key: Hashable, value: object) -> None:
+        """Store a constructed ORM query bucket for the active run."""
+        self.set((ORM_QUERY_BUCKET_PREFIX, key), value)
+
+    def get_orm_bucket_exists(self, key: Hashable) -> object:
+        """Return cached ORM bucket existence for key, or `None` when absent."""
+        return self.get((ORM_BUCKET_EXISTS_PREFIX, key))
+
+    def set_orm_bucket_exists(self, key: Hashable, value: bool) -> None:
+        """Store an ORM bucket existence result for the active run."""
+        self.set((ORM_BUCKET_EXISTS_PREFIX, key), value)
+
     def clear_orm_bucket_results(self) -> None:
         """Discard all run-scoped ORM bucket result entries."""
         self.discard_prefix((ORM_BUCKET_RESULT_PREFIX,))
         self.discard_prefix((ORM_BUCKET_ROW_RESULT_PREFIX,))
+        self.discard_prefix((ORM_BUCKET_MANAGER_RESULT_PREFIX,))
+        self.discard_prefix((ORM_QUERY_BUCKET_PREFIX,))
+        self.discard_prefix((ORM_BUCKET_EXISTS_PREFIX,))
 
     def _bucket_index_cache_key(
         self,
@@ -358,6 +389,10 @@ class CalculationRunContext:
     def clear_bucket_indexes(self) -> None:
         """Discard all run-scoped bucket index entries."""
         self.discard_prefix((BUCKET_INDEX_PREFIX,))
+
+    def clear_trusted_orm_managers(self) -> None:
+        """Discard run-scoped manager wrappers built from trusted ORM rows."""
+        self.discard_prefix((TRUSTED_ORM_MANAGER_PREFIX,))
 
     def has(self, key: Hashable) -> bool:
         """Return whether key has a value in the active run."""

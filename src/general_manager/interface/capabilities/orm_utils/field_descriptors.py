@@ -264,7 +264,12 @@ class _FieldDescriptorBuilder:
                 related_model, "_general_manager_class", None
             )
             if general_manager_class:
-                accessor = _general_manager_accessor(field.name, general_manager_class)
+                raw_id_name = getattr(field, "attname", f"{field.name}_id")
+                accessor = _general_manager_accessor(
+                    field.name,
+                    general_manager_class,
+                    raw_id_name=raw_id_name,
+                )
                 relation_type = cast(type[object], general_manager_class)
             else:
                 accessor = _instance_attribute_accessor(field.name)
@@ -752,8 +757,14 @@ def _instance_attribute_accessor(field_name: str) -> DescriptorAccessor:
     return getter
 
 
+_MISSING_RELATED = object()
+
+
 def _general_manager_accessor(
-    field_name: str, manager_class: type[object]
+    field_name: str,
+    manager_class: type[object],
+    *,
+    raw_id_name: str | None = None,
 ) -> DescriptorAccessor:
     """
     Create an accessor that resolves a related object's manager instance from a OrmInterfaceBase.
@@ -773,13 +784,32 @@ def _general_manager_accessor(
         Returns:
             The value produced by calling `manager_class` with the related object's primary key, or `None` if the related object is `None`.
         """
+        manager_type = cast("type[GeneralManager]", manager_class)
+        if raw_id_name is not None:
+            raw_id = getattr(self._instance, raw_id_name, None)
+            if raw_id is None:
+                return None
+            state = getattr(self._instance, "_state", None)
+            fields_cache = getattr(state, "fields_cache", {})
+            related = fields_cache.get(field_name, _MISSING_RELATED)
+            if related is _MISSING_RELATED:
+                return manager_type(raw_id)
+            if related is None:
+                return None
+            trusted_hydrate = getattr(manager_type, "_from_trusted_orm_instance", None)
+            if callable(trusted_hydrate):
+                return trusted_hydrate(related)
+            return manager_type(raw_id)
+
         try:
             related = getattr(self._instance, field_name)
         except ObjectDoesNotExist:
             return None
         if related is None:
             return None
-        manager_type = cast("type[GeneralManager]", manager_class)
+        trusted_hydrate = getattr(manager_type, "_from_trusted_orm_instance", None)
+        if callable(trusted_hydrate):
+            return trusted_hydrate(related)
         return manager_type(related.pk)
 
     return getter

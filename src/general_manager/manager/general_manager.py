@@ -1,5 +1,7 @@
 from __future__ import annotations
+import json
 from collections.abc import Mapping
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Iterator, Protocol, Self, Type, cast
 
 from general_manager.api.property import GraphQLProperty
@@ -48,6 +50,23 @@ if TYPE_CHECKING:
 logger = get_logger("manager.general")
 
 
+def _serialize_simple_id_identification(
+    identification: dict[str, object],
+) -> str | None:
+    if len(identification) != 1 or "id" not in identification:
+        return None
+    value = identification["id"]
+    if isinstance(value, datetime):
+        serialized_value = json.dumps(value.isoformat())
+    elif isinstance(value, date):
+        serialized_value = json.dumps(value.isoformat())
+    elif value is None or isinstance(value, (str, int, float, bool)):
+        serialized_value = json.dumps(value)
+    else:
+        return None
+    return f'{{"id": {serialized_value}}}'
+
+
 class TrustedOrmRow(Protocol):
     """Protocol for ORM rows accepted by trusted hydration."""
 
@@ -60,8 +79,24 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     _attributes: dict[str, object]
     Interface: Type["InterfaceBase"]
     _old_values: dict[str, object]
+    _attribute_value_cache: dict[str, object]
     _manager_state_valid: bool
     _manager_state_reason: str | None
+
+    @classmethod
+    def _track_identification_dependency(
+        cls,
+        identification: dict[str, object],
+    ) -> None:
+        if DependencyTracker.is_active():
+            identifier = _serialize_simple_id_identification(identification)
+            if identifier is None:
+                identifier = serialize_dependency_identifier(identification)
+            DependencyTracker.track(
+                cls.__name__,
+                "identification",
+                identifier,
+            )
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         """
@@ -73,14 +108,10 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """
         self._interface = self.Interface(*args, **kwargs)
         self.__id: dict[str, object] = self._interface.identification
+        self._attribute_value_cache = {}
         self._manager_state_valid = True
         self._manager_state_reason = None
-        if DependencyTracker.is_active():
-            DependencyTracker.track(
-                self.__class__.__name__,
-                "identification",
-                serialize_dependency_identifier(self.__id),
-            )
+        self._track_identification_dependency(self.__id)
         logger.debug(
             "instantiated manager",
             context={
@@ -123,17 +154,34 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 return cls(pk)
             return cls(pk, search_date=search_date)
 
+        from general_manager.cache.run_context import (
+            TRUSTED_ORM_MANAGER_PREFIX,
+            current_calculation_run_context,
+        )
+
+        context = current_calculation_run_context()
+        cache_key = (
+            TRUSTED_ORM_MANAGER_PREFIX,
+            cls,
+            id(instance),
+            instance.pk,
+            search_date,
+        )
+        if context is not None:
+            cached = context.get(cache_key)
+            if isinstance(cached, cls):
+                cls._track_identification_dependency(cached.identification)
+                return cached
+
         manager = cls.__new__(cls)
         manager._interface = hydrate(instance, search_date=search_date)
         manager.__id = manager._interface.identification
+        manager._attribute_value_cache = {}
         manager._manager_state_valid = True
         manager._manager_state_reason = None
-        if DependencyTracker.is_active():
-            DependencyTracker.track(
-                cls.__name__,
-                "identification",
-                serialize_dependency_identifier(manager.__id),
-            )
+        if context is not None:
+            context.set(cache_key, manager)
+        cls._track_identification_dependency(manager.__id)
         logger.debug(
             "trusted orm manager hydrated",
             context={
@@ -252,6 +300,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         ``_manager_state_reason`` is cleared.
         """
         self._interface = self.Interface(**self.__id)
+        self._attribute_value_cache = {}
         self._manager_state_valid = True
         self._manager_state_reason = None
 
@@ -264,6 +313,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """
         self._manager_state_valid = False
         self._manager_state_reason = reason
+        self._attribute_value_cache = {}
 
     def _ensure_manager_state_valid(self, attribute_name: str | None = None) -> None:
         """

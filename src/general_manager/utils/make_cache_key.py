@@ -1,6 +1,7 @@
 """Utilities for building deterministic cache keys from function calls."""
 
 from collections.abc import Callable, Mapping
+from functools import lru_cache
 import inspect
 import json
 from hashlib import sha256
@@ -9,6 +10,11 @@ from general_manager.utils.json_encoder import CustomJSONEncoder
 
 type CacheKeyArgs = tuple[object, ...]
 type CacheKeyKwargs = Mapping[str, object]
+
+
+@lru_cache(maxsize=None)
+def _signature_for(func: Callable[..., object]) -> inspect.Signature:
+    return inspect.signature(func)
 
 
 def make_cache_key(
@@ -30,7 +36,7 @@ def make_cache_key(
             if payload serialization fails before `CustomJSONEncoder` can fall
             back to strings.
     """
-    sig = inspect.signature(func)
+    sig = _signature_for(func)
     kwargs_dict = {} if kwargs is None else dict(kwargs)
     bound = sig.bind_partial(*args, **kwargs_dict)
     bound.apply_defaults()

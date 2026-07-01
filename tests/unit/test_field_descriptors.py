@@ -9,6 +9,7 @@ from django.db import models
 
 from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     _FieldDescriptorBuilder,
+    _general_manager_accessor,
     _general_manager_many_accessor,
     build_field_descriptors,
 )
@@ -39,6 +40,65 @@ def test_general_manager_many_accessor_uses_explicit_relation_field_name() -> No
     related_model._meta.get_field.assert_called_once_with("reviewer")
     manager_class.filter.assert_called_once_with(reviewer=42)
     assert result is filter_result
+
+
+def test_general_manager_fk_accessor_uses_trusted_hydration_for_loaded_row() -> None:
+    related = SimpleNamespace(pk=7)
+    constructor_calls: list[object] = []
+    calls: list[tuple[object, object | None]] = []
+    trusted_result = object()
+
+    class RelatedManager:
+        def __init__(self, pk: object) -> None:
+            constructor_calls.append(pk)
+
+        @classmethod
+        def _from_trusted_orm_instance(
+            cls,
+            instance: object,
+            *,
+            search_date: object | None = None,
+        ) -> object:
+            calls.append((instance, search_date))
+            return trusted_result
+
+    accessor = _general_manager_accessor("owner", RelatedManager)
+    interface_instance = SimpleNamespace(_instance=SimpleNamespace(owner=related))
+
+    assert accessor(interface_instance) is trusted_result
+    assert constructor_calls == []
+    assert calls == [(related, None)]
+
+
+def test_general_manager_fk_accessor_uses_raw_id_without_loading_relation() -> None:
+    calls: list[object] = []
+
+    class RelatedManager:
+        def __init__(self, pk: object) -> None:
+            calls.append(pk)
+
+    class SourceInstance:
+        owner_id = 7
+        _state = SimpleNamespace(fields_cache={})
+        loaded_relation = False
+
+        @property
+        def owner(self) -> object:
+            self.loaded_relation = True
+            return object()
+
+    accessor = _general_manager_accessor(
+        "owner",
+        RelatedManager,
+        raw_id_name="owner_id",
+    )
+    interface_instance = SimpleNamespace(_instance=SourceInstance())
+
+    result = accessor(interface_instance)
+
+    assert isinstance(result, RelatedManager)
+    assert calls == [7]
+    assert not interface_instance._instance.loaded_relation
 
 
 def test_build_field_descriptors_disambiguates_duplicate_reverse_relations() -> None:

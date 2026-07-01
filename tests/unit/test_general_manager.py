@@ -16,6 +16,7 @@ from general_manager.permission.manager_based_permission import (
 )
 from unittest.mock import Mock, patch
 from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.run_context import CalculationRunContext
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.contrib.auth import get_user_model
 from django.utils.crypto import get_random_string
@@ -190,6 +191,21 @@ class GeneralManagerTestCase(TestCase):
             dependencies,
         )
 
+    def test_manager_init_tracks_scalar_id_without_generic_serializer(self):
+        with (
+            DependencyTracker() as dependencies,
+            patch(
+                "general_manager.manager.general_manager.serialize_dependency_identifier",
+                side_effect=AssertionError("generic serialization should be skipped"),
+            ),
+        ):
+            self.manager("dummy_id")
+
+        self.assertIn(
+            ("GeneralManager", "identification", '{"id": "dummy_id"}'),
+            dependencies,
+        )
+
     def test_trusted_orm_hydration_does_not_serialize_without_dependency_tracker(self):
         manager_class = self._temporary_manager_class()
 
@@ -227,6 +243,32 @@ class GeneralManagerTestCase(TestCase):
         with DependencyTracker() as dependencies:
             manager_class._from_trusted_orm_instance(row)
 
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "trusted_id"}'),
+            dependencies,
+        )
+
+    def test_trusted_orm_hydration_reuses_loaded_row_inside_run_context(self):
+        manager_class = self._temporary_manager_class()
+        hydration_calls = []
+
+        class TrustedInterface:
+            @classmethod
+            def _from_trusted_orm_instance(cls, instance, *, search_date=None):
+                hydration_calls.append((instance, search_date))
+                interface = cls()
+                interface.identification = {"id": instance.pk}
+                return interface
+
+        manager_class.Interface = TrustedInterface  # type: ignore[assignment]
+        row = Mock(pk="trusted_id")
+
+        with CalculationRunContext(), DependencyTracker() as dependencies:
+            first = manager_class._from_trusted_orm_instance(row)
+            second = manager_class._from_trusted_orm_instance(row)
+
+        self.assertIs(first, second)
+        self.assertEqual(hydration_calls, [(row, None)])
         self.assertIn(
             ("TemporaryManager", "identification", '{"id": "trusted_id"}'),
             dependencies,

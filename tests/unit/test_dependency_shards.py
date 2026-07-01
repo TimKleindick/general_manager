@@ -8,7 +8,10 @@ from unittest import mock
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 
-from general_manager.cache.dependency_matching import stable_value_hash
+from general_manager.cache.dependency_matching import (
+    parse_dependency_identifier,
+    stable_value_hash,
+)
 from general_manager.cache.dependency_shards import (
     ALL_RECORDS_VALUE,
     DEPENDENCY_SHARD_PREFIX,
@@ -27,6 +30,7 @@ from general_manager.cache.dependency_shards import (
     request_query_shard_key,
     reverse_membership_key,
     scan_lookup_shard_key,
+    _shard_keys_for_dependency,
 )
 from general_manager.cache.dependency_index import (
     capture_old_values,
@@ -373,6 +377,36 @@ class DependencyShardKeyTests(TestCase):
         assert counting_cache.set_calls == []
         assert len(counting_cache.get_many_calls) <= 2
         assert len(counting_cache.set_many_calls) <= 2
+
+    def test_record_many_cache_dependencies_reuses_shard_plan_for_duplicates(
+        self,
+    ) -> None:
+        counting_cache = CountingShardCache()
+        dependency: Dependency = (
+            "Project",
+            "filter",
+            json.dumps({"status": "open"}),
+        )
+        entries: list[tuple[str, set[Dependency]]] = [
+            (f"cache-{index}", {dependency}) for index in range(10)
+        ]
+        cache_clear = getattr(_shard_keys_for_dependency, "cache_clear", None)
+        if callable(cache_clear):
+            cache_clear()
+
+        with (
+            mock.patch(
+                "general_manager.cache.dependency_shards.cache",
+                counting_cache,
+            ),
+            mock.patch(
+                "general_manager.cache.dependency_shards.parse_dependency_identifier",
+                wraps=parse_dependency_identifier,
+            ) as mocked_parse,
+        ):
+            record_many_cache_dependencies(entries)
+
+        assert mocked_parse.call_count == 1
 
     def test_record_many_cache_dependencies_replaces_existing_memberships_in_bulk(
         self,

@@ -27,6 +27,7 @@ QueryAnnotationCallable = Callable[
     models.QuerySet[models.Model],
 ]
 MAX_RUN_SCOPED_BUCKET_RESULT_ROWS = 1000
+_QUERY_SIGNATURE_NOT_COMPUTED = object()
 
 
 class DatabaseBucketTypeMismatchError(TypeError):
@@ -251,6 +252,79 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self._sort_keys = sort_keys
         self._sort_reverse = sort_reverse
         self._run_scoped_cacheable = run_scoped_cacheable
+        self._query_signature_cache: tuple[Hashable, ...] | None | object = (
+            _QUERY_SIGNATURE_NOT_COMPUTED
+        )
+        self._trusted_query_signature: Hashable | None = None
+
+    def _set_trusted_query_signature(self, signature: Hashable | None) -> None:
+        """Set an internal non-SQL signature for framework-built querysets."""
+        self._trusted_query_signature = signature
+        self._query_signature_cache = _QUERY_SIGNATURE_NOT_COMPUTED
+
+    def _copy_for_run_context_reuse(self) -> DatabaseBucket[GeneralManagerType]:
+        """Return an unexposed bucket copy that reuses the same trusted queryset."""
+
+        bucket = self.__class__(
+            self._data,
+            self._manager_class,
+            self.filters,
+            self.excludes,
+            search_date=self._search_date,
+            sort_keys=self._sort_keys,
+            sort_reverse=self._sort_reverse,
+            run_scoped_cacheable=self._run_scoped_cacheable,
+        )
+        bucket._set_trusted_query_signature(self._trusted_query_signature)
+        return bucket
+
+    @staticmethod
+    def _freeze_trusted_signature_payload(value: object) -> Hashable:
+        if isinstance(value, Mapping):
+            return tuple(
+                (
+                    str(key),
+                    DatabaseBucket._freeze_trusted_signature_payload(item_value),
+                )
+                for key, item_value in sorted(
+                    value.items(),
+                    key=lambda item: str(item[0]),
+                )
+            )
+        if isinstance(value, (list, tuple)):
+            return tuple(
+                DatabaseBucket._freeze_trusted_signature_payload(item) for item in value
+            )
+        if isinstance(value, (set, frozenset)):
+            return tuple(
+                sorted(
+                    (
+                        DatabaseBucket._freeze_trusted_signature_payload(item)
+                        for item in value
+                    ),
+                    key=repr,
+                )
+            )
+        if isinstance(value, models.Model):
+            return ("model", value.__class__, value.pk)
+        try:
+            hash(value)
+        except TypeError:
+            return ("serialized", serialize_dependency_identifier(value))
+        return value
+
+    def _trusted_query_signature_with(
+        self,
+        operation: str,
+        kwargs: Mapping[str, object],
+    ) -> Hashable | None:
+        if self._trusted_query_signature is None:
+            return None
+        return (
+            self._trusted_query_signature,
+            operation,
+            self._freeze_trusted_signature_payload(kwargs),
+        )
 
     def __reduce__(self) -> str | tuple[object, ...]:
         """
@@ -365,27 +439,50 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             tuple[Hashable, ...] | None: Cache key components for equivalent
             queryset results, or ``None`` when reuse should be bypassed.
         """
+        if self._query_signature_cache is not _QUERY_SIGNATURE_NOT_COMPUTED:
+            return cast(tuple[Hashable, ...] | None, self._query_signature_cache)
         if not self._run_scoped_cacheable:
+            self._query_signature_cache = None
             return None
+        if self._trusted_query_signature is not None:
+            signature = (
+                self._manager_class,
+                self._data.model,
+                self._data.db,
+                "trusted",
+                self._trusted_query_signature,
+                self._search_date,
+                self._sort_keys,
+                self._sort_reverse,
+            )
+            self._query_signature_cache = signature
+            return signature
         query = self._data.query
         if not isinstance(query, Query):
+            self._query_signature_cache = None
             return None
         if query.select_for_update:
+            self._query_signature_cache = None
             return None
         if query.combinator:
+            self._query_signature_cache = None
             return None
         if query.distinct:
+            self._query_signature_cache = None
             return None
         if getattr(self._data, "_prefetch_related_lookups", ()):
+            self._query_signature_cache = None
             return None
         deferred_loading = getattr(query, "deferred_loading", None)
         if isinstance(deferred_loading, tuple) and deferred_loading[0]:
+            self._query_signature_cache = None
             return None
         try:
             sql, params = self._data.query.sql_with_params()
         except (EmptyResultSet, FieldError, TypeError, ValueError):
+            self._query_signature_cache = None
             return None
-        return (
+        signature = (
             self._manager_class,
             self._data.model,
             self._data.db,
@@ -395,6 +492,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self._sort_keys,
             self._sort_reverse,
         )
+        self._query_signature_cache = signature
+        return signature
 
     def _bucket_index_source_signature(self) -> Hashable:
         """Return a queryset signature when safe, otherwise use object identity."""
@@ -501,6 +600,38 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return None
         return cast(tuple[models.Model, ...], cached)
 
+    def _can_cache_run_scoped_managers(self) -> bool:
+        if self._manager_class.__init__ is not GeneralManager.__init__:
+            return False
+        return callable(
+            getattr(self._manager_class.Interface, "_from_trusted_orm_instance", None)
+        )
+
+    def _get_run_scoped_managers(self) -> tuple[GeneralManagerType, ...] | None:
+        """Load or reuse manager wrappers for a trusted row snapshot."""
+        if not self._can_cache_run_scoped_managers():
+            return None
+        context = current_calculation_run_context()
+        if context is None:
+            return None
+        signature = self._query_signature()
+        if signature is None:
+            return None
+        cached = context.get_orm_bucket_managers(signature)
+        if cached is not None:
+            managers = cast(tuple[GeneralManagerType, ...], cached)
+            for manager in managers:
+                self._manager_class._track_identification_dependency(
+                    manager.identification
+                )
+            return managers
+        rows = self._get_run_scoped_rows()
+        if rows is None:
+            return None
+        managers = tuple(self._build_manager_from_instance(row) for row in rows)
+        context.set_orm_bucket_managers(signature, managers)
+        return managers
+
     @staticmethod
     def _snapshot_get_primary_key(
         kwargs: Mapping[str, LookupValue],
@@ -576,6 +707,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             GeneralManagerType: Manager instance for each primary key in the queryset.
         """
         self._track_effective_dependencies()
+        managers = self._get_run_scoped_managers()
+        if managers is not None:
+            yield from managers
+            return
         rows = self._get_run_scoped_rows()
         if rows is not None:
             for row in rows:
@@ -782,7 +917,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             qs = qs.filter(pk__in=ids)
 
         merged_filter = self.__merge_filter_definitions(self.filters, **kwargs)
-        return self.__class__(
+        bucket = self.__class__(
             qs,
             self._manager_class,
             merged_filter,
@@ -792,6 +927,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             sort_reverse=self._sort_reverse,
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
+        if not annotations and not python_filters:
+            bucket._set_trusted_query_signature(
+                self._trusted_query_signature_with("filter", orm_kwargs)
+            )
+        return bucket
 
     def exclude(self, **kwargs: LookupValue) -> DatabaseBucket[GeneralManagerType]:
         """
@@ -843,7 +983,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             qs = qs.exclude(pk__in=ids)
 
         merged_exclude = self.__merge_filter_definitions(self.excludes, **kwargs)
-        return self.__class__(
+        bucket = self.__class__(
             qs,
             self._manager_class,
             self.filters,
@@ -853,6 +993,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             sort_reverse=self._sort_reverse,
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
+        if not annotations and not python_filters:
+            bucket._set_trusted_query_signature(
+                self._trusted_query_signature_with("exclude", orm_kwargs)
+            )
+        return bucket
 
     def first(self) -> GeneralManagerType | None:
         """
@@ -932,7 +1077,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             DatabaseBucket[GeneralManagerType]: Bucket encapsulating `self._data.all()`.
         """
-        return self.__class__(
+        bucket = self.__class__(
             self._data.all(),
             self._manager_class,
             self.filters,
@@ -942,6 +1087,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             sort_reverse=self._sort_reverse,
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
+        bucket._set_trusted_query_signature(self._trusted_query_signature)
+        return bucket
 
     def get(self, **kwargs: LookupValue) -> GeneralManagerType:
         """
@@ -1026,6 +1173,32 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 raise ValueError
             return self._build_manager_from_primary_key(primary_keys[item])
         return self._build_manager_from_instance(self._data[item])
+
+    def __bool__(self) -> bool:
+        """
+        Return whether the bucket contains at least one row without counting all rows.
+
+        Truthiness is an existence check, not a cardinality request. Reuse any
+        active run-context snapshot first, then cache a queryset ``exists()``
+        result for equivalent trusted querysets in the same calculation run.
+        """
+        self._track_effective_dependencies()
+        rows = self._peek_run_scoped_rows()
+        if rows is not None:
+            return bool(rows)
+        primary_keys = self._peek_run_scoped_primary_keys()
+        if primary_keys is not None:
+            return bool(primary_keys)
+        context = current_calculation_run_context()
+        signature = self._query_signature() if context is not None else None
+        if context is not None and signature is not None:
+            cached = context.get_orm_bucket_exists(signature)
+            if cached is not None:
+                return bool(cached)
+        exists = bool(self._data.exists())
+        if context is not None and signature is not None:
+            context.set_orm_bucket_exists(signature, exists)
+        return exists
 
     def __len__(self) -> int:
         """
@@ -1169,7 +1342,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             except (FieldError, TypeError, ValueError) as error:
                 raise QuerysetOrderingError(error) from error
 
-        return self.__class__(
+        bucket = self.__class__(
             qs,
             self._manager_class,
             self.filters,
@@ -1179,6 +1352,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             sort_reverse=reverse,
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
+        if not annotations and not python_keys:
+            bucket._set_trusted_query_signature(self._trusted_query_signature)
+        return bucket
 
     def none(self) -> DatabaseBucket[GeneralManagerType]:
         """
@@ -1193,4 +1369,6 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         own = self.all()
         own._data = own._data.none()
+        own._query_signature_cache = _QUERY_SIGNATURE_NOT_COMPUTED
+        own._trusted_query_signature = None
         return own

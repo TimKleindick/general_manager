@@ -13,6 +13,7 @@ import hashlib
 from collections.abc import Iterable, Mapping
 from collections import defaultdict
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Literal
 
 from django.core.cache import cache
@@ -377,6 +378,7 @@ def clear_legacy_dependency_index() -> set[str]:
     return cache_keys
 
 
+@lru_cache(maxsize=16384)
 def _shard_keys_for_dependency(
     manager_name: str,
     action: DependencyAction,

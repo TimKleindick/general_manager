@@ -3,6 +3,7 @@ from __future__ import annotations
 import pickle
 from collections.abc import Iterable, Mapping
 from typing import cast
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
@@ -181,6 +182,48 @@ class DependencyCacheEntryTests(SimpleTestCase):
             None,
         )
         marker = object()
+
+        self.assertIs(
+            read_dependency_cache_hit(cache_backend, "cache-a", sentinel=marker),
+            marker,
+        )
+
+    def test_current_combined_payload_reads_dependencies_without_legacy_validation(
+        self,
+    ) -> None:
+        cache_backend = PickleCache()
+        dependencies: set[Dependency] = {("Project", "identification", '{"id": 1}')}
+        cache_backend.set(
+            "cache-a",
+            make_dependency_cache_entry("ready", dependencies),
+            None,
+        )
+
+        with patch(
+            "general_manager.cache.dependency_cache._legacy_dependency_set",
+            side_effect=AssertionError("legacy validation should not run"),
+        ):
+            hit = read_dependency_cache_hit(cache_backend, "cache-a")
+
+        self.assertIsInstance(hit, DependencyCacheHit)
+        assert isinstance(hit, DependencyCacheHit)
+        self.assertEqual(hit.value, "ready")
+        self.assertEqual(hit.dependencies, frozenset(dependencies))
+
+    def test_legacy_combined_payload_still_rejects_malformed_dependencies(
+        self,
+    ) -> None:
+        cache_backend = PickleCache()
+        marker = object()
+        cache_backend.set(
+            "cache-a",
+            DependencyCacheEntry(
+                version=1,
+                value="legacy",
+                dependencies=frozenset({("Project", "bad-action", '{"id": 1}')}),  # type: ignore[arg-type]
+            ),
+            None,
+        )
 
         self.assertIs(
             read_dependency_cache_hit(cache_backend, "cache-a", sentinel=marker),

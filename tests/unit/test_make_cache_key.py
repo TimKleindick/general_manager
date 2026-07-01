@@ -36,6 +36,19 @@ class TestMakeCacheKey(SimpleTestCase):
         result2 = make_cache_key(sample_function, args, kwargs)
         self.assertEqual(result, result2)
 
+    def test_make_cache_key_reuses_signature_for_same_function(self):
+        def sample_function(x, y=1):
+            return x + y
+
+        with patch(
+            "general_manager.utils.make_cache_key.inspect.signature",
+            wraps=inspect.signature,
+        ) as signature:
+            make_cache_key(sample_function, (1,), None)
+            make_cache_key(sample_function, (2,), None)
+
+        signature.assert_called_once_with(sample_function)
+
     def test_make_cache_key_with_different_args(self):
         """
         Tests that different positional arguments produce different cache keys for the same function.
