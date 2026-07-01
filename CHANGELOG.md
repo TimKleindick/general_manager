@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.60.1 (2026-07-01)
+
+### Performance Improvements
+
+- Improve cold-cache revenue calculation
+  ([`d378bb4`](https://github.com/TimKleindick/general_manager/commit/d378bb43d6c072fcfe9239783447e166580e8125))
+
+- Reduce cold-cache framework overhead
+  ([`56b2e93`](https://github.com/TimKleindick/general_manager/commit/56b2e93fc28bd3cd15f308c298721864239064df))
+
+
 ## v0.60.0 (2026-06-30)
 
 ### Bug Fixes
