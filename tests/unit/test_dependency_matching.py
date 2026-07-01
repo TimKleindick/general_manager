@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from general_manager.cache.dependency_matching import (
     EXACT_OPERATORS,
@@ -92,11 +93,52 @@ def test_normalize_dependency_value_and_hash_are_stable() -> None:
     )
 
 
+def test_single_key_scalar_dependency_mapping_skips_sorting() -> None:
+    with patch(
+        "general_manager.cache.dependency_matching.sorted",
+        side_effect=AssertionError("single-key scalar mapping does not need sorting"),
+        create=True,
+    ):
+        assert normalize_dependency_value({"id": 7}) == {"id": 7}
+
+
+def test_single_key_scalar_dependency_mapping_serialization_skips_json_dumps() -> None:
+    with (
+        patch(
+            "general_manager.cache.dependency_matching.json.dumps",
+            side_effect=AssertionError("single-key scalar mapping uses fast path"),
+        ),
+        patch(
+            "general_manager.cache.dependency_matching.sorted",
+            side_effect=AssertionError(
+                "single-key scalar mapping does not need sorting"
+            ),
+            create=True,
+        ),
+    ):
+        assert serialize_normalized_value({"id": 7}) == '{"id": 7}'
+        assert serialize_normalized_value({"day": date(2026, 1, 2)}) == (
+            '{"day": "2026-01-02"}'
+        )
+
+
 def test_primitive_dependency_serialization_matches_json_contract() -> None:
     assert serialize_normalized_value("abc") == '"abc"'
     assert serialize_normalized_value(3) == "3"
     assert serialize_normalized_value(True) == "true"
     assert serialize_normalized_value(None) == "null"
+
+
+def test_scalar_dependency_serialization_skips_json_dumps() -> None:
+    with patch(
+        "general_manager.cache.dependency_matching.json.dumps",
+        side_effect=AssertionError("scalar dependency values use fast path"),
+    ):
+        assert serialize_normalized_value("abc") == '"abc"'
+        assert serialize_normalized_value(date(2026, 1, 2)) == '"2026-01-02"'
+        assert serialize_normalized_value(3) == "3"
+        assert serialize_normalized_value(True) == "true"
+        assert serialize_normalized_value(None) == "null"
 
 
 def test_nested_dependency_serialization_remains_sorted_and_recursive() -> None:

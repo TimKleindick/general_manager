@@ -1,4 +1,5 @@
 from unittest import mock
+from types import SimpleNamespace
 
 import pytest
 
@@ -412,6 +413,49 @@ def test_clear_orm_bucket_results_clears_primary_keys_and_rows() -> None:
 
         assert ctx.get_orm_bucket_result(("query", "a")) is None
         assert ctx.get_orm_bucket_rows(("query", "a")) is None
+
+
+def test_orm_bucket_rows_index_model_rows_and_prefetch_state() -> None:
+    class Row:
+        _meta = SimpleNamespace(concrete_model=None)
+
+        def __init__(self, pk: int, database_alias: str) -> None:
+            self.pk = pk
+            self._state = SimpleNamespace(db=database_alias)
+
+    Row._meta = SimpleNamespace(concrete_model=Row)
+    row = Row(7, "default")
+
+    with CalculationRunContext() as ctx:
+        ctx.set_orm_bucket_rows(("query", "rows"), (row,))
+
+        assert ctx.get_orm_model_row(Row, 7, "default") is row
+        assert ctx.get_orm_model_row_items(Row) == (((7, "default"), row),)
+
+        ctx.add_orm_model_relation_prefetched_keys(
+            Row,
+            "default",
+            "members",
+            [(7, "default")],
+        )
+        assert ctx.get_orm_model_relation_prefetched_keys(
+            Row,
+            "default",
+            "members",
+        ) == frozenset({(7, "default")})
+
+        ctx.clear_orm_bucket_results()
+
+        assert ctx.get_orm_model_row(Row, 7, "default") is None
+        assert ctx.get_orm_model_row_items(Row) == ()
+        assert (
+            ctx.get_orm_model_relation_prefetched_keys(
+                Row,
+                "default",
+                "members",
+            )
+            == frozenset()
+        )
 
 
 def test_bucket_index_helpers_store_replay_and_clear_dependencies() -> None:

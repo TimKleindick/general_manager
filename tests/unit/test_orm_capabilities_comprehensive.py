@@ -1130,6 +1130,48 @@ class TestOrmQueryCapability:
 
         assert translated == "unresolvedaliastargetrequestfeasibility__missing__gte"
 
+    def test_translate_reverse_filter_key_caches_repeated_model_key_pairs(
+        self,
+    ) -> None:
+        class CachedFilterTranslationModel(models.Model):
+            status = models.IntegerField(default=0)
+
+            class Meta:
+                app_label = "orm_capability_tests"
+
+        cache_clear = getattr(_translate_reverse_filter_key, "cache_clear", None)
+        if callable(cache_clear):
+            cache_clear()
+
+        status_field = CachedFilterTranslationModel._meta.get_field("status")
+        try:
+            with patch(
+                "general_manager.interface.capabilities.orm.support._resolve_filter_segment",
+                return_value=("status", status_field),
+            ) as resolve_segment:
+                assert (
+                    _translate_reverse_filter_key(
+                        CachedFilterTranslationModel,
+                        "status__gte",
+                    )
+                    == "status__gte"
+                )
+                assert (
+                    _translate_reverse_filter_key(
+                        CachedFilterTranslationModel,
+                        "status__gte",
+                    )
+                    == "status__gte"
+                )
+
+            resolve_segment.assert_called_once_with(
+                CachedFilterTranslationModel,
+                "status",
+            )
+        finally:
+            if callable(cache_clear):
+                cache_clear()
+
     def test_translate_reverse_filter_key_preserves_remaining_parts_after_relation_without_related_model(
         self,
     ) -> None:
@@ -1231,6 +1273,42 @@ class TestOrmQueryCapability:
                         search_date=None,
                     )
                     assert result is mock_bucket.return_value
+
+    def test_build_or_reuse_bucket_skips_signature_without_run_context(self):
+        capability = OrmQueryCapability()
+        interface_cls = Mock()
+        built_bucket = Mock()
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.current_calculation_run_context",
+                return_value=None,
+            ),
+            patch.object(
+                capability,
+                "_run_scoped_query_bucket_signature",
+                side_effect=AssertionError("signature only needed inside run context"),
+            ),
+            patch.object(
+                capability,
+                "_build_bucket",
+                return_value=built_bucket,
+            ) as build_bucket,
+        ):
+            result = capability._build_or_reuse_bucket(
+                interface_cls,
+                include_inactive=False,
+                normalized_kwargs={"name": "test"},
+            )
+
+        assert result is built_bucket
+        build_bucket.assert_called_once_with(
+            interface_cls,
+            include_inactive=False,
+            normalized_kwargs={"name": "test"},
+            exclude=False,
+            search_date=None,
+        )
 
     def test_exclude_returns_database_bucket(self):
         """Test that exclude returns a DatabaseBucket with exclusion."""

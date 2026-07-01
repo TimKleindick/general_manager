@@ -14,6 +14,7 @@ from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from typing import Callable, ClassVar, Type
+from unittest.mock import patch
 
 
 # Dummy InputField implementation for testing
@@ -553,6 +554,36 @@ class InterfaceBaseTests(SimpleTestCase):
         self.assertEqual(second.identification, {"a": 2, "b": "y", "c": None})
         self.assertEqual(fields.keys_calls, 1)
         self.assertEqual(fields.items_calls, 1)
+
+    def test_single_required_input_skips_generic_argument_mapping(self):
+        class SingleInputInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {"id": DummyInput(int)}
+
+        with patch(
+            "general_manager.interface.base_interface.args_to_kwargs",
+            side_effect=AssertionError("single input should use fast path"),
+        ):
+            instance = SingleInputInterface(7)
+
+        self.assertEqual(instance.identification, {"id": 7})
+
+    def test_single_required_input_reuses_pure_scalar_parse_inside_run_context(self):
+        class SingleInputInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {"id": Input(int)}
+
+        input_field = SingleInputInterface.input_fields["id"]
+
+        with (
+            CalculationRunContext(),
+            patch.object(input_field, "cast", wraps=input_field.cast) as cast_input,
+        ):
+            first = SingleInputInterface(7)
+            second = SingleInputInterface(7)
+
+        self.assertEqual(first.identification, {"id": 7})
+        self.assertEqual(second.identification, {"id": 7})
+        self.assertIsNot(first.identification, second.identification)
+        self.assertEqual(cast_input.call_count, 1)
 
     def test_input_parsing_plan_accepts_id_alias_and_preserves_overwrite_behavior(
         self,

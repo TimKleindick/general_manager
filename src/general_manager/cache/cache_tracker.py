@@ -135,12 +135,20 @@ class DependencyTracker:
             raise _InvalidDependencyTrackerValueError
         if operation not in _SUPPORTED_OPERATIONS:
             raise _InvalidDependencyTrackerOperationError(operation)
+        DependencyTracker._track_validated(class_name, operation, identifier)
+
+    @staticmethod
+    def _track_validated(
+        class_name: general_manager_name,
+        operation: filter_type,
+        identifier: str,
+    ) -> None:
+        """Record an already-validated dependency tuple in active collectors."""
         if _dependency_storage.depth < 0:
             return
-        for dep_set in _dependency_storage.dependencies[
-            : _dependency_storage.depth + 1
-        ]:
-            dep_set.add((class_name, operation, identifier))
+        dependency = (class_name, operation, identifier)
+        for dep_set in _dependency_storage.dependencies:
+            dep_set.add(dependency)
 
     @staticmethod
     def is_active() -> bool:

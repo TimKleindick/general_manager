@@ -38,6 +38,13 @@ def _parse_unit(unit: str) -> pint.Unit:
     return ureg.parse_units(unit)
 
 
+@lru_cache(maxsize=512)
+def _canonical_unit_string(unit: str) -> str:
+    """Return Pint's canonical unit string for one unit expression."""
+
+    return str(_parse_unit(unit))
+
+
 def _format_decimal(value: Decimal) -> Decimal:
     """
     Normalise decimals so integers have no fractional component.
@@ -106,6 +113,17 @@ def _unit_uses_offset(unit: str | pint.Unit | MeasurementQuantity) -> bool:
 
 _unit_uses_offset.cache_clear = _unit_uses_offset_for_unit_string.cache_clear  # type: ignore[attr-defined]
 _unit_uses_offset.cache_info = _unit_uses_offset_for_unit_string.cache_info  # type: ignore[attr-defined]
+
+
+@lru_cache(maxsize=512)
+def _scalar_arithmetic_preserves_unit(unit: str) -> bool:
+    """Return whether multiplying/dividing by a scalar keeps the canonical unit."""
+
+    if _unit_uses_offset_for_unit_string(unit):
+        return False
+    if unit == "dimensionless":
+        return True
+    return bool(_parse_unit(unit).dimensionality)
 
 
 def _quantity_as_float(quantity: MeasurementQuantity) -> PlainQuantity[float]:
@@ -437,14 +455,37 @@ class Measurement:
                 value = Decimal(str(value))
             except (InvalidOperation, TypeError, ValueError) as error:
                 raise InvalidMeasurementInitializationError() from error
-        self.__set_quantity(_build_quantity(value, unit))
+        self.__set_quantity(_build_quantity(value, unit), _canonical_unit_string(unit))
 
-    def __set_quantity(self, quantity: MeasurementQuantity) -> None:
+    @classmethod
+    def _from_canonical_parts(
+        cls,
+        value: NumericMagnitude,
+        unit: str,
+    ) -> Measurement:
+        """Build a measurement from already-canonical non-offset unit metadata."""
+
+        measurement = cls.__new__(cls)
+        decimal_value = _decimal_from_magnitude(value)
+        measurement.__quantity = cast(
+            MeasurementQuantity,
+            ureg.Quantity(decimal_value, _parse_unit(unit)),
+        )
+        measurement.__magnitude = decimal_value
+        measurement.__unit = unit
+        measurement.__quantity_exposed = False
+        return measurement
+
+    def __set_quantity(
+        self,
+        quantity: MeasurementQuantity,
+        unit: str | None = None,
+    ) -> None:
         """Store quantity and cached public scalar values for internal reads."""
 
         self.__quantity = quantity
         self.__magnitude = _decimal_from_magnitude(quantity.magnitude)
-        self.__unit = str(quantity.units)
+        self.__unit = unit if unit is not None else str(quantity.units)
         self.__quantity_exposed = False
 
     def __current_magnitude(self) -> Decimal:
@@ -482,7 +523,7 @@ class Measurement:
         """
         value = Decimal(state["magnitude"])
         unit = state["unit"]
-        self.__set_quantity(_build_quantity(value, unit))
+        self.__set_quantity(_build_quantity(value, unit), _canonical_unit_string(unit))
 
     @property
     def quantity(self) -> MeasurementQuantity:
@@ -701,7 +742,7 @@ class Measurement:
         Returns:
             bool: True if the unit matches one of the registered currency codes.
         """
-        return str(self.unit) in currency_units
+        return self.unit in currency_units
 
     def __add__(self, other: object) -> Measurement:
         """
@@ -723,6 +764,13 @@ class Measurement:
         """
         if not isinstance(other, Measurement):
             raise MeasurementOperandTypeError("Addition")
+        left_unit = self.__current_unit()
+        right_unit = other.__current_unit()
+        if left_unit == right_unit and not _unit_uses_offset_for_unit_string(left_unit):
+            return self._from_canonical_parts(
+                self.__current_magnitude() + other.__current_magnitude(),
+                left_unit,
+            )
         if self.is_currency() and other.is_currency():
             # Both are currencies
             if self.unit != other.unit:
@@ -771,6 +819,13 @@ class Measurement:
         """
         if not isinstance(other, Measurement):
             raise MeasurementOperandTypeError("Subtraction")
+        left_unit = self.__current_unit()
+        right_unit = other.__current_unit()
+        if left_unit == right_unit and not _unit_uses_offset_for_unit_string(left_unit):
+            return self._from_canonical_parts(
+                self.__current_magnitude() - other.__current_magnitude(),
+                left_unit,
+            )
         if self.is_currency() and other.is_currency():
             # Both are currencies
             if self.unit != other.unit:
@@ -831,6 +886,12 @@ class Measurement:
         elif _is_numeric_scalar(other):
             if not isinstance(other, Decimal):
                 other = Decimal(str(other))
+            unit = self.__current_unit()
+            if _scalar_arithmetic_preserves_unit(unit):
+                return self._from_canonical_parts(
+                    self.__current_magnitude() * other,
+                    unit,
+                )
             quantity = self.__quantity
             scalar: QuantityMagnitude = other
             if _unit_uses_offset(quantity):
@@ -879,6 +940,12 @@ class Measurement:
         elif _is_numeric_scalar(other):
             if not isinstance(other, Decimal):
                 other = Decimal(str(other))
+            unit = self.__current_unit()
+            if _scalar_arithmetic_preserves_unit(unit):
+                return self._from_canonical_parts(
+                    self.__current_magnitude() / other,
+                    unit,
+                )
             quantity = self.__quantity
             scalar: QuantityMagnitude = other
             if _unit_uses_offset(quantity):

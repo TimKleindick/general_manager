@@ -6,13 +6,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 import re
-from typing import TYPE_CHECKING, Callable, Iterable, Protocol, cast
+from typing import TYPE_CHECKING, Callable, Hashable, Iterable, Protocol, cast
 from uuid import UUID
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
+from django.db.models.query import prefetch_related_objects
 
 from general_manager.interface.base_interface import AttributeTypedDict
 from general_manager.interface.utils.errors import DuplicateFieldNameError
@@ -758,6 +759,7 @@ def _instance_attribute_accessor(field_name: str) -> DescriptorAccessor:
 
 
 _MISSING_RELATED = object()
+_MANY_RELATION_PREFETCH_CHUNK_SIZE = 1000
 
 
 def _general_manager_accessor(
@@ -767,11 +769,18 @@ def _general_manager_accessor(
     raw_id_name: str | None = None,
 ) -> DescriptorAccessor:
     """
-    Create an accessor that resolves a related object's manager instance from a OrmInterfaceBase.
+    Create an accessor that resolves a related object's manager from an interface.
+
+    When `raw_id_name` is supplied, the accessor reads the raw foreign-key value
+    first and consults Django's internal `_state.fields_cache` only to reuse an
+    already-loaded related object. Loaded related rows are hydrated through
+    `_from_trusted_orm_instance` when the manager supports it; otherwise the
+    manager is constructed from the related object's primary key.
 
     Parameters:
         field_name (str): Name of the attribute on the underlying model that holds the related object.
-        manager_class (type): Class to instantiate with the related object's primary key to obtain its manager.
+        manager_class (type): Class used to hydrate or construct the related manager.
+        raw_id_name (str | None): Optional raw foreign-key attribute name used to avoid loading the relation.
 
     Returns:
         DescriptorAccessor: A callable that, given a OrmInterfaceBase, returns the manager instance for the related object, or `None` if the related attribute is `None`.
@@ -779,10 +788,16 @@ def _general_manager_accessor(
 
     def getter(self: OrmInterfaceInstance) -> object:
         """
-        Return a manager instance bound to the related object's primary key or None.
+        Return a manager for the related object without unnecessary ORM loads.
+
+        The raw-id path avoids fetching the relation unless Django already has
+        it in `_state.fields_cache`, which is an intentional internal-Django
+        optimization point. Cached or directly loaded related objects use
+        `_from_trusted_orm_instance` when available; otherwise the manager is
+        built from the primary key.
 
         Returns:
-            The value produced by calling `manager_class` with the related object's primary key, or `None` if the related object is `None`.
+            The related manager instance, or `None` if the related object is `None`.
         """
         manager_type = cast("type[GeneralManager]", manager_class)
         if raw_id_name is not None:
@@ -868,11 +883,20 @@ def _general_manager_many_accessor(
         Returns:
             A manager or queryset containing related model instances whose foreign-key fields equal this interface instance's primary key.
         """
+        manager_cls = cast("type[GeneralManager]", general_manager_class)
         if relation_filter_name is not None:
             filter_kwargs = {relation_filter_name: self.pk}
+            prefetched_bucket = _prefetched_general_manager_many_bucket(
+                self,
+                accessor_name=accessor_name,
+                relation_filter_name=relation_filter_name,
+                manager_cls=manager_cls,
+                source_model=source_model,
+            )
+            if prefetched_bucket is not None:
+                return prefetched_bucket
         else:
             filter_kwargs = {field.name: self.pk for field in related_fields}
-        manager_cls = cast("type[GeneralManager]", general_manager_class)
         if not filter_kwargs:
             raise MissingRelatedFieldsError(
                 accessor_name=accessor_name,
@@ -882,6 +906,138 @@ def _general_manager_many_accessor(
         return manager_cls.filter(**filter_kwargs)
 
     return getter
+
+
+def _orm_row_identity(row: object) -> tuple[Hashable, Hashable | None] | None:
+    pk = getattr(row, "pk", None)
+    try:
+        hash(pk)
+    except TypeError:
+        return None
+    state = getattr(row, "_state", None)
+    database_alias = getattr(state, "db", None)
+    try:
+        hash(database_alias)
+    except TypeError:
+        return None
+    return cast(Hashable, pk), cast(Hashable | None, database_alias)
+
+
+def _can_use_prefetched_general_manager_many_bucket(
+    manager_cls: type["GeneralManager"],
+    database_alias: Hashable | None,
+) -> bool:
+    interface_cls = manager_cls.Interface
+    interface_model = getattr(interface_cls, "_model", None)
+    configured_database = getattr(interface_cls, "database", None)
+    if configured_database is not None and configured_database != database_alias:
+        return False
+    meta = getattr(interface_model, "_meta", None)
+    if bool(getattr(meta, "use_soft_delete", False)):
+        return False
+    if bool(getattr(interface_cls, "_soft_delete_default", False)):
+        return False
+    return True
+
+
+def _prefetch_relation_in_chunks(
+    rows: list[models.Model],
+    accessor_name: str,
+) -> None:
+    for index in range(0, len(rows), _MANY_RELATION_PREFETCH_CHUNK_SIZE):
+        prefetch_related_objects(
+            rows[index : index + _MANY_RELATION_PREFETCH_CHUNK_SIZE],
+            accessor_name,
+        )
+
+
+def _prefetched_general_manager_many_bucket(
+    interface_instance: OrmInterfaceInstance,
+    *,
+    accessor_name: str,
+    relation_filter_name: str,
+    manager_cls: type["GeneralManager"],
+    source_model: type[models.Model],
+) -> object | None:
+    """Return a bucket backed by a run-scoped prefetched M2M relation."""
+    source_instance = getattr(interface_instance, "_instance", None)
+    if not isinstance(source_instance, source_model):
+        return None
+    source_identity = _orm_row_identity(source_instance)
+    if source_identity is None:
+        return None
+    source_primary_key, database_alias = source_identity
+    if not _can_use_prefetched_general_manager_many_bucket(
+        manager_cls,
+        database_alias,
+    ):
+        return None
+
+    from general_manager.bucket.database_bucket import DatabaseBucket
+    from general_manager.cache.run_context import current_calculation_run_context
+
+    context = current_calculation_run_context()
+    if context is None:
+        return None
+    indexed_source_row = context.get_orm_model_row(
+        source_model,
+        source_primary_key,
+        database_alias,
+    )
+    if indexed_source_row is None:
+        return None
+
+    prefetched_keys = context.get_orm_model_relation_prefetched_keys(
+        source_model,
+        database_alias,
+        accessor_name,
+    )
+
+    def build_bucket() -> DatabaseBucket["GeneralManager"]:
+        queryset = getattr(indexed_source_row, accessor_name).all()
+        bucket = DatabaseBucket(
+            queryset,
+            manager_cls,
+            {relation_filter_name: [source_primary_key]},
+        )
+        bucket._set_trusted_query_signature(
+            (
+                "prefetched-direct-many-relation-v1",
+                source_model,
+                database_alias,
+                accessor_name,
+                relation_filter_name,
+                source_primary_key,
+            )
+        )
+        return bucket
+
+    if source_identity in prefetched_keys:
+        return build_bucket()
+
+    row_items = context.get_orm_model_row_items(source_model)
+    if not row_items:
+        return None
+
+    rows_to_prefetch: list[models.Model] = []
+    row_keys_to_prefetch = []
+    for row_key, row in row_items:
+        if row_key[1] != database_alias or row_key in prefetched_keys:
+            continue
+        if isinstance(row, source_model):
+            rows_to_prefetch.append(row)
+            row_keys_to_prefetch.append(row_key)
+
+    if rows_to_prefetch:
+        _prefetch_relation_in_chunks(rows_to_prefetch, accessor_name)
+        context.add_orm_model_relation_prefetched_keys(
+            source_model,
+            database_alias,
+            accessor_name,
+            row_keys_to_prefetch,
+        )
+
+    return build_bucket()
 
 
 def _many_to_many_relation_filter_name(

@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
 from dataclasses import dataclass
 from datetime import date, datetime
+from json.encoder import encode_basestring_ascii
 from typing import Literal, Protocol, cast
 
 LookupOperator = Literal[
@@ -29,6 +30,8 @@ SCAN_OPERATORS = frozenset(
 )
 SUPPORTED_LOOKUP_OPERATORS = EXACT_OPERATORS | SCAN_OPERATORS
 UNDEFINED = object()
+_SCALAR_NORMALIZATION_MISS = object()
+_SCALAR_SERIALIZATION_MISS = object()
 
 
 type NormalizedDependencyValue = (
@@ -62,6 +65,47 @@ class SupportsDependencyComparison(Protocol):
         ...
 
 
+def _normalize_scalar_dependency_value(value: object) -> object:
+    """
+    Return the scalar-only equivalent of `normalize_dependency_value`.
+
+    This avoids the slower general path for simple scalars only, and its output
+    must remain equivalent to full normalization for every value it accepts.
+    """
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return _SCALAR_NORMALIZATION_MISS
+
+
+def _serialize_scalar_dependency_value(value: object) -> str | object:
+    """
+    Serialize simple scalars without the slower generic JSON path.
+
+    Outputs must remain equivalent to full normalization followed by
+    `json.dumps(..., sort_keys=True)`. Floats are intentionally excluded so the
+    caller can preserve Python's JSON spelling for finite and non-finite values.
+    """
+
+    if isinstance(value, str):
+        return encode_basestring_ascii(value)
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if type(value) is int:
+        return str(value)
+    if isinstance(value, date):
+        return encode_basestring_ascii(value.isoformat())
+    return _SCALAR_SERIALIZATION_MISS
+
+
 @dataclass(frozen=True, slots=True)
 class LookupSpec:
     """Parsed dependency lookup path and operator."""
@@ -75,6 +119,11 @@ def normalize_dependency_value(value: object) -> NormalizedDependencyValue:
     """Return a deterministic JSON-compatible representation for dependency data."""
     if isinstance(value, Mapping):
         mapping = cast(Mapping[object, object], value)
+        if len(mapping) == 1:
+            key, val = next(iter(mapping.items()))
+            normalized_value = _normalize_scalar_dependency_value(val)
+            if normalized_value is not _SCALAR_NORMALIZATION_MISS:
+                return {str(key): cast(NormalizedDependencyValue, normalized_value)}
         return {
             str(key): normalize_dependency_value(val)
             for key, val in sorted(mapping.items(), key=lambda item: str(item[0]))
@@ -101,12 +150,24 @@ def normalize_dependency_value(value: object) -> NormalizedDependencyValue:
 
 def serialize_normalized_value(value: object) -> str:
     """Serialize dependency values in the canonical dependency format."""
-    if isinstance(value, str):
+    serialized_scalar = _serialize_scalar_dependency_value(value)
+    if serialized_scalar is not _SCALAR_SERIALIZATION_MISS:
+        return cast(str, serialized_scalar)
+    if isinstance(value, float):
         return json.dumps(value)
-    if value is None or isinstance(value, (int, float, bool)):
-        return json.dumps(value)
-    if isinstance(value, date):
-        return json.dumps(value.isoformat())
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[object, object], value)
+        if len(mapping) == 1:
+            key, val = next(iter(mapping.items()))
+            normalized_value = _normalize_scalar_dependency_value(val)
+            serialized_value = _serialize_scalar_dependency_value(normalized_value)
+            if serialized_value is not _SCALAR_SERIALIZATION_MISS:
+                return (
+                    "{"
+                    f"{encode_basestring_ascii(str(key))}: "
+                    f"{cast(str, serialized_value)}"
+                    "}"
+                )
     return json.dumps(normalize_dependency_value(value), sort_keys=True)
 
 

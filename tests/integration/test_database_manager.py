@@ -345,6 +345,43 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(first_names, ["Alice", "Bob", "Charlie"])
         self.assertEqual(second_names, ["Alice", "Bob", "Charlie"])
 
+    def test_run_context_prefetches_cached_many_to_many_source_rows(self):
+        self.TestFamily.create(
+            creator_id=None,
+            name="Johnson Family",
+            humans=[self.test_human2],
+            ignore_permission=True,
+        )
+        families_bucket = self.TestFamily.filter(
+            name__in=["Smith Family", "Johnson Family"]
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(2):
+            families = sorted(families_bucket, key=lambda family: family.name)
+            human_names_by_family = {
+                family.name: sorted(human.name for human in family.humans_list)
+                for family in families
+            }
+
+        self.assertEqual(
+            human_names_by_family,
+            {
+                "Johnson Family": ["Bob"],
+                "Smith Family": ["Alice", "Bob"],
+            },
+        )
+
+    def test_run_context_many_to_many_accessor_falls_back_without_cached_source_row(
+        self,
+    ):
+        family_id = self.test_family.identification["id"]
+
+        with CalculationRunContext():
+            family = self.TestFamily(id=family_id)
+            human_names = sorted(human.name for human in family.humans_list)
+
+        self.assertEqual(human_names, ["Alice", "Bob"])
+
     def test_manager_field_access_reuses_resolved_attribute_value(self):
         human = self.TestHuman.filter(name="Alice").first()
         original_accessor = human._attributes["name"]

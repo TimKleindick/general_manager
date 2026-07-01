@@ -28,12 +28,16 @@ _active_context: ContextVar["CalculationRunContext | None"] = ContextVar(
 ORM_BUCKET_RESULT_PREFIX = "orm_bucket_result"
 ORM_BUCKET_ROW_RESULT_PREFIX = "orm_bucket_row_result"
 ORM_BUCKET_MANAGER_RESULT_PREFIX = "orm_bucket_manager_result"
+ORM_BUCKET_FIRST_ROW_PREFIX = "orm_bucket_first_row"
+ORM_MODEL_ROW_INDEX_PREFIX = "orm_model_row_index"
+ORM_MODEL_RELATION_PREFETCH_PREFIX = "orm_model_relation_prefetch"
 ORM_QUERY_BUCKET_PREFIX = "orm_query_bucket"
 ORM_BUCKET_EXISTS_PREFIX = "orm_bucket_exists"
 BUCKET_INDEX_PREFIX = "bucket_index"
 TRUSTED_ORM_MANAGER_PREFIX = "trusted_orm_manager"
 DEFAULT_DEPENDENCY_CACHE_PUBLISH_BATCH_SIZE = 1000
 logger = get_logger("cache.run_context")
+OrmModelRowKey = tuple[Hashable, Hashable | None]
 
 
 @dataclass(frozen=True)
@@ -298,6 +302,118 @@ class CalculationRunContext:
     def set_orm_bucket_rows(self, key: Hashable, value: object) -> None:
         """Store or overwrite ORM bucket rows for the active run."""
         self.set((ORM_BUCKET_ROW_RESULT_PREFIX, key), value)
+        self._index_orm_model_rows(value)
+
+    @staticmethod
+    def _orm_model_row_key(row: object) -> OrmModelRowKey | None:
+        """Return a stable per-run key for a Django ORM row, if possible."""
+        pk = getattr(row, "pk", None)
+        try:
+            hash(pk)
+        except TypeError:
+            return None
+        state = getattr(row, "_state", None)
+        db = getattr(state, "db", None)
+        try:
+            hash(db)
+        except TypeError:
+            return None
+        return (cast(Hashable, pk), cast(Hashable | None, db))
+
+    @staticmethod
+    def _orm_model_index_classes(row: object) -> tuple[type[object], ...]:
+        """Return model classes under which an ORM row should be indexed."""
+        meta = getattr(row, "_meta", None)
+        if meta is None:
+            return ()
+        row_class = row.__class__
+        concrete_model = getattr(meta, "concrete_model", None)
+        if (
+            isinstance(concrete_model, type)
+            and issubclass(row_class, concrete_model)
+            and concrete_model is not row_class
+        ):
+            return (row_class, concrete_model)
+        return (row_class,)
+
+    def _index_orm_model_rows(self, rows: object) -> None:
+        """Index cached ORM rows by model/database/primary key for relation reuse."""
+        if not isinstance(rows, tuple):
+            return
+        for row in rows:
+            row_key = self._orm_model_row_key(row)
+            if row_key is None:
+                continue
+            for model_class in self._orm_model_index_classes(row):
+                cache_key = (ORM_MODEL_ROW_INDEX_PREFIX, model_class)
+                index = self.get(cache_key)
+                if not isinstance(index, dict):
+                    index = {}
+                    self.set(cache_key, index)
+                index[row_key] = row
+
+    def get_orm_model_row(
+        self,
+        model: type[object],
+        primary_key: Hashable,
+        database_alias: Hashable | None,
+        default: object = None,
+    ) -> object:
+        """Return an indexed ORM row by model/database/primary key, if present."""
+        index = self.get((ORM_MODEL_ROW_INDEX_PREFIX, model))
+        if not isinstance(index, dict):
+            return default
+        return index.get((primary_key, database_alias), default)
+
+    def get_orm_model_row_items(
+        self,
+        model: type[object],
+    ) -> tuple[tuple[OrmModelRowKey, object], ...]:
+        """Return indexed ORM row items for `model` in insertion order."""
+        index = self.get((ORM_MODEL_ROW_INDEX_PREFIX, model))
+        if not isinstance(index, dict):
+            return ()
+        return tuple(cast("dict[OrmModelRowKey, object]", index).items())
+
+    def get_orm_model_relation_prefetched_keys(
+        self,
+        model: type[object],
+        database_alias: Hashable | None,
+        accessor_name: str,
+    ) -> frozenset[OrmModelRowKey]:
+        """Return row keys already prefetched for one model relation."""
+        prefetched = self.get(
+            (
+                ORM_MODEL_RELATION_PREFETCH_PREFIX,
+                model,
+                database_alias,
+                accessor_name,
+            )
+        )
+        if isinstance(prefetched, frozenset):
+            return cast(frozenset[OrmModelRowKey], prefetched)
+        return frozenset()
+
+    def add_orm_model_relation_prefetched_keys(
+        self,
+        model: type[object],
+        database_alias: Hashable | None,
+        accessor_name: str,
+        row_keys: Iterable[OrmModelRowKey],
+    ) -> None:
+        """Record row keys whose relation has been prefetched in this run."""
+        cache_key = (
+            ORM_MODEL_RELATION_PREFETCH_PREFIX,
+            model,
+            database_alias,
+            accessor_name,
+        )
+        prefetched = self.get_orm_model_relation_prefetched_keys(
+            model,
+            database_alias,
+            accessor_name,
+        )
+        self.set(cache_key, prefetched | frozenset(row_keys))
 
     def get_orm_bucket_managers(self, key: Hashable) -> object:
         """Return cached ORM bucket managers for key, or `None` when absent."""
@@ -306,6 +422,18 @@ class CalculationRunContext:
     def set_orm_bucket_managers(self, key: Hashable, value: object) -> None:
         """Store or overwrite ORM bucket managers for the active run."""
         self.set((ORM_BUCKET_MANAGER_RESULT_PREFIX, key), value)
+
+    def get_orm_bucket_first_row(
+        self,
+        key: Hashable,
+        default: object = None,
+    ) -> object:
+        """Return a cached ORM first-row result, or default when absent."""
+        return self.get((ORM_BUCKET_FIRST_ROW_PREFIX, key), default)
+
+    def set_orm_bucket_first_row(self, key: Hashable, value: object) -> None:
+        """Store or overwrite an ORM first-row result for the active run."""
+        self.set((ORM_BUCKET_FIRST_ROW_PREFIX, key), value)
 
     def get_orm_query_bucket(self, key: Hashable) -> object:
         """Return a cached constructed ORM query bucket, or `None` when absent."""
@@ -328,6 +456,9 @@ class CalculationRunContext:
         self.discard_prefix((ORM_BUCKET_RESULT_PREFIX,))
         self.discard_prefix((ORM_BUCKET_ROW_RESULT_PREFIX,))
         self.discard_prefix((ORM_BUCKET_MANAGER_RESULT_PREFIX,))
+        self.discard_prefix((ORM_BUCKET_FIRST_ROW_PREFIX,))
+        self.discard_prefix((ORM_MODEL_ROW_INDEX_PREFIX,))
+        self.discard_prefix((ORM_MODEL_RELATION_PREFETCH_PREFIX,))
         self.discard_prefix((ORM_QUERY_BUCKET_PREFIX,))
         self.discard_prefix((ORM_BUCKET_EXISTS_PREFIX,))
 
@@ -365,7 +496,7 @@ class CalculationRunContext:
         from general_manager.cache.cache_tracker import DependencyTracker
 
         for class_name, operation, identifier in entry.dependencies:
-            DependencyTracker.track(class_name, operation, identifier)
+            DependencyTracker._track_validated(class_name, operation, identifier)
         return entry.value
 
     def set_bucket_index_result(

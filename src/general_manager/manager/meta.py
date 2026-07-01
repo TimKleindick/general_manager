@@ -154,6 +154,13 @@ class GeneralManagerMeta(type):
             initialized = class_dict.get("_gm_attributes_initialized", False)
             if initialized and attribute_name in class_dict:
                 return type.__getattribute__(cls, attribute_name)
+            attributes = class_dict.get("_attributes")
+            if (
+                initialized
+                and isinstance(attributes, dict)
+                and attribute_name not in attributes
+            ):
+                return type.__getattribute__(cls, attribute_name)
             manager_class = cast(type["GeneralManager"], cls)
             GeneralManagerMeta.ensure_attributes_initialized(
                 manager_class, attribute_name
@@ -486,28 +493,55 @@ class GeneralManagerMeta(type):
                     """
                     if instance is None:
                         return self._class.Interface.get_field_type(self._attr_name)
-                    GeneralManagerMeta.ensure_manager_is_valid(
-                        instance, self._attr_name
-                    )
-                    cache = getattr(instance, "_attribute_value_cache", None)
-                    if isinstance(cache, dict) and self._attr_name in cache:
-                        cached_attribute = cache[self._attr_name]
-                        track_dependency = getattr(
-                            cached_attribute.__class__,
-                            "_track_identification_dependency",
-                            None,
+                    try:
+                        manager_state_valid = instance._manager_state_valid
+                    except AttributeError:
+                        manager_state_valid = True
+                    if not manager_state_valid:
+                        reason = getattr(
+                            instance,
+                            "_manager_state_reason",
+                            "manager state is invalid",
                         )
-                        identification = getattr(
-                            cached_attribute,
-                            "identification",
-                            None,
+                        raise InvalidManagerStateError(
+                            instance.__class__.__name__,
+                            reason,
+                            self._attr_name,
                         )
-                        if callable(track_dependency) and isinstance(
-                            identification,
-                            dict,
-                        ):
-                            track_dependency(identification)
-                        return cached_attribute
+                    try:
+                        cache = instance._attribute_value_cache
+                    except AttributeError:
+                        cache = None
+                    if cache is not None:
+                        try:
+                            cached_attribute = cache[self._attr_name]
+                        except (KeyError, TypeError):
+                            pass
+                        else:
+                            cached_attribute_class = cached_attribute.__class__
+                            for candidate_class in cached_attribute_class.__mro__:
+                                if (
+                                    "_track_identification_dependency"
+                                    not in candidate_class.__dict__
+                                ):
+                                    continue
+                                manager_attribute = cast(
+                                    "GeneralManager", cached_attribute
+                                )
+                                try:
+                                    identification = manager_attribute.identification
+                                except AttributeError:
+                                    break
+                                if isinstance(identification, dict):
+                                    manager_class = cast(
+                                        type["GeneralManager"],
+                                        cached_attribute_class,
+                                    )
+                                    manager_class._track_identification_dependency(
+                                        identification
+                                    )
+                                break
+                            return cached_attribute
                     attribute = instance._attributes.get(self._attr_name, _nonExistent)
                     if attribute is _nonExistent:
                         logger.warning(
@@ -533,8 +567,11 @@ class GeneralManagerMeta(type):
                                 },
                             )
                             raise AttributeEvaluationError(self._attr_name, e) from e
-                    if isinstance(cache, dict):
-                        cache[self._attr_name] = attribute
+                    if cache is not None:
+                        try:
+                            cache[self._attr_name] = attribute
+                        except TypeError:
+                            pass
                     return attribute
 
             return Descriptor(attr_name, new_class)
