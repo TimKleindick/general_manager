@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Hashable
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
-from typing import TYPE_CHECKING, Callable, ClassVar, Type, cast
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Type, cast
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
@@ -42,6 +43,7 @@ if TYPE_CHECKING:  # pragma: no cover
 type OrmInterfaceClass = type["OrmInterfaceBase[models.Model]"]
 type OrmInterfaceInstance = "OrmInterfaceBase[models.Model]"
 type FilterKwargs = dict[str, object]
+_PayloadNormalizerType = PayloadNormalizer
 
 
 class OrmPersistenceSupportCapability(BaseCapability):
@@ -118,7 +120,13 @@ class OrmPersistenceSupportCapability(BaseCapability):
         Returns:
             PayloadNormalizer: A normalizer instance bound to the interface's Django `models.Model`.
         """
-        return PayloadNormalizer(interface_cls._model)
+        normalizer = getattr(interface_cls, "_payload_normalizer", None)
+        if not isinstance(normalizer, _PayloadNormalizerType) or (
+            normalizer.model is not interface_cls._model
+        ):
+            normalizer = PayloadNormalizer(interface_cls._model)
+            cast(Any, interface_cls)._payload_normalizer = normalizer
+        return normalizer
 
     def get_field_descriptors(
         self, interface_cls: OrmInterfaceClass
@@ -591,6 +599,57 @@ class OrmQueryCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "query"
 
     @staticmethod
+    def _is_default_history_capability(history_handler: object) -> bool:
+        handler_type = type(history_handler)
+        return (
+            handler_type.__module__
+            == "general_manager.interface.capabilities.orm.history"
+            and handler_type.__name__ == "OrmHistoryCapability"
+        )
+
+    def _trusted_query_source_signature(
+        self,
+        interface_cls: OrmInterfaceClass,
+        support: OrmPersistenceSupportCapability,
+        *,
+        include_inactive: bool,
+        search_date: datetime | None,
+        historical: bool,
+        history_handler: object | None,
+        database_alias: str | None,
+    ) -> Hashable | None:
+        if type(support) is not OrmPersistenceSupportCapability:
+            return None
+        if historical and not self._is_default_history_capability(history_handler):
+            return None
+        return (
+            "orm-query-source-v1",
+            interface_cls,
+            interface_cls._parent_class,
+            interface_cls._model,
+            database_alias,
+            include_inactive,
+            is_soft_delete_enabled(interface_cls),
+            "historical" if historical else "live",
+            search_date,
+        )
+
+    def _trusted_query_signature(
+        self,
+        source_signature: Hashable | None,
+        *,
+        exclude: bool,
+        normalized_kwargs: FilterKwargs,
+    ) -> Hashable | None:
+        if source_signature is None:
+            return None
+        return (
+            source_signature,
+            "exclude" if exclude else "filter",
+            DatabaseBucket._freeze_trusted_signature_payload(normalized_kwargs),
+        )
+
+    @staticmethod
     def _ensure_search_date_input(search_date: object) -> None:
         if not isinstance(search_date, (datetime, date)):
             raise SearchDateInputError
@@ -627,7 +686,7 @@ class OrmQueryCapability(BaseCapability):
             include_flag, normalized, search_date = self._normalize_kwargs(
                 interface_cls, kwargs
             )
-            return self._build_bucket(
+            return self._build_or_reuse_bucket(
                 interface_cls,
                 include_inactive=include_flag,
                 normalized_kwargs=normalized,
@@ -670,7 +729,7 @@ class OrmQueryCapability(BaseCapability):
             include_flag, normalized, search_date = self._normalize_kwargs(
                 interface_cls, kwargs
             )
-            return self._build_bucket(
+            return self._build_or_reuse_bucket(
                 interface_cls,
                 include_inactive=include_flag,
                 normalized_kwargs=normalized,
@@ -722,6 +781,76 @@ class OrmQueryCapability(BaseCapability):
         normalized_kwargs = normalizer.normalize_filter_kwargs(translated_payload)
         return include_inactive, normalized_kwargs, search_date
 
+    def _run_scoped_query_bucket_signature(
+        self,
+        interface_cls: OrmInterfaceClass,
+        *,
+        include_inactive: bool,
+        normalized_kwargs: FilterKwargs,
+        exclude: bool,
+        search_date: datetime | None,
+    ) -> Hashable | None:
+        support = get_support_capability(interface_cls)
+        if support.__class__ is not OrmPersistenceSupportCapability:
+            return None
+        if search_date is not None and search_date <= timezone.now() - timedelta(
+            seconds=interface_cls.historical_lookup_buffer_seconds
+        ):
+            return None
+        queryset_base = (
+            support.get_manager(interface_cls, only_active=False).all()
+            if include_inactive
+            else support.get_queryset(interface_cls)
+        )
+        source_signature = self._trusted_query_source_signature(
+            interface_cls,
+            support,
+            include_inactive=include_inactive,
+            search_date=search_date,
+            historical=False,
+            history_handler=None,
+            database_alias=queryset_base.db,
+        )
+        return self._trusted_query_signature(
+            source_signature,
+            exclude=exclude,
+            normalized_kwargs=normalized_kwargs,
+        )
+
+    def _build_or_reuse_bucket(
+        self,
+        interface_cls: OrmInterfaceClass,
+        *,
+        include_inactive: bool,
+        normalized_kwargs: FilterKwargs,
+        exclude: bool = False,
+        search_date: datetime | None = None,
+    ) -> DatabaseBucket["GeneralManager"]:
+        cache_signature = self._run_scoped_query_bucket_signature(
+            interface_cls,
+            include_inactive=include_inactive,
+            normalized_kwargs=normalized_kwargs,
+            exclude=exclude,
+            search_date=search_date,
+        )
+        context = current_calculation_run_context()
+        if context is not None and cache_signature is not None:
+            cached = context.get_orm_query_bucket(cache_signature)
+            if isinstance(cached, DatabaseBucket):
+                return cached._copy_for_run_context_reuse()
+
+        bucket = self._build_bucket(
+            interface_cls,
+            include_inactive=include_inactive,
+            normalized_kwargs=normalized_kwargs,
+            exclude=exclude,
+            search_date=search_date,
+        )
+        if context is not None and cache_signature is not None:
+            context.set_orm_query_bucket(cache_signature, bucket)
+            return bucket._copy_for_run_context_reuse()
+        return bucket
+
     def _build_bucket(
         self,
         interface_cls: OrmInterfaceClass,
@@ -745,6 +874,8 @@ class OrmQueryCapability(BaseCapability):
         """
         support = get_support_capability(interface_cls)
         queryset_base = support.get_queryset(interface_cls)
+        historical = False
+        history_handler: object | None = None
         if include_inactive:
             queryset_base = cast(
                 models.QuerySet[models.Model],
@@ -766,18 +897,36 @@ class OrmQueryCapability(BaseCapability):
                 interface_cls,
                 search_date,
             )
+            historical = True
         queryset = (
             queryset_base.exclude(**normalized_kwargs)
             if exclude
             else queryset_base.filter(**normalized_kwargs)
         )
-        return DatabaseBucket(
+        bucket = DatabaseBucket(
             queryset,
             interface_cls._parent_class,
             {} if exclude else cast("dict[str, list[object]]", dict(normalized_kwargs)),
             cast("dict[str, list[object]]", dict(normalized_kwargs)) if exclude else {},
             search_date=search_date,
         )
+        source_signature = self._trusted_query_source_signature(
+            interface_cls,
+            support,
+            include_inactive=include_inactive,
+            search_date=search_date,
+            historical=historical,
+            history_handler=history_handler,
+            database_alias=queryset.db,
+        )
+        bucket._set_trusted_query_signature(
+            self._trusted_query_signature(
+                source_signature,
+                exclude=exclude,
+                normalized_kwargs=normalized_kwargs,
+            )
+        )
+        return bucket
 
 
 class SoftDeleteCapability(BaseCapability):

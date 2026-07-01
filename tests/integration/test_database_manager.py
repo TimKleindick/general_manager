@@ -14,6 +14,7 @@ from general_manager.interface import DatabaseInterface, ReadOnlyInterface
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.run_context import CalculationRunContext
+from general_manager.cache.signals import pre_data_change
 
 from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
@@ -343,6 +344,138 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         self.assertEqual(first_names, ["Alice", "Bob", "Charlie"])
         self.assertEqual(second_names, ["Alice", "Bob", "Charlie"])
+
+    def test_manager_field_access_reuses_resolved_attribute_value(self):
+        human = self.TestHuman.filter(name="Alice").first()
+        original_accessor = human._attributes["name"]
+        access_count = 0
+
+        def wrapped_accessor(interface):
+            nonlocal access_count
+            access_count += 1
+            return original_accessor(interface)
+
+        self.TestHuman._attributes["name"] = wrapped_accessor
+        self.addCleanup(
+            self.TestHuman._attributes.__setitem__, "name", original_accessor
+        )
+
+        self.assertEqual(human.name, "Alice")
+        self.assertEqual(human.name, "Alice")
+        self.assertEqual(access_count, 1)
+
+    def test_gm_created_bucket_run_cache_does_not_compile_sql_for_signature(self):
+        first_bucket = self.TestHuman.filter(name__in=["Alice", "Bob"])
+        second_bucket = self.TestHuman.filter(name__in=["Alice", "Bob"])
+
+        with (
+            patch.object(
+                first_bucket._data.query,
+                "sql_with_params",
+                side_effect=AssertionError("first bucket signature compiled SQL"),
+            ),
+            patch.object(
+                second_bucket._data.query,
+                "sql_with_params",
+                side_effect=AssertionError("second bucket signature compiled SQL"),
+            ),
+            CalculationRunContext(),
+            self.assertNumQueries(1),
+        ):
+            first_names = sorted(human.name for human in first_bucket)
+            second_names = sorted(human.name for human in second_bucket)
+
+        self.assertEqual(first_names, ["Alice", "Bob"])
+        self.assertEqual(second_names, ["Alice", "Bob"])
+
+    def test_run_context_reuses_constructed_gm_filter_bucket(self):
+        query_capability = self.TestHuman.Interface.require_capability("query")
+        original_build_bucket = query_capability._build_bucket
+
+        with (
+            CalculationRunContext(),
+            patch.object(
+                query_capability,
+                "_build_bucket",
+                wraps=original_build_bucket,
+            ) as mocked_build_bucket,
+        ):
+            first_bucket = self.TestHuman.filter(name="Alice")
+            second_bucket = self.TestHuman.filter(name="Alice")
+
+        self.assertEqual(mocked_build_bucket.call_count, 1)
+        self.assertIsNot(first_bucket, second_bucket)
+        first_bucket.filters["name"].append("mutated")
+        self.assertEqual(second_bucket.filters["name"], ["Alice"])
+
+    def test_run_context_distinguishes_recent_search_date_query_buckets(self):
+        search_date = timezone.now()
+
+        with CalculationRunContext():
+            live_bucket = self.TestHuman.filter(name="Alice")
+            dated_bucket = self.TestHuman.filter(
+                name="Alice",
+                search_date=search_date,
+            )
+
+        self.assertIsNone(live_bucket._search_date)
+        self.assertEqual(dated_bucket._search_date, search_date)
+
+    def test_pre_change_query_cache_is_cleared_after_mutation(self):
+        pre_change_names = []
+
+        def populate_pre_change_cache(sender, instance, action, **_kwargs):
+            if sender is self.TestHuman and action == "update":
+                pre_change_names.extend(
+                    human.name for human in self.TestHuman.filter(name="Alice")
+                )
+
+        pre_data_change.connect(populate_pre_change_cache, weak=False)
+        self.addCleanup(pre_data_change.disconnect, populate_pre_change_cache)
+
+        with CalculationRunContext():
+            self.test_human1.update(name="Alice Updated", ignore_permission=True)
+
+            self.assertEqual(pre_change_names, ["Alice"])
+            self.assertEqual(
+                [human.name for human in self.TestHuman.filter(name="Alice")],
+                [],
+            )
+            self.assertEqual(
+                [human.name for human in self.TestHuman.filter(name="Alice Updated")],
+                ["Alice Updated"],
+            )
+
+    def test_database_bucket_truthiness_does_not_count_rows(self):
+        bucket = self.TestHuman.filter(name="Alice")
+
+        with patch.object(
+            bucket._data,
+            "count",
+            side_effect=AssertionError("truthiness should not count rows"),
+        ):
+            self.assertTrue(bucket)
+
+    def test_orm_filter_reuses_payload_normalizer(self):
+        from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
+            PayloadNormalizer,
+        )
+
+        if hasattr(self.TestHuman.Interface, "_payload_normalizer"):
+            delattr(self.TestHuman.Interface, "_payload_normalizer")
+        original_init = PayloadNormalizer.__init__
+        init_count = 0
+
+        def wrapped_init(normalizer, model):
+            nonlocal init_count
+            init_count += 1
+            original_init(normalizer, model)
+
+        with patch.object(PayloadNormalizer, "__init__", wrapped_init):
+            self.TestHuman.filter(name="Alice")
+            self.TestHuman.filter(name="Bob")
+
+        self.assertEqual(init_count, 1)
 
     def test_live_queryset_with_search_date_uses_historical_lookup(self):
         old_buffer_seconds = self.TestHuman.Interface.historical_lookup_buffer_seconds

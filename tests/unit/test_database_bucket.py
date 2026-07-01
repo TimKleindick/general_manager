@@ -429,6 +429,41 @@ class DatabaseBucketTestCase(TestCase):
                 [self.u1.id, self.u2.id],
             )
 
+    def test_query_signature_reuses_compiled_sql_for_same_bucket(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+        )
+
+        with patch.object(
+            bucket._data.query,
+            "sql_with_params",
+            wraps=bucket._data.query.sql_with_params,
+        ) as sql_with_params:
+            first_signature = bucket._query_signature()
+            second_signature = bucket._query_signature()
+
+        self.assertEqual(first_signature, second_signature)
+        sql_with_params.assert_called_once()
+
+    def test_trusted_signature_payload_freezes_common_filter_values(self):
+        frozen = DatabaseBucket._freeze_trusted_signature_payload(
+            {
+                "name__in": ["alice", "bob"],
+                "is_active": True,
+                "count": 2,
+            }
+        )
+
+        self.assertEqual(
+            frozen,
+            (
+                ("count", 2),
+                ("is_active", True),
+                ("name__in", ("alice", "bob")),
+            ),
+        )
+
     def test_unordered_bucket_queries_share_loaded_rows_inside_run_context(self):
         first_bucket = DatabaseBucket(User.objects.all(), UserManager)
         second_bucket = DatabaseBucket(User.objects.all(), UserManager)
@@ -439,6 +474,32 @@ class DatabaseBucketTestCase(TestCase):
 
         self.assertEqual(second_ids, first_ids)
         self.assertEqual(sorted(first_ids), [self.u1.id, self.u2.id, self.u3.id])
+
+    def test_cached_trusted_rows_reuse_built_managers_inside_run_context(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            TrustedUserManager,
+        )
+
+        with CalculationRunContext():
+            first_managers = list(bucket)
+            with patch.object(
+                bucket,
+                "_build_manager_from_instance",
+                wraps=bucket._build_manager_from_instance,
+            ) as build_manager:
+                second_managers = list(bucket)
+
+        build_manager.assert_not_called()
+        self.assertEqual(
+            [manager.identification["id"] for manager in first_managers],
+            [self.u1.id, self.u2.id],
+        )
+        self.assertEqual(
+            [manager.identification["id"] for manager in second_managers],
+            [self.u1.id, self.u2.id],
+        )
+        self.assertIs(first_managers[0], second_managers[0])
 
     def test_equivalent_database_buckets_share_index_inside_run_context(self):
         """Share a bucket index for equivalent querysets in one run context."""
