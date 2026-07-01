@@ -28,6 +28,8 @@ QueryAnnotationCallable = Callable[
 ]
 MAX_RUN_SCOPED_BUCKET_RESULT_ROWS = 1000
 _QUERY_SIGNATURE_NOT_COMPUTED = object()
+_FIRST_ROW_CACHE_MISS = object()
+_FIRST_ROW_CACHE_NONE = object()
 
 
 class DatabaseBucketTypeMismatchError(TypeError):
@@ -659,21 +661,33 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return kwargs["id"]
         return None
 
+    def _can_materialize_count_snapshot(self) -> bool:
+        """Return whether count/len may populate a bounded run-scoped snapshot."""
+        context = current_calculation_run_context()
+        if context is None:
+            return False
+        query = getattr(self._data, "query", None)
+        if not isinstance(query, Query):
+            return False
+        where = getattr(query, "where", None)
+        children = getattr(where, "children", None)
+        return bool(children)
+
     def _track_effective_dependencies(self) -> None:
         """Record the bucket's effective filter/exclude state when it is evaluated."""
         manager_name = self._manager_class.__name__
         normalized_filters = self._normalize_dependency_mapping(self.filters)
         normalized_excludes = self._normalize_dependency_mapping(self.excludes)
         if self.filters:
-            DependencyTracker.track(
+            DependencyTracker._track_validated(
                 manager_name,
                 "filter",
                 serialize_dependency_identifier(normalized_filters),
             )
         else:
-            DependencyTracker.track(manager_name, "all", "")
+            DependencyTracker._track_validated(manager_name, "all", "")
         if self.excludes:
-            DependencyTracker.track(
+            DependencyTracker._track_validated(
                 manager_name,
                 "exclude",
                 serialize_dependency_identifier(normalized_excludes),
@@ -685,7 +699,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                     "excludes": normalized_excludes,
                     "reverse": self._sort_reverse,
                 }
-                DependencyTracker.track(
+                DependencyTracker._track_validated(
                     manager_name,
                     "filter",
                     serialize_dependency_identifier({f"__sort__{sort_key}": payload}),
@@ -1020,7 +1034,23 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             if not primary_keys:
                 return None
             return self._build_manager_from_primary_key(primary_keys[0])
+        context = current_calculation_run_context()
+        signature = self._query_signature() if context is not None else None
+        if context is not None and signature is not None:
+            cached = context.get_orm_bucket_first_row(
+                signature,
+                _FIRST_ROW_CACHE_MISS,
+            )
+            if cached is _FIRST_ROW_CACHE_NONE:
+                return None
+            if cached is not _FIRST_ROW_CACHE_MISS:
+                return self._build_manager_from_instance(cast(models.Model, cached))
         first_element = self._data.first()
+        if context is not None and signature is not None:
+            context.set_orm_bucket_first_row(
+                signature,
+                _FIRST_ROW_CACHE_NONE if first_element is None else first_element,
+            )
         if first_element is None:
             return None
         return self._build_manager_from_instance(first_element)
@@ -1062,6 +1092,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             int: Number of represented rows.
         """
         self._track_effective_dependencies()
+        if self._can_materialize_count_snapshot():
+            rows = self._get_run_scoped_rows()
+            if rows is not None:
+                return len(rows)
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             return len(primary_keys)
@@ -1204,17 +1238,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Return the number of rows represented by the bucket.
 
-        A safe run-scoped primary-key snapshot is reused when present; otherwise
-        this delegates to the queryset count.
+        Delegates to `count()` so dependency tracking, run-scoped snapshots, and
+        queryset fallback behavior stay aligned between both cardinality paths.
 
         Returns:
             int: Number of represented rows.
         """
-        self._track_effective_dependencies()
-        primary_keys = self._peek_run_scoped_primary_keys()
-        if primary_keys is not None:
-            return len(primary_keys)
-        return int(self._data.count())
+        return self.count()
 
     def __str__(self) -> str:
         """

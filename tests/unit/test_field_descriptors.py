@@ -42,6 +42,196 @@ def test_general_manager_many_accessor_uses_explicit_relation_field_name() -> No
     assert result is filter_result
 
 
+def test_general_manager_many_accessor_skips_row_scan_for_prefetched_source() -> None:
+    class PrefetchSourceModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class PrefetchRelatedModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class RelatedManager:
+        class Interface:
+            _model = PrefetchRelatedModel
+            database = None
+            _soft_delete_default = False
+
+        @classmethod
+        def filter(cls, **_kwargs: object) -> object:
+            raise AssertionError
+
+    class RunContext:
+        def get_orm_model_row(
+            self,
+            model: type[object],
+            primary_key: object,
+            database_alias: object,
+        ) -> object:
+            assert model is PrefetchSourceModel
+            assert primary_key == 7
+            assert database_alias is None
+            return source_row
+
+        def get_orm_model_relation_prefetched_keys(
+            self,
+            model: type[object],
+            database_alias: object,
+            accessor_name: str,
+        ) -> frozenset[tuple[int, None]]:
+            assert model is PrefetchSourceModel
+            assert database_alias is None
+            assert accessor_name == "members"
+            return frozenset({(7, None)})
+
+        def get_orm_model_row_items(
+            self,
+            _model: type[object],
+        ) -> tuple[object, ...]:
+            raise AssertionError
+
+    related_queryset = Mock()
+    relation_manager = SimpleNamespace(all=Mock(return_value=related_queryset))
+    source_row = PrefetchSourceModel(id=7)
+    source_row.members = relation_manager
+    interface_instance = SimpleNamespace(_instance=source_row, pk=7)
+    accessor = _general_manager_many_accessor(
+        accessor_name="members",
+        related_model=PrefetchRelatedModel,
+        general_manager_class=RelatedManager,
+        source_model=PrefetchSourceModel,
+        relation_filter_name="sources",
+    )
+
+    with patch(
+        "general_manager.cache.run_context.current_calculation_run_context",
+        return_value=RunContext(),
+    ):
+        result = accessor(interface_instance)
+
+    assert result._data is related_queryset
+    assert result.filters == {"sources": [7]}
+    relation_manager.all.assert_called_once_with()
+
+
+def test_general_manager_many_accessor_falls_back_when_source_row_is_not_indexed() -> (
+    None
+):
+    class UnindexedPrefetchSourceModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class UnindexedPrefetchRelatedModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class RelatedManager:
+        filter = Mock(return_value="fallback-bucket")
+
+        class Interface:
+            _model = UnindexedPrefetchRelatedModel
+            database = None
+            _soft_delete_default = False
+
+    class RunContext:
+        def get_orm_model_row(
+            self,
+            model: type[object],
+            primary_key: object,
+            database_alias: object,
+        ) -> object | None:
+            assert model is UnindexedPrefetchSourceModel
+            assert primary_key == 7
+            assert database_alias is None
+            return None
+
+    source_row = UnindexedPrefetchSourceModel(id=7)
+    interface_instance = SimpleNamespace(_instance=source_row, pk=7)
+    accessor = _general_manager_many_accessor(
+        accessor_name="members",
+        related_model=UnindexedPrefetchRelatedModel,
+        general_manager_class=RelatedManager,
+        source_model=UnindexedPrefetchSourceModel,
+        relation_filter_name="sources",
+    )
+
+    with patch(
+        "general_manager.cache.run_context.current_calculation_run_context",
+        return_value=RunContext(),
+    ):
+        result = accessor(interface_instance)
+
+    assert result == "fallback-bucket"
+    RelatedManager.filter.assert_called_once_with(sources=7)
+
+
+def test_general_manager_many_accessor_falls_back_for_soft_delete_managers() -> None:
+    class SoftDeletePrefetchSourceModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class SoftDeletePrefetchRelatedModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class RelatedManager:
+        filter = Mock(return_value="fallback-bucket")
+
+        class Interface:
+            _model = SoftDeletePrefetchRelatedModel
+            database = None
+            _soft_delete_default = True
+
+    source_row = SoftDeletePrefetchSourceModel(id=7)
+    interface_instance = SimpleNamespace(_instance=source_row, pk=7)
+    accessor = _general_manager_many_accessor(
+        accessor_name="members",
+        related_model=SoftDeletePrefetchRelatedModel,
+        general_manager_class=RelatedManager,
+        source_model=SoftDeletePrefetchSourceModel,
+        relation_filter_name="sources",
+    )
+
+    result = accessor(interface_instance)
+
+    assert result == "fallback-bucket"
+    RelatedManager.filter.assert_called_once_with(sources=7)
+
+
+def test_general_manager_many_accessor_falls_back_for_database_mismatch() -> None:
+    class DatabasePrefetchSourceModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class DatabasePrefetchRelatedModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class RelatedManager:
+        filter = Mock(return_value="fallback-bucket")
+
+        class Interface:
+            _model = DatabasePrefetchRelatedModel
+            database = "default"
+            _soft_delete_default = False
+
+    source_row = DatabasePrefetchSourceModel(id=7)
+    source_row._state.db = "replica"
+    interface_instance = SimpleNamespace(_instance=source_row, pk=7)
+    accessor = _general_manager_many_accessor(
+        accessor_name="members",
+        related_model=DatabasePrefetchRelatedModel,
+        general_manager_class=RelatedManager,
+        source_model=DatabasePrefetchSourceModel,
+        relation_filter_name="sources",
+    )
+
+    result = accessor(interface_instance)
+
+    assert result == "fallback-bucket"
+    RelatedManager.filter.assert_called_once_with(sources=7)
+
+
 def test_general_manager_fk_accessor_uses_trusted_hydration_for_loaded_row() -> None:
     related = SimpleNamespace(pk=7)
     constructor_calls: list[object] = []

@@ -264,6 +264,10 @@ def _combined_payload_to_hit(
         if dependencies is None:
             return _MISSING
     elif payload.version == DEPENDENCY_CACHE_ENTRY_VERSION:
+        # Legacy entries may contain arbitrary tuple-like data, so the
+        # _legacy_dependency_set path validates each dependency. Current entries
+        # come from make_dependency_cache_entry after that same validation flow,
+        # so keep deserialization on the frozenset type-check fast path.
         if not isinstance(payload.dependencies, frozenset):
             return _MISSING
         dependencies = payload.dependencies

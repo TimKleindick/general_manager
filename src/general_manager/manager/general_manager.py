@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import date, datetime
+from json.encoder import encode_basestring_ascii
 from typing import TYPE_CHECKING, Iterator, Protocol, Self, Type, cast
 
 from general_manager.api.property import GraphQLProperty
@@ -57,10 +58,20 @@ def _serialize_simple_id_identification(
         return None
     value = identification["id"]
     if isinstance(value, datetime):
-        serialized_value = json.dumps(value.isoformat())
+        serialized_value = encode_basestring_ascii(value.isoformat())
     elif isinstance(value, date):
-        serialized_value = json.dumps(value.isoformat())
-    elif value is None or isinstance(value, (str, int, float, bool)):
+        serialized_value = encode_basestring_ascii(value.isoformat())
+    elif isinstance(value, str):
+        serialized_value = encode_basestring_ascii(value)
+    elif value is True:
+        serialized_value = "true"
+    elif value is False:
+        serialized_value = "false"
+    elif value is None:
+        serialized_value = "null"
+    elif isinstance(value, int):
+        serialized_value = str(value)
+    elif isinstance(value, float):
         serialized_value = json.dumps(value)
     else:
         return None
@@ -92,7 +103,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             identifier = _serialize_simple_id_identification(identification)
             if identifier is None:
                 identifier = serialize_dependency_identifier(identification)
-            DependencyTracker.track(
+            DependencyTracker._track_validated(
                 cls.__name__,
                 "identification",
                 identifier,
@@ -574,6 +585,18 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             Mapping with managers substituted by lookup identifiers, or
             ``None`` if no substitutions occurred.
         """
+        needs_normalization = False
+        for value in kwargs.values():
+            if isinstance(value, GeneralManager):
+                needs_normalization = True
+                break
+            if isinstance(value, (list, tuple)):
+                if any(isinstance(item, GeneralManager) for item in value):
+                    needs_normalization = True
+                    break
+        if not needs_normalization:
+            return None
+
         output: dict[str, object] = {}
         changed = False
         for key, value in kwargs.items():

@@ -252,6 +252,25 @@ class MeasurementTestCase(TestCase):
         result = m1 * 3
         self.assertEqual(str(result), "6 meter")
 
+    def test_scalar_arithmetic_reuses_canonical_unit_without_rebuilding(self):
+        from unittest.mock import patch
+
+        from general_manager.measurement import measurement as measurement_module
+
+        measurement = Measurement(Decimal("12"), "meter")
+
+        with patch.object(
+            measurement_module,
+            "_build_quantity",
+            wraps=measurement_module._build_quantity,
+        ) as mocked:
+            multiplied = measurement * Decimal("2")
+            divided = measurement / Decimal("3")
+
+        self.assertEqual(str(multiplied), "24 meter")
+        self.assertEqual(str(divided), "4 meter")
+        mocked.assert_not_called()
+
     def test_multiplication_different_units(self):
         m1 = Measurement(2, "meter")
         m2 = Measurement(3, "second")
@@ -286,6 +305,26 @@ class MeasurementTestCase(TestCase):
         m2 = Measurement(1, "meter")
         result = m1 - m2
         self.assertEqual(str(result), "1 meter")
+
+    def test_same_unit_add_sub_reuses_canonical_unit_without_rebuilding(self):
+        from unittest.mock import patch
+
+        from general_manager.measurement import measurement as measurement_module
+
+        left = Measurement(Decimal("2"), "meter")
+        right = Measurement(Decimal("1.5"), "meter")
+
+        with patch.object(
+            measurement_module,
+            "_build_quantity",
+            wraps=measurement_module._build_quantity,
+        ) as mocked:
+            added = left + right
+            subtracted = left - right
+
+        self.assertEqual(str(added), "3.5 meter")
+        self.assertEqual(str(subtracted), "0.5 meter")
+        mocked.assert_not_called()
 
     def test_random_measurements(self):
         """

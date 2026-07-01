@@ -69,6 +69,10 @@ type classPostCreationMethod = Callable[
     None,
 ]
 
+_SINGLE_INPUT_VALUE_CACHE_PREFIX = "interface_single_input_value"
+_SINGLE_INPUT_VALUE_CACHE_MISS = object()
+_RUN_SCOPED_SCALAR_INPUT_TYPES = (str, int, bool)
+
 
 class AttributeTypedDict(TypedDict):
     """Describe metadata captured for each interface attribute."""
@@ -665,6 +669,37 @@ class InterfaceBase(ABC):
             cls._input_dependency_order = ordered_names
         return ordered_names, unresolved
 
+    @classmethod
+    def _single_input_run_cache_key(
+        cls,
+        name: str,
+        input_field: "Input[type[object]]",
+        value: object,
+    ) -> tuple[object, ...] | None:
+        from general_manager.manager.input import Input as ManagerInput
+
+        if type(input_field) is not ManagerInput:
+            return None
+        if input_field.type not in _RUN_SCOPED_SCALAR_INPUT_TYPES:
+            return None
+        if type(value) is not input_field.type:
+            return None
+        if input_field.is_manager:
+            return None
+        if (
+            input_field.possible_values is not None
+            or input_field.min_value is not None
+            or input_field.max_value is not None
+            or input_field.validator is not None
+            or input_field.normalizer is not None
+        ):
+            return None
+        try:
+            hash(value)
+        except TypeError:
+            return None
+        return (_SINGLE_INPUT_VALUE_CACHE_PREFIX, cls, name, id(input_field), value)
+
     def parse_input_fields_to_identification(
         self,
         *args: object,
@@ -699,6 +734,45 @@ class InterfaceBase(ABC):
         """
         resolved_identification: dict[str, object] = {}
         plan = type(self)._get_input_parsing_plan()
+        if (
+            len(args) == 1
+            and not kwargs
+            and len(plan.names) == 1
+            and plan.required_names == plan.name_set
+            and plan.dependency_items[0][1] == ()
+        ):
+            name = plan.names[0]
+            input_field = self.input_fields[name]
+            cache_key = type(self)._single_input_run_cache_key(
+                name,
+                input_field,
+                args[0],
+            )
+            context = None
+            if cache_key is not None:
+                from general_manager.cache.run_context import (
+                    current_calculation_run_context,
+                )
+
+                context = current_calculation_run_context()
+                if context is not None:
+                    cached_value = context.get(
+                        cache_key,
+                        _SINGLE_INPUT_VALUE_CACHE_MISS,
+                    )
+                    if cached_value is not _SINGLE_INPUT_VALUE_CACHE_MISS:
+                        return {name: cached_value}
+            cache_context = type(self)._input_possible_values_cache_context(name)
+            value = input_field.cast(
+                args[0],
+                resolved_identification,
+                cache_context=cache_context,
+            )
+            self._process_input(name, value, resolved_identification)
+            if context is not None and cache_key is not None:
+                context.set(cache_key, value)
+            return {name: value}
+
         kwargs = args_to_kwargs(args, plan.names, kwargs)
 
         extra_args = set(kwargs) - plan.name_set

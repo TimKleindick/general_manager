@@ -49,6 +49,115 @@ class TestMakeCacheKey(SimpleTestCase):
 
         signature.assert_called_once_with(sample_function)
 
+    def test_make_cache_key_skips_binding_for_simple_positional_call(self):
+        def sample_function(manager):
+            return manager
+
+        args = ("manager-id",)
+        payload = {
+            "module": sample_function.__module__,
+            "qualname": sample_function.__qualname__,
+            "args": {"manager": "manager-id"},
+        }
+        raw = json.dumps(payload, sort_keys=True, cls=CustomJSONEncoder).encode()
+        expected = hashlib.sha256(raw, usedforsecurity=False).hexdigest()
+
+        with patch.object(
+            inspect.Signature,
+            "bind_partial",
+            side_effect=AssertionError("simple call should not bind"),
+        ):
+            result = make_cache_key(sample_function, args, {})
+
+        self.assertEqual(result, expected)
+
+    def test_make_cache_key_supports_unhashable_callable_instances(self):
+        class CallableWithoutHash:
+            __hash__ = None  # type: ignore[assignment]
+
+            def __init__(self) -> None:
+                self.__module__ = __name__
+                self.__qualname__ = "CallableWithoutHash"
+
+            def __eq__(self, other):
+                return isinstance(other, CallableWithoutHash)
+
+            def __call__(self, value):
+                return value
+
+        callable_instance = CallableWithoutHash()
+        payload = {
+            "module": callable_instance.__module__,
+            "qualname": callable_instance.__qualname__,
+            "args": {"value": 7},
+        }
+        raw = json.dumps(payload, sort_keys=True, cls=CustomJSONEncoder).encode()
+        expected = hashlib.sha256(raw, usedforsecurity=False).hexdigest()
+
+        result = make_cache_key(callable_instance, (7,), {})
+
+        self.assertEqual(result, expected)
+
+    def test_make_cache_key_fast_path_for_single_manager_arg_matches_generic_key(self):
+        from general_manager.manager.general_manager import GeneralManager
+
+        class CacheKeyInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        class CacheKeyManager(GeneralManager):
+            pass
+
+        CacheKeyManager.Interface = CacheKeyInterface
+
+        def sample_function(manager):
+            return manager
+
+        manager = CacheKeyManager(7)
+        payload = {
+            "module": sample_function.__module__,
+            "qualname": sample_function.__qualname__,
+            "args": {"manager": manager},
+        }
+        raw = json.dumps(payload, sort_keys=True, cls=CustomJSONEncoder).encode()
+        expected = hashlib.sha256(raw, usedforsecurity=False).hexdigest()
+
+        with patch(
+            "general_manager.utils.make_cache_key.json.dumps",
+            side_effect=AssertionError("single manager fast path should not dump"),
+        ):
+            result = make_cache_key(sample_function, (manager,), {})
+
+        self.assertEqual(result, expected)
+
+    def test_make_cache_key_fast_path_for_non_ascii_manager_arg_matches_generic_key(
+        self,
+    ):
+        from general_manager.manager.general_manager import GeneralManager
+
+        class CacheKeyInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        class CacheKeyManager(GeneralManager):
+            pass
+
+        CacheKeyManager.Interface = CacheKeyInterface
+
+        def sample_function(manager):
+            return manager
+
+        manager = CacheKeyManager("M\u00fcller")
+        payload = {
+            "module": sample_function.__module__,
+            "qualname": sample_function.__qualname__,
+            "args": {"manager": manager},
+        }
+        raw = json.dumps(payload, sort_keys=True, cls=CustomJSONEncoder).encode()
+        expected = hashlib.sha256(raw, usedforsecurity=False).hexdigest()
+
+        self.assertEqual(make_cache_key(sample_function, (manager,), {}), expected)
+
     def test_make_cache_key_with_different_args(self):
         """
         Tests that different positional arguments produce different cache keys for the same function.

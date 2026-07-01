@@ -587,6 +587,36 @@ class DatabaseBucketTestCase(TestCase):
             self.assertEqual(bucket[1].identification["id"], self.u2.id)
             self.assertIn(self.u1, bucket)
 
+    def test_filtered_count_populates_primary_key_snapshot_for_iteration(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+            {"username__in": [["alice", "bob"]]},
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(bucket.count(), 2)
+            self.assertEqual(
+                [manager.identification["id"] for manager in bucket],
+                [self.u1.id, self.u2.id],
+            )
+
+    def test_equivalent_first_reuses_row_inside_run_context(self):
+        first_bucket = DatabaseBucket(
+            User.objects.filter(username="alice").order_by("id"),
+            UserManager,
+            {"username": ["alice"]},
+        )
+        second_bucket = DatabaseBucket(
+            User.objects.filter(username="alice").order_by("id"),
+            UserManager,
+            {"username": ["alice"]},
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(first_bucket.first().identification["id"], self.u1.id)
+            self.assertEqual(second_bucket.first().identification["id"], self.u1.id)
+
     def test_primary_key_snapshot_terminal_operations_without_row_snapshot(self):
         bucket = DatabaseBucket(
             User.objects.filter(username__in=["alice", "bob"]).order_by("username"),

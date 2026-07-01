@@ -120,11 +120,14 @@ class OrmPersistenceSupportCapability(BaseCapability):
         Returns:
             PayloadNormalizer: A normalizer instance bound to the interface's Django `models.Model`.
         """
+        normalizer_cls = PayloadNormalizer
         normalizer = getattr(interface_cls, "_payload_normalizer", None)
-        if not isinstance(normalizer, _PayloadNormalizerType) or (
-            normalizer.model is not interface_cls._model
+        if (
+            not isinstance(normalizer_cls, type)
+            or not isinstance(normalizer, normalizer_cls)
+            or (normalizer.model is not interface_cls._model)
         ):
-            normalizer = PayloadNormalizer(interface_cls._model)
+            normalizer = normalizer_cls(interface_cls._model)
             cast(Any, interface_cls)._payload_normalizer = normalizer
         return normalizer
 
@@ -530,6 +533,7 @@ def _translate_reverse_filter_aliases(
     return translated
 
 
+@lru_cache(maxsize=8192)
 def _translate_reverse_filter_key(model: type[models.Model], key: str) -> str:
     """Rewrite only relation-path segments that are known reverse aliases."""
     parts = key.split("__")
@@ -826,14 +830,16 @@ class OrmQueryCapability(BaseCapability):
         exclude: bool = False,
         search_date: datetime | None = None,
     ) -> DatabaseBucket["GeneralManager"]:
-        cache_signature = self._run_scoped_query_bucket_signature(
-            interface_cls,
-            include_inactive=include_inactive,
-            normalized_kwargs=normalized_kwargs,
-            exclude=exclude,
-            search_date=search_date,
-        )
         context = current_calculation_run_context()
+        cache_signature: Hashable | None = None
+        if context is not None:
+            cache_signature = self._run_scoped_query_bucket_signature(
+                interface_cls,
+                include_inactive=include_inactive,
+                normalized_kwargs=normalized_kwargs,
+                exclude=exclude,
+                search_date=search_date,
+            )
         if context is not None and cache_signature is not None:
             cached = context.get_orm_query_bucket(cache_signature)
             if isinstance(cached, DatabaseBucket):

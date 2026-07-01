@@ -16,6 +16,7 @@ from general_manager.permission.manager_based_permission import (
 )
 from unittest.mock import Mock, patch
 from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.contrib.auth import get_user_model
@@ -158,18 +159,19 @@ class GeneralManagerTestCase(TestCase):
             pending_graphql_interfaces,
         )
 
-    @patch("general_manager.cache.cache_tracker.DependencyTracker.track")
-    def test_initialization(self, mock_track):
+    def test_initialization(self):
         # Test if the manager initializes correctly
         """
         Tests initialization of GeneralManager and dependency tracking.
 
-        Asserts that DependencyTracker.track is called with the correct arguments and that the created object is an instance of GeneralManager.
+        Asserts that the created object is an instance of GeneralManager and
+        its identification dependency is captured.
         """
-        with DependencyTracker():
+        with DependencyTracker() as dependencies:
             manager = self.manager()
-        mock_track.assert_called_once_with(
-            "GeneralManager", "identification", '{"id": "dummy_id"}'
+        self.assertIn(
+            ("GeneralManager", "identification", '{"id": "dummy_id"}'),
+            dependencies,
         )
         self.assertIsInstance(manager, GeneralManager)
 
@@ -205,6 +207,47 @@ class GeneralManagerTestCase(TestCase):
             ("GeneralManager", "identification", '{"id": "dummy_id"}'),
             dependencies,
         )
+
+    def test_manager_init_tracks_scalar_id_without_json_dumps(self):
+        with (
+            DependencyTracker() as dependencies,
+            patch(
+                "general_manager.manager.general_manager.json.dumps",
+                side_effect=AssertionError("scalar id should use fast serialization"),
+            ),
+        ):
+            self.manager("dummy_id")
+
+        self.assertIn(
+            ("GeneralManager", "identification", '{"id": "dummy_id"}'),
+            dependencies,
+        )
+
+    def test_manager_init_tracks_non_ascii_scalar_id_like_generic_serializer(self):
+        class NonAsciiInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        manager_class = self._temporary_manager_class()
+        manager_class.Interface = NonAsciiInterface
+        expected_identifier = serialize_dependency_identifier({"id": "M\u00fcller"})
+
+        with DependencyTracker() as dependencies:
+            manager_class("M\u00fcller")
+
+        self.assertIn(
+            (manager_class.__name__, "identification", expected_identifier),
+            dependencies,
+        )
+
+    def test_parse_identification_skips_item_scan_for_scalar_values(self):
+        class ScalarOnlyPayload(dict):
+            def items(self):  # type: ignore[override]
+                raise AssertionError
+
+        parse_identification = GeneralManager._GeneralManager__parse_identification
+
+        self.assertIsNone(parse_identification(ScalarOnlyPayload({"id": 7})))
 
     def test_trusted_orm_hydration_does_not_serialize_without_dependency_tracker(self):
         manager_class = self._temporary_manager_class()
@@ -263,9 +306,10 @@ class GeneralManagerTestCase(TestCase):
         manager_class.Interface = TrustedInterface  # type: ignore[assignment]
         row = Mock(pk="trusted_id")
 
-        with CalculationRunContext(), DependencyTracker() as dependencies:
+        with CalculationRunContext():
             first = manager_class._from_trusted_orm_instance(row)
-            second = manager_class._from_trusted_orm_instance(row)
+            with DependencyTracker() as dependencies:
+                second = manager_class._from_trusted_orm_instance(row)
 
         self.assertIs(first, second)
         self.assertEqual(hydration_calls, [(row, None)])
@@ -441,6 +485,35 @@ class GeneralManagerTestCase(TestCase):
         instance = manager_class("dummy_id")
 
         self.assertEqual(instance.id, "dummy_id")
+
+    def test_cached_descriptor_read_skips_generic_getattr_lookup(self):
+        manager_class = self._temporary_manager_class()
+
+        with patch.object(DummyInterface, "get_attributes", create=True):
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+
+        instance = manager_class("dummy_id")
+        self.assertEqual(instance.id, "dummy_id")
+
+        with patch(
+            "general_manager.manager.meta.getattr",
+            side_effect=AssertionError("cached descriptor read should be direct"),
+            create=True,
+        ):
+            self.assertEqual(instance.id, "dummy_id")
+
+    def test_initialized_manager_inherited_method_skips_attribute_initialization(self):
+        manager_class = self._temporary_manager_class()
+
+        with patch.object(DummyInterface, "get_attributes", create=True):
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+
+        with patch.object(
+            GeneralManagerMeta,
+            "ensure_attributes_initialized",
+            side_effect=AssertionError("inherited method should not reinitialize"),
+        ):
+            self.assertTrue(callable(manager_class.filter))
 
     def test_initialized_manager_discovers_late_added_public_field(self):
         manager_class = self._temporary_manager_class()
@@ -684,6 +757,19 @@ class GeneralManagerTestCase(TestCase):
             result = manager_obj.delete(creator_id=1)
             mock_delete.assert_called_once_with(creator_id=1, history_comment=None)
             self.assertIsNone(result)
+
+    def test_valid_manager_descriptor_read_skips_validity_helper(self):
+        manager_class = self._temporary_manager_class()
+        with patch.object(DummyInterface, "get_attributes", create=True):
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+        manager_obj = manager_class("dummy_id")
+
+        with patch.object(
+            GeneralManagerMeta,
+            "ensure_manager_is_valid",
+            side_effect=AssertionError("valid descriptor reads should be inline"),
+        ):
+            self.assertEqual(manager_obj.id, "dummy_id")
 
     def test_invalidated_manager_state_raises_dedicated_error(self):
         manager_obj = self.manager()

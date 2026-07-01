@@ -65,6 +65,23 @@ class TestDependencyTracker(TestCase):
                 ("TestClass", "identification", "TestIdentifier"), dependencies
             )
 
+    def test_dependency_tracker_track_validated_records_nested_dependencies(self):
+        """Internal validated tracking records to active collectors."""
+        with DependencyTracker() as outer_dependencies:
+            DependencyTracker._track_validated("Outer", "filter", "one")
+
+            with DependencyTracker() as inner_dependencies:
+                DependencyTracker._track_validated("Inner", "exclude", "two")
+
+        self.assertEqual(
+            outer_dependencies,
+            {
+                ("Outer", "filter", "one"),
+                ("Inner", "exclude", "two"),
+            },
+        )
+        self.assertEqual(inner_dependencies, {("Inner", "exclude", "two")})
+
     def test_dependency_tracker_is_active_reflects_context_depth(self):
         """Report active tracking only while at least one context is open."""
         DependencyTracker.reset_thread_local_storage()
