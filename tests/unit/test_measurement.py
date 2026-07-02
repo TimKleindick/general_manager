@@ -5,7 +5,7 @@ from general_manager.measurement.measurement import Measurement, ureg
 from decimal import Decimal
 from random import Random
 import pickle
-from pint.errors import DimensionalityError
+from pint.errors import DimensionalityError, UndefinedUnitError
 from typing import Any
 
 
@@ -87,10 +87,44 @@ class MeasurementTestCase(TestCase):
 
         self.assertEqual(str(converted), "100000 EUR / metric_ton")
 
+    def test_same_canonical_physical_unit_conversion_returns_same_object(self):
+        m = Measurement(1, "kilogram")
+
+        converted = m.to("kilogram")
+
+        self.assertIs(converted, m)
+
+    def test_alias_target_unit_conversion_returns_same_object(self):
+        m = Measurement(1, "kilogram")
+
+        converted = m.to("kg")
+
+        self.assertIs(converted, m)
+
+    def test_compound_alias_target_unit_conversion_returns_same_object(self):
+        m = Measurement(1, "EUR / kilogram")
+
+        converted = m.to("EUR/kg")
+
+        self.assertIs(converted, m)
+
+    def test_same_currency_conversion_returns_same_object(self):
+        m = Measurement(1, "EUR")
+
+        converted = m.to("EUR")
+
+        self.assertIs(converted, m)
+
     def test_invalid_currency_conversion(self):
         m = Measurement(100, "EUR")
         with self.assertRaises(ValueError):
             m.to("USD")
+
+    def test_invalid_target_unit_conversion_raises_pint_error(self):
+        m = Measurement(1, "kilogram")
+
+        with self.assertRaises(UndefinedUnitError):
+            m.to("not_a_real_unit")
 
     def test_physical_unit_conversion(self):
         m = Measurement(1, "kilometer")
