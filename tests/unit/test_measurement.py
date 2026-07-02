@@ -279,6 +279,14 @@ class MeasurementTestCase(TestCase):
         result = m1 * m2
         self.assertEqual(str(result), "6 meter * second")
 
+    def test_currency_per_unit_product_does_not_collapse_compound_right_unit(self):
+        result = Measurement(2, "EUR / kilogram / second") * Measurement(
+            3,
+            "kilogram / second",
+        )
+
+        self.assertEqual(str(result), "6 EUR / second ** 2")
+
     def test_division_same_units(self):
         m1 = Measurement(10, "meter")
         result = m1 / 2

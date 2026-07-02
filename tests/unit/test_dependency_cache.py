@@ -385,6 +385,60 @@ class DependencyCacheEntryTests(SimpleTestCase):
             {},
         )
 
+    def test_prefetch_bundle_readers_reject_non_mapping_payloads(self) -> None:
+        class DirectCache:
+            def __init__(self) -> None:
+                self.store: dict[str, object] = {
+                    "bundle": DependencyCachePrefetchBundle(
+                        version=1,
+                        entries="not a mapping",  # type: ignore[arg-type]
+                    ),
+                    "values": DependencyCachePrefetchValueBundle(
+                        version=1,
+                        values="not a mapping",  # type: ignore[arg-type]
+                    ),
+                }
+
+            def get(self, key: str, default: object = None) -> object:
+                return self.store.get(key, default)
+
+            def set(
+                self,
+                key: str,
+                value: object,
+                timeout: int | None = None,
+            ) -> None:
+                del timeout
+                self.store[key] = value
+
+            def get_many(self, keys: Iterable[str]) -> Mapping[str, object]:
+                return {key: self.store[key] for key in keys if key in self.store}
+
+        cache_backend = DirectCache()
+
+        self.assertEqual(
+            read_dependency_cache_prefetch_bundle_entries(cache_backend, "bundle"),
+            {},
+        )
+        self.assertEqual(
+            read_dependency_cache_prefetch_bundle_hits(cache_backend, "bundle"),
+            {},
+        )
+        self.assertEqual(
+            read_dependency_cache_prefetch_bundle_values(cache_backend, "values"),
+            {},
+        )
+        self.assertEqual(
+            read_many_dependency_cache_prefetch_bundle_hits(cache_backend, ("bundle",)),
+            {},
+        )
+        self.assertEqual(
+            read_many_dependency_cache_prefetch_bundle_values(
+                cache_backend, ("values",)
+            ),
+            {},
+        )
+
     def test_many_prefetch_bundle_readers_filter_payloads_and_entries(self) -> None:
         cache_backend = PickleCache()
         dependencies: set[Dependency] = {("Project", "identification", '{"id": 1}')}

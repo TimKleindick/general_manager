@@ -133,10 +133,15 @@ def _exact_currency_per_unit_product(
 ) -> str | None:
     """Return the currency unit for exact ``currency / unit * unit`` products."""
 
+    right_parsed = _parse_unit(right_unit)
+    if len(right_parsed._units) != 1:
+        return None
     for currency in currency_units:
         prefix = f"{currency} / "
-        if left_unit.startswith(prefix) and left_unit[len(prefix) :] == right_unit:
-            return currency
+        if left_unit.startswith(prefix):
+            left_denominator = left_unit[len(prefix) :]
+            if _parse_unit(left_denominator) == right_parsed:
+                return currency
     return None
 
 

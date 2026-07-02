@@ -691,38 +691,22 @@ def candidate_cache_keys_for_lookup(
             Runtime callers are expected to honor this typed contract; the
             helper does not perform additional action validation.
         lookup: Changed lookup attribute path.
-        old_value: Optional previous value for exact-match shard candidates.
-            The sentinel `VALUE_NOT_PROVIDED` suppresses the exact old-value
-            lookup. `None` is a real dependency value and is hashed.
-        new_value: Optional current value for exact-match shard candidates. The
-            sentinel `VALUE_NOT_PROVIDED` suppresses the exact new-value lookup.
-            Serialization errors propagate from `stable_value_hash()`.
+        old_value: Deprecated compatibility parameter; exact-value shards are
+            no longer queried.
+        new_value: Deprecated compatibility parameter; exact-value shards are
+            no longer queried.
 
     Returns:
-        Cache keys from exact, scan, composite, and all-records shards that may
+        Cache keys from scan, composite, and all-records shards that may
         need runtime dependency evaluation. Scan shards are queried for every
         operator in `SCAN_OPERATORS` using both `{lookup}__{operator}` and the
-        normalized base lookup name. Exact old/new values are looked up only in
-        equality (`"eq"`) shards for the base lookup name returned by
-        `lookup_spec_from_key()`, which treats a supported operator suffix such
-        as `status__gte` as lookup path `status` plus operator `gte`.
+        normalized base lookup name returned by `lookup_spec_from_key()`, which
+        treats a supported operator suffix such as `status__gte` as lookup path
+        `status` plus operator `gte`.
     """
+    del old_value, new_value
     candidates = set()
     candidate_lookup = _lookup_name_for_candidate(lookup)
-
-    for value in (old_value, new_value):
-        if value is not VALUE_NOT_PROVIDED:
-            candidates.update(
-                cache_set_members(
-                    exact_lookup_shard_key(
-                        manager_name,
-                        action,
-                        candidate_lookup,
-                        "eq",
-                        value,
-                    )
-                )
-            )
 
     for operator in SCAN_OPERATORS:
         scan_lookup = f"{candidate_lookup}__{operator}"

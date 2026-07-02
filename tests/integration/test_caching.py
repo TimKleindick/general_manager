@@ -2,6 +2,9 @@ import copy
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
 from django.utils import timezone
+from general_manager.cache.cache_decorator import (
+    _DEPENDENCY_CACHE_PREFETCH_MANIFEST_PREFIX,
+)
 from general_manager.cache.dependency_index import get_full_index
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
@@ -1604,7 +1607,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         prefetch_cache_keys = {
             cache_key
             for cache_key in cache_keys
-            if cache_key.startswith("dependency_cache_prefetch_manifest:")
+            if cache_key.startswith(f"{_DEPENDENCY_CACHE_PREFETCH_MANIFEST_PREFIX}:")
         }
         self.assertEqual(len(cache_keys - prefetch_cache_keys), 1)
         self.assertEqual(len(prefetch_cache_keys), 2)
