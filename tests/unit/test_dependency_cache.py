@@ -13,9 +13,18 @@ from general_manager.cache.dependency_cache import (
     DEPENDENCY_CACHE_ENTRY_VERSION,
     DependencyCacheEntry,
     DependencyCacheHit,
+    DependencyCachePrefetchBundle,
+    DependencyCachePrefetchValueBundle,
     make_dependency_cache_entry,
+    make_dependency_cache_prefetch_bundle,
+    make_dependency_cache_prefetch_value_bundle,
     read_dependency_cache_hit,
+    read_dependency_cache_prefetch_bundle_entries,
+    read_dependency_cache_prefetch_bundle_hits,
+    read_dependency_cache_prefetch_bundle_values,
     read_many_dependency_cache_hits,
+    read_many_dependency_cache_prefetch_bundle_hits,
+    read_many_dependency_cache_prefetch_bundle_values,
     replay_dependency_cache_hit,
 )
 from general_manager.cache.dependency_index import Dependency
@@ -316,6 +325,157 @@ class DependencyCacheEntryTests(SimpleTestCase):
 
         self.assertEqual([hits["cache-0"].value, hits["cache-1"].value], [0, 1])
         self.assertEqual(cache_backend.get_calls, ["cache-0", "cache-1"])
+
+    def test_prefetch_bundle_readers_filter_invalid_entries(self) -> None:
+        cache_backend = PickleCache()
+        dependencies: set[Dependency] = {("Project", "identification", '{"id": 1}')}
+        valid_entry = make_dependency_cache_entry("ready", dependencies)
+        cache_backend.set(
+            "bundle",
+            DependencyCachePrefetchBundle(
+                version=1,
+                entries={
+                    "cache-a": valid_entry,
+                    "cache-legacy": DependencyCacheEntry(
+                        version=1,
+                        value="legacy",
+                        dependencies=frozenset(dependencies),
+                    ),
+                    "cache-future": DependencyCacheEntry(
+                        version=999,
+                        value="future",
+                        dependencies=frozenset(dependencies),
+                    ),
+                    "cache-invalid": "not an entry",  # type: ignore[dict-item]
+                    1: valid_entry,  # type: ignore[dict-item]
+                },
+            ),
+            None,
+        )
+
+        entries = read_dependency_cache_prefetch_bundle_entries(
+            cache_backend,
+            "bundle",
+        )
+        hits = read_dependency_cache_prefetch_bundle_hits(cache_backend, "bundle")
+
+        self.assertEqual(set(entries), {"cache-a", "cache-legacy", "cache-future"})
+        self.assertEqual(set(hits), {"cache-a"})
+        self.assertEqual(hits["cache-a"].value, "ready")
+
+    def test_prefetch_bundle_readers_reject_wrong_payload_versions(self) -> None:
+        cache_backend = PickleCache()
+        cache_backend.set(
+            "bundle",
+            DependencyCachePrefetchBundle(version=999, entries={}),
+            None,
+        )
+        cache_backend.set(
+            "values",
+            DependencyCachePrefetchValueBundle(version=999, values={"cache-a": 1}),
+            None,
+        )
+
+        self.assertEqual(
+            read_dependency_cache_prefetch_bundle_entries(cache_backend, "bundle"),
+            {},
+        )
+        self.assertEqual(
+            read_dependency_cache_prefetch_bundle_values(cache_backend, "values"),
+            {},
+        )
+
+    def test_many_prefetch_bundle_readers_filter_payloads_and_entries(self) -> None:
+        cache_backend = PickleCache()
+        dependencies: set[Dependency] = {("Project", "identification", '{"id": 1}')}
+        valid_entry = make_dependency_cache_entry("ready", dependencies)
+        cache_backend.set("not-bundle", object(), None)
+        cache_backend.set(
+            "wrong-version-bundle",
+            DependencyCachePrefetchBundle(
+                version=999, entries={"cache-a": valid_entry}
+            ),
+            None,
+        )
+        cache_backend.set(
+            "bundle",
+            DependencyCachePrefetchBundle(
+                version=1,
+                entries={
+                    "cache-a": valid_entry,
+                    "cache-future": DependencyCacheEntry(
+                        version=999,
+                        value="future",
+                        dependencies=frozenset(dependencies),
+                    ),
+                    1: valid_entry,  # type: ignore[dict-item]
+                },
+            ),
+            None,
+        )
+        cache_backend.set("not-values", object(), None)
+        cache_backend.set(
+            "wrong-version-values",
+            DependencyCachePrefetchValueBundle(version=999, values={"cache-a": 1}),
+            None,
+        )
+        cache_backend.set(
+            "values",
+            DependencyCachePrefetchValueBundle(
+                version=1,
+                values={
+                    "cache-a": "ready",
+                    1: "ignored",  # type: ignore[dict-item]
+                },
+            ),
+            None,
+        )
+
+        hits = read_many_dependency_cache_prefetch_bundle_hits(
+            cache_backend,
+            ("not-bundle", "wrong-version-bundle", "bundle"),
+        )
+        values = read_many_dependency_cache_prefetch_bundle_values(
+            cache_backend,
+            ("not-values", "wrong-version-values", "values"),
+        )
+
+        self.assertEqual(set(hits), {"cache-a"})
+        self.assertEqual(hits["cache-a"].value, "ready")
+        self.assertEqual(values, {"cache-a": "ready"})
+
+    def test_prefetch_bundle_reads_fall_back_without_get_many(self) -> None:
+        cache_backend = PickleCacheWithoutGetMany()
+        dependencies: set[Dependency] = {("Project", "identification", '{"id": 1}')}
+        cache_backend.set(
+            "bundle",
+            make_dependency_cache_prefetch_bundle(
+                {"cache-a": make_dependency_cache_entry("ready", dependencies)}
+            ),
+            None,
+        )
+        cache_backend.set(
+            "values",
+            make_dependency_cache_prefetch_value_bundle(
+                {"cache-a": make_dependency_cache_entry("ready", dependencies)}
+            ),
+            None,
+        )
+
+        self.assertEqual(
+            read_many_dependency_cache_prefetch_bundle_hits(cache_backend, ()), {}
+        )
+        hits = read_many_dependency_cache_prefetch_bundle_hits(
+            cache_backend, ("bundle",)
+        )
+        values = read_many_dependency_cache_prefetch_bundle_values(
+            cache_backend,
+            ("missing", "values"),
+        )
+
+        self.assertEqual(set(hits), {"cache-a"})
+        self.assertEqual(values, {"cache-a": "ready"})
+        self.assertEqual(cache_backend.get_calls, ["bundle", "missing", "values"])
 
     def test_replay_dependency_cache_hit_tracks_dependencies(self) -> None:
         hit = DependencyCacheHit(
