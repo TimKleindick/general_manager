@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.60.3 (2026-07-02)
+
+### Bug Fixes
+
+- Address measurement conversion review
+  ([`60a1db0`](https://github.com/TimKleindick/general_manager/commit/60a1db02e73b76109d225be2b6753697e862ee20))
+
+- Skip exact measurement unit conversions
+  ([`8a4205e`](https://github.com/TimKleindick/general_manager/commit/8a4205e6a6465fa7a006c5743bf7923bdd4f91fc))
+
+### Testing
+
+- Cover measurement currency fallback
+  ([`286904e`](https://github.com/TimKleindick/general_manager/commit/286904ef58ede82f507c7b2c36b6562064fc8ef7))
+
+
 ## v0.60.2 (2026-07-02)
 
 ### Bug Fixes
