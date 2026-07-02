@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.60.4 (2026-07-02)
+
+### Performance Improvements
+
+- Cache measurement unit conversions
+  ([`829e699`](https://github.com/TimKleindick/general_manager/commit/829e699bf6a9aea21cc22b640beef8031e6d7e11))
+
+
 ## v0.60.3 (2026-07-02)
 
 ### Bug Fixes
