@@ -15,6 +15,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from django.db.models.query import prefetch_related_objects
 
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface.base_interface import AttributeTypedDict
 from general_manager.interface.utils.errors import DuplicateFieldNameError
 from general_manager.measurement.measurement import Measurement
@@ -785,6 +786,33 @@ def _general_manager_accessor(
     Returns:
         DescriptorAccessor: A callable that, given a OrmInterfaceBase, returns the manager instance for the related object, or `None` if the related attribute is `None`.
     """
+    manager_type = cast("type[GeneralManager]", manager_class)
+
+    def raw_id_manager(raw_id: object, database_alias: object) -> object:
+        from general_manager.cache.run_context import current_calculation_run_context
+
+        context = current_calculation_run_context()
+        if context is None:
+            return manager_type(raw_id)
+
+        cache_key = (manager_type, raw_id, database_alias)
+        try:
+            cached = context.get_orm_relation_manager(cast(Hashable, cache_key))
+        except TypeError:
+            return manager_type(raw_id)
+        if isinstance(cached, manager_type):
+            track_own = getattr(
+                cached,
+                "_track_own_identification_dependency_active",
+                None,
+            )
+            if callable(track_own) and DependencyTracker.is_active():
+                track_own()
+            return cached
+
+        manager = manager_type(raw_id)
+        context.set_orm_relation_manager(cast(Hashable, cache_key), manager)
+        return manager
 
     def getter(self: OrmInterfaceInstance) -> object:
         """
@@ -799,16 +827,16 @@ def _general_manager_accessor(
         Returns:
             The related manager instance, or `None` if the related object is `None`.
         """
-        manager_type = cast("type[GeneralManager]", manager_class)
         if raw_id_name is not None:
             raw_id = getattr(self._instance, raw_id_name, None)
             if raw_id is None:
                 return None
             state = getattr(self._instance, "_state", None)
+            database_alias = getattr(state, "db", None)
             fields_cache = getattr(state, "fields_cache", {})
             related = fields_cache.get(field_name, _MISSING_RELATED)
             if related is _MISSING_RELATED:
-                return manager_type(raw_id)
+                return raw_id_manager(raw_id, database_alias)
             if related is None:
                 return None
             trusted_hydrate = getattr(manager_type, "_from_trusted_orm_instance", None)

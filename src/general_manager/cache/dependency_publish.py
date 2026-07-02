@@ -11,10 +11,18 @@ from typing import TypeGuard
 
 from django.core.cache import cache as coordination_cache
 
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_cache import (
     DependencyCacheBackend,
+    DependencyCacheEntry,
     DependencyCacheHit,
     DependencyCacheSetManyBackend,
+    dependency_cache_prefetch_segment_bundle_key,
+    dependency_cache_prefetch_segment_index_key,
+    dependency_cache_prefetch_segment_token,
+    dependency_cache_prefetch_segment_value_bundle_key,
+    make_dependency_cache_prefetch_bundle,
+    make_dependency_cache_prefetch_value_bundle,
     make_dependency_cache_entry,
     read_dependency_cache_hit,
 )
@@ -72,6 +80,8 @@ class PendingDependencyCachePublication:
     timeout: int | None
     started_generation: int
     lease: CacheComputeLease
+    dependencies_trusted: bool = False
+    prefetch_manifest_key: str | None = None
 
 
 RecordManyDependenciesFn = Callable[[Iterable[tuple[str, Iterable[Dependency]]]], None]
@@ -81,6 +91,10 @@ COMPUTE_LOCK_TIMEOUT = LOCK_TIMEOUT
 WAIT_INITIAL_DELAY = 0.01
 WAIT_MAX_DELAY = 0.2
 _WAIT_MISS = object()
+_CALCULATION_IDENTITY_MANAGER_NAMES_CACHE: tuple[tuple[int, ...], frozenset[str]] = (
+    (),
+    frozenset(),
+)
 
 
 def _compute_lock_key(cache_key: str) -> str:
@@ -179,6 +193,90 @@ def _supports_set_many(
     return callable(getattr(cache_backend, "set_many", None))
 
 
+def _calculation_identity_manager_names() -> frozenset[str]:
+    from general_manager.interface.interfaces.calculation import CalculationInterface
+    from general_manager.manager.meta import GeneralManagerMeta
+
+    global _CALCULATION_IDENTITY_MANAGER_NAMES_CACHE
+
+    manager_classes = tuple(GeneralManagerMeta.all_classes)
+    fingerprint = tuple(id(manager_class) for manager_class in manager_classes)
+    cached_fingerprint, cached_names = _CALCULATION_IDENTITY_MANAGER_NAMES_CACHE
+    if fingerprint == cached_fingerprint:
+        return cached_names
+
+    names = frozenset(
+        manager_class.__name__
+        for manager_class in manager_classes
+        if isinstance(getattr(manager_class, "Interface", None), type)
+        and issubclass(manager_class.Interface, CalculationInterface)
+    )
+    _CALCULATION_IDENTITY_MANAGER_NAMES_CACHE = (fingerprint, names)
+    return names
+
+
+def _metadata_dependency_set(
+    dependencies: Iterable[Dependency],
+    calculation_manager_names: frozenset[str] | None = None,
+) -> set[Dependency]:
+    dependency_set = set(dependencies)
+    if not dependency_set:
+        return dependency_set
+
+    if calculation_manager_names is None:
+        calculation_manager_names = _calculation_identity_manager_names()
+    if not calculation_manager_names:
+        return dependency_set
+
+    return {
+        dependency
+        for dependency in dependency_set
+        if not (
+            dependency[1] == "identification"
+            and dependency[0] in calculation_manager_names
+        )
+    }
+
+
+def _segment_tokens(payload: object) -> tuple[str, ...]:
+    if not isinstance(payload, (tuple, list, frozenset, set)):
+        return ()
+    return tuple(token for token in payload if isinstance(token, str))
+
+
+def _set_prefetch_segment_entries(
+    cache_backend: DependencyCacheBackend,
+    timeout: int | None,
+    manifest_key: str,
+    bundle_entries: dict[str, DependencyCacheEntry],
+) -> None:
+    if not bundle_entries:
+        return
+    ordered_cache_keys = tuple(bundle_entries)
+    segment_token = dependency_cache_prefetch_segment_token(ordered_cache_keys)
+    segment_index_key = dependency_cache_prefetch_segment_index_key(manifest_key)
+    segment_tokens = _segment_tokens(cache_backend.get(segment_index_key, ()))
+    if segment_token not in segment_tokens:
+        cache_backend.set(
+            segment_index_key,
+            (*segment_tokens, segment_token),
+            timeout,
+        )
+    cache_backend.set(
+        dependency_cache_prefetch_segment_bundle_key(manifest_key, segment_token),
+        make_dependency_cache_prefetch_bundle(bundle_entries),
+        timeout,
+    )
+    cache_backend.set(
+        dependency_cache_prefetch_segment_value_bundle_key(
+            manifest_key,
+            segment_token,
+        ),
+        make_dependency_cache_prefetch_value_bundle(bundle_entries),
+        timeout,
+    )
+
+
 def _set_dependency_cache_entries(
     entries: Iterable[PendingDependencyCachePublication],
 ) -> None:
@@ -196,6 +294,7 @@ def _set_dependency_cache_entries(
             entry.cache_key: make_dependency_cache_entry(
                 entry.result,
                 entry.dependencies,
+                trusted_dependencies=entry.dependencies_trusted,
             )
             for entry in group_entries
         }
@@ -204,9 +303,60 @@ def _set_dependency_cache_entries(
             for key in failed_keys:
                 if key in payloads:
                     cache_backend.set(key, payloads[key], timeout)
-            continue
-        for key, payload in payloads.items():
-            cache_backend.set(key, payload, timeout)
+        else:
+            for key, payload in payloads.items():
+                cache_backend.set(key, payload, timeout)
+
+        manifest_payloads: dict[str, list[str]] = defaultdict(list)
+        for entry in group_entries:
+            if entry.prefetch_manifest_key is not None:
+                manifest_payloads[entry.prefetch_manifest_key].append(entry.cache_key)
+        for manifest_key, cache_keys in manifest_payloads.items():
+            ordered_cache_keys = tuple(dict.fromkeys(cache_keys))
+            bundle_payloads = {
+                cache_key: payloads[cache_key]
+                for cache_key in ordered_cache_keys
+                if cache_key in payloads
+            }
+            cache_backend.set(manifest_key, tuple(bundle_payloads), timeout)
+            _set_prefetch_segment_entries(
+                cache_backend,
+                timeout,
+                manifest_key,
+                bundle_payloads,
+            )
+
+
+def _prefetch_bundle_dependency_entries_from_metadata(
+    grouped_dependencies: dict[str, set[Dependency]],
+    grouped_cache_keys: dict[str, list[str]],
+) -> tuple[tuple[str, set[Dependency]], ...]:
+    return tuple(
+        bundle_entry
+        for manifest_key, dependencies in grouped_dependencies.items()
+        for segment_token in (
+            dependency_cache_prefetch_segment_token(
+                tuple(dict.fromkeys(grouped_cache_keys[manifest_key]))
+            ),
+        )
+        for bundle_entry in (
+            (
+                dependency_cache_prefetch_segment_bundle_key(
+                    manifest_key,
+                    segment_token,
+                ),
+                dependencies,
+            ),
+            (
+                dependency_cache_prefetch_segment_value_bundle_key(
+                    manifest_key,
+                    segment_token,
+                ),
+                dependencies,
+            ),
+        )
+        if dependencies
+    )
 
 
 def publish_dependency_cache_entries(
@@ -250,11 +400,32 @@ def publish_dependency_cache_entries(
         if not publishable_entries:
             return
 
-        record_many_cache_dependencies(
-            (entry.cache_key, entry.dependencies)
-            for entry in publishable_entries
-            if entry.dependencies
+        calculation_manager_names = _calculation_identity_manager_names()
+        dependency_entries: list[tuple[str, Iterable[Dependency]]] = []
+        prefetch_dependencies: dict[str, set[Dependency]] = defaultdict(set)
+        prefetch_cache_keys: dict[str, list[str]] = defaultdict(list)
+        for entry in publishable_entries:
+            if entry.dependencies:
+                metadata_dependencies = _metadata_dependency_set(
+                    entry.dependencies,
+                    calculation_manager_names,
+                )
+                if metadata_dependencies:
+                    dependency_entries.append((entry.cache_key, metadata_dependencies))
+                    if entry.prefetch_manifest_key is not None:
+                        prefetch_dependencies[entry.prefetch_manifest_key].update(
+                            metadata_dependencies
+                        )
+                        prefetch_cache_keys[entry.prefetch_manifest_key].append(
+                            entry.cache_key
+                        )
+        dependency_entries.extend(
+            _prefetch_bundle_dependency_entries_from_metadata(
+                prefetch_dependencies,
+                prefetch_cache_keys,
+            )
         )
+        record_many_cache_dependencies(dependency_entries)
 
         _ensure_publish_current(current_generation)
         _set_dependency_cache_entries(publishable_entries)
@@ -271,6 +442,7 @@ def publish_dependency_cache_entry(
     timeout: int | None,
     started_generation: int,
     record_many_fn: RecordManyDependenciesFn | None = None,
+    prefetch_manifest_key: str | None = None,
 ) -> None:
     """Publish dependency metadata and value only if the computation is current.
 
@@ -296,6 +468,9 @@ def publish_dependency_cache_entry(
         Exception: Lock, dependency-index, custom recorder, and cache backend
             errors propagate.
     """
+    dependencies_trusted = DependencyTracker._dependencies_are_tracker_captured(
+        dependencies
+    )
     dependency_set = set(dependencies)
 
     acquire_lock_with_retry("publish_dependency_cache_entry")
@@ -307,14 +482,51 @@ def publish_dependency_cache_entry(
                 record_many_fn([(cache_key, dependency_set)])
             _ensure_publish_current(started_generation)
         else:
-            if dependency_set:
-                record_many_cache_dependencies([(cache_key, dependency_set)])
+            metadata_dependencies = _metadata_dependency_set(dependency_set)
+            dependency_entries = (
+                [(cache_key, metadata_dependencies)] if metadata_dependencies else []
+            )
+            if prefetch_manifest_key is not None and metadata_dependencies:
+                segment_token = dependency_cache_prefetch_segment_token((cache_key,))
+                dependency_entries.extend(
+                    [
+                        (
+                            dependency_cache_prefetch_segment_bundle_key(
+                                prefetch_manifest_key,
+                                segment_token,
+                            ),
+                            metadata_dependencies,
+                        ),
+                        (
+                            dependency_cache_prefetch_segment_value_bundle_key(
+                                prefetch_manifest_key,
+                                segment_token,
+                            ),
+                            metadata_dependencies,
+                        ),
+                    ]
+                )
+            record_many_cache_dependencies(dependency_entries)
             _ensure_publish_current(started_generation)
 
-        cache_backend.set(
-            cache_key,
-            make_dependency_cache_entry(result, dependency_set),
-            timeout,
+        payload = make_dependency_cache_entry(
+            result,
+            dependency_set,
+            trusted_dependencies=dependencies_trusted,
         )
+        prefetch_bundle_entries = {cache_key: payload}
+
+        cache_backend.set(cache_key, payload, timeout)
+        if prefetch_manifest_key is not None:
+            if record_many_fn is None:
+                cache_backend.set(prefetch_manifest_key, (cache_key,), timeout)
+                _set_prefetch_segment_entries(
+                    cache_backend,
+                    timeout,
+                    prefetch_manifest_key,
+                    prefetch_bundle_entries,
+                )
+            else:
+                cache_backend.set(prefetch_manifest_key, (cache_key,), timeout)
     finally:
         release_lock()

@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.test import TestCase
 from general_manager.measurement.measurement import Measurement, ureg
 from decimal import Decimal
@@ -505,6 +507,26 @@ class MeasurementTestCase(TestCase):
         self.assertEqual(result.magnitude, Decimal("1000"))
         self.assertEqual(str(result), "1000")
 
+    def test_percentage_scalar_arithmetic_avoids_rebuilding_result_quantity(self):
+        from general_manager.measurement import measurement as measurement_module
+
+        measurement = Measurement(Decimal("200"), "%")
+
+        with patch.object(
+            measurement_module,
+            "_build_quantity",
+            side_effect=AssertionError(
+                "percentage scalar arithmetic should not rebuild the Pint result"
+            ),
+        ):
+            multiplied = measurement * Decimal("500")
+            divided = measurement / Decimal("500")
+
+        self.assertEqual(multiplied.unit, "dimensionless")
+        self.assertEqual(multiplied.magnitude, Decimal("1000"))
+        self.assertEqual(divided.unit, "dimensionless")
+        self.assertEqual(divided.magnitude, Decimal("0.004"))
+
     def test_dimensionless_values(self):
         """
         Test initialization, arithmetic operations, and comparisons for dimensionless Measurement instances.
@@ -550,6 +572,35 @@ class MeasurementTestCase(TestCase):
         result_div = m1 / m2
         self.assertEqual(str(result_div), "50 EUR")
         self.assertEqual(result_div.quantity.units, ureg("EUR / dimensionless"))
+
+    def test_same_unit_addition_defers_result_quantity_until_exposed(self):
+        m1 = Measurement(100, "EUR")
+        m2 = Measurement(50, "EUR")
+
+        with patch.object(ureg, "Quantity", wraps=ureg.Quantity) as quantity:
+            result = m1 + m2
+            self.assertEqual(result.magnitude, Decimal("150"))
+            self.assertEqual(result.unit, "EUR")
+            self.assertEqual(str(result), "150 EUR")
+            quantity.assert_not_called()
+
+            self.assertEqual(str(result.quantity.units), "EUR")
+
+        quantity.assert_called_once()
+
+    def test_scalar_multiplication_defers_result_quantity_until_exposed(self):
+        measurement = Measurement(25, "kilogram")
+
+        with patch.object(ureg, "Quantity", wraps=ureg.Quantity) as quantity:
+            result = measurement * Decimal("2")
+            self.assertEqual(result.magnitude, Decimal("50"))
+            self.assertEqual(result.unit, "kilogram")
+            self.assertEqual(str(result), "50 kilogram")
+            quantity.assert_not_called()
+
+            self.assertEqual(str(result.quantity.units), "kilogram")
+
+        quantity.assert_called_once()
 
     def test_calculation_with_other_dimension_and_currency(self):
         """
@@ -597,6 +648,54 @@ class MeasurementTestCase(TestCase):
         m3 = m1 * m2
         self.assertIn(str(m3), ["200 meter * EUR", "200 EUR * meter"])
         self.assertEqual(str(m3.to("EUR * kilometer")), "0.2 EUR * kilometer")
+
+    def test_measurement_multiplication_reuses_pint_result_quantity(self):
+        m1 = Measurement(100, "EUR")
+        m2 = Measurement(2, "meter")
+
+        with patch(
+            "general_manager.measurement.measurement._build_quantity",
+            side_effect=AssertionError(
+                "measurement multiplication should not rebuild the Pint result"
+            ),
+        ):
+            result = m1 * m2
+
+        self.assertIn(str(result), ["200 meter * EUR", "200 EUR * meter"])
+        self.assertEqual(str(result.to("EUR * kilometer")), "0.2 EUR * kilometer")
+
+    def test_exact_currency_per_unit_multiplication_avoids_pint_result(self):
+        price = Measurement(Decimal("12"), "EUR / kilogram")
+        weight = Measurement(Decimal("3"), "kilogram")
+
+        with patch.object(
+            Measurement,
+            "_from_quantity",
+            side_effect=AssertionError(
+                "exact currency-per-unit multiplication should not use Pint"
+            ),
+        ):
+            left_result = price * weight
+            right_result = weight * price
+
+        self.assertEqual(left_result.unit, "EUR")
+        self.assertEqual(left_result.magnitude, Decimal("36"))
+        self.assertEqual(right_result.unit, "EUR")
+        self.assertEqual(right_result.magnitude, Decimal("36"))
+
+    def test_measurement_division_reuses_pint_result_quantity(self):
+        m1 = Measurement(100, "EUR")
+        m2 = Measurement(2, "meter")
+
+        with patch(
+            "general_manager.measurement.measurement._build_quantity",
+            side_effect=AssertionError(
+                "measurement division should not rebuild the Pint result"
+            ),
+        ):
+            result = m1 / m2
+
+        self.assertEqual(str(result), "50 EUR / meter")
 
     def test_invalid_measurement_initialization_error(self):
         """Test that InvalidMeasurementInitializationError is raised for invalid value types."""

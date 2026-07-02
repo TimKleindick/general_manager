@@ -1,5 +1,6 @@
 # type: ignore
 from django.test import SimpleTestCase, override_settings
+from general_manager.interface import base_interface as base_interface_module
 from general_manager.interface.base_interface import (
     InterfaceBase,
     InvalidInputTypeError,
@@ -453,6 +454,75 @@ class InterfaceBaseTests(SimpleTestCase):
         inst = DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
         self.assertEqual(inst.identification["vals"], 99)
 
+    def test_possible_values_setting_helper_does_not_import_config_per_call(self):
+        import builtins
+
+        with patch("builtins.__import__", wraps=builtins.__import__) as importer:
+            base_interface_module._should_validate_possible_values()
+            base_interface_module._should_validate_possible_values()
+
+        config_imports = [
+            call
+            for call in importer.call_args_list
+            if call.args and call.args[0] == "general_manager.conf"
+        ]
+        self.assertEqual(config_imports, [])
+
+    @override_settings(DEBUG=False, GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_possible_values_setting_helper_reuses_cached_setting_value(self):
+        with patch.object(
+            base_interface_module,
+            "get_setting",
+            wraps=base_interface_module.get_setting,
+        ) as get_setting:
+            self.assertTrue(base_interface_module._should_validate_possible_values())
+            self.assertTrue(base_interface_module._should_validate_possible_values())
+
+        get_setting.assert_called_once_with("VALIDATE_INPUT_VALUES")
+
+    def test_possible_values_setting_helper_recomputes_after_settings_change(self):
+        with override_settings(DEBUG=False, GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True):
+            self.assertTrue(base_interface_module._should_validate_possible_values())
+
+        with override_settings(
+            DEBUG=True, GENERAL_MANAGER={"VALIDATE_INPUT_VALUES": "off"}
+        ):
+            self.assertFalse(base_interface_module._should_validate_possible_values())
+
+    def test_input_without_possible_values_skips_validation_setting_lookup(self):
+        class NoPossibleValuesInterface(InterfaceBase):
+            input_fields: ClassVar = {"id": DummyInput(int, possible_values=None)}
+
+        with patch(
+            "general_manager.interface.base_interface._should_validate_possible_values",
+            side_effect=AssertionError("setting lookup is unnecessary"),
+        ):
+            instance = NoPossibleValuesInterface(7)
+
+        self.assertEqual(instance.identification, {"id": 7})
+
+    def test_unconstrained_input_skips_bound_and_validator_helpers(self):
+        class UnconstrainedInputInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {"id": Input(int)}
+
+        input_field = UnconstrainedInputInterface.input_fields["id"]
+
+        with (
+            patch.object(
+                input_field,
+                "validate_bounds",
+                side_effect=AssertionError("bounds helper should be skipped"),
+            ),
+            patch.object(
+                input_field,
+                "validate_with_callable",
+                side_effect=AssertionError("validator helper should be skipped"),
+            ),
+        ):
+            instance = UnconstrainedInputInterface(7)
+
+        self.assertEqual(instance.identification, {"id": 7})
+
     def test_input_possible_values_cache_context_is_reused_during_cast_and_validation(
         self,
     ):
@@ -515,6 +585,48 @@ class InterfaceBaseTests(SimpleTestCase):
         inst = DummyInterface(a=1, b="foo", gm=gm, vals=2, c=1)
         self.assertEqual(inst.get_data(), inst.identification)
 
+    def test_execute_with_observability_resolves_success_hooks_once(self):
+        class CountingObserver:
+            before_lookups = 0
+            after_lookups = 0
+
+            @property
+            def before_operation(self):
+                self.before_lookups += 1
+                return lambda **_kwargs: None
+
+            @property
+            def after_operation(self):
+                self.after_lookups += 1
+                return lambda **_kwargs: None
+
+        observer = CountingObserver()
+
+        result = InterfaceBase._execute_with_observability(
+            target=DummyInterface,
+            operation="read",
+            payload={},
+            func=lambda: "ok",
+            observer=observer,
+        )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(observer.before_lookups, 1)
+        self.assertEqual(observer.after_lookups, 1)
+
+    def test_execute_with_observability_none_hook_still_raises(self):
+        class NoneObserver:
+            before_operation = None
+
+        with self.assertRaises(TypeError):
+            InterfaceBase._execute_with_observability(
+                target=DummyInterface,
+                operation="read",
+                payload={},
+                func=lambda: "ok",
+                observer=NoneObserver(),
+            )
+
     def test_vals_allowed_lower_and_upper_bounds(self):
         # Lower bound
         inst1 = DummyInterface(a=1, b="v", gm=DummyGM({"id": 21}), vals=1, c=1)
@@ -567,6 +679,126 @@ class InterfaceBaseTests(SimpleTestCase):
 
         self.assertEqual(instance.identification, {"id": 7})
 
+    def test_single_required_input_reuses_loaded_input_field_for_validation(self):
+        class CountingFields(dict):
+            getitem_calls = 0
+
+            def __getitem__(self, key):
+                self.getitem_calls += 1
+                return super().__getitem__(key)
+
+        fields = CountingFields({"id": DummyInput(int)})
+
+        class SingleInputInterface(InterfaceBase):
+            input_fields = fields
+
+        instance = SingleInputInterface(7)
+
+        self.assertEqual(instance.identification, {"id": 7})
+        self.assertEqual(fields.getitem_calls, 0)
+
+    def test_input_parsing_uses_fresh_plan_fields_without_item_lookup(self):
+        class UnexpectedItemLookup(AssertionError):
+            pass
+
+        class NoItemLookupFields(dict):
+            def __getitem__(self, key):
+                raise UnexpectedItemLookup
+
+        fields = NoItemLookupFields(
+            {
+                "name": DummyInput(str),
+                "count": DummyInput(int),
+            }
+        )
+
+        class PlannedInterface(InterfaceBase):
+            input_fields = fields
+
+        instance = PlannedInterface(name="demo", count=3)
+
+        self.assertEqual(instance.identification, {"name": "demo", "count": 3})
+
+    def test_exact_keyword_inputs_without_dependencies_skip_generic_argument_mapping(
+        self,
+    ):
+        class ExactKeywordInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {
+                "manager": DummyInput(DummyGM),
+                "name": DummyInput(str),
+                "count": DummyInput(int),
+            }
+
+        manager = DummyGM({"id": 7})
+        with patch(
+            "general_manager.interface.base_interface.args_to_kwargs",
+            side_effect=AssertionError("exact keyword input should use fast path"),
+        ):
+            instance = ExactKeywordInterface(
+                manager=manager,
+                name="demo",
+                count=3,
+            )
+
+        self.assertEqual(
+            instance.identification,
+            {"manager": {"id": 7}, "name": "demo", "count": 3},
+        )
+
+    def test_keyword_inputs_with_omitted_optional_skip_generic_argument_mapping(
+        self,
+    ):
+        class OptionalKeywordInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {
+                "name": DummyInput(str),
+                "search_date": DummyInput(object, required=False),
+            }
+
+        with patch(
+            "general_manager.interface.base_interface.args_to_kwargs",
+            side_effect=AssertionError("known keyword input should use fast path"),
+        ):
+            instance = OptionalKeywordInterface(name="demo")
+
+        self.assertEqual(
+            instance.identification,
+            {"name": "demo", "search_date": None},
+        )
+
+    def test_keyword_dependency_inputs_fast_path_preserves_input_field_order(
+        self,
+    ):
+        class DependentInput(DummyInput):
+            def cast(self, value, identification=None, *, cache_context=None):
+                del cache_context
+                identification = identification or {}
+                return f"{identification['parent']}:{value}"
+
+        class DependencyInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {
+                "child": DependentInput(str, depends_on=["parent"]),
+                "parent": DummyInput(str),
+                "search_date": DummyInput(object, required=False),
+            }
+
+        with patch(
+            "general_manager.interface.base_interface.args_to_kwargs",
+            side_effect=AssertionError("known dependency input should use fast path"),
+        ):
+            parsed = DependencyInterface(child="child", parent="parent")
+
+        self.assertEqual(
+            list(parsed.identification), ["child", "parent", "search_date"]
+        )
+        self.assertEqual(
+            parsed.identification,
+            {
+                "child": "parent:child",
+                "parent": "parent",
+                "search_date": None,
+            },
+        )
+
     def test_single_required_input_reuses_pure_scalar_parse_inside_run_context(self):
         class SingleInputInterface(InterfaceBase):
             input_fields: ClassVar[dict] = {"id": Input(int)}
@@ -584,6 +816,70 @@ class InterfaceBaseTests(SimpleTestCase):
         self.assertEqual(second.identification, {"id": 7})
         self.assertIsNot(first.identification, second.identification)
         self.assertEqual(cast_input.call_count, 1)
+
+    def test_single_required_keyword_input_reuses_pure_scalar_parse_inside_run_context(
+        self,
+    ):
+        class SingleInputInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {"id": Input(int)}
+
+        input_field = SingleInputInterface.input_fields["id"]
+
+        with (
+            CalculationRunContext(),
+            patch.object(input_field, "cast", wraps=input_field.cast) as cast_input,
+        ):
+            first = SingleInputInterface(id=7)
+            second = SingleInputInterface(id=7)
+
+        self.assertEqual(first.identification, {"id": 7})
+        self.assertEqual(second.identification, {"id": 7})
+        self.assertIsNot(first.identification, second.identification)
+        self.assertEqual(cast_input.call_count, 1)
+
+    def test_single_scalar_input_skips_identification_formatting(self):
+        class SingleInputInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {"id": Input(int)}
+
+        with patch.object(
+            SingleInputInterface,
+            "format_identification",
+            side_effect=AssertionError("scalar identification needs no formatting"),
+        ):
+            parsed = SingleInputInterface(7)
+
+        self.assertEqual(parsed.identification, {"id": 7})
+
+    def test_single_manager_input_still_formats_identification(self):
+        class SingleManagerInputInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {"manager": Input(DummyGM)}
+
+        manager = DummyGM({"id": 7})
+
+        parsed = SingleManagerInputInterface(manager)
+
+        self.assertEqual(parsed.identification, {"manager": {"id": 7}})
+
+    def test_get_capability_handler_skips_initialization_when_already_initialized(
+        self,
+    ):
+        handler = object()
+
+        class InitializedInterface(InterfaceBase):
+            pass
+
+        InitializedInterface._capability_selection = object()  # type: ignore[assignment]
+        InitializedInterface._configured_capabilities_applied = True
+        InitializedInterface._capability_handlers = {"read": handler}
+
+        with patch.object(
+            InitializedInterface,
+            "_ensure_capabilities_initialized",
+            side_effect=AssertionError("initialized lookup should use fast path"),
+        ):
+            result = InitializedInterface.get_capability_handler("read")
+
+        self.assertIs(result, handler)
 
     def test_input_parsing_plan_accepts_id_alias_and_preserves_overwrite_behavior(
         self,
@@ -769,6 +1065,23 @@ class InterfaceBaseTests(SimpleTestCase):
             MutableInterface(a=2)
         parsed = MutableInterface(a=2, maybe="x")
         self.assertEqual(parsed.identification, {"a": 2, "maybe": "x"})
+
+    def test_input_parsing_plan_reflects_single_field_required_mutation(self):
+        fields = {
+            "a": DummyInput(int, required=False),
+        }
+
+        class MutableInterface(InterfaceBase):
+            input_fields = fields
+
+        first = MutableInterface()
+        fields["a"].required = True
+
+        self.assertEqual(first.identification, {"a": None})
+        with self.assertRaises(MissingInputArgumentsError):
+            MutableInterface()
+        parsed = MutableInterface(a=2)
+        self.assertEqual(parsed.identification, {"a": 2})
 
     def test_input_parsing_plan_reflects_dependency_mutation_after_first_parse(self):
         events: list[tuple[str, dict[str, object]]] = []

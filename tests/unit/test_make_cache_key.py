@@ -1,4 +1,5 @@
 from datetime import datetime
+import builtins
 import hashlib
 import inspect
 import json
@@ -7,7 +8,9 @@ from unittest.mock import patch
 from django.test import SimpleTestCase
 
 from general_manager.utils.json_encoder import CustomJSONEncoder
+from general_manager.utils import make_cache_key as make_cache_key_module
 from general_manager.utils.make_cache_key import make_cache_key
+from general_manager.manager.meta import GeneralManagerMeta
 
 
 class TestMakeCacheKey(SimpleTestCase):
@@ -130,6 +133,98 @@ class TestMakeCacheKey(SimpleTestCase):
 
         self.assertEqual(result, expected)
 
+    def test_single_manager_fast_path_reuses_static_json_fragments(self):
+        from general_manager.manager.general_manager import GeneralManager
+
+        class CacheKeyInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        class CacheKeyManager(GeneralManager):
+            pass
+
+        CacheKeyManager.Interface = CacheKeyInterface
+
+        def sample_function(manager):
+            return manager
+
+        first_manager = CacheKeyManager(7)
+        second_manager = CacheKeyManager(8)
+
+        with patch(
+            "general_manager.utils.make_cache_key.encode_basestring_ascii",
+            wraps=make_cache_key_module.encode_basestring_ascii,
+        ) as encode_string:
+            make_cache_key(sample_function, (first_manager,), {})
+            first_call_count = encode_string.call_count
+            make_cache_key(sample_function, (second_manager,), {})
+
+        self.assertEqual(encode_string.call_count - first_call_count, 1)
+
+    def test_single_manager_fast_path_reuses_hashed_key_for_equivalent_manager(self):
+        from general_manager.manager.general_manager import GeneralManager
+
+        class CacheKeyInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        class CacheKeyManager(GeneralManager):
+            pass
+
+        CacheKeyManager.Interface = CacheKeyInterface
+
+        def sample_function(manager):
+            return manager
+
+        with patch(
+            "general_manager.utils.make_cache_key.sha256",
+            wraps=hashlib.sha256,
+        ) as hash_factory:
+            first_result = make_cache_key(sample_function, (CacheKeyManager(7),), {})
+            second_result = make_cache_key(
+                sample_function,
+                (CacheKeyManager(7),),
+                {},
+            )
+
+        self.assertEqual(first_result, second_result)
+        self.assertEqual(hash_factory.call_count, 1)
+
+    def test_single_manager_fast_path_caches_general_manager_class_lookup(self):
+        from general_manager.manager.general_manager import GeneralManager
+
+        class CacheKeyInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        class CacheKeyManager(GeneralManager):
+            pass
+
+        CacheKeyManager.Interface = CacheKeyInterface
+
+        def sample_function(manager):
+            return manager
+
+        manager = CacheKeyManager(7)
+        imports = 0
+        real_import = builtins.__import__
+
+        def counting_import(name, *args, **kwargs):
+            nonlocal imports
+            if name == "general_manager.manager.general_manager":
+                imports += 1
+            return real_import(name, *args, **kwargs)
+
+        make_cache_key_module._general_manager_class.cache_clear()
+        try:
+            with patch("builtins.__import__", side_effect=counting_import):
+                make_cache_key(sample_function, (manager,), {})
+                make_cache_key(sample_function, (manager,), {})
+        finally:
+            make_cache_key_module._general_manager_class.cache_clear()
+
+        self.assertEqual(imports, 1)
+
     def test_make_cache_key_fast_path_for_non_ascii_manager_arg_matches_generic_key(
         self,
     ):
@@ -157,6 +252,68 @@ class TestMakeCacheKey(SimpleTestCase):
         expected = hashlib.sha256(raw, usedforsecurity=False).hexdigest()
 
         self.assertEqual(make_cache_key(sample_function, (manager,), {}), expected)
+
+    def test_make_cache_key_single_manager_arg_respects_changed_function_module(self):
+        from general_manager.manager.general_manager import GeneralManager
+
+        class CacheKeyInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        class CacheKeyManager(GeneralManager):
+            pass
+
+        CacheKeyManager.Interface = CacheKeyInterface
+
+        def sample_function(manager):
+            return manager
+
+        manager = CacheKeyManager(7)
+        result1 = make_cache_key(sample_function, (manager,), {})
+
+        sample_function.__module__ = "different_module"
+        result2 = make_cache_key(sample_function, (manager,), {})
+
+        self.assertNotEqual(result1, result2)
+
+    def test_single_manager_fast_path_reads_name_without_metaclass_lookup(self):
+        from general_manager.manager.general_manager import GeneralManager
+
+        class CacheKeyInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        class CacheKeyManager(GeneralManager):
+            pass
+
+        CacheKeyManager.Interface = CacheKeyInterface
+
+        def sample_function(manager):
+            return manager
+
+        manager = CacheKeyManager(7)
+        original_getattribute = GeneralManagerMeta.__getattribute__
+
+        def fail_on_name_lookup(cls, attribute_name):
+            if attribute_name == "__name__":
+                raise AssertionError
+            return original_getattribute(cls, attribute_name)
+
+        with patch.object(
+            GeneralManagerMeta,
+            "__getattribute__",
+            fail_on_name_lookup,
+        ):
+            result = make_cache_key(sample_function, (manager,), {})
+
+        payload = {
+            "module": sample_function.__module__,
+            "qualname": sample_function.__qualname__,
+            "args": {"manager": manager},
+        }
+        raw = json.dumps(payload, sort_keys=True, cls=CustomJSONEncoder).encode()
+        expected = hashlib.sha256(raw, usedforsecurity=False).hexdigest()
+        self.assertEqual(result, expected)
 
     def test_make_cache_key_with_different_args(self):
         """

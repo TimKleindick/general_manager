@@ -1,7 +1,7 @@
 from typing import ClassVar
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.interface import CalculationInterface
 from general_manager.interface.capabilities.calculation import (
@@ -12,6 +12,9 @@ from general_manager.interface.capabilities.configuration import (
     InterfaceCapabilityConfig,
 )
 from general_manager.manager.input import Input
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.cache.cache_tracker import DependencyTracker
 
 
 class DummyCalculationInterface(CalculationInterface):
@@ -111,6 +114,59 @@ class TestCalculationInterface(TestCase):
         self.assertEqual(attributes["field1"](interface), "alpha")
         self.assertEqual(attributes["field2"](interface), "ALPHA")
         self.assertEqual(attributes["field2"](interface), "ALPHA")
+
+    def test_cached_manager_input_uses_manager_dependency_fast_path(self):
+        class RelatedInterface:
+            def __init__(self, manager_id=None, *, id=None):
+                if id is not None:
+                    manager_id = id
+                self.identification = {"id": manager_id}
+
+        with override_settings(AUTOCREATE_GRAPHQL=False):
+
+            class RelatedManager(GeneralManager):
+                pass
+
+        RelatedManager.Interface = RelatedInterface  # type: ignore[assignment]
+        RelatedManager.Permission = ManagerBasedPermission  # type: ignore[assignment]
+        RelatedManager._attributes = {}
+
+        class ManagerInputCalculationInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "manager": Input(type=RelatedManager),
+            }
+
+        class ManagerInputCalculation:
+            Interface = ManagerInputCalculationInterface
+
+        ManagerInputCalculationInterface._parent_class = ManagerInputCalculation
+        interface = ManagerInputCalculationInterface("related-id")
+        attributes = ManagerInputCalculationInterface.get_attributes()
+        manager = attributes["manager"](interface)
+        self.assertIsInstance(manager, RelatedManager)
+
+        track_calls = []
+        original_track = RelatedManager._track_identification_dependency
+
+        def track_identification(identification):
+            track_calls.append(identification)
+            return original_track(identification)
+
+        with (
+            DependencyTracker() as dependencies,
+            patch.object(
+                RelatedManager,
+                "_track_identification_dependency",
+                side_effect=track_identification,
+            ),
+        ):
+            self.assertIs(attributes["manager"](interface), manager)
+
+        self.assertEqual(track_calls, [manager.identification])
+        self.assertIn(
+            (RelatedManager.__name__, "identification", '{"id": "related-id"}'),
+            dependencies,
+        )
 
     def test_filter(self):
         """

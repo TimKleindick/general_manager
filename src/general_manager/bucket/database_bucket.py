@@ -11,7 +11,10 @@ from django.db.models.sql.query import Query
 
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.cache_tracker import DependencyTracker
-from general_manager.cache.dependency_index import serialize_dependency_identifier
+from general_manager.cache.dependency_index import (
+    Dependency,
+    serialize_dependency_identifier,
+)
 from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.filter_parser import create_filter_function
@@ -609,6 +612,20 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             getattr(self._manager_class.Interface, "_from_trusted_orm_instance", None)
         )
 
+    def _manager_identification_dependencies(
+        self,
+        managers: tuple[GeneralManagerType, ...],
+    ) -> frozenset[Dependency]:
+        manager_name = type.__getattribute__(self._manager_class, "__name__")
+        return frozenset(
+            (
+                manager_name,
+                "identification",
+                serialize_dependency_identifier(manager.identification),
+            )
+            for manager in managers
+        )
+
     def _get_run_scoped_managers(self) -> tuple[GeneralManagerType, ...] | None:
         """Load or reuse manager wrappers for a trusted row snapshot."""
         if not self._can_cache_run_scoped_managers():
@@ -622,16 +639,24 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         cached = context.get_orm_bucket_managers(signature)
         if cached is not None:
             managers = cast(tuple[GeneralManagerType, ...], cached)
-            for manager in managers:
-                self._manager_class._track_identification_dependency(
-                    manager.identification
-                )
+            dependencies = context.get_orm_bucket_manager_dependencies(signature)
+            if dependencies is not None:
+                DependencyTracker._track_many_validated(dependencies)
+            else:
+                for manager in managers:
+                    self._manager_class._track_identification_dependency(
+                        manager.identification
+                    )
             return managers
         rows = self._get_run_scoped_rows()
         if rows is None:
             return None
         managers = tuple(self._build_manager_from_instance(row) for row in rows)
-        context.set_orm_bucket_managers(signature, managers)
+        context.set_orm_bucket_managers(
+            signature,
+            managers,
+            self._manager_identification_dependencies(managers),
+        )
         return managers
 
     @staticmethod
@@ -675,9 +700,18 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def _track_effective_dependencies(self) -> None:
         """Record the bucket's effective filter/exclude state when it is evaluated."""
-        manager_name = self._manager_class.__name__
-        normalized_filters = self._normalize_dependency_mapping(self.filters)
-        normalized_excludes = self._normalize_dependency_mapping(self.excludes)
+        manager_name = type.__getattribute__(self._manager_class, "__name__")
+        needs_sort_payload = bool(self._sort_keys)
+        normalized_filters = (
+            self._normalize_dependency_mapping(self.filters)
+            if self.filters or needs_sort_payload
+            else {}
+        )
+        normalized_excludes = (
+            self._normalize_dependency_mapping(self.excludes)
+            if self.excludes or needs_sort_payload
+            else {}
+        )
         if self.filters:
             DependencyTracker._track_validated(
                 manager_name,

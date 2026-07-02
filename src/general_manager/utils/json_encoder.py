@@ -27,7 +27,8 @@ class CustomJSONEncoder(json.JSONEncoder):
         if isinstance(o, (datetime, date, time)):
             return o.isoformat()
         if isinstance(o, GeneralManager):
-            return f"{o.__class__.__name__}(**{o.identification})"
+            manager_class_name = type.__getattribute__(o.__class__, "__name__")
+            return f"{manager_class_name}(**{o.identification})"
         try:
             return super().default(o)
         except TypeError:

@@ -1,5 +1,6 @@
 """Context manager utilities for tracking cache dependencies per thread."""
 
+from collections.abc import Collection, Iterable
 import threading
 from types import TracebackType
 
@@ -30,18 +31,32 @@ class _InvalidDependencyTrackerOperationError(ValueError):
         super().__init__(f"Unsupported dependency tracker operation: {operation!r}")
 
 
+class _TrackedDependencySet(set[Dependency]):
+    """Dependency set returned by DependencyTracker for framework-captured deps."""
+
+
 class _DependencyStorage(threading.local):
     """Thread-local dependency tracking stack."""
 
     def __init__(self) -> None:
         """Initialize an inactive dependency stack for one thread."""
-        self.dependencies: list[set[Dependency]] = []
+        self.dependencies: list[_TrackedDependencySet] = []
         self.depth = -1
+        self.stack_version = 0
+        self.last_dependency: Dependency | None = None
+        self.last_dependency_stack_version = -1
+        self.seen_dependencies: set[Dependency] = set()
+        self.seen_dependencies_stack_version = -1
 
     def reset(self) -> None:
         """Clear all active dependency scopes for the current thread."""
         self.dependencies.clear()
         self.depth = -1
+        self.stack_version += 1
+        self.last_dependency = None
+        self.last_dependency_stack_version = -1
+        self.seen_dependencies.clear()
+        self.seen_dependencies_stack_version = -1
 
 
 _dependency_storage = _DependencyStorage()
@@ -69,7 +84,8 @@ class DependencyTracker:
             thread-local storage does not mutate sets that were already returned.
         """
         _dependency_storage.depth += 1
-        _dependency_storage.dependencies.append(set())
+        _dependency_storage.dependencies.append(_TrackedDependencySet())
+        _dependency_storage.stack_version += 1
         return _dependency_storage.dependencies[_dependency_storage.depth]
 
     def __exit__(
@@ -98,6 +114,9 @@ class DependencyTracker:
             return
         _dependency_storage.dependencies.pop()
         _dependency_storage.depth -= 1
+        _dependency_storage.stack_version += 1
+        _dependency_storage.last_dependency = None
+        _dependency_storage.last_dependency_stack_version = -1
 
     @staticmethod
     def track(
@@ -144,11 +163,50 @@ class DependencyTracker:
         identifier: str,
     ) -> None:
         """Record an already-validated dependency tuple in active collectors."""
+        storage = _dependency_storage
+        if storage.depth < 0:
+            return
+        if storage.last_dependency_stack_version == storage.stack_version:
+            last_dependency = storage.last_dependency
+            if (
+                last_dependency is not None
+                and last_dependency[0] == class_name
+                and last_dependency[1] == operation
+                and last_dependency[2] == identifier
+            ):
+                return
+        dependency = (class_name, operation, identifier)
+        if storage.seen_dependencies_stack_version != storage.stack_version:
+            storage.seen_dependencies.clear()
+            storage.seen_dependencies_stack_version = storage.stack_version
+        elif dependency in storage.seen_dependencies:
+            return
+        if storage.depth == 0:
+            storage.dependencies[0].add(dependency)
+        else:
+            for dep_set in storage.dependencies:
+                dep_set.add(dependency)
+        storage.last_dependency = dependency
+        storage.last_dependency_stack_version = storage.stack_version
+        storage.seen_dependencies.add(dependency)
+
+    @staticmethod
+    def _track_many_validated(dependencies: Iterable[Dependency]) -> None:
+        """Record already-validated dependency tuples in active collectors."""
         if _dependency_storage.depth < 0:
             return
-        dependency = (class_name, operation, identifier)
+        reusable_dependencies: Collection[Dependency]
+        if isinstance(dependencies, Collection):
+            reusable_dependencies = dependencies
+        else:
+            reusable_dependencies = tuple(dependencies)
         for dep_set in _dependency_storage.dependencies:
-            dep_set.add(dependency)
+            dep_set.update(reusable_dependencies)
+
+    @staticmethod
+    def _dependencies_are_tracker_captured(dependencies: object) -> bool:
+        """Return whether dependencies came from this tracker implementation."""
+        return isinstance(dependencies, _TrackedDependencySet)
 
     @staticmethod
     def is_active() -> bool:

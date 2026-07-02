@@ -1,7 +1,18 @@
 import threading
 
+from general_manager.cache import cache_tracker as cache_tracker_module
 from general_manager.cache.cache_tracker import DependencyTracker
 from unittest import TestCase
+
+
+class RecordingDependencyCollector:
+    def __init__(self) -> None:
+        self.dependencies: set[tuple[str, str, str]] = set()
+        self.add_calls = 0
+
+    def add(self, dependency: tuple[str, str, str]) -> None:
+        self.add_calls += 1
+        self.dependencies.add(dependency)
 
 
 class TestDependencyTracker(TestCase):
@@ -122,6 +133,119 @@ class TestDependencyTracker(TestCase):
                 dependencies,
                 {("TestClass", "identification", "TestIdentifier")},
             )
+
+    def test_dependency_tracker_skips_consecutive_duplicate_collector_adds(self):
+        """Avoid repeated collector writes for immediate duplicate dependencies."""
+        with DependencyTracker():
+            collector = RecordingDependencyCollector()
+            cache_tracker_module._dependency_storage.dependencies[0] = collector  # type: ignore[list-item]
+
+            DependencyTracker._track_validated(
+                "TestClass",
+                "identification",
+                "TestIdentifier",
+            )
+            DependencyTracker._track_validated(
+                "TestClass",
+                "identification",
+                "TestIdentifier",
+            )
+
+        self.assertEqual(collector.add_calls, 1)
+        self.assertEqual(
+            collector.dependencies,
+            {("TestClass", "identification", "TestIdentifier")},
+        )
+
+    def test_dependency_tracker_skips_nonconsecutive_duplicate_collector_adds(self):
+        """Avoid repeated collector writes for duplicates within one stack state."""
+        with DependencyTracker():
+            collector = RecordingDependencyCollector()
+            cache_tracker_module._dependency_storage.dependencies[0] = collector  # type: ignore[list-item]
+
+            DependencyTracker._track_validated(
+                "TestClass",
+                "identification",
+                "TestIdentifier",
+            )
+            DependencyTracker._track_validated(
+                "OtherClass",
+                "filter",
+                "OtherIdentifier",
+            )
+            DependencyTracker._track_validated(
+                "TestClass",
+                "identification",
+                "TestIdentifier",
+            )
+
+        self.assertEqual(collector.add_calls, 2)
+        self.assertEqual(
+            collector.dependencies,
+            {
+                ("TestClass", "identification", "TestIdentifier"),
+                ("OtherClass", "filter", "OtherIdentifier"),
+            },
+        )
+
+    def test_dependency_tracker_duplicate_skip_respects_nested_contexts(self):
+        """Entering a nested tracker must still record the dependency there."""
+        with DependencyTracker():
+            outer_collector = RecordingDependencyCollector()
+            cache_tracker_module._dependency_storage.dependencies[0] = outer_collector  # type: ignore[list-item]
+            DependencyTracker._track_validated(
+                "TestClass",
+                "identification",
+                "TestIdentifier",
+            )
+            DependencyTracker._track_validated(
+                "TestClass",
+                "identification",
+                "TestIdentifier",
+            )
+
+            with DependencyTracker():
+                inner_collector = RecordingDependencyCollector()
+                cache_tracker_module._dependency_storage.dependencies[1] = (
+                    inner_collector  # type: ignore[list-item]
+                )
+                DependencyTracker._track_validated(
+                    "TestClass",
+                    "identification",
+                    "TestIdentifier",
+                )
+                DependencyTracker._track_validated(
+                    "TestClass",
+                    "identification",
+                    "TestIdentifier",
+                )
+
+        self.assertEqual(outer_collector.add_calls, 2)
+        self.assertEqual(inner_collector.add_calls, 1)
+        self.assertEqual(
+            inner_collector.dependencies,
+            {("TestClass", "identification", "TestIdentifier")},
+        )
+
+    def test_dependency_tracker_duplicate_skip_checks_all_active_collectors(self):
+        """Manual inner collector mutation must not prevent outer propagation."""
+        dependency = ("TestClass", "identification", "TestIdentifier")
+
+        with DependencyTracker():
+            outer_collector = RecordingDependencyCollector()
+            cache_tracker_module._dependency_storage.dependencies[0] = outer_collector  # type: ignore[list-item]
+
+            with DependencyTracker():
+                inner_collector = RecordingDependencyCollector()
+                inner_collector.dependencies.add(dependency)
+                cache_tracker_module._dependency_storage.dependencies[1] = (
+                    inner_collector  # type: ignore[list-item]
+                )
+
+                DependencyTracker._track_validated(*dependency)
+
+        self.assertEqual(outer_collector.dependencies, {dependency})
+        self.assertEqual(inner_collector.dependencies, {dependency})
 
     def test_dependency_tracker_propagates_nested_tracks_to_outer_context(self):
         """Record nested dependencies in both nested and enclosing collectors."""

@@ -18,8 +18,11 @@ from typing import (
     cast,
 )
 from django.conf import settings
+from django.core.signals import setting_changed
 from django.db.models import Model
+from django.dispatch import receiver
 
+from general_manager.conf import get_setting
 from general_manager.utils.args_to_kwargs import args_to_kwargs
 from general_manager.api.property import GraphQLProperty
 from general_manager.interface.capabilities.base import Capability, CapabilityName
@@ -71,7 +74,9 @@ type classPostCreationMethod = Callable[
 
 _SINGLE_INPUT_VALUE_CACHE_PREFIX = "interface_single_input_value"
 _SINGLE_INPUT_VALUE_CACHE_MISS = object()
+_OBSERVABILITY_HOOK_MISSING = object()
 _RUN_SCOPED_SCALAR_INPUT_TYPES = (str, int, bool)
+_FORMATLESS_IDENTIFICATION_VALUE_TYPES = {str, int, float, bool, type(None)}
 
 
 class AttributeTypedDict(TypedDict):
@@ -181,30 +186,62 @@ class InvalidInputConstraintError(ValueError):
         super().__init__(f"Invalid value for {name}: {detail}.")
 
 
+_VALIDATE_POSSIBLE_VALUES_CACHE: bool | None = None
+
+
+@receiver(setting_changed)
+def _clear_possible_values_validation_cache(
+    *,
+    setting: str,
+    **_kwargs: object,
+) -> None:
+    if setting in {
+        "DEBUG",
+        "GENERAL_MANAGER",
+        "GENERAL_MANAGER_VALIDATE_INPUT_VALUES",
+        "VALIDATE_INPUT_VALUES",
+    }:
+        global _VALIDATE_POSSIBLE_VALUES_CACHE
+        _VALIDATE_POSSIBLE_VALUES_CACHE = None
+
+
 def _should_validate_possible_values() -> bool:
     """Return whether ``possible_values`` membership should be enforced."""
-    from general_manager.conf import get_setting
+    global _VALIDATE_POSSIBLE_VALUES_CACHE
+    if _VALIDATE_POSSIBLE_VALUES_CACHE is not None:
+        return _VALIDATE_POSSIBLE_VALUES_CACHE
 
     value = get_setting("VALIDATE_INPUT_VALUES")
     if value is None:
-        return bool(settings.DEBUG)
+        result = bool(settings.DEBUG)
+        _VALIDATE_POSSIBLE_VALUES_CACHE = result
+        return result
     if isinstance(value, bool):
+        _VALIDATE_POSSIBLE_VALUES_CACHE = value
         return value
     if isinstance(value, str):
-        return value.strip().lower() in {"true", "1", "yes", "on"}
+        result = value.strip().lower() in {"true", "1", "yes", "on"}
+        _VALIDATE_POSSIBLE_VALUES_CACHE = result
+        return result
     if isinstance(value, int):
-        return value != 0
-    return bool(settings.DEBUG)
+        result = value != 0
+        _VALIDATE_POSSIBLE_VALUES_CACHE = result
+        return result
+    result = bool(settings.DEBUG)
+    _VALIDATE_POSSIBLE_VALUES_CACHE = result
+    return result
 
 
 @dataclass(frozen=True, slots=True)
 class _InputParsingPlan:
     names: tuple[str, ...]
     name_set: frozenset[str]
+    field_by_name: Mapping[str, "Input[type[object]]"]
     alias_to_name: Mapping[str, str]
     required_names: frozenset[str]
     optional_names: frozenset[str]
     dependency_items: tuple[tuple[str, tuple[str, ...]], ...]
+    has_dependencies: bool
     field_state: tuple[tuple[str, int, bool, tuple[str, ...]], ...]
 
 
@@ -257,6 +294,11 @@ class InterfaceBase(ABC):
             **kwargs: Named identification values matching the interface's input field names.
         """
         identification = self.parse_input_fields_to_identification(*args, **kwargs)
+        if len(identification) == 1:
+            value = next(iter(identification.values()))
+            if value.__class__ in _FORMATLESS_IDENTIFICATION_VALUE_TYPES:
+                self.identification = identification
+                return
         self.identification = self.format_identification(identification)
 
     @classmethod
@@ -292,6 +334,11 @@ class InterfaceBase(ABC):
         Returns:
             Capability | None: The capability handler registered for `name`, or `None` if no handler is bound.
         """
+        if (
+            cls._capability_selection is not None
+            and cls._configured_capabilities_applied
+        ):
+            return cls._capability_handlers.get(name)
         cls._ensure_capabilities_initialized()
         return cls._capability_handlers.get(name)
 
@@ -597,6 +644,7 @@ class InterfaceBase(ABC):
         names = tuple(cls.input_fields.keys())
         field_items = tuple(cls.input_fields.items())
         name_set = frozenset(names)
+        field_by_name = MappingProxyType(dict(field_items))
         alias_to_name = MappingProxyType({f"{name}_id": name for name in names})
         required_names = frozenset(
             name for name, input_field in field_items if input_field.required
@@ -613,10 +661,12 @@ class InterfaceBase(ABC):
         plan = _InputParsingPlan(
             names=names,
             name_set=name_set,
+            field_by_name=field_by_name,
             alias_to_name=alias_to_name,
             required_names=required_names,
             optional_names=optional_names,
             dependency_items=dependency_items,
+            has_dependencies=any(depends_on for _name, depends_on in dependency_items),
             field_state=field_state,
         )
         cls._input_parsing_plan = plan
@@ -624,6 +674,18 @@ class InterfaceBase(ABC):
 
     @classmethod
     def _input_parsing_plan_is_fresh(cls, plan: _InputParsingPlan) -> bool:
+        if len(plan.field_state) == 1:
+            if len(cls.input_fields) != 1:
+                return False
+            name, input_id, required, depends_on = plan.field_state[0]
+            input_field = cls.input_fields.get(name)
+            if input_field is None:
+                return False
+            return (
+                id(input_field) == input_id
+                and input_field.required == required
+                and tuple(input_field.depends_on) == depends_on
+            )
         if len(cls.input_fields) != len(plan.field_state):
             return False
         if tuple(cls.input_fields) != plan.names:
@@ -735,43 +797,88 @@ class InterfaceBase(ABC):
         resolved_identification: dict[str, object] = {}
         plan = type(self)._get_input_parsing_plan()
         if (
-            len(args) == 1
-            and not kwargs
-            and len(plan.names) == 1
+            len(plan.names) == 1
             and plan.required_names == plan.name_set
             and plan.dependency_items[0][1] == ()
         ):
             name = plan.names[0]
-            input_field = self.input_fields[name]
-            cache_key = type(self)._single_input_run_cache_key(
-                name,
-                input_field,
-                args[0],
-            )
-            context = None
-            if cache_key is not None:
-                from general_manager.cache.run_context import (
-                    current_calculation_run_context,
+            raw_value: object = None
+            has_single_value = False
+            if len(args) == 1 and not kwargs:
+                raw_value = args[0]
+                has_single_value = True
+            elif not args and len(kwargs) == 1 and name in kwargs:
+                raw_value = kwargs[name]
+                has_single_value = True
+            if has_single_value:
+                input_field = plan.field_by_name[name]
+                cache_key = type(self)._single_input_run_cache_key(
+                    name,
+                    input_field,
+                    raw_value,
                 )
-
-                context = current_calculation_run_context()
-                if context is not None:
-                    cached_value = context.get(
-                        cache_key,
-                        _SINGLE_INPUT_VALUE_CACHE_MISS,
+                context = None
+                if cache_key is not None:
+                    from general_manager.cache.run_context import (
+                        current_calculation_run_context,
                     )
-                    if cached_value is not _SINGLE_INPUT_VALUE_CACHE_MISS:
-                        return {name: cached_value}
-            cache_context = type(self)._input_possible_values_cache_context(name)
-            value = input_field.cast(
-                args[0],
-                resolved_identification,
-                cache_context=cache_context,
-            )
-            self._process_input(name, value, resolved_identification)
-            if context is not None and cache_key is not None:
-                context.set(cache_key, value)
-            return {name: value}
+
+                    context = current_calculation_run_context()
+                    if context is not None:
+                        cached_value = context.get(
+                            cache_key,
+                            _SINGLE_INPUT_VALUE_CACHE_MISS,
+                        )
+                        if cached_value is not _SINGLE_INPUT_VALUE_CACHE_MISS:
+                            return {name: cached_value}
+                cache_context = type(self)._input_possible_values_cache_context(name)
+                value = input_field.cast(
+                    raw_value,
+                    resolved_identification,
+                    cache_context=cache_context,
+                )
+                self._process_input_field(
+                    name,
+                    input_field,
+                    value,
+                    resolved_identification,
+                    cache_context=cache_context,
+                )
+                if context is not None and cache_key is not None:
+                    context.set(cache_key, value)
+                return {name: value}
+
+        if not args:
+            kwarg_names = kwargs.keys()
+            if kwarg_names <= plan.name_set and plan.required_names <= kwarg_names:
+                if plan.has_dependencies:
+                    ordered_names, unresolved = type(self)._get_input_dependency_order(
+                        plan
+                    )
+                else:
+                    ordered_names = plan.names
+                    unresolved = frozenset()
+                for name in ordered_names:
+                    input_field = plan.field_by_name[name]
+                    cache_context = type(self)._input_possible_values_cache_context(
+                        name
+                    )
+                    value = input_field.cast(
+                        kwargs.get(name),
+                        resolved_identification,
+                        cache_context=cache_context,
+                    )
+                    self._process_input_field(
+                        name,
+                        input_field,
+                        value,
+                        resolved_identification,
+                        cache_context=cache_context,
+                    )
+                    resolved_identification[name] = value
+                if unresolved:
+                    raise CircularInputDependencyError(unresolved)
+                return {name: resolved_identification[name] for name in plan.names}
 
         kwargs = args_to_kwargs(args, plan.names, kwargs)
 
@@ -797,14 +904,20 @@ class InterfaceBase(ABC):
 
         ordered_names, unresolved = type(self)._get_input_dependency_order(plan)
         for name in ordered_names:
-            input_field = self.input_fields[name]
+            input_field = plan.field_by_name[name]
             cache_context = type(self)._input_possible_values_cache_context(name)
             value = input_field.cast(
                 kwargs.get(name),
                 resolved_identification,
                 cache_context=cache_context,
             )
-            self._process_input(name, value, resolved_identification)
+            self._process_input_field(
+                name,
+                input_field,
+                value,
+                resolved_identification,
+                cache_context=cache_context,
+            )
             resolved_identification[name] = value
         if unresolved:
             raise CircularInputDependencyError(unresolved)
@@ -876,30 +989,56 @@ class InterfaceBase(ABC):
             InvalidInputValueError: If possible-value validation is enabled and `value` is not contained in the evaluated `possible_values`.
         """
         input_field = self.input_fields[name]
+        cache_context = type(self)._input_possible_values_cache_context(name)
+        self._process_input_field(
+            name,
+            input_field,
+            value,
+            identification,
+            cache_context=cache_context,
+        )
+
+    def _process_input_field(
+        self,
+        name: str,
+        input_field: "Input[type[object]]",
+        value: object,
+        identification: dict[str, object],
+        *,
+        cache_context: tuple[type[object], str] | None,
+    ) -> None:
+        """Validate a value against an already-resolved input field."""
         if value is None:
             if input_field.required:
                 raise InvalidInputTypeError(name, type(value), input_field.type)
             return
         if not isinstance(value, input_field.type):
             raise InvalidInputTypeError(name, type(value), input_field.type)
-        if not input_field.validate_bounds(value):
+        if (
+            input_field.min_value is not None or input_field.max_value is not None
+        ) and not input_field.validate_bounds(value):
             raise InvalidInputConstraintError(
                 name,
                 f"{value} is outside the allowed range"
                 f" [{input_field.min_value}, {input_field.max_value}]",
             )
-        if not input_field.validate_with_callable(value, identification):
+        if input_field.validator is not None and not input_field.validate_with_callable(
+            value,
+            identification,
+        ):
             raise InvalidInputConstraintError(
                 name,
                 f"{value} did not satisfy the configured validator",
             )
 
+        if input_field.possible_values is None:
+            return
         if not _should_validate_possible_values():
             return
 
         allowed_values = input_field.resolve_possible_values(
             identification,
-            cache_context=type(self)._input_possible_values_cache_context(name),
+            cache_context=cache_context,
         )
         if allowed_values is None:
             return
@@ -1242,8 +1381,16 @@ class InterfaceBase(ABC):
             after a successful `func`, that exception is propagated instead of
             the result.
         """
-        if observer is not None and hasattr(observer, "before_operation"):
-            observer.before_operation(
+        if observer is not None:
+            before_operation = getattr(
+                observer,
+                "before_operation",
+                _OBSERVABILITY_HOOK_MISSING,
+            )
+        else:
+            before_operation = _OBSERVABILITY_HOOK_MISSING
+        if before_operation is not _OBSERVABILITY_HOOK_MISSING:
+            cast(Callable[..., None], before_operation)(
                 operation=operation,
                 target=target,
                 payload=payload,
@@ -1251,16 +1398,32 @@ class InterfaceBase(ABC):
         try:
             result = func()
         except Exception as error:
-            if observer is not None and hasattr(observer, "on_error"):
-                observer.on_error(
+            if observer is not None:
+                on_error = getattr(
+                    observer,
+                    "on_error",
+                    _OBSERVABILITY_HOOK_MISSING,
+                )
+            else:
+                on_error = _OBSERVABILITY_HOOK_MISSING
+            if on_error is not _OBSERVABILITY_HOOK_MISSING:
+                cast(Callable[..., None], on_error)(
                     operation=operation,
                     target=target,
                     payload=payload,
                     error=error,
                 )
             raise
-        if observer is not None and hasattr(observer, "after_operation"):
-            observer.after_operation(
+        if observer is not None:
+            after_operation = getattr(
+                observer,
+                "after_operation",
+                _OBSERVABILITY_HOOK_MISSING,
+            )
+        else:
+            after_operation = _OBSERVABILITY_HOOK_MISSING
+        if after_operation is not _OBSERVABILITY_HOOK_MISSING:
+            cast(Callable[..., None], after_operation)(
                 operation=operation,
                 target=target,
                 payload=payload,

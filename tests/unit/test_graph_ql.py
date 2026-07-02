@@ -70,6 +70,28 @@ class GraphQLPropertyTests(TestCase):
         prop = GraphQLProperty(mock_getter)
         self.assertEqual(prop.graphql_type_hint, str)
 
+    def test_graphql_property_uses_cached_resolver_after_set_name(self):
+        """Descriptor access should not redo cached resolver lookup after setup."""
+        calls = []
+
+        def mock_getter(instance) -> str:
+            calls.append(instance)
+            return "test"
+
+        prop = GraphQLProperty(mock_getter)
+        owner = type("Owner", (), {})
+        instance = object()
+        prop.__set_name__(owner, "value")
+
+        with patch.object(
+            prop,
+            "_get_cached_fget",
+            side_effect=AssertionError("cached resolver should be used directly"),
+        ):
+            self.assertEqual(prop.__get__(instance, owner), "test")
+
+        self.assertEqual(calls, [instance])
+
     def test_graph_ql_property_direct_decorator_requires_return_annotation(self):
         """Public decorator validates direct usage at decoration time."""
 

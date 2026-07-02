@@ -2,25 +2,30 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 import pickle
-from typing import cast
+from typing import ClassVar, cast
 from unittest import mock
 
 from django.core.cache import cache, cache as coordination_cache
 from django.test import SimpleTestCase, override_settings
 
+from general_manager.cache import dependency_cache as dependency_cache_module
+from general_manager.cache import dependency_publish as dependency_publish_module
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_cache import (
     DependencyCacheEntry,
     DependencyCacheHit,
+    TRUSTED_DEPENDENCY_CACHE_ENTRY_VERSION,
 )
 from general_manager.cache.dependency_index import (
     Dependency,
     begin_dependency_data_change,
     end_dependency_data_change,
+    generic_cache_invalidation,
     get_dependency_generation,
 )
 from general_manager.cache.dependency_shards import (
     cache_set_members,
-    exact_lookup_shard_key,
+    composite_lookup_shard_key,
     record_many_cache_dependencies,
 )
 from general_manager.cache.dependency_publish import (
@@ -34,6 +39,8 @@ from general_manager.cache.dependency_publish import (
     wait_for_cached_dependency_hit,
     _compute_lock_key,
 )
+from general_manager.interface import CalculationInterface
+from general_manager.manager import GeneralManager
 
 
 TEST_CACHES = {
@@ -95,6 +102,11 @@ class FakeDependencyCachePartialSetManyBackend(FakeDependencyCacheBackend):
             if key not in self.failed_keys:
                 self.set(key, value, timeout)
         return sorted(self.failed_keys & payloads.keys())
+
+
+class PublishedTrustedManager:
+    def __init__(self, identification: int) -> None:
+        self.identification = identification
 
 
 def cache_entry(
@@ -221,6 +233,55 @@ class TestDependencyPublish(SimpleTestCase):
         self.assertEqual(cache_backend.timeouts[cache_key], 30)
         self.assertNotIn(f"{cache_key}:deps", cache_backend.store)
 
+    def test_publish_trusted_entry_still_uses_dependency_invalidation(self) -> None:
+        cache_key = "trusted-cache"
+        with DependencyTracker() as dependencies:
+            DependencyTracker.track("PublishedTrustedManager", "identification", "42")
+
+        publish_dependency_cache_entry(
+            cache_key=cache_key,
+            result={"status": "ready"},
+            dependencies=dependencies,
+            cache_backend=cache,
+            timeout=None,
+            started_generation=get_dependency_generation(),
+        )
+
+        payload = cache.get(cache_key)
+        self.assertIsInstance(payload, DependencyCacheEntry)
+        assert isinstance(payload, DependencyCacheEntry)
+        self.assertEqual(payload.version, TRUSTED_DEPENDENCY_CACHE_ENTRY_VERSION)
+        self.assertEqual(payload.value, {"status": "ready"})
+        self.assertEqual(payload.dependencies, frozenset(dependencies))
+        self.assertEqual(
+            cache_set_members(
+                composite_lookup_shard_key(
+                    "PublishedTrustedManager",
+                    "filter",
+                    "identification",
+                )
+            ),
+            {cache_key},
+        )
+
+        generic_cache_invalidation(
+            sender=PublishedTrustedManager,
+            instance=PublishedTrustedManager(42),
+            old_relevant_values={},
+        )
+
+        self.assertIsNone(cache.get(cache_key))
+        self.assertEqual(
+            cache_set_members(
+                composite_lookup_shard_key(
+                    "PublishedTrustedManager",
+                    "filter",
+                    "identification",
+                )
+            ),
+            set(),
+        )
+
     def test_batch_publish_records_shards_once_before_bulk_value_write(self) -> None:
         cache_backend = FakeDependencyCacheSetManyBackend()
         events: list[str] = []
@@ -268,15 +329,9 @@ class TestDependencyPublish(SimpleTestCase):
         self.assertIsNone(cache.get("dependency_index"))
         self.assertEqual(
             cache_set_members(
-                exact_lookup_shard_key("Project", "filter", "identification", "eq", "1")
+                composite_lookup_shard_key("Project", "filter", "identification")
             ),
-            {"cache-a"},
-        )
-        self.assertEqual(
-            cache_set_members(
-                exact_lookup_shard_key("Project", "filter", "identification", "eq", "2")
-            ),
-            {"cache-b"},
+            {"cache-a", "cache-b"},
         )
         self.assertEqual(len(cache_backend.set_many_calls), 1)
         self.assertEqual(
@@ -289,6 +344,300 @@ class TestDependencyPublish(SimpleTestCase):
         self.assertEqual(
             cache_entry(cache_backend, "cache-b").dependencies,
             frozenset({("Project", "identification", "2")}),
+        )
+
+    def test_batch_publish_skips_calculation_identity_dependency_metadata(
+        self,
+    ) -> None:
+        class DependencyPublishCalculationIdentity(GeneralManager):
+            class Interface(CalculationInterface):
+                input_fields: ClassVar[dict] = {}
+
+        cache_backend = FakeDependencyCacheSetManyBackend()
+        calculation_dependency: Dependency = (
+            DependencyPublishCalculationIdentity.__name__,
+            "identification",
+            '{"id": 99}',
+        )
+        project_dependency: Dependency = (
+            "Project",
+            "identification",
+            '{"id": 1}',
+        )
+
+        publish_dependency_cache_entries(
+            [
+                self.make_pending_publication(
+                    cache_key="cache-a",
+                    result="alpha",
+                    dependencies={calculation_dependency, project_dependency},
+                    cache_backend=cache_backend,
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            cache_set_members(
+                composite_lookup_shard_key(
+                    DependencyPublishCalculationIdentity.__name__,
+                    "filter",
+                    "identification",
+                )
+            ),
+            set(),
+        )
+        self.assertEqual(
+            cache_set_members(
+                composite_lookup_shard_key(
+                    "Project",
+                    "filter",
+                    "identification",
+                )
+            ),
+            {"cache-a"},
+        )
+        self.assertEqual(
+            cache_entry(cache_backend, "cache-a").dependencies,
+            frozenset({calculation_dependency, project_dependency}),
+        )
+
+    def test_batch_publish_reuses_metadata_dependencies_for_prefetch_bundle(
+        self,
+    ) -> None:
+        cache_backend = FakeDependencyCacheSetManyBackend()
+        lease_id = "lease-cache-a"
+
+        with mock.patch(
+            "general_manager.cache.dependency_publish._metadata_dependency_set",
+            wraps=dependency_publish_module._metadata_dependency_set,
+        ) as metadata_dependency_set:
+            publish_dependency_cache_entries(
+                [
+                    PendingDependencyCachePublication(
+                        cache_key="cache-a",
+                        result="alpha",
+                        dependencies=frozenset(
+                            {("Project", "identification", '{"id": 1}')}
+                        ),
+                        cache_backend=cache_backend,
+                        timeout=None,
+                        started_generation=get_dependency_generation(),
+                        lease=CacheComputeLease(
+                            key=_compute_lock_key("cache-a"),
+                            token=lease_id,
+                        ),
+                        prefetch_manifest_key="dependency-cache-prefetch-manifest:test",
+                    )
+                ]
+            )
+
+        self.assertEqual(metadata_dependency_set.call_count, 1)
+
+    def test_batch_publish_records_prefetch_bundle_for_invalidation(self) -> None:
+        manifest_key = "dependency-cache-prefetch-manifest:test"
+        lease_id = "lease-cache-a"
+        segment_token = dependency_cache_module.dependency_cache_prefetch_segment_token(
+            ("cache-a",)
+        )
+        bundle_key = (
+            dependency_cache_module.dependency_cache_prefetch_segment_bundle_key(
+                manifest_key,
+                segment_token,
+            )
+        )
+        value_bundle_key = (
+            dependency_cache_module.dependency_cache_prefetch_segment_value_bundle_key(
+                manifest_key,
+                segment_token,
+            )
+        )
+        segment_index_key = (
+            dependency_cache_module.dependency_cache_prefetch_segment_index_key(
+                manifest_key
+            )
+        )
+        old_bundle_key = dependency_cache_module.dependency_cache_prefetch_bundle_key(
+            manifest_key
+        )
+        old_value_bundle_key = (
+            dependency_cache_module.dependency_cache_prefetch_value_bundle_key(
+                manifest_key
+            )
+        )
+
+        publish_dependency_cache_entries(
+            [
+                PendingDependencyCachePublication(
+                    cache_key="cache-a",
+                    result="alpha",
+                    dependencies=frozenset(
+                        {("PublishedTrustedManager", "identification", "42")}
+                    ),
+                    cache_backend=cache,
+                    timeout=None,
+                    started_generation=get_dependency_generation(),
+                    lease=CacheComputeLease(
+                        key=_compute_lock_key("cache-a"),
+                        token=lease_id,
+                    ),
+                    prefetch_manifest_key=manifest_key,
+                )
+            ]
+        )
+
+        self.assertIsNotNone(cache.get(bundle_key))
+        self.assertIsNotNone(cache.get(value_bundle_key))
+        self.assertEqual(cache.get(segment_index_key), (segment_token,))
+        self.assertIsNone(cache.get(old_bundle_key))
+        self.assertIsNone(cache.get(old_value_bundle_key))
+        self.assertIn(
+            bundle_key,
+            cache_set_members(
+                composite_lookup_shard_key(
+                    "PublishedTrustedManager",
+                    "filter",
+                    "identification",
+                )
+            ),
+        )
+        self.assertIn(
+            value_bundle_key,
+            cache_set_members(
+                composite_lookup_shard_key(
+                    "PublishedTrustedManager",
+                    "filter",
+                    "identification",
+                )
+            ),
+        )
+
+        generic_cache_invalidation(
+            sender=PublishedTrustedManager,
+            instance=PublishedTrustedManager(42),
+            old_relevant_values={},
+        )
+
+        self.assertIsNone(cache.get(bundle_key))
+        self.assertIsNone(cache.get(value_bundle_key))
+
+    def test_prefetch_bundle_accumulates_across_publish_flushes(self) -> None:
+        manifest_key = "dependency-cache-prefetch-manifest:test"
+        lease_a = "lease-a"
+        lease_b = "lease-b"
+        segment_index_key = (
+            dependency_cache_module.dependency_cache_prefetch_segment_index_key(
+                manifest_key
+            )
+        )
+        segment_a = dependency_cache_module.dependency_cache_prefetch_segment_token(
+            ("cache-a",)
+        )
+        segment_b = dependency_cache_module.dependency_cache_prefetch_segment_token(
+            ("cache-b",)
+        )
+        segment_a_bundle_key = (
+            dependency_cache_module.dependency_cache_prefetch_segment_bundle_key(
+                manifest_key,
+                segment_a,
+            )
+        )
+        segment_a_value_bundle_key = (
+            dependency_cache_module.dependency_cache_prefetch_segment_value_bundle_key(
+                manifest_key,
+                segment_a,
+            )
+        )
+        segment_value_keys = (
+            dependency_cache_module.dependency_cache_prefetch_segment_value_bundle_key(
+                manifest_key,
+                segment_a,
+            ),
+            dependency_cache_module.dependency_cache_prefetch_segment_value_bundle_key(
+                manifest_key,
+                segment_b,
+            ),
+        )
+        old_bundle_key = dependency_cache_module.dependency_cache_prefetch_bundle_key(
+            manifest_key
+        )
+        old_value_bundle_key = (
+            dependency_cache_module.dependency_cache_prefetch_value_bundle_key(
+                manifest_key
+            )
+        )
+        entry_a = PendingDependencyCachePublication(
+            cache_key="cache-a",
+            result="alpha",
+            dependencies=frozenset(
+                {("PublishedTrustedManager", "identification", "42")}
+            ),
+            cache_backend=cache,
+            timeout=None,
+            started_generation=get_dependency_generation(),
+            lease=CacheComputeLease(
+                key=_compute_lock_key("cache-a"),
+                token=lease_a,
+            ),
+            prefetch_manifest_key=manifest_key,
+        )
+        entry_b = PendingDependencyCachePublication(
+            cache_key="cache-b",
+            result="bravo",
+            dependencies=frozenset(
+                {("PublishedTrustedManager", "identification", "43")}
+            ),
+            cache_backend=cache,
+            timeout=None,
+            started_generation=get_dependency_generation(),
+            lease=CacheComputeLease(
+                key=_compute_lock_key("cache-b"),
+                token=lease_b,
+            ),
+            prefetch_manifest_key=manifest_key,
+        )
+
+        publish_dependency_cache_entries([entry_a])
+        publish_dependency_cache_entries([entry_b])
+
+        self.assertEqual(set(cache.get(segment_index_key)), {segment_a, segment_b})
+        self.assertEqual(
+            dependency_cache_module.read_many_dependency_cache_prefetch_bundle_values(
+                cache,
+                segment_value_keys,
+            ),
+            {"cache-a": "alpha", "cache-b": "bravo"},
+        )
+        self.assertIsNone(cache.get(old_bundle_key))
+        self.assertIsNone(cache.get(old_value_bundle_key))
+        self.assertIn(
+            segment_a_bundle_key,
+            cache_set_members(
+                composite_lookup_shard_key(
+                    "PublishedTrustedManager",
+                    "filter",
+                    "identification",
+                )
+            ),
+        )
+        self.assertIn(
+            segment_a_value_bundle_key,
+            cache_set_members(
+                composite_lookup_shard_key(
+                    "PublishedTrustedManager",
+                    "filter",
+                    "identification",
+                )
+            ),
+        )
+        self.assertNotIn(
+            old_bundle_key,
+            cache_set_members(
+                composite_lookup_shard_key(
+                    "PublishedTrustedManager",
+                    "filter",
+                    "identification",
+                )
+            ),
         )
 
     def test_batch_publish_falls_back_to_per_key_set_without_set_many(self) -> None:

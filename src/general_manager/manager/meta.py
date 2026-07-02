@@ -7,6 +7,7 @@ import threading
 from _thread import LockType
 from typing import TYPE_CHECKING, ClassVar, Iterable, TypeVar, cast
 
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.logging import get_logger
 
@@ -23,6 +24,25 @@ type MetaPreCreationHook = Callable[
 ]
 
 logger = get_logger("manager.meta")
+_MANAGER_DEPENDENCY_TRACKING_CLASS_CACHE: dict[type, type["GeneralManager"] | None] = {}
+_DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN = object()
+
+
+def _manager_dependency_tracking_class(
+    value_class: type,
+) -> type["GeneralManager"] | None:
+    """Return `value_class` when its instances can track manager dependencies."""
+    try:
+        return _MANAGER_DEPENDENCY_TRACKING_CLASS_CACHE[value_class]
+    except KeyError:
+        pass
+    for candidate_class in value_class.__mro__:
+        if "_track_identification_dependency" in candidate_class.__dict__:
+            manager_class = cast(type["GeneralManager"], value_class)
+            _MANAGER_DEPENDENCY_TRACKING_CLASS_CACHE[value_class] = manager_class
+            return manager_class
+    _MANAGER_DEPENDENCY_TRACKING_CLASS_CACHE[value_class] = None
+    return None
 
 
 class InvalidInterfaceTypeError(TypeError):
@@ -363,7 +383,32 @@ class GeneralManagerMeta(type):
             attrs: dict[str, object],
         ) -> type["GeneralManager"]:
             """Helper to instantiate the class via the default ``type.__new__``."""
-            return cast(type["GeneralManager"], type.__new__(mcs, name, bases, attrs))
+            uses_default_identification_dependency_active = (
+                name == "GeneralManager"
+                or (
+                    "_track_identification_dependency_active" not in attrs
+                    and all(
+                        bool(
+                            getattr(
+                                base,
+                                "_gm_uses_default_identification_dependency_active",
+                                False,
+                            )
+                        )
+                        for base in bases
+                    )
+                )
+            )
+            new_class = cast(
+                type["GeneralManager"],
+                type.__new__(mcs, name, bases, attrs),
+            )
+            type.__setattr__(
+                new_class,
+                "_gm_uses_default_identification_dependency_active",
+                uses_default_identification_dependency_active,
+            )
+            return new_class
 
         if "Interface" in attrs:
             interface_candidate = attrs.pop("Interface")
@@ -463,6 +508,15 @@ class GeneralManagerMeta(type):
                 ) -> None:
                     self._attr_name = descriptor_attr_name
                     self._class = descriptor_class
+                    self._dependency_tracking_value_class: type | object = (
+                        _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN
+                    )
+                    self._non_tracking_value_class: type | object = (
+                        _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN
+                    )
+                    self._dependency_tracking_manager_class: (
+                        type[GeneralManager] | None
+                    ) = None
 
                 def __get__(
                     self,
@@ -519,28 +573,33 @@ class GeneralManagerMeta(type):
                             pass
                         else:
                             cached_attribute_class = cached_attribute.__class__
-                            for candidate_class in cached_attribute_class.__mro__:
-                                if (
-                                    "_track_identification_dependency"
-                                    not in candidate_class.__dict__
-                                ):
-                                    continue
+                            if cached_attribute_class is self._non_tracking_value_class:
+                                return cached_attribute
+                            if (
+                                cached_attribute_class
+                                is self._dependency_tracking_value_class
+                            ):
+                                manager_class = self._dependency_tracking_manager_class
+                            else:
+                                manager_class = _manager_dependency_tracking_class(
+                                    cached_attribute_class
+                                )
+                                self._dependency_tracking_value_class = (
+                                    cached_attribute_class
+                                )
+                                self._dependency_tracking_manager_class = manager_class
+                                if manager_class is None:
+                                    self._non_tracking_value_class = (
+                                        cached_attribute_class
+                                    )
+                            if (
+                                manager_class is not None
+                                and DependencyTracker.is_active()
+                            ):
                                 manager_attribute = cast(
                                     "GeneralManager", cached_attribute
                                 )
-                                try:
-                                    identification = manager_attribute.identification
-                                except AttributeError:
-                                    break
-                                if isinstance(identification, dict):
-                                    manager_class = cast(
-                                        type["GeneralManager"],
-                                        cached_attribute_class,
-                                    )
-                                    manager_class._track_identification_dependency(
-                                        identification
-                                    )
-                                break
+                                manager_attribute._track_own_identification_dependency_active()
                             return cached_attribute
                     attribute = instance._attributes.get(self._attr_name, _nonExistent)
                     if attribute is _nonExistent:

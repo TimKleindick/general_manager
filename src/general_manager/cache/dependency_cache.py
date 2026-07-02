@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Protocol, TypeGuard, cast
 
 from general_manager.cache.cache_tracker import DependencyTracker
@@ -11,6 +12,9 @@ from general_manager.cache.dependency_index import Dependency
 
 LEGACY_DEPENDENCY_CACHE_ENTRY_VERSION = 1
 DEPENDENCY_CACHE_ENTRY_VERSION = 2
+TRUSTED_DEPENDENCY_CACHE_ENTRY_VERSION = 3
+DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION = 1
+DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION = 1
 _VALID_DEPENDENCY_ACTIONS = frozenset(
     {"filter", "exclude", "identification", "request_query", "all"}
 )
@@ -39,6 +43,84 @@ class DependencyCacheEntry:
     value: object
     dependencies: frozenset[Dependency]
 
+    def __reduce__(
+        self,
+    ) -> tuple[
+        object,
+        tuple[int, object, frozenset[Dependency]],
+    ]:
+        """Pickle entries through constructor args instead of slot state."""
+        return (
+            _rebuild_dependency_cache_entry,
+            (self.version, self.value, self.dependencies),
+        )
+
+
+def _rebuild_dependency_cache_entry(
+    version: int,
+    value: object,
+    dependencies: frozenset[Dependency],
+) -> DependencyCacheEntry:
+    return DependencyCacheEntry(
+        version=version,
+        value=value,
+        dependencies=dependencies,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyCachePrefetchBundle:
+    """Private payload containing multiple dependency-cache entries."""
+
+    version: int
+    entries: Mapping[str, DependencyCacheEntry]
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        object,
+        tuple[int, dict[str, DependencyCacheEntry]],
+    ]:
+        """Pickle bundles through constructor args instead of slot state."""
+        return (
+            _rebuild_dependency_cache_prefetch_bundle,
+            (self.version, dict(self.entries)),
+        )
+
+
+def _rebuild_dependency_cache_prefetch_bundle(
+    version: int,
+    entries: dict[str, DependencyCacheEntry],
+) -> DependencyCachePrefetchBundle:
+    return DependencyCachePrefetchBundle(version=version, entries=entries)
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyCachePrefetchValueBundle:
+    """Private payload containing values for inactive dependency tracking."""
+
+    version: int
+    values: Mapping[str, object]
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        object,
+        tuple[int, dict[str, object]],
+    ]:
+        """Pickle value bundles through constructor args instead of slot state."""
+        return (
+            _rebuild_dependency_cache_prefetch_value_bundle,
+            (self.version, dict(self.values)),
+        )
+
+
+def _rebuild_dependency_cache_prefetch_value_bundle(
+    version: int,
+    values: dict[str, object],
+) -> DependencyCachePrefetchValueBundle:
+    return DependencyCachePrefetchValueBundle(version=version, values=values)
+
 
 @dataclass(frozen=True, slots=True)
 class DependencyCacheHit:
@@ -50,6 +132,10 @@ class DependencyCacheHit:
 
     value: object
     dependencies: frozenset[Dependency]
+
+
+class _TrustedDependencyCacheHit(DependencyCacheHit):
+    """Cache hit whose dependencies were captured by DependencyTracker."""
 
 
 class DependencyCacheBackend(Protocol):
@@ -87,21 +173,185 @@ class DependencyCacheSetManyBackend(DependencyCacheBackend, Protocol):
 def make_dependency_cache_entry(
     value: object,
     dependencies: Iterable[Dependency],
+    *,
+    trusted_dependencies: bool | None = None,
 ) -> DependencyCacheEntry:
     """Build the current persisted dependency-cache payload.
 
     Args:
         value: Cached function result to persist.
         dependencies: Dependencies captured while computing the value.
+        trusted_dependencies: Whether dependencies are known to come from
+            `DependencyTracker`. When omitted, tracker-captured sets are
+            detected automatically.
 
     Returns:
         A versioned `DependencyCacheEntry` with dependencies frozen.
     """
+    if trusted_dependencies is None:
+        trusted_dependencies = DependencyTracker._dependencies_are_tracker_captured(
+            dependencies
+        )
     return DependencyCacheEntry(
-        version=DEPENDENCY_CACHE_ENTRY_VERSION,
+        version=(
+            TRUSTED_DEPENDENCY_CACHE_ENTRY_VERSION
+            if trusted_dependencies
+            else DEPENDENCY_CACHE_ENTRY_VERSION
+        ),
         value=value,
         dependencies=frozenset(dependencies),
     )
+
+
+def dependency_cache_prefetch_bundle_key(manifest_key: str) -> str:
+    """Return the private bundle key paired with a prefetch manifest key."""
+    return f"{manifest_key}:bundle"
+
+
+def dependency_cache_prefetch_value_bundle_key(manifest_key: str) -> str:
+    """Return the private value-bundle key paired with a prefetch manifest key."""
+    return f"{manifest_key}:values"
+
+
+def dependency_cache_prefetch_segment_index_key(manifest_key: str) -> str:
+    """Return the private segment-index key paired with a prefetch manifest."""
+    return f"{manifest_key}:segments"
+
+
+def dependency_cache_prefetch_segment_token(cache_keys: Iterable[str]) -> str:
+    """Return a stable token for one prefetch segment's ordered cache keys."""
+    digest = sha256(usedforsecurity=False)
+    for cache_key in cache_keys:
+        encoded_key = cache_key.encode()
+        digest.update(len(encoded_key).to_bytes(8, "big"))
+        digest.update(encoded_key)
+    return digest.hexdigest()
+
+
+def dependency_cache_prefetch_segment_bundle_key(
+    manifest_key: str,
+    segment_token: str,
+) -> str:
+    """Return the private full bundle key for one prefetch segment."""
+    return f"{manifest_key}:segment:{segment_token}:bundle"
+
+
+def dependency_cache_prefetch_segment_value_bundle_key(
+    manifest_key: str,
+    segment_token: str,
+) -> str:
+    """Return the private value bundle key for one prefetch segment."""
+    return f"{manifest_key}:segment:{segment_token}:values"
+
+
+def make_dependency_cache_prefetch_bundle(
+    entries: Mapping[str, DependencyCacheEntry],
+) -> DependencyCachePrefetchBundle:
+    """Build a private prefetch bundle from dependency-cache entry payloads."""
+    return DependencyCachePrefetchBundle(
+        version=DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION,
+        entries=dict(entries),
+    )
+
+
+def make_dependency_cache_prefetch_value_bundle(
+    entries: Mapping[str, DependencyCacheEntry],
+) -> DependencyCachePrefetchValueBundle:
+    """Build a private value-only bundle from dependency-cache entries."""
+    return DependencyCachePrefetchValueBundle(
+        version=DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION,
+        values={cache_key: entry.value for cache_key, entry in entries.items()},
+    )
+
+
+def read_dependency_cache_prefetch_bundle_hits(
+    cache_backend: DependencyCacheBackend,
+    bundle_key: str,
+) -> dict[str, DependencyCacheHit]:
+    """Read dependency-cache hits from one private prefetch bundle payload."""
+    entries = read_dependency_cache_prefetch_bundle_entries(cache_backend, bundle_key)
+    if not entries:
+        return {}
+
+    hits: dict[str, DependencyCacheHit] = {}
+    for cache_key, entry in entries.items():
+        hit = _combined_payload_to_hit(entry)
+        if isinstance(hit, DependencyCacheHit):
+            hits[cache_key] = hit
+    return hits
+
+
+def read_dependency_cache_prefetch_bundle_entries(
+    cache_backend: DependencyCacheBackend,
+    bundle_key: str,
+) -> dict[str, DependencyCacheEntry]:
+    """Read raw dependency-cache entries from one private prefetch bundle."""
+    payload = cache_backend.get(bundle_key, _MISSING)
+    if not isinstance(payload, DependencyCachePrefetchBundle):
+        return {}
+    if payload.version != DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION:
+        return {}
+    return {
+        cache_key: entry
+        for cache_key, entry in payload.entries.items()
+        if isinstance(cache_key, str) and isinstance(entry, DependencyCacheEntry)
+    }
+
+
+def read_dependency_cache_prefetch_bundle_values(
+    cache_backend: DependencyCacheBackend,
+    value_bundle_key: str,
+) -> dict[str, object]:
+    """Read value-only dependency-cache hits from one private bundle payload."""
+    payload = cache_backend.get(value_bundle_key, _MISSING)
+    if not isinstance(payload, DependencyCachePrefetchValueBundle):
+        return {}
+    if payload.version != DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION:
+        return {}
+    return {
+        cache_key: value
+        for cache_key, value in payload.values.items()
+        if isinstance(cache_key, str)
+    }
+
+
+def read_many_dependency_cache_prefetch_bundle_hits(
+    cache_backend: DependencyCacheBackend,
+    bundle_keys: Iterable[str],
+) -> dict[str, DependencyCacheHit]:
+    """Read dependency-cache hits from multiple private prefetch bundles."""
+    payloads = _get_many_or_loop(cache_backend, tuple(dict.fromkeys(bundle_keys)))
+    hits: dict[str, DependencyCacheHit] = {}
+    for payload in payloads.values():
+        if not isinstance(payload, DependencyCachePrefetchBundle):
+            continue
+        if payload.version != DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION:
+            continue
+        for cache_key, entry in payload.entries.items():
+            if not isinstance(cache_key, str):
+                continue
+            hit = _combined_payload_to_hit(entry)
+            if isinstance(hit, DependencyCacheHit):
+                hits[cache_key] = hit
+    return hits
+
+
+def read_many_dependency_cache_prefetch_bundle_values(
+    cache_backend: DependencyCacheBackend,
+    value_bundle_keys: Iterable[str],
+) -> dict[str, object]:
+    """Read values from multiple private prefetch value bundles."""
+    payloads = _get_many_or_loop(cache_backend, tuple(dict.fromkeys(value_bundle_keys)))
+    values: dict[str, object] = {}
+    for payload in payloads.values():
+        if not isinstance(payload, DependencyCachePrefetchValueBundle):
+            continue
+        if payload.version != DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION:
+            continue
+        for cache_key, value in payload.values.items():
+            if isinstance(cache_key, str):
+                values[cache_key] = value
+    return values
 
 
 def read_dependency_cache_hit(
@@ -223,6 +473,9 @@ def replay_dependency_cache_hit(hit: DependencyCacheHit) -> None:
         ValueError: Propagated from `DependencyTracker.track()` if a dependency
             tuple uses an unsupported operation.
     """
+    if isinstance(hit, _TrustedDependencyCacheHit):
+        DependencyTracker._track_many_validated(hit.dependencies)
+        return
     for class_name, operation, identifier in hit.dependencies:
         DependencyTracker.track(class_name, operation, identifier)
 
@@ -264,16 +517,23 @@ def _combined_payload_to_hit(
         if dependencies is None:
             return _MISSING
     elif payload.version == DEPENDENCY_CACHE_ENTRY_VERSION:
-        # Legacy entries may contain arbitrary tuple-like data, so the
-        # _legacy_dependency_set path validates each dependency. Current entries
-        # come from make_dependency_cache_entry after that same validation flow,
-        # so keep deserialization on the frozenset type-check fast path.
+        # Version 2 entries are structurally checked here and still validate
+        # each dependency during replay.
         if not isinstance(payload.dependencies, frozenset):
             return _MISSING
         dependencies = payload.dependencies
+        hit_type = DependencyCacheHit
+    elif payload.version == TRUSTED_DEPENDENCY_CACHE_ENTRY_VERSION:
+        # Version 3 entries are written only for dependency sets captured by
+        # DependencyTracker, so replay can bulk-merge them without per-tuple
+        # validation.
+        if not isinstance(payload.dependencies, frozenset):
+            return _MISSING
+        dependencies = payload.dependencies
+        hit_type = _TrustedDependencyCacheHit
     else:
         return _MISSING
-    return DependencyCacheHit(
+    return hit_type(
         value=payload.value,
         dependencies=dependencies,
     )
@@ -283,6 +543,22 @@ def _supports_get_many(
     cache_backend: DependencyCacheBackend,
 ) -> TypeGuard[DependencyCacheGetManyBackend]:
     return callable(getattr(cache_backend, "get_many", None))
+
+
+def _get_many_or_loop(
+    cache_backend: DependencyCacheBackend,
+    keys: tuple[str, ...],
+) -> Mapping[str, object]:
+    if not keys:
+        return {}
+    if _supports_get_many(cache_backend):
+        return cache_backend.get_many(keys)
+    values: dict[str, object] = {}
+    for key in keys:
+        value = cache_backend.get(key, _MISSING)
+        if value is not _MISSING:
+            values[key] = value
+    return values
 
 
 def _read_many_without_get_many(
