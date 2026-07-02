@@ -120,6 +120,22 @@ class MeasurementTestCase(TestCase):
         with self.assertRaises(ValueError):
             m.to("USD")
 
+    def test_currency_to_non_currency_conversion_requires_exchange_rate(self):
+        from general_manager.measurement.measurement import MissingExchangeRateError
+
+        m = Measurement(2, "EUR")
+
+        with self.assertRaises(MissingExchangeRateError):
+            m.to("meter")
+
+    def test_currency_to_non_currency_conversion_uses_exchange_rate_fallback(self):
+        m = Measurement(2, "EUR")
+
+        converted = m.to("meter", exchange_rate=3.0)
+
+        self.assertEqual(converted.magnitude, Decimal("6"))
+        self.assertEqual(converted.unit, "meter")
+
     def test_invalid_target_unit_conversion_raises_pint_error(self):
         m = Measurement(1, "kilogram")
 
