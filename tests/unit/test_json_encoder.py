@@ -7,6 +7,8 @@ from unittest.mock import patch
 import pytest
 
 from general_manager.utils import json_encoder
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 
 
 class FakeGeneralManager:
@@ -38,6 +40,33 @@ def test_serialize_general_manager() -> None:
         dumped = json.dumps(gm, cls=json_encoder.CustomJSONEncoder)
         expected = f'"{gm.__class__.__name__}(**{gm.identification})"'
         assert dumped == expected
+
+
+def test_serialize_general_manager_reads_name_without_metaclass_lookup() -> None:
+    class JsonInterface:
+        def __init__(self, manager_id: int) -> None:
+            self.identification = {"id": manager_id}
+
+    class JsonManager(GeneralManager):
+        pass
+
+    JsonManager.Interface = JsonInterface  # type: ignore[assignment]
+    manager = JsonManager(7)
+    original_getattribute = GeneralManagerMeta.__getattribute__
+
+    def fail_on_name_lookup(cls: type, attribute_name: str) -> object:
+        if attribute_name == "__name__":
+            raise AssertionError
+        return original_getattribute(cls, attribute_name)
+
+    with patch.object(
+        GeneralManagerMeta,
+        "__getattribute__",
+        fail_on_name_lookup,
+    ):
+        dumped = json.dumps(manager, cls=json_encoder.CustomJSONEncoder)
+
+    assert dumped == "\"JsonManager(**{'id': 7})\""
 
 
 def test_standard_json_values_keep_standard_behavior() -> None:

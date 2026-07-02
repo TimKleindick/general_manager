@@ -1334,15 +1334,15 @@ def _generic_cache_invalidation_from_shards(
     invalidation_candidates.update(all_records_cache_keys(manager_name))
     identification = getattr(instance, "identification", None)
     if identification:
-        invalidation_candidates.update(
-            candidate_cache_keys_for_lookup(
-                manager_name,
-                "filter",
-                "identification",
-                old_value=serialize_dependency_identifier(identification),
-                new_value=serialize_dependency_identifier(identification),
-            )
-        )
+        for cache_key in candidate_cache_keys_for_lookup(
+            manager_name,
+            "filter",
+            "identification",
+            old_value=serialize_dependency_identifier(identification),
+            new_value=serialize_dependency_identifier(identification),
+        ):
+            if candidate_should_invalidate(cache_key, "identification", None):
+                invalidation_candidates.add(cache_key)
 
     for lookup in tracked_lookup_names(manager_name):
         old_value = old_relevant_values.get(lookup)

@@ -31,6 +31,7 @@ ORM_BUCKET_MANAGER_RESULT_PREFIX = "orm_bucket_manager_result"
 ORM_BUCKET_FIRST_ROW_PREFIX = "orm_bucket_first_row"
 ORM_MODEL_ROW_INDEX_PREFIX = "orm_model_row_index"
 ORM_MODEL_RELATION_PREFETCH_PREFIX = "orm_model_relation_prefetch"
+ORM_RELATION_MANAGER_PREFIX = "orm_relation_manager"
 ORM_QUERY_BUCKET_PREFIX = "orm_query_bucket"
 ORM_BUCKET_EXISTS_PREFIX = "orm_bucket_exists"
 BUCKET_INDEX_PREFIX = "bucket_index"
@@ -43,6 +44,14 @@ OrmModelRowKey = tuple[Hashable, Hashable | None]
 @dataclass(frozen=True)
 class BucketIndexRunCacheEntry:
     """Run-cache payload for a bucket index plus dependencies to replay on hits."""
+
+    value: object
+    dependencies: frozenset["Dependency"]
+
+
+@dataclass(frozen=True)
+class OrmBucketManagersRunCacheEntry:
+    """Run-cache payload for cached ORM managers plus dependencies to replay."""
 
     value: object
     dependencies: frozenset["Dependency"]
@@ -147,9 +156,12 @@ class CalculationRunContext:
         synchronous callable; coroutine objects are stored as ordinary return
         values if a loader returns one.
         """
-        if key not in self._values:
-            self._values[key] = loader()
-        return cast(T, self._values[key])
+        try:
+            return cast(T, self._values[key])
+        except KeyError:
+            value = loader()
+            self._values[key] = value
+            return value
 
     def get(self, key: Hashable, default: object = None) -> object:
         """Return the stored value for key, or default when key is absent."""
@@ -415,13 +427,48 @@ class CalculationRunContext:
         )
         self.set(cache_key, prefetched | frozenset(row_keys))
 
+    def get_orm_relation_manager(self, key: Hashable) -> object:
+        """Return a cached relation manager for key, or `None` when absent."""
+        return self.get((ORM_RELATION_MANAGER_PREFIX, key))
+
+    def set_orm_relation_manager(self, key: Hashable, value: object) -> None:
+        """Store a manager created by a generated ORM relation accessor."""
+        self.set((ORM_RELATION_MANAGER_PREFIX, key), value)
+
     def get_orm_bucket_managers(self, key: Hashable) -> object:
         """Return cached ORM bucket managers for key, or `None` when absent."""
-        return self.get((ORM_BUCKET_MANAGER_RESULT_PREFIX, key))
+        entry = self.get((ORM_BUCKET_MANAGER_RESULT_PREFIX, key))
+        if isinstance(entry, OrmBucketManagersRunCacheEntry):
+            return entry.value
+        return entry
 
-    def set_orm_bucket_managers(self, key: Hashable, value: object) -> None:
+    def get_orm_bucket_manager_dependencies(
+        self,
+        key: Hashable,
+    ) -> frozenset["Dependency"] | None:
+        """Return cached ORM manager dependencies for key, when available."""
+        entry = self.get((ORM_BUCKET_MANAGER_RESULT_PREFIX, key))
+        if isinstance(entry, OrmBucketManagersRunCacheEntry):
+            return entry.dependencies
+        return None
+
+    def set_orm_bucket_managers(
+        self,
+        key: Hashable,
+        value: object,
+        dependencies: Iterable["Dependency"] | None = None,
+    ) -> None:
         """Store or overwrite ORM bucket managers for the active run."""
-        self.set((ORM_BUCKET_MANAGER_RESULT_PREFIX, key), value)
+        if dependencies is None:
+            self.set((ORM_BUCKET_MANAGER_RESULT_PREFIX, key), value)
+            return
+        self.set(
+            (ORM_BUCKET_MANAGER_RESULT_PREFIX, key),
+            OrmBucketManagersRunCacheEntry(
+                value=value,
+                dependencies=frozenset(dependencies),
+            ),
+        )
 
     def get_orm_bucket_first_row(
         self,
@@ -459,6 +506,7 @@ class CalculationRunContext:
         self.discard_prefix((ORM_BUCKET_FIRST_ROW_PREFIX,))
         self.discard_prefix((ORM_MODEL_ROW_INDEX_PREFIX,))
         self.discard_prefix((ORM_MODEL_RELATION_PREFETCH_PREFIX,))
+        self.discard_prefix((ORM_RELATION_MANAGER_PREFIX,))
         self.discard_prefix((ORM_QUERY_BUCKET_PREFIX,))
         self.discard_prefix((ORM_BUCKET_EXISTS_PREFIX,))
 

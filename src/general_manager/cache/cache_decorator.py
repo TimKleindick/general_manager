@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Iterable
 from functools import wraps
+from hashlib import sha256
 from typing import (
     Literal,
     Protocol,
@@ -15,6 +16,16 @@ from django.core.cache import cache as django_cache
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_cache import (
     DependencyCacheHit,
+    dependency_cache_prefetch_bundle_key,
+    dependency_cache_prefetch_segment_bundle_key,
+    dependency_cache_prefetch_segment_index_key,
+    dependency_cache_prefetch_segment_value_bundle_key,
+    dependency_cache_prefetch_value_bundle_key,
+    read_many_dependency_cache_hits,
+    read_many_dependency_cache_prefetch_bundle_hits,
+    read_many_dependency_cache_prefetch_bundle_values,
+    read_dependency_cache_prefetch_bundle_hits,
+    read_dependency_cache_prefetch_bundle_values,
     read_dependency_cache_hit,
     replay_dependency_cache_hit,
 )
@@ -63,6 +74,10 @@ FuncT = TypeVar("FuncT", bound=Callable[..., object])
 CacheScope = Literal["dependency", "run", "timeout", "none"]
 
 _SENTINEL = object()
+_RUN_CACHE_MISS = object()
+_DEPENDENCY_CACHE_PREFETCH_MANIFEST_PREFIX = "dependency_cache_prefetch_manifest"
+_DEPENDENCY_CACHE_PREFETCH_ATTEMPT_PREFIX = "dependency_cache_prefetch_attempt"
+_DEPENDENCY_CACHE_PREFETCH_VALUE_PREFIX = "dependency_cache_prefetch_value"
 logger = get_logger("cache.decorator")
 
 
@@ -169,7 +184,130 @@ def cached(
     if timeout is not None and cache != "timeout":
         raise CacheTimeoutConfigurationError.unexpected_timeout()
 
+    def dependency_cache_prefetch_manifest_key(
+        decorated_func: Callable[..., object],
+    ) -> str:
+        raw = f"{decorated_func.__module__}:{decorated_func.__qualname__}".encode()
+        digest = sha256(raw, usedforsecurity=False).hexdigest()
+        return f"{_DEPENDENCY_CACHE_PREFETCH_MANIFEST_PREFIX}:{digest}"
+
+    def prefetch_dependency_cache_manifest(
+        context: object,
+        manifest_key: str,
+    ) -> None:
+        if not callable(getattr(cache_backend, "get_many", None)):
+            return
+        if not all(
+            hasattr(context, attr)
+            for attr in (
+                "get",
+                "set",
+                "set_dependency_cache_hits",
+            )
+        ):
+            return
+        attempt_key = (
+            _DEPENDENCY_CACHE_PREFETCH_ATTEMPT_PREFIX,
+            id(cache_backend),
+            manifest_key,
+        )
+        if context.get(attempt_key, False):  # type: ignore[attr-defined]
+            return
+        context.set(attempt_key, True)  # type: ignore[attr-defined]
+
+        segment_tokens = cache_backend.get(
+            dependency_cache_prefetch_segment_index_key(manifest_key),
+            (),
+        )
+        if isinstance(segment_tokens, (tuple, list, frozenset, set)):
+            valid_segment_tokens = tuple(
+                token for token in segment_tokens if isinstance(token, str)
+            )
+        else:
+            valid_segment_tokens = ()
+
+        if not DependencyTracker.is_active():
+            if valid_segment_tokens:
+                segment_value_keys = tuple(
+                    dependency_cache_prefetch_segment_value_bundle_key(
+                        manifest_key,
+                        segment_token,
+                    )
+                    for segment_token in valid_segment_tokens
+                )
+                segment_values = read_many_dependency_cache_prefetch_bundle_values(
+                    cache_backend,
+                    segment_value_keys,
+                )
+                if segment_values:
+                    for cache_key, value in segment_values.items():
+                        context.set(  # type: ignore[attr-defined]
+                            (
+                                _DEPENDENCY_CACHE_PREFETCH_VALUE_PREFIX,
+                                id(cache_backend),
+                                cache_key,
+                            ),
+                            value,
+                        )
+                    return
+
+            bundle_values = read_dependency_cache_prefetch_bundle_values(
+                cache_backend,
+                dependency_cache_prefetch_value_bundle_key(manifest_key),
+            )
+            if bundle_values:
+                for cache_key, value in bundle_values.items():
+                    context.set(  # type: ignore[attr-defined]
+                        (
+                            _DEPENDENCY_CACHE_PREFETCH_VALUE_PREFIX,
+                            id(cache_backend),
+                            cache_key,
+                        ),
+                        value,
+                    )
+                return
+
+        if valid_segment_tokens:
+            segment_bundle_keys = tuple(
+                dependency_cache_prefetch_segment_bundle_key(
+                    manifest_key,
+                    segment_token,
+                )
+                for segment_token in valid_segment_tokens
+            )
+            segment_hits = read_many_dependency_cache_prefetch_bundle_hits(
+                cache_backend,
+                segment_bundle_keys,
+            )
+            if segment_hits:
+                context.set_dependency_cache_hits(segment_hits)  # type: ignore[attr-defined]
+                return
+
+        bundle_hits = read_dependency_cache_prefetch_bundle_hits(
+            cache_backend,
+            dependency_cache_prefetch_bundle_key(manifest_key),
+        )
+        if bundle_hits:
+            context.set_dependency_cache_hits(bundle_hits)  # type: ignore[attr-defined]
+            return
+
+        manifest = cache_backend.get(manifest_key, ())
+        if not isinstance(manifest, (tuple, list, frozenset, set)):
+            return
+        cache_keys = tuple(key for key in manifest if isinstance(key, str))
+        if not cache_keys:
+            return
+        hits = read_many_dependency_cache_hits(cache_backend, cache_keys)
+        if hits:
+            context.set_dependency_cache_hits(hits)  # type: ignore[attr-defined]
+
     def decorator(decorated_func: FuncT) -> FuncT:
+        prefetch_manifest_key = (
+            dependency_cache_prefetch_manifest_key(decorated_func)
+            if cache == "dependency"
+            else None
+        )
+
         @wraps(decorated_func)
         def wrapper(*args: object, **kwargs: object) -> object:
             if cache == "none":
@@ -177,11 +315,21 @@ def cached(
 
             if cache == "run":
                 key = make_cache_key(decorated_func, args, kwargs)
+                active_context = current_calculation_run_context()
+                if active_context is not None:
+                    cached_run_value = active_context.get(key, _RUN_CACHE_MISS)
+                    if cached_run_value is not _RUN_CACHE_MISS:
+                        return cached_run_value
+                    result = decorated_func(*args, **kwargs)
+                    active_context.set(key, result)
+                    return result
                 with ensure_calculation_run_context() as context:
-                    return context.get_or_set(
-                        key,
-                        lambda: decorated_func(*args, **kwargs),
-                    )
+                    cached_run_value = context.get(key, _RUN_CACHE_MISS)
+                    if cached_run_value is not _RUN_CACHE_MISS:
+                        return cached_run_value
+                    result = decorated_func(*args, **kwargs)
+                    context.set(key, result)
+                    return result
 
             key = make_cache_key(decorated_func, args, kwargs)
 
@@ -223,8 +371,23 @@ def cached(
                 )
                 return hit.value
 
+            def prefetched_value_from_context(context: object) -> object:
+                if DependencyTracker.is_active():
+                    return _SENTINEL
+                return context.get(  # type: ignore[attr-defined]
+                    (
+                        _DEPENDENCY_CACHE_PREFETCH_VALUE_PREFIX,
+                        id(cache_backend),
+                        key,
+                    ),
+                    _SENTINEL,
+                )
+
             prefetch_context = current_calculation_run_context()
             if prefetch_context is not None:
+                prefetched_value = prefetched_value_from_context(prefetch_context)
+                if prefetched_value is not _SENTINEL:
+                    return prefetched_value
                 prefetched_hit = prefetch_context.get_dependency_cache_hit(
                     key, _SENTINEL
                 )
@@ -233,6 +396,22 @@ def cached(
                         prefetched_hit,
                         "cache hit from dependency prefetch",
                     )
+                if prefetch_manifest_key is not None:
+                    prefetch_dependency_cache_manifest(
+                        prefetch_context,
+                        prefetch_manifest_key,
+                    )
+                    prefetched_value = prefetched_value_from_context(prefetch_context)
+                    if prefetched_value is not _SENTINEL:
+                        return prefetched_value
+                    prefetched_hit = prefetch_context.get_dependency_cache_hit(
+                        key, _SENTINEL
+                    )
+                    if isinstance(prefetched_hit, DependencyCacheHit):
+                        return return_cached_hit(
+                            prefetched_hit,
+                            "cache hit from dependency prefetch manifest",
+                        )
 
             cached_hit = read_dependency_cache_hit(
                 cache_backend,
@@ -288,6 +467,10 @@ def cached(
                             timeout=timeout,
                             started_generation=started_generation,
                             lease=lease,
+                            dependencies_trusted=DependencyTracker._dependencies_are_tracker_captured(
+                                dependencies
+                            ),
+                            prefetch_manifest_key=prefetch_manifest_key,
                         )
                     )
                     lease_transferred_to_context = True
@@ -305,6 +488,7 @@ def cached(
                                 if record_fn is record_dependencies
                                 else record_many
                             ),
+                            prefetch_manifest_key=prefetch_manifest_key,
                         )
                     except CachePublishAborted:
                         logger.debug(

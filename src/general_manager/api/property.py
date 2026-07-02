@@ -142,7 +142,10 @@ class GraphQLProperty(property):
         @wraps(fget)
         def resolver(instance: object) -> object:
             """Resolve the property through the selected cached wrapper."""
-            return self._get_cached_fget()(instance)
+            cached_fget = self._cached_fget
+            if cached_fget is None:
+                cached_fget = self._get_cached_fget()
+            return cached_fget(instance)
 
         super().__init__(resolver, doc=doc)
         self.is_graphql_resolver = True

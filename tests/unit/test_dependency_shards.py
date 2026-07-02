@@ -30,6 +30,7 @@ from general_manager.cache.dependency_shards import (
     request_query_shard_key,
     reverse_membership_key,
     scan_lookup_shard_key,
+    _cache_set_add_many,
     _shard_keys_for_dependency,
 )
 from general_manager.cache.dependency_index import (
@@ -137,12 +138,18 @@ class DependencyShardKeyTests(TestCase):
             ],
         )
 
-        exact_key = exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+        status_key = composite_lookup_shard_key("Project", "filter", "status")
         scan_key = scan_lookup_shard_key("Project", "filter", "priority__gte", "gte")
         request_key = request_query_shard_key("RemoteProject")
         all_key = all_records_shard_key("Project")
 
-        assert cache_set_members(exact_key) == {"cache-a"}
+        assert cache_set_members(status_key) == {"cache-a"}
+        assert (
+            cache_set_members(
+                exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+            )
+            == set()
+        )
         assert cache_set_members(scan_key) == {"cache-a"}
         assert cache_set_members(request_key) == {"cache-a"}
         assert cache_set_members(all_key) == {"cache-a"}
@@ -150,7 +157,7 @@ class DependencyShardKeyTests(TestCase):
         reverse = cache.get(reverse_membership_key("cache-a"))
         assert reverse == ReverseDependencyMembership(
             cache_key="cache-a",
-            shard_keys=frozenset({exact_key, scan_key, request_key, all_key}),
+            shard_keys=frozenset({status_key, scan_key, request_key, all_key}),
             composite_dependencies=frozenset(),
             simple_dependencies=frozenset(
                 {
@@ -179,12 +186,63 @@ class DependencyShardKeyTests(TestCase):
             {("Project", "filter", identifier)}
         )
 
+    def test_record_exact_dependency_uses_lookup_level_candidate_shard(self) -> None:
+        identifier = json.dumps({"status": "open"})
+
+        record_cache_dependencies("cache-a", [("Project", "filter", identifier)])
+
+        assert cache_set_members(
+            composite_lookup_shard_key("Project", "filter", "status")
+        ) == {"cache-a"}
+        assert (
+            cache_set_members(
+                exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+            )
+            == set()
+        )
+        reverse = cache.get(reverse_membership_key("cache-a"))
+        assert isinstance(reverse, ReverseDependencyMembership)
+        assert reverse.simple_dependencies == frozenset(
+            {("Project", "filter", identifier)}
+        )
+
+    def test_record_identification_dependency_uses_lookup_level_candidate_shard(
+        self,
+    ) -> None:
+        identifier = json.dumps({"id": 1})
+
+        record_cache_dependencies(
+            "cache-a",
+            [("Project", "identification", identifier)],
+        )
+
+        assert cache_set_members(
+            composite_lookup_shard_key("Project", "filter", "identification")
+        ) == {"cache-a"}
+        assert (
+            cache_set_members(
+                exact_lookup_shard_key(
+                    "Project",
+                    "filter",
+                    "identification",
+                    "eq",
+                    identifier,
+                )
+            )
+            == set()
+        )
+        reverse = cache.get(reverse_membership_key("cache-a"))
+        assert isinstance(reverse, ReverseDependencyMembership)
+        assert reverse.simple_dependencies == frozenset(
+            {("Project", "identification", identifier)}
+        )
+
     def test_remove_cache_key_uses_reverse_membership_without_scanning(self) -> None:
         record_cache_dependencies(
             "cache-a",
             [("Project", "filter", json.dumps({"status": "open"}))],
         )
-        shard_key = exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+        shard_key = composite_lookup_shard_key("Project", "filter", "status")
 
         remove_cache_key_from_shards("cache-a")
 
@@ -346,19 +404,15 @@ class DependencyShardKeyTests(TestCase):
             record_many_cache_dependencies(entries)
 
         cache_keys = {f"cache-{index}" for index in range(25)}
-        status_shard = exact_lookup_shard_key(
+        status_shard = composite_lookup_shard_key(
             "Project",
             "filter",
             "status",
-            "eq",
-            "open",
         )
-        priority_shard = exact_lookup_shard_key(
+        priority_shard = composite_lookup_shard_key(
             "Project",
             "filter",
             "priority",
-            "eq",
-            3,
         )
 
         assert counting_cache.store[status_shard] == cache_keys
@@ -377,6 +431,46 @@ class DependencyShardKeyTests(TestCase):
         assert counting_cache.set_calls == []
         assert len(counting_cache.get_many_calls) <= 2
         assert len(counting_cache.set_many_calls) <= 2
+
+    def test_cache_set_add_many_skips_member_decoding_for_new_shards(self) -> None:
+        """Cold shard writes should store pending members without merge work."""
+        additions = {"dependency-shard:new": {"cache-a", "cache-b"}}
+
+        with (
+            mock.patch(
+                "general_manager.cache.dependency_shards._cache_get_many",
+                return_value={},
+            ),
+            mock.patch(
+                "general_manager.cache.dependency_shards._cache_member_set",
+                side_effect=AssertionError("new shards should not decode members"),
+            ),
+            mock.patch(
+                "general_manager.cache.dependency_shards._cache_set_many",
+            ) as set_many,
+        ):
+            _cache_set_add_many(additions)
+
+        set_many.assert_called_once_with(additions)
+
+    def test_cache_set_add_many_reuses_exact_set_inputs(self) -> None:
+        """Shard publication should not copy member sets it already owns."""
+        members = {"cache-a", "cache-b"}
+        additions = {"dependency-shard:new": members}
+
+        with (
+            mock.patch(
+                "general_manager.cache.dependency_shards._cache_get_many",
+                return_value={},
+            ),
+            mock.patch(
+                "general_manager.cache.dependency_shards._cache_set_many",
+            ) as set_many,
+        ):
+            _cache_set_add_many(additions)
+
+        payload = set_many.call_args.args[0]
+        assert payload["dependency-shard:new"] is members
 
     def test_record_many_cache_dependencies_reuses_shard_plan_for_duplicates(
         self,
@@ -403,9 +497,14 @@ class DependencyShardKeyTests(TestCase):
                 "general_manager.cache.dependency_shards.parse_dependency_identifier",
                 wraps=parse_dependency_identifier,
             ) as mocked_parse,
+            mock.patch(
+                "general_manager.cache.dependency_shards._shard_keys_for_dependency",
+                wraps=_shard_keys_for_dependency,
+            ) as mocked_plan,
         ):
             record_many_cache_dependencies(entries)
 
+        assert mocked_plan.call_count == 1
         assert mocked_parse.call_count == 1
 
     def test_record_many_cache_dependencies_replaces_existing_memberships_in_bulk(
@@ -419,12 +518,10 @@ class DependencyShardKeyTests(TestCase):
             "eq",
             "old",
         )
-        new_shard = exact_lookup_shard_key(
+        new_shard = composite_lookup_shard_key(
             "Project",
             "filter",
             "status",
-            "eq",
-            "new",
         )
         reverse_a = reverse_membership_key("cache-a")
         reverse_b = reverse_membership_key("cache-b")
@@ -541,7 +638,7 @@ class DependencyIndexShardFacadeTests(TestCase):
 
         assert cache.get("dependency_index") is None
         assert cache_set_members(
-            exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+            composite_lookup_shard_key("Project", "filter", "status")
         ) == {"cache-a"}
 
     def test_capture_old_values_uses_sharded_lookup_registry(self) -> None:
@@ -576,11 +673,32 @@ class DependencyIndexShardFacadeTests(TestCase):
 
         assert cache.get("cache-a") is None
         assert (
-            cache_set_members(
-                exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
-            )
+            cache_set_members(composite_lookup_shard_key("Project", "filter", "status"))
             == set()
         )
+
+    def test_generic_cache_invalidation_keeps_nonmatching_exact_lookup_candidate(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [("Project", "filter", json.dumps({"status": "open"}))],
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="closed"),
+            old_relevant_values={"status": "pending"},
+        )
+
+        assert cache.get("cache-a") == "cached-value"
+        assert cache_set_members(
+            composite_lookup_shard_key("Project", "filter", "status")
+        ) == {"cache-a"}
 
     def test_generic_cache_invalidation_invalidates_matching_filter_when_lookup_unchanged(
         self,
@@ -602,9 +720,7 @@ class DependencyIndexShardFacadeTests(TestCase):
 
         assert cache.get("cache-a") is None
         assert (
-            cache_set_members(
-                exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
-            )
+            cache_set_members(composite_lookup_shard_key("Project", "filter", "status"))
             == set()
         )
 
@@ -626,9 +742,7 @@ class DependencyIndexShardFacadeTests(TestCase):
 
         assert cache.get("cache-a") is None
         assert (
-            cache_set_members(
-                exact_lookup_shard_key("Project", "filter", "status", "eq", None)
-            )
+            cache_set_members(composite_lookup_shard_key("Project", "filter", "status"))
             == set()
         )
 
@@ -653,7 +767,7 @@ class DependencyIndexShardFacadeTests(TestCase):
         assert cache.get("dependency_index") is None
         assert cache.get("legacy-cache") is None
         assert cache_set_members(
-            exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+            composite_lookup_shard_key("Project", "filter", "status")
         ) == {"cache-a"}
 
     def test_generic_cache_invalidation_invalidates_identification_dependency(
@@ -680,33 +794,23 @@ class DependencyIndexShardFacadeTests(TestCase):
         class Project:
             pass
 
-        cache_key = "cache-a"
         identification = {"id": 2}
         record_dependencies(
-            cache_key,
-            [("Project", "filter", json.dumps({"status": "open"}))],
+            "cache-a",
+            [("Project", "identification", json.dumps({"id": 1}))],
         )
-        cache.set(
-            reverse_membership_key(cache_key),
-            ReverseDependencyMembership(
-                cache_key=cache_key,
-                shard_keys=frozenset(),
-                composite_dependencies=frozenset(),
-                simple_dependencies=frozenset(
-                    {("Project", "identification", json.dumps({"id": 1}))}
-                ),
-            ),
-            None,
-        )
-        cache.set(cache_key, "cached-value", None)
+        cache.set("cache-a", "cached-value", None)
 
         generic_cache_invalidation(
             sender=Project,
-            instance=SimpleNamespace(identification=identification, status="closed"),
-            old_relevant_values={"status": "open"},
+            instance=SimpleNamespace(identification=identification),
+            old_relevant_values={},
         )
 
-        assert cache.get(cache_key) == "cached-value"
+        assert cache.get("cache-a") == "cached-value"
+        assert cache_set_members(
+            composite_lookup_shard_key("Project", "filter", "identification")
+        ) == {"cache-a"}
 
     def test_generic_cache_invalidation_uses_request_query_match_when_candidate(
         self,

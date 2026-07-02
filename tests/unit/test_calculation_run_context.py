@@ -40,6 +40,18 @@ def make_pending_publication(cache_key: str) -> PendingDependencyCachePublicatio
     )
 
 
+class CountingHashKey:
+    def __init__(self) -> None:
+        self.hash_calls = 0
+
+    def __hash__(self) -> int:
+        self.hash_calls += 1
+        return 1
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+
 class CalculationFailed(RuntimeError):
     """Test exception used to exercise context cleanup."""
 
@@ -119,6 +131,18 @@ def test_get_or_set_reuses_loaded_value_inside_context() -> None:
         assert ctx.get_or_set(("answer",), loader) == 42
 
     assert calls == 1
+
+
+def test_get_or_set_hit_uses_single_mapping_lookup() -> None:
+    key = CountingHashKey()
+
+    with CalculationRunContext() as ctx:
+        assert ctx.get_or_set(key, lambda: 42) == 42
+        key.hash_calls = 0
+
+        assert ctx.get_or_set(key, lambda: 99) == 42
+
+    assert key.hash_calls == 1
 
 
 def test_get_or_set_does_not_cache_failed_loader() -> None:

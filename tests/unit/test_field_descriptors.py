@@ -7,6 +7,9 @@ from unittest.mock import Mock, patch
 from django.apps import apps
 from django.db import models
 
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.run_context import CalculationRunContext
+from general_manager.cache.signals import data_change
 from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     _FieldDescriptorBuilder,
     _general_manager_accessor,
@@ -14,6 +17,7 @@ from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     build_field_descriptors,
 )
 from general_manager.bootstrap import initialize_general_manager_classes
+from general_manager.manager.general_manager import GeneralManager
 
 
 def test_general_manager_many_accessor_uses_explicit_relation_field_name() -> None:
@@ -289,6 +293,131 @@ def test_general_manager_fk_accessor_uses_raw_id_without_loading_relation() -> N
     assert isinstance(result, RelatedManager)
     assert calls == [7]
     assert not interface_instance._instance.loaded_relation
+
+
+def test_general_manager_fk_accessor_reuses_raw_id_manager_in_run_context() -> None:
+    calls: list[object] = []
+
+    class RelatedManager:
+        def __init__(self, pk: object) -> None:
+            calls.append(pk)
+
+    source = SimpleNamespace(
+        owner_id=7,
+        _state=SimpleNamespace(fields_cache={}),
+    )
+    accessor = _general_manager_accessor(
+        "owner",
+        RelatedManager,
+        raw_id_name="owner_id",
+    )
+    interface_instance = SimpleNamespace(_instance=source)
+
+    with CalculationRunContext():
+        first = accessor(interface_instance)
+        second = accessor(interface_instance)
+
+    assert first is second
+    assert calls == [7]
+
+
+def test_general_manager_fk_accessor_clears_raw_id_cache_on_data_change() -> None:
+    calls: list[object] = []
+
+    class RelatedManager:
+        def __init__(self, pk: object) -> None:
+            calls.append(pk)
+
+    source = SimpleNamespace(
+        owner_id=7,
+        _state=SimpleNamespace(fields_cache={}),
+    )
+    accessor = _general_manager_accessor(
+        "owner",
+        RelatedManager,
+        raw_id_name="owner_id",
+    )
+    interface_instance = SimpleNamespace(_instance=source)
+
+    @data_change
+    def mutate(instance: object) -> object:
+        return instance
+
+    with CalculationRunContext():
+        first = accessor(interface_instance)
+        mutate(SimpleNamespace(identification={"id": 1}))
+        second = accessor(interface_instance)
+
+    assert first is not second
+    assert calls == [7, 7]
+
+
+def test_general_manager_fk_accessor_scopes_raw_id_cache_by_database_alias() -> None:
+    calls: list[object] = []
+
+    class RelatedManager:
+        def __init__(self, pk: object) -> None:
+            calls.append(pk)
+
+    accessor = _general_manager_accessor(
+        "owner",
+        RelatedManager,
+        raw_id_name="owner_id",
+    )
+    default_source = SimpleNamespace(
+        owner_id=7,
+        _state=SimpleNamespace(db="default", fields_cache={}),
+    )
+    replica_source = SimpleNamespace(
+        owner_id=7,
+        _state=SimpleNamespace(db="replica", fields_cache={}),
+    )
+
+    with CalculationRunContext():
+        default_manager = accessor(SimpleNamespace(_instance=default_source))
+        replica_manager = accessor(SimpleNamespace(_instance=replica_source))
+
+    assert default_manager is not replica_manager
+    assert calls == [7, 7]
+
+
+def test_general_manager_fk_accessor_replays_dependency_for_cached_raw_id_manager() -> (
+    None
+):
+    calls: list[object] = []
+
+    class RelatedInterface:
+        def __init__(self, manager_id: object) -> None:
+            calls.append(manager_id)
+            self.identification = {"id": manager_id}
+
+    class RelatedManager(GeneralManager):
+        pass
+
+    RelatedManager.Interface = RelatedInterface  # type: ignore[assignment]
+
+    source = SimpleNamespace(
+        owner_id=7,
+        _state=SimpleNamespace(fields_cache={}),
+    )
+    accessor = _general_manager_accessor(
+        "owner",
+        RelatedManager,
+        raw_id_name="owner_id",
+    )
+    interface_instance = SimpleNamespace(_instance=source)
+
+    with CalculationRunContext():
+        accessor(interface_instance)
+        with DependencyTracker() as dependencies:
+            accessor(interface_instance)
+
+    assert (
+        "RelatedManager",
+        "identification",
+        '{"id": 7}',
+    ) in dependencies
+    assert calls == [7]
 
 
 def test_build_field_descriptors_disambiguates_duplicate_reverse_relations() -> None:

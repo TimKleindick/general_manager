@@ -122,6 +122,45 @@ def test_single_key_scalar_dependency_mapping_serialization_skips_json_dumps() -
         )
 
 
+def test_multi_key_simple_dependency_mapping_serialization_skips_generic_path() -> None:
+    payload = {
+        "target_date": date(2026, 1, 2),
+        "derivative": {"id": 7},
+        "search_date": None,
+    }
+
+    with (
+        patch(
+            "general_manager.cache.dependency_matching.json.dumps",
+            side_effect=AssertionError("simple mapping uses fast path"),
+        ),
+        patch(
+            "general_manager.cache.dependency_matching.normalize_dependency_value",
+            side_effect=AssertionError("simple mapping does not need normalization"),
+        ),
+    ):
+        assert serialize_normalized_value(payload) == (
+            '{"derivative": {"id": 7}, "search_date": null, '
+            '"target_date": "2026-01-02"}'
+        )
+
+
+def test_sorted_two_key_simple_dependency_mapping_serialization_skips_sorting() -> None:
+    payload = {
+        "bill_of_material": {"id": 7},
+        "search_date": None,
+    }
+
+    with patch(
+        "general_manager.cache.dependency_matching.sorted",
+        side_effect=AssertionError("already-sorted two-key mapping skips sorting"),
+        create=True,
+    ):
+        assert serialize_normalized_value(payload) == (
+            '{"bill_of_material": {"id": 7}, "search_date": null}'
+        )
+
+
 def test_primitive_dependency_serialization_matches_json_contract() -> None:
     assert serialize_normalized_value("abc") == '"abc"'
     assert serialize_normalized_value(3) == "3"

@@ -18,6 +18,7 @@ ComparisonOperation: TypeAlias = Callable[[QuantityMagnitude, QuantityMagnitude]
 
 # Set precision for Decimal
 getcontext().prec = 28
+_PERCENT_SCALE = Decimal("100")
 
 # Create a new UnitRegistry
 ureg: pint.UnitRegistry[QuantityMagnitude] = pint.UnitRegistry(
@@ -124,6 +125,19 @@ def _scalar_arithmetic_preserves_unit(unit: str) -> bool:
     if unit == "dimensionless":
         return True
     return bool(_parse_unit(unit).dimensionality)
+
+
+def _exact_currency_per_unit_product(
+    left_unit: str,
+    right_unit: str,
+) -> str | None:
+    """Return the currency unit for exact ``currency / unit * unit`` products."""
+
+    for currency in currency_units:
+        prefix = f"{currency} / "
+        if left_unit.startswith(prefix) and left_unit[len(prefix) :] == right_unit:
+            return currency
+    return None
 
 
 def _quantity_as_float(quantity: MeasurementQuantity) -> PlainQuantity[float]:
@@ -413,6 +427,11 @@ class Measurement:
     version and are not a stable GeneralManager API contract.
     """
 
+    __quantity: MeasurementQuantity | None
+    __magnitude: Decimal
+    __unit: str
+    __quantity_exposed: bool
+
     def __init__(self, value: NumericMagnitude, unit: str) -> None:
         """
         Create a Measurement from a numeric value and a unit label.
@@ -467,13 +486,18 @@ class Measurement:
 
         measurement = cls.__new__(cls)
         decimal_value = _decimal_from_magnitude(value)
-        measurement.__quantity = cast(
-            MeasurementQuantity,
-            ureg.Quantity(decimal_value, _parse_unit(unit)),
-        )
+        measurement.__quantity = None
         measurement.__magnitude = decimal_value
         measurement.__unit = unit
         measurement.__quantity_exposed = False
+        return measurement
+
+    @classmethod
+    def _from_quantity(cls, quantity: MeasurementQuantity) -> Measurement:
+        """Build a measurement from a Pint operation result without reparsing it."""
+
+        measurement = cls.__new__(cls)
+        measurement.__set_quantity(quantity)
         return measurement
 
     def __set_quantity(
@@ -488,14 +512,24 @@ class Measurement:
         self.__unit = unit if unit is not None else str(quantity.units)
         self.__quantity_exposed = False
 
+    def __current_quantity(self) -> MeasurementQuantity:
+        quantity = self.__quantity
+        if quantity is None:
+            quantity = cast(
+                MeasurementQuantity,
+                ureg.Quantity(self.__magnitude, _parse_unit(self.__unit)),
+            )
+            self.__quantity = quantity
+        return quantity
+
     def __current_magnitude(self) -> Decimal:
         if self.__quantity_exposed:
-            return _decimal_from_magnitude(self.__quantity.magnitude)
+            return _decimal_from_magnitude(self.__current_quantity().magnitude)
         return self.__magnitude
 
     def __current_unit(self) -> str:
         if self.__quantity_exposed:
-            return str(self.__quantity.units)
+            return str(self.__current_quantity().units)
         return self.__unit
 
     def __getstate__(self) -> dict[str, str]:
@@ -537,8 +571,9 @@ class Measurement:
         Returns:
             PlainQuantity: Pint quantity representing the measurement value and unit.
         """
+        quantity = self.__current_quantity()
         self.__quantity_exposed = True
-        return self.__quantity
+        return quantity
 
     @property
     def magnitude(self) -> Decimal:
@@ -775,7 +810,7 @@ class Measurement:
             # Both are currencies
             if self.unit != other.unit:
                 raise CurrencyMismatchError("Addition")
-            result_quantity = self.__quantity + other.__quantity
+            result_quantity = self.__current_quantity() + other.__current_quantity()
             if not isinstance(result_quantity, pint.Quantity):
                 raise IncompatibleUnitsError("addition")
             return Measurement(
@@ -783,11 +818,13 @@ class Measurement:
             )
         elif not self.is_currency() and not other.is_currency():
             # Both are physical units
-            if self.__quantity.dimensionality != other.__quantity.dimensionality:
+            left_quantity = self.__current_quantity()
+            right_quantity = other.__current_quantity()
+            if left_quantity.dimensionality != right_quantity.dimensionality:
                 raise IncompatibleUnitsError("addition")
             left_quantity, right_quantity = _prepare_quantities_for_binary_operation(
-                self.__quantity,
-                other.__quantity,
+                left_quantity,
+                right_quantity,
             )
             result_quantity = left_quantity + right_quantity
             if not isinstance(result_quantity, pint.Quantity):
@@ -830,15 +867,17 @@ class Measurement:
             # Both are currencies
             if self.unit != other.unit:
                 raise CurrencyMismatchError("Subtraction")
-            result_quantity = self.__quantity - other.__quantity
+            result_quantity = self.__current_quantity() - other.__current_quantity()
             return Measurement(Decimal(str(result_quantity.magnitude)), str(self.unit))
         elif not self.is_currency() and not other.is_currency():
             # Both are physical units
-            if self.__quantity.dimensionality != other.__quantity.dimensionality:
+            left_quantity = self.__current_quantity()
+            right_quantity = other.__current_quantity()
+            if left_quantity.dimensionality != right_quantity.dimensionality:
                 raise IncompatibleUnitsError("subtraction")
             left_quantity, right_quantity = _prepare_quantities_for_binary_operation(
-                self.__quantity,
-                other.__quantity,
+                left_quantity,
+                right_quantity,
             )
             result_quantity = left_quantity - right_quantity
             return Measurement(
@@ -874,25 +913,41 @@ class Measurement:
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency():
                 raise CurrencyScalarOperationError("Multiplication")
+            left_unit = self.__current_unit()
+            right_unit = other.__current_unit()
+            result_currency = _exact_currency_per_unit_product(left_unit, right_unit)
+            if result_currency is not None:
+                return self._from_canonical_parts(
+                    self.__current_magnitude() * other.__current_magnitude(),
+                    result_currency,
+                )
+            result_currency = _exact_currency_per_unit_product(right_unit, left_unit)
+            if result_currency is not None:
+                return self._from_canonical_parts(
+                    self.__current_magnitude() * other.__current_magnitude(),
+                    result_currency,
+                )
             left_quantity, right_quantity = _prepare_quantities_for_binary_operation(
-                self.__quantity,
-                other.__quantity,
+                self.__current_quantity(),
+                other.__current_quantity(),
             )
             result_quantity = left_quantity * right_quantity
-            return Measurement(
-                _decimal_from_magnitude(result_quantity.magnitude),
-                str(result_quantity.units),
-            )
+            return self._from_quantity(cast(MeasurementQuantity, result_quantity))
         elif _is_numeric_scalar(other):
             if not isinstance(other, Decimal):
                 other = Decimal(str(other))
             unit = self.__current_unit()
+            if unit == "percent":
+                return self._from_canonical_parts(
+                    self.__current_magnitude() * other / _PERCENT_SCALE,
+                    "dimensionless",
+                )
             if _scalar_arithmetic_preserves_unit(unit):
                 return self._from_canonical_parts(
                     self.__current_magnitude() * other,
                     unit,
                 )
-            quantity = self.__quantity
+            quantity = self.__current_quantity()
             scalar: QuantityMagnitude = other
             if _unit_uses_offset(quantity):
                 quantity = cast(MeasurementQuantity, _quantity_as_float(quantity))
@@ -929,24 +984,26 @@ class Measurement:
             if self.is_currency() and other.is_currency() and self.unit != other.unit:
                 raise CurrencyMismatchError("Division")
             left_quantity, right_quantity = _prepare_quantities_for_binary_operation(
-                self.__quantity,
-                other.__quantity,
+                self.__current_quantity(),
+                other.__current_quantity(),
             )
             result_quantity = left_quantity / right_quantity
-            return Measurement(
-                _decimal_from_magnitude(result_quantity.magnitude),
-                str(result_quantity.units),
-            )
+            return self._from_quantity(cast(MeasurementQuantity, result_quantity))
         elif _is_numeric_scalar(other):
             if not isinstance(other, Decimal):
                 other = Decimal(str(other))
             unit = self.__current_unit()
+            if unit == "percent":
+                return self._from_canonical_parts(
+                    self.__current_magnitude() / other / _PERCENT_SCALE,
+                    "dimensionless",
+                )
             if _scalar_arithmetic_preserves_unit(unit):
                 return self._from_canonical_parts(
                     self.__current_magnitude() / other,
                     unit,
                 )
-            quantity = self.__quantity
+            quantity = self.__current_quantity()
             scalar: QuantityMagnitude = other
             if _unit_uses_offset(quantity):
                 quantity = cast(MeasurementQuantity, _quantity_as_float(quantity))
@@ -1027,8 +1084,8 @@ class Measurement:
             raise UnsupportedComparisonError()
         try:
             self_quantity, other_quantity = _prepare_quantities_for_binary_operation(
-                self.__quantity,
-                other.__quantity,
+                self.__current_quantity(),
+                other.__current_quantity(),
             )
             other_converted = _convert_quantity(
                 other_quantity, str(self_quantity.units)
@@ -1121,7 +1178,7 @@ class Measurement:
         if _is_numeric_scalar(other):
             if not isinstance(other, Decimal):
                 other = Decimal(str(other))
-            quantity = self.__quantity
+            quantity = self.__current_quantity()
             scalar: QuantityMagnitude = other
             if _unit_uses_offset(quantity):
                 quantity = cast(MeasurementQuantity, _quantity_as_float(quantity))
@@ -1261,7 +1318,7 @@ class Measurement:
             int: Stable hash suitable for use in dictionaries and sets. Measurements
             that compare equal after unit conversion produce the same hash.
         """
-        quantity = self.__quantity
+        quantity = self.__current_quantity()
         if _unit_uses_offset(quantity):
             quantity = cast(MeasurementQuantity, _quantity_as_float(quantity))
         base_quantity = quantity.to_base_units()

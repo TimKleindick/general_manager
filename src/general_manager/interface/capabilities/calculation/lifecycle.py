@@ -6,8 +6,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, ClassVar
 
 from general_manager.bucket.calculation_bucket import CalculationBucket
-from general_manager.cache.cache_tracker import DependencyTracker
-from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 
@@ -23,11 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 def _track_cached_manager(value: object) -> None:
     if isinstance(value, GeneralManager):
-        DependencyTracker.track(
-            value.__class__.__name__,
-            "identification",
-            serialize_dependency_identifier(value.identification),
-        )
+        value.__class__._track_identification_dependency(value.identification)
 
 
 class CalculationReadCapability(BaseCapability):

@@ -44,17 +44,6 @@ class ObservabilityCapability(Protocol):
     ) -> None: ...
 
 
-class ObservabilityTarget(Protocol):
-    """
-    Structural target shape consumed internally by :func:`with_observability`.
-
-    The protocol is not exported from this module. The wrapper requests only the
-    ``"observability"`` capability name.
-    """
-
-    def get_capability_handler(self, name: str) -> object | None: ...
-
-
 def with_observability(
     target: object,
     *,
@@ -103,9 +92,7 @@ def with_observability(
     get_handler = getattr(target, "get_capability_handler", None)
     if get_handler is None:
         return func()
-    capability = cast(ObservabilityTarget, target).get_capability_handler(
-        "observability"
-    )
+    capability = get_handler("observability")
     if capability is None:
         return func()
     observed = cast(ObservabilityCapability, capability)

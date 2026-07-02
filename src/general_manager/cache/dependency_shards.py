@@ -257,14 +257,22 @@ def _cache_member_set(value: object) -> set[str]:
 
 
 def _cache_set_add_many(additions: Mapping[str, set[str]]) -> None:
-    pending = {key: set(members) for key, members in additions.items() if members}
+    pending = {
+        key: members if type(members) is set else set(members)
+        for key, members in additions.items()
+        if members
+    }
     if not pending:
         return
 
     existing_sets = _cache_get_many(pending)
     payloads: dict[str, set[str]] = {}
     for key, members in pending.items():
-        current = _cache_member_set(existing_sets.get(key, set()))
+        existing = existing_sets.get(key)
+        if existing is None:
+            payloads[key] = members
+            continue
+        current = _cache_member_set(existing)
         current.update(members)
         payloads[key] = current
     _cache_set_many(payloads)
@@ -411,13 +419,7 @@ def _shard_keys_for_dependency(
 
     if action == "identification":
         shard_keys.add(
-            exact_lookup_shard_key(
-                manager_name,
-                "filter",
-                "identification",
-                "eq",
-                identifier,
-            )
+            composite_lookup_shard_key(manager_name, "filter", "identification")
         )
         simple_dependencies.add((manager_name, action, identifier))
         return _DependencyShardPlan(
@@ -494,13 +496,13 @@ def _shard_keys_for_dependency(
             frozenset(lookup_registrations),
         )
 
-    lookup, value = next(iter(params.items()))
+    lookup, _value = next(iter(params.items()))
     spec = lookup_spec_from_key(str(lookup))
     candidate_lookup = "__".join(spec.attr_path)
     lookup_registrations.add((manager_name, action, candidate_lookup))
     if spec.operator == "eq":
         shard_keys.add(
-            exact_lookup_shard_key(manager_name, action, spec.lookup, "eq", value)
+            composite_lookup_shard_key(manager_name, action, candidate_lookup)
         )
     else:
         shard_keys.add(
@@ -518,6 +520,7 @@ def _shard_keys_for_dependency(
 def _reverse_membership_for_dependencies(
     cache_key: str,
     dependency_set: set[Dependency],
+    plan_cache: dict[Dependency, _DependencyShardPlan] | None = None,
 ) -> tuple[ReverseDependencyMembership, set[tuple[str, str, str]]]:
     shard_keys: set[str] = set()
     composites: set[CompositeDependency] = set()
@@ -525,7 +528,15 @@ def _reverse_membership_for_dependencies(
     lookup_registrations: set[tuple[str, str, str]] = set()
 
     for manager_name, action, identifier in dependency_set:
-        plan = _shard_keys_for_dependency(manager_name, action, identifier)
+        dependency = (manager_name, action, identifier)
+        if plan_cache is None:
+            plan = _shard_keys_for_dependency(manager_name, action, identifier)
+        else:
+            try:
+                plan = plan_cache[dependency]
+            except KeyError:
+                plan = _shard_keys_for_dependency(manager_name, action, identifier)
+                plan_cache[dependency] = plan
         shard_keys.update(plan.shard_keys)
         composites.update(plan.composite_dependencies)
         simple_dependencies.update(plan.simple_dependencies)
@@ -592,7 +603,11 @@ def record_many_cache_dependencies(
     for cache_key, dependencies in entries:
         dependency_set = set(dependencies)
         if dependency_set:
-            normalized.setdefault(cache_key, set()).update(dependency_set)
+            existing_dependencies = normalized.get(cache_key)
+            if existing_dependencies is None:
+                normalized[cache_key] = dependency_set
+            else:
+                existing_dependencies.update(dependency_set)
     if not normalized:
         return
 
@@ -614,11 +629,13 @@ def record_many_cache_dependencies(
 
     set_additions: dict[str, set[str]] = defaultdict(set)
     reverse_payloads: dict[str, ReverseDependencyMembership] = {}
+    plan_cache: dict[Dependency, _DependencyShardPlan] = {}
 
     for cache_key, dependency_set in normalized.items():
         reverse, lookup_registrations = _reverse_membership_for_dependencies(
             cache_key,
             dependency_set,
+            plan_cache,
         )
         for shard_key in reverse.shard_keys:
             set_additions[shard_key].add(cache_key)

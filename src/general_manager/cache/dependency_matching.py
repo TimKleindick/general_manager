@@ -32,6 +32,7 @@ SUPPORTED_LOOKUP_OPERATORS = EXACT_OPERATORS | SCAN_OPERATORS
 UNDEFINED = object()
 _SCALAR_NORMALIZATION_MISS = object()
 _SCALAR_SERIALIZATION_MISS = object()
+_MAPPING_SERIALIZATION_MISS = object()
 
 
 type NormalizedDependencyValue = (
@@ -106,6 +107,71 @@ def _serialize_scalar_dependency_value(value: object) -> str | object:
     return _SCALAR_SERIALIZATION_MISS
 
 
+def _serialize_simple_dependency_value(value: object) -> str | object:
+    normalized_value = _normalize_scalar_dependency_value(value)
+    if normalized_value is not _SCALAR_NORMALIZATION_MISS:
+        serialized_value = _serialize_scalar_dependency_value(normalized_value)
+        if serialized_value is not _SCALAR_SERIALIZATION_MISS:
+            return serialized_value
+        if isinstance(normalized_value, float):
+            return json.dumps(normalized_value)
+    if isinstance(value, Mapping):
+        return _serialize_simple_dependency_mapping(value)
+    return _MAPPING_SERIALIZATION_MISS
+
+
+def _serialize_simple_dependency_mapping(
+    value: Mapping[object, object],
+) -> str | object:
+    if not value:
+        return "{}"
+    if len(value) == 1:
+        raw_key, raw_value = next(iter(value.items()))
+        serialized_value = _serialize_simple_dependency_value(raw_value)
+        if serialized_value is _MAPPING_SERIALIZATION_MISS:
+            return _MAPPING_SERIALIZATION_MISS
+        return (
+            "{"
+            f"{encode_basestring_ascii(str(raw_key))}: {cast(str, serialized_value)}"
+            "}"
+        )
+    if len(value) == 2:
+        iterator = iter(value.items())
+        first_key, first_value = next(iterator)
+        second_key, second_value = next(iterator)
+        first_key_str = str(first_key)
+        second_key_str = str(second_key)
+        if first_key_str == second_key_str:
+            return _MAPPING_SERIALIZATION_MISS
+        if first_key_str < second_key_str:
+            first_serialized = _serialize_simple_dependency_value(first_value)
+            if first_serialized is _MAPPING_SERIALIZATION_MISS:
+                return _MAPPING_SERIALIZATION_MISS
+            second_serialized = _serialize_simple_dependency_value(second_value)
+            if second_serialized is _MAPPING_SERIALIZATION_MISS:
+                return _MAPPING_SERIALIZATION_MISS
+            return (
+                "{"
+                f"{encode_basestring_ascii(first_key_str)}: "
+                f"{cast(str, first_serialized)}, "
+                f"{encode_basestring_ascii(second_key_str)}: "
+                f"{cast(str, second_serialized)}"
+                "}"
+            )
+    parts: list[str] = []
+    seen_keys: set[str] = set()
+    for raw_key, raw_value in sorted(value.items(), key=lambda item: str(item[0])):
+        key = str(raw_key)
+        if key in seen_keys:
+            return _MAPPING_SERIALIZATION_MISS
+        seen_keys.add(key)
+        serialized_value = _serialize_simple_dependency_value(raw_value)
+        if serialized_value is _MAPPING_SERIALIZATION_MISS:
+            return _MAPPING_SERIALIZATION_MISS
+        parts.append(f"{encode_basestring_ascii(key)}: {cast(str, serialized_value)}")
+    return "{" + ", ".join(parts) + "}"
+
+
 @dataclass(frozen=True, slots=True)
 class LookupSpec:
     """Parsed dependency lookup path and operator."""
@@ -157,17 +223,9 @@ def serialize_normalized_value(value: object) -> str:
         return json.dumps(value)
     if isinstance(value, Mapping):
         mapping = cast(Mapping[object, object], value)
-        if len(mapping) == 1:
-            key, val = next(iter(mapping.items()))
-            normalized_value = _normalize_scalar_dependency_value(val)
-            serialized_value = _serialize_scalar_dependency_value(normalized_value)
-            if serialized_value is not _SCALAR_SERIALIZATION_MISS:
-                return (
-                    "{"
-                    f"{encode_basestring_ascii(str(key))}: "
-                    f"{cast(str, serialized_value)}"
-                    "}"
-                )
+        serialized_mapping = _serialize_simple_dependency_mapping(mapping)
+        if serialized_mapping is not _MAPPING_SERIALIZATION_MISS:
+            return cast(str, serialized_mapping)
     return json.dumps(normalize_dependency_value(value), sort_keys=True)
 
 

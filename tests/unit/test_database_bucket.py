@@ -16,6 +16,7 @@ from general_manager.bucket.database_bucket import (
     QuerysetFilteringError,
     _restore_database_bucket_from_primary_keys,
 )
+from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.general_manager import GeneralManager
@@ -501,6 +502,43 @@ class DatabaseBucketTestCase(TestCase):
         )
         self.assertIs(first_managers[0], second_managers[0])
 
+    def test_cached_trusted_managers_replay_identification_dependencies_in_bulk(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            TrustedUserManager,
+        )
+
+        with CalculationRunContext():
+            list(bucket)
+            with (
+                patch.object(
+                    TrustedUserManager,
+                    "_track_identification_dependency",
+                    side_effect=AssertionError(
+                        "cached manager dependencies should be replayed in bulk"
+                    ),
+                ),
+                DependencyTracker() as dependencies,
+            ):
+                list(bucket)
+
+        self.assertIn(
+            (
+                "TrustedUserManager",
+                "identification",
+                f'{{"id": {self.u1.id}}}',
+            ),
+            dependencies,
+        )
+        self.assertIn(
+            (
+                "TrustedUserManager",
+                "identification",
+                f'{{"id": {self.u2.id}}}',
+            ),
+            dependencies,
+        )
+
     def test_equivalent_database_buckets_share_index_inside_run_context(self):
         """Share a bucket index for equivalent querysets in one run context."""
         first_bucket = DatabaseBucket(
@@ -586,6 +624,56 @@ class DatabaseBucketTestCase(TestCase):
             self.assertEqual(bucket.get(pk=self.u1.pk).identification["id"], self.u1.id)
             self.assertEqual(bucket[1].identification["id"], self.u2.id)
             self.assertIn(self.u1, bucket)
+
+    def test_tracking_unsorted_all_bucket_skips_empty_mapping_normalization(self):
+        """Avoid serializing empty mappings that are not part of tracked output."""
+        bucket = DatabaseBucket(User.objects.all(), UserManager)
+        original_normalize = DatabaseBucket._normalize_dependency_mapping
+        normalized_definitions = []
+
+        def spy_normalize(definitions):
+            normalized_definitions.append(definitions)
+            return original_normalize(definitions)
+
+        with (
+            patch.object(
+                DatabaseBucket,
+                "_normalize_dependency_mapping",
+                side_effect=spy_normalize,
+            ),
+            DependencyTracker() as dependencies,
+        ):
+            bucket._track_effective_dependencies()
+
+        self.assertEqual(normalized_definitions, [])
+        self.assertIn(("UserManager", "all", ""), dependencies)
+
+    def test_tracking_sorted_all_bucket_keeps_empty_mappings_in_sort_payload(self):
+        """Sorted buckets still publish empty filters/excludes for sort identity."""
+        bucket = DatabaseBucket(
+            User.objects.all(),
+            UserManager,
+            sort_keys=("username",),
+            sort_reverse=True,
+        )
+
+        with DependencyTracker() as dependencies:
+            bucket._track_effective_dependencies()
+
+        expected_sort_identifier = serialize_dependency_identifier(
+            {
+                "__sort__username": {
+                    "filters": {},
+                    "excludes": {},
+                    "reverse": True,
+                }
+            }
+        )
+        self.assertIn(("UserManager", "all", ""), dependencies)
+        self.assertIn(
+            ("UserManager", "filter", expected_sort_identifier),
+            dependencies,
+        )
 
     def test_filtered_count_populates_primary_key_snapshot_for_iteration(self):
         bucket = DatabaseBucket(

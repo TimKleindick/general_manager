@@ -6,8 +6,12 @@ import inspect
 import json
 from json.encoder import encode_basestring_ascii
 from hashlib import sha256
+from typing import TYPE_CHECKING, cast
 
 from general_manager.utils.json_encoder import CustomJSONEncoder
+
+if TYPE_CHECKING:
+    from general_manager.manager.general_manager import GeneralManager
 
 type CacheKeyArgs = tuple[object, ...]
 type CacheKeyKwargs = Mapping[str, object]
@@ -42,25 +46,70 @@ def _simple_positional_parameter_names(
     return tuple(parameter.name for parameter in parameters)
 
 
+@lru_cache(maxsize=1)
+def _general_manager_class() -> type[object]:
+    from general_manager.manager.general_manager import GeneralManager
+
+    return GeneralManager
+
+
+@lru_cache(maxsize=None)
+def _single_manager_arg_cache_key_parts(
+    func: Callable[..., object],
+    parameter_name: str,
+    module: str,
+    qualname: str,
+) -> tuple[bytes, bytes]:
+    prefix = (f'{{"args": {{{encode_basestring_ascii(parameter_name)}: ').encode()
+    suffix = (
+        f'}}, "module": {encode_basestring_ascii(module)}, '
+        f'"qualname": {encode_basestring_ascii(qualname)}}}'
+    ).encode()
+    return prefix, suffix
+
+
+@lru_cache(maxsize=65536)
+def _single_manager_arg_cache_key_from_repr(
+    func: Callable[..., object],
+    parameter_name: str,
+    module: str,
+    qualname: str,
+    manager_class_name: str,
+    identification_repr: str,
+) -> str:
+    manager_value = f"{manager_class_name}(**{identification_repr})"
+    prefix, suffix = _single_manager_arg_cache_key_parts(
+        func,
+        parameter_name,
+        module,
+        qualname,
+    )
+    hash_builder = sha256(usedforsecurity=False)
+    hash_builder.update(prefix)
+    hash_builder.update(encode_basestring_ascii(manager_value).encode())
+    hash_builder.update(suffix)
+    return hash_builder.hexdigest()
+
+
 def _single_manager_arg_cache_key(
     func: Callable[..., object],
     parameter_name: str,
     value: object,
 ) -> str | None:
     """Return the generic JSON-equivalent key for a single manager argument."""
-    from general_manager.manager.general_manager import GeneralManager
-
-    if not isinstance(value, GeneralManager):
+    if not isinstance(value, _general_manager_class()):
         return None
-    manager_value = f"{value.__class__.__name__}(**{value.identification})"
-    raw = (
-        '{"args": {'
-        f"{encode_basestring_ascii(parameter_name)}: "
-        f"{encode_basestring_ascii(manager_value)}"
-        f'}}, "module": {encode_basestring_ascii(func.__module__)}, '
-        f'"qualname": {encode_basestring_ascii(func.__qualname__)}}}'
-    ).encode()
-    return sha256(raw, usedforsecurity=False).hexdigest()
+    manager = cast("GeneralManager", value)
+    manager_class_name = type.__getattribute__(manager.__class__, "__name__")
+    identification_repr = f"{manager.identification}"
+    return _single_manager_arg_cache_key_from_repr(
+        func,
+        parameter_name,
+        func.__module__,
+        func.__qualname__,
+        manager_class_name,
+        identification_repr,
+    )
 
 
 def make_cache_key(

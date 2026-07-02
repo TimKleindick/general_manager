@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import pytest
 from unittest.mock import Mock
 
@@ -56,6 +57,28 @@ def test_with_observability_no_capability():
     assert result == 42
     assert calls == ["executed"]
     target.get_capability_handler.assert_called_once_with("observability")
+
+
+def test_with_observability_resolves_handler_once():
+    class Target:
+        handler_lookups = 0
+
+        @property
+        def get_capability_handler(self):
+            self.handler_lookups += 1
+            return lambda _name: None
+
+    target = Target()
+
+    result = with_observability(
+        target,
+        operation="test_op",
+        payload={},
+        func=lambda: "result",
+    )
+
+    assert result == "result"
+    assert target.handler_lookups == 1
 
 
 def test_with_observability_before_operation():
@@ -218,9 +241,17 @@ def test_with_observability_reuses_same_payload_copy_for_all_hooks():
 def test_with_observability_does_not_copy_payload_without_capability():
     """Payload conversion should be skipped when no capability is registered."""
 
-    class BrokenMapping(dict[str, object]):
+    class BrokenMapping(Mapping[str, object]):
+        def __getitem__(self, key: str) -> object:
+            if key == "key":
+                return "value"
+            raise KeyError(key)
+
         def __iter__(self):
             raise PayloadCopyError
+
+        def __len__(self) -> int:
+            return 1
 
     target = Mock()
     target.get_capability_handler = Mock(return_value=None)
@@ -228,7 +259,7 @@ def test_with_observability_does_not_copy_payload_without_capability():
     result = with_observability(
         target,
         operation="test",
-        payload=BrokenMapping({"key": "value"}),
+        payload=BrokenMapping(),
         func=lambda: "ok",
     )
 

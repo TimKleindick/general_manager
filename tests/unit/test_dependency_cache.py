@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pickle
+import pickletools
 from collections.abc import Iterable, Mapping
 from typing import cast
 from unittest.mock import patch
@@ -83,6 +84,18 @@ class DependencyCacheEntryTests(SimpleTestCase):
         self.assertEqual(entry.version, DEPENDENCY_CACHE_ENTRY_VERSION)
         self.assertEqual(entry.value, {"status": "ready"})
         self.assertEqual(entry.dependencies, frozenset(dependencies))
+
+    def test_dependency_cache_entry_pickle_uses_compact_reducer(self) -> None:
+        dependencies: set[Dependency] = {("Project", "identification", '{"id": 1}')}
+        entry = make_dependency_cache_entry("ready", dependencies)
+
+        opcodes = [
+            opcode.name
+            for opcode, _argument, _position in pickletools.genops(pickle.dumps(entry))
+        ]
+
+        self.assertNotIn("BUILD", opcodes)
+        self.assertIn("REDUCE", opcodes)
 
     def test_reads_falsey_combined_values_as_hits(self) -> None:
         values: list[object] = [None, False, 0, [], {}]
@@ -319,3 +332,39 @@ class DependencyCacheEntryTests(SimpleTestCase):
             replay_dependency_cache_hit(hit)
 
         self.assertEqual(dependencies, set(hit.dependencies))
+
+    def test_replay_framework_captured_hit_uses_trusted_bulk_path(self) -> None:
+        with DependencyTracker() as captured_dependencies:
+            DependencyTracker.track("Project", "identification", '{"id": 1}')
+            DependencyTracker.track("User", "filter", '{"active": true}')
+            DependencyTracker.track("User", "all", "")
+
+        cache_backend = PickleCache()
+        entry = make_dependency_cache_entry("ready", captured_dependencies)
+        cache_backend.set("cache-a", entry, None)
+        hit = read_dependency_cache_hit(cache_backend, "cache-a")
+        self.assertIsInstance(hit, DependencyCacheHit)
+        assert isinstance(hit, DependencyCacheHit)
+
+        with patch.object(
+            DependencyTracker,
+            "track",
+            side_effect=AssertionError("trusted replay should not track one-by-one"),
+        ):
+            with DependencyTracker() as dependencies:
+                replay_dependency_cache_hit(hit)
+
+        self.assertEqual(dependencies, set(captured_dependencies))
+
+    def test_replay_untrusted_hit_rejects_malformed_dependency(self) -> None:
+        hit = DependencyCacheHit(
+            value="ready",
+            dependencies=frozenset(
+                {
+                    ("Project", "fetch", '{"id": 1}'),  # type: ignore[arg-type]
+                }
+            ),
+        )
+
+        with self.assertRaises(ValueError):
+            replay_dependency_cache_hit(hit)

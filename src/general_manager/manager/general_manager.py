@@ -1,9 +1,10 @@
 from __future__ import annotations
 import json
+import logging
 from collections.abc import Mapping
 from datetime import date, datetime
 from json.encoder import encode_basestring_ascii
-from typing import TYPE_CHECKING, Iterator, Protocol, Self, Type, cast
+from typing import TYPE_CHECKING, ClassVar, Iterator, Protocol, Self, Type, cast
 
 from general_manager.api.property import GraphQLProperty
 from general_manager.bucket.base_bucket import Bucket
@@ -51,19 +52,20 @@ if TYPE_CHECKING:
 logger = get_logger("manager.general")
 
 
+def _debug_logging_enabled() -> bool:
+    is_enabled_for = getattr(logger, "isEnabledFor", None)
+    if callable(is_enabled_for):
+        return bool(is_enabled_for(logging.DEBUG))
+    return True
+
+
 def _serialize_simple_id_identification(
     identification: dict[str, object],
 ) -> str | None:
     if len(identification) != 1 or "id" not in identification:
         return None
     value = identification["id"]
-    if isinstance(value, datetime):
-        serialized_value = encode_basestring_ascii(value.isoformat())
-    elif isinstance(value, date):
-        serialized_value = encode_basestring_ascii(value.isoformat())
-    elif isinstance(value, str):
-        serialized_value = encode_basestring_ascii(value)
-    elif value is True:
+    if value is True:
         serialized_value = "true"
     elif value is False:
         serialized_value = "false"
@@ -71,11 +73,31 @@ def _serialize_simple_id_identification(
         serialized_value = "null"
     elif isinstance(value, int):
         serialized_value = str(value)
+    elif isinstance(value, str):
+        serialized_value = encode_basestring_ascii(value)
     elif isinstance(value, float):
         serialized_value = json.dumps(value)
+    elif isinstance(value, datetime):
+        serialized_value = encode_basestring_ascii(value.isoformat())
+    elif isinstance(value, date):
+        serialized_value = encode_basestring_ascii(value.isoformat())
     else:
         return None
     return f'{{"id": {serialized_value}}}'
+
+
+def _track_identification_dependency_active_default(
+    cls: type[object],
+    identification: dict[str, object],
+) -> None:
+    identifier = _serialize_simple_id_identification(identification)
+    if identifier is None:
+        identifier = serialize_dependency_identifier(identification)
+    DependencyTracker._track_validated(
+        type.__getattribute__(cls, "__name__"),
+        "identification",
+        identifier,
+    )
 
 
 class TrustedOrmRow(Protocol):
@@ -84,13 +106,18 @@ class TrustedOrmRow(Protocol):
     pk: object
 
 
+type _IdentificationDependencyCache = tuple[type[object], object, str]
+
+
 class GeneralManager(metaclass=GeneralManagerMeta):
     chat_exposed: bool = False
+    _gm_uses_default_identification_dependency_active: ClassVar[bool] = True
     Permission: Type[BasePermission]
     _attributes: dict[str, object]
     Interface: Type["InterfaceBase"]
     _old_values: dict[str, object]
     _attribute_value_cache: dict[str, object]
+    _identification_dependency_cache: _IdentificationDependencyCache | None
     _manager_state_valid: bool
     _manager_state_reason: str | None
 
@@ -100,14 +127,46 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         identification: dict[str, object],
     ) -> None:
         if DependencyTracker.is_active():
+            if type.__getattribute__(
+                cls,
+                "_gm_uses_default_identification_dependency_active",
+            ):
+                _track_identification_dependency_active_default(cls, identification)
+            else:
+                cls._track_identification_dependency_active(identification)
+
+    @classmethod
+    def _track_identification_dependency_active(
+        cls,
+        identification: dict[str, object],
+    ) -> None:
+        _track_identification_dependency_active_default(cls, identification)
+
+    def _identification_dependency_identifier(self) -> str:
+        identification = self.__id
+        if len(identification) == 1 and "id" in identification:
+            value = identification["id"]
+            value_class = value.__class__
+            cache = self._identification_dependency_cache
+            if cache is not None and cache[0] is value_class and cache[1] == value:
+                return cache[2]
             identifier = _serialize_simple_id_identification(identification)
-            if identifier is None:
-                identifier = serialize_dependency_identifier(identification)
-            DependencyTracker._track_validated(
-                cls.__name__,
-                "identification",
-                identifier,
-            )
+            if identifier is not None:
+                self._identification_dependency_cache = (
+                    value_class,
+                    value,
+                    identifier,
+                )
+                return identifier
+        self._identification_dependency_cache = None
+        return serialize_dependency_identifier(identification)
+
+    def _track_own_identification_dependency_active(self) -> None:
+        DependencyTracker._track_validated(
+            type.__getattribute__(self.__class__, "__name__"),
+            "identification",
+            self._identification_dependency_identifier(),
+        )
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         """
@@ -120,16 +179,18 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         self._interface = self.Interface(*args, **kwargs)
         self.__id: dict[str, object] = self._interface.identification
         self._attribute_value_cache = {}
+        self._identification_dependency_cache = None
         self._manager_state_valid = True
         self._manager_state_reason = None
         self._track_identification_dependency(self.__id)
-        logger.debug(
-            "instantiated manager",
-            context={
-                "manager": self.__class__.__name__,
-                "identification": self.__id,
-            },
-        )
+        if _debug_logging_enabled():
+            logger.debug(
+                "instantiated manager",
+                context={
+                    "manager": self.__class__.__name__,
+                    "identification": self.__id,
+                },
+            )
 
     @classmethod
     def _from_trusted_orm_instance(
@@ -188,18 +249,20 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         manager._interface = hydrate(instance, search_date=search_date)
         manager.__id = manager._interface.identification
         manager._attribute_value_cache = {}
+        manager._identification_dependency_cache = None
         manager._manager_state_valid = True
         manager._manager_state_reason = None
         if context is not None:
             context.set(cache_key, manager)
         cls._track_identification_dependency(manager.__id)
-        logger.debug(
-            "trusted orm manager hydrated",
-            context={
-                "manager": cls.__name__,
-                "identification": manager.__id,
-            },
-        )
+        if _debug_logging_enabled():
+            logger.debug(
+                "trusted orm manager hydrated",
+                context={
+                    "manager": cls.__name__,
+                    "identification": manager.__id,
+                },
+            )
         return manager
 
     def __str__(self) -> str:
@@ -520,7 +583,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         logger.debug(
             "manager filter",
             context={
-                "manager": cls.__name__,
+                "manager": type.__getattribute__(cls, "__name__"),
                 "filters": identifier_map,
             },
         )
@@ -554,7 +617,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         logger.debug(
             "manager exclude",
             context={
-                "manager": cls.__name__,
+                "manager": type.__getattribute__(cls, "__name__"),
                 "filters": identifier_map,
             },
         )
@@ -566,7 +629,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         logger.debug(
             "manager all",
             context={
-                "manager": cls.__name__,
+                "manager": type.__getattribute__(cls, "__name__"),
             },
         )
         return cast(Bucket[Self], cls.Interface.filter())

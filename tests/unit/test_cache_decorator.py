@@ -4,7 +4,9 @@ from unittest import mock
 from general_manager.cache.cache_decorator import cached, DependencyTracker
 from general_manager.cache.dependency_cache import (
     DependencyCacheHit,
+    dependency_cache_prefetch_value_bundle_key,
     make_dependency_cache_entry,
+    make_dependency_cache_prefetch_value_bundle,
     read_dependency_cache_hit,
 )
 from general_manager.cache.dependency_index import (
@@ -38,6 +40,7 @@ class FakeCacheBackend:
         self.store = {}
         self.timeouts = {}
         self.get_calls = []
+        self.get_many_calls = []
         self.lock = threading.RLock()
 
     def get(self, key, default=None):
@@ -57,6 +60,16 @@ class FakeCacheBackend:
         if cached_value is not default:
             return _trusted_pickle_loads(cached_value)  # type: ignore
         return default
+
+    def get_many(self, keys):
+        key_tuple = tuple(keys)
+        self.get_many_calls.append(key_tuple)
+        with self.lock:
+            return {
+                key: _trusted_pickle_loads(self.store[key])  # type: ignore
+                for key in key_tuple
+                if key in self.store
+            }
 
     def set(self, key, value, timeout=None):
         """
@@ -846,6 +859,320 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.assertEqual(self.fake_cache.get_calls, [])
         self.assertEqual(self.record_calls, [])
 
+    def test_dependency_scope_prefetches_previous_run_manifest_hits(self):
+        calls = []
+
+        @cached(cache="dependency", cache_backend=self.fake_cache)
+        def sample(value):
+            calls.append(value)
+            DependencyTracker.track("Project", "identification", f'{{"id": {value}}}')
+            return value * 3
+
+        key_one = make_cache_key(sample, (1,), {})
+        key_two = make_cache_key(sample, (2,), {})
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        for stored_key in tuple(self.fake_cache.store):
+            if isinstance(stored_key, str) and stored_key.endswith(
+                (":bundle", ":values", ":segments")
+            ):
+                del self.fake_cache.store[stored_key]
+        self.fake_cache.get_calls.clear()
+        self.fake_cache.get_many_calls.clear()
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        self.assertEqual(calls, [1, 2])
+        self.assertNotIn(key_one, self.fake_cache.get_calls)
+        self.assertNotIn(key_two, self.fake_cache.get_calls)
+        self.assertEqual(len(self.fake_cache.get_many_calls), 1)
+        self.assertEqual(set(self.fake_cache.get_many_calls[0]), {key_one, key_two})
+
+    def test_dependency_scope_prefetches_previous_run_bundle_without_get_many(self):
+        calls = []
+
+        @cached(cache="dependency", cache_backend=self.fake_cache)
+        def sample(value):
+            calls.append(value)
+            DependencyTracker.track("Project", "identification", f'{{"id": {value}}}')
+            return value * 3
+
+        key_one = make_cache_key(sample, (1,), {})
+        key_two = make_cache_key(sample, (2,), {})
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        self.fake_cache.get_calls.clear()
+        self.fake_cache.get_many_calls.clear()
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        self.assertEqual(calls, [1, 2])
+        self.assertNotIn(key_one, self.fake_cache.get_calls)
+        self.assertNotIn(key_two, self.fake_cache.get_calls)
+        self.assertEqual(len(self.fake_cache.get_many_calls), 1)
+        self.assertTrue(
+            all(
+                isinstance(cache_key, str) and cache_key.endswith(":values")
+                for cache_key in self.fake_cache.get_many_calls[0]
+            )
+        )
+
+    def test_dependency_scope_prefetches_value_bundle_when_tracker_inactive(self):
+        calls = []
+
+        @cached(cache="dependency", cache_backend=self.fake_cache)
+        def sample(value):
+            calls.append(value)
+            DependencyTracker.track("Project", "identification", f'{{"id": {value}}}')
+            return value * 3
+
+        key_one = make_cache_key(sample, (1,), {})
+        key_two = make_cache_key(sample, (2,), {})
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        self.fake_cache.get_calls.clear()
+        self.fake_cache.get_many_calls.clear()
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        prefetch_hint_gets = [
+            key for key in self.fake_cache.get_calls if key not in {key_one, key_two}
+        ]
+        self.assertTrue(
+            any(
+                isinstance(prefetch_key, str) and prefetch_key.endswith(":segments")
+                for prefetch_key in prefetch_hint_gets
+            )
+        )
+        self.assertFalse(
+            any(
+                isinstance(prefetch_key, str) and prefetch_key.endswith(":bundle")
+                for prefetch_key in prefetch_hint_gets
+            )
+        )
+        self.assertEqual(calls, [1, 2])
+        self.assertEqual(len(self.fake_cache.get_many_calls), 1)
+        self.assertTrue(
+            all(
+                isinstance(cache_key, str) and cache_key.endswith(":values")
+                for cache_key in self.fake_cache.get_many_calls[0]
+            )
+        )
+
+    def test_dependency_scope_value_bundle_accumulates_across_publish_flushes(self):
+        calls = []
+
+        @cached(cache="dependency", cache_backend=self.fake_cache)
+        def sample(value):
+            calls.append(value)
+            DependencyTracker.track("Project", "identification", f'{{"id": {value}}}')
+            return value * 3
+
+        key_one = make_cache_key(sample, (1,), {})
+        key_two = make_cache_key(sample, (2,), {})
+
+        with CalculationRunContext(dependency_cache_publish_batch_size=1):
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        self.fake_cache.get_calls.clear()
+        self.fake_cache.get_many_calls.clear()
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        self.assertEqual(calls, [1, 2])
+        self.assertNotIn(key_one, self.fake_cache.get_calls)
+        self.assertNotIn(key_two, self.fake_cache.get_calls)
+        self.assertEqual(len(self.fake_cache.get_many_calls), 1)
+        self.assertTrue(
+            all(
+                isinstance(cache_key, str) and cache_key.endswith(":values")
+                for cache_key in self.fake_cache.get_many_calls[0]
+            )
+        )
+
+    def test_dependency_scope_old_value_bundle_prefetches_all_values(self):
+        calls = []
+
+        @cached(cache="dependency", cache_backend=self.fake_cache)
+        def sample(value):
+            calls.append(value)
+            DependencyTracker.track("Project", "identification", f'{{"id": {value}}}')
+            return value * 3
+
+        key_one = make_cache_key(sample, (1,), {})
+        key_two = make_cache_key(sample, (2,), {})
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        manifest_key = next(
+            stored_key
+            for stored_key in self.fake_cache.store
+            if isinstance(stored_key, str)
+            and stored_key.startswith("dependency_cache_prefetch_manifest:")
+            and ":segment:" not in stored_key
+            and not stored_key.endswith((":bundle", ":values", ":segments"))
+        )
+        self.fake_cache.store.clear()
+        self.fake_cache.set(
+            dependency_cache_prefetch_value_bundle_key(manifest_key),
+            make_dependency_cache_prefetch_value_bundle(
+                {
+                    key_one: make_dependency_cache_entry(3, ()),
+                    key_two: make_dependency_cache_entry(6, ()),
+                }
+            ),
+        )
+        self.fake_cache.get_calls.clear()
+        self.fake_cache.get_many_calls.clear()
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        self.assertEqual(calls, [1, 2])
+        self.assertNotIn(key_one, self.fake_cache.get_calls)
+        self.assertNotIn(key_two, self.fake_cache.get_calls)
+
+    def test_dependency_scope_prefetches_full_bundle_when_tracker_active(self):
+        calls = []
+
+        @cached(cache="dependency", cache_backend=self.fake_cache)
+        def sample(value):
+            calls.append(value)
+            DependencyTracker.track("Project", "identification", f'{{"id": {value}}}')
+            return value * 3
+
+        key = make_cache_key(sample, (1,), {})
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+
+        self.fake_cache.get_calls.clear()
+        self.fake_cache.get_many_calls.clear()
+
+        with CalculationRunContext():
+            with DependencyTracker() as dependencies:
+                self.assertEqual(sample(1), 3)
+
+        prefetch_hint_gets = [
+            stored_key for stored_key in self.fake_cache.get_calls if stored_key != key
+        ]
+        self.assertTrue(
+            any(
+                isinstance(prefetch_key, str) and prefetch_key.endswith(":segments")
+                for prefetch_key in prefetch_hint_gets
+            )
+        )
+        self.assertEqual(len(self.fake_cache.get_many_calls), 1)
+        self.assertFalse(
+            any(
+                isinstance(cache_key, str) and cache_key.endswith(":values")
+                for cache_key in self.fake_cache.get_many_calls[0]
+            )
+        )
+        self.assertTrue(
+            all(
+                isinstance(cache_key, str) and cache_key.endswith(":bundle")
+                for cache_key in self.fake_cache.get_many_calls[0]
+            )
+        )
+        self.assertEqual(
+            dependencies,
+            {("Project", "identification", '{"id": 1}')},
+        )
+        self.assertEqual(calls, [1])
+
+    def test_dependency_scope_prefetch_manifest_is_attempted_once_per_context(self):
+        calls = []
+
+        @cached(cache="dependency", cache_backend=self.fake_cache)
+        def sample(value):
+            calls.append(value)
+            DependencyTracker.track("Project", "identification", f'{{"id": {value}}}')
+            return value * 3
+
+        key_one = make_cache_key(sample, (1,), {})
+        key_two = make_cache_key(sample, (2,), {})
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+            self.assertEqual(sample(2), 6)
+
+        prefetch_hint_gets = [
+            key for key in self.fake_cache.get_calls if key not in {key_one, key_two}
+        ]
+        self.assertEqual(len(prefetch_hint_gets), 5)
+        self.assertEqual(len(set(prefetch_hint_gets)), 4)
+        self.assertTrue(
+            any(
+                isinstance(prefetch_key, str) and prefetch_key.endswith(":segments")
+                for prefetch_key in prefetch_hint_gets
+            )
+        )
+        self.assertTrue(
+            any(
+                isinstance(prefetch_key, str) and prefetch_key.endswith(":values")
+                for prefetch_key in prefetch_hint_gets
+            )
+        )
+        self.assertTrue(
+            any(
+                isinstance(prefetch_key, str) and prefetch_key.endswith(":bundle")
+                for prefetch_key in prefetch_hint_gets
+            )
+        )
+        self.assertEqual(calls, [1, 2])
+
+    def test_dependency_scope_stale_prefetch_manifest_falls_back_to_compute(self):
+        calls = []
+
+        @cached(cache="dependency", cache_backend=self.fake_cache)
+        def sample(value):
+            calls.append(value)
+            DependencyTracker.track("Project", "identification", f'{{"id": {value}}}')
+            return value * 3
+
+        key = make_cache_key(sample, (1,), {})
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+
+        del self.fake_cache.store[key]
+        for stored_key in tuple(self.fake_cache.store):
+            if isinstance(stored_key, str) and stored_key.endswith(
+                (":bundle", ":values", ":segments")
+            ):
+                del self.fake_cache.store[stored_key]
+        self.fake_cache.get_calls.clear()
+        self.fake_cache.get_many_calls.clear()
+
+        with CalculationRunContext():
+            self.assertEqual(sample(1), 3)
+
+        self.assertEqual(calls, [1, 1])
+        self.assertEqual(self.fake_cache.get_many_calls, [(key,)])
+        self.assertIn(key, self.fake_cache.get_calls)
+
 
 class TestCacheDecoratorScopes(SimpleTestCase):
     def test_bare_cached_decorator_reuses_value_inside_context_only(self):
@@ -950,6 +1277,53 @@ class TestCacheDecoratorScopes(SimpleTestCase):
 
         self.assertEqual(sample(3), 6)
         self.assertEqual(calls, 2)
+
+    def test_run_scope_uses_active_context_without_context_manager(self):
+        calls = 0
+
+        @cached(cache="run")
+        def sample(value):
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+        with (
+            CalculationRunContext(),
+            mock.patch(
+                "general_manager.cache.cache_decorator.ensure_calculation_run_context",
+                side_effect=AssertionError(
+                    "active run context should be used directly"
+                ),
+            ),
+        ):
+            self.assertEqual(sample(3), 6)
+            self.assertEqual(sample(3), 6)
+
+        self.assertEqual(calls, 1)
+
+    def test_run_scope_uses_active_context_without_get_or_set_loader(self):
+        calls = 0
+
+        @cached(cache="run")
+        def sample(value):
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+        with (
+            CalculationRunContext(),
+            mock.patch.object(
+                CalculationRunContext,
+                "get_or_set",
+                side_effect=AssertionError(
+                    "active run cache should use direct context access"
+                ),
+            ),
+        ):
+            self.assertEqual(sample(3), 6)
+            self.assertEqual(sample(3), 6)
+
+        self.assertEqual(calls, 1)
 
     def test_run_scope_creates_context_when_missing_for_single_call(self):
         calls = 0

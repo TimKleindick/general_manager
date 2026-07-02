@@ -1,3 +1,5 @@
+from datetime import date, datetime
+
 from django.test import TestCase, override_settings
 from general_manager.bootstrap import (
     InvalidPermissionClassError,
@@ -9,6 +11,7 @@ from general_manager.manager.general_manager import (
     TrustedOrmHydrationNotSupportedError,
     UnsupportedUnionOperandError,
 )
+from general_manager.manager import general_manager as general_manager_module
 from general_manager.manager.meta import GeneralManagerMeta, InvalidManagerStateError
 from general_manager.permission.manager_based_permission import (
     AdditiveManagerPermission,
@@ -149,6 +152,55 @@ class GeneralManagerTestCase(TestCase):
         TemporaryManager.Permission = ManagerBasedPermission  # type: ignore
         return TemporaryManager
 
+    def test_class_dependency_tracking_reads_name_without_metaclass_lookup(self):
+        manager_class = self._temporary_manager_class()
+        original_getattribute = GeneralManagerMeta.__getattribute__
+
+        def fail_on_name_lookup(cls, attribute_name):
+            if attribute_name == "__name__":
+                raise AssertionError
+            return original_getattribute(cls, attribute_name)
+
+        with (
+            DependencyTracker() as dependencies,
+            patch.object(
+                GeneralManagerMeta,
+                "__getattribute__",
+                fail_on_name_lookup,
+            ),
+        ):
+            manager_class._track_identification_dependency_active({"id": "tracked"})
+
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "tracked"}'),
+            dependencies,
+        )
+
+    def test_instance_dependency_tracking_reads_name_without_metaclass_lookup(self):
+        manager_class = self._temporary_manager_class()
+        manager = manager_class(id="tracked")
+        original_getattribute = GeneralManagerMeta.__getattribute__
+
+        def fail_on_name_lookup(cls, attribute_name):
+            if attribute_name == "__name__":
+                raise AssertionError
+            return original_getattribute(cls, attribute_name)
+
+        with (
+            DependencyTracker() as dependencies,
+            patch.object(
+                GeneralManagerMeta,
+                "__getattribute__",
+                fail_on_name_lookup,
+            ),
+        ):
+            manager._track_own_identification_dependency_active()
+
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "dummy_id"}'),
+            dependencies,
+        )
+
     def test_temporary_manager_class_does_not_register_graphql_interface(self):
         pending_graphql_interfaces = list(GeneralManagerMeta.pending_graphql_interfaces)
 
@@ -175,6 +227,23 @@ class GeneralManagerTestCase(TestCase):
         )
         self.assertIsInstance(manager, GeneralManager)
 
+    def test_manager_init_skips_disabled_debug_logging(self):
+        class DisabledDebugLogger:
+            debug_calls = 0
+
+            def isEnabledFor(self, _level):
+                return False
+
+            def debug(self, *_args, **_kwargs):
+                self.debug_calls += 1
+
+        fake_logger = DisabledDebugLogger()
+
+        with patch("general_manager.manager.general_manager.logger", fake_logger):
+            self.manager()
+
+        self.assertEqual(fake_logger.debug_calls, 0)
+
     def test_manager_init_does_not_serialize_identifier_without_dependency_tracker(
         self,
     ):
@@ -192,6 +261,40 @@ class GeneralManagerTestCase(TestCase):
             ("GeneralManager", "identification", '{"id": "dummy_id"}'),
             dependencies,
         )
+
+    def test_default_identification_tracking_wrapper_uses_fast_active_path(self):
+        manager_class = self._temporary_manager_class()
+
+        with (
+            DependencyTracker() as dependencies,
+            patch.object(
+                manager_class,
+                "_track_identification_dependency_active",
+                side_effect=AssertionError("default wrapper should use fast path"),
+            ),
+        ):
+            manager_class._track_identification_dependency({"id": "tracked"})
+
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "tracked"}'),
+            dependencies,
+        )
+
+    def test_identification_tracking_wrapper_preserves_active_override(self):
+        base_class = self._temporary_manager_class()
+        calls = []
+
+        class OverrideManager(base_class):
+            @classmethod
+            def _track_identification_dependency_active(cls, identification):
+                calls.append((cls, identification))
+
+        identification = {"id": "tracked"}
+
+        with DependencyTracker():
+            OverrideManager._track_identification_dependency(identification)
+
+        self.assertEqual(calls, [(OverrideManager, identification)])
 
     def test_manager_init_tracks_scalar_id_without_generic_serializer(self):
         with (
@@ -220,6 +323,68 @@ class GeneralManagerTestCase(TestCase):
 
         self.assertIn(
             ("GeneralManager", "identification", '{"id": "dummy_id"}'),
+            dependencies,
+        )
+
+    def test_manager_init_tracks_int_id_without_date_type_checks(self):
+        class RaisingInstanceCheck(type):
+            def __instancecheck__(cls, instance):
+                raise AssertionError
+
+        class RaisingDate(metaclass=RaisingInstanceCheck):
+            pass
+
+        class IntInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        manager_class = self._temporary_manager_class()
+        manager_class.Interface = IntInterface  # type: ignore[assignment]
+
+        with (
+            DependencyTracker() as dependencies,
+            patch("general_manager.manager.general_manager.datetime", RaisingDate),
+            patch("general_manager.manager.general_manager.date", RaisingDate),
+        ):
+            manager_class(7)
+
+        self.assertIn(
+            (manager_class.__name__, "identification", '{"id": 7}'),
+            dependencies,
+        )
+
+    def test_manager_init_scalar_id_fast_path_preserves_bool_and_temporal_values(self):
+        class ScalarInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        manager_class = self._temporary_manager_class()
+        manager_class.Interface = ScalarInterface  # type: ignore[assignment]
+
+        with DependencyTracker() as dependencies:
+            manager_class(True)
+            manager_class(False)
+            manager_class(date(2026, 1, 2))
+            manager_class(datetime(2026, 1, 2, 3, 4, 5))
+
+        self.assertIn(
+            (manager_class.__name__, "identification", '{"id": true}'),
+            dependencies,
+        )
+        self.assertIn(
+            (manager_class.__name__, "identification", '{"id": false}'),
+            dependencies,
+        )
+        self.assertIn(
+            (manager_class.__name__, "identification", '{"id": "2026-01-02"}'),
+            dependencies,
+        )
+        self.assertIn(
+            (
+                manager_class.__name__,
+                "identification",
+                '{"id": "2026-01-02T03:04:05"}',
+            ),
             dependencies,
         )
 
@@ -501,6 +666,263 @@ class GeneralManagerTestCase(TestCase):
             create=True,
         ):
             self.assertEqual(instance.id, "dummy_id")
+
+    def test_cached_descriptor_read_tracks_cached_manager_dependency(self):
+        related_class = self._temporary_manager_class()
+
+        class RelatedInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        related_class.Interface = RelatedInterface  # type: ignore[assignment]
+        related = related_class("related-id")
+
+        owner_class = self._temporary_manager_class()
+        owner_class._attributes = {"related": lambda _interface: related}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            owner_class._attributes.keys(),
+            owner_class,
+        )
+        owner = owner_class("dummy_id")
+        self.assertIs(owner.related, related)
+
+        with DependencyTracker() as dependencies:
+            self.assertIs(owner.related, related)
+
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "related-id"}'),
+            dependencies,
+        )
+
+    def test_cached_manager_descriptor_replay_uses_active_tracking_path(self):
+        related_class = self._temporary_manager_class()
+
+        class RelatedInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        related_class.Interface = RelatedInterface  # type: ignore[assignment]
+        related = related_class("related-id")
+
+        owner_class = self._temporary_manager_class()
+        owner_class._attributes = {"related": lambda _interface: related}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            owner_class._attributes.keys(),
+            owner_class,
+        )
+        owner = owner_class("dummy_id")
+        self.assertIs(owner.related, related)
+
+        with (
+            DependencyTracker() as dependencies,
+            patch(
+                "general_manager.manager.meta.DependencyTracker.is_active",
+                side_effect=[True, AssertionError],
+            ),
+        ):
+            self.assertIs(owner.related, related)
+
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "related-id"}'),
+            dependencies,
+        )
+
+    def test_cached_manager_descriptor_reuses_identification_dependency_identifier(
+        self,
+    ):
+        related_class = self._temporary_manager_class()
+
+        class RelatedInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        related_class.Interface = RelatedInterface  # type: ignore[assignment]
+        related = related_class("related-id")
+
+        owner_class = self._temporary_manager_class()
+        owner_class._attributes = {"related": lambda _interface: related}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            owner_class._attributes.keys(),
+            owner_class,
+        )
+        owner = owner_class("dummy_id")
+        self.assertIs(owner.related, related)
+
+        with (
+            DependencyTracker() as dependencies,
+            patch(
+                "general_manager.manager.general_manager."
+                "_serialize_simple_id_identification",
+                wraps=general_manager_module._serialize_simple_id_identification,
+            ) as serialize_simple_id,
+        ):
+            self.assertIs(owner.related, related)
+            self.assertIs(owner.related, related)
+
+        self.assertEqual(serialize_simple_id.call_count, 1)
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "related-id"}'),
+            dependencies,
+        )
+
+    def test_cached_manager_descriptor_rechecks_mutated_identification_dependency(
+        self,
+    ):
+        related_class = self._temporary_manager_class()
+
+        class RelatedInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        related_class.Interface = RelatedInterface  # type: ignore[assignment]
+        related = related_class("related-id")
+
+        owner_class = self._temporary_manager_class()
+        owner_class._attributes = {"related": lambda _interface: related}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            owner_class._attributes.keys(),
+            owner_class,
+        )
+        owner = owner_class("dummy_id")
+        self.assertIs(owner.related, related)
+
+        with DependencyTracker() as dependencies:
+            self.assertIs(owner.related, related)
+            related.identification["id"] = "changed-id"
+            self.assertIs(owner.related, related)
+
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "related-id"}'),
+            dependencies,
+        )
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "changed-id"}'),
+            dependencies,
+        )
+
+    def test_cached_descriptor_read_skips_manager_tracking_when_inactive(self):
+        related_class = self._temporary_manager_class()
+
+        class RelatedInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        related_class.Interface = RelatedInterface  # type: ignore[assignment]
+        related = related_class("related-id")
+
+        owner_class = self._temporary_manager_class()
+        owner_class._attributes = {"related": lambda _interface: related}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            owner_class._attributes.keys(),
+            owner_class,
+        )
+        owner = owner_class("dummy_id")
+        self.assertIs(owner.related, related)
+
+        with patch.object(
+            related_class,
+            "_track_identification_dependency",
+            side_effect=AssertionError("inactive tracker should skip tracking"),
+        ):
+            self.assertIs(owner.related, related)
+
+    def test_cached_scalar_descriptor_read_reuses_non_manager_tracking_result(self):
+        owner_class = self._temporary_manager_class()
+        owner_class._attributes = {"name": lambda _interface: "cached-name"}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            owner_class._attributes.keys(),
+            owner_class,
+        )
+        owner = owner_class("dummy_id")
+        self.assertEqual(owner.name, "cached-name")
+
+        with DependencyTracker():
+            self.assertEqual(owner.name, "cached-name")
+            with patch(
+                "general_manager.manager.meta._manager_dependency_tracking_class",
+                side_effect=AssertionError(
+                    "cached scalar tracking result should be reused"
+                ),
+            ):
+                self.assertEqual(owner.name, "cached-name")
+
+    def test_cached_scalar_descriptor_read_skips_tracker_check_after_class_is_known(
+        self,
+    ):
+        owner_class = self._temporary_manager_class()
+        owner_class._attributes = {"name": lambda _interface: "cached-name"}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            owner_class._attributes.keys(),
+            owner_class,
+        )
+        owner = owner_class("dummy_id")
+        self.assertEqual(owner.name, "cached-name")
+
+        with DependencyTracker():
+            self.assertEqual(owner.name, "cached-name")
+
+        with patch(
+            "general_manager.manager.meta.DependencyTracker.is_active",
+            side_effect=AssertionError(
+                "known scalar cached values do not need tracker checks"
+            ),
+        ):
+            self.assertEqual(owner.name, "cached-name")
+
+    def test_cached_scalar_descriptor_read_remembers_non_tracking_value_class(self):
+        owner_class = self._temporary_manager_class()
+        owner_class._attributes = {"name": lambda _interface: "cached-name"}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            owner_class._attributes.keys(),
+            owner_class,
+        )
+        owner = owner_class("dummy_id")
+        self.assertEqual(owner.name, "cached-name")
+        self.assertEqual(owner.name, "cached-name")
+        descriptor = vars(owner_class)["name"]
+
+        self.assertIs(descriptor._non_tracking_value_class, str)
+
+    def test_cached_descriptor_rechecks_tracking_when_cached_value_class_changes(
+        self,
+    ):
+        related_class = self._temporary_manager_class()
+
+        class RelatedInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        related_class.Interface = RelatedInterface  # type: ignore[assignment]
+        related = related_class("related-id")
+
+        owner_class = self._temporary_manager_class()
+        owner_class._attributes = {"value": lambda _interface: "cached-name"}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            owner_class._attributes.keys(),
+            owner_class,
+        )
+        owner = owner_class("dummy_id")
+        self.assertEqual(owner.value, "cached-name")
+
+        with DependencyTracker():
+            self.assertEqual(owner.value, "cached-name")
+
+        owner._attribute_value_cache["value"] = related
+        with DependencyTracker() as dependencies:
+            self.assertIs(owner.value, related)
+
+        self.assertIn(
+            ("TemporaryManager", "identification", '{"id": "related-id"}'),
+            dependencies,
+        )
+
+    def test_manager_dependency_tracking_class_detection_is_cached(self):
+        from general_manager.manager.meta import _manager_dependency_tracking_class
+
+        manager_class = self._temporary_manager_class()
+
+        self.assertIs(_manager_dependency_tracking_class(manager_class), manager_class)
+        self.assertIsNone(_manager_dependency_tracking_class(str))
 
     def test_initialized_manager_inherited_method_skips_attribute_initialization(self):
         manager_class = self._temporary_manager_class()
