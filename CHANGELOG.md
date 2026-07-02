@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.60.2 (2026-07-02)
+
+### Bug Fixes
+
+- Address dependency cache review feedback
+  ([`398b7f0`](https://github.com/TimKleindick/general_manager/commit/398b7f0c23522549a9bc089e28b9cbf41e6b50b4))
+
+- Handle dependency cache replay regressions
+  ([`1c70bb8`](https://github.com/TimKleindick/general_manager/commit/1c70bb8a049c461a1cf0e1c2eed33555e0ac8c45))
+
+### Performance Improvements
+
+- Reduce dependency-cache framework overhead
+  ([`d69be5f`](https://github.com/TimKleindick/general_manager/commit/d69be5fa0530bca8941ea407033862d0060a0ca2))
+
+### Testing
+
+- Cover dependency cache prefetch helpers
+  ([`0c1c3d9`](https://github.com/TimKleindick/general_manager/commit/0c1c3d9c67f98c427dbd8661c0d7d2f44749700f))
+
+
 ## v0.60.1 (2026-07-01)
 
 ### Performance Improvements
