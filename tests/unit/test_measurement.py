@@ -66,6 +66,45 @@ class MeasurementTestCase(TestCase):
 
         self.assertEqual(str(converted), "125000 EUR / metric_ton")
 
+    def test_convert_magnitude_uses_cached_multiplicative_factor(self):
+        from general_manager.measurement import measurement as measurement_module
+
+        measurement_module._parse_unit.cache_clear()
+        measurement_module._canonical_unit_string.cache_clear()
+        measurement_module._multiplicative_conversion_factor.cache_clear()
+
+        cases = [
+            (Decimal("1"), "percent", "dimensionless", Decimal("0.01")),
+            (Decimal("2000"), "EUR * percent / kilogram", "EUR/kg", Decimal("20")),
+            (Decimal("100"), "EUR / metric_ton", "EUR/kg", Decimal("0.1")),
+        ]
+
+        with patch.object(
+            measurement_module,
+            "_build_quantity",
+            side_effect=AssertionError(
+                "eligible multiplicative conversions should not build a quantity"
+            ),
+        ):
+            for value, source, target, expected in cases:
+                with self.subTest(source=source, target=target):
+                    self.assertEqual(
+                        measurement_module.convert_magnitude(value, source, target),
+                        expected,
+                    )
+
+        first_cache = measurement_module._multiplicative_conversion_factor.cache_info()
+        self.assertGreaterEqual(first_cache.misses, len(cases))
+
+        for value, source, target, expected in cases:
+            self.assertEqual(
+                measurement_module.convert_magnitude(value, source, target),
+                expected,
+            )
+
+        second_cache = measurement_module._multiplicative_conversion_factor.cache_info()
+        self.assertGreaterEqual(second_cache.hits, first_cache.hits + len(cases))
+
     def test_compound_currency_conversion_requires_exchange_rate(self):
         from general_manager.measurement.measurement import MissingExchangeRateError
 
@@ -73,6 +112,26 @@ class MeasurementTestCase(TestCase):
 
         with self.assertRaises(MissingExchangeRateError):
             m.to("EUR/t")
+
+    def test_cross_currency_conversion_still_requires_exchange_rate(self):
+        from general_manager.measurement import measurement as measurement_module
+        from general_manager.measurement.measurement import MissingExchangeRateError
+
+        measurement_module._multiplicative_conversion_factor.cache_clear()
+
+        with self.assertRaises(MissingExchangeRateError):
+            Measurement(Decimal("100"), "USD / metric_ton").to("EUR/t")
+
+    def test_explicit_cross_currency_conversion_uses_existing_exchange_rate_behavior(
+        self,
+    ):
+        converted = Measurement(Decimal("100"), "USD / metric_ton").to(
+            "EUR/t",
+            exchange_rate=1.25,
+        )
+
+        self.assertEqual(converted.magnitude, Decimal("125"))
+        self.assertEqual(converted.unit, "EUR / metric_ton")
 
     def test_fractional_currency_power_falls_back_to_pint_conversion(self):
         m = Measurement(4, "EUR ** 0.5")
@@ -142,6 +201,24 @@ class MeasurementTestCase(TestCase):
         with self.assertRaises(UndefinedUnitError):
             m.to("not_a_real_unit")
 
+    def test_invalid_conversion_falls_back_after_factor_rejects_path(self):
+        from general_manager.measurement import measurement as measurement_module
+
+        measurement_module._multiplicative_conversion_factor.cache_clear()
+
+        self.assertIsNone(
+            measurement_module._cached_multiplicative_conversion_factor(
+                "not_a_real_unit",
+                "meter",
+            )
+        )
+        with self.assertRaises(UndefinedUnitError):
+            Measurement(Decimal("1"), "kilogram").to("not_a_real_unit")
+
+    def test_invalid_conversion_still_raises_pint_error(self):
+        with self.assertRaises(DimensionalityError):
+            Measurement(Decimal("1"), "meter").to("second")
+
     def test_physical_unit_conversion(self):
         m = Measurement(1, "kilometer")
         converted = m.to("meter")
@@ -152,6 +229,20 @@ class MeasurementTestCase(TestCase):
         converted = m.to("degF")
         self.assertEqual(converted.unit, "degree_Fahrenheit")
         self.assertAlmostEqual(float(converted.magnitude), 77.0)
+
+    def test_offset_conversion_still_uses_pint_fallback(self):
+        from general_manager.measurement import measurement as measurement_module
+
+        measurement_module._multiplicative_conversion_factor.cache_clear()
+
+        converted = Measurement(Decimal("25"), "degC").to("degF")
+
+        self.assertEqual(converted.unit, "degree_Fahrenheit")
+        self.assertAlmostEqual(float(converted.magnitude), 77.0)
+        self.assertEqual(
+            measurement_module._multiplicative_conversion_factor.cache_info().currsize,
+            1,
+        )
 
     def test_offset_unit_from_string_conversion(self):
         converted = Measurement.from_string("25 degC").to("degF")
@@ -226,6 +317,63 @@ class MeasurementTestCase(TestCase):
             Measurement(2, "kg")
 
         self.assertEqual(mocked.call_count, 1)
+
+    def test_currency_component_uses_cached_parse_unit(self):
+        from general_manager.measurement import measurement as measurement_module
+
+        measurement_module._parse_unit.cache_clear()
+        measurement_module._pint_unit_components.cache_clear()
+        measurement_module._currency_component.cache_clear()
+
+        with patch.object(
+            measurement_module,
+            "_parse_unit",
+            wraps=measurement_module._parse_unit,
+        ) as mocked:
+            self.assertEqual(
+                measurement_module._currency_component("EUR / kilogram"),
+                ("EUR", 1),
+            )
+            self.assertEqual(
+                measurement_module._currency_component("EUR / kilogram"),
+                ("EUR", 1),
+            )
+
+        self.assertEqual(mocked.call_count, 1)
+        self.assertGreaterEqual(
+            measurement_module._currency_component.cache_info().hits,
+            1,
+        )
+
+    def test_unit_without_currency_is_cached(self):
+        from general_manager.measurement import measurement as measurement_module
+
+        measurement_module._parse_unit.cache_clear()
+        measurement_module._unit_without_currency.cache_clear()
+
+        with patch.object(
+            measurement_module,
+            "_parse_unit",
+            wraps=measurement_module._parse_unit,
+        ) as mocked:
+            first = measurement_module._unit_without_currency(
+                "USD / kilogram",
+                "USD",
+                1,
+            )
+            second = measurement_module._unit_without_currency(
+                "USD / kilogram",
+                "USD",
+                1,
+            )
+
+        self.assertEqual(first, "1 / kilogram")
+        self.assertEqual(second, "1 / kilogram")
+        self.assertEqual(mocked.call_count, 2)
+        self.assertGreaterEqual(
+            measurement_module._unit_without_currency.cache_info().hits,
+            1,
+        )
 
     def test_measurement_reuses_canonical_values_until_quantity_is_exposed(self):
         measurement = Measurement(Decimal("1.2300"), "kg / m ** 3")
@@ -693,6 +841,12 @@ class MeasurementTestCase(TestCase):
         m3 = m1 * m2
         self.assertEqual(str(m3), "2000 EUR * percent")
         self.assertEqual(str(m3.to("EUR")), "20 EUR")
+
+    def test_currency_percent_arithmetic_result_unit_is_unchanged(self):
+        result = Measurement(Decimal("100"), "EUR") * Measurement(Decimal("20"), "%")
+
+        self.assertEqual(str(result), "2000 EUR * percent")
+        self.assertEqual(str(result.to("EUR")), "20 EUR")
 
     def test_conversion_to_complex_units(self):
         """
