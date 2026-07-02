@@ -91,11 +91,19 @@ def _unit_uses_offset_for_unit_string(unit: str) -> bool:
     return False
 
 
+@lru_cache(maxsize=512)
 def _pint_unit_components(unit: str) -> tuple[tuple[str, object], ...]:
     """Return Pint unit component names and powers for one unit expression."""
 
     parsed_unit = _parse_unit(unit)
     return tuple(parsed_unit._units.items())
+
+
+@lru_cache(maxsize=512)
+def _unit_dimensionality(unit: str) -> object:
+    """Return Pint dimensionality metadata for one unit expression."""
+
+    return _parse_unit(unit).dimensionality
 
 
 def _pint_unit_component_uses_offset(unit_name: str) -> bool:
@@ -187,12 +195,12 @@ def _convert_quantity(
     return source_quantity.to(target_unit)
 
 
+@lru_cache(maxsize=512)
 def _currency_component(unit: str) -> tuple[str, int] | None:
     """Return the single configured currency component in a unit expression."""
 
-    parsed_unit = ureg.parse_units(str(unit))
     currency_components: list[tuple[str, int]] = []
-    for unit_name, power in parsed_unit._units.items():
+    for unit_name, power in _pint_unit_components(unit):
         currency_power = _integer_unit_power(power)
         if currency_power is not None and unit_name in currency_units:
             currency_components.append((unit_name, currency_power))
@@ -213,11 +221,67 @@ def _integer_unit_power(power: object) -> int | None:
     return None
 
 
+@lru_cache(maxsize=512)
 def _unit_without_currency(unit: str, currency: str, power: int) -> str:
     """Return a unit expression with one currency component removed."""
 
-    stripped_unit = ureg.parse_units(str(unit)) / (ureg.parse_units(currency) ** power)
+    stripped_unit = _parse_unit(unit) / (_parse_unit(currency) ** power)
     return str(stripped_unit)
+
+
+def _is_implicit_cross_currency_conversion(
+    source_unit: str,
+    target_unit: str,
+) -> bool:
+    """Return whether a conversion would require an explicit exchange rate."""
+
+    source_currency = _currency_component(source_unit)
+    target_currency = _currency_component(target_unit)
+    return (
+        source_currency is not None
+        and target_currency is not None
+        and source_currency[0] != target_currency[0]
+    )
+
+
+@lru_cache(maxsize=1024)
+def _multiplicative_conversion_factor(
+    source_unit: str,
+    target_unit: str,
+) -> Decimal | None:
+    """Return a cached Decimal factor for safe multiplicative conversions."""
+
+    try:
+        if (
+            _unit_uses_offset_for_unit_string(source_unit)
+            or _unit_uses_offset_for_unit_string(target_unit)
+            or _is_implicit_cross_currency_conversion(source_unit, target_unit)
+        ):
+            return None
+        converted_quantity = ureg.Quantity(
+            Decimal("1"),
+            _parse_unit(source_unit),
+        ).to(_parse_unit(target_unit))
+    except pint.errors.PintError:
+        return None
+    return _decimal_from_magnitude(converted_quantity.magnitude)
+
+
+def _cached_multiplicative_conversion_factor(
+    source_unit: str,
+    target_unit: str,
+) -> Decimal | None:
+    """Return a cached factor keyed by canonical source and target units."""
+
+    try:
+        source_canonical_unit = _canonical_unit_string(source_unit)
+        target_canonical_unit = _canonical_unit_string(target_unit)
+    except pint.errors.PintError:
+        return None
+    return _multiplicative_conversion_factor(
+        source_canonical_unit,
+        target_canonical_unit,
+    )
 
 
 def convert_magnitude(value: Decimal, source_unit: str, target_unit: str) -> Decimal:
@@ -229,6 +293,13 @@ def convert_magnitude(value: Decimal, source_unit: str, target_unit: str) -> Dec
     stays as ``Decimal``. For those conversions, convert through ``float`` and then
     round-trip back to ``Decimal`` via ``str``.
     """
+
+    conversion_factor = _cached_multiplicative_conversion_factor(
+        source_unit,
+        target_unit,
+    )
+    if conversion_factor is not None:
+        return _decimal_from_magnitude(value * conversion_factor)
 
     converted_quantity = _convert_quantity(
         _build_quantity(value, source_unit), target_unit
@@ -830,10 +901,10 @@ class Measurement:
             )
         elif not self.is_currency() and not other.is_currency():
             # Both are physical units
+            if _unit_dimensionality(left_unit) != _unit_dimensionality(right_unit):
+                raise IncompatibleUnitsError("addition")
             left_quantity = self.__current_quantity()
             right_quantity = other.__current_quantity()
-            if left_quantity.dimensionality != right_quantity.dimensionality:
-                raise IncompatibleUnitsError("addition")
             left_quantity, right_quantity = _prepare_quantities_for_binary_operation(
                 left_quantity,
                 right_quantity,
@@ -883,10 +954,10 @@ class Measurement:
             return Measurement(Decimal(str(result_quantity.magnitude)), str(self.unit))
         elif not self.is_currency() and not other.is_currency():
             # Both are physical units
+            if _unit_dimensionality(left_unit) != _unit_dimensionality(right_unit):
+                raise IncompatibleUnitsError("subtraction")
             left_quantity = self.__current_quantity()
             right_quantity = other.__current_quantity()
-            if left_quantity.dimensionality != right_quantity.dimensionality:
-                raise IncompatibleUnitsError("subtraction")
             left_quantity, right_quantity = _prepare_quantities_for_binary_operation(
                 left_quantity,
                 right_quantity,
