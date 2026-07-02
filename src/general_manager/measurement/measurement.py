@@ -728,6 +728,12 @@ class Measurement:
             pint.errors.PintError: If `target_unit` is invalid or incompatible
                 with the source unit.
         """
+        if self.unit == target_unit:
+            return self
+        target_canonical_unit = _canonical_unit_string(target_unit)
+        if self.unit == target_canonical_unit:
+            return self
+
         source_currency = _currency_component(self.unit)
         target_currency = _currency_component(target_unit)
         if (
