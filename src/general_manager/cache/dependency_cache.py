@@ -10,7 +10,6 @@ from typing import Protocol, TypeGuard, cast
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import Dependency
 
-LEGACY_DEPENDENCY_CACHE_ENTRY_VERSION = 1
 DEPENDENCY_CACHE_ENTRY_VERSION = 2
 TRUSTED_DEPENDENCY_CACHE_ENTRY_VERSION = 3
 DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION = 1
@@ -512,11 +511,7 @@ def _combined_payload_to_hit(
 ) -> DependencyCacheHit | None | _MissingSentinel:
     if not isinstance(payload, DependencyCacheEntry):
         return None
-    if payload.version == LEGACY_DEPENDENCY_CACHE_ENTRY_VERSION:
-        dependencies = _legacy_dependency_set(payload.dependencies)
-        if dependencies is None:
-            return _MISSING
-    elif payload.version == DEPENDENCY_CACHE_ENTRY_VERSION:
+    if payload.version == DEPENDENCY_CACHE_ENTRY_VERSION:
         # Version 2 entries are structurally checked here and still validate
         # each dependency during replay.
         if not isinstance(payload.dependencies, frozenset):

@@ -162,11 +162,18 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         return serialize_dependency_identifier(identification)
 
     def _track_own_identification_dependency_active(self) -> None:
-        DependencyTracker._track_validated(
-            type.__getattribute__(self.__class__, "__name__"),
-            "identification",
-            self._identification_dependency_identifier(),
-        )
+        manager_class = self.__class__
+        if type.__getattribute__(
+            manager_class,
+            "_gm_uses_default_identification_dependency_active",
+        ):
+            DependencyTracker._track_validated(
+                type.__getattribute__(manager_class, "__name__"),
+                "identification",
+                self._identification_dependency_identifier(),
+            )
+            return
+        manager_class._track_identification_dependency_active(self.__id)
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         """

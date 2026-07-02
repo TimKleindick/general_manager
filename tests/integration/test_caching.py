@@ -1600,4 +1600,11 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         filter_section = index_after["filter"]["TestProjectForCommercials"]["name"]
         self.assertEqual(len(filter_section), 1)
-        self.assertEqual(len(next(iter(filter_section.values()))), 1)
+        cache_keys = next(iter(filter_section.values()))
+        prefetch_cache_keys = {
+            cache_key
+            for cache_key in cache_keys
+            if cache_key.startswith("dependency_cache_prefetch_manifest:")
+        }
+        self.assertEqual(len(cache_keys - prefetch_cache_keys), 1)
+        self.assertEqual(len(prefetch_cache_keys), 2)
