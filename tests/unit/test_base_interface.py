@@ -489,6 +489,17 @@ class InterfaceBaseTests(SimpleTestCase):
         ):
             self.assertFalse(base_interface_module._should_validate_possible_values())
 
+    @override_settings(DEBUG=False, GENERAL_MANAGER={"VALIDATE_INPUT_VALUES": 1})
+    def test_possible_values_toggle_accepts_integer_setting(self):
+        self.assertTrue(base_interface_module._should_validate_possible_values())
+
+    @override_settings(
+        DEBUG=True,
+        GENERAL_MANAGER={"VALIDATE_INPUT_VALUES": object()},
+    )
+    def test_possible_values_toggle_falls_back_to_debug_for_unknown_setting(self):
+        self.assertTrue(base_interface_module._should_validate_possible_values())
+
     def test_input_without_possible_values_skips_validation_setting_lookup(self):
         class NoPossibleValuesInterface(InterfaceBase):
             input_fields: ClassVar = {"id": DummyInput(int, possible_values=None)}
@@ -627,6 +638,30 @@ class InterfaceBaseTests(SimpleTestCase):
                 observer=NoneObserver(),
             )
 
+    def test_execute_with_observability_runs_without_observer(self):
+        self.assertEqual(
+            InterfaceBase._execute_with_observability(
+                target=DummyInterface,
+                operation="read",
+                payload={},
+                func=lambda: "ok",
+                observer=None,
+            ),
+            "ok",
+        )
+
+    def test_execute_with_observability_reraises_without_error_observer(self):
+        error = RuntimeError("failed")
+
+        with self.assertRaisesRegex(RuntimeError, "failed"):
+            InterfaceBase._execute_with_observability(
+                target=DummyInterface,
+                operation="read",
+                payload={},
+                func=lambda: (_ for _ in ()).throw(error),
+                observer=None,
+            )
+
     def test_vals_allowed_lower_and_upper_bounds(self):
         # Lower bound
         inst1 = DummyInterface(a=1, b="v", gm=DummyGM({"id": 21}), vals=1, c=1)
@@ -666,6 +701,15 @@ class InterfaceBaseTests(SimpleTestCase):
         self.assertEqual(second.identification, {"a": 2, "b": "y", "c": None})
         self.assertEqual(fields.keys_calls, 1)
         self.assertEqual(fields.items_calls, 1)
+
+    def test_single_field_input_parsing_plan_refreshes_when_field_removed(self):
+        class SingleFieldInterface(InterfaceBase):
+            input_fields: ClassVar = {"id": DummyInput(int)}
+
+        plan = SingleFieldInterface._get_input_parsing_plan()
+        SingleFieldInterface.input_fields = {}
+
+        self.assertFalse(SingleFieldInterface._input_parsing_plan_is_fresh(plan))
 
     def test_single_required_input_skips_generic_argument_mapping(self):
         class SingleInputInterface(InterfaceBase):
