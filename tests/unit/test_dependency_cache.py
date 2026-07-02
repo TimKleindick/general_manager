@@ -223,7 +223,7 @@ class DependencyCacheEntryTests(SimpleTestCase):
         self.assertEqual(hit.value, "ready")
         self.assertEqual(hit.dependencies, frozenset(dependencies))
 
-    def test_legacy_combined_payload_still_rejects_malformed_dependencies(
+    def test_legacy_combined_payload_version_is_treated_as_cache_miss(
         self,
     ) -> None:
         cache_backend = PickleCache()
@@ -233,7 +233,7 @@ class DependencyCacheEntryTests(SimpleTestCase):
             DependencyCacheEntry(
                 version=1,
                 value="legacy",
-                dependencies=frozenset({("Project", "bad-action", '{"id": 1}')}),  # type: ignore[arg-type]
+                dependencies=frozenset({("Project", "identification", '{"id": 1}')}),
             ),
             None,
         )

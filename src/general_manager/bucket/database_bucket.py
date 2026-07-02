@@ -608,6 +608,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def _can_cache_run_scoped_managers(self) -> bool:
         if self._manager_class.__init__ is not GeneralManager.__init__:
             return False
+        if not type.__getattribute__(
+            self._manager_class,
+            "_gm_uses_default_identification_dependency_active",
+        ):
+            return False
         return callable(
             getattr(self._manager_class.Interface, "_from_trusted_orm_instance", None)
         )

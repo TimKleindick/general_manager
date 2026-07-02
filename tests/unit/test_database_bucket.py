@@ -1,6 +1,7 @@
 # type: ignore
 
 from datetime import datetime
+from typing import ClassVar
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -226,6 +227,15 @@ class InitTrackingTrustedManager(GeneralManager):
         super().__init__(pk, **kwargs)
 
 
+class CustomTrackingTrustedManager(GeneralManager):
+    tracking_calls: ClassVar[list[dict[str, object]]] = []
+
+    @classmethod
+    def _track_identification_dependency_active(cls, identification):
+        cls.tracking_calls.append(dict(identification))
+        DependencyTracker.track(cls.__name__, "all", "")
+
+
 class DatabaseBucketTestCase(TestCase):
     def setUp(self):
         """
@@ -239,6 +249,8 @@ class DatabaseBucketTestCase(TestCase):
         TrustedUserManager.Interface = TrustedDummyInterface
         GroupBackedTrustedUserManager.Interface = GroupBackedTrustedInterface
         InitTrackingTrustedManager.Interface = TrustedDummyInterface
+        CustomTrackingTrustedManager.Interface = TrustedDummyInterface
+        CustomTrackingTrustedManager.tracking_calls = []
         DummyInterface._parent_class = UserManager
         TrustedDummyInterface._parent_class = TrustedUserManager
         # Create some test users
@@ -538,6 +550,44 @@ class DatabaseBucketTestCase(TestCase):
             ),
             dependencies,
         )
+
+    def test_cached_trusted_manager_reuse_preserves_custom_dependency_tracking(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            CustomTrackingTrustedManager,
+        )
+
+        with CalculationRunContext():
+            list(bucket)
+            with DependencyTracker() as dependencies:
+                list(bucket)
+
+        self.assertEqual(
+            CustomTrackingTrustedManager.tracking_calls,
+            [{"id": self.u1.id}, {"id": self.u2.id}],
+        )
+        self.assertIn(("CustomTrackingTrustedManager", "all", ""), dependencies)
+        self.assertNotIn(
+            (
+                "CustomTrackingTrustedManager",
+                "identification",
+                f'{{"id": {self.u1.id}}}',
+            ),
+            dependencies,
+        )
+
+    def test_instance_tracking_helper_preserves_custom_dependency_tracking(self):
+        manager = CustomTrackingTrustedManager(self.u1.id)
+        CustomTrackingTrustedManager.tracking_calls = []
+
+        with DependencyTracker() as dependencies:
+            manager._track_own_identification_dependency_active()
+
+        self.assertEqual(
+            CustomTrackingTrustedManager.tracking_calls,
+            [{"id": self.u1.id}],
+        )
+        self.assertEqual(dependencies, {("CustomTrackingTrustedManager", "all", "")})
 
     def test_equivalent_database_buckets_share_index_inside_run_context(self):
         """Share a bucket index for equivalent querysets in one run context."""
