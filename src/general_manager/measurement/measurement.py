@@ -702,6 +702,10 @@ class Measurement:
         each unit expression contains exactly one configured currency component;
         expressions with zero, multiple, inverse, or mismatched-power currency
         components fall back to Pint conversion and may raise Pint errors.
+        When ``target_unit`` matches the current canonical unit exactly, or
+        ``_canonical_unit_string(target_unit)`` canonicalizes to the current
+        unit, ``to()`` returns this ``Measurement`` object unchanged instead of
+        allocating a converted copy.
         Components with explicit power one, such as ``EUR ** 1``, are treated as
         the same currency component; expressions such as ``EUR / EUR`` simplify
         before this check and therefore are not currency conversions.
@@ -759,14 +763,11 @@ class Measurement:
                 return Measurement(value, target_unit)
 
         if self.is_currency():
-            if str(self.unit) == str(target_unit):
-                return self  # Same currency, no conversion needed
-            elif exchange_rate is not None:
+            if exchange_rate is not None:
                 # Convert using the provided exchange rate
                 value = self.magnitude * Decimal(str(exchange_rate))
                 return Measurement(value, target_unit)
-            else:
-                raise MissingExchangeRateError()
+            raise MissingExchangeRateError()
         else:
             # Standard conversion for physical units
             value = convert_magnitude(self.magnitude, self.unit, target_unit)
