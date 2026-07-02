@@ -820,8 +820,8 @@ class GeneralManagerTestCase(TestCase):
         self.assertIs(owner.related, related)
 
         with patch.object(
-            related_class,
-            "_track_identification_dependency",
+            related,
+            "_track_own_identification_dependency_active",
             side_effect=AssertionError("inactive tracker should skip tracking"),
         ):
             self.assertIs(owner.related, related)
@@ -1049,6 +1049,25 @@ class GeneralManagerTestCase(TestCase):
         self.assertEqual(forwarded, composite_identification)
         self.assertIsNot(forwarded, composite_identification)
         self.assertEqual(result, [])
+
+    def test_query_debug_logging_skips_context_when_debug_disabled(self):
+        class DisabledDebugLogger:
+            def isEnabledFor(self, _level):
+                return False
+
+            def debug(self, *_args, **_kwargs):
+                raise AssertionError
+
+        with (
+            patch.object(DummyInterface, "filter", return_value=[]),
+            patch.object(DummyInterface, "exclude", return_value=[]),
+            patch(
+                "general_manager.manager.general_manager.logger", DisabledDebugLogger()
+            ),
+        ):
+            self.manager.filter(owner=self.manager())
+            self.manager.exclude(owner=self.manager())
+            self.manager.all()
 
     def test_classmethod_get(self):
         """

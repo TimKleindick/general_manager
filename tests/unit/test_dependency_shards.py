@@ -256,7 +256,7 @@ class DependencyShardKeyTests(TestCase):
             "cache-all-filter"
         }
 
-    def test_candidate_lookup_combines_exact_scan_and_composite_shards(self) -> None:
+    def test_candidate_lookup_combines_scan_and_composite_shards(self) -> None:
         record_cache_dependencies(
             "cache-exact",
             [("Project", "filter", json.dumps({"status": "open"}))],
@@ -268,6 +268,11 @@ class DependencyShardKeyTests(TestCase):
         record_cache_dependencies(
             "cache-combo",
             [("Project", "filter", json.dumps({"status": "open", "priority": 3}))],
+        )
+        cache.set(
+            exact_lookup_shard_key("Project", "filter", "status", "eq", "closed"),
+            {"legacy-exact"},
+            None,
         )
 
         assert candidate_cache_keys_for_lookup(
@@ -847,7 +852,7 @@ class DependencyIndexShardFacadeTests(TestCase):
             [("Project", "filter", json.dumps({"status": "seed"}))],
         )
         cache.set(
-            exact_lookup_shard_key("Project", "filter", "status", "eq", "open"),
+            composite_lookup_shard_key("Project", "filter", "status"),
             {cache_key},
             None,
         )
@@ -884,7 +889,7 @@ class DependencyIndexShardFacadeTests(TestCase):
             [("Project", "filter", json.dumps({"status": "seed"}))],
         )
         cache.set(
-            exact_lookup_shard_key("Project", "filter", "status", "eq", "open"),
+            composite_lookup_shard_key("Project", "filter", "status"),
             {"cache-a"},
             None,
         )
@@ -910,7 +915,7 @@ class DependencyIndexShardFacadeTests(TestCase):
             [("Project", "filter", json.dumps({"status": "seed"}))],
         )
         cache.set(
-            exact_lookup_shard_key("Project", "filter", "status", "eq", "open"),
+            composite_lookup_shard_key("Project", "filter", "status"),
             {cache_key},
             None,
         )
@@ -946,7 +951,7 @@ class DependencyIndexShardFacadeTests(TestCase):
             [("Project", "filter", json.dumps({"status": "seed"}))],
         )
         cache.set(
-            exact_lookup_shard_key("Project", "filter", "status", "eq", "open"),
+            composite_lookup_shard_key("Project", "filter", "status"),
             {cache_key},
             None,
         )
@@ -986,7 +991,7 @@ class DependencyIndexShardFacadeTests(TestCase):
             [("Project", "filter", json.dumps({"status": "seed"}))],
         )
         cache.set(
-            exact_lookup_shard_key("Project", "filter", "status", "eq", "open"),
+            composite_lookup_shard_key("Project", "filter", "status"),
             {cache_key},
             None,
         )

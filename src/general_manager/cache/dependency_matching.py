@@ -108,6 +108,8 @@ def _serialize_scalar_dependency_value(value: object) -> str | object:
 
 
 def _serialize_simple_dependency_value(value: object) -> str | object:
+    """Serialize only values matching the full encoder, else return the miss sentinel."""
+
     normalized_value = _normalize_scalar_dependency_value(value)
     if normalized_value is not _SCALAR_NORMALIZATION_MISS:
         serialized_value = _serialize_scalar_dependency_value(normalized_value)
@@ -123,6 +125,8 @@ def _serialize_simple_dependency_value(value: object) -> str | object:
 def _serialize_simple_dependency_mapping(
     value: Mapping[object, object],
 ) -> str | object:
+    """Serialize mappings or return `_MAPPING_SERIALIZATION_MISS` on ambiguity."""
+
     if not value:
         return "{}"
     if len(value) == 1:

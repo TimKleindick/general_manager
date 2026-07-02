@@ -126,6 +126,8 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         cls,
         identification: dict[str, object],
     ) -> None:
+        """Track an identification dependency only when a tracker is active."""
+
         if DependencyTracker.is_active():
             if type.__getattribute__(
                 cls,
@@ -140,6 +142,8 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         cls,
         identification: dict[str, object],
     ) -> None:
+        """Record an identification dependency for the default tracking path."""
+
         _track_identification_dependency_active_default(cls, identification)
 
     def _identification_dependency_identifier(self) -> str:
@@ -162,6 +166,8 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         return serialize_dependency_identifier(identification)
 
     def _track_own_identification_dependency_active(self) -> None:
+        """Replay this instance's identification dependency on cached reads."""
+
         manager_class = self.__class__
         if type.__getattribute__(
             manager_class,
@@ -587,13 +593,14 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             Bucket[Self]: Bucket containing manager instances that match the lookups.
         """
         identifier_map = cls.__parse_identification(kwargs) or kwargs
-        logger.debug(
-            "manager filter",
-            context={
-                "manager": type.__getattribute__(cls, "__name__"),
-                "filters": identifier_map,
-            },
-        )
+        if _debug_logging_enabled():
+            logger.debug(
+                "manager filter",
+                context={
+                    "manager": type.__getattribute__(cls, "__name__"),
+                    "filters": identifier_map,
+                },
+            )
         return cast(Bucket[Self], cls.Interface.filter(**identifier_map))
 
     @classmethod
@@ -621,24 +628,26 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             Bucket[Self]: Bucket of manager instances that do not satisfy the lookups.
         """
         identifier_map = cls.__parse_identification(kwargs) or kwargs
-        logger.debug(
-            "manager exclude",
-            context={
-                "manager": type.__getattribute__(cls, "__name__"),
-                "filters": identifier_map,
-            },
-        )
+        if _debug_logging_enabled():
+            logger.debug(
+                "manager exclude",
+                context={
+                    "manager": type.__getattribute__(cls, "__name__"),
+                    "filters": identifier_map,
+                },
+            )
         return cast(Bucket[Self], cls.Interface.exclude(**identifier_map))
 
     @classmethod
     def all(cls) -> Bucket[Self]:
         """Return a bucket containing every managed object of this class."""
-        logger.debug(
-            "manager all",
-            context={
-                "manager": type.__getattribute__(cls, "__name__"),
-            },
-        )
+        if _debug_logging_enabled():
+            logger.debug(
+                "manager all",
+                context={
+                    "manager": type.__getattribute__(cls, "__name__"),
+                },
+            )
         return cast(Bucket[Self], cls.Interface.filter())
 
     @staticmethod

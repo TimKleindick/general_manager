@@ -55,7 +55,6 @@ def _general_manager_class() -> type[object]:
 
 @lru_cache(maxsize=None)
 def _single_manager_arg_cache_key_parts(
-    func: Callable[..., object],
     parameter_name: str,
     module: str,
     qualname: str,
@@ -70,7 +69,6 @@ def _single_manager_arg_cache_key_parts(
 
 @lru_cache(maxsize=65536)
 def _single_manager_arg_cache_key_from_repr(
-    func: Callable[..., object],
     parameter_name: str,
     module: str,
     qualname: str,
@@ -79,7 +77,6 @@ def _single_manager_arg_cache_key_from_repr(
 ) -> str:
     manager_value = f"{manager_class_name}(**{identification_repr})"
     prefix, suffix = _single_manager_arg_cache_key_parts(
-        func,
         parameter_name,
         module,
         qualname,
@@ -103,7 +100,6 @@ def _single_manager_arg_cache_key(
     manager_class_name = type.__getattribute__(manager.__class__, "__name__")
     identification_repr = f"{manager.identification}"
     return _single_manager_arg_cache_key_from_repr(
-        func,
         parameter_name,
         func.__module__,
         func.__qualname__,

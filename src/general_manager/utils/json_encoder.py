@@ -27,6 +27,7 @@ class CustomJSONEncoder(json.JSONEncoder):
         if isinstance(o, (datetime, date, time)):
             return o.isoformat()
         if isinstance(o, GeneralManager):
+            # Bypass GeneralManagerMeta.__getattribute__ descriptor initialization.
             manager_class_name = type.__getattribute__(o.__class__, "__name__")
             return f"{manager_class_name}(**{o.identification})"
         try:

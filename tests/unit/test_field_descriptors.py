@@ -420,6 +420,54 @@ def test_general_manager_fk_accessor_replays_dependency_for_cached_raw_id_manage
     assert calls == [7]
 
 
+def test_general_manager_fk_accessor_replays_custom_tracking_for_cached_raw_id_manager() -> (
+    None
+):
+    calls: list[object] = []
+    tracked: list[dict[str, object]] = []
+
+    class RelatedInterface:
+        def __init__(self, manager_id: object) -> None:
+            calls.append(manager_id)
+            self.identification = {"id": manager_id}
+
+    class RelatedManager(GeneralManager):
+        @classmethod
+        def _track_identification_dependency_active(
+            cls,
+            identification: dict[str, object],
+        ) -> None:
+            tracked.append(dict(identification))
+            DependencyTracker.track("CustomRelatedManager", "all", "")
+
+    RelatedManager.Interface = RelatedInterface  # type: ignore[assignment]
+
+    source = SimpleNamespace(
+        owner_id=7,
+        _state=SimpleNamespace(fields_cache={}),
+    )
+    accessor = _general_manager_accessor(
+        "owner",
+        RelatedManager,
+        raw_id_name="owner_id",
+    )
+    interface_instance = SimpleNamespace(_instance=source)
+
+    with CalculationRunContext():
+        accessor(interface_instance)
+        with DependencyTracker() as dependencies:
+            accessor(interface_instance)
+
+    assert tracked == [{"id": 7}]
+    assert ("CustomRelatedManager", "all", "") in dependencies
+    assert (
+        "RelatedManager",
+        "identification",
+        '{"id": 7}',
+    ) not in dependencies
+    assert calls == [7]
+
+
 def test_build_field_descriptors_disambiguates_duplicate_reverse_relations() -> None:
     class SourceModel(models.Model):
         class Meta:

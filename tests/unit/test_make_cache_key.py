@@ -133,6 +133,45 @@ class TestMakeCacheKey(SimpleTestCase):
 
         self.assertEqual(result, expected)
 
+    def test_single_manager_fast_path_supports_unhashable_callable_instances(self):
+        from general_manager.manager.general_manager import GeneralManager
+
+        class CacheKeyInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+        class CacheKeyManager(GeneralManager):
+            pass
+
+        CacheKeyManager.Interface = CacheKeyInterface
+
+        class CallableWithoutHash:
+            __hash__ = None  # type: ignore[assignment]
+
+            def __init__(self) -> None:
+                self.__module__ = __name__
+                self.__qualname__ = "CallableWithoutHash"
+
+            def __eq__(self, other):
+                return isinstance(other, CallableWithoutHash)
+
+            def __call__(self, manager):
+                return manager
+
+        callable_instance = CallableWithoutHash()
+        manager = CacheKeyManager(7)
+        payload = {
+            "module": callable_instance.__module__,
+            "qualname": callable_instance.__qualname__,
+            "args": {"manager": manager},
+        }
+        raw = json.dumps(payload, sort_keys=True, cls=CustomJSONEncoder).encode()
+        expected = hashlib.sha256(raw, usedforsecurity=False).hexdigest()
+
+        result = make_cache_key(callable_instance, (manager,), {})
+
+        self.assertEqual(result, expected)
+
     def test_single_manager_fast_path_reuses_static_json_fragments(self):
         from general_manager.manager.general_manager import GeneralManager
 

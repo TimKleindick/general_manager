@@ -6,6 +6,7 @@ from collections.abc import Callable
 import threading
 from _thread import LockType
 from typing import TYPE_CHECKING, ClassVar, Iterable, TypeVar, cast
+from weakref import WeakKeyDictionary
 
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface.base_interface import InterfaceBase
@@ -24,7 +25,10 @@ type MetaPreCreationHook = Callable[
 ]
 
 logger = get_logger("manager.meta")
-_MANAGER_DEPENDENCY_TRACKING_CLASS_CACHE: dict[type, type["GeneralManager"] | None] = {}
+_MANAGER_DEPENDENCY_TRACKING_CLASS_CACHE: WeakKeyDictionary[
+    type,
+    type["GeneralManager"] | None,
+] = WeakKeyDictionary()
 _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN = object()
 
 

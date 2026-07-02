@@ -290,6 +290,8 @@ def read_dependency_cache_prefetch_bundle_entries(
         return {}
     if payload.version != DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION:
         return {}
+    if not isinstance(payload.entries, Mapping):
+        return {}
     return {
         cache_key: entry
         for cache_key, entry in payload.entries.items()
@@ -306,6 +308,8 @@ def read_dependency_cache_prefetch_bundle_values(
     if not isinstance(payload, DependencyCachePrefetchValueBundle):
         return {}
     if payload.version != DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION:
+        return {}
+    if not isinstance(payload.values, Mapping):
         return {}
     return {
         cache_key: value
@@ -325,6 +329,8 @@ def read_many_dependency_cache_prefetch_bundle_hits(
         if not isinstance(payload, DependencyCachePrefetchBundle):
             continue
         if payload.version != DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION:
+            continue
+        if not isinstance(payload.entries, Mapping):
             continue
         for cache_key, entry in payload.entries.items():
             if not isinstance(cache_key, str):
@@ -346,6 +352,8 @@ def read_many_dependency_cache_prefetch_bundle_values(
         if not isinstance(payload, DependencyCachePrefetchValueBundle):
             continue
         if payload.version != DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION:
+            continue
+        if not isinstance(payload.values, Mapping):
             continue
         for cache_key, value in payload.values.items():
             if isinstance(cache_key, str):

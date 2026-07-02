@@ -265,8 +265,8 @@ class TestDependencyPublish(SimpleTestCase):
         )
 
         generic_cache_invalidation(
-            sender=PublishedTrustedManager,
-            instance=PublishedTrustedManager(42),
+            sender=cast(type[GeneralManager], PublishedTrustedManager),
+            instance=cast(GeneralManager, PublishedTrustedManager(42)),
             old_relevant_values={},
         )
 
