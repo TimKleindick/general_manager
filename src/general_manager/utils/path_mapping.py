@@ -230,7 +230,12 @@ class PathTracer:
     """
 
     def __init__(
-        self, start_class: type[GeneralManager], destination_class: type[GeneralManager]
+        self,
+        start_class: type[GeneralManager],
+        destination_class: type[GeneralManager],
+        path: list[str] | None = None,
+        *,
+        search: bool = True,
     ) -> None:
         """
         Initialise a path tracer between two manager classes.
@@ -238,42 +243,55 @@ class PathTracer:
         Parameters:
             start_class (type[GeneralManager]): Origin manager class where traversal begins.
             destination_class (type[GeneralManager]): Target manager class to reach.
+            path (list[str] | None): Precomputed path used by lazy PathMap lookup when search is False.
+            search (bool): Whether to compute the path during construction.
 
         Returns:
             None
         """
         self.start_class = start_class
         self.destination_class = destination_class
-        if self.start_class == self.destination_class:
-            self.path: list[str] | None = []
+        if not search:
+            self.path = path
+        elif self.start_class == self.destination_class:
+            self.path = []
         else:
-            self.path = self.create_path(start_class, [])
+            self.path = self.create_path(start_class, [], {start_class})
 
     def create_path(
-        self, current_manager: type[GeneralManager], path: list[str]
+        self,
+        current_manager: type[GeneralManager],
+        path: list[str],
+        visited_managers: set[type[GeneralManager]] | None = None,
     ) -> list[str] | None:
         """
         Recursively compute the traversal path from `current_manager` to the destination class.
 
         Candidate edges come from `Interface.get_attribute_types()` entries that
         expose a `type` key and from `@GraphQLProperty` return annotations. Only
-        GeneralManager subclasses are traversed. The search skips attributes
-        already in the current path and skips edges back to the original start
-        class to avoid cycles.
+        GeneralManager subclasses are traversed. Each manager class is expanded
+        at most once, which bounds missing-path and cyclic graph searches.
 
         Parameters:
             current_manager (type[GeneralManager]): Manager class used as the current traversal node.
             path (list[str]): Sequence of attribute names accumulated along the traversal.
+            visited_managers (set[type[GeneralManager]] | None): Manager classes already expanded during this search.
 
         Returns:
             list[str] | None: Updated list of attribute names leading to the destination, or None if no route exists.
         """
+        if visited_managers is None:
+            visited_managers = {current_manager}
+
         for attr, attr_type in _iter_manager_connections(current_manager):
             if attr in path or attr_type == self.start_class:
                 continue
             if attr_type == self.destination_class:
                 return [*path, attr]
-            result = self.create_path(attr_type, [*path, attr])
+            if attr_type in visited_managers:
+                continue
+            visited_managers.add(attr_type)
+            result = self.create_path(attr_type, [*path, attr], visited_managers)
             if result:
                 return result
 
