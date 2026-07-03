@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import graphene
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
@@ -36,18 +34,20 @@ class ChatSystemPromptTests(SimpleTestCase):
         if hasattr(PathMap, "instance"):
             delattr(PathMap, "instance")
 
-        class PartInterface(BaseTestInterface):
-            pass
-
-        class PartManager(GeneralManager):
-            Interface = PartInterface
-            chat_exposed = True
-
         class MaterialInterface(BaseTestInterface):
             pass
 
         class MaterialManager(GeneralManager):
             Interface = MaterialInterface
+            chat_exposed = True
+
+        class PartInterface(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):  # type: ignore[no-untyped-def]
+                return {"material": {"type": MaterialManager}}
+
+        class PartManager(GeneralManager):
+            Interface = PartInterface
             chat_exposed = True
 
         class SecretInterface(BaseTestInterface):
@@ -82,12 +82,6 @@ class ChatSystemPromptTests(SimpleTestCase):
             "MaterialManager": MaterialManager,
             "SecretManager": SecretManager,
         }
-        PathMap.mapping[("PartManager", "MaterialManager")] = SimpleNamespace(
-            path=["material"]
-        )
-        PathMap.mapping[("PartManager", "SecretManager")] = SimpleNamespace(
-            path=["secret"]
-        )
 
     def tearDown(self) -> None:
         clear_schema_index_cache()
@@ -112,6 +106,9 @@ class ChatSystemPromptTests(SimpleTestCase):
     def test_build_system_prompt_includes_tools_managers_relationships_and_developer_prompt(
         self,
     ) -> None:
+        assert PathMap.mapping == {}
+        assert not hasattr(PathMap, "instance")
+
         prompt = build_system_prompt()
 
         assert "search_managers" in prompt
@@ -123,6 +120,17 @@ class ChatSystemPromptTests(SimpleTestCase):
         assert "MaterialManager: Raw material." in prompt
         assert "PartManager -> MaterialManager" in prompt
         assert "Always cite manager names." in prompt
+
+    def test_build_system_prompt_derives_relationships_without_seeded_path_cache(
+        self,
+    ) -> None:
+        assert PathMap.mapping == {}
+        assert not hasattr(PathMap, "instance")
+
+        prompt = build_system_prompt()
+
+        assert "PartManager -> MaterialManager" in prompt
+        assert "PartManager -> SecretManager" not in prompt
 
     def test_build_system_prompt_excludes_hidden_managers(self) -> None:
         prompt = build_system_prompt()
@@ -222,3 +230,4 @@ class ChatSystemPromptTests(SimpleTestCase):
             not in prompt
         )
         assert "Relationship graph omitted for large schemas" in prompt
+        assert PathMap.mapping == {}

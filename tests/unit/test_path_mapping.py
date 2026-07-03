@@ -744,6 +744,7 @@ class PathMappingUnitTests(SimpleTestCase):
         PathMap._registry_signature = ()  # type: ignore[attr-defined]
         PathMap._classes_by_name = {}  # type: ignore[attr-defined]
         PathMap._adjacency = {}  # type: ignore[attr-defined]
+        PathMap._class_adjacency = {}  # type: ignore[attr-defined]
 
         # Register test managers
         GeneralManagerMeta.all_classes.append(self.StartManager)
@@ -945,6 +946,51 @@ class PathMappingUnitTests(SimpleTestCase):
         self.assertEqual(
             set(PathMap.mapping),
             {(self.EndManager.__name__, self.StartManager.__name__)},
+        )
+
+    def test_pathmap_traverses_unregistered_intermediate_manager(self):
+        """Lazy PathMap should match PathTracer through unregistered intermediate classes."""
+        GeneralManagerMeta.all_classes.clear()
+        PathMap.mapping.clear()
+        PathMap._registry_signature = ()  # type: ignore[attr-defined]
+        PathMap._classes_by_name = {}  # type: ignore[attr-defined]
+        PathMap._adjacency = {}  # type: ignore[attr-defined]
+        PathMap._class_adjacency = {}  # type: ignore[attr-defined]
+        if hasattr(PathMap, "instance"):
+            delattr(PathMap, "instance")
+
+        class EndInterface(BaseTestInterface):
+            pass
+
+        class EndManager(GeneralManager):
+            Interface = EndInterface
+
+        class IntermediateInterface(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):  # type: ignore[no-untyped-def]
+                return {"end": {"type": EndManager}}
+
+        class IntermediateManager(GeneralManager):
+            Interface = IntermediateInterface
+
+        class StartInterface(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):  # type: ignore[no-untyped-def]
+                return {"intermediate": {"type": IntermediateManager}}
+
+        class StartManager(GeneralManager):
+            Interface = StartInterface
+
+        GeneralManagerMeta.all_classes[:] = [StartManager, EndManager]
+
+        direct_tracer = PathTracer(StartManager, EndManager)
+        path_map_tracer = PathMap(StartManager).to(EndManager)
+
+        self.assertEqual(direct_tracer.path, ["intermediate", "end"])
+        self.assertIsNotNone(path_map_tracer)
+        self.assertEqual(
+            path_map_tracer.path,  # type: ignore[union-attr]
+            ["intermediate", "end"],
         )
 
     def test_path_map_get_all_connected_empty(self):
