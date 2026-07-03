@@ -113,13 +113,13 @@ class PathMap:
         Returns:
             None
         """
-        cls._ensure_graph_current()
+        cls._ensure_graph_current(force=True)
 
     @classmethod
-    def _ensure_graph_current(cls) -> None:
+    def _ensure_graph_current(cls, *, force: bool = False) -> None:
         """Refresh class and adjacency caches when the manager registry changes."""
         registry_signature = tuple(GeneralManagerMeta.all_classes)
-        if cls._registry_signature == registry_signature:
+        if not force and cls._registry_signature == registry_signature:
             return
 
         cls._registry_signature = registry_signature
@@ -322,7 +322,8 @@ class PathMap:
                 if next_class in visited:
                     continue
                 visited.add(next_class)
-                connected_classes.add(next_class.__name__)
+                if next_class.__name__ in self._classes_by_name:
+                    connected_classes.add(next_class.__name__)
                 queue.append(next_class)
 
         return connected_classes
