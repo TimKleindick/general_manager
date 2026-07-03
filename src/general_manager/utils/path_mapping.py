@@ -14,7 +14,6 @@ from general_manager.manager.general_manager import GeneralManager
 type PathStart = str
 type PathDestination = str
 type PathEdge = tuple[str, PathDestination]
-type PathEdgeQueue = deque[PathEdge]
 type TraversalValue = GeneralManager | Bucket[GeneralManager]
 
 
@@ -79,43 +78,117 @@ class PathMap:
     """
     Maintain cached traversal paths between GeneralManager classes.
 
-    The class-level mapping stores one PathTracer for each registered
-    start/destination class-name pair. A cached tracer may have ``path is None``
-    when the classes are known but no route exists.
+    The class-level mapping stores lazily resolved PathTracer objects for
+    requested start/destination class-name pairs. A cached tracer may have
+    ``path is None`` when the classes are known but no route exists.
     """
 
     instance: PathMap
     mapping: ClassVar[dict[tuple[PathStart, PathDestination], PathTracer]] = {}
+    _registry_signature: ClassVar[tuple[type[GeneralManager], ...]] = ()
+    _classes_by_name: ClassVar[dict[str, type[GeneralManager]]] = {}
+    _adjacency: ClassVar[dict[PathStart, tuple[PathEdge, ...]]] = {}
 
     def __new__(cls, *args: object, **kwargs: object) -> PathMap:
         """
-        Obtain the singleton PathMap, initializing the path mapping on first instantiation.
+        Obtain the singleton PathMap, refreshing graph metadata on each construction.
 
         Returns:
             PathMap: The singleton PathMap instance.
         """
         if not hasattr(cls, "instance"):
             cls.instance = super().__new__(cls)
-            cls.create_path_mapping()
+        cls._ensure_graph_current()
         return cls.instance
 
     @classmethod
     def create_path_mapping(cls) -> None:
         """
-        Populate the path mapping with tracers for every distinct pair of managed classes.
-
-        The generated tracers capture the attribute sequence needed to navigate from the start class to the destination class and are cached on the singleton instance.
+        Refresh path graph metadata without eagerly creating all pair tracers.
 
         Returns:
             None
         """
-        all_managed_classes = GeneralManagerMeta.all_classes
-        for start_class in all_managed_classes:
-            for destination_class in all_managed_classes:
-                if start_class != destination_class:
-                    cls.instance.mapping[
-                        (start_class.__name__, destination_class.__name__)
-                    ] = PathTracer(start_class, destination_class)
+        cls._ensure_graph_current()
+
+    @classmethod
+    def _ensure_graph_current(cls) -> None:
+        """Refresh class and adjacency caches when the manager registry changes."""
+        registry_signature = tuple(GeneralManagerMeta.all_classes)
+        if cls._registry_signature == registry_signature:
+            return
+
+        cls._registry_signature = registry_signature
+        cls._classes_by_name = {
+            manager_class.__name__: manager_class
+            for manager_class in registry_signature
+        }
+        cls._adjacency = {
+            manager_class.__name__: tuple(
+                (attr, target_class.__name__)
+                for attr, target_class in _iter_manager_connections(manager_class)
+            )
+            for manager_class in registry_signature
+        }
+        cls.mapping.clear()
+
+    @classmethod
+    def _find_path(
+        cls,
+        start_class_name: PathStart,
+        destination_class_name: PathDestination,
+    ) -> list[str] | None:
+        """Find the shortest attribute path between two registered managers."""
+        if start_class_name == destination_class_name:
+            return []
+
+        visited = {start_class_name}
+        queue: deque[tuple[PathStart, list[str]]] = deque([(start_class_name, [])])
+
+        while queue:
+            current_class_name, current_path = queue.popleft()
+            for attr, next_class_name in cls._adjacency.get(current_class_name, ()):
+                if next_class_name in visited:
+                    continue
+                next_path = [*current_path, attr]
+                if next_class_name == destination_class_name:
+                    return next_path
+                visited.add(next_class_name)
+                queue.append((next_class_name, next_path))
+
+        return None
+
+    @staticmethod
+    def _destination_name(
+        path_destination: PathDestination | type[GeneralManager] | str,
+    ) -> PathDestination:
+        """Return the class-name key for a path destination input."""
+        if isinstance(path_destination, type):
+            return path_destination.__name__
+        return path_destination
+
+    def _get_or_create_tracer(
+        self,
+        destination_class_name: PathDestination,
+    ) -> PathTracer | None:
+        """Return the cached tracer for one pair, computing only that pair when needed."""
+        if self.start_class_name == destination_class_name:
+            return None
+
+        key = (self.start_class_name, destination_class_name)
+        tracer = self.mapping.get(key)
+        if tracer is not None:
+            return tracer
+
+        start_class = self._classes_by_name.get(self.start_class_name)
+        destination_class = self._classes_by_name.get(destination_class_name)
+        if start_class is None or destination_class is None:
+            return None
+
+        path = self._find_path(self.start_class_name, destination_class_name)
+        tracer = PathTracer(start_class, destination_class, path, search=False)
+        self.mapping[key] = tracer
+        return tracer
 
     def __init__(
         self,
@@ -152,23 +225,18 @@ class PathMap:
         """
         Retrieve the cached path tracer from the start class to the desired destination.
 
-        ``None`` means no cached key exists for the start/destination names. A
-        non-``None`` tracer can still be unreachable; inspect ``tracer.path`` for
-        ``None`` before treating it as a usable route.
+        ``None`` means either the start or destination class name is not
+        registered, or the requested pair uses the same start and destination
+        class. A non-``None`` tracer can still be unreachable; inspect
+        ``tracer.path`` for ``None`` before treating it as a usable route.
 
         Parameters:
             path_destination (PathDestination | type[GeneralManager] | str): Target manager identifier, either as a manager class or string class name. Destination instances are not accepted.
 
         Returns:
-            PathTracer | None: The cached tracer for the registered class-name pair, or None when no mapping key exists.
+            PathTracer | None: The cached tracer for the registered class-name pair, or None when no mapping key can be created.
         """
-        if isinstance(path_destination, type):
-            path_destination = path_destination.__name__
-
-        tracer = self.mapping.get((self.start_class_name, path_destination), None)
-        if not tracer:
-            return None
-        return tracer
+        return self._get_or_create_tracer(self._destination_name(path_destination))
 
     def go_to(
         self, path_destination: PathDestination | type[GeneralManager] | str
@@ -176,11 +244,11 @@ class PathMap:
         """
         Traverse the cached path from the configured start to the given destination.
 
-        The lookup first resolves a cached tracer. Missing tracer keys and
-        tracers with ``path is None`` return ``None``. A tracer with an empty
-        path also returns ``None`` because no traversal is required. If a
-        traversable path exists but this PathMap was created from a class or
-        string start, MissingStartInstanceError is raised.
+        The lookup lazily resolves and caches the requested tracer. Missing
+        tracer keys and tracers with ``path is None`` return ``None``. A tracer
+        with an empty path also returns ``None`` because no traversal is
+        required. If a traversable path exists but this PathMap was created from
+        a class or string start, MissingStartInstanceError is raised.
 
         Parameters:
             path_destination (PathDestination | type[GeneralManager] | str): Destination specified as a manager class or string class name. Destination instances are not accepted.
@@ -191,10 +259,7 @@ class PathMap:
         Raises:
             MissingStartInstanceError: If the cached path requires a concrete start instance but the PathMap was constructed without one.
         """
-        if isinstance(path_destination, type):
-            path_destination = path_destination.__name__
-
-        tracer = self.mapping.get((self.start_class_name, path_destination), None)
+        tracer = self._get_or_create_tracer(self._destination_name(path_destination))
         if not tracer:
             return None
         if not tracer.path:
@@ -205,18 +270,24 @@ class PathMap:
 
     def get_all_connected(self) -> set[str]:
         """
-        Return the set of destination class names that are reachable from the configured start.
+        Return the set of destination class names reachable from the configured start.
 
         Returns:
             set[str]: Destination class names reachable from the current start_class_name.
         """
         connected_classes: set[str] = set()
-        for path_tuple, path_obj in self.mapping.items():
-            if path_tuple[0] == self.start_class_name:
-                destination_class_name = path_tuple[1]
-                if path_obj.path is None:
+        visited = {self.start_class_name}
+        queue: deque[PathStart] = deque([self.start_class_name])
+
+        while queue:
+            current_class_name = queue.popleft()
+            for _attr, next_class_name in self._adjacency.get(current_class_name, ()):
+                if next_class_name in visited:
                     continue
-                connected_classes.add(destination_class_name)
+                visited.add(next_class_name)
+                connected_classes.add(next_class_name)
+                queue.append(next_class_name)
+
         return connected_classes
 
 

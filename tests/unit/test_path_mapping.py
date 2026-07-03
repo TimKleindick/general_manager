@@ -244,30 +244,44 @@ class PathMappingUnitTests(SimpleTestCase):
 
     def test_pathmap_caching_behavior(self):
         """
-        Test that PathMap properly caches mapping data and rebuilds when cleared.
+        Test that PathMap caches requested path tracers without eager warming.
 
-        Verifies that the mapping cache improves performance by avoiding
-        redundant computation while allowing for cache invalidation.
+        Verifies that graph reachability does not populate the pair cache, while
+        requested tracers are cached and can be recreated after cache clearing.
         """
         pm = PathMap(self.StartManager)
-        initial_mapping = dict(pm.mapping)  # Create copy to avoid reference issues
 
-        # Verify mapping is populated after first access
+        # Verify construction and reachability do not populate pair tracers
+        self.assertEqual(pm.mapping, {})
         connected = pm.get_all_connected()
         self.assertGreater(len(connected), 0)
-        self.assertGreater(len(initial_mapping), 0)
+        self.assertEqual(pm.mapping, {})
 
-        # Clear global mapping cache and singleton
+        # First pair lookup should compute and cache only that path
+        tracer = pm.to(self.EndManager)
+        self.assertIsNotNone(tracer)
+        self.assertEqual(tracer.path, ["end"])  # type: ignore[union-attr]
+        self.assertEqual(
+            set(pm.mapping),
+            {(self.StartManager.__name__, self.EndManager.__name__)},
+        )
+
+        # Clear global pair cache and singleton
         PathMap.mapping.clear()
         if hasattr(PathMap, "instance"):
             delattr(PathMap, "instance")
 
-        # Create new PathMap instance - should rebuild mapping
+        # Create new PathMap instance - graph metadata still supports reachability
         pm_new = PathMap(self.StartManager)
         new_connected = pm_new.get_all_connected()
 
         # Results should be the same even after cache rebuild
         self.assertEqual(connected, new_connected)
+        self.assertEqual(PathMap.mapping, {})
+
+        new_tracer = pm_new.to(self.EndManager)
+        self.assertIsNotNone(new_tracer)
+        self.assertEqual(new_tracer.path, ["end"])  # type: ignore[union-attr]
 
     def test_graphql_property_detection(self):
         """
@@ -727,28 +741,43 @@ class PathMappingUnitTests(SimpleTestCase):
         # Clear existing mappings
         PathMap.mapping.clear()
         GeneralManagerMeta.all_classes.clear()
+        PathMap._registry_signature = ()  # type: ignore[attr-defined]
+        PathMap._classes_by_name = {}  # type: ignore[attr-defined]
+        PathMap._adjacency = {}  # type: ignore[attr-defined]
 
         # Register test managers
         GeneralManagerMeta.all_classes.append(self.StartManager)
         GeneralManagerMeta.all_classes.append(self.EndManager)
 
-        # Manually trigger mapping creation
+        # Manually refresh graph metadata
         PathMap.instance = PathMap.__new__(PathMap)
         PathMap.create_path_mapping()
 
-        # Verify mappings were created
-        start_to_end_key = (self.StartManager.__name__, self.EndManager.__name__)
-        end_to_start_key = (self.EndManager.__name__, self.StartManager.__name__)
+        self.assertEqual(PathMap.mapping, {})
+        self.assertEqual(
+            PathMap._classes_by_name,  # type: ignore[attr-defined]
+            {
+                self.StartManager.__name__: self.StartManager,
+                self.EndManager.__name__: self.EndManager,
+            },
+        )
+        self.assertEqual(
+            PathMap._adjacency[self.StartManager.__name__],  # type: ignore[attr-defined]
+            (("end", self.EndManager.__name__),),
+        )
+        self.assertEqual(
+            PathMap._adjacency[self.EndManager.__name__],  # type: ignore[attr-defined]
+            (),
+        )
 
-        self.assertIn(start_to_end_key, PathMap.mapping)
-        self.assertIn(end_to_start_key, PathMap.mapping)
+        tracer = PathMap(self.StartManager).to(self.EndManager)
 
-        # Verify tracers were created correctly
-        start_to_end_tracer = PathMap.mapping[start_to_end_key]
-        self.assertEqual(start_to_end_tracer.path, ["end"])
-
-        end_to_start_tracer = PathMap.mapping[end_to_start_key]
-        self.assertIsNone(end_to_start_tracer.path)
+        self.assertIsNotNone(tracer)
+        self.assertEqual(tracer.path, ["end"])  # type: ignore[union-attr]
+        self.assertEqual(
+            set(PathMap.mapping),
+            {(self.StartManager.__name__, self.EndManager.__name__)},
+        )
 
     def test_pathtracer_recursive_path_creation(self):
         """
