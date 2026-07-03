@@ -257,6 +257,7 @@ def _relationship_lines(
     relationship_lines: list[str] = []
     exposed_names = [name for name in manager_names if name in index]
     if len(exposed_names) > PROMPT_MANAGER_DETAIL_LIMIT:
+        # Bound lazy path resolution to avoid reintroducing CPU-bound O(n^2) work.
         return relationship_lines
     for from_manager in exposed_names:
         path_map = PathMap(from_manager)
