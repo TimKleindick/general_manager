@@ -1,6 +1,7 @@
 """Utilities for tracing relationships between GeneralManager classes."""
 
 from __future__ import annotations
+from collections import deque
 from collections.abc import Mapping
 from typing import ClassVar, cast, get_args
 from general_manager.manager.meta import GeneralManagerMeta
@@ -12,6 +13,8 @@ from general_manager.manager.general_manager import GeneralManager
 
 type PathStart = str
 type PathDestination = str
+type PathEdge = tuple[str, PathDestination]
+type PathEdgeQueue = deque[PathEdge]
 type TraversalValue = GeneralManager | Bucket[GeneralManager]
 
 
@@ -34,6 +37,42 @@ class InvalidPathTraversalValueError(TypeError):
         super().__init__(
             "Path traversal attributes must resolve to a GeneralManager or Bucket."
         )
+
+
+def _as_manager_class(value: object) -> type[GeneralManager] | None:
+    """Return value when it is a GeneralManager subclass."""
+    if value is None or not isinstance(value, type):
+        return None
+    if not issubclass(value, GeneralManager):
+        return None
+    return value
+
+
+def _iter_manager_connections(
+    manager_class: type[GeneralManager],
+) -> list[tuple[str, type[GeneralManager]]]:
+    """Return traversable manager edges declared by interface fields and GraphQL properties."""
+    current_connections: dict[str, object] = {}
+    for attr_name, attr_value in manager_class.Interface.get_attribute_types().items():
+        if isinstance(attr_value, Mapping):
+            current_connections[attr_name] = attr_value.get("type")
+    for attr_name, attr_value in manager_class.__dict__.items():
+        if not isinstance(attr_value, GraphQLProperty):
+            continue
+        type_hints = get_args(attr_value.graphql_type_hint)
+        field_type = (
+            type_hints[0]
+            if type_hints
+            else cast(type[object], attr_value.graphql_type_hint)
+        )
+        current_connections[attr_name] = field_type
+
+    connections: list[tuple[str, type[GeneralManager]]] = []
+    for attr_name, attr_type in current_connections.items():
+        manager_type = _as_manager_class(attr_type)
+        if manager_type is not None:
+            connections.append((attr_name, manager_type))
+    return connections
 
 
 class PathMap:
@@ -229,29 +268,8 @@ class PathTracer:
         Returns:
             list[str] | None: Updated list of attribute names leading to the destination, or None if no route exists.
         """
-        current_connections: dict[str, object] = {}
-        for (
-            attr_name,
-            attr_value,
-        ) in current_manager.Interface.get_attribute_types().items():
-            if isinstance(attr_value, Mapping):
-                current_connections[attr_name] = attr_value.get("type")
-        for attr_name, attr_value in current_manager.__dict__.items():
-            if not isinstance(attr_value, GraphQLProperty):
-                continue
-            type_hints = get_args(attr_value.graphql_type_hint)
-            field_type = (
-                type_hints[0]
-                if type_hints
-                else cast(type[object], attr_value.graphql_type_hint)
-            )
-            current_connections[attr_name] = field_type
-        for attr, attr_type in current_connections.items():
+        for attr, attr_type in _iter_manager_connections(current_manager):
             if attr in path or attr_type == self.start_class:
-                continue
-            if attr_type is None or not isinstance(attr_type, type):
-                continue
-            if not issubclass(attr_type, GeneralManager):
                 continue
             if attr_type == self.destination_class:
                 return [*path, attr]
