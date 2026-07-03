@@ -322,7 +322,7 @@ class PathMap:
                 if next_class in visited:
                     continue
                 visited.add(next_class)
-                if next_class.__name__ in self._classes_by_name:
+                if self._classes_by_name.get(next_class.__name__) is next_class:
                     connected_classes.add(next_class.__name__)
                 queue.append(next_class)
 
