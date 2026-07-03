@@ -837,6 +837,69 @@ class PathMappingUnitTests(SimpleTestCase):
         # Should be the same tracer instance (cached)
         self.assertIs(tracer1, tracer2)
 
+    def test_pathmap_to_creates_only_requested_tracer(self):
+        """PathMap first use should not build tracers for every registered pair."""
+        created_pairs: list[tuple[str, str]] = []
+        original_init = PathTracer.__init__
+
+        def counted_init(
+            tracer: PathTracer,
+            start_class: type[GeneralManager],
+            destination_class: type[GeneralManager],
+        ) -> None:
+            created_pairs.append((start_class.__name__, destination_class.__name__))
+            original_init(tracer, start_class, destination_class)
+
+        PathTracer.__init__ = counted_init  # type: ignore[method-assign]
+        try:
+            tracer = PathMap(self.StartManager).to(self.EndManager)
+        finally:
+            PathTracer.__init__ = original_init  # type: ignore[method-assign]
+
+        self.assertIsNotNone(tracer)
+        self.assertEqual(tracer.path, ["end"])  # type: ignore[union-attr]
+        self.assertEqual(
+            created_pairs,
+            [(self.StartManager.__name__, self.EndManager.__name__)],
+        )
+        self.assertEqual(
+            set(PathMap.mapping),
+            {(self.StartManager.__name__, self.EndManager.__name__)},
+        )
+
+    def test_pathmap_missing_path_is_cached_without_all_pairs(self):
+        """A failed pair lookup should be cached without warming unrelated pairs."""
+        created_pairs: list[tuple[str, str]] = []
+        original_init = PathTracer.__init__
+
+        def counted_init(
+            tracer: PathTracer,
+            start_class: type[GeneralManager],
+            destination_class: type[GeneralManager],
+        ) -> None:
+            created_pairs.append((start_class.__name__, destination_class.__name__))
+            original_init(tracer, start_class, destination_class)
+
+        PathTracer.__init__ = counted_init  # type: ignore[method-assign]
+        try:
+            path_map = PathMap(self.EndManager)
+            first = path_map.to(self.StartManager)
+            second = path_map.to(self.StartManager)
+        finally:
+            PathTracer.__init__ = original_init  # type: ignore[method-assign]
+
+        self.assertIsNotNone(first)
+        self.assertIs(first, second)
+        self.assertIsNone(first.path)  # type: ignore[union-attr]
+        self.assertEqual(
+            created_pairs,
+            [(self.EndManager.__name__, self.StartManager.__name__)],
+        )
+        self.assertEqual(
+            set(PathMap.mapping),
+            {(self.EndManager.__name__, self.StartManager.__name__)},
+        )
+
     def test_path_map_get_all_connected_empty(self):
         """Test get_all_connected when no connections exist."""
 
@@ -887,6 +950,34 @@ class PathMappingUnitTests(SimpleTestCase):
         self.assertIn(Level2Manager.__name__, connected)
         self.assertIn(Level3Manager.__name__, connected)
 
+    def test_get_all_connected_does_not_populate_pair_cache(self):
+        """Reachability listing should not materialize every pair tracer."""
+
+        class Level2Interface(BaseTestInterface):
+            pass
+
+        class Level2Manager(GeneralManager):
+            Interface = Level2Interface
+
+            @GraphQLProperty
+            def end(self) -> self.EndManager:  # type: ignore
+                return self.EndManager()
+
+        class Level1Interface(BaseTestInterface):
+            pass
+
+        class Level1Manager(GeneralManager):
+            Interface = Level1Interface
+
+            @GraphQLProperty
+            def level2(self) -> Level2Manager:  # type: ignore
+                return Level2Manager()
+
+        connected = PathMap(Level1Manager).get_all_connected()
+
+        self.assertEqual(connected, {"Level2Manager", self.EndManager.__name__})
+        self.assertEqual(PathMap.mapping, {})
+
     def test_path_tracer_with_no_path_available(self):
         """Test PathTracer when no path exists between managers."""
 
@@ -900,6 +991,47 @@ class PathMappingUnitTests(SimpleTestCase):
 
         # Should have no path
         self.assertIsNone(tracer.path)
+
+    def test_path_tracer_missing_path_visits_each_manager_class_once(self):
+        """Direct PathTracer no-path search should not re-expand the same class."""
+        call_counts = {"branch": 0}
+
+        class MissingInterface(BaseTestInterface):
+            pass
+
+        class MissingManager(GeneralManager):
+            Interface = MissingInterface
+
+        class LeafInterface(BaseTestInterface):
+            pass
+
+        class LeafManager(GeneralManager):
+            Interface = LeafInterface
+
+        class BranchInterface(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):  # type: ignore[no-untyped-def]
+                call_counts["branch"] += 1
+                return {"leaf": {"type": LeafManager}}
+
+        class BranchManager(GeneralManager):
+            Interface = BranchInterface
+
+        class RootInterface(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):  # type: ignore[no-untyped-def]
+                return {
+                    "branch_a": {"type": BranchManager},
+                    "branch_b": {"type": BranchManager},
+                }
+
+        class RootManager(GeneralManager):
+            Interface = RootInterface
+
+        tracer = PathTracer(RootManager, MissingManager)
+
+        self.assertIsNone(tracer.path)
+        self.assertEqual(call_counts["branch"], 1)
 
     def test_path_tracer_traverse_path_no_path(self):
         """Test traverse_path when no path exists."""
