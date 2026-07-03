@@ -14,6 +14,7 @@ from general_manager.manager.general_manager import GeneralManager
 type PathStart = str
 type PathDestination = str
 type PathEdge = tuple[str, PathDestination]
+type PathClassEdge = tuple[str, type[GeneralManager]]
 type TraversalValue = GeneralManager | Bucket[GeneralManager]
 
 
@@ -88,6 +89,9 @@ class PathMap:
     _registry_signature: ClassVar[tuple[type[GeneralManager], ...]] = ()
     _classes_by_name: ClassVar[dict[str, type[GeneralManager]]] = {}
     _adjacency: ClassVar[dict[PathStart, tuple[PathEdge, ...]]] = {}
+    _class_adjacency: ClassVar[
+        dict[type[GeneralManager], tuple[PathClassEdge, ...]]
+    ] = {}
 
     def __new__(cls, *args: object, **kwargs: object) -> PathMap:
         """
@@ -123,14 +127,36 @@ class PathMap:
             manager_class.__name__: manager_class
             for manager_class in registry_signature
         }
+        cls._class_adjacency = {
+            manager_class: tuple(_iter_manager_connections(manager_class))
+            for manager_class in registry_signature
+        }
         cls._adjacency = {
             manager_class.__name__: tuple(
                 (attr, target_class.__name__)
-                for attr, target_class in _iter_manager_connections(manager_class)
+                for attr, target_class in cls._class_adjacency[manager_class]
             )
             for manager_class in registry_signature
         }
         cls.mapping.clear()
+
+    @classmethod
+    def _edges_for_class(
+        cls,
+        manager_class: type[GeneralManager],
+    ) -> tuple[PathClassEdge, ...]:
+        """Return cached outgoing edges for registered or discovered manager classes."""
+        edges = cls._class_adjacency.get(manager_class)
+        if edges is not None:
+            return edges
+
+        edges = tuple(_iter_manager_connections(manager_class))
+        cls._class_adjacency[manager_class] = edges
+        cls._adjacency.setdefault(
+            manager_class.__name__,
+            tuple((attr, target_class.__name__) for attr, target_class in edges),
+        )
+        return edges
 
     @classmethod
     def _find_path(
@@ -142,19 +168,26 @@ class PathMap:
         if start_class_name == destination_class_name:
             return []
 
-        visited = {start_class_name}
-        queue: deque[tuple[PathStart, list[str]]] = deque([(start_class_name, [])])
+        start_class = cls._classes_by_name.get(start_class_name)
+        destination_class = cls._classes_by_name.get(destination_class_name)
+        if start_class is None or destination_class is None:
+            return None
+
+        visited = {start_class}
+        queue: deque[tuple[type[GeneralManager], list[str]]] = deque(
+            [(start_class, [])]
+        )
 
         while queue:
-            current_class_name, current_path = queue.popleft()
-            for attr, next_class_name in cls._adjacency.get(current_class_name, ()):
-                if next_class_name in visited:
+            current_class, current_path = queue.popleft()
+            for attr, next_class in cls._edges_for_class(current_class):
+                if next_class in visited:
                     continue
                 next_path = [*current_path, attr]
-                if next_class_name == destination_class_name:
+                if next_class == destination_class:
                     return next_path
-                visited.add(next_class_name)
-                queue.append((next_class_name, next_path))
+                visited.add(next_class)
+                queue.append((next_class, next_path))
 
         return None
 
@@ -275,18 +308,22 @@ class PathMap:
         Returns:
             set[str]: Destination class names reachable from the current start_class_name.
         """
+        start_class = self._classes_by_name.get(self.start_class_name)
+        if start_class is None:
+            return set()
+
         connected_classes: set[str] = set()
-        visited = {self.start_class_name}
-        queue: deque[PathStart] = deque([self.start_class_name])
+        visited = {start_class}
+        queue: deque[type[GeneralManager]] = deque([start_class])
 
         while queue:
-            current_class_name = queue.popleft()
-            for _attr, next_class_name in self._adjacency.get(current_class_name, ()):
-                if next_class_name in visited:
+            current_class = queue.popleft()
+            for _attr, next_class in self._edges_for_class(current_class):
+                if next_class in visited:
                     continue
-                visited.add(next_class_name)
-                connected_classes.add(next_class_name)
-                queue.append(next_class_name)
+                visited.add(next_class)
+                connected_classes.add(next_class.__name__)
+                queue.append(next_class)
 
         return connected_classes
 

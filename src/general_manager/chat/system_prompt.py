@@ -255,16 +255,20 @@ def _relationship_lines(
     index: dict[str, dict[str, object]], manager_names: list[str]
 ) -> list[str]:
     relationship_lines: list[str] = []
-    if not PathMap.mapping and manager_names:
-        PathMap(manager_names[0])
-    for (from_manager, to_manager), tracer in sorted(PathMap.mapping.items()):
-        if from_manager not in index or to_manager not in index:
-            continue
-        path = getattr(tracer, "path", None)
-        if path:
-            relationship_lines.append(
-                f"{from_manager} -> {to_manager}: {' -> '.join(path)}"
-            )
+    exposed_names = [name for name in manager_names if name in index]
+    if len(exposed_names) > PROMPT_MANAGER_DETAIL_LIMIT:
+        return relationship_lines
+    for from_manager in exposed_names:
+        path_map = PathMap(from_manager)
+        for to_manager in exposed_names:
+            if from_manager == to_manager:
+                continue
+            tracer = path_map.to(to_manager)
+            path = getattr(tracer, "path", None) if tracer is not None else None
+            if path:
+                relationship_lines.append(
+                    f"{from_manager} -> {to_manager}: {' -> '.join(path)}"
+                )
     return relationship_lines
 
 
