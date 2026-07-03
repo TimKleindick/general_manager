@@ -100,9 +100,11 @@ class PathMap:
         Returns:
             PathMap: The singleton PathMap instance.
         """
+        force_refresh = False
         if not hasattr(cls, "instance"):
             cls.instance = super().__new__(cls)
-        cls._ensure_graph_current()
+            force_refresh = not cls.mapping
+        cls._ensure_graph_current(force=force_refresh)
         return cls.instance
 
     @classmethod
