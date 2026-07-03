@@ -2,6 +2,56 @@
 
 <!-- version list -->
 
+## v0.60.5 (2026-07-03)
+
+### Bug Fixes
+
+- Bound path tracer class traversal
+  ([`f616d33`](https://github.com/TimKleindick/general_manager/commit/f616d33d703b0e5c2720561b712f579c51d133d7))
+
+- Filter connected path map destinations by class
+  ([`97cf324`](https://github.com/TimKleindick/general_manager/commit/97cf324f6608ace2b95ed1f75834b0b37262cb66))
+
+- Include inherited path map edges
+  ([`643a071`](https://github.com/TimKleindick/general_manager/commit/643a071012ab589ac741f6bd2067d37e5cf524ac))
+
+- Preserve lazy path map consumers
+  ([`f7b04a4`](https://github.com/TimKleindick/general_manager/commit/f7b04a415cd5ce40f08812473b8caba5b9cd319b))
+
+- Refresh lazy path map metadata
+  ([`0bdecd5`](https://github.com/TimKleindick/general_manager/commit/0bdecd5f3bbbcd08b3ada4a5fb081d329d3f0062))
+
+- Refresh path map metadata on reset
+  ([`145d1ac`](https://github.com/TimKleindick/general_manager/commit/145d1acad9f01bc59994f75c056e5bf5240f5e23))
+
+- Resolve path map pairs lazily
+  ([`8197d6a`](https://github.com/TimKleindick/general_manager/commit/8197d6a4ed0a00889166efb6f65aabfd539f88b4))
+
+### Documentation
+
+- Clarify path map lookup results
+  ([`5d8ae33`](https://github.com/TimKleindick/general_manager/commit/5d8ae33b0e24fb23bfda78bb07a94c0295edc26a))
+
+- Describe lazy path map lookup
+  ([`a759d8a`](https://github.com/TimKleindick/general_manager/commit/a759d8a28ecffd0896a5954738d82f55d84fb4df))
+
+### Refactoring
+
+- Extract path map graph edge discovery
+  ([`913f21d`](https://github.com/TimKleindick/general_manager/commit/913f21da3f0eed81203b6e69625079a5ac4770f1))
+
+### Testing
+
+- Cover lazy path map lookup performance
+  ([`8a6a9e9`](https://github.com/TimKleindick/general_manager/commit/8a6a9e9fac5e4ed9a49d03abcf7beb6261bddf57))
+
+- Cover precomputed path tracers
+  ([`8d995b3`](https://github.com/TimKleindick/general_manager/commit/8d995b3904fa1384288ada5584c0766c67807d2b))
+
+- Cover repeated path tracer attributes
+  ([`74a470f`](https://github.com/TimKleindick/general_manager/commit/74a470f2d8dbb0ab2b5070f56c5431958b0535e6))
+
+
 ## v0.60.4 (2026-07-02)
 
 ### Performance Improvements
