@@ -103,7 +103,11 @@ customer_or_bucket = PathMap(project).go_to(Customer)
 connected_names = path_map.get_all_connected()
 ```
 
-Use `PathMap(SomeManagerClass).to(TargetManager)` when you only need the cached `PathTracer` and its `.path`. Destinations are manager classes or string class names, not manager instances. Use `PathMap(manager_instance).go_to(TargetManager)` when you want to traverse the path from a concrete instance. `go_to()` returns `None` when no mapping key exists, when the cached tracer is unreachable (`path is None`), when the tracer has an empty same-class path, or when bucket traversal has no entries to merge. If a traversable path exists but the `PathMap` was created from a class or string start, `go_to()` raises `MissingStartInstanceError`.
+Use `PathMap(SomeManagerClass).to(TargetManager)` when you need the cached `PathTracer` and its `.path`. Destinations are manager classes or string class names, not manager instances. Path lookup is lazy: constructing `PathMap` only refreshes manager graph metadata, and the first `to()` or `go_to()` for a `(source, destination)` pair resolves and caches only that pair. Missing paths are cached as tracers with `path is None`, so repeated misses return quickly without re-searching the graph.
+
+Use `PathMap(manager_instance).go_to(TargetManager)` when you want to traverse the path from a concrete instance. `go_to()` returns `None` when no mapping key exists, when the cached tracer is unreachable (`path is None`), when the tracer has an empty same-class path, or when bucket traversal has no entries to merge. If a traversable path exists but the `PathMap` was created from a class or string start, `go_to()` raises `MissingStartInstanceError`.
+
+Use `PathMap(SomeManagerClass).get_all_connected()` to list reachable destination manager class names. It walks the cached adjacency graph and does not materialize every possible source/destination tracer.
 
 Bucket-valued paths are traversed one entry at a time. For each path segment, `PathTracer.traverse_path()` reads the attribute from every bucket entry and unions the resulting managers or buckets into one value. Every traversed attribute must return a `GeneralManager` or `Bucket`; other values raise `InvalidPathTraversalValueError`.
 

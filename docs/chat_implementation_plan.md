@@ -176,7 +176,8 @@ Auto-generate from two sources:
 - **GraphQL schema**: manager names + docstrings (one line each), available tool
   descriptions.
 - **PathMap**: compact relationship graph (adjacency list) derived from
-  `PathMap.mapping`, which covers all interface types.
+  PathMap's cached adjacency graph, which covers all interface types without
+  materializing every source/destination tracer.
 - Append developer-provided `system_prompt` from settings.
 
 **Acceptance criteria**:
