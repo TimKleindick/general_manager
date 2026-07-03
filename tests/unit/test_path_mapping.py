@@ -992,6 +992,38 @@ class PathMappingUnitTests(SimpleTestCase):
         # Should have no path
         self.assertIsNone(tracer.path)
 
+    def test_path_tracer_allows_repeated_attribute_names_on_different_managers(self):
+        """Direct PathTracer should allow repeated attribute names across managers."""
+
+        class DestinationInterface(BaseTestInterface):
+            pass
+
+        class DestinationManager(GeneralManager):
+            Interface = DestinationInterface
+
+        class SharedInterface(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):  # type: ignore[no-untyped-def]
+                return {"target_edge": {"type": DestinationManager}}
+
+        class SharedManager(GeneralManager):
+            Interface = SharedInterface
+
+        class RootInterface(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):  # type: ignore[no-untyped-def]
+                return {
+                    "target_edge": {"type": SharedManager},
+                    "alternate_edge": {"type": SharedManager},
+                }
+
+        class RootManager(GeneralManager):
+            Interface = RootInterface
+
+        tracer = PathTracer(RootManager, DestinationManager)
+
+        self.assertEqual(tracer.path, ["target_edge", "target_edge"])
+
     def test_path_tracer_missing_path_visits_each_manager_class_once(self):
         """Direct PathTracer no-path search should not re-expand the same class."""
         call_counts = {"branch": 0}
