@@ -90,9 +90,9 @@ propagate.
 
 ## Path mapping and small transforms
 
-`PathMap` supports nested path mapping where integrations need stable source-to-target field paths. It builds a singleton cache from registered `GeneralManager` classes and records `PathTracer` objects keyed by `(start_class_name, destination_class_name)`. A tracer can exist with `tracer.path is None` when both classes are registered but no route is reachable; `PathMap.to(...)` returns `None` only when no mapping key exists.
+`PathMap` supports nested path mapping where integrations need stable source-to-target field paths. It keeps singleton graph metadata from registered `GeneralManager` classes and records requested `PathTracer` objects in a partial pair cache keyed by `(start_class_name, destination_class_name)`. A tracer can exist with `tracer.path is None` when both classes are registered but no route is reachable; `PathMap.to(...)` returns `None` when the source or destination is unknown, or when the source and destination are the same class.
 
-Path discovery uses `Interface.get_attribute_types()` entries that expose a `type` key and `@GraphQLProperty` return annotations. Only `GeneralManager` subclasses are traversed. The search skips attributes already in the current path and skips edges back to the original start class to avoid cycles. A tracer's `.path` is `[]` for the same start and destination class, a list of attribute names for the first route found, or `None` when unreachable.
+Path discovery uses `Interface.get_attribute_types()` entries that expose a `type` key and `@GraphQLProperty` return annotations. Only `GeneralManager` subclasses are traversed, and each manager class is expanded once per lookup to avoid cycles. Direct `PathTracer` construction represents same-class paths as `[]`; `PathMap.to(...)` treats same-class lookups as no traversal and returns `None`. Reachable paths are lists of attribute names, and unreachable paths are cached as tracers with `path is None`.
 
 ```python
 path_map = PathMap(Project)
@@ -105,7 +105,7 @@ connected_names = path_map.get_all_connected()
 
 Use `PathMap(SomeManagerClass).to(TargetManager)` when you need the cached `PathTracer` and its `.path`. Destinations are manager classes or string class names, not manager instances. Path lookup is lazy: constructing `PathMap` only refreshes manager graph metadata, and the first `to()` or `go_to()` for a `(source, destination)` pair resolves and caches only that pair. Missing paths are cached as tracers with `path is None`, so repeated misses return quickly without re-searching the graph.
 
-Use `PathMap(manager_instance).go_to(TargetManager)` when you want to traverse the path from a concrete instance. `go_to()` returns `None` when no mapping key exists, when the cached tracer is unreachable (`path is None`), when the tracer has an empty same-class path, or when bucket traversal has no entries to merge. If a traversable path exists but the `PathMap` was created from a class or string start, `go_to()` raises `MissingStartInstanceError`.
+Use `PathMap(manager_instance).go_to(TargetManager)` when you want to traverse the path from a concrete instance. `go_to()` returns `None` when no mapping key can be created, for same-class lookups, when the cached tracer is unreachable (`path is None`), or when bucket traversal has no entries to merge. If a traversable path exists but the `PathMap` was created from a class or string start, `go_to()` raises `MissingStartInstanceError`.
 
 Use `PathMap(SomeManagerClass).get_all_connected()` to list reachable destination manager class names. It walks the cached adjacency graph and does not materialize every possible source/destination tracer.
 
