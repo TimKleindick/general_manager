@@ -846,9 +846,18 @@ class PathMappingUnitTests(SimpleTestCase):
             tracer: PathTracer,
             start_class: type[GeneralManager],
             destination_class: type[GeneralManager],
+            path: list[str] | None = None,
+            *,
+            search: bool = True,
         ) -> None:
             created_pairs.append((start_class.__name__, destination_class.__name__))
-            original_init(tracer, start_class, destination_class)
+            original_init(
+                tracer,
+                start_class,
+                destination_class,
+                path,
+                search=search,
+            )
 
         PathTracer.__init__ = counted_init  # type: ignore[method-assign]
         try:
@@ -876,9 +885,18 @@ class PathMappingUnitTests(SimpleTestCase):
             tracer: PathTracer,
             start_class: type[GeneralManager],
             destination_class: type[GeneralManager],
+            path: list[str] | None = None,
+            *,
+            search: bool = True,
         ) -> None:
             created_pairs.append((start_class.__name__, destination_class.__name__))
-            original_init(tracer, start_class, destination_class)
+            original_init(
+                tracer,
+                start_class,
+                destination_class,
+                path,
+                search=search,
+            )
 
         PathTracer.__init__ = counted_init  # type: ignore[method-assign]
         try:
@@ -991,6 +1009,53 @@ class PathMappingUnitTests(SimpleTestCase):
 
         # Should have no path
         self.assertIsNone(tracer.path)
+
+    def test_path_tracer_uses_precomputed_path_without_search(self):
+        """Direct PathTracer should accept cached paths without searching."""
+        create_path_calls = 0
+
+        class DisconnectedStartInterface(BaseTestInterface):
+            pass
+
+        class DisconnectedStartManager(GeneralManager):
+            Interface = DisconnectedStartInterface
+
+        class DisconnectedDestinationInterface(BaseTestInterface):
+            pass
+
+        class DisconnectedDestinationManager(GeneralManager):
+            Interface = DisconnectedDestinationInterface
+
+        original_create_path = PathTracer.create_path
+
+        def counted_create_path(
+            tracer: PathTracer,
+            current_manager: type[GeneralManager],
+            current_path: list[str],
+            visited_managers: set[type[GeneralManager]] | None = None,
+        ) -> list[str] | None:
+            nonlocal create_path_calls
+            create_path_calls += 1
+            return original_create_path(
+                tracer,
+                current_manager,
+                current_path,
+                visited_managers,
+            )
+
+        PathTracer.create_path = counted_create_path  # type: ignore[method-assign]
+        try:
+            tracer = PathTracer(
+                DisconnectedStartManager,
+                DisconnectedDestinationManager,
+                ["cached"],
+                search=False,
+            )
+        finally:
+            PathTracer.create_path = original_create_path  # type: ignore[method-assign]
+
+        self.assertEqual(tracer.path, ["cached"])
+        self.assertEqual(create_path_calls, 0)
 
     def test_path_tracer_allows_repeated_attribute_names_on_different_managers(self):
         """Direct PathTracer should allow repeated attribute names across managers."""
