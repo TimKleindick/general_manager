@@ -973,10 +973,19 @@ class PathMappingUnitTests(SimpleTestCase):
         class IntermediateManager(GeneralManager):
             Interface = IntermediateInterface
 
+        class UnregisteredTerminalInterface(BaseTestInterface):
+            pass
+
+        class UnregisteredTerminalManager(GeneralManager):
+            Interface = UnregisteredTerminalInterface
+
         class StartInterface(BaseTestInterface):
             @classmethod
             def get_attribute_types(cls):  # type: ignore[no-untyped-def]
-                return {"intermediate": {"type": IntermediateManager}}
+                return {
+                    "intermediate": {"type": IntermediateManager},
+                    "unregistered_terminal": {"type": UnregisteredTerminalManager},
+                }
 
         class StartManager(GeneralManager):
             Interface = StartInterface
@@ -984,13 +993,65 @@ class PathMappingUnitTests(SimpleTestCase):
         GeneralManagerMeta.all_classes[:] = [StartManager, EndManager]
 
         direct_tracer = PathTracer(StartManager, EndManager)
-        path_map_tracer = PathMap(StartManager).to(EndManager)
+        path_map = PathMap(StartManager)
+        path_map_tracer = path_map.to(EndManager)
+        connected = path_map.get_all_connected()
 
         self.assertEqual(direct_tracer.path, ["intermediate", "end"])
         self.assertIsNotNone(path_map_tracer)
         self.assertEqual(
             path_map_tracer.path,  # type: ignore[union-attr]
             ["intermediate", "end"],
+        )
+        self.assertIn(EndManager.__name__, connected)
+        self.assertNotIn(IntermediateManager.__name__, connected)
+        self.assertNotIn(UnregisteredTerminalManager.__name__, connected)
+
+    def test_create_path_mapping_force_refreshes_unchanged_registry(self):
+        """Explicit metadata refresh should clear stale misses for unchanged classes."""
+        GeneralManagerMeta.all_classes.clear()
+        PathMap.mapping.clear()
+        PathMap._registry_signature = ()  # type: ignore[attr-defined]
+        PathMap._classes_by_name = {}  # type: ignore[attr-defined]
+        PathMap._adjacency = {}  # type: ignore[attr-defined]
+        PathMap._class_adjacency = {}  # type: ignore[attr-defined]
+        if hasattr(PathMap, "instance"):
+            delattr(PathMap, "instance")
+
+        class DynamicEndInterface(BaseTestInterface):
+            pass
+
+        class DynamicEndManager(GeneralManager):
+            Interface = DynamicEndInterface
+
+        class DynamicStartInterface(BaseTestInterface):
+            pass
+
+        class DynamicStartManager(GeneralManager):
+            Interface = DynamicStartInterface
+
+        GeneralManagerMeta.all_classes[:] = [DynamicStartManager, DynamicEndManager]
+
+        stale_tracer = PathMap(DynamicStartManager).to(DynamicEndManager)
+
+        self.assertIsNotNone(stale_tracer)
+        self.assertIsNone(stale_tracer.path)  # type: ignore[union-attr]
+
+        def dynamic_attribute_types(cls):  # type: ignore[no-untyped-def]
+            return {"dynamic_end": {"type": DynamicEndManager}}
+
+        DynamicStartInterface.get_attribute_types = classmethod(dynamic_attribute_types)  # type: ignore[method-assign]
+
+        PathMap.create_path_mapping()
+
+        self.assertEqual(PathMap.mapping, {})
+
+        refreshed_tracer = PathMap(DynamicStartManager).to(DynamicEndManager)
+
+        self.assertIsNotNone(refreshed_tracer)
+        self.assertEqual(
+            refreshed_tracer.path,  # type: ignore[union-attr]
+            ["dynamic_end"],
         )
 
     def test_path_map_get_all_connected_empty(self):
