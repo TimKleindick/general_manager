@@ -1054,6 +1054,52 @@ class PathMappingUnitTests(SimpleTestCase):
             ["dynamic_end"],
         )
 
+    def test_recreated_pathmap_refreshes_after_public_cache_clear(self):
+        """Clearing the pair cache and recreating PathMap refreshes graph metadata."""
+        GeneralManagerMeta.all_classes.clear()
+        PathMap.mapping.clear()
+        PathMap._registry_signature = ()  # type: ignore[attr-defined]
+        PathMap._classes_by_name = {}  # type: ignore[attr-defined]
+        PathMap._adjacency = {}  # type: ignore[attr-defined]
+        PathMap._class_adjacency = {}  # type: ignore[attr-defined]
+        if hasattr(PathMap, "instance"):
+            delattr(PathMap, "instance")
+
+        class DynamicEndInterface(BaseTestInterface):
+            pass
+
+        class DynamicEndManager(GeneralManager):
+            Interface = DynamicEndInterface
+
+        class DynamicStartInterface(BaseTestInterface):
+            pass
+
+        class DynamicStartManager(GeneralManager):
+            Interface = DynamicStartInterface
+
+        GeneralManagerMeta.all_classes[:] = [DynamicStartManager, DynamicEndManager]
+
+        stale_tracer = PathMap(DynamicStartManager).to(DynamicEndManager)
+
+        self.assertIsNotNone(stale_tracer)
+        self.assertIsNone(stale_tracer.path)  # type: ignore[union-attr]
+
+        def dynamic_attribute_types(cls):  # type: ignore[no-untyped-def]
+            return {"dynamic_end": {"type": DynamicEndManager}}
+
+        DynamicStartInterface.get_attribute_types = classmethod(dynamic_attribute_types)  # type: ignore[method-assign]
+
+        PathMap.mapping.clear()
+        delattr(PathMap, "instance")
+
+        refreshed_tracer = PathMap(DynamicStartManager).to(DynamicEndManager)
+
+        self.assertIsNotNone(refreshed_tracer)
+        self.assertEqual(
+            refreshed_tracer.path,  # type: ignore[union-attr]
+            ["dynamic_end"],
+        )
+
     def test_get_all_connected_filters_duplicate_names_by_class_identity(self):
         """Connected destinations must match the registered class object."""
         GeneralManagerMeta.all_classes.clear()
