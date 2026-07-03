@@ -1054,6 +1054,59 @@ class PathMappingUnitTests(SimpleTestCase):
             ["dynamic_end"],
         )
 
+    def test_get_all_connected_filters_duplicate_names_by_class_identity(self):
+        """Connected destinations must match the registered class object."""
+        GeneralManagerMeta.all_classes.clear()
+        PathMap.mapping.clear()
+        PathMap._registry_signature = ()  # type: ignore[attr-defined]
+        PathMap._classes_by_name = {}  # type: ignore[attr-defined]
+        PathMap._adjacency = {}  # type: ignore[attr-defined]
+        PathMap._class_adjacency = {}  # type: ignore[attr-defined]
+        if hasattr(PathMap, "instance"):
+            delattr(PathMap, "instance")
+
+        class RegisteredShadowInterface(BaseTestInterface):
+            pass
+
+        class ShadowManager(GeneralManager):
+            Interface = RegisteredShadowInterface
+
+        registered_shadow = ShadowManager
+
+        class UnregisteredShadowInterface(BaseTestInterface):
+            pass
+
+        unregistered_shadow = type(
+            "ShadowManager",
+            (GeneralManager,),
+            {"Interface": UnregisteredShadowInterface},
+        )
+
+        class StartInterface(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):  # type: ignore[no-untyped-def]
+                return {"shadow": {"type": unregistered_shadow}}
+
+        class StartManager(GeneralManager):
+            Interface = StartInterface
+
+        GeneralManagerMeta.all_classes[:] = [StartManager, registered_shadow]
+
+        path_map = PathMap(StartManager)
+        tracer = path_map.to(registered_shadow)
+        connected = path_map.get_all_connected()
+
+        self.assertIsNotNone(tracer)
+        self.assertIsNone(tracer.path)  # type: ignore[union-attr]
+        self.assertNotIn("ShadowManager", connected)
+        self.assertIs(
+            PathMap.mapping[(StartManager.__name__, registered_shadow.__name__)],
+            tracer,
+        )
+        self.assertIsNone(
+            PathMap.mapping[(StartManager.__name__, registered_shadow.__name__)].path
+        )
+
     def test_path_map_get_all_connected_empty(self):
         """Test get_all_connected when no connections exist."""
 
