@@ -532,6 +532,74 @@ class PathMappingUnitTests(SimpleTestCase):
             # Should find a path using either inherited or own property
             self.assertIn(tracer.path[0], ["inherited_end", "own_end"])
 
+    def test_pathmap_finds_inherited_graphql_property_without_derived_edge(self):
+        EndManager = self.EndManager
+
+        class BaseOnlyInterface(BaseTestInterface):
+            pass
+
+        class BaseOnlyManager(GeneralManager):
+            Interface = BaseOnlyInterface
+
+            @GraphQLProperty
+            def inherited_only(self) -> EndManager:  # type: ignore
+                return EndManager()
+
+        class DerivedOnlyInterface(BaseTestInterface):
+            pass
+
+        class DerivedOnlyManager(BaseOnlyManager):
+            Interface = DerivedOnlyInterface
+
+        pm = PathMap(DerivedOnlyManager)
+        tracer = pm.to(EndManager)
+
+        self.assertIsNotNone(tracer)
+        self.assertEqual(tracer.path, ["inherited_only"])  # type: ignore[union-attr]
+        self.assertEqual(pm.get_all_connected(), {EndManager.__name__})
+
+    def test_pathmap_uses_derived_graphql_property_override(self):
+        class BaseTargetInterface(BaseTestInterface):
+            pass
+
+        class BaseTargetManager(GeneralManager):
+            Interface = BaseTargetInterface
+
+        class DerivedTargetInterface(BaseTestInterface):
+            pass
+
+        class DerivedTargetManager(GeneralManager):
+            Interface = DerivedTargetInterface
+
+        class BaseOverrideInterface(BaseTestInterface):
+            pass
+
+        class BaseOverrideManager(GeneralManager):
+            Interface = BaseOverrideInterface
+
+            @GraphQLProperty
+            def shared_edge(self) -> BaseTargetManager:  # type: ignore
+                return BaseTargetManager()
+
+        class DerivedOverrideInterface(BaseTestInterface):
+            pass
+
+        class DerivedOverrideManager(BaseOverrideManager):
+            Interface = DerivedOverrideInterface
+
+            @GraphQLProperty
+            def shared_edge(self) -> DerivedTargetManager:  # type: ignore
+                return DerivedTargetManager()
+
+        pm = PathMap(DerivedOverrideManager)
+        tracer = pm.to(DerivedTargetManager)
+        base_tracer = pm.to(BaseTargetManager)
+
+        self.assertIsNotNone(tracer)
+        self.assertEqual(tracer.path, ["shared_edge"])  # type: ignore[union-attr]
+        self.assertIsNotNone(base_tracer)
+        self.assertIsNone(base_tracer.path)  # type: ignore[union-attr]
+
     def test_pathmap_string_representation(self):
         """
         Test string representation of PathMap and PathTracer objects.

@@ -56,16 +56,21 @@ def _iter_manager_connections(
     for attr_name, attr_value in manager_class.Interface.get_attribute_types().items():
         if isinstance(attr_value, Mapping):
             current_connections[attr_name] = attr_value.get("type")
-    for attr_name, attr_value in manager_class.__dict__.items():
-        if not isinstance(attr_value, GraphQLProperty):
-            continue
-        type_hints = get_args(attr_value.graphql_type_hint)
-        field_type = (
-            type_hints[0]
-            if type_hints
-            else cast(type[object], attr_value.graphql_type_hint)
-        )
-        current_connections[attr_name] = field_type
+    seen_attrs: set[str] = set()
+    for mro_class in manager_class.__mro__:
+        for attr_name, attr_value in mro_class.__dict__.items():
+            if attr_name in seen_attrs:
+                continue
+            seen_attrs.add(attr_name)
+            if not isinstance(attr_value, GraphQLProperty):
+                continue
+            type_hints = get_args(attr_value.graphql_type_hint)
+            field_type = (
+                type_hints[0]
+                if type_hints
+                else cast(type[object], attr_value.graphql_type_hint)
+            )
+            current_connections[attr_name] = field_type
 
     connections: list[tuple[str, type[GeneralManager]]] = []
     for attr_name, attr_type in current_connections.items():
