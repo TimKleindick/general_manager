@@ -284,7 +284,7 @@ class PathTracer:
             visited_managers = {current_manager}
 
         for attr, attr_type in _iter_manager_connections(current_manager):
-            if attr in path or attr_type == self.start_class:
+            if attr_type == self.start_class:
                 continue
             if attr_type == self.destination_class:
                 return [*path, attr]
