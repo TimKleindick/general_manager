@@ -73,10 +73,10 @@ class MeasurementField(MeasurementFieldBase):
         """
         Create a MeasurementField configured with a canonical base unit and paired backing columns.
 
-        Initializes the field's canonical base unit and derived dimensionality, records the editable flag, constructs a Decimal-backed value column (`<name>_value`) and Char-backed unit column (`<name>_unit`), and forwards remaining arguments to the base Field constructor. Stored magnitudes are converted to `base_unit` and rounded to the backing `DecimalField(max_digits=30, decimal_places=10)` precision; the unit column stores Pint's canonical spelling for the assigned unit, such as `gram` for `g`.
+        Initializes the field's canonical base unit and derived dimensionality, records the editable flag, constructs a Decimal-backed value column (`<name>_value`) and Char-backed unit column (`<name>_unit`), and forwards remaining arguments to the base Field constructor. Stored magnitudes are converted to `base_unit` and rounded to the backing `DecimalField(max_digits=30, decimal_places=10)` precision; the unit column stores the Measurement's public unit spelling, such as `gram` for `g` and `count` for discrete item counts.
 
         Parameters:
-            base_unit (str): Multiplicative Pint unit used to normalize and store measurements. Currency units must be one of `currency_units`; each configured currency is treated as its own Pint dimension.
+            base_unit (str): Multiplicative Pint unit used to normalize and store measurements. Currency units must be one of `currency_units`; each configured currency is treated as its own Pint dimension. Use `count` for discrete item quantities.
             *args (object): Positional arguments forwarded to the base Field implementation.
             null (bool): If True, the backing columns may be NULL in the database.
             blank (bool): If True, forms may accept an empty value for this field.
@@ -536,7 +536,7 @@ class MeasurementField(MeasurementFieldBase):
         Resolve the field value on an instance, reconstructing the measurement when possible.
 
         The descriptor reads `<name>_value` as a base-unit magnitude and
-        `<name>_unit` as Pint's canonical spelling for the unit originally assigned. It converts the
+        `<name>_unit` as the Measurement public spelling for the unit originally assigned. It converts the
         base magnitude back to that stored unit for display. If stored data has
         drifted and the unit is no longer parseable or dimensionally compatible with the base
         unit, reconstruction falls back to a Measurement in `base_unit` rather
@@ -655,7 +655,7 @@ class MeasurementField(MeasurementFieldBase):
             ) from e
 
         setattr(instance, self.value_attr, self._normalize_base_magnitude(base_mag))
-        setattr(instance, self.unit_attr, str(value.quantity.units))
+        setattr(instance, self.unit_attr, str(value.unit))
 
     def validate(
         self,

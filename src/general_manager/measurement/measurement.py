@@ -19,11 +19,20 @@ ComparisonOperation: TypeAlias = Callable[[QuantityMagnitude, QuantityMagnitude]
 # Set precision for Decimal
 getcontext().prec = 28
 _PERCENT_SCALE = Decimal("100")
+_COUNT_PUBLIC_UNIT = "count"
+_PIECE_COUNT_CANONICAL_UNIT = "piece"
 
 # Create a new UnitRegistry
 ureg: pint.UnitRegistry[QuantityMagnitude] = pint.UnitRegistry(
     auto_reduce_dimensions=True
 )
+
+# Pint defines "count" as dimensionless. GeneralManager treats discrete item
+# counts as their own unit family so scalar arithmetic cannot silently erase it.
+ureg.define(
+    f"{_PIECE_COUNT_CANONICAL_UNIT} = [piece_count] = pc = {_COUNT_PUBLIC_UNIT}"
+)
+_PIECE_COUNT_UNIT = ureg.parse_units(_COUNT_PUBLIC_UNIT)
 
 # Define currency units
 currency_units = ["EUR", "USD", "GBP", "JPY", "CHF", "AUD", "CAD"]
@@ -43,7 +52,10 @@ def _parse_unit(unit: str) -> pint.Unit:
 def _canonical_unit_string(unit: str) -> str:
     """Return Pint's canonical unit string for one unit expression."""
 
-    return str(_parse_unit(unit))
+    parsed_unit = _parse_unit(unit)
+    if parsed_unit == _PIECE_COUNT_UNIT:
+        return _COUNT_PUBLIC_UNIT
+    return str(parsed_unit)
 
 
 def _format_decimal(value: Decimal) -> Decimal:
@@ -496,8 +508,11 @@ class Measurement:
     comparison, string parsing, pickling, and explicit currency conversion.
     Currency conversions never use implicit rates; callers must pass an
     ``exchange_rate`` when converting between different configured currencies.
-    Pint canonicalizes unit names, so ``unit`` and string/repr output may use
-    canonical names such as ``"kilogram"`` rather than the caller's spelling.
+    Pint canonicalizes most unit names, so ``unit`` and string/repr output may
+    use canonical names such as ``"kilogram"`` rather than the caller's
+    spelling. GeneralManager keeps the public ``"count"`` spelling for discrete
+    piece-count measurements even though Pint represents that base unit
+    internally as ``"piece"``.
     Exact Pint exception subclasses/messages, canonical compound-unit ordering,
     aliases, and offset-unit internals are delegated to the installed Pint
     version and are not a stable GeneralManager API contract.
@@ -515,8 +530,10 @@ class Measurement:
         Converts the provided numeric-like value to a Decimal through
         ``Decimal(str(value))`` and constructs the internal quantity using the
         given Pint unit expression. ``unit`` may be ``"dimensionless"`` or an
-        empty string for dimensionless measurements. Invalid units are reported
-        by Pint and are not wrapped by this constructor. String values are
+        empty string for dimensionless measurements. Discrete item quantities
+        should use ``"count"``, which belongs to its own unit family rather than
+        Pint's plain dimensionless family. Invalid units are reported by Pint and
+        are not wrapped by this constructor. String values are
         numeric magnitudes only; use ``from_string()`` for combined
         ``"<value> <unit>"`` text. ``bool`` is rejected even though it is an
         ``int`` subclass in Python.
@@ -531,7 +548,8 @@ class Measurement:
             value (Decimal | float | int | str): Numeric value to use as the measurement magnitude; strings and numeric types are coerced to Decimal.
             unit (str): Unit label registered in the module's unit registry,
                 including configured currency codes, physical unit names,
-                compound Pint expressions such as ``"kg / m^2"``, or
+                ``"count"`` for discrete item quantities, compound Pint
+                expressions such as ``"kg / m^2"``, or
                 dimensionless units.
 
         Raises:
@@ -585,7 +603,9 @@ class Measurement:
 
         self.__quantity = quantity
         self.__magnitude = _decimal_from_magnitude(quantity.magnitude)
-        self.__unit = unit if unit is not None else str(quantity.units)
+        self.__unit = (
+            unit if unit is not None else _canonical_unit_string(str(quantity.units))
+        )
         self.__quantity_exposed = False
 
     def __current_quantity(self) -> MeasurementQuantity:
@@ -605,7 +625,7 @@ class Measurement:
 
     def __current_unit(self) -> str:
         if self.__quantity_exposed:
-            return str(self.__current_quantity().units)
+            return _canonical_unit_string(str(self.__current_quantity().units))
         return self.__unit
 
     def __getstate__(self) -> dict[str, str]:
@@ -671,12 +691,15 @@ class Measurement:
         """
         Retrieve the unit label associated with the measurement.
 
-        The returned value is Pint's canonical unit string, not necessarily the
-        spelling passed to the constructor. Empty-string and ``"dimensionless"``
-        inputs both expose ``"dimensionless"``.
+        The returned value is GeneralManager's public unit string, usually
+        Pint's canonical unit string and not necessarily the spelling passed to
+        the constructor. Empty-string and ``"dimensionless"`` inputs both expose
+        ``"dimensionless"``. Discrete piece-count inputs such as ``"count"``,
+        ``"pc"``, and ``"piece"`` expose ``"count"`` while Pint's internal
+        quantity uses ``"piece"``.
 
         Returns:
-            str: Canonical unit string as provided by the unit registry.
+            str: Public unit string used by GeneralManager.
         """
         return self.__current_unit()
 
@@ -1118,8 +1141,8 @@ class Measurement:
         Return a detailed representation suitable for debugging.
 
         The magnitude is read through the ``magnitude`` property, and the unit
-        is Pint's canonical unit string. The GeneralManager-owned shape is
-        ``Measurement(<magnitude>, '<canonical unit>')``; exact magnitude and
+        is GeneralManager's public unit string. The GeneralManager-owned shape is
+        ``Measurement(<magnitude>, '<unit>')``; exact magnitude and
         compound-unit spelling follow the documented Decimal/Pint boundaries.
 
         Returns:

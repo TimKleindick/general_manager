@@ -30,7 +30,9 @@ from decimal import Decimal
 ]
 ```
 
-Units use Pint's canonical unit names through `Measurement.unit`.
+Units use `Measurement.unit`, which exposes GeneralManager's public unit names.
+Most aliases canonicalize through Pint; discrete item counts are emitted as
+`"count"`.
 
 ## Parse Strings Intentionally
 

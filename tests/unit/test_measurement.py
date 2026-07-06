@@ -471,6 +471,56 @@ class MeasurementTestCase(TestCase):
         self.assertEqual(str(divided), "4 meter")
         mocked.assert_not_called()
 
+    def test_count_scalar_arithmetic_preserves_public_count_unit(self):
+        measurement = Measurement(Decimal("1.123"), "count")
+
+        divided = measurement / Decimal("1")
+        multiplied = measurement * Decimal("2")
+
+        self.assertEqual(divided.magnitude, Decimal("1.123"))
+        self.assertEqual(divided.unit, "count")
+        self.assertEqual(multiplied.magnitude, Decimal("2.246"))
+        self.assertEqual(multiplied.unit, "count")
+
+    def test_count_weighted_average_preserves_public_count_unit(self):
+        result = sum(
+            [
+                Measurement(Decimal("2"), "count"),
+                Measurement(Decimal("4"), "count"),
+            ]
+        ) / Decimal("2")
+
+        self.assertEqual(result.magnitude, Decimal("3"))
+        self.assertEqual(result.unit, "count")
+        self.assertEqual(result.to("count").magnitude, Decimal("3"))
+
+    def test_count_uses_dedicated_piece_count_dimension(self):
+        count = Measurement(Decimal("1"), "count")
+
+        self.assertEqual(count.to("count").magnitude, Decimal("1"))
+        with self.assertRaises(DimensionalityError):
+            count.to("dimensionless")
+        with self.assertRaises(DimensionalityError):
+            Measurement(Decimal("1"), "dimensionless").to("count")
+
+    def test_count_public_unit_survives_quantity_exposure(self):
+        measurement = Measurement(Decimal("1"), "count")
+
+        self.assertEqual(str(measurement.quantity.units), "piece")
+
+        self.assertEqual(measurement.unit, "count")
+        self.assertEqual(str(measurement), "1 count")
+        self.assertEqual(repr(measurement), "Measurement(1, 'count')")
+
+    def test_count_public_unit_survives_pickle_after_quantity_exposure(self):
+        measurement = Measurement(Decimal("1"), "count")
+        _ = measurement.quantity
+
+        restored = _trusted_pickle_loads(pickle.dumps(measurement))
+
+        self.assertEqual(restored.unit, "count")
+        self.assertEqual(str(restored), "1 count")
+
     def test_multiplication_different_units(self):
         m1 = Measurement(2, "meter")
         m2 = Measurement(3, "second")

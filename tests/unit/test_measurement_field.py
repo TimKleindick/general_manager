@@ -170,6 +170,24 @@ class MeasurementFieldTests(TestCase):
         self.assertEqual(temperature.unit, "degree_Celsius")  # type: ignore[union-attr]
         self.assertAlmostEqual(float(temperature.magnitude), 25.0)  # type: ignore[union-attr]
 
+    @isolate_apps("tests")
+    def test_count_measurement_field_preserves_count_after_scalar_arithmetic(self):
+        class Inventory(models.Model):
+            quantity = MeasurementField(base_unit="count", null=True, blank=True)
+
+            class Meta:
+                app_label = "tests"
+
+        instance = Inventory()
+        instance.quantity = Measurement(Decimal("6"), "count") / Decimal("2")
+        instance.full_clean()
+
+        self.assertEqual(instance.quantity_value, Decimal("3"))  # type: ignore
+        self.assertEqual(instance.quantity_unit, "count")  # type: ignore
+        self.assertIsNotNone(instance.quantity)
+        self.assertEqual(instance.quantity.unit, "count")  # type: ignore[union-attr]
+        self.assertEqual(instance.quantity.to("count").magnitude, Decimal("3"))  # type: ignore[union-attr]
+
     def test_descriptor_falls_back_to_base_unit_for_unknown_stored_unit(self):
         self.instance.length_value = Decimal("5")  # type: ignore
         self.instance.length_unit = "not_a_unit"  # type: ignore
