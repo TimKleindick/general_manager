@@ -239,10 +239,10 @@ HANDLED_MANAGER_ERRORS: tuple[type[Exception], ...] = (
 
 
 class MeasurementType(ObjectType):
-    """GraphQL object wrapper exposing measurement magnitude and Pint unit text.
+    """GraphQL object wrapper exposing measurement magnitude and unit text.
 
     ``value`` is emitted through Graphene ``Float`` and may lose Decimal
-    precision. ``unit`` is the measurement's canonical Pint unit string.
+    precision. ``unit`` is the measurement's GeneralManager public unit string.
     """
 
     value = Float()
@@ -259,7 +259,7 @@ class MeasurementScalar(Scalar):
     are outside the documented user API.
 
     ``serialize()`` accepts only ``Measurement`` instances and returns their
-    canonical string representation; it raises ``InvalidMeasurementValueError``
+    public string representation; it raises ``InvalidMeasurementValueError``
     for every other value. ``parse_value()`` is the public variable-input parser,
     accepts a string, and returns a ``Measurement``. Type checkers should reject
     non-string direct calls. Runtime non-string calls are unsupported; their

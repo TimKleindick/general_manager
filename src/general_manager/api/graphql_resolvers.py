@@ -588,7 +588,7 @@ def create_measurement_resolver(field_name: str) -> Resolver:
             result = result.to(target_unit)
         return {
             "value": result.quantity.magnitude,
-            "unit": str(result.quantity.units),
+            "unit": result.unit,
         }
 
     return resolver

@@ -64,6 +64,15 @@ discounted_price = price * Measurement(10, "percent")
 discounted_price.to("EUR") # returns Measurement(19.9, 'EUR')
 ```
 
+Use `"count"` for discrete item quantities. Counts keep their unit through
+scalar operations such as weighted averages and are separate from plain
+dimensionless ratios:
+
+```python
+units = (Measurement(2, "count") + Measurement(4, "count")) / 2
+units.to("count") # returns Measurement(3, 'count')
+```
+
 Addition and subtraction require compatible units. Currency values must use the
 same currency code for arithmetic, and converting between currencies requires an
 explicit exchange rate. The exchange rate is target currency per one source
@@ -82,9 +91,10 @@ canonical unit `"dimensionless"`. Invalid text raises
 `InvalidMeasurementStringError` or
 `InvalidDimensionlessValueError`; incompatible arithmetic raises one of the
 measurement-specific `TypeError` or `ValueError` subclasses. Equivalent
-measurements compare and hash by their canonical unit value, so
+measurements compare and hash by normalized base-unit value, so
 `Measurement(1, "kg")` and `Measurement(1000, "gram")` can be used
-interchangeably as dictionary keys.
+interchangeably as dictionary keys. Count measurements use the public unit
+`"count"` while Pint stores their internal base unit as `"piece"`.
 
 ## Step 5: Expose via GraphQL
 

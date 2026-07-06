@@ -345,6 +345,21 @@ class GraphQLTests(TestCase):
         result = resolver(mock_instance, self.info, target_unit="cm")
         self.assertEqual(result, {"value": Decimal(100), "unit": "centimeter"})
 
+    def test_create_resolver_measurement_count_uses_public_unit(self):
+        mock_instance = MagicMock()
+        mock_instance.measurement_field = Measurement(Decimal("1"), "count")
+
+        resolver = GraphQL._create_resolver("measurement_field", Measurement)
+
+        self.assertEqual(
+            resolver(mock_instance, self.info),
+            {"value": Decimal("1"), "unit": "count"},
+        )
+        self.assertEqual(
+            resolver(mock_instance, self.info, target_unit="count"),
+            {"value": Decimal("1"), "unit": "count"},
+        )
+
     def test_create_resolver_list_case(self):
         mock_instance = MagicMock()
         mock_queryset = MagicMock()
