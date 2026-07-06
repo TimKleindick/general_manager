@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.60.6 (2026-07-06)
+
+### Bug Fixes
+
+- Avoid pc count unit alias
+  ([`33ecccd`](https://github.com/TimKleindick/general_manager/commit/33ecccda4b24b502cdeae1bd996141df908b7866))
+
+- Preserve count measurement units
+  ([`af596c5`](https://github.com/TimKleindick/general_manager/commit/af596c54b9caeefc55f40251c23aed82e71feb3c))
+
+
 ## v0.60.5 (2026-07-03)
 
 ### Bug Fixes
