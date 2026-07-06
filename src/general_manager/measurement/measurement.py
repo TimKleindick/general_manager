@@ -29,9 +29,7 @@ ureg: pint.UnitRegistry[QuantityMagnitude] = pint.UnitRegistry(
 
 # Pint defines "count" as dimensionless. GeneralManager treats discrete item
 # counts as their own unit family so scalar arithmetic cannot silently erase it.
-ureg.define(
-    f"{_PIECE_COUNT_CANONICAL_UNIT} = [piece_count] = pc = {_COUNT_PUBLIC_UNIT}"
-)
+ureg.define(f"{_PIECE_COUNT_CANONICAL_UNIT} = [piece_count] = {_COUNT_PUBLIC_UNIT}")
 _PIECE_COUNT_UNIT = ureg.parse_units(_COUNT_PUBLIC_UNIT)
 
 # Define currency units
@@ -694,9 +692,9 @@ class Measurement:
         The returned value is GeneralManager's public unit string, usually
         Pint's canonical unit string and not necessarily the spelling passed to
         the constructor. Empty-string and ``"dimensionless"`` inputs both expose
-        ``"dimensionless"``. Discrete piece-count inputs such as ``"count"``,
-        ``"pc"``, and ``"piece"`` expose ``"count"`` while Pint's internal
-        quantity uses ``"piece"``.
+        ``"dimensionless"``. Discrete piece-count inputs such as ``"count"``
+        and ``"piece"`` expose ``"count"`` while Pint's internal quantity uses
+        ``"piece"``. The Pint ``"pc"`` alias remains parsec, not piece count.
 
         Returns:
             str: Public unit string used by GeneralManager.

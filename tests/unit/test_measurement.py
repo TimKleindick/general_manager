@@ -503,6 +503,12 @@ class MeasurementTestCase(TestCase):
         with self.assertRaises(DimensionalityError):
             Measurement(Decimal("1"), "dimensionless").to("count")
 
+    def test_pc_remains_parsec_alias_not_piece_count_alias(self):
+        measurement = Measurement(Decimal("1"), "pc")
+
+        self.assertEqual(measurement.unit, "parsec")
+        self.assertEqual(measurement.quantity.units, ureg.parse_units("parsec"))
+
     def test_count_public_unit_survives_quantity_exposure(self):
         measurement = Measurement(Decimal("1"), "count")
 
