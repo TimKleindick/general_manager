@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.61.0 (2026-07-07)
+
+### Features
+
+- Expose structured graphql validation errors
+  ([`d23ad37`](https://github.com/TimKleindick/general_manager/commit/d23ad37f1e456efa769e79960985b9a43beb473b))
+
+
 ## v0.60.6 (2026-07-06)
 
 ### Bug Fixes
