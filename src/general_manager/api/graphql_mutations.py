@@ -20,6 +20,7 @@ from django.db.models import NOT_PROVIDED
 from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.type_checks import safe_issubclass
+from general_manager.utils.format_string import snake_to_camel
 from general_manager.api.graphql_errors import (
     HANDLED_MANAGER_ERRORS,
     MissingManagerIdentifierError,
@@ -119,6 +120,35 @@ def _normalize_mutation_kwargs_for_manager(
                 normalized.pop(key, None)
 
     return normalized
+
+
+def _graphql_mutation_field_name(
+    general_manager_class: type[GeneralManager],
+    field_name: str,
+) -> str:
+    interface_cls = getattr(general_manager_class, "Interface", None)
+    if interface_cls is None:
+        return snake_to_camel(field_name)
+
+    attribute_types = interface_cls.get_attribute_types()
+
+    if field_name.endswith("_id_list"):
+        relation_name = f"{field_name.removesuffix('_id_list')}_list"
+        relation_info = attribute_types.get(relation_name)
+        if relation_info is not None and safe_issubclass(
+            relation_info["type"], GeneralManager
+        ):
+            return snake_to_camel(relation_name)
+
+    if field_name.endswith("_id"):
+        relation_name = field_name.removesuffix("_id")
+        relation_info = attribute_types.get(relation_name)
+        if relation_info is not None and safe_issubclass(
+            relation_info["type"], GeneralManager
+        ):
+            return snake_to_camel(relation_name)
+
+    return snake_to_camel(field_name)
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +313,12 @@ def generate_create_mutation_class(
                 create_kwargs["history_comment"] = history_comment
                 instance = create(**create_kwargs)
         except HANDLED_MANAGER_ERRORS as error:
-            raise handle_graph_ql_error(error) from error
+            raise handle_graph_ql_error(
+                error,
+                field_name_mapper=lambda field_name: _graphql_mutation_field_name(
+                    generalManagerClass, field_name
+                ),
+            ) from error
         return {"success": True, generalManagerClass.__name__: instance}
 
     return type(
@@ -361,7 +396,12 @@ def generate_update_mutation_class(
                 update_kwargs["history_comment"] = history_comment
                 instance = update(**update_kwargs)
         except HANDLED_MANAGER_ERRORS as error:
-            raise handle_graph_ql_error(error) from error
+            raise handle_graph_ql_error(
+                error,
+                field_name_mapper=lambda field_name: _graphql_mutation_field_name(
+                    generalManagerClass, field_name
+                ),
+            ) from error
         return {"success": True, generalManagerClass.__name__: instance}
 
     return type(
@@ -440,7 +480,12 @@ def generate_delete_mutation_class(
                     history_comment=history_comment,
                 )
         except HANDLED_MANAGER_ERRORS as error:
-            raise handle_graph_ql_error(error) from error
+            raise handle_graph_ql_error(
+                error,
+                field_name_mapper=lambda field_name: _graphql_mutation_field_name(
+                    generalManagerClass, field_name
+                ),
+            ) from error
         return {"success": True, generalManagerClass.__name__: None}
 
     return type(

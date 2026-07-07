@@ -9,7 +9,7 @@ without introducing circular dependencies.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Protocol, TypeAlias, TypedDict, cast
 
 from graphql import GraphQLError
 from graphql.language import ast
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 
 from general_manager.logging import get_logger
 from general_manager.measurement.measurement import Measurement
@@ -83,6 +83,8 @@ PermissionFilterPlan: TypeAlias = list[PermissionConstraint]
 ReadPermissionPlanMethod: TypeAlias = Callable[[], object]
 BigIntCoercible: TypeAlias = str | bytes | bytearray | int | float | Decimal
 GraphQLSubscriptionAction: TypeAlias = str
+ValidationFieldNameMapper: TypeAlias = Callable[[str], str]
+ValidationFieldErrors: TypeAlias = dict[str, list[str]]
 
 
 class _ReadPermissionProvider(Protocol):
@@ -438,30 +440,76 @@ def map_field_to_graphene_base_type(
         return String
 
 
-def handle_graph_ql_error(error: Exception) -> GraphQLError:
-    """Convert an exception into a GraphQL error with an extensions code.
+def _validation_messages_to_strings(messages: object) -> list[str]:
+    """Convert Django validation message values to plain strings."""
+    if isinstance(messages, ValidationError):
+        return [str(message) for message in messages.messages]
+    if isinstance(messages, str):
+        return [messages]
+    if isinstance(messages, bytes):
+        return [messages.decode()]
+    if isinstance(messages, Iterable):
+        return [str(message) for message in messages]
+    return [str(messages)]
+
+
+def _build_validation_error_extensions(
+    message_dict: Mapping[str, object],
+    *,
+    field_name_mapper: ValidationFieldNameMapper | None,
+) -> dict[str, object]:
+    """Convert validation messages into GraphQL BAD_USER_INPUT extensions.
+
+    Per-field keys are remapped with ``field_name_mapper`` when provided.
+    ``NON_FIELD_ERRORS`` messages are separated into ``nonFieldErrors`` and are
+    not remapped. The returned mapping always includes ``code``,
+    ``fieldErrors``, and ``nonFieldErrors`` keys.
+    """
+    field_errors: ValidationFieldErrors = {}
+    non_field_errors: list[str] = []
+
+    for field_name, messages in message_dict.items():
+        message_list = _validation_messages_to_strings(messages)
+        if field_name == NON_FIELD_ERRORS:
+            non_field_errors.extend(message_list)
+            continue
+
+        schema_field_name = (
+            field_name_mapper(field_name)
+            if field_name_mapper is not None
+            else field_name
+        )
+        field_errors.setdefault(schema_field_name, []).extend(message_list)
+
+    return {
+        "code": "BAD_USER_INPUT",
+        "fieldErrors": field_errors,
+        "nonFieldErrors": non_field_errors,
+    }
+
+
+def handle_graph_ql_error(
+    error: Exception,
+    *,
+    field_name_mapper: ValidationFieldNameMapper | None = None,
+) -> GraphQLError:
+    """Convert a handled exception into a GraphQL error.
 
     This private extracted helper is used by the canonical GraphQL module and is
     not a stable import path. The behavior documented here is a
     generated-resolver compatibility note, not a stable direct-import guarantee.
 
     Explicit ``GraphQLError`` instances are returned as the same object,
-    preserving their message and entire existing ``extensions`` mapping. For
-    converted exceptions, the returned ``GraphQLError.extensions`` mapping
-    contains a single ``"code"`` key. The original exception message is
-    intentionally exposed as the GraphQL error message; this is a stable
-    generated-response compatibility guarantee for
-    ``{"code": "INTERNAL_SERVER_ERROR"}`` responses as well as user-error
-    responses, even though the helper itself remains a private import.
-    ``PermissionError`` uses ``{"code": "PERMISSION_DENIED"}`` and is
-    logged at info level. ``ValueError`` and Django ``ValidationError`` use
-    ``{"code": "BAD_USER_INPUT"}`` and are logged as warnings. ``TypeError``,
-    ``AttributeError``, and ``RuntimeError`` are treated as suspicious handled
-    errors, logged with traceback information, and returned as
-    ``{"code": "INTERNAL_SERVER_ERROR"}``. Exceptions outside those explicit
-    branches are logged as unexpected internal errors and also returned as
-    ``INTERNAL_SERVER_ERROR``. Logging level/category is diagnostic behavior of
-    the internal ``api.graphql`` logger and is not a public API contract.
+    preserving their message and existing ``extensions`` mapping. Converted
+    exceptions always include an ``extensions["code"]`` value. Django
+    ``ValidationError`` instances with ``message_dict`` use
+    ``"Validation failed."`` with ``BAD_USER_INPUT`` plus ``fieldErrors`` and
+    ``nonFieldErrors``. When ``field_name_mapper`` is provided, it maps
+    ``message_dict`` field keys before they are emitted in ``fieldErrors``;
+    non-field errors are not mapped. Other converted exceptions keep their
+    original message and category-specific code. Logging level/category is
+    diagnostic behavior of the internal ``api.graphql`` logger and is not a
+    public API contract.
     """
     message = str(error)
     error_name = type(error).__name__
@@ -477,7 +525,21 @@ def handle_graph_ql_error(error: Exception) -> GraphQLError:
             context={"error": error_name, "message": message},
         )
         return GraphQLError(message, extensions={"code": "PERMISSION_DENIED"})
-    elif isinstance(error, (ValueError, ValidationError)):
+    elif isinstance(error, ValidationError):
+        logger.warning(
+            "graphql user error",
+            context={"error": error_name, "message": message},
+        )
+        if hasattr(error, "error_dict"):
+            return GraphQLError(
+                "Validation failed.",
+                extensions=_build_validation_error_extensions(
+                    error.message_dict,
+                    field_name_mapper=field_name_mapper,
+                ),
+            )
+        return GraphQLError(message, extensions={"code": "BAD_USER_INPUT"})
+    elif isinstance(error, ValueError):
         logger.warning(
             "graphql user error",
             context={"error": error_name, "message": message},

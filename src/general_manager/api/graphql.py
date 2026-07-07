@@ -69,6 +69,7 @@ from general_manager.api.graphql_errors import (
     EXPECTED_MANAGER_ERRORS,  # noqa: F401  # re-exported
     SUSPICIOUS_MANAGER_ERRORS,  # noqa: F401  # re-exported
     HANDLED_MANAGER_ERRORS as HANDLED_MANAGER_ERRORS,
+    ValidationFieldNameMapper,
     MeasurementType as MeasurementType,
     MeasurementScalar as MeasurementScalar,
     PageInfo,
@@ -1512,9 +1513,13 @@ class GraphQL:
         )
 
     @staticmethod
-    def _handle_graph_ql_error(error: Exception) -> GraphQLError:
+    def _handle_graph_ql_error(
+        error: Exception,
+        *,
+        field_name_mapper: ValidationFieldNameMapper | None = None,
+    ) -> GraphQLError:
         """Thin wrapper - see :func:`general_manager.api.graphql_errors.handle_graph_ql_error`."""
-        return _handle_graph_ql_error_fn(error)
+        return _handle_graph_ql_error_fn(error, field_name_mapper=field_name_mapper)
 
     @classmethod
     def _handle_data_change(

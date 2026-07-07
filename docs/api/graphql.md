@@ -145,13 +145,22 @@ are not `GraphQLPermissionCapability` instances are ignored.
 Generated GraphQL resolvers convert handled manager exceptions through the
 shared error mapper. Existing `GraphQLError` instances are returned unchanged,
 preserving object identity and the full existing `extensions` mapping. Converted
-errors use an `extensions` mapping with a single `code` key. `PermissionError`
-becomes `PERMISSION_DENIED`; Django `ValidationError` and plain `ValueError`
-become `BAD_USER_INPUT`; `TypeError`, `AttributeError`, `RuntimeError`,
-`LookupError`, and other handled internal exceptions currently become
-`INTERNAL_SERVER_ERROR`. The original exception text remains the GraphQL error
-message for compatibility. These lower-level helper details document current
-generated-resolver behavior, not stable direct-import guarantees.
+errors always include an `extensions.code` value. `PermissionError` becomes
+`PERMISSION_DENIED`; plain `ValueError` and unstructured Django
+`ValidationError` become `BAD_USER_INPUT`; `TypeError`, `AttributeError`,
+`RuntimeError`, `LookupError`, and other handled internal exceptions currently
+become `INTERNAL_SERVER_ERROR`. Non-structured converted exceptions keep
+`str(error)` as the GraphQL message, preserving current Django
+`ValidationError` message formatting.
+
+When Django `ValidationError` instances have `message_dict`, mutation errors use
+the generic message `Validation failed.` and include structured details in
+`extensions.fieldErrors` and `extensions.nonFieldErrors`. Generated mutations
+use schema-aware input field names, so a Python/Django field such as
+`project_phase_type` is reported as `projectPhaseType`, and relation raw-id
+implementation keys such as `customer_id` are reported as their exposed GraphQL
+input field, such as `customer`. Decorator-created mutations map structured
+validation field keys with `snake_to_camel`.
 
 ::: general_manager.api.graphql_view.GeneralManagerGraphQLView
 

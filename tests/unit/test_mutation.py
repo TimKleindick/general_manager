@@ -1,6 +1,7 @@
 from typing import Optional, List, ClassVar
 
 import graphene
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.test import TestCase
 from django.contrib.auth.models import AnonymousUser, User
 
@@ -84,6 +85,76 @@ class SingleInputGM(GeneralManager):
 
 # Required because the dummy handle_interface hook does not attach Interface.
 SingleInputGM.Interface = SingleInputInterface
+
+
+class ValidationInputInterface(DummyInterface):
+    input_fields: ClassVar[dict] = {}
+
+    @classmethod
+    def get_attribute_types(cls):
+        return {
+            "project_phase_type": {
+                "type": str,
+                "is_required": False,
+                "default": None,
+                "is_derived": False,
+                "is_editable": True,
+            },
+            "customer": {
+                "type": SingleInputGM,
+                "is_required": False,
+                "default": None,
+                "is_derived": False,
+                "is_editable": True,
+                "relation_kind": "direct",
+            },
+            "member_list": {
+                "type": SingleInputGM,
+                "is_required": False,
+                "default": None,
+                "is_derived": False,
+                "is_editable": True,
+            },
+        }
+
+
+class ValidationInputGM(GeneralManager):
+    class Interface(ValidationInputInterface):
+        pass
+
+    @classmethod
+    def create(cls, **kwargs):
+        if "member_id_list" in kwargs:
+            raise ValidationError({"member_id_list": ["Members are required."]})
+        raise ValidationError(
+            {
+                "project_phase_type": ["This field cannot be null."],
+                "customer_id": ["Customer is required."],
+                NON_FIELD_ERRORS: ["Project dates overlap."],
+            }
+        )
+
+
+ValidationInputGM.Interface = ValidationInputInterface
+
+
+class ValidationMutationGM(GeneralManager):
+    class Interface(ValidationInputInterface):
+        pass
+
+    def __init__(self, *args, **kwargs):
+        _ = args, kwargs
+
+    def update(self, **kwargs):
+        _ = kwargs
+        raise ValidationError({"customer_id": ["Customer is required."]})
+
+    def delete(self, **kwargs):
+        _ = kwargs
+        raise ValidationError({"customer_id": ["Customer is required."]})
+
+
+ValidationMutationGM.Interface = ValidationInputInterface
 
 
 class MultiInputInterface(DummyInterface):
@@ -270,6 +341,172 @@ class MutationDecoratorTests(TestCase):
             mutation.mutate(None, info, item="not-an-int")
 
         self.assertEqual(ctx.exception.extensions["code"], "BAD_USER_INPUT")
+
+    def test_decorator_mutation_validation_errors_use_schema_argument_names(self):
+        @graph_ql_mutation()
+        def validate_project(info, project_phase_type: str) -> str:
+            _ = info, project_phase_type
+            raise ValidationError(
+                {
+                    "project_phase_type": ["This field cannot be null."],
+                    NON_FIELD_ERRORS: ["Project dates overlap."],
+                }
+            )
+
+        mutation = GraphQL._mutations["validateProject"]
+        info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        with self.assertRaises(GraphQLError) as ctx:
+            mutation.mutate(None, info, project_phase_type="")
+
+        self.assertEqual(ctx.exception.message, "Validation failed.")
+        self.assertEqual(
+            ctx.exception.extensions,
+            {
+                "code": "BAD_USER_INPUT",
+                "fieldErrors": {
+                    "projectPhaseType": ["This field cannot be null."],
+                },
+                "nonFieldErrors": ["Project dates overlap."],
+            },
+        )
+
+    def test_generated_create_mutation_validation_errors_use_schema_field_names(self):
+        mutation = GraphQL.generate_create_mutation_class(ValidationInputGM, {})
+        info = type(
+            "Info",
+            (),
+            {
+                "context": type(
+                    "Ctx",
+                    (),
+                    {"user": type("User", (), {"id": 42})()},
+                )()
+            },
+        )()
+
+        with self.assertRaises(GraphQLError) as ctx:
+            mutation.mutate(
+                None,
+                info,
+                project_phase_type=None,
+                customer="7",
+            )
+
+        self.assertEqual(ctx.exception.message, "Validation failed.")
+        self.assertEqual(
+            ctx.exception.extensions,
+            {
+                "code": "BAD_USER_INPUT",
+                "fieldErrors": {
+                    "projectPhaseType": ["This field cannot be null."],
+                    "customer": ["Customer is required."],
+                },
+                "nonFieldErrors": ["Project dates overlap."],
+            },
+        )
+
+    def test_generated_create_mutation_validation_errors_use_schema_list_field_names(
+        self,
+    ):
+        mutation = GraphQL.generate_create_mutation_class(ValidationInputGM, {})
+        info = type(
+            "Info",
+            (),
+            {
+                "context": type(
+                    "Ctx",
+                    (),
+                    {"user": type("User", (), {"id": 42})()},
+                )()
+            },
+        )()
+
+        with self.assertRaises(GraphQLError) as ctx:
+            mutation.mutate(
+                None,
+                info,
+                member_list=["7"],
+            )
+
+        self.assertEqual(ctx.exception.message, "Validation failed.")
+        self.assertEqual(
+            ctx.exception.extensions,
+            {
+                "code": "BAD_USER_INPUT",
+                "fieldErrors": {
+                    "memberList": ["Members are required."],
+                },
+                "nonFieldErrors": [],
+            },
+        )
+
+    def test_generated_update_mutation_validation_errors_use_schema_field_names(self):
+        mutation = GraphQL.generate_update_mutation_class(ValidationMutationGM, {})
+        info = type(
+            "Info",
+            (),
+            {
+                "context": type(
+                    "Ctx",
+                    (),
+                    {"user": type("User", (), {"id": 42})()},
+                )()
+            },
+        )()
+
+        with self.assertRaises(GraphQLError) as ctx:
+            mutation.mutate(
+                None,
+                info,
+                id="99",
+                customer="7",
+            )
+
+        self.assertEqual(ctx.exception.message, "Validation failed.")
+        self.assertEqual(
+            ctx.exception.extensions,
+            {
+                "code": "BAD_USER_INPUT",
+                "fieldErrors": {
+                    "customer": ["Customer is required."],
+                },
+                "nonFieldErrors": [],
+            },
+        )
+
+    def test_generated_delete_mutation_validation_errors_use_schema_field_names(self):
+        mutation = GraphQL.generate_delete_mutation_class(ValidationMutationGM, {})
+        info = type(
+            "Info",
+            (),
+            {
+                "context": type(
+                    "Ctx",
+                    (),
+                    {"user": type("User", (), {"id": 42})()},
+                )()
+            },
+        )()
+
+        with self.assertRaises(GraphQLError) as ctx:
+            mutation.mutate(
+                None,
+                info,
+                id="99",
+            )
+
+        self.assertEqual(ctx.exception.message, "Validation failed.")
+        self.assertEqual(
+            ctx.exception.extensions,
+            {
+                "code": "BAD_USER_INPUT",
+                "fieldErrors": {
+                    "customer": ["Customer is required."],
+                },
+                "nonFieldErrors": [],
+            },
+        )
 
     def test_list_argument(self):
         @graph_ql_mutation()
