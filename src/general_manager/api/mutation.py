@@ -480,7 +480,10 @@ def graph_ql_mutation(
                 data["success"] = True
                 return mutation_class(**data)
             except HANDLED_MANAGER_ERRORS as error:
-                raise GraphQL._handle_graph_ql_error(error) from error
+                raise GraphQL._handle_graph_ql_error(
+                    error,
+                    field_name_mapper=snake_to_camel,
+                ) from error
 
         # Assemble class dict
         class_dict: GrapheneFieldMap = {

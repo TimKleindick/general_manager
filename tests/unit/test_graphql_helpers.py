@@ -5,8 +5,9 @@ from unittest import mock
 
 import pytest
 import graphene  # type: ignore[import]
-from graphql import GraphQLError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.test import SimpleTestCase
+from graphql import GraphQLError
 from graphql import parse
 from graphql.language.ast import (
     FragmentDefinitionNode,
@@ -36,6 +37,7 @@ from general_manager.permission.base_permission import (
     BasePermission,
     ReadPermissionPlan,
 )
+from general_manager.utils.format_string import snake_to_camel
 from general_manager.api.graphql_resolvers import (
     apply_grouping,
     apply_pagination,
@@ -458,6 +460,52 @@ class GraphQLHelperTests(SimpleTestCase):
         error = GraphQLError("explicit", extensions={"code": "CUSTOM"})
 
         assert GraphQL._handle_graph_ql_error(error) is error
+
+    def test_handle_graphql_error_structures_validation_message_dict(self) -> None:
+        error = GraphQL._handle_graph_ql_error(
+            ValidationError(
+                {
+                    "project_phase_type": ["This field cannot be null."],
+                    NON_FIELD_ERRORS: ["Project dates overlap."],
+                }
+            ),
+            field_name_mapper=snake_to_camel,
+        )
+
+        assert error.message == "Validation failed."
+        assert error.extensions == {
+            "code": "BAD_USER_INPUT",
+            "fieldErrors": {
+                "projectPhaseType": ["This field cannot be null."],
+            },
+            "nonFieldErrors": ["Project dates overlap."],
+        }
+
+    def test_handle_graphql_error_preserves_field_names_without_mapper(self) -> None:
+        error = GraphQL._handle_graph_ql_error(
+            ValidationError(
+                {
+                    "project_phase_type": ["This field cannot be null."],
+                }
+            ),
+        )
+
+        assert error.message == "Validation failed."
+        assert error.extensions == {
+            "code": "BAD_USER_INPUT",
+            "fieldErrors": {
+                "project_phase_type": ["This field cannot be null."],
+            },
+            "nonFieldErrors": [],
+        }
+
+    def test_handle_graphql_error_preserves_unstructured_validation_behavior(
+        self,
+    ) -> None:
+        error = GraphQL._handle_graph_ql_error(ValidationError("bad data"))
+
+        assert error.extensions == {"code": "BAD_USER_INPUT"}
+        assert error.message == "['bad data']"
 
     def test_apply_permission_filters_enforces_instance_read_gate(self) -> None:
         class AdminOnlyPermission(BasePermission):
