@@ -135,6 +135,42 @@ def test_upload_settings_reject_encoded_or_malformed_paths_as_unsafe(
         get_file_upload_settings()
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "gm/\x85/",
+        "gm/\u202e/",
+        "gm/\ud800/",
+        "gm/\ue000/",
+        "gm/\u0378/",
+        "gm/%C2%85/",
+        "gm/%E2%80%AE/",
+        "gm/%EE%80%80/",
+        "gm/%CD%B8/",
+        "gm/%FF/",
+        "gm/%E2%80/",
+        "gm/%GG/",
+    ],
+)
+def test_upload_settings_reject_unicode_controls_and_malformed_escapes(
+    settings,
+    value: str,
+) -> None:
+    settings.GENERAL_MANAGER = {"FILE_UPLOADS": {"STAGING_PREFIX": value}}
+
+    with pytest.raises(
+        FileUploadConfigurationError,
+        match=r"^STAGING_PREFIX must be a safe relative path\.$",
+    ):
+        get_file_upload_settings()
+
+
+def test_upload_settings_allow_printable_unicode_path_segments(settings) -> None:
+    settings.GENERAL_MANAGER = {"FILE_UPLOADS": {"STAGING_PREFIX": "gm/über/資料/"}}
+
+    assert get_file_upload_settings().staging_prefix == "gm/über/資料/"
+
+
 @pytest.mark.parametrize("configured", [None, [], "uploads"])
 def test_upload_settings_require_a_mapping(settings, configured: object) -> None:
     settings.GENERAL_MANAGER = {"FILE_UPLOADS": configured}

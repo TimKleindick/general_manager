@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import re
+from unicodedata import category
 from urllib.parse import unquote, urlsplit
 
 from django.db import DEFAULT_DB_ALIAS
@@ -118,6 +120,7 @@ _SETTING_NAMES = {
     "DOWNLOAD_URL_TTL_SECONDS",
     "DELETE_REPLACED_FILES",
 }
+_MALFORMED_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 def get_file_upload_settings() -> FileUploadSettings:
@@ -261,7 +264,9 @@ def _safe_prefix(name: str, value: object) -> str:
 
 
 def _is_safe_path_segment(segment: str) -> bool:
-    """Reject empty, traversal, separator, and control content after URL decoding."""
+    """Reject malformed escapes and unsafe Unicode content after URL decoding."""
+    if _MALFORMED_PERCENT_ESCAPE.search(segment):
+        return False
     try:
         decoded = unquote(segment, errors="strict")
     except UnicodeError:
@@ -271,7 +276,7 @@ def _is_safe_path_segment(segment: str) -> bool:
         and decoded not in {".", ".."}
         and "/" not in decoded
         and "\\" not in decoded
-        and all(ord(character) >= 32 and ord(character) != 127 for character in decoded)
+        and all(not category(character).startswith("C") for character in decoded)
     )
 
 
