@@ -87,12 +87,7 @@ class S3UploadAdapter:
 
     @property
     def supports_public_urls(self) -> bool:
-        return bool(
-            getattr(self.storage, "public", False) is True
-            or getattr(self.storage, "default_acl", None) == "public-read"
-            or getattr(self.storage, "querystring_auth", True) is False
-            or self._object_options.final_copy_arguments.get("ACL") == "public-read"
-        )
+        return _storage_is_public(self.storage, self._object_options)
 
     @classmethod
     def supports_direct(cls, storage: Storage) -> bool:
@@ -329,6 +324,15 @@ def _looks_like_s3_storage(storage: Storage) -> bool:
     )
 
 
+def _storage_is_public(storage: Storage, object_options: _S3ObjectOptions) -> bool:
+    return bool(
+        getattr(storage, "public", False) is True
+        or getattr(storage, "querystring_auth", True) is False
+        or object_options.final_copy_arguments.get("ACL")
+        in {"public-read", "public-read-write"}
+    )
+
+
 def _validate_direct_support(
     storage: Storage,
 ) -> tuple[_S3ClientProtocol, str, _S3ObjectOptions]:
@@ -338,6 +342,14 @@ def _validate_direct_support(
             "The storage backend is not a recognized S3 storage.",
         )
     object_options = _storage_object_options(storage)
+    if (
+        _storage_is_public(storage, object_options)
+        and getattr(storage, "upload_staging_prefix_private", False) is not True
+    ):
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "Public S3 storage requires an explicitly private staging prefix.",
+        )
     if not _is_aws_s3_endpoint(storage):
         try:
             custom_conditional_copy = storage.supports_conditional_copy  # type: ignore[attr-defined]
@@ -422,7 +434,7 @@ def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
         "BucketKeyEnabled": "x-amz-server-side-encryption-bucket-key-enabled",
         "StorageClass": "x-amz-storage-class",
     }
-    staging_post_fields: dict[str, str] = {"acl": "private"}
+    staging_post_fields: dict[str, str] = {}
     final_copy_arguments: dict[str, object] = {}
     for name, value in values.items():
         if name == "BucketKeyEnabled":
@@ -439,7 +451,9 @@ def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
                 UploadBackendUnsupportedError,
                 "S3 object parameter values must be non-empty strings.",
             )
-        if name not in {"ACL", "StorageClass"}:
+        if name == "ACL" and value == "bucket-owner-full-control":
+            staging_post_fields[post_names[name]] = value
+        elif name not in {"ACL", "StorageClass"}:
             staging_post_fields[post_names[name]] = value
         final_copy_arguments[name] = value
     return _S3ObjectOptions(
