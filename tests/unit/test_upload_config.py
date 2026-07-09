@@ -7,6 +7,7 @@ import pytest
 from general_manager.uploads.config import (
     FileUploadConfigurationError,
     FileUploadPolicy,
+    FileUploadSettings,
     get_file_upload_settings,
     merge_file_upload_policy,
 )
@@ -17,6 +18,19 @@ def test_upload_settings_default_to_secure_finite_values(settings) -> None:
 
     value = get_file_upload_settings()
 
+    assert value == FileUploadSettings(
+        enabled=False,
+        http_upload_path="gm/uploads/",
+        staging_prefix="gm-staging/",
+        intent_database="default",
+        max_bytes=25_000_000,
+        max_pending_intents_per_user=20,
+        max_pending_bytes_per_user=100_000_000,
+        max_image_pixels=40_000_000,
+        token_ttl_seconds=900,
+        download_url_ttl_seconds=300,
+        delete_replaced_files=False,
+    )
     assert value.enabled is False
     assert value.intent_database == "default"
     assert value.max_bytes > 0
@@ -37,6 +51,46 @@ def test_file_policy_overrides_global_limits_without_mutating_defaults() -> None
         base.max_bytes = 1  # type: ignore[misc]
 
 
+def test_file_policy_defensively_copies_allowed_value_sequences() -> None:
+    content_types = ["image/png"]
+    extensions = [".png"]
+
+    policy = FileUploadPolicy(
+        allowed_content_types=content_types,
+        allowed_extensions=extensions,
+    )
+    content_types.append("image/jpeg")
+    extensions.append(".jpg")
+
+    assert policy.allowed_content_types == ("image/png",)
+    assert policy.allowed_extensions == (".png",)
+
+
+@pytest.mark.parametrize(
+    ("content_types", "extensions"),
+    [
+        ([], None),
+        ([""], None),
+        (["   "], None),
+        ([1], None),
+        ({"image/png"}, None),
+        (object(), None),
+        (None, []),
+        (None, [""]),
+        (None, [object()]),
+    ],
+)
+def test_file_policy_rejects_empty_or_non_string_allowed_values(
+    content_types: object,
+    extensions: object,
+) -> None:
+    with pytest.raises(FileUploadConfigurationError):
+        FileUploadPolicy(
+            allowed_content_types=content_types,  # type: ignore[arg-type]
+            allowed_extensions=extensions,  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.parametrize(
     "configured",
     [
@@ -53,6 +107,31 @@ def test_upload_settings_reject_invalid_values(settings, configured: object) -> 
     settings.GENERAL_MANAGER = {"FILE_UPLOADS": configured}
 
     with pytest.raises(FileUploadConfigurationError):
+        get_file_upload_settings()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("STAGING_PREFIX", "gm\x00-staging/"),
+        ("HTTP_UPLOAD_PATH", "gm/\nuploads/"),
+        ("STAGING_PREFIX", "%2e%2E/gm-staging/"),
+        ("STAGING_PREFIX", "gm%2fstaging/"),
+        ("STAGING_PREFIX", "gm%5Cstaging/"),
+        ("HTTP_UPLOAD_PATH", "http://[/"),
+    ],
+)
+def test_upload_settings_reject_encoded_or_malformed_paths_as_unsafe(
+    settings,
+    name: str,
+    value: str,
+) -> None:
+    settings.GENERAL_MANAGER = {"FILE_UPLOADS": {name: value}}
+
+    with pytest.raises(
+        FileUploadConfigurationError,
+        match=rf"^{name} must be a safe relative path\.$",
+    ):
         get_file_upload_settings()
 
 

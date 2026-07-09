@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from uuid import UUID
 
@@ -81,9 +81,9 @@ class UploadCandidate:
 class ObjectVersion:
     """Immutable identity and verified metadata for a staged object."""
 
-    version_id: str | None
-    etag: str | None
-    checksum_sha256: str
+    version_id: str | None = field(repr=False)
+    etag: str | None = field(repr=False)
+    checksum_sha256: str = field(repr=False)
     size: int
     content_type: str | None = None
 
