@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from django.db import DEFAULT_DB_ALIAS
 
@@ -49,6 +49,11 @@ class FileUploadConfigurationError(ValueError):
         """Build the error for an unsupported database alias value."""
         return cls("INTENT_DATABASE must be a string or null.")
 
+    @classmethod
+    def non_empty_strings(cls, name: str) -> FileUploadConfigurationError:
+        """Build the error for a malformed policy allowlist."""
+        return cls(f"{name} must be a non-empty sequence of non-empty strings.")
+
 
 @dataclass(frozen=True, slots=True)
 class FileUploadSettings:
@@ -72,8 +77,8 @@ class FileUploadPolicy:
     """Optional per-file-field policy values layered over global policy."""
 
     max_bytes: int | None = None
-    allowed_content_types: tuple[str, ...] | None = None
-    allowed_extensions: tuple[str, ...] | None = None
+    allowed_content_types: Sequence[str] | None = None
+    allowed_extensions: Sequence[str] | None = None
     public: bool | None = None
 
     def __post_init__(self) -> None:
@@ -82,6 +87,22 @@ class FileUploadPolicy:
             _positive_integer("max_bytes", self.max_bytes)
         if self.public is not None and not isinstance(self.public, bool):
             raise FileUploadConfigurationError.boolean("public")
+        object.__setattr__(
+            self,
+            "allowed_content_types",
+            _normalize_policy_strings(
+                "allowed_content_types",
+                self.allowed_content_types,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "allowed_extensions",
+            _normalize_policy_strings(
+                "allowed_extensions",
+                self.allowed_extensions,
+            ),
+        )
 
 
 _SETTING_NAMES = {
@@ -196,6 +217,22 @@ def _positive_integer(name: str, value: object) -> int:
     return value
 
 
+def _normalize_policy_strings(
+    name: str,
+    value: object,
+) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise FileUploadConfigurationError.non_empty_strings(name)
+    normalized = tuple(value)
+    if not normalized or any(
+        not isinstance(item, str) or not item.strip() for item in normalized
+    ):
+        raise FileUploadConfigurationError.non_empty_strings(name)
+    return normalized
+
+
 def _boolean(name: str, value: object) -> bool:
     if not isinstance(value, bool):
         raise FileUploadConfigurationError.boolean(name)
@@ -205,7 +242,10 @@ def _boolean(name: str, value: object) -> bool:
 def _safe_prefix(name: str, value: object) -> str:
     if not isinstance(value, str) or not value or not value.endswith("/"):
         raise FileUploadConfigurationError.relative_path(name)
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise FileUploadConfigurationError.unsafe_path(name) from exc
     segments = value[:-1].split("/")
     if (
         parsed.scheme
@@ -214,10 +254,25 @@ def _safe_prefix(name: str, value: object) -> str:
         or parsed.fragment
         or value.startswith("/")
         or "\\" in value
-        or any(segment in {"", ".", ".."} for segment in segments)
+        or any(not _is_safe_path_segment(segment) for segment in segments)
     ):
         raise FileUploadConfigurationError.unsafe_path(name)
     return value
+
+
+def _is_safe_path_segment(segment: str) -> bool:
+    """Reject empty, traversal, separator, and control content after URL decoding."""
+    try:
+        decoded = unquote(segment, errors="strict")
+    except UnicodeError:
+        return False
+    return bool(
+        decoded
+        and decoded not in {".", ".."}
+        and "/" not in decoded
+        and "\\" not in decoded
+        and all(ord(character) >= 32 and ord(character) != 127 for character in decoded)
+    )
 
 
 def _database_alias(value: object) -> str:

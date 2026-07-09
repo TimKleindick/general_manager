@@ -95,6 +95,22 @@ def test_object_version_is_frozen_and_accepts_checksum_identity() -> None:
         version.size = 0  # type: ignore[misc]
 
 
+def test_object_version_repr_redacts_immutable_storage_identity() -> None:
+    secrets = ("secret-version-id", "secret-etag", "secret-checksum")
+    version = ObjectVersion(
+        version_id=secrets[0],
+        etag=secrets[1],
+        checksum_sha256=secrets[2],
+        size=123,
+        content_type="image/png",
+    )
+
+    representation = repr(version)
+
+    assert representation == "ObjectVersion(size=123, content_type='image/png')"
+    assert all(secret not in representation for secret in secrets)
+
+
 @pytest.mark.parametrize(
     ("version_id", "checksum_sha256", "size"),
     [(None, "", 1), (None, "a" * 64, -1)],
