@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import hashlib
 from io import BufferedIOBase
 import json
+import re
 from tempfile import SpooledTemporaryFile
 from types import MappingProxyType
 from typing import IO, ClassVar, Protocol, TypeVar, cast, runtime_checkable
@@ -16,9 +17,10 @@ from uuid import UUID
 
 from django.core.files import File
 from django.core.files.base import ContentFile
-from django.core.files.storage import Storage, storages
+from django.core.files.storage import FileSystemStorage, Storage, storages
 
 from general_manager.uploads.errors import (
+    UploadBackendUnsupportedError,
     UploadChecksumMismatchError,
     UploadStorageChangedError,
     UploadStorageError,
@@ -197,6 +199,13 @@ class ProxyUploadAdapter:
         size: int | None = None,
     ) -> ObjectVersion:
         """Stream chunks through a bounded spool and save without overwriting."""
+        stage_marker = _stage_metadata_marker(stage_key)
+        if self.storage.exists(stage_marker):
+            raise _exception(
+                UploadTransferConflictError,
+                "The reserved staging identity marker is already occupied.",
+            )
+        self._require_conditional_creation(stage_key)
         with SpooledTemporaryFile(max_size=self._spool_memory_limit, mode="w+b") as raw:
             digest = hashlib.sha256()
             byte_count = 0
@@ -223,7 +232,6 @@ class ProxyUploadAdapter:
                 UploadTransferConflictError,
                 "The reserved staging key is already occupied.",
             )
-        stage_marker = _stage_metadata_marker(stage_key)
         metadata = json.dumps(
             {
                 "checksum_sha256": actual_checksum,
@@ -233,6 +241,7 @@ class ProxyUploadAdapter:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
+        self._require_conditional_creation(stage_marker, framework_generated=True)
         saved_marker = self.storage.save(
             stage_marker,
             ContentFile(metadata),
@@ -275,14 +284,21 @@ class ProxyUploadAdapter:
         intent_id: UUID,
     ) -> str:
         marker = _materialization_marker(final_key)
-        if self.storage.exists(final_key) and self._marker_matches(
-            marker,
-            intent_id=intent_id,
-            checksum_sha256=version.checksum_sha256,
-        ):
-            checksum, size = self._object_checksum(final_key)
-            if checksum == version.checksum_sha256 and size == version.size:
-                return final_key
+        if self.storage.exists(marker):
+            if self.storage.exists(final_key) and self._marker_matches(
+                marker,
+                intent_id=intent_id,
+                checksum_sha256=version.checksum_sha256,
+            ):
+                checksum, size = self._object_checksum(final_key)
+                if checksum == version.checksum_sha256 and size == version.size:
+                    return final_key
+            raise _exception(
+                UploadTransferConflictError,
+                "The final upload identity marker is already occupied.",
+            )
+
+        self._require_conditional_creation(final_key)
 
         with SpooledTemporaryFile(max_size=self._spool_memory_limit, mode="w+b") as raw:
             with self.storage.open(stage_key, "rb") as staged:
@@ -304,6 +320,22 @@ class ProxyUploadAdapter:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
+        if self.storage.exists(actual_marker):
+            if self._marker_matches(
+                actual_marker,
+                intent_id=intent_id,
+                checksum_sha256=version.checksum_sha256,
+            ):
+                return actual_key
+            self.storage.delete(actual_key)
+            raise _exception(
+                UploadTransferConflictError,
+                "The final upload identity marker is already occupied.",
+            )
+        self._require_conditional_creation(
+            actual_marker,
+            framework_generated=True,
+        )
         saved_marker = self.storage.save(
             actual_marker,
             ContentFile(marker_payload),
@@ -364,6 +396,63 @@ class ProxyUploadAdapter:
     def _object_checksum(self, key: str) -> tuple[str, int]:
         with self.storage.open(key, "rb") as stored:
             return _checksum_stream(cast(IO[bytes], stored))
+
+    def _require_conditional_creation(
+        self,
+        key: str,
+        *,
+        framework_generated: bool = False,
+    ) -> None:
+        """Fail closed when ``Storage.save`` could overwrite an existing key.
+
+        Django's default filesystem backend uses atomic exclusive creation when
+        ``allow_overwrite`` is false. Other backends may opt in only through an
+        explicit atomic-create capability. For opaque backends, the proxy uses
+        a prior existence check only for framework-owned UUID-derived keys; the
+        unguessable namespace makes the remaining check/save race negligible.
+        """
+        storage = self.storage
+        if isinstance(storage, FileSystemStorage):
+            if storage._allow_overwrite:
+                raise _exception(
+                    UploadBackendUnsupportedError,
+                    "The storage backend permits overwriting existing object keys.",
+                )
+            return
+        try:
+            allow_overwrite = storage.allow_overwrite  # type: ignore[attr-defined]
+        except AttributeError:
+            allow_overwrite = None
+        if allow_overwrite is True:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "The storage backend permits overwriting existing object keys.",
+            )
+        if allow_overwrite is False:
+            return
+
+        try:
+            supports_atomic_create = storage.supports_atomic_conditional_create  # type: ignore[attr-defined]
+        except AttributeError:
+            supports_atomic_create = False
+        if supports_atomic_create is True:
+            if storage.exists(key):
+                raise _exception(
+                    UploadTransferConflictError,
+                    "The reserved storage key is already occupied.",
+                )
+            return
+
+        if storage.exists(key):
+            raise _exception(
+                UploadTransferConflictError,
+                "The reserved storage key is already occupied.",
+            )
+        if not framework_generated and not _UUID_KEY_PATTERN.search(key):
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "Opaque storage backends require framework-generated UUID keys.",
+            )
 
     def _marker_matches(
         self,
@@ -602,3 +691,10 @@ def _safe_endpoint(value: str) -> str:
     except ValueError:
         port = ""
     return urlunsplit((parsed.scheme, f"{hostname}{port}", parsed.path, "", ""))
+
+
+_UUID_KEY_PATTERN = re.compile(
+    r"(?i)(?:^|[^0-9a-f])"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+    r"(?:$|[^0-9a-f])"
+)

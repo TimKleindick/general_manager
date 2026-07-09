@@ -142,7 +142,11 @@ class S3UploadAdapter:
         )
 
     def inspect_staged(self, stage_key: str) -> ObjectVersion:
-        response = self._client.head_object(Bucket=self._bucket, Key=stage_key)
+        response = self._client.head_object(
+            Bucket=self._bucket,
+            Key=stage_key,
+            ChecksumMode="ENABLED",
+        )
         return _object_version(response)
 
     def materialize(
@@ -259,7 +263,11 @@ class S3UploadAdapter:
 
     def _head_optional(self, key: str) -> Mapping[str, object] | None:
         try:
-            return self._client.head_object(Bucket=self._bucket, Key=key)
+            return self._client.head_object(
+                Bucket=self._bucket,
+                Key=key,
+                ChecksumMode="ENABLED",
+            )
         except Exception as exc:
             if _is_missing_error(exc):
                 return None

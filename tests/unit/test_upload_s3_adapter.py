@@ -30,6 +30,7 @@ class FakeS3Client:
         self.objects: dict[tuple[str, str | None], dict[str, Any]] = {}
         self.copy_calls: list[dict[str, Any]] = []
         self.delete_calls: list[dict[str, Any]] = []
+        self.head_calls: list[dict[str, Any]] = []
 
     def get_bucket_versioning(self, **kwargs: Any) -> dict[str, str]:
         assert kwargs["Bucket"] == "uploads"
@@ -47,6 +48,11 @@ class FakeS3Client:
         return "https://signed.example.test/get?signature=secret"
 
     def head_object(self, **kwargs: Any) -> dict[str, Any]:
+        self.head_calls.append(dict(kwargs))
+        assert kwargs.get("ChecksumMode") == "ENABLED"
+        return self._lookup_object(**kwargs)
+
+    def _lookup_object(self, **kwargs: Any) -> dict[str, Any]:
         key = (kwargs["Key"], kwargs.get("VersionId"))
         if key not in self.objects and kwargs.get("VersionId") is None:
             versions = [item for item in self.objects if item[0] == kwargs["Key"]]
@@ -58,13 +64,13 @@ class FakeS3Client:
             raise MissingObjectError from exc
 
     def get_object(self, **kwargs: Any) -> dict[str, Any]:
-        value = self.head_object(**kwargs)
+        value = self._lookup_object(**kwargs)
         return {"Body": BytesIO(value["Body"])}
 
     def copy_object(self, **kwargs: Any) -> dict[str, Any]:
         self.copy_calls.append(dict(kwargs))
         source = kwargs["CopySource"]
-        value = self.head_object(Key=source["Key"], VersionId=source["VersionId"])
+        value = self._lookup_object(Key=source["Key"], VersionId=source["VersionId"])
         destination = (kwargs["Key"], "final-version")
         self.objects[destination] = {
             **value,
@@ -187,6 +193,22 @@ def test_s3_inspects_and_opens_exact_immutable_version() -> None:
     assert opened.read() == b"immutable staged payload"
 
 
+def test_s3_inspection_requests_checksum_metadata() -> None:
+    client = FakeS3Client()
+    _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    adapter.inspect_staged("gm-staging/intent.bin")
+
+    assert client.head_calls == [
+        {
+            "Bucket": "uploads",
+            "Key": "gm-staging/intent.bin",
+            "ChecksumMode": "ENABLED",
+        }
+    ]
+
+
 def test_s3_materializes_exact_version_conditionally_and_retries() -> None:
     client = FakeS3Client()
     version = _stage(client)
@@ -220,6 +242,25 @@ def test_s3_materializes_exact_version_conditionally_and_retries() -> None:
     assert call["Metadata"] == {
         "gm-intent-id": str(intent_id),
         "gm-checksum-sha256": version.checksum_sha256,
+    }
+
+
+def test_s3_post_copy_inspection_requests_checksum_metadata() -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    adapter.materialize(
+        "gm-staging/intent.bin",
+        version,
+        "files/report.txt",
+        intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+    )
+
+    assert client.head_calls[-1] == {
+        "Bucket": "uploads",
+        "Key": "files/report.txt",
+        "ChecksumMode": "ENABLED",
     }
 
 
