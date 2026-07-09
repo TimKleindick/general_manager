@@ -10,6 +10,7 @@ from graphql.language import IntValueNode, StringValueNode
 
 from general_manager.api.graphql import GraphQL
 from general_manager.interface.base_interface import AttributeTypedDict
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.uploads.graphql_types import (
     StoredFile,
     StoredFileStatusEnum,
@@ -51,6 +52,10 @@ class _FileInterface:
     @classmethod
     def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
         return cls.attribute_types
+
+    @staticmethod
+    def get_graph_ql_properties() -> dict[str, object]:
+        return {}
 
 
 def _introspect_type(type_: type[graphene.ObjectType]) -> dict[str, object]:
@@ -103,6 +108,15 @@ def test_upload_token_rejects_empty_and_non_string_literals() -> None:
     assert UploadToken.parse_literal(IntValueNode(value="7")) is Undefined
 
 
+def test_upload_token_serializes_non_empty_strings() -> None:
+    assert UploadToken.serialize("token") == "token"
+
+
+def test_upload_token_rejects_non_string_output() -> None:
+    with pytest.raises(TypeError, match="UploadToken must be a string"):
+        UploadToken.serialize(7)
+
+
 def test_stored_file_status_enum_is_derived_from_domain_status() -> None:
     class Query(graphene.ObjectType):
         value = graphene.Field(StoredFile)
@@ -142,14 +156,13 @@ def test_stored_file_output_schema_has_stable_nullable_shape() -> None:
 
 
 def test_stored_image_output_schema_adds_nullable_dimensions() -> None:
-    fields = _introspect_type(StoredImage)
+    file_fields = _introspect_type(StoredFile)
+    image_fields = _introspect_type(StoredImage)
 
-    assert fields["width"] == {"kind": "SCALAR", "name": "Int", "ofType": None}
-    assert fields["height"] == {"kind": "SCALAR", "name": "Int", "ofType": None}
-    assert fields["status"] == {
-        "kind": "NON_NULL",
-        "name": None,
-        "ofType": {"kind": "ENUM", "name": "StoredFileStatus"},
+    assert image_fields == {
+        **file_fields,
+        "width": {"kind": "SCALAR", "name": "Int", "ofType": None},
+        "height": {"kind": "SCALAR", "name": "Int", "ofType": None},
     }
 
 
@@ -187,6 +200,80 @@ def test_graphql_read_fields_use_typed_file_objects() -> None:
         "photo": "StoredImage",
         "label": "String",
     }
+
+
+def test_file_manager_schema_keeps_filter_inputs_as_strings() -> None:
+    class FileManager(GeneralManager):
+        pass
+
+    FileManager.Interface = _FileInterface  # type: ignore[assignment]
+    GraphQL.graphql_filter_type_registry.clear()
+    filter_type = GraphQL._create_filter_options(FileManager)
+    assert filter_type is not None
+
+    class FileManagerType(graphene.ObjectType):
+        document = GraphQL._map_field_to_graphene_read(
+            str,
+            "document",
+            _FileInterface.attribute_types["document"],
+        )
+        photo = GraphQL._map_field_to_graphene_read(
+            str,
+            "photo",
+            _FileInterface.attribute_types["photo"],
+        )
+
+    class Query(graphene.ObjectType):
+        files = graphene.List(
+            FileManagerType,
+            filter=graphene.Argument(filter_type),
+            exclude=graphene.Argument(filter_type),
+        )
+
+    schema = graphene.Schema(query=Query, auto_camelcase=False)
+    result = schema.execute(
+        """
+        {
+          query: __type(name: "Query") {
+            fields { name args { name type { kind name } } }
+          }
+          filters: __type(name: "FileManagerFilterTypeDepth1") {
+            inputFields { name type { kind name ofType { kind name } } }
+          }
+        }
+        """
+    )
+
+    assert result.errors is None
+    assert result.data is not None
+    query_fields = {field["name"]: field for field in result.data["query"]["fields"]}
+    assert {
+        argument["name"]: argument["type"] for argument in query_fields["files"]["args"]
+    } == {
+        "filter": {
+            "kind": "INPUT_OBJECT",
+            "name": "FileManagerFilterTypeDepth1",
+        },
+        "exclude": {
+            "kind": "INPUT_OBJECT",
+            "name": "FileManagerFilterTypeDepth1",
+        },
+    }
+
+    input_fields = {
+        field["name"]: field["type"] for field in result.data["filters"]["inputFields"]
+    }
+    scalar_string = {"kind": "SCALAR", "name": "String", "ofType": None}
+    list_of_strings = {
+        "kind": "LIST",
+        "name": None,
+        "ofType": {"kind": "SCALAR", "name": "String"},
+    }
+    for field_name in ("document", "photo"):
+        assert input_fields[field_name] == scalar_string
+        for lookup in ("exact", "icontains", "contains", "startswith", "endswith"):
+            assert input_fields[f"{field_name}__{lookup}"] == scalar_string
+        assert input_fields[f"{field_name}__in"] == list_of_strings
 
 
 def test_graphql_write_fields_use_upload_tokens_and_preserve_update_optionality() -> (

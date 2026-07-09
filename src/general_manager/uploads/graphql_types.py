@@ -64,6 +64,10 @@ class UploadToken(Scalar):
     """Opaque, non-empty upload token accepted by generated mutations."""
 
     @staticmethod
+    def serialize(value: object) -> str:
+        return UploadToken._validate(value)
+
+    @staticmethod
     def parse_value(value: object) -> str:
         return UploadToken._validate(value)
 

@@ -790,7 +790,9 @@ class GraphQL:
     ]:
         """Yield filter variants for *attribute_type*. See ``graphql_search.get_filter_options``."""
         return _get_filter_options_fn(
-            attribute_type, attribute_name, GraphQL._map_field_to_graphene_read
+            attribute_type,
+            attribute_name,
+            GraphQL._map_field_to_graphene_filter_input,
         )
 
     @staticmethod
@@ -803,8 +805,24 @@ class GraphQL:
         return _create_filter_options_fn(
             field_type,
             GraphQL.graphql_filter_type_registry,
-            GraphQL._map_field_to_graphene_read,
+            GraphQL._map_field_to_graphene_filter_input,
             relation_depth=relation_depth,
+        )
+
+    @staticmethod
+    def _map_field_to_graphene_filter_input(
+        field_type: type,
+        field_name: str,
+        field_info: Mapping[str, object] | None = None,
+    ) -> object:
+        """Map file metadata to legacy string filters and delegate other fields."""
+        orm_field_kind = field_info.get("orm_field_kind") if field_info else None
+        if orm_field_kind in {"file", "image"}:
+            return graphene.String()
+        return GraphQL._map_field_to_graphene_read(
+            field_type,
+            field_name,
+            field_info,
         )
 
     @staticmethod
