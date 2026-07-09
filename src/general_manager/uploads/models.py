@@ -40,8 +40,11 @@ class UploadIntent(models.Model):
     )
     user: Any = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="upload_intents",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        db_index=False,
     )
     token_digest: models.CharField[str] = models.CharField(max_length=64)
 
@@ -51,8 +54,7 @@ class UploadIntent(models.Model):
         max_length=16,
         choices=UPLOAD_OPERATION_CHOICES,
     )
-    target_id: models.CharField[str | None] = models.CharField(
-        max_length=255,
+    target_id: models.TextField[str | None] = models.TextField(
         null=True,
         blank=True,
     )

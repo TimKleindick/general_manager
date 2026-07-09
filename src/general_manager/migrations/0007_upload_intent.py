@@ -36,7 +36,7 @@ class Migration(migrations.Migration):
                         max_length=16,
                     ),
                 ),
-                ("target_id", models.CharField(blank=True, max_length=255, null=True)),
+                ("target_id", models.TextField(blank=True, null=True)),
                 ("adapter_id", models.CharField(max_length=128)),
                 ("adapter_version", models.CharField(max_length=64)),
                 ("storage_fingerprint", models.CharField(max_length=255)),
@@ -91,8 +91,11 @@ class Migration(migrations.Migration):
                 (
                     "user",
                     models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE,
-                        related_name="upload_intents",
+                        blank=True,
+                        db_index=False,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="+",
                         to=settings.AUTH_USER_MODEL,
                     ),
                 ),
