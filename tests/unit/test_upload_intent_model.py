@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import textwrap
 from datetime import timedelta
 from importlib import import_module
 from typing import Any
@@ -9,8 +13,8 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.conf import settings
-from django.db import IntegrityError, migrations, transaction
-from django.test import TestCase
+from django.db import IntegrityError, migrations, models, transaction
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from general_manager.uploads.models import UploadIntent
@@ -123,6 +127,37 @@ class UploadIntentModelTests(TestCase):
             UploadIntent._meta.get_field("user").remote_field.model is get_user_model()
         )
 
+    def test_user_field_avoids_reverse_relation_and_redundant_index(self) -> None:
+        """Keep the swappable user relation nullable, private, and index-efficient."""
+        user_field = UploadIntent._meta.get_field("user")
+
+        assert user_field.null is True
+        assert user_field.blank is True
+        assert user_field.remote_field.on_delete is models.SET_NULL
+        assert user_field.remote_field.related_name == "+"
+        assert user_field.db_index is False
+
+    def test_deleting_owner_preserves_intent_for_cleanup(self) -> None:
+        """Retain staged-object recovery metadata after its owner is deleted."""
+        intent = self.make_intent()
+        intent_id = intent.pk
+
+        self.user.delete()
+
+        persisted = UploadIntent.objects.get(pk=intent_id)
+        assert persisted.user is None
+        assert persisted.staging_key == "uploads/staging/intent/avatar.png"
+
+    def test_canonical_target_id_round_trips_beyond_255_characters(self) -> None:
+        """Persist long serialized canonical IDs without a varchar ceiling."""
+        target_id = "canonical:" + "segment/" * 80
+        intent = self.make_intent(target_id=target_id)
+        intent.refresh_from_db()
+
+        assert isinstance(UploadIntent._meta.get_field("target_id"), models.TextField)
+        assert len(target_id) > 255
+        assert intent.target_id == target_id
+
     def test_database_rejects_negative_sizes_and_attempt_counts(self) -> None:
         """Enforce non-negative byte counts and retry counters in the database."""
         invalid_values = (
@@ -226,3 +261,70 @@ class UploadIntentModelTests(TestCase):
         assert migrations.swappable_dependency(settings.AUTH_USER_MODEL) in (
             migration.dependencies
         )
+
+
+class UploadIntentSwappableUserMigrationTests(SimpleTestCase):
+    """Verify upload intent migration behavior in an isolated Django process."""
+
+    def test_migration_resolves_custom_user_foreign_key(self) -> None:
+        """Apply 0007 with a custom user and inspect its actual database FK."""
+        script = textwrap.dedent(
+            """
+            import django
+
+            django.setup()
+
+            from django.contrib.auth import get_user_model
+            from django.core.management import call_command
+            from django.db import connection, models
+            from general_manager.uploads.models import UploadIntent
+
+            call_command("migrate", run_syncdb=True, verbosity=0, interactive=False)
+
+            upload_intent = UploadIntent
+            custom_user = get_user_model()
+            user_field = upload_intent._meta.get_field("user")
+
+            assert user_field.remote_field.model is custom_user
+            assert user_field.null is True
+            assert user_field.remote_field.on_delete is models.SET_NULL
+            assert upload_intent._meta.db_table in connection.introspection.table_names()
+
+            with connection.cursor() as cursor:
+                constraints = connection.introspection.get_constraints(
+                    cursor,
+                    upload_intent._meta.db_table,
+                )
+            foreign_keys = {
+                value["foreign_key"]
+                for value in constraints.values()
+                if value["foreign_key"] is not None
+            }
+            assert (
+                custom_user._meta.db_table,
+                custom_user._meta.pk.column,
+            ) in foreign_keys
+            """
+        )
+        env = {
+            **os.environ,
+            "DJANGO_SETTINGS_MODULE": "tests.swappable_user_settings",
+            "PYTHONPATH": os.pathsep.join(
+                (
+                    os.path.join(os.getcwd(), "src"),
+                    os.getcwd(),
+                    os.environ.get("PYTHONPATH", ""),
+                )
+            ),
+        }
+        result = subprocess.run(  # noqa: S603
+            [sys.executable, "-c", script],
+            cwd=os.getcwd(),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            self.fail(result.stderr or result.stdout or "custom user migration failed")
