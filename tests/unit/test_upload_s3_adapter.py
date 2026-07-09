@@ -128,6 +128,7 @@ class FakeS3Storage:
     _gm_s3_storage = True
     bucket_name = "uploads"
     default_acl = None
+    upload_staging_prefix_private: object
 
     def __init__(
         self,
@@ -305,6 +306,121 @@ def test_s3_presigned_upload_binds_stage_metadata() -> None:
     assert "credential=secret" not in repr(instructions)
 
 
+def test_s3_bucket_owner_enforced_staging_omits_acl() -> None:
+    client = FakeS3Client()
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    checksum = hashlib.sha256(b"payload").hexdigest()
+
+    instructions = adapter.create_upload_instructions(
+        stage_key="gm-staging/intent.bin",
+        upload_url=None,
+        content_type="text/plain",
+        size=7,
+        checksum_sha256=checksum,
+    )
+
+    assert "acl" not in instructions.fields
+    assert not any(
+        isinstance(condition, dict) and "acl" in condition
+        for condition in client.presigned_post_calls[0]["Conditions"]
+    )
+
+
+def test_s3_staging_propagates_safe_bucket_owner_acl() -> None:
+    client = FakeS3Client()
+    adapter = S3UploadAdapter(
+        FakeS3Storage(
+            client,
+            object_parameters={"ACL": "bucket-owner-full-control"},
+        )
+    )
+    checksum = hashlib.sha256(b"payload").hexdigest()
+    version = _stage(client)
+
+    instructions = adapter.create_upload_instructions(
+        stage_key="gm-staging/intent.bin",
+        upload_url=None,
+        content_type="text/plain",
+        size=7,
+        checksum_sha256=checksum,
+    )
+
+    assert instructions.fields["acl"] == "bucket-owner-full-control"
+    assert {"acl": "bucket-owner-full-control"} in (
+        client.presigned_post_calls[0]["Conditions"]
+    )
+    adapter.materialize(
+        "gm-staging/intent.bin",
+        version,
+        "files/report.txt",
+        intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+    )
+    assert client.copy_calls[0]["ACL"] == "bucket-owner-full-control"
+
+
+@pytest.mark.parametrize(
+    ("default_acl", "object_parameters"),
+    [
+        ("public-read", None),
+        (None, {"ACL": "public-read"}),
+    ],
+)
+def test_s3_public_final_acl_requires_private_staging_prefix(
+    default_acl: str | None,
+    object_parameters: dict[str, object] | None,
+) -> None:
+    storage = FakeS3Storage(
+        FakeS3Client(),
+        default_acl=default_acl,
+        object_parameters=object_parameters,
+    )
+
+    assert S3UploadAdapter.supports_direct(storage) is False
+    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    with pytest.raises(UploadBackendUnsupportedError):
+        S3UploadAdapter(storage)
+
+
+def test_s3_public_bucket_policy_requires_private_staging_prefix() -> None:
+    storage = FakeS3Storage(FakeS3Client(), public=True)
+
+    assert S3UploadAdapter.supports_direct(storage) is False
+    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    with pytest.raises(UploadBackendUnsupportedError):
+        S3UploadAdapter(storage)
+
+
+@pytest.mark.parametrize("capability", [False, 1, "yes"])
+def test_s3_public_bucket_policy_requires_exact_private_prefix_capability(
+    capability: object,
+) -> None:
+    storage = FakeS3Storage(FakeS3Client(), public=True)
+    storage.upload_staging_prefix_private = capability
+
+    assert S3UploadAdapter.supports_direct(storage) is False
+    with pytest.raises(UploadBackendUnsupportedError):
+        S3UploadAdapter(storage)
+
+
+def test_s3_public_bucket_policy_allows_explicit_private_staging_prefix() -> None:
+    storage = FakeS3Storage(FakeS3Client(), public=True)
+    storage.upload_staging_prefix_private = True
+
+    assert S3UploadAdapter.supports_direct(storage) is True
+    adapter = S3UploadAdapter(storage)
+    checksum = hashlib.sha256(b"payload").hexdigest()
+
+    instructions = adapter.create_upload_instructions(
+        stage_key="gm-staging/intent.bin",
+        upload_url=None,
+        content_type="text/plain",
+        size=7,
+        checksum_sha256=checksum,
+    )
+
+    assert "acl" not in instructions.fields
+
+
 def test_s3_stages_private_with_kms_and_applies_public_acl_on_final_copy() -> None:
     client = FakeS3Client()
     storage = FakeS3Storage(
@@ -317,6 +433,7 @@ def test_s3_stages_private_with_kms_and_applies_public_acl_on_final_copy() -> No
             "StorageClass": "STANDARD_IA",
         },
     )
+    storage.upload_staging_prefix_private = True
     adapter = S3UploadAdapter(storage)
     version = _stage(client)
 
@@ -335,12 +452,12 @@ def test_s3_stages_private_with_kms_and_applies_public_acl_on_final_copy() -> No
     )
 
     expected_fields = {
-        "acl": "private",
         "x-amz-server-side-encryption": "aws:kms",
         "x-amz-server-side-encryption-aws-kms-key-id": "alias/uploads",
         "x-amz-server-side-encryption-bucket-key-enabled": "true",
     }
     assert expected_fields.items() <= instructions.fields.items()
+    assert "acl" not in instructions.fields
     assert "x-amz-storage-class" not in instructions.fields
     conditions = client.presigned_post_calls[0]["Conditions"]
     assert all({key: value} in conditions for key, value in expected_fields.items())
@@ -376,7 +493,7 @@ def test_s3_archive_storage_class_is_final_only(storage_class: str) -> None:
         intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
     )
 
-    assert instructions.fields["acl"] == "private"
+    assert "acl" not in instructions.fields
     assert "x-amz-storage-class" not in instructions.fields
     assert client.copy_calls[0]["StorageClass"] == storage_class
 
@@ -544,7 +661,9 @@ def test_s3_deletes_exact_version_and_handles_private_and_public_urls() -> None:
         }
     ]
 
-    public = S3UploadAdapter(FakeS3Storage(client, public=True))
+    public_storage = FakeS3Storage(client, public=True)
+    public_storage.upload_staging_prefix_private = True
+    public = S3UploadAdapter(public_storage)
     assert public.supports_public_urls is True
     assert public.public_url("files/report.txt") == (
         "https://cdn.example.test/files/report.txt"
