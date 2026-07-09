@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 import hashlib
 from io import BufferedIOBase
 import json
 from tempfile import SpooledTemporaryFile
+from threading import RLock
 from types import MappingProxyType
 from typing import IO, ClassVar, Protocol, TypeVar, cast, runtime_checkable
 from urllib.parse import urlsplit, urlunsplit
@@ -140,11 +141,31 @@ class UploadAdapter(Protocol):
         ...
 
 
+@runtime_checkable
+class ProxyUploadSink(UploadAdapter, Protocol):
+    """Upload adapter that can accept a proxy stream through Django storage."""
+
+    def save_stage(
+        self,
+        stage_key: str,
+        chunks: Iterable[bytes],
+        *,
+        content_type: str | None,
+        checksum_sha256: str | None = None,
+        size: int | None = None,
+    ) -> ObjectVersion:
+        """Stream and verify one proxy upload into staging."""
+        ...
+
+
+UploadAdapterFactory = Callable[[Storage], UploadAdapter]
+
+
 class ProxyUploadAdapter:
     """Universal adapter using only Django's bounded ``Storage`` API."""
 
-    adapter_id = "proxy"
-    adapter_version = 1
+    adapter_id: ClassVar[str] = "proxy"
+    adapter_version: ClassVar[int] = 1
     _spool_memory_limit = 1024 * 1024
 
     def __init__(self, storage: Storage | None = None, *, public: bool = False) -> None:
@@ -199,7 +220,7 @@ class ProxyUploadAdapter:
     ) -> ObjectVersion:
         """Stream chunks through a bounded spool and save without overwriting."""
         stage_marker = _stage_metadata_marker(stage_key)
-        if self.storage.exists(stage_marker):
+        if self._storage_exists(stage_marker):
             raise _exception(
                 UploadTransferConflictError,
                 "The reserved staging identity marker is already occupied.",
@@ -221,12 +242,12 @@ class ProxyUploadAdapter:
                     "The staged upload size did not match.",
                 )
             raw.seek(0)
-            saved_key = self.storage.save(
+            saved_key = self._storage_save(
                 stage_key,
                 File(cast(BufferedIOBase, raw), name=stage_key),
             )
         if saved_key != stage_key:
-            self.storage.delete(saved_key)
+            self._storage_delete(saved_key)
             raise _exception(
                 UploadTransferConflictError,
                 "The reserved staging key is already occupied.",
@@ -241,13 +262,13 @@ class ProxyUploadAdapter:
             separators=(",", ":"),
         ).encode("utf-8")
         self._require_conditional_creation(stage_marker)
-        saved_marker = self.storage.save(
+        saved_marker = self._storage_save(
             stage_marker,
             ContentFile(metadata),
         )
         if saved_marker != stage_marker:
-            self.storage.delete(saved_marker)
-            self.storage.delete(stage_key)
+            self._storage_delete(saved_marker)
+            self._storage_delete(stage_key)
             raise _exception(
                 UploadTransferConflictError,
                 "The reserved staging identity marker is already occupied.",
@@ -261,8 +282,8 @@ class ProxyUploadAdapter:
         )
 
     def inspect_staged(self, stage_key: str) -> ObjectVersion:
-        with self.storage.open(stage_key, "rb") as staged:
-            checksum, size = _checksum_stream(cast(IO[bytes], staged))
+        with self._storage_open(stage_key) as staged:
+            checksum, size = _checksum_stream(staged)
         content_type = self._staged_content_type(
             stage_key, checksum=checksum, size=size
         )
@@ -282,101 +303,143 @@ class ProxyUploadAdapter:
         *,
         intent_id: UUID,
     ) -> str:
-        marker = _materialization_marker(final_key)
-        if self.storage.exists(marker):
-            if self.storage.exists(final_key) and self._marker_matches(
-                marker,
-                intent_id=intent_id,
-                checksum_sha256=version.checksum_sha256,
+        claim_key = _materialization_marker(final_key)
+        completed_key = _materialization_completed_marker(final_key)
+        claim_identity = _materialization_identity(
+            intent_id=intent_id,
+            checksum_sha256=version.checksum_sha256,
+            state="claimed",
+        )
+        completed_identity = _materialization_identity(
+            intent_id=intent_id,
+            checksum_sha256=version.checksum_sha256,
+            state="completed",
+        )
+
+        if self._storage_exists(final_key):
+            if self._marker_matches(claim_key, claim_identity) and self._object_matches(
+                final_key,
+                version,
             ):
-                checksum, size = self._object_checksum(final_key)
-                if checksum == version.checksum_sha256 and size == version.size:
-                    return final_key
+                self._acquire_marker(completed_key, completed_identity)
+                return final_key
             raise _exception(
                 UploadTransferConflictError,
-                "The final upload identity marker is already occupied.",
+                "The requested final storage key is already occupied.",
             )
 
-        self._require_conditional_creation(final_key)
+        self._acquire_marker(claim_key, claim_identity)
+        if self._storage_exists(final_key):
+            if self._object_matches(final_key, version):
+                self._acquire_marker(completed_key, completed_identity)
+                return final_key
+            raise _exception(
+                UploadTransferConflictError,
+                "The requested final storage key is already occupied.",
+            )
+
+        try:
+            self._require_conditional_creation(final_key)
+        except UploadTransferConflictError:
+            if self._object_matches(final_key, version):
+                self._acquire_marker(completed_key, completed_identity)
+                return final_key
+            raise
 
         with SpooledTemporaryFile(max_size=self._spool_memory_limit, mode="w+b") as raw:
-            with self.storage.open(stage_key, "rb") as staged:
-                checksum, size = _copy_stream(cast(IO[bytes], staged), raw)
+            with self._storage_open(stage_key) as staged:
+                checksum, size = _copy_stream(staged, raw)
             if checksum != version.checksum_sha256 or size != version.size:
                 raise UploadStorageChangedError()
             raw.seek(0)
-            actual_key = self.storage.save(
+            actual_key = self._storage_save(
                 final_key,
                 File(cast(BufferedIOBase, raw), name=final_key),
             )
 
-        actual_marker = _materialization_marker(actual_key)
-        marker_payload = json.dumps(
-            {
-                "intent_id": str(intent_id),
-                "checksum_sha256": version.checksum_sha256,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        if self.storage.exists(actual_marker):
-            if self._marker_matches(
-                actual_marker,
-                intent_id=intent_id,
-                checksum_sha256=version.checksum_sha256,
-            ):
-                return actual_key
-            self.storage.delete(actual_key)
-            raise _exception(
-                UploadTransferConflictError,
-                "The final upload identity marker is already occupied.",
-            )
-        self._require_conditional_creation(actual_marker)
-        saved_marker = self.storage.save(
-            actual_marker,
-            ContentFile(marker_payload),
-        )
-        if saved_marker != actual_marker:
-            self.storage.delete(saved_marker)
-            if not self._marker_matches(
-                actual_marker,
-                intent_id=intent_id,
-                checksum_sha256=version.checksum_sha256,
-            ):
-                self.storage.delete(actual_key)
+        if actual_key != final_key:
+            self._storage_delete(actual_key)
+            if not self._object_matches(final_key, version):
                 raise _exception(
                     UploadTransferConflictError,
-                    "The final upload identity marker is already occupied.",
+                    "The requested final storage key is already occupied.",
                 )
-        return actual_key
+        self._acquire_marker(completed_key, completed_identity)
+        return final_key
 
     def open_stage(self, stage_key: str, version: ObjectVersion) -> IO[bytes]:
-        inspected = self.inspect_staged(stage_key)
-        if (
-            inspected.checksum_sha256 != version.checksum_sha256
-            or inspected.size != version.size
-        ):
-            raise UploadStorageChangedError()
-        return cast(IO[bytes], self.storage.open(stage_key, "rb"))
+        opened = self._storage_open(stage_key)
+        try:
+            seekable = opened.seekable()
+        except (AttributeError, OSError):
+            seekable = False
+        if seekable:
+            try:
+                checksum, size = _checksum_stream(opened)
+                _ensure_object_version(checksum, size, version)
+                opened.seek(0)
+            except Exception:
+                opened.close()
+                raise
+            return opened
+
+        spooled = SpooledTemporaryFile(
+            max_size=self._spool_memory_limit,
+            mode="w+b",
+        )
+        try:
+            checksum, size = _copy_stream(opened, spooled)
+        except Exception:
+            spooled.close()
+            raise
+        finally:
+            opened.close()
+        try:
+            _ensure_object_version(checksum, size, version)
+        except UploadStorageChangedError:
+            spooled.close()
+            raise
+        spooled.seek(0)
+        return cast(IO[bytes], spooled)
 
     def delete_stage(
         self,
         stage_key: str,
         version: ObjectVersion | None = None,
     ) -> None:
-        if version is not None and self.storage.exists(stage_key):
-            inspected = self.inspect_staged(stage_key)
-            if (
-                inspected.checksum_sha256 != version.checksum_sha256
-                or inspected.size != version.size
-            ):
-                raise UploadStorageChangedError()
-        self.storage.delete(stage_key)
-        self.storage.delete(_stage_metadata_marker(stage_key))
+        if version is None:
+            self._storage_delete(stage_key)
+            self._storage_delete(_stage_metadata_marker(stage_key))
+            return
+        storage = self.storage
+        try:
+            supports_conditional_delete = storage.supports_atomic_conditional_delete  # type: ignore[attr-defined]
+            conditional_delete = storage.delete_if_version  # type: ignore[attr-defined]
+        except AttributeError:
+            supports_conditional_delete = False
+            conditional_delete = None
+        if supports_conditional_delete is not True or not callable(conditional_delete):
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "The storage backend lacks atomic conditional deletion.",
+            )
+        try:
+            deleted = conditional_delete(stage_key, version)
+        except OSError as exc:
+            raise _exception(
+                UploadStorageError,
+                "The storage backend could not conditionally delete the object.",
+            ) from exc
+        if deleted is not True:
+            raise UploadStorageChangedError()
+        self._storage_delete(_stage_metadata_marker(stage_key))
 
     def private_download_url(self, key: str, *, expires_in: int) -> str:
-        del expires_in
-        return self.storage.url(key)
+        del key, expires_in
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "Proxy storage does not provide expiring private download URLs.",
+        )
 
     def public_url(self, key: str) -> str:
         if not self.supports_public_urls:
@@ -384,14 +447,90 @@ class ProxyUploadAdapter:
                 PublicUploadUrlUnsupportedError,
                 "This storage was not explicitly configured as public.",
             )
-        return self.storage.url(key)
+        return self._storage_url(key)
 
     def storage_fingerprint(self) -> str:
         return build_storage_fingerprint(self.storage)
 
+    def _storage_exists(self, key: str) -> bool:
+        try:
+            return self.storage.exists(key)
+        except OSError as exc:
+            raise _exception(
+                UploadStorageError,
+                "The storage backend could not inspect an object key.",
+            ) from exc
+
+    def _storage_open(self, key: str) -> IO[bytes]:
+        try:
+            return cast(IO[bytes], self.storage.open(key, "rb"))
+        except OSError as exc:
+            raise _exception(
+                UploadStorageError,
+                "The storage backend could not open an object.",
+            ) from exc
+
+    def _storage_save(self, key: str, content: object) -> str:
+        try:
+            return self.storage.save(key, content)  # type: ignore[arg-type]
+        except OSError as exc:
+            raise _exception(
+                UploadStorageError,
+                "The storage backend could not save an object.",
+            ) from exc
+
+    def _storage_delete(self, key: str) -> None:
+        try:
+            self.storage.delete(key)
+        except OSError as exc:
+            raise _exception(
+                UploadStorageError,
+                "The storage backend could not delete an object.",
+            ) from exc
+
+    def _storage_url(self, key: str) -> str:
+        try:
+            return self.storage.url(key)
+        except OSError as exc:
+            raise _exception(
+                UploadStorageError,
+                "The storage backend could not create an object URL.",
+            ) from exc
+
     def _object_checksum(self, key: str) -> tuple[str, int]:
-        with self.storage.open(key, "rb") as stored:
-            return _checksum_stream(cast(IO[bytes], stored))
+        with self._storage_open(key) as stored:
+            return _checksum_stream(stored)
+
+    def _object_matches(self, key: str, version: ObjectVersion) -> bool:
+        if not self._storage_exists(key):
+            return False
+        checksum, size = self._object_checksum(key)
+        return checksum == version.checksum_sha256 and size == version.size
+
+    def _acquire_marker(self, key: str, identity: Mapping[str, str]) -> None:
+        if self._storage_exists(key):
+            if self._marker_matches(key, identity):
+                return
+            raise _exception(
+                UploadTransferConflictError,
+                "The upload materialization marker is already occupied.",
+            )
+        self._require_conditional_creation(key)
+        payload = json.dumps(
+            dict(identity),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        saved_key = self._storage_save(key, ContentFile(payload))
+        if saved_key == key:
+            return
+        self._storage_delete(saved_key)
+        if self._marker_matches(key, identity):
+            return
+        raise _exception(
+            UploadTransferConflictError,
+            "The upload materialization marker is already occupied.",
+        )
 
     def _require_conditional_creation(
         self,
@@ -421,7 +560,7 @@ class ProxyUploadAdapter:
                 UploadBackendUnsupportedError,
                 "The storage backend lacks atomic conditional creation.",
             )
-        if storage.exists(key):
+        if self._storage_exists(key):
             raise _exception(
                 UploadTransferConflictError,
                 "The reserved storage key is already occupied.",
@@ -430,27 +569,19 @@ class ProxyUploadAdapter:
     def _marker_matches(
         self,
         marker: str,
-        *,
-        intent_id: UUID,
-        checksum_sha256: str,
+        identity: Mapping[str, str],
     ) -> bool:
-        if not self.storage.exists(marker):
+        if not self._storage_exists(marker):
             return False
         try:
-            with self.storage.open(marker, "rb") as stored:
-                payload = cast(IO[bytes], stored).read(4097)
+            with self._storage_open(marker) as stored:
+                payload = stored.read(4097)
             if len(payload) > 4096:
                 return False
             value = json.loads(payload)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
             return False
-        return bool(
-            value
-            == {
-                "intent_id": str(intent_id),
-                "checksum_sha256": checksum_sha256,
-            }
-        )
+        return bool(value == dict(identity))
 
     def _staged_content_type(
         self,
@@ -460,11 +591,11 @@ class ProxyUploadAdapter:
         size: int,
     ) -> str | None:
         marker = _stage_metadata_marker(stage_key)
-        if not self.storage.exists(marker):
+        if not self._storage_exists(marker):
             return None
         try:
-            with self.storage.open(marker, "rb") as stored:
-                payload = cast(IO[bytes], stored).read(4097)
+            with self._storage_open(marker) as stored:
+                payload = stored.read(4097)
             if len(payload) > 4096:
                 return None
             value = json.loads(payload)
@@ -489,92 +620,102 @@ class UploadAdapterRegistry:
     """Resolve explicit adapters deterministically before safe built-ins."""
 
     def __init__(self) -> None:
-        self._registrations: dict[type[Storage], object] = {}
-        self._identities: dict[tuple[str, int], object] = {}
-        self._identity_storage_classes: dict[tuple[str, int], set[type[Storage]]] = {}
+        self._registrations: dict[type[Storage], UploadAdapterFactory] = {}
+        self._lock = RLock()
 
-    def register(self, storage_class: type[Storage], adapter: object) -> None:
-        if storage_class in self._registrations:
-            raise _exception(
-                AmbiguousUploadAdapterError,
-                f"An upload adapter is already registered for {storage_class!r}.",
-            )
-        identity = _adapter_identity(adapter)
-        if identity is not None:
-            existing = self._identities.get(identity)
-            if existing is not None and existing is not adapter:
+    def register(
+        self,
+        storage_class: type[Storage],
+        factory: UploadAdapterFactory,
+    ) -> None:
+        with self._lock:
+            if storage_class in self._registrations:
                 raise _exception(
                     AmbiguousUploadAdapterError,
-                    f"Upload adapter identity {identity!r} is already registered.",
+                    f"An upload adapter is already registered for {storage_class!r}.",
                 )
-            self._identities[identity] = adapter
-            self._identity_storage_classes.setdefault(identity, set()).add(
-                storage_class
-            )
-        self._registrations[storage_class] = adapter
+            self._registrations[storage_class] = factory
 
-    def resolve(self, storage: Storage | None = None) -> object:
-        resolved_storage = storage or storages["default"]
-        explicit = self._resolve_explicit(resolved_storage)
-        if explicit is not None:
-            return explicit
+    def resolve(self, storage: Storage | None = None) -> UploadAdapter:
+        resolved_storage = storage if storage is not None else storages["default"]
+        with self._lock:
+            explicit = self._resolve_explicit_factory(resolved_storage)
+            if explicit is not None:
+                return self._build_adapter(explicit, resolved_storage)
 
-        from general_manager.uploads.s3 import S3UploadAdapter
+            from general_manager.uploads.s3 import S3UploadAdapter
 
-        if S3UploadAdapter.supports_direct(resolved_storage):
-            return S3UploadAdapter(resolved_storage)
-        return ProxyUploadAdapter(resolved_storage)
+            if S3UploadAdapter.supports_direct(resolved_storage):
+                return S3UploadAdapter(resolved_storage)
+            return ProxyUploadAdapter(resolved_storage)
 
     def resolve_by_id(
         self,
         adapter_id: str,
         adapter_version: int,
         storage: Storage | None = None,
-    ) -> object | None:
+    ) -> UploadAdapter | None:
         identity = (adapter_id, adapter_version)
-        explicit = self._identities.get(identity)
-        resolved_storage = storage or storages["default"]
-        if explicit is not None:
-            registered_classes = self._identity_storage_classes[identity]
-            if any(
-                isinstance(resolved_storage, storage_class)
-                for storage_class in registered_classes
+        resolved_storage = storage if storage is not None else storages["default"]
+        with self._lock:
+            explicit = self._resolve_explicit_factory(resolved_storage)
+            if explicit is not None:
+                adapter = self._build_adapter(explicit, resolved_storage)
+                if _adapter_identity(adapter) == identity:
+                    return adapter
+                return None
+            if identity == (
+                ProxyUploadAdapter.adapter_id,
+                ProxyUploadAdapter.adapter_version,
             ):
-                return explicit
+                return ProxyUploadAdapter(resolved_storage)
+
+            from general_manager.uploads.s3 import S3UploadAdapter
+
+            if identity == (
+                S3UploadAdapter.adapter_id,
+                S3UploadAdapter.adapter_version,
+            ):
+                if S3UploadAdapter.supports_direct(resolved_storage):
+                    return S3UploadAdapter(resolved_storage)
             return None
-        if identity == (
-            ProxyUploadAdapter.adapter_id,
-            ProxyUploadAdapter.adapter_version,
-        ):
-            return ProxyUploadAdapter(resolved_storage)
 
-        from general_manager.uploads.s3 import S3UploadAdapter
-
-        if identity == (S3UploadAdapter.adapter_id, S3UploadAdapter.adapter_version):
-            if S3UploadAdapter.supports_direct(resolved_storage):
-                return S3UploadAdapter(resolved_storage)
-        return None
-
-    def _resolve_explicit(self, storage: Storage) -> object | None:
+    def _resolve_explicit_factory(
+        self,
+        storage: Storage,
+    ) -> UploadAdapterFactory | None:
         candidates = [
-            (storage_class, adapter)
-            for storage_class, adapter in self._registrations.items()
+            (storage_class, factory)
+            for storage_class, factory in self._registrations.items()
             if isinstance(storage, storage_class)
         ]
         if not candidates:
             return None
         distances = [
-            (_inheritance_distance(type(storage), storage_class), adapter)
-            for storage_class, adapter in candidates
+            (_inheritance_distance(type(storage), storage_class), factory)
+            for storage_class, factory in candidates
         ]
-        closest = min(distance for distance, _adapter in distances)
-        matches = [adapter for distance, adapter in distances if distance == closest]
+        closest = min(distance for distance, _factory in distances)
+        matches = [factory for distance, factory in distances if distance == closest]
         if len(matches) != 1:
             raise _exception(
                 AmbiguousUploadAdapterError,
                 f"Multiple upload adapters match {type(storage)!r} equally.",
             )
         return matches[0]
+
+    @staticmethod
+    def _build_adapter(
+        factory: UploadAdapterFactory,
+        storage: Storage,
+    ) -> UploadAdapter:
+        adapter = factory(storage)
+        if not isinstance(adapter, UploadAdapter):
+            raise _exception(
+                TypeError,
+                "Upload adapter factory must return an UploadAdapter.",
+            )
+        return adapter
 
 
 def build_storage_fingerprint(
@@ -633,6 +774,15 @@ def _checksum_stream(stream: IO[bytes]) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
+def _ensure_object_version(
+    checksum: str,
+    size: int,
+    version: ObjectVersion,
+) -> None:
+    if checksum != version.checksum_sha256 or size != version.size:
+        raise UploadStorageChangedError()
+
+
 def _copy_stream(source: IO[bytes], destination: IO[bytes]) -> tuple[str, int]:
     digest = hashlib.sha256()
     size = 0
@@ -646,6 +796,24 @@ def _copy_stream(source: IO[bytes], destination: IO[bytes]) -> tuple[str, int]:
 def _materialization_marker(key: str) -> str:
     identity = hashlib.sha256(key.encode("utf-8")).hexdigest()
     return f"gm-upload-meta/{identity}.json"
+
+
+def _materialization_completed_marker(key: str) -> str:
+    identity = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return f"gm-upload-complete/{identity}.json"
+
+
+def _materialization_identity(
+    *,
+    intent_id: UUID,
+    checksum_sha256: str,
+    state: str,
+) -> dict[str, str]:
+    return {
+        "intent_id": str(intent_id),
+        "checksum_sha256": checksum_sha256,
+        "state": state,
+    }
 
 
 def _stage_metadata_marker(key: str) -> str:
