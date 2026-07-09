@@ -18,6 +18,7 @@ from general_manager.uploads.adapters import (
     UploadAdapterRegistry,
 )
 from general_manager.uploads.errors import (
+    UploadBackendUnsupportedError,
     UploadChecksumMismatchError,
     UploadTransferConflictError,
 )
@@ -48,6 +49,28 @@ def _filesystem_adapter(
     return ProxyUploadAdapter(
         FileSystemStorage(location=location, base_url="/media/"),
         public=public,
+    )
+
+
+def _overwrite_filesystem_adapter(location: Path) -> ProxyUploadAdapter:
+    return ProxyUploadAdapter(
+        FileSystemStorage(
+            location=location,
+            base_url="/media/",
+            allow_overwrite=True,
+        )
+    )
+
+
+def _proxy_version(
+    payload: bytes, *, content_type: str = "text/plain"
+) -> ObjectVersion:
+    return ObjectVersion(
+        version_id=None,
+        etag=None,
+        checksum_sha256=hashlib.sha256(payload).hexdigest(),
+        size=len(payload),
+        content_type=content_type,
     )
 
 
@@ -206,6 +229,67 @@ def test_proxy_stage_save_does_not_overwrite_collision(tmp_path: Path) -> None:
     ]
 
 
+def test_proxy_rejects_overwrite_enabled_storage_before_occupied_stage_write(
+    tmp_path: Path,
+) -> None:
+    adapter = _overwrite_filesystem_adapter(tmp_path)
+    adapter.storage.save("gm-staging/intent.bin", ContentFile(b"original"))
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.save_stage(
+            "gm-staging/intent.bin",
+            [b"replacement"],
+            content_type="text/plain",
+        )
+
+    with adapter.storage.open("gm-staging/intent.bin", "rb") as stored:
+        assert stored.read() == b"original"
+
+
+def test_proxy_rejects_overwrite_enabled_storage_before_occupied_final_write(
+    tmp_path: Path,
+) -> None:
+    adapter = _overwrite_filesystem_adapter(tmp_path)
+    payload = b"staged payload"
+    adapter.storage.save("gm-staging/intent.bin", ContentFile(payload))
+    adapter.storage.save("files/report.txt", ContentFile(b"unrelated"))
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            _proxy_version(payload),
+            "files/report.txt",
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+
+    with adapter.storage.open("files/report.txt", "rb") as stored:
+        assert stored.read() == b"unrelated"
+
+
+def test_proxy_rejects_overwrite_enabled_storage_before_conflicting_marker_write(
+    tmp_path: Path,
+) -> None:
+    adapter = _overwrite_filesystem_adapter(tmp_path)
+    payload = b"staged payload"
+    final_key = "files/report.txt"
+    marker_digest = hashlib.sha256(final_key.encode()).hexdigest()
+    marker_key = f"gm-upload-meta/{marker_digest}.json"
+    adapter.storage.save("gm-staging/intent.bin", ContentFile(payload))
+    adapter.storage.save(marker_key, ContentFile(b'{"intent_id":"another"}'))
+
+    with pytest.raises(UploadTransferConflictError):
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            _proxy_version(payload),
+            final_key,
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+
+    assert not adapter.storage.exists(final_key)
+    with adapter.storage.open(marker_key, "rb") as stored:
+        assert stored.read() == b'{"intent_id":"another"}'
+
+
 def test_proxy_materialization_returns_collision_safe_actual_key_and_retries(
     tmp_path: Path,
 ) -> None:
@@ -239,7 +323,7 @@ def test_proxy_materialization_returns_collision_safe_actual_key_and_retries(
         assert materialized.read() == b"new payload"
 
 
-def test_proxy_does_not_accept_existing_object_for_another_intent(
+def test_proxy_rejects_existing_marker_for_another_intent_without_writing(
     tmp_path: Path,
 ) -> None:
     adapter = _filesystem_adapter(tmp_path)
@@ -255,14 +339,15 @@ def test_proxy_does_not_accept_existing_object_for_another_intent(
         intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
     )
 
-    second_key = adapter.materialize(
-        "gm-staging/intent.bin",
-        version,
-        first_key,
-        intent_id=UUID("1aeff4c6-4895-4114-a984-b3d136083d33"),
-    )
+    with pytest.raises(UploadTransferConflictError):
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            first_key,
+            intent_id=UUID("1aeff4c6-4895-4114-a984-b3d136083d33"),
+        )
 
-    assert second_key != first_key
+    assert [path.name for path in (tmp_path / "files").iterdir()] == ["report.txt"]
 
 
 def test_proxy_opens_deletes_and_exposes_urls_only_when_explicit(
