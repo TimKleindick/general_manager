@@ -14,6 +14,7 @@ from typing import (
     Iterable,
     ClassVar,
     Callable,
+    Literal,
     TypedDict,
     cast,
 )
@@ -86,6 +87,8 @@ class AttributeTypedDict(TypedDict):
     graphql_scalar: NotRequired[str]
     relation_kind: NotRequired[str]
     filter_lookup: NotRequired[str]
+    orm_field_kind: NotRequired[Literal["file", "image"]]
+    file_clearable: NotRequired[bool]
     default: object
     is_required: bool
     is_editable: bool

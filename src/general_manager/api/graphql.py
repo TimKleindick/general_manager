@@ -49,6 +49,7 @@ from general_manager.permission.graphql_capabilities import (
     get_capability_context,
     get_graphql_capabilities,
 )
+from general_manager.uploads.graphql_types import StoredFile, StoredImage
 from general_manager.utils.format_string import pascal_to_snake
 from general_manager.utils.type_checks import safe_issubclass
 
@@ -865,6 +866,11 @@ class GraphQL:
                 lambda: GraphQL.graphql_type_registry[field_type.__name__]
             )
         else:
+            orm_field_kind = field_info.get("orm_field_kind") if field_info else None
+            if orm_field_kind == "file":
+                return graphene.Field(StoredFile)
+            if orm_field_kind == "image":
+                return graphene.Field(StoredImage)
             return GraphQL._map_field_to_graphene_base_type(
                 field_type,
                 field_info,

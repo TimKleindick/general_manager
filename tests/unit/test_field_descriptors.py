@@ -742,3 +742,71 @@ def test_initialize_general_manager_classes_clears_stale_field_descriptors() -> 
     initialize_general_manager_classes([manager_cls], [manager_cls])
 
     assert observed_cache_values == [None]
+
+
+def test_build_field_descriptors_preserves_file_field_metadata() -> None:
+    class FileMetadataModel(models.Model):
+        required_file = models.FileField(upload_to="uploads")
+        optional_file = models.FileField(upload_to="uploads", blank=True)
+        default_file = models.FileField(
+            upload_to="uploads",
+            default="uploads/default.txt",
+        )
+        nullable_required_file = models.FileField(
+            upload_to="uploads",
+            null=True,
+            blank=False,
+        )
+        image = models.ImageField(upload_to="images", blank=True)
+
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    interface_cls = type("InterfaceUnderTest", (), {"_model": FileMetadataModel})
+
+    descriptors = build_field_descriptors(interface_cls)
+
+    required_file = descriptors["required_file"].metadata
+    assert required_file["type"] is str
+    assert required_file["orm_field_kind"] == "file"
+    assert required_file["is_required"] is True
+    assert required_file["file_clearable"] is False
+
+    optional_file = descriptors["optional_file"].metadata
+    assert optional_file["type"] is str
+    assert optional_file["orm_field_kind"] == "file"
+    assert optional_file["is_required"] is False
+    assert optional_file["file_clearable"] is True
+
+    default_file = descriptors["default_file"].metadata
+    assert default_file["is_required"] is False
+    assert default_file["file_clearable"] is False
+
+    nullable_required_file = descriptors["nullable_required_file"].metadata
+    assert nullable_required_file["is_required"] is True
+    assert nullable_required_file["file_clearable"] is False
+
+    image = descriptors["image"].metadata
+    assert image["type"] is str
+    assert image["orm_field_kind"] == "image"
+    assert image["file_clearable"] is True
+
+
+def test_build_field_descriptors_does_not_add_file_metadata_to_string_fields() -> None:
+    class StringMetadataModel(models.Model):
+        char = models.CharField(max_length=100)
+        url = models.URLField()
+        path = models.FilePathField(path="/var")
+
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    interface_cls = type("InterfaceUnderTest", (), {"_model": StringMetadataModel})
+
+    descriptors = build_field_descriptors(interface_cls)
+
+    for name in ("char", "url", "path"):
+        metadata = descriptors[name].metadata
+        assert metadata["type"] is str
+        assert "orm_field_kind" not in metadata
+        assert "file_clearable" not in metadata
