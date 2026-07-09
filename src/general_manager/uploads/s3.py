@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 import importlib.util
 import re
 from typing import IO, ClassVar, Protocol, TypeVar, cast
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from django.core.files.storage import Storage
@@ -19,6 +21,7 @@ from general_manager.uploads.adapters import (
 from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
     UploadStorageChangedError,
+    UploadError,
     UploadStorageError,
     UploadTransferConflictError,
 )
@@ -26,6 +29,7 @@ from general_manager.uploads.types import ObjectVersion, UploadTransport
 
 
 _ExceptionT = TypeVar("_ExceptionT", bound=Exception)
+_ResultT = TypeVar("_ResultT")
 
 
 def _exception(
@@ -33,6 +37,15 @@ def _exception(
     message: str,
 ) -> _ExceptionT:
     return exception_type(message)
+
+
+def _sdk_call(operation: Callable[[], _ResultT], message: str) -> _ResultT:
+    try:
+        return operation()
+    except UploadError:
+        raise
+    except Exception as exc:
+        raise _exception(UploadStorageError, message) from exc
 
 
 class _S3ClientProtocol(Protocol):
@@ -53,6 +66,12 @@ class _S3ClientProtocol(Protocol):
     def delete_object(self, **kwargs: object) -> object: ...
 
 
+@dataclass(frozen=True, slots=True)
+class _S3ObjectOptions:
+    post_fields: Mapping[str, str]
+    copy_arguments: Mapping[str, object]
+
+
 class S3UploadAdapter:
     """Direct adapter requiring S3 bucket versioning and exact source versions."""
 
@@ -70,6 +89,7 @@ class S3UploadAdapter:
         self.storage = storage
         self._client = client
         self._bucket = bucket
+        self._object_options = _storage_object_options(storage)
 
     @property
     def supports_public_urls(self) -> bool:
@@ -77,12 +97,24 @@ class S3UploadAdapter:
             getattr(self.storage, "public", False) is True
             or getattr(self.storage, "default_acl", None) == "public-read"
             or getattr(self.storage, "querystring_auth", True) is False
+            or self._object_options.copy_arguments.get("ACL") == "public-read"
         )
 
     @classmethod
     def supports_direct(cls, storage: Storage) -> bool:
         if not _looks_like_s3_storage(storage):
             return False
+        try:
+            _storage_object_options(storage)
+        except UploadBackendUnsupportedError:
+            return False
+        if not _is_aws_s3_endpoint(storage):
+            try:
+                custom_conditional_copy = storage.supports_conditional_copy  # type: ignore[attr-defined]
+            except AttributeError:
+                custom_conditional_copy = False
+            if custom_conditional_copy is not True:
+                return False
         if getattr(storage, "versioning_enabled", True) is False:
             return False
         bucket = getattr(storage, "bucket_name", None)
@@ -115,17 +147,25 @@ class S3UploadAdapter:
             "Content-Type": content_type,
             "x-amz-checksum-sha256": checksum_base64,
         }
-        response = self._client.generate_presigned_post(
-            Bucket=self._bucket,
-            Key=stage_key,
-            Fields=fields,
-            Conditions=[
-                {"key": stage_key},
-                {"Content-Type": content_type},
-                {"x-amz-checksum-sha256": checksum_base64},
-                ["content-length-range", size, size],
-            ],
-            ExpiresIn=expires_in,
+        fields.update(self._object_options.post_fields)
+        conditions: list[object] = [
+            {"key": stage_key},
+            {"Content-Type": content_type},
+            {"x-amz-checksum-sha256": checksum_base64},
+            ["content-length-range", size, size],
+        ]
+        conditions.extend(
+            {key: value} for key, value in self._object_options.post_fields.items()
+        )
+        response = _sdk_call(
+            lambda: self._client.generate_presigned_post(
+                Bucket=self._bucket,
+                Key=stage_key,
+                Fields=fields,
+                Conditions=conditions,
+                ExpiresIn=expires_in,
+            ),
+            "S3 could not create upload instructions.",
         )
         url = response.get("url")
         response_fields = response.get("fields")
@@ -142,10 +182,13 @@ class S3UploadAdapter:
         )
 
     def inspect_staged(self, stage_key: str) -> ObjectVersion:
-        response = self._client.head_object(
-            Bucket=self._bucket,
-            Key=stage_key,
-            ChecksumMode="ENABLED",
+        response = _sdk_call(
+            lambda: self._client.head_object(
+                Bucket=self._bucket,
+                Key=stage_key,
+                ChecksumMode="ENABLED",
+            ),
+            "S3 could not inspect the staged object.",
         )
         return _object_version(response)
 
@@ -189,7 +232,10 @@ class S3UploadAdapter:
                 MetadataDirective="REPLACE",
                 ContentType=version.content_type or "application/octet-stream",
                 ChecksumAlgorithm="SHA256",
+                **self._object_options.copy_arguments,
             )
+        except UploadError:
+            raise
         except Exception as exc:
             raced = self._head_optional(final_key)
             if raced is not None and _matches_materialization(raced, version, identity):
@@ -217,10 +263,13 @@ class S3UploadAdapter:
                 UploadBackendUnsupportedError,
                 "S3 staged reads require an immutable VersionId.",
             )
-        response = self._client.get_object(
-            Bucket=self._bucket,
-            Key=stage_key,
-            VersionId=version.version_id,
+        response = _sdk_call(
+            lambda: self._client.get_object(
+                Bucket=self._bucket,
+                Key=stage_key,
+                VersionId=version.version_id,
+            ),
+            "S3 could not open the staged object.",
         )
         body = response.get("Body")
         if body is None or not hasattr(body, "read"):
@@ -235,16 +284,26 @@ class S3UploadAdapter:
         stage_key: str,
         version: ObjectVersion | None = None,
     ) -> None:
+        if version is None or not version.version_id:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 staged deletion requires an immutable VersionId.",
+            )
         parameters: dict[str, object] = {"Bucket": self._bucket, "Key": stage_key}
-        if version is not None and version.version_id:
-            parameters["VersionId"] = version.version_id
-        self._client.delete_object(**parameters)
+        parameters["VersionId"] = version.version_id
+        _sdk_call(
+            lambda: self._client.delete_object(**parameters),
+            "S3 could not delete the staged object.",
+        )
 
     def private_download_url(self, key: str, *, expires_in: int) -> str:
-        return self._client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self._bucket, "Key": key},
-            ExpiresIn=expires_in,
+        return _sdk_call(
+            lambda: self._client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self._bucket, "Key": key},
+                ExpiresIn=expires_in,
+            ),
+            "S3 could not create a private download URL.",
         )
 
     def public_url(self, key: str) -> str:
@@ -253,7 +312,10 @@ class S3UploadAdapter:
                 PublicUploadUrlUnsupportedError,
                 "This S3 storage was not explicitly configured as public.",
             )
-        return self.storage.url(key)
+        return _sdk_call(
+            lambda: self.storage.url(key),
+            "S3 storage could not create a public URL.",
+        )
 
     def storage_fingerprint(self) -> str:
         return build_storage_fingerprint(
@@ -293,6 +355,65 @@ def _looks_like_s3_storage(storage: Storage) -> bool:
     )
 
 
+def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
+    configured = getattr(storage, "object_parameters", {})
+    if configured is None:
+        configured = {}
+    if not isinstance(configured, Mapping):
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "S3 object_parameters must be a mapping.",
+        )
+    allowed = {
+        "ACL",
+        "ServerSideEncryption",
+        "SSEKMSKeyId",
+        "BucketKeyEnabled",
+        "StorageClass",
+    }
+    unknown = set(configured) - allowed
+    if unknown:
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "S3 object_parameters contain unsupported options.",
+        )
+    values = dict(configured)
+    default_acl = getattr(storage, "default_acl", None)
+    if "ACL" not in values and default_acl is not None:
+        values["ACL"] = default_acl
+
+    post_names = {
+        "ACL": "acl",
+        "ServerSideEncryption": "x-amz-server-side-encryption",
+        "SSEKMSKeyId": "x-amz-server-side-encryption-aws-kms-key-id",
+        "BucketKeyEnabled": "x-amz-server-side-encryption-bucket-key-enabled",
+        "StorageClass": "x-amz-storage-class",
+    }
+    post_fields: dict[str, str] = {}
+    copy_arguments: dict[str, object] = {}
+    for name, value in values.items():
+        if name == "BucketKeyEnabled":
+            if not isinstance(value, bool):
+                raise _exception(
+                    UploadBackendUnsupportedError,
+                    "S3 BucketKeyEnabled must be a boolean.",
+                )
+            post_fields[post_names[name]] = str(value).lower()
+            copy_arguments[name] = value
+            continue
+        if not isinstance(value, str) or not value:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 object parameter values must be non-empty strings.",
+            )
+        post_fields[post_names[name]] = value
+        copy_arguments[name] = value
+    return _S3ObjectOptions(
+        post_fields=post_fields,
+        copy_arguments=copy_arguments,
+    )
+
+
 def _client_for_storage(storage: Storage) -> _S3ClientProtocol | None:
     injected = getattr(storage, "s3_client", None)
     if injected is not None and getattr(storage, "_gm_s3_storage", False) is True:
@@ -316,13 +437,6 @@ def _optional_dependencies_available() -> bool:
 def _supports_conditional_copy(client: _S3ClientProtocol) -> bool:
     """Require the SDK/backend to expose destination ``IfNoneMatch``."""
     try:
-        explicit = client.supports_conditional_copy  # type: ignore[attr-defined]
-    except AttributeError:
-        pass
-    else:
-        if isinstance(explicit, bool):
-            return explicit
-    try:
         operation = client.meta.service_model.operation_model(  # type: ignore[attr-defined]
             "CopyObject"
         )
@@ -330,6 +444,25 @@ def _supports_conditional_copy(client: _S3ClientProtocol) -> bool:
     except (AttributeError, KeyError, RuntimeError, TypeError):
         return False
     return isinstance(members, Mapping) and "IfNoneMatch" in members
+
+
+def _is_aws_s3_endpoint(storage: Storage) -> bool:
+    endpoint = getattr(storage, "endpoint_url", None)
+    if endpoint is None or endpoint == "":
+        return True
+    if not isinstance(endpoint, str):
+        return False
+    try:
+        hostname = urlsplit(endpoint).hostname
+    except ValueError:
+        return False
+    if hostname is None:
+        return False
+    labels = hostname.lower().split(".")
+    is_aws_domain = hostname.lower().endswith((".amazonaws.com", ".amazonaws.com.cn"))
+    return is_aws_domain and any(
+        label == "s3" or label.startswith("s3-") for label in labels
+    )
 
 
 def _object_version(response: Mapping[str, object]) -> ObjectVersion:

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 from io import BytesIO
+import json
 from pathlib import Path
+from threading import Barrier
 from typing import ClassVar
 from uuid import UUID
 
@@ -15,21 +17,27 @@ from django.test import override_settings
 from general_manager.uploads.adapters import (
     AmbiguousUploadAdapterError,
     ProxyUploadAdapter,
+    ProxyUploadSink,
     PublicUploadUrlUnsupportedError,
+    UploadAdapter,
     UploadAdapterRegistry,
 )
 from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
     UploadChecksumMismatchError,
+    UploadStorageError,
     UploadTransferConflictError,
 )
 from general_manager.uploads.types import ObjectVersion, UploadTransport
 
 
-@dataclass(frozen=True)
-class NamedAdapter:
+class NamedAdapter(ProxyUploadAdapter):
     adapter_id: ClassVar[str] = "tests.named"
     adapter_version: ClassVar[int] = 7
+
+    def __init__(self, storage: Storage, *, label: str = "named") -> None:
+        super().__init__(storage)
+        self.label = label
 
 
 class UnknownStorage(Storage):
@@ -48,6 +56,7 @@ class OpaqueOverwriteStorage(Storage):
     def __init__(self, capability: object | None = None) -> None:
         self.objects: dict[str, bytes] = {}
         self.save_attempts: list[str] = []
+        self.delete_attempts: list[str] = []
         if capability is not None:
             self.supports_atomic_conditional_create = capability
 
@@ -64,11 +73,141 @@ class OpaqueOverwriteStorage(Storage):
         return name in self.objects
 
     def delete(self, name: str) -> None:
+        self.delete_attempts.append(name)
         self.objects.pop(name, None)
+
+
+class MutatingReadStorage(Storage):
+    def __init__(self, original: bytes, replacement: bytes) -> None:
+        self.payloads = [original, replacement]
+        self.opened: list[BytesIO] = []
+
+    def _open(self, name: str, mode: str = "rb") -> BytesIO:
+        del name, mode
+        payload = self.payloads[min(len(self.opened), len(self.payloads) - 1)]
+        opened = BytesIO(payload)
+        self.opened.append(opened)
+        return opened
+
+    def exists(self, name: str) -> bool:
+        del name
+        return False
+
+
+class NonSeekableBytes:
+    def __init__(self, payload: bytes) -> None:
+        self._source = BytesIO(payload)
+        self.closed = False
+
+    def read(self, size: int = -1) -> bytes:
+        return self._source.read(size)
+
+    def seekable(self) -> bool:
+        return False
+
+    def close(self) -> None:
+        self.closed = True
+        self._source.close()
+
+    def __enter__(self) -> NonSeekableBytes:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        del args
+        self.close()
+
+
+class NonSeekableReadStorage(Storage):
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+        self.opened: list[NonSeekableBytes] = []
+
+    def _open(self, name: str, mode: str = "rb") -> NonSeekableBytes:
+        del name, mode
+        opened = NonSeekableBytes(self.payload)
+        self.opened.append(opened)
+        return opened
+
+    def exists(self, name: str) -> bool:
+        del name
+        return False
+
+
+class FailingOperationStorage(Storage):
+    supports_atomic_conditional_create = True
+
+    def __init__(self, operation: str) -> None:
+        self.operation = operation
+
+    def _raise_if(self, operation: str) -> None:
+        if self.operation == operation:
+            raise OSError
+
+    def _open(self, name: str, mode: str = "rb") -> BytesIO:
+        del name, mode
+        self._raise_if("open")
+        return BytesIO(b"payload")
+
+    def _save(self, name: str, content: object) -> str:
+        del content
+        self._raise_if("save")
+        return name
+
+    def exists(self, name: str) -> bool:
+        del name
+        return False
+
+    def delete(self, name: str) -> None:
+        del name
+        self._raise_if("delete")
+
+    def url(self, name: str) -> str:
+        del name
+        self._raise_if("url")
+        return "/unused"
+
+
+class SynchronizedFinalStorage(FileSystemStorage):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.final_key: str | None = None
+        self.final_barrier = Barrier(2)
+
+    def save(
+        self,
+        name: str,
+        content: object,
+        max_length: int | None = None,
+    ) -> str:
+        if name == self.final_key:
+            self.final_barrier.wait(timeout=5)
+        return super().save(name, content, max_length=max_length)  # type: ignore[arg-type]
+
+
+class CrashBeforeKeyStorage(FileSystemStorage):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.crash_before: set[str] = set()
+
+    def save(
+        self,
+        name: str,
+        content: object,
+        max_length: int | None = None,
+    ) -> str:
+        if name in self.crash_before:
+            self.crash_before.remove(name)
+            raise OSError
+        return super().save(name, content, max_length=max_length)  # type: ignore[arg-type]
 
 
 _UUID_STAGE_KEY = "gm-staging/9c90741f-72ce-4f34-886c-297bc019db16.bin"
 _UUID_FINAL_KEY = "files/1aeff4c6-4895-4114-a984-b3d136083d33.bin"
+
+
+def _intent_marker(prefix: str, final_key: str) -> str:
+    digest = hashlib.sha256(final_key.encode()).hexdigest()
+    return f"{prefix}/{digest}.json"
 
 
 def _filesystem_adapter(
@@ -105,37 +244,44 @@ def _proxy_version(
 
 
 def test_registry_prefers_most_specific_storage_class() -> None:
-    base_adapter = object()
-    local_adapter = object()
     registry = UploadAdapterRegistry()
-    registry.register(Storage, base_adapter)
-    registry.register(FileSystemStorage, local_adapter)
+    registry.register(Storage, lambda storage: NamedAdapter(storage, label="base"))
+    registry.register(
+        FileSystemStorage,
+        lambda storage: NamedAdapter(storage, label="local"),
+    )
 
-    assert registry.resolve(FileSystemStorage()) is local_adapter
+    resolved = registry.resolve(FileSystemStorage())
+
+    assert isinstance(resolved, NamedAdapter)
+    assert resolved.label == "local"
 
 
 def test_registry_rejects_ambiguous_registration() -> None:
     registry = UploadAdapterRegistry()
-    registry.register(FileSystemStorage, object())
+    registry.register(FileSystemStorage, lambda storage: NamedAdapter(storage))
 
     with pytest.raises(AmbiguousUploadAdapterError):
-        registry.register(FileSystemStorage, object())
+        registry.register(FileSystemStorage, lambda storage: NamedAdapter(storage))
 
 
 def test_registry_resolves_registered_adapter_by_stable_id_and_version() -> None:
-    adapter = NamedAdapter()
     registry = UploadAdapterRegistry()
-    registry.register(UnknownStorage, adapter)
+    storage = UnknownStorage()
+    registry.register(UnknownStorage, lambda value: NamedAdapter(value))
 
-    assert registry.resolve_by_id("tests.named", 7, UnknownStorage()) is adapter
-    assert registry.resolve_by_id("tests.named", 8, UnknownStorage()) is None
+    resolved = registry.resolve_by_id("tests.named", 7, storage)
+
+    assert isinstance(resolved, NamedAdapter)
+    assert resolved.storage is storage
+    assert registry.resolve_by_id("tests.named", 8, storage) is None
 
 
 def test_registry_id_resolution_remains_bound_to_registered_storage_class(
     tmp_path: Path,
 ) -> None:
     registry = UploadAdapterRegistry()
-    registry.register(UnknownStorage, NamedAdapter())
+    registry.register(UnknownStorage, lambda storage: NamedAdapter(storage))
 
     resolved = registry.resolve_by_id(
         "tests.named",
@@ -144,6 +290,71 @@ def test_registry_id_resolution_remains_bound_to_registered_storage_class(
     )
 
     assert resolved is None
+
+
+def test_registry_factory_builds_distinct_storage_bound_adapters(
+    tmp_path: Path,
+) -> None:
+    first_storage = FileSystemStorage(location=tmp_path / "first")
+    second_storage = FileSystemStorage(location=tmp_path / "second")
+    registry = UploadAdapterRegistry()
+    registry.register(FileSystemStorage, lambda storage: NamedAdapter(storage))
+
+    first = registry.resolve(first_storage)
+    second = registry.resolve(second_storage)
+
+    assert isinstance(first, NamedAdapter)
+    assert isinstance(second, NamedAdapter)
+    assert first is not second
+    assert first.storage is first_storage
+    assert second.storage is second_storage
+
+
+def test_registry_factory_tracks_default_storage_overrides(tmp_path: Path) -> None:
+    registry = UploadAdapterRegistry()
+    registry.register(FileSystemStorage, lambda storage: NamedAdapter(storage))
+
+    with override_settings(
+        STORAGES={
+            "default": {
+                "BACKEND": "django.core.files.storage.FileSystemStorage",
+                "OPTIONS": {"location": tmp_path / "first"},
+            }
+        }
+    ):
+        first = registry.resolve()
+    with override_settings(
+        STORAGES={
+            "default": {
+                "BACKEND": "django.core.files.storage.FileSystemStorage",
+                "OPTIONS": {"location": tmp_path / "second"},
+            }
+        }
+    ):
+        second = registry.resolve()
+
+    assert isinstance(first, NamedAdapter)
+    assert isinstance(second, NamedAdapter)
+    assert first is not second
+    assert Path(first.storage.location) == tmp_path / "first"
+    assert Path(second.storage.location) == tmp_path / "second"
+
+
+def test_registry_rejects_factory_result_outside_adapter_protocol() -> None:
+    registry = UploadAdapterRegistry()
+    registry.register(FileSystemStorage, lambda _storage: object())  # type: ignore[arg-type,return-value]
+
+    with pytest.raises(TypeError, match="UploadAdapter"):
+        registry.resolve(FileSystemStorage())
+
+
+def test_proxy_adapter_satisfies_upload_and_streaming_sink_protocols(
+    tmp_path: Path,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+
+    assert isinstance(adapter, UploadAdapter)
+    assert isinstance(adapter, ProxyUploadSink)
 
 
 def test_registry_uses_proxy_for_unknown_storage() -> None:
@@ -345,7 +556,7 @@ def test_proxy_rejects_overwrite_enabled_storage_before_occupied_final_write(
     adapter.storage.save("gm-staging/intent.bin", ContentFile(payload))
     adapter.storage.save("files/report.txt", ContentFile(b"unrelated"))
 
-    with pytest.raises(UploadBackendUnsupportedError):
+    with pytest.raises(UploadTransferConflictError):
         adapter.materialize(
             "gm-staging/intent.bin",
             _proxy_version(payload),
@@ -381,7 +592,7 @@ def test_proxy_rejects_overwrite_enabled_storage_before_conflicting_marker_write
         assert stored.read() == b'{"intent_id":"another"}'
 
 
-def test_proxy_materialization_returns_collision_safe_actual_key_and_retries(
+def test_proxy_materialization_rejects_unrelated_requested_key_without_alternate(
     tmp_path: Path,
 ) -> None:
     adapter = _filesystem_adapter(tmp_path)
@@ -393,25 +604,127 @@ def test_proxy_materialization_returns_collision_safe_actual_key_and_retries(
     adapter.storage.save("files/report.txt", ContentFile(b"unrelated"))
     intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
 
-    actual_key = adapter.materialize(
-        "gm-staging/intent.bin",
-        version,
-        "files/report.txt",
-        intent_id=intent_id,
-    )
-    retried_key = adapter.materialize(
-        "gm-staging/intent.bin",
-        version,
-        actual_key,
-        intent_id=intent_id,
-    )
+    with pytest.raises(UploadTransferConflictError):
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            "files/report.txt",
+            intent_id=intent_id,
+        )
 
-    assert actual_key != "files/report.txt"
-    assert retried_key == actual_key
     with adapter.storage.open("files/report.txt", "rb") as unrelated:
         assert unrelated.read() == b"unrelated"
-    with adapter.storage.open(actual_key, "rb") as materialized:
-        assert materialized.read() == b"new payload"
+    assert [path.name for path in (tmp_path / "files").iterdir()] == ["report.txt"]
+
+
+def test_proxy_concurrent_same_intent_materializes_one_requested_key(
+    tmp_path: Path,
+) -> None:
+    storage = SynchronizedFinalStorage(location=tmp_path, base_url="/media/")
+    adapter = ProxyUploadAdapter(storage)
+    version = adapter.save_stage(
+        "gm-staging/intent.bin",
+        [b"new payload"],
+        content_type="text/plain",
+    )
+    final_key = "files/report.txt"
+    storage.final_key = final_key
+    intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda _index: adapter.materialize(
+                    "gm-staging/intent.bin",
+                    version,
+                    final_key,
+                    intent_id=intent_id,
+                ),
+                range(2),
+            )
+        )
+
+    assert results == [final_key, final_key]
+    assert [path.name for path in (tmp_path / "files").iterdir()] == ["report.txt"]
+
+
+def test_proxy_retry_resumes_after_claim_before_data_crash(tmp_path: Path) -> None:
+    storage = CrashBeforeKeyStorage(location=tmp_path, base_url="/media/")
+    adapter = ProxyUploadAdapter(storage)
+    version = adapter.save_stage(
+        "gm-staging/intent.bin",
+        [b"new payload"],
+        content_type="text/plain",
+    )
+    final_key = "files/report.txt"
+    intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    claim_key = _intent_marker("gm-upload-meta", final_key)
+    completed_key = _intent_marker("gm-upload-complete", final_key)
+    storage.crash_before.add(final_key)
+
+    with pytest.raises(UploadStorageError) as captured:
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            final_key,
+            intent_id=intent_id,
+        )
+    assert isinstance(captured.value.__cause__, OSError)
+
+    assert storage.exists(claim_key)
+    assert not storage.exists(final_key)
+    assert not storage.exists(completed_key)
+    with storage.open(claim_key, "rb") as claim:
+        assert json.load(claim)["state"] == "claimed"
+
+    assert (
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            final_key,
+            intent_id=intent_id,
+        )
+        == final_key
+    )
+    assert storage.exists(completed_key)
+
+
+def test_proxy_retry_completes_after_data_before_marker_crash(tmp_path: Path) -> None:
+    storage = CrashBeforeKeyStorage(location=tmp_path, base_url="/media/")
+    adapter = ProxyUploadAdapter(storage)
+    version = adapter.save_stage(
+        "gm-staging/intent.bin",
+        [b"new payload"],
+        content_type="text/plain",
+    )
+    final_key = "files/report.txt"
+    intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    completed_key = _intent_marker("gm-upload-complete", final_key)
+    storage.crash_before.add(completed_key)
+
+    with pytest.raises(UploadStorageError) as captured:
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            final_key,
+            intent_id=intent_id,
+        )
+    assert isinstance(captured.value.__cause__, OSError)
+
+    assert storage.exists(final_key)
+    assert not storage.exists(completed_key)
+
+    assert (
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            final_key,
+            intent_id=intent_id,
+        )
+        == final_key
+    )
+    with storage.open(completed_key, "rb") as completed:
+        assert json.load(completed)["state"] == "completed"
 
 
 def test_proxy_rejects_existing_marker_for_another_intent_without_writing(
@@ -453,18 +766,81 @@ def test_proxy_opens_deletes_and_exposes_urls_only_when_explicit(
 
     with private.open_stage("gm-staging/intent.bin", version) as staged:
         assert staged.read() == b"payload"
-    assert private.private_download_url("gm-staging/intent.bin", expires_in=60) == (
-        "/media/gm-staging/intent.bin"
-    )
+    with pytest.raises(UploadBackendUnsupportedError):
+        private.private_download_url("gm-staging/intent.bin", expires_in=60)
     assert private.supports_public_urls is False
     with pytest.raises(PublicUploadUrlUnsupportedError):
         private.public_url("gm-staging/intent.bin")
-    private.delete_stage("gm-staging/intent.bin", version)
+    with pytest.raises(UploadBackendUnsupportedError):
+        private.delete_stage("gm-staging/intent.bin", version)
+    private.delete_stage("gm-staging/intent.bin")
     assert not private.storage.exists("gm-staging/intent.bin")
 
     public = _filesystem_adapter(tmp_path / "public", public=True)
     assert public.supports_public_urls is True
     assert public.public_url("files/image.png") == "/media/files/image.png"
+
+
+def test_proxy_open_stage_verifies_and_rewinds_same_handle() -> None:
+    original = b"verified payload"
+    storage = MutatingReadStorage(original, b"mutated payload")
+    adapter = ProxyUploadAdapter(storage)
+
+    opened = adapter.open_stage("gm-staging/intent.bin", _proxy_version(original))
+
+    assert opened is storage.opened[0]
+    assert len(storage.opened) == 1
+    assert opened.read() == original
+
+
+def test_proxy_open_stage_spools_non_seekable_source_once() -> None:
+    payload = b"non-seekable payload"
+    storage = NonSeekableReadStorage(payload)
+    adapter = ProxyUploadAdapter(storage)
+
+    opened = adapter.open_stage("gm-staging/intent.bin", _proxy_version(payload))
+
+    assert len(storage.opened) == 1
+    assert storage.opened[0].closed is True
+    assert opened.seekable() is True
+    assert opened.read() == payload
+
+
+def test_proxy_exact_delete_fails_before_mutable_backend_delete() -> None:
+    payload = b"verified payload"
+    storage = OpaqueOverwriteStorage()
+    storage.objects[_UUID_STAGE_KEY] = payload
+    adapter = ProxyUploadAdapter(storage)
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.delete_stage(_UUID_STAGE_KEY, _proxy_version(payload))
+
+    assert storage.objects[_UUID_STAGE_KEY] == payload
+    assert storage.delete_attempts == []
+
+
+@pytest.mark.parametrize("operation", ["save", "open", "delete", "url"])
+def test_proxy_normalizes_backend_os_errors(operation: str) -> None:
+    adapter = ProxyUploadAdapter(
+        FailingOperationStorage(operation),
+        public=operation == "url",
+    )
+
+    with pytest.raises(UploadStorageError) as captured:
+        if operation == "save":
+            adapter.save_stage(
+                _UUID_STAGE_KEY,
+                [b"payload"],
+                content_type="text/plain",
+            )
+        elif operation == "open":
+            adapter.open_stage(_UUID_STAGE_KEY, _proxy_version(b"payload"))
+        elif operation == "delete":
+            adapter.delete_stage(_UUID_STAGE_KEY)
+        else:
+            adapter.public_url(_UUID_FINAL_KEY)
+
+    assert isinstance(captured.value.__cause__, OSError)
 
 
 def test_proxy_fingerprint_and_repr_exclude_storage_secrets(tmp_path: Path) -> None:
