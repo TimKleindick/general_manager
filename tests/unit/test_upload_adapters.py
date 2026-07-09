@@ -210,6 +210,11 @@ def _intent_marker(prefix: str, final_key: str) -> str:
     return f"{prefix}/{digest}.json"
 
 
+def _stage_marker(prefix: str, stage_key: str) -> str:
+    digest = hashlib.sha256(stage_key.encode()).hexdigest()
+    return f"{prefix}/{digest}.json"
+
+
 def _filesystem_adapter(
     location: Path,
     *,
@@ -438,6 +443,93 @@ def test_proxy_streams_chunks_and_records_checksum(tmp_path: Path) -> None:
     assert adapter.inspect_staged("gm-staging/intent.bin") == version
 
 
+def test_proxy_concurrent_same_stage_identity_converges_on_requested_key(
+    tmp_path: Path,
+) -> None:
+    storage = SynchronizedFinalStorage(location=tmp_path, base_url="/media/")
+    adapter = ProxyUploadAdapter(storage)
+    stage_key = "gm-staging/intent.bin"
+    storage.final_key = stage_key
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        versions = list(
+            executor.map(
+                lambda _index: adapter.save_stage(
+                    stage_key,
+                    [b"concurrent payload"],
+                    content_type="text/plain",
+                ),
+                range(2),
+            )
+        )
+
+    assert versions == [versions[0], versions[0]]
+    with storage.open(stage_key, "rb") as staged:
+        assert staged.read() == b"concurrent payload"
+    assert [path.name for path in (tmp_path / "gm-staging").iterdir()] == ["intent.bin"]
+
+
+def test_proxy_stage_retry_recovers_after_completion_marker_crash(
+    tmp_path: Path,
+) -> None:
+    storage = CrashBeforeKeyStorage(location=tmp_path, base_url="/media/")
+    adapter = ProxyUploadAdapter(storage)
+    stage_key = "gm-staging/intent.bin"
+    claim_key = _stage_marker("gm-upload-stage-claim", stage_key)
+    completed_key = _stage_marker("gm-upload-stage-meta", stage_key)
+    storage.crash_before.add(completed_key)
+
+    with pytest.raises(UploadStorageError) as captured:
+        adapter.save_stage(
+            stage_key,
+            [b"recoverable payload"],
+            content_type="text/plain",
+        )
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert storage.exists(claim_key)
+    assert storage.exists(stage_key)
+    assert not storage.exists(completed_key)
+
+    recovered = adapter.save_stage(
+        stage_key,
+        [b"recoverable payload"],
+        content_type="text/plain",
+    )
+
+    assert (
+        recovered.checksum_sha256 == hashlib.sha256(b"recoverable payload").hexdigest()
+    )
+    assert storage.exists(completed_key)
+
+
+def test_proxy_stage_retry_rejects_conflicting_bytes_after_claim_crash(
+    tmp_path: Path,
+) -> None:
+    storage = CrashBeforeKeyStorage(location=tmp_path, base_url="/media/")
+    adapter = ProxyUploadAdapter(storage)
+    stage_key = "gm-staging/intent.bin"
+    claim_key = _stage_marker("gm-upload-stage-claim", stage_key)
+    storage.crash_before.add(stage_key)
+
+    with pytest.raises(UploadStorageError):
+        adapter.save_stage(
+            stage_key,
+            [b"expected payload"],
+            content_type="text/plain",
+        )
+
+    assert storage.exists(claim_key)
+    storage.save(stage_key, ContentFile(b"conflicting payload"))
+
+    with pytest.raises(UploadTransferConflictError):
+        adapter.save_stage(
+            stage_key,
+            [b"expected payload"],
+            content_type="text/plain",
+        )
+
+
 def test_proxy_rejects_checksum_mismatch_before_saving(tmp_path: Path) -> None:
     adapter = _filesystem_adapter(tmp_path)
 
@@ -537,7 +629,7 @@ def test_proxy_rejects_overwrite_enabled_storage_before_occupied_stage_write(
     adapter = _overwrite_filesystem_adapter(tmp_path)
     adapter.storage.save("gm-staging/intent.bin", ContentFile(b"original"))
 
-    with pytest.raises(UploadBackendUnsupportedError):
+    with pytest.raises(UploadTransferConflictError):
         adapter.save_stage(
             "gm-staging/intent.bin",
             [b"replacement"],
@@ -771,10 +863,16 @@ def test_proxy_opens_deletes_and_exposes_urls_only_when_explicit(
     assert private.supports_public_urls is False
     with pytest.raises(PublicUploadUrlUnsupportedError):
         private.public_url("gm-staging/intent.bin")
+    completion_marker = _stage_marker("gm-upload-stage-meta", "gm-staging/intent.bin")
+    claim_marker = _stage_marker("gm-upload-stage-claim", "gm-staging/intent.bin")
+    assert private.storage.exists(completion_marker)
+    assert private.storage.exists(claim_marker)
     with pytest.raises(UploadBackendUnsupportedError):
         private.delete_stage("gm-staging/intent.bin", version)
     private.delete_stage("gm-staging/intent.bin")
     assert not private.storage.exists("gm-staging/intent.bin")
+    assert not private.storage.exists(completion_marker)
+    assert not private.storage.exists(claim_marker)
 
     public = _filesystem_adapter(tmp_path / "public", public=True)
     assert public.supports_public_urls is True

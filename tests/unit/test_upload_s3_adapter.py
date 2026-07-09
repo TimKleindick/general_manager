@@ -187,12 +187,26 @@ def test_s3_direct_mode_requires_versioning() -> None:
     assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
 
 
+def test_s3_direct_construction_rejects_suspended_versioning() -> None:
+    storage = FakeS3Storage(FakeS3Client(versioning=False))
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        S3UploadAdapter(storage)
+
+
 def test_s3_direct_mode_requires_conditional_destination_copy() -> None:
     client = FakeS3Client(conditional_copy=False)
     storage = FakeS3Storage(client)
 
     assert S3UploadAdapter.supports_direct(storage) is False
     assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+
+
+def test_s3_direct_construction_rejects_missing_if_none_match_model() -> None:
+    storage = FakeS3Storage(FakeS3Client(conditional_copy=False))
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        S3UploadAdapter(storage)
 
 
 @pytest.mark.parametrize("capability", [None, False, 1, "yes"])
@@ -219,6 +233,25 @@ def test_s3_custom_endpoint_allows_explicit_conditional_copy_capability() -> Non
 
     assert S3UploadAdapter.supports_direct(storage) is True
     assert isinstance(UploadAdapterRegistry().resolve(storage), S3UploadAdapter)
+
+
+def test_s3_direct_construction_rejects_unapproved_custom_endpoint() -> None:
+    storage = FakeS3Storage(
+        FakeS3Client(),
+        endpoint_url="https://objects.example.test",
+    )
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        S3UploadAdapter(storage)
+
+
+def test_s3_registered_factory_cannot_bypass_constructor_capabilities() -> None:
+    storage = FakeS3Storage(FakeS3Client(versioning=False))
+    registry = UploadAdapterRegistry()
+    registry.register(FakeS3Storage, lambda value: S3UploadAdapter(value))
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        registry.resolve(storage)
 
 
 def test_s3_extra_requires_conditional_copy_capable_boto3() -> None:
@@ -272,7 +305,7 @@ def test_s3_presigned_upload_binds_stage_metadata() -> None:
     assert "credential=secret" not in repr(instructions)
 
 
-def test_s3_preserves_acl_encryption_bucket_key_and_storage_class() -> None:
+def test_s3_stages_private_with_kms_and_applies_public_acl_on_final_copy() -> None:
     client = FakeS3Client()
     storage = FakeS3Storage(
         client,
@@ -302,13 +335,13 @@ def test_s3_preserves_acl_encryption_bucket_key_and_storage_class() -> None:
     )
 
     expected_fields = {
-        "acl": "public-read",
+        "acl": "private",
         "x-amz-server-side-encryption": "aws:kms",
         "x-amz-server-side-encryption-aws-kms-key-id": "alias/uploads",
         "x-amz-server-side-encryption-bucket-key-enabled": "true",
-        "x-amz-storage-class": "STANDARD_IA",
     }
     assert expected_fields.items() <= instructions.fields.items()
+    assert "x-amz-storage-class" not in instructions.fields
     conditions = client.presigned_post_calls[0]["Conditions"]
     assert all({key: value} in conditions for key, value in expected_fields.items())
     copy = client.copy_calls[0]
@@ -317,6 +350,59 @@ def test_s3_preserves_acl_encryption_bucket_key_and_storage_class() -> None:
     assert copy["SSEKMSKeyId"] == "alias/uploads"
     assert copy["BucketKeyEnabled"] is True
     assert copy["StorageClass"] == "STANDARD_IA"
+
+
+@pytest.mark.parametrize("storage_class", ["GLACIER", "DEEP_ARCHIVE"])
+def test_s3_archive_storage_class_is_final_only(storage_class: str) -> None:
+    client = FakeS3Client()
+    storage = FakeS3Storage(
+        client,
+        object_parameters={"StorageClass": storage_class},
+    )
+    adapter = S3UploadAdapter(storage)
+    version = _stage(client)
+
+    instructions = adapter.create_upload_instructions(
+        stage_key="gm-staging/intent.bin",
+        upload_url=None,
+        content_type="text/plain",
+        size=version.size,
+        checksum_sha256=version.checksum_sha256,
+    )
+    adapter.materialize(
+        "gm-staging/intent.bin",
+        version,
+        "files/report.txt",
+        intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+    )
+
+    assert instructions.fields["acl"] == "private"
+    assert "x-amz-storage-class" not in instructions.fields
+    assert client.copy_calls[0]["StorageClass"] == storage_class
+
+
+@pytest.mark.parametrize(
+    "object_parameters",
+    [
+        {"SSEKMSKeyId": "alias/uploads"},
+        {"BucketKeyEnabled": True},
+        {
+            "ServerSideEncryption": "AES256",
+            "SSEKMSKeyId": "alias/uploads",
+        },
+    ],
+)
+def test_s3_direct_construction_rejects_invalid_kms_staging_configuration(
+    object_parameters: dict[str, object],
+) -> None:
+    storage = FakeS3Storage(
+        FakeS3Client(),
+        object_parameters=object_parameters,
+    )
+
+    assert S3UploadAdapter.supports_direct(storage) is False
+    with pytest.raises(UploadBackendUnsupportedError):
+        S3UploadAdapter(storage)
 
 
 def test_s3_rejects_unsupported_object_parameters() -> None:
@@ -544,6 +630,7 @@ def test_s3_fingerprint_and_repr_exclude_endpoint_credentials() -> None:
             endpoint_url=(
                 "https://user:password@objects.example.test/root?secret=value"
             ),
+            conditional_copy=True,
         )
     )
 

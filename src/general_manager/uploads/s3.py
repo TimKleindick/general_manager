@@ -68,8 +68,8 @@ class _S3ClientProtocol(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class _S3ObjectOptions:
-    post_fields: Mapping[str, str]
-    copy_arguments: Mapping[str, object]
+    staging_post_fields: Mapping[str, str]
+    final_copy_arguments: Mapping[str, object]
 
 
 class S3UploadAdapter:
@@ -79,17 +79,11 @@ class S3UploadAdapter:
     adapter_version: ClassVar[int] = 1
 
     def __init__(self, storage: Storage) -> None:
-        client = _client_for_storage(storage)
-        bucket = getattr(storage, "bucket_name", None)
-        if client is None or not isinstance(bucket, str) or not bucket:
-            raise _exception(
-                UploadBackendUnsupportedError,
-                "The storage does not expose a version-capable S3 client.",
-            )
+        client, bucket, object_options = _validate_direct_support(storage)
         self.storage = storage
         self._client = client
         self._bucket = bucket
-        self._object_options = _storage_object_options(storage)
+        self._object_options = object_options
 
     @property
     def supports_public_urls(self) -> bool:
@@ -97,37 +91,16 @@ class S3UploadAdapter:
             getattr(self.storage, "public", False) is True
             or getattr(self.storage, "default_acl", None) == "public-read"
             or getattr(self.storage, "querystring_auth", True) is False
-            or self._object_options.copy_arguments.get("ACL") == "public-read"
+            or self._object_options.final_copy_arguments.get("ACL") == "public-read"
         )
 
     @classmethod
     def supports_direct(cls, storage: Storage) -> bool:
-        if not _looks_like_s3_storage(storage):
-            return False
         try:
-            _storage_object_options(storage)
+            _validate_direct_support(storage)
         except UploadBackendUnsupportedError:
             return False
-        if not _is_aws_s3_endpoint(storage):
-            try:
-                custom_conditional_copy = storage.supports_conditional_copy  # type: ignore[attr-defined]
-            except AttributeError:
-                custom_conditional_copy = False
-            if custom_conditional_copy is not True:
-                return False
-        if getattr(storage, "versioning_enabled", True) is False:
-            return False
-        bucket = getattr(storage, "bucket_name", None)
-        client = _client_for_storage(storage)
-        if not isinstance(bucket, str) or not bucket or client is None:
-            return False
-        if not _supports_conditional_copy(client):
-            return False
-        try:
-            response = client.get_bucket_versioning(Bucket=bucket)
-        except Exception:  # noqa: BLE001 - capability detection must fail closed
-            return False
-        return response.get("Status") == "Enabled"
+        return True
 
     def create_upload_instructions(
         self,
@@ -147,7 +120,7 @@ class S3UploadAdapter:
             "Content-Type": content_type,
             "x-amz-checksum-sha256": checksum_base64,
         }
-        fields.update(self._object_options.post_fields)
+        fields.update(self._object_options.staging_post_fields)
         conditions: list[object] = [
             {"key": stage_key},
             {"Content-Type": content_type},
@@ -155,7 +128,8 @@ class S3UploadAdapter:
             ["content-length-range", size, size],
         ]
         conditions.extend(
-            {key: value} for key, value in self._object_options.post_fields.items()
+            {key: value}
+            for key, value in self._object_options.staging_post_fields.items()
         )
         response = _sdk_call(
             lambda: self._client.generate_presigned_post(
@@ -232,7 +206,7 @@ class S3UploadAdapter:
                 MetadataDirective="REPLACE",
                 ContentType=version.content_type or "application/octet-stream",
                 ChecksumAlgorithm="SHA256",
-                **self._object_options.copy_arguments,
+                **self._object_options.final_copy_arguments,
             )
         except UploadError:
             raise
@@ -355,6 +329,57 @@ def _looks_like_s3_storage(storage: Storage) -> bool:
     )
 
 
+def _validate_direct_support(
+    storage: Storage,
+) -> tuple[_S3ClientProtocol, str, _S3ObjectOptions]:
+    if not _looks_like_s3_storage(storage):
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "The storage backend is not a recognized S3 storage.",
+        )
+    object_options = _storage_object_options(storage)
+    if not _is_aws_s3_endpoint(storage):
+        try:
+            custom_conditional_copy = storage.supports_conditional_copy  # type: ignore[attr-defined]
+        except AttributeError:
+            custom_conditional_copy = False
+        if custom_conditional_copy is not True:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "Custom S3 endpoints require explicit conditional-copy support.",
+            )
+    if getattr(storage, "versioning_enabled", True) is False:
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "S3 bucket versioning is not enabled.",
+        )
+    bucket = getattr(storage, "bucket_name", None)
+    client = _client_for_storage(storage)
+    if not isinstance(bucket, str) or not bucket or client is None:
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "The storage does not expose a version-capable S3 client.",
+        )
+    if not _supports_conditional_copy(client):
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "The S3 client cannot conditionally create copied objects.",
+        )
+    try:
+        response = client.get_bucket_versioning(Bucket=bucket)
+    except Exception as exc:
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "S3 bucket versioning capability could not be verified.",
+        ) from exc
+    if response.get("Status") != "Enabled":
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "S3 bucket versioning is not enabled.",
+        )
+    return client, bucket, object_options
+
+
 def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
     configured = getattr(storage, "object_parameters", {})
     if configured is None:
@@ -382,6 +407,14 @@ def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
     if "ACL" not in values and default_acl is not None:
         values["ACL"] = default_acl
 
+    encryption = values.get("ServerSideEncryption")
+    requires_kms = "SSEKMSKeyId" in values or values.get("BucketKeyEnabled") is True
+    if requires_kms and encryption != "aws:kms":
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "S3 KMS key and bucket-key options require aws:kms encryption.",
+        )
+
     post_names = {
         "ACL": "acl",
         "ServerSideEncryption": "x-amz-server-side-encryption",
@@ -389,8 +422,8 @@ def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
         "BucketKeyEnabled": "x-amz-server-side-encryption-bucket-key-enabled",
         "StorageClass": "x-amz-storage-class",
     }
-    post_fields: dict[str, str] = {}
-    copy_arguments: dict[str, object] = {}
+    staging_post_fields: dict[str, str] = {"acl": "private"}
+    final_copy_arguments: dict[str, object] = {}
     for name, value in values.items():
         if name == "BucketKeyEnabled":
             if not isinstance(value, bool):
@@ -398,19 +431,20 @@ def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
                     UploadBackendUnsupportedError,
                     "S3 BucketKeyEnabled must be a boolean.",
                 )
-            post_fields[post_names[name]] = str(value).lower()
-            copy_arguments[name] = value
+            staging_post_fields[post_names[name]] = str(value).lower()
+            final_copy_arguments[name] = value
             continue
         if not isinstance(value, str) or not value:
             raise _exception(
                 UploadBackendUnsupportedError,
                 "S3 object parameter values must be non-empty strings.",
             )
-        post_fields[post_names[name]] = value
-        copy_arguments[name] = value
+        if name not in {"ACL", "StorageClass"}:
+            staging_post_fields[post_names[name]] = value
+        final_copy_arguments[name] = value
     return _S3ObjectOptions(
-        post_fields=post_fields,
-        copy_arguments=copy_arguments,
+        staging_post_fields=staging_post_fields,
+        final_copy_arguments=final_copy_arguments,
     )
 
 
