@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from io import BytesIO
 from pathlib import Path
 from typing import ClassVar
 from uuid import UUID
@@ -39,6 +40,35 @@ class SecretBearingStorage(FileSystemStorage):
     access_key = "AKIA-DO-NOT-LOG"
     secret_key = "super-secret"  # noqa: S105 - verifies redaction
     endpoint_url = "https://username:password@objects.example.test/root?signature=bad"
+
+
+class OpaqueOverwriteStorage(Storage):
+    """Opaque fake whose ``_save`` overwrites and is therefore not atomic-safe."""
+
+    def __init__(self, capability: object | None = None) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.save_attempts: list[str] = []
+        if capability is not None:
+            self.supports_atomic_conditional_create = capability
+
+    def _open(self, name: str, mode: str = "rb") -> BytesIO:
+        del mode
+        return BytesIO(self.objects[name])
+
+    def _save(self, name: str, content: object) -> str:
+        self.save_attempts.append(name)
+        self.objects[name] = b"".join(content.chunks())  # type: ignore[attr-defined]
+        return name
+
+    def exists(self, name: str) -> bool:
+        return name in self.objects
+
+    def delete(self, name: str) -> None:
+        self.objects.pop(name, None)
+
+
+_UUID_STAGE_KEY = "gm-staging/9c90741f-72ce-4f34-886c-297bc019db16.bin"
+_UUID_FINAL_KEY = "files/1aeff4c6-4895-4114-a984-b3d136083d33.bin"
 
 
 def _filesystem_adapter(
@@ -227,6 +257,67 @@ def test_proxy_stage_save_does_not_overwrite_collision(tmp_path: Path) -> None:
     assert list((tmp_path / "gm-staging").iterdir()) == [
         tmp_path / "gm-staging" / "intent.bin"
     ]
+
+
+def test_proxy_rejects_opaque_storage_for_uuid_stage_before_write() -> None:
+    storage = OpaqueOverwriteStorage()
+    adapter = ProxyUploadAdapter(storage)
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.save_stage(
+            _UUID_STAGE_KEY,
+            [b"payload"],
+            content_type="text/plain",
+        )
+
+    assert storage.save_attempts == []
+
+
+def test_proxy_rejects_opaque_storage_for_uuid_final_before_write() -> None:
+    storage = OpaqueOverwriteStorage()
+    payload = b"staged payload"
+    storage.objects[_UUID_STAGE_KEY] = payload
+    adapter = ProxyUploadAdapter(storage)
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.materialize(
+            _UUID_STAGE_KEY,
+            _proxy_version(payload),
+            _UUID_FINAL_KEY,
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+
+    assert storage.save_attempts == []
+    assert _UUID_FINAL_KEY not in storage.objects
+
+
+def test_proxy_rejects_opaque_storage_for_framework_marker_before_write() -> None:
+    storage = OpaqueOverwriteStorage()
+    adapter = ProxyUploadAdapter(storage)
+    marker_digest = hashlib.sha256(_UUID_FINAL_KEY.encode()).hexdigest()
+    marker_key = f"gm-upload-meta/{marker_digest}.json"
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter._require_conditional_creation(marker_key)
+
+    assert storage.save_attempts == []
+
+
+@pytest.mark.parametrize("capability", [False, 1, "yes"])
+def test_proxy_requires_atomic_create_capability_to_be_exactly_true(
+    capability: object,
+) -> None:
+    storage = OpaqueOverwriteStorage(capability)
+    adapter = ProxyUploadAdapter(storage)
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.save_stage(
+            _UUID_STAGE_KEY,
+            [b"payload"],
+            content_type="text/plain",
+        )
+
+    assert storage.save_attempts == []
 
 
 def test_proxy_rejects_overwrite_enabled_storage_before_occupied_stage_write(

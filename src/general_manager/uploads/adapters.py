@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 import hashlib
 from io import BufferedIOBase
 import json
-import re
 from tempfile import SpooledTemporaryFile
 from types import MappingProxyType
 from typing import IO, ClassVar, Protocol, TypeVar, cast, runtime_checkable
@@ -241,7 +240,7 @@ class ProxyUploadAdapter:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        self._require_conditional_creation(stage_marker, framework_generated=True)
+        self._require_conditional_creation(stage_marker)
         saved_marker = self.storage.save(
             stage_marker,
             ContentFile(metadata),
@@ -332,10 +331,7 @@ class ProxyUploadAdapter:
                 UploadTransferConflictError,
                 "The final upload identity marker is already occupied.",
             )
-        self._require_conditional_creation(
-            actual_marker,
-            framework_generated=True,
-        )
+        self._require_conditional_creation(actual_marker)
         saved_marker = self.storage.save(
             actual_marker,
             ContentFile(marker_payload),
@@ -400,16 +396,13 @@ class ProxyUploadAdapter:
     def _require_conditional_creation(
         self,
         key: str,
-        *,
-        framework_generated: bool = False,
     ) -> None:
         """Fail closed when ``Storage.save`` could overwrite an existing key.
 
         Django's default filesystem backend uses atomic exclusive creation when
-        ``allow_overwrite`` is false. Other backends may opt in only through an
-        explicit atomic-create capability. For opaque backends, the proxy uses
-        a prior existence check only for framework-owned UUID-derived keys; the
-        unguessable namespace makes the remaining check/save race negligible.
+        ``allow_overwrite`` is false. Opaque backends may opt in only through an
+        explicit atomic-create capability; ``exists()`` followed by ``save()``
+        is not accepted because concurrent retries can race between those calls.
         """
         storage = self.storage
         if isinstance(storage, FileSystemStorage):
@@ -420,38 +413,18 @@ class ProxyUploadAdapter:
                 )
             return
         try:
-            allow_overwrite = storage.allow_overwrite  # type: ignore[attr-defined]
-        except AttributeError:
-            allow_overwrite = None
-        if allow_overwrite is True:
-            raise _exception(
-                UploadBackendUnsupportedError,
-                "The storage backend permits overwriting existing object keys.",
-            )
-        if allow_overwrite is False:
-            return
-
-        try:
             supports_atomic_create = storage.supports_atomic_conditional_create  # type: ignore[attr-defined]
         except AttributeError:
             supports_atomic_create = False
-        if supports_atomic_create is True:
-            if storage.exists(key):
-                raise _exception(
-                    UploadTransferConflictError,
-                    "The reserved storage key is already occupied.",
-                )
-            return
-
+        if supports_atomic_create is not True:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "The storage backend lacks atomic conditional creation.",
+            )
         if storage.exists(key):
             raise _exception(
                 UploadTransferConflictError,
                 "The reserved storage key is already occupied.",
-            )
-        if not framework_generated and not _UUID_KEY_PATTERN.search(key):
-            raise _exception(
-                UploadBackendUnsupportedError,
-                "Opaque storage backends require framework-generated UUID keys.",
             )
 
     def _marker_matches(
@@ -691,10 +664,3 @@ def _safe_endpoint(value: str) -> str:
     except ValueError:
         port = ""
     return urlunsplit((parsed.scheme, f"{hostname}{port}", parsed.path, "", ""))
-
-
-_UUID_KEY_PATTERN = re.compile(
-    r"(?i)(?:^|[^0-9a-f])"
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
-    r"(?:$|[^0-9a-f])"
-)
