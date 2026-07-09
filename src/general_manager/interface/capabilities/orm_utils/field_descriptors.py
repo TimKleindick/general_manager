@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 import re
-from typing import TYPE_CHECKING, Callable, Hashable, Iterable, Protocol, cast
+from typing import TYPE_CHECKING, Callable, Hashable, Iterable, Literal, Protocol, cast
 from uuid import UUID
 
 from django.apps import apps
@@ -31,6 +31,7 @@ type OrmInterfaceInstance = "OrmInterfaceBase[models.Model]"
 type DescriptorAccessor = Callable[[OrmInterfaceInstance], object]
 type ResolveMany = Callable[[OrmInterfaceInstance, str, str], object]
 type DjangoField = models.Field[object, object]
+type OrmFileFieldKind = Literal["file", "image"]
 
 
 class ManyRelationResolver(Protocol):
@@ -52,10 +53,11 @@ class FieldDescriptor:
 
     `metadata` always contains `type`, `default`, `is_required`, `is_editable`,
     and `is_derived`. Auto-integer-like fields may add `graphql_scalar`.
-    Relation descriptors may add `relation_kind` (`"direct"` or `"collection"`)
-    and `filter_lookup`. The `accessor` accepts an ORM interface instance and
-    returns the stored value, related manager object, queryset, iterable, or
-    `None` when an optional relation is missing.
+    File fields add `orm_field_kind` and `file_clearable`. Relation descriptors
+    may add `relation_kind` (`"direct"` or `"collection"`) and `filter_lookup`.
+    The `accessor` accepts an ORM interface instance and returns the stored
+    value, related manager object, queryset, iterable, or `None` when an
+    optional relation is missing.
     """
 
     name: str
@@ -126,6 +128,17 @@ def _graphql_scalar_hint(raw_type: type[object]) -> str | None:
         return None
     if issubclass(raw_type, models.BigIntegerField):
         return "bigint"
+    return None
+
+
+def _orm_file_field_kind(
+    field: models.Field[object, object],
+) -> OrmFileFieldKind | None:
+    """Return the concrete ORM file family, checking images before files."""
+    if isinstance(field, models.ImageField):
+        return "image"
+    if isinstance(field, models.FileField):
+        return "file"
     return None
 
 
@@ -221,14 +234,21 @@ class _FieldDescriptorBuilder:
         """
         for field_name in self._custom_fields:
             field = cast("DjangoField", getattr(self.model, field_name))
+            orm_field_kind = _orm_file_field_kind(field)
             self._register(
                 attribute_name=field_name,
                 raw_type=type(field),
-                is_required=not field.null,
+                is_required=(
+                    not field.blank and field.default is models.NOT_PROVIDED
+                    if orm_field_kind is not None
+                    else not field.null
+                ),
                 is_editable=field.editable,
                 default=field.default,
                 is_derived=False,
                 accessor=_instance_attribute_accessor(field_name),
+                orm_field_kind=orm_field_kind,
+                file_clearable=field.blank if orm_field_kind is not None else None,
             )
 
     def _add_model_fields(self) -> None:
@@ -240,14 +260,21 @@ class _FieldDescriptorBuilder:
         for field in _iter_model_fields(self.model):
             if field.name in self._ignored_helpers:
                 continue
+            orm_field_kind = _orm_file_field_kind(field)
             self._register(
                 attribute_name=field.name,
                 raw_type=type(field),
-                is_required=not field.null and field.default is models.NOT_PROVIDED,
+                is_required=(
+                    not field.blank and field.default is models.NOT_PROVIDED
+                    if orm_field_kind is not None
+                    else not field.null and field.default is models.NOT_PROVIDED
+                ),
                 is_editable=field.editable,
                 default=field.default,
                 is_derived=False,
                 accessor=_instance_attribute_accessor(field.name),
+                orm_field_kind=orm_field_kind,
+                file_clearable=field.blank if orm_field_kind is not None else None,
             )
 
     def _add_foreign_key_fields(self) -> None:
@@ -525,6 +552,8 @@ class _FieldDescriptorBuilder:
         accessor: DescriptorAccessor,
         relation_kind: str | None = None,
         filter_lookup: str | None = None,
+        orm_field_kind: OrmFileFieldKind | None = None,
+        file_clearable: bool | None = None,
     ) -> None:
         """
         Register a FieldDescriptor for a named interface attribute.
@@ -557,6 +586,9 @@ class _FieldDescriptorBuilder:
             metadata["relation_kind"] = relation_kind
         if filter_lookup is not None:
             metadata["filter_lookup"] = filter_lookup
+        if orm_field_kind is not None:
+            metadata["orm_field_kind"] = orm_field_kind
+            metadata["file_clearable"] = bool(file_clearable)
         self._descriptors[attribute_name] = FieldDescriptor(
             name=attribute_name,
             metadata=metadata,

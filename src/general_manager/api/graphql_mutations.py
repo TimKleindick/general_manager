@@ -19,6 +19,7 @@ from django.db.models import NOT_PROVIDED
 
 from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.uploads.graphql_types import UploadToken
 from general_manager.utils.type_checks import safe_issubclass
 from general_manager.utils.format_string import snake_to_camel
 from general_manager.api.graphql_errors import (
@@ -240,7 +241,9 @@ def create_write_fields(
         default = info["default"]
 
         fld: object
-        if safe_issubclass(typ, GeneralManager):
+        if info.get("orm_field_kind") in {"file", "image"}:
+            fld = UploadToken(required=req, default_value=default)
+        elif safe_issubclass(typ, GeneralManager):
             if name.endswith("_list"):
                 fld = graphene.List(graphene.ID, required=req, default_value=default)
             else:
