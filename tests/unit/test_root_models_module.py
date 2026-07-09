@@ -9,6 +9,7 @@ from general_manager.chat.models import (
     ChatPendingConfirmation,
 )
 from general_manager.search.models import SearchIndexState
+from general_manager.uploads.models import UploadIntent
 from general_manager.workflow.models import (
     WorkflowDeliveryAttempt,
     WorkflowEventRecord,
@@ -24,6 +25,7 @@ def test_root_models_module_exports_canonical_django_models() -> None:
         "ChatMessage",
         "ChatPendingConfirmation",
         "SearchIndexState",
+        "UploadIntent",
         "WorkflowDeliveryAttempt",
         "WorkflowEventRecord",
         "WorkflowExecutionRecord",
@@ -33,6 +35,7 @@ def test_root_models_module_exports_canonical_django_models() -> None:
     assert root_models.ChatMessage is ChatMessage
     assert root_models.ChatPendingConfirmation is ChatPendingConfirmation
     assert root_models.SearchIndexState is SearchIndexState
+    assert root_models.UploadIntent is UploadIntent
     assert root_models.WorkflowDeliveryAttempt is WorkflowDeliveryAttempt
     assert root_models.WorkflowEventRecord is WorkflowEventRecord
     assert root_models.WorkflowExecutionRecord is WorkflowExecutionRecord
