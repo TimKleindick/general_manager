@@ -219,13 +219,6 @@ class ProxyUploadAdapter:
         size: int | None = None,
     ) -> ObjectVersion:
         """Stream chunks through a bounded spool and save without overwriting."""
-        stage_marker = _stage_metadata_marker(stage_key)
-        if self._storage_exists(stage_marker):
-            raise _exception(
-                UploadTransferConflictError,
-                "The reserved staging identity marker is already occupied.",
-            )
-        self._require_conditional_creation(stage_key)
         with SpooledTemporaryFile(max_size=self._spool_memory_limit, mode="w+b") as raw:
             digest = hashlib.sha256()
             byte_count = 0
@@ -241,45 +234,65 @@ class ProxyUploadAdapter:
                     UploadStorageError,
                     "The staged upload size did not match.",
                 )
+            version = ObjectVersion(
+                version_id=None,
+                etag=None,
+                checksum_sha256=actual_checksum,
+                size=byte_count,
+                content_type=content_type,
+            )
+            claim_key = _stage_claim_marker(stage_key)
+            completed_key = _stage_metadata_marker(stage_key)
+            claim_identity = _stage_identity(version, state="claimed")
+            completed_identity = _stage_identity(version, state="completed")
+
+            if self._storage_exists(stage_key):
+                if self._marker_matches(
+                    claim_key,
+                    claim_identity,
+                ) and self._object_matches(stage_key, version):
+                    self._acquire_marker(completed_key, completed_identity)
+                    return version
+                raise _exception(
+                    UploadTransferConflictError,
+                    "The reserved staging key is already occupied.",
+                )
+            if self._storage_exists(completed_key):
+                raise _exception(
+                    UploadTransferConflictError,
+                    "The staged upload completion marker has no matching object.",
+                )
+
+            self._acquire_marker(claim_key, claim_identity)
+            if self._storage_exists(stage_key):
+                if self._object_matches(stage_key, version):
+                    self._acquire_marker(completed_key, completed_identity)
+                    return version
+                raise _exception(
+                    UploadTransferConflictError,
+                    "The reserved staging key is already occupied.",
+                )
+            try:
+                self._require_conditional_creation(stage_key)
+            except UploadTransferConflictError:
+                if self._object_matches(stage_key, version):
+                    self._acquire_marker(completed_key, completed_identity)
+                    return version
+                raise
             raw.seek(0)
             saved_key = self._storage_save(
                 stage_key,
                 File(cast(BufferedIOBase, raw), name=stage_key),
             )
-        if saved_key != stage_key:
-            self._storage_delete(saved_key)
-            raise _exception(
-                UploadTransferConflictError,
-                "The reserved staging key is already occupied.",
-            )
-        metadata = json.dumps(
-            {
-                "checksum_sha256": actual_checksum,
-                "content_type": content_type,
-                "size": byte_count,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        self._require_conditional_creation(stage_marker)
-        saved_marker = self._storage_save(
-            stage_marker,
-            ContentFile(metadata),
-        )
-        if saved_marker != stage_marker:
-            self._storage_delete(saved_marker)
-            self._storage_delete(stage_key)
-            raise _exception(
-                UploadTransferConflictError,
-                "The reserved staging identity marker is already occupied.",
-            )
-        return ObjectVersion(
-            version_id=None,
-            etag=None,
-            checksum_sha256=actual_checksum,
-            size=byte_count,
-            content_type=content_type,
-        )
+            if saved_key != stage_key:
+                self._storage_delete(saved_key)
+                if not self._object_matches(stage_key, version):
+                    raise _exception(
+                        UploadTransferConflictError,
+                        "The reserved staging key is already occupied.",
+                    )
+            self._acquire_marker(completed_key, completed_identity)
+            return version
 
     def inspect_staged(self, stage_key: str) -> ObjectVersion:
         with self._storage_open(stage_key) as staged:
@@ -410,6 +423,7 @@ class ProxyUploadAdapter:
         if version is None:
             self._storage_delete(stage_key)
             self._storage_delete(_stage_metadata_marker(stage_key))
+            self._storage_delete(_stage_claim_marker(stage_key))
             return
         storage = self.storage
         try:
@@ -433,6 +447,7 @@ class ProxyUploadAdapter:
         if deleted is not True:
             raise UploadStorageChangedError()
         self._storage_delete(_stage_metadata_marker(stage_key))
+        self._storage_delete(_stage_claim_marker(stage_key))
 
     def private_download_url(self, key: str, *, expires_in: int) -> str:
         del key, expires_in
@@ -507,7 +522,7 @@ class ProxyUploadAdapter:
         checksum, size = self._object_checksum(key)
         return checksum == version.checksum_sha256 and size == version.size
 
-    def _acquire_marker(self, key: str, identity: Mapping[str, str]) -> None:
+    def _acquire_marker(self, key: str, identity: Mapping[str, object]) -> None:
         if self._storage_exists(key):
             if self._marker_matches(key, identity):
                 return
@@ -569,7 +584,7 @@ class ProxyUploadAdapter:
     def _marker_matches(
         self,
         marker: str,
-        identity: Mapping[str, str],
+        identity: Mapping[str, object],
     ) -> bool:
         if not self._storage_exists(marker):
             return False
@@ -819,6 +834,24 @@ def _materialization_identity(
 def _stage_metadata_marker(key: str) -> str:
     identity = hashlib.sha256(key.encode("utf-8")).hexdigest()
     return f"gm-upload-stage-meta/{identity}.json"
+
+
+def _stage_claim_marker(key: str) -> str:
+    identity = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return f"gm-upload-stage-claim/{identity}.json"
+
+
+def _stage_identity(
+    version: ObjectVersion,
+    *,
+    state: str,
+) -> dict[str, object]:
+    return {
+        "checksum_sha256": version.checksum_sha256,
+        "content_type": version.content_type,
+        "size": version.size,
+        "state": state,
+    }
 
 
 def _safe_endpoint(value: str) -> str:
