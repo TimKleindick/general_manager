@@ -1,7 +1,7 @@
 """Root Django model exports for the GeneralManager app.
 
-Importing `general_manager.models` exposes the concrete chat, search, and workflow
-models that belong to this Django app. The classes are imported from their
+Importing `general_manager.models` exposes the concrete chat, search, upload, and
+workflow models that belong to this Django app. The classes are imported from their
 canonical submodules and re-exported for Django model discovery and stable
 root-module imports.
 
@@ -15,6 +15,7 @@ from general_manager.chat.models import (
     ChatPendingConfirmation,
 )
 from general_manager.search.models import SearchIndexState
+from general_manager.uploads.models import UploadIntent
 from general_manager.workflow.models import (
     WorkflowDeliveryAttempt,
     WorkflowEventRecord,
@@ -27,6 +28,7 @@ __all__: tuple[str, ...] = (
     "ChatMessage",
     "ChatPendingConfirmation",
     "SearchIndexState",
+    "UploadIntent",
     "WorkflowDeliveryAttempt",
     "WorkflowEventRecord",
     "WorkflowExecutionRecord",
