@@ -9,7 +9,12 @@ import pytest
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.manager.group_manager import GroupManager
-from tests.perf.support import Counter, PerfBudgets, capture_diagnostics
+from tests.perf.support import (
+    Counter,
+    DiagnosticObservation,
+    PerfBudgets,
+    capture_diagnostics,
+)
 
 pytestmark = pytest.mark.perf
 
@@ -251,8 +256,24 @@ def test_group_bucket_construction_work(
     def construct_group_bucket() -> GroupBucket[Any]:
         return GroupBucket(manager_class, ("group_key",), source_bucket)
 
+    diagnostic_captures = Counter()
+    original_capture_diagnostics = capture_diagnostics
+
+    def counted_capture_diagnostics(
+        callback: Callable[[], GroupBucket[Any]],
+    ) -> DiagnosticObservation[GroupBucket[Any]]:
+        diagnostic_captures.increment()
+        return original_capture_diagnostics(callback)
+
+    monkeypatch.setattr(
+        "tests.perf.test_group_bucket_perf.capture_diagnostics",
+        counted_capture_diagnostics,
+    )
+    diagnostics_enabled = (
+        expected_groups == ROW_COUNT and pytestconfig.getoption("verbose") >= 2
+    )
     counters.reset()
-    if expected_groups == ROW_COUNT and pytestconfig.getoption("verbose") >= 2:
+    if diagnostics_enabled:
         diagnostic = capture_diagnostics(construct_group_bucket)
         bucket = diagnostic.result
         observations = counters.snapshot()
@@ -277,37 +298,7 @@ def test_group_bucket_construction_work(
     rows_per_group = ROW_COUNT // expected_groups
     assert all(group._data.count() == rows_per_group for group in bucket)
     assert counters.snapshot() == observations
+    assert diagnostic_captures.value == int(diagnostics_enabled)
 
     for name, observed in zip(PERF_NAMES[expected_groups], observations, strict=True):
         perf_budgets.assert_observation(name, observed)
-
-
-def test_default_verbosity_skips_group_diagnostics(
-    source_managers: list[GroupPerfManager],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class DefaultVerbosityConfig:
-        @staticmethod
-        def getoption(name: str) -> int:
-            assert name == "verbose"
-            return 0
-
-    def fail_capture_diagnostics(callback: Callable[[], object]) -> Any:
-        pytest.fail("capture_diagnostics ran at default verbosity")
-
-    monkeypatch.setattr(
-        "tests.perf.test_group_bucket_perf.capture_diagnostics",
-        fail_capture_diagnostics,
-    )
-    names = PERF_NAMES[ROW_COUNT]
-    budgets = PerfBudgets(
-        dict(zip(names, (ROW_COUNT, ROW_COUNT, ROW_COUNT), strict=True))
-    )
-
-    test_group_bucket_construction_work(
-        ROW_COUNT,
-        source_managers,
-        monkeypatch,
-        budgets,
-        cast(pytest.Config, DefaultVerbosityConfig()),
-    )
