@@ -14,12 +14,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, cast
 
 import graphene
+from graphql import GraphQLError
 
 from django.db.models import NOT_PROVIDED
+from django.db import models
+from django.core.exceptions import FieldDoesNotExist
 
 from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.uploads.errors import UploadError, stable_upload_error
 from general_manager.uploads.graphql_types import UploadToken
+from general_manager.uploads.types import UploadOperation
 from general_manager.utils.type_checks import safe_issubclass
 from general_manager.utils.format_string import snake_to_camel
 from general_manager.api.graphql_errors import (
@@ -50,6 +55,66 @@ class _EditableGrapheneField(Protocol):
 
 
 type GrapheneFieldMap = dict[str, _EditableGrapheneField]
+
+
+def _preflight_mutation_uploads(
+    *,
+    info: GraphQLResolveInfo,
+    general_manager_class: type[GeneralManager],
+    operation: UploadOperation,
+    target_id: object | None,
+    file_field_names: tuple[str, ...],
+    kwargs: MutationPayload,
+) -> None:
+    """Convert file tokens before manager permission and observability hooks."""
+
+    graphql_error: GraphQLError | None = None
+    try:
+        # Import lazily because GraphQL mutation classes are imported while the
+        # Django app registry is still being populated.
+        from general_manager.uploads.services import preflight_upload_tokens
+
+        preflight_upload_tokens(
+            user=getattr(info.context, "user", None),
+            manager_class=general_manager_class,
+            operation=operation,
+            target_id=target_id,
+            file_field_names=file_field_names,
+            values=kwargs,
+        )
+    except UploadError as error:
+        public_error = stable_upload_error(error)
+        graphql_error = GraphQLError(
+            public_error.default_message,
+            extensions={"code": public_error.code},
+        )
+
+    if graphql_error is not None:
+        # Raising outside the handler keeps service errors and their frames out
+        # of the GraphQL exception chain; ``kwargs`` is already token-free.
+        raise graphql_error
+
+
+def _file_token_field_names(
+    interface_cls: type[InterfaceBase],
+    write_fields: GrapheneFieldMap,
+) -> tuple[str, ...]:
+    """Return generated UploadToken inputs backed by actual ORM file fields."""
+
+    model = getattr(interface_cls, "_model", None)
+    if not isinstance(model, type) or not issubclass(model, models.Model):
+        return ()
+    result: list[str] = []
+    for name, field_value in write_fields.items():
+        if not isinstance(field_value, UploadToken) or field_value.editable is not True:
+            continue
+        try:
+            model_field = model._meta.get_field(name)
+        except (FieldDoesNotExist, LookupError):
+            continue
+        if isinstance(model_field, models.FileField) and model_field.editable is True:
+            result.append(name)
+    return tuple(sorted(result))
 
 
 class _ManagerCreateMethod(Protocol):
@@ -294,6 +359,12 @@ def generate_create_mutation_class(
     )
     if not interface_cls:
         return None
+    write_fields = create_write_fields(interface_cls)
+    file_field_names = tuple(
+        name
+        for name in _file_token_field_names(interface_cls, write_fields)
+        if name not in generalManagerClass.Interface.input_fields
+    )
 
     def create_mutation(
         self: object,
@@ -306,6 +377,14 @@ def generate_create_mutation_class(
                 for field_name, value in kwargs.items()
                 if value is not NOT_PROVIDED
             }
+            _preflight_mutation_uploads(
+                info=info,
+                general_manager_class=generalManagerClass,
+                operation=UploadOperation.CREATE,
+                target_id=None,
+                file_field_names=file_field_names,
+                kwargs=kwargs,
+            )
             kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
             history_comment = _pop_history_comment(kwargs)
             create = cast(_ManagerCreateMethod, generalManagerClass.create)
@@ -315,6 +394,8 @@ def generate_create_mutation_class(
             else:
                 create_kwargs["history_comment"] = history_comment
                 instance = create(**create_kwargs)
+        except GraphQLError:
+            raise
         except HANDLED_MANAGER_ERRORS as error:
             raise handle_graph_ql_error(
                 error,
@@ -335,7 +416,7 @@ def generate_create_mutation_class(
                 (),
                 {
                     field_name: field
-                    for field_name, field in create_write_fields(interface_cls).items()
+                    for field_name, field in write_fields.items()
                     if field_name not in generalManagerClass.Interface.input_fields
                     and field.editable
                 },
@@ -372,6 +453,8 @@ def generate_update_mutation_class(
     )
     if not interface_cls:
         return None
+    write_fields = create_write_fields(interface_cls, require_fields=False)
+    file_field_names = _file_token_field_names(interface_cls, write_fields)
 
     def update_mutation(
         self: object,
@@ -387,6 +470,14 @@ def generate_update_mutation_class(
                 for field_name, value in kwargs.items()
                 if value is not NOT_PROVIDED
             }
+            _preflight_mutation_uploads(
+                info=info,
+                general_manager_class=generalManagerClass,
+                operation=UploadOperation.UPDATE,
+                target_id=manager_id,
+                file_field_names=file_field_names,
+                kwargs=kwargs,
+            )
             kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
             history_comment = _pop_history_comment(kwargs)
             update = cast(
@@ -398,6 +489,8 @@ def generate_update_mutation_class(
             else:
                 update_kwargs["history_comment"] = history_comment
                 instance = update(**update_kwargs)
+        except GraphQLError:
+            raise
         except HANDLED_MANAGER_ERRORS as error:
             raise handle_graph_ql_error(
                 error,
@@ -420,10 +513,7 @@ def generate_update_mutation_class(
                     "id": graphene.ID(required=True),
                     **{
                         field_name: field
-                        for field_name, field in create_write_fields(
-                            interface_cls,
-                            require_fields=False,
-                        ).items()
+                        for field_name, field in write_fields.items()
                         if field.editable
                     },
                 },

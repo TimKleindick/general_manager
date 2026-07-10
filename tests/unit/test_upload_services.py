@@ -962,15 +962,14 @@ class BeginFileUploadTests(TestCase):
         finally:
             UploadProfileInterface.database = None
 
-    def test_effective_manager_database_uses_django_write_router(self) -> None:
-        with (
-            patch(
-                "general_manager.uploads.services.router.db_for_write",
-                return_value="replica",
-            ),
-            pytest.raises(UploadDatabaseMismatchError),
+    def test_falsey_manager_database_ignores_django_write_router(self) -> None:
+        with patch(
+            "django.db.router.db_for_write",
+            return_value="replica",
         ):
-            begin_file_upload(user=self.user, request=valid_request())
+            result = begin_file_upload(user=self.user, request=valid_request())
+
+        assert UploadIntent.objects.filter(pk=result.intent_id).exists()
 
     @override_settings(
         GENERAL_MANAGER={
