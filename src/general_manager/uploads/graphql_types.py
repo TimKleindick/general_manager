@@ -16,6 +16,7 @@ from uuid import UUID
 
 from django.conf import settings as django_settings
 from django.core import signing
+from django.core.exceptions import FieldDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, models
 from django.utils import timezone
 from graphql import Undefined
@@ -707,7 +708,7 @@ def create_stored_file_value(
         return None
     try:
         model_field = model._meta.get_field(field_name)
-    except (LookupError, AttributeError):
+    except (FieldDoesNotExist, LookupError, AttributeError):
         return None
     if not isinstance(model_field, models.FileField):
         return None

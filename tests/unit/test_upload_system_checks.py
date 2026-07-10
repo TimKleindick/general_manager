@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import ClassVar, Never
 
 import pytest
 
@@ -12,10 +12,15 @@ from django.core.checks import Error
 from django.core.files.storage import Storage
 from django.db import models
 
-from general_manager.uploads.config import FileUploadPolicy
+from general_manager.uploads.config import (
+    FileUploadConfigurationError,
+    FileUploadPolicy,
+)
 from general_manager.uploads import services
 from general_manager.uploads.checks import (
     _AdapterCapabilities,
+    _policy_is_safe,
+    _static_adapter_capabilities,
     register_upload_checks,
     run_upload_checks,
 )
@@ -55,7 +60,7 @@ def test_system_check_rejects_disabled_uploads_with_editable_orm_file_field(
 ) -> None:
     settings.GENERAL_MANAGER = {"FILE_UPLOADS": {"ENABLED": False}}
     with patch(
-        "general_manager.uploads.checks.services._resolve_file_field",
+        "general_manager.uploads.checks.services.resolve_file_field",
         return_value=(models.Model, models.ImageField()),
     ):
         errors = run_upload_checks(managers=(_FakeManager,))
@@ -161,7 +166,7 @@ def test_system_check_rejects_malformed_mime_extension_and_image_policy(
 
     with (
         patch(
-            "general_manager.uploads.checks.services._resolve_file_field",
+            "general_manager.uploads.checks.services.resolve_file_field",
             return_value=(models.Model, models.ImageField()),
         ),
         patch(
@@ -180,7 +185,7 @@ def test_system_check_rejects_missing_finalization_and_public_capability(
     _enabled(settings)
     with (
         patch(
-            "general_manager.uploads.checks.services._resolve_file_field",
+            "general_manager.uploads.checks.services.resolve_file_field",
             return_value=(models.Model, models.ImageField()),
         ),
         patch(
@@ -200,7 +205,7 @@ def test_system_check_sanitizes_hostile_adapter_failure(settings) -> None:
     hostile_value = "https://user:password@example.invalid/?X-Amz-Signature=secret"
     with (
         patch(
-            "general_manager.uploads.checks.services._resolve_file_field",
+            "general_manager.uploads.checks.services.resolve_file_field",
             return_value=(models.Model, models.ImageField()),
         ),
         patch(
@@ -244,7 +249,7 @@ def test_system_check_never_calls_s3_or_storage_network_capabilities(settings) -
             fields: ClassVar = {"avatar": FileUploadPolicy(public=False)}
 
     with patch(
-        "general_manager.uploads.checks.services._resolve_file_field",
+        "general_manager.uploads.checks.services.resolve_file_field",
         return_value=(models.Model, models.ImageField(storage=S3LikeStorage())),
     ):
         run_upload_checks(managers=(PrivateManager,))
@@ -252,7 +257,7 @@ def test_system_check_never_calls_s3_or_storage_network_capabilities(settings) -
     assert calls == []
 
 
-def test_system_check_does_not_reject_valid_callable_adapter_factory(settings) -> None:
+def test_system_check_rejects_undeclared_callable_adapter_factory(settings) -> None:
     _enabled(settings)
 
     class PrivateManager(_FakeManager):
@@ -262,17 +267,18 @@ def test_system_check_does_not_reject_valid_callable_adapter_factory(settings) -
     factory = lambda storage: SimpleNamespace(storage=storage)  # noqa: E731
     with (
         patch(
-            "general_manager.uploads.checks.services._resolve_file_field",
+            "general_manager.uploads.checks.services.resolve_file_field",
             return_value=(models.Model, models.ImageField()),
         ),
         patch(
-            "general_manager.uploads.checks.services.upload_adapter_registry._resolve_explicit_factory",
+            "general_manager.uploads.checks.services.upload_adapter_registry.explicit_factory_for",
             return_value=factory,
         ),
     ):
         errors = run_upload_checks(managers=(PrivateManager,))
 
-    assert "general_manager.uploads.E004" not in {error.id for error in errors}
+    assert "general_manager.uploads.E004" in {error.id for error in errors}
+    assert "general_manager.uploads.W001" in {error.id for error in errors}
 
 
 def test_system_check_does_not_evaluate_hostile_storage_descriptors(settings) -> None:
@@ -293,7 +299,7 @@ def test_system_check_does_not_evaluate_hostile_storage_descriptors(settings) ->
             fields: ClassVar = {"avatar": FileUploadPolicy(public=False)}
 
     with patch(
-        "general_manager.uploads.checks.services._resolve_file_field",
+        "general_manager.uploads.checks.services.resolve_file_field",
         return_value=(models.Model, models.ImageField(storage=HostileS3())),
     ):
         run_upload_checks(managers=(PrivateManager,))
@@ -315,7 +321,7 @@ def test_system_check_warns_when_s3_direct_security_is_not_static(settings) -> N
             fields: ClassVar = {"avatar": FileUploadPolicy(public=False)}
 
     with patch(
-        "general_manager.uploads.checks.services._resolve_file_field",
+        "general_manager.uploads.checks.services.resolve_file_field",
         return_value=(models.Model, models.ImageField(storage=S3WithoutSigV4())),
     ):
         errors = run_upload_checks(managers=(PrivateManager,))
@@ -347,7 +353,7 @@ def test_system_check_rejects_public_builtin_s3_with_custom_domain(settings) -> 
         object_parameters: ClassVar[dict[str, object]] = {}
 
     with patch(
-        "general_manager.uploads.checks.services._resolve_file_field",
+        "general_manager.uploads.checks.services.resolve_file_field",
         return_value=(
             models.Model,
             models.ImageField(storage=PublicCustomDomainS3()),
@@ -375,8 +381,8 @@ def test_system_check_rejects_malformed_unmatched_registration(settings) -> None
     registrations = {Storage: "not-callable"}
     with patch.object(
         services.upload_adapter_registry,
-        "_registrations",
-        registrations,
+        "registrations_snapshot",
+        return_value=registrations,
     ):
         errors = run_upload_checks(managers=())
 
@@ -400,11 +406,11 @@ def test_system_check_accepts_static_public_factory_capability(settings) -> None
 
     with (
         patch(
-            "general_manager.uploads.checks.services._resolve_file_field",
+            "general_manager.uploads.checks.services.resolve_file_field",
             return_value=(models.Model, models.ImageField()),
         ),
         patch(
-            "general_manager.uploads.checks.services.upload_adapter_registry._resolve_explicit_factory",
+            "general_manager.uploads.checks.services.upload_adapter_registry.explicit_factory_for",
             return_value=PropertyAdapterFactory(),
         ),
     ):
@@ -429,14 +435,291 @@ def test_system_check_rejects_class_factory_identity_runtime_would_reject(
     InvalidAdapterFactory.adapter_version = adapter_version
     with (
         patch(
-            "general_manager.uploads.checks.services._resolve_file_field",
+            "general_manager.uploads.checks.services.resolve_file_field",
             return_value=(models.Model, models.ImageField()),
         ),
         patch(
-            "general_manager.uploads.checks.services.upload_adapter_registry._resolve_explicit_factory",
+            "general_manager.uploads.checks.services.upload_adapter_registry.explicit_factory_for",
             return_value=InvalidAdapterFactory,
         ),
     ):
         errors = run_upload_checks(managers=(_FakeManager,))
 
     assert "general_manager.uploads.E004" in {error.id for error in errors}
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    (
+        (
+            FileUploadConfigurationError("hostile configuration detail"),
+            "File upload settings are invalid.",
+        ),
+        (
+            RuntimeError("hostile runtime detail"),
+            "File upload settings could not be inspected.",
+        ),
+    ),
+)
+def test_system_check_sanitizes_settings_inspection_failures(
+    settings, failure: Exception, message: str
+) -> None:
+    _enabled(settings)
+
+    with patch(
+        "general_manager.uploads.checks.get_file_upload_settings",
+        side_effect=failure,
+    ):
+        errors = run_upload_checks(managers=())
+
+    assert [(error.id, error.msg) for error in errors] == [
+        ("general_manager.uploads.E000", message)
+    ]
+
+
+def test_system_check_uses_registry_and_sanitizes_registry_failures(settings) -> None:
+    _enabled(settings)
+
+    class BrokenRegistry:
+        def values(self):
+            raise RuntimeError("registry-secret")
+
+    with patch("general_manager.api.graphql.GraphQL.manager_registry", {}):
+        assert run_upload_checks() == []
+    with patch(
+        "general_manager.api.graphql.GraphQL.manager_registry", BrokenRegistry()
+    ):
+        errors = run_upload_checks()
+
+    assert [error.id for error in errors] == ["general_manager.uploads.E003"]
+    assert "registry-secret" not in str(errors[0])
+
+    settings.GENERAL_MANAGER = {"FILE_UPLOADS": {"ENABLED": False}}
+    with patch(
+        "general_manager.api.graphql.GraphQL.manager_registry", BrokenRegistry()
+    ):
+        assert run_upload_checks() == []
+
+
+def test_disabled_upload_check_ignores_unprovable_manager_metadata(settings) -> None:
+    settings.GENERAL_MANAGER = {"FILE_UPLOADS": {"ENABLED": False}}
+
+    class NoInterface:
+        pass
+
+    class RaisingInterface:
+        @classmethod
+        def get_attribute_types(cls):
+            raise RuntimeError("metadata-secret")
+
+    class RaisingManager:
+        Interface = RaisingInterface
+
+    class NonMappingInterface:
+        @classmethod
+        def get_attribute_types(cls):
+            return []
+
+    class NonMappingManager:
+        Interface = NonMappingInterface
+
+    with patch(
+        "general_manager.uploads.checks.services.resolve_file_field",
+        side_effect=RuntimeError("field-secret"),
+    ):
+        errors = run_upload_checks(
+            managers=(NoInterface, RaisingManager, NonMappingManager, _FakeManager)
+        )
+
+    assert errors == []
+
+
+@pytest.mark.parametrize("metadata", [RuntimeError("metadata-secret"), []])
+def test_enabled_upload_check_rejects_invalid_manager_metadata(
+    settings, metadata: object
+) -> None:
+    _enabled(settings)
+
+    class Interface:
+        @classmethod
+        def get_attribute_types(cls):
+            if isinstance(metadata, Exception):
+                raise metadata
+            return metadata
+
+    class Manager:
+        pass
+
+    Manager.Interface = Interface
+    errors = run_upload_checks(managers=(Manager,))
+
+    assert [error.id for error in errors] == ["general_manager.uploads.E003"]
+    assert "metadata-secret" not in str(errors[0])
+
+
+def test_enabled_upload_check_handles_empty_and_malformed_policy_declarations(
+    settings,
+) -> None:
+    _enabled(settings)
+
+    class EmptyInterface:
+        @classmethod
+        def get_attribute_types(cls):
+            return {}
+
+    class EmptyManager:
+        Interface = EmptyInterface
+
+        class FileUploads:
+            fields = None
+
+    class MalformedManager:
+        Interface = EmptyInterface
+
+        class FileUploads:
+            fields: ClassVar[list[object]] = []
+
+    class NoInterfaceManager:
+        pass
+
+    assert run_upload_checks(managers=(NoInterfaceManager,)) == []
+    assert run_upload_checks(managers=(EmptyManager,)) == []
+    errors = run_upload_checks(managers=(MalformedManager,))
+    assert [error.id for error in errors] == ["general_manager.uploads.E003"]
+
+
+def test_enabled_upload_check_rejects_database_and_non_file_field_mismatches(
+    settings,
+) -> None:
+    _enabled(settings)
+
+    class OtherDatabaseInterface(_FakeInterface):
+        database = "analytics"
+
+    class OtherDatabaseManager(_FakeManager):
+        Interface = OtherDatabaseInterface
+
+        class FileUploads:
+            fields: ClassVar = {"avatar": FileUploadPolicy(public=False)}
+
+    with patch(
+        "general_manager.uploads.checks.services.resolve_file_field",
+        return_value=(models.Model, models.CharField()),
+    ):
+        errors = run_upload_checks(managers=(OtherDatabaseManager,))
+
+    assert {error.id for error in errors} == {
+        "general_manager.uploads.E001",
+        "general_manager.uploads.E003",
+    }
+
+
+def test_system_check_rejects_malformed_adapter_registration_metadata(
+    settings,
+) -> None:
+    _enabled(settings)
+
+    class CallableFactory:
+        def __init__(self, capabilities: object) -> None:
+            self.upload_adapter_capabilities = capabilities
+
+        def __call__(self, _storage: Storage) -> object:
+            return object()
+
+    registrations = (
+        [],
+        {Storage: CallableFactory({"adapter_id": "missing-required-keys"})},
+        {
+            Storage: CallableFactory(
+                {
+                    "adapter_id": "bad/id",
+                    "adapter_version": 1,
+                    "finalization": True,
+                    "public": False,
+                }
+            )
+        },
+    )
+    for registration in registrations:
+        with patch.object(
+            services.upload_adapter_registry,
+            "registrations_snapshot",
+            return_value=registration,
+        ):
+            errors = run_upload_checks(managers=())
+
+        assert [error.id for error in errors] == ["general_manager.uploads.E004"]
+
+
+def test_static_s3_endpoint_validation_accepts_https_and_rejects_unknown_values() -> (
+    None
+):
+    class Client:
+        meta = SimpleNamespace(config=SimpleNamespace(signature_version="s3v4"))
+
+    class S3Storage(Storage):
+        _gm_s3_storage = True
+        versioning_enabled = True
+        supports_conditional_copy = True
+        upload_staging_prefix_private = True
+        s3_client = Client()
+
+    secure = S3Storage()
+    secure.endpoint_url = "https://s3.example.test"
+    unknown = S3Storage()
+    unknown.endpoint_url = object()
+
+    assert _static_adapter_capabilities(secure).uncertain is False
+    assert _static_adapter_capabilities(unknown).uncertain is True
+
+
+def test_builtin_proxy_adapter_capabilities_are_detected_without_storage_io() -> None:
+    calls: list[str] = []
+
+    class NoIOStorage(Storage):
+        def _fail(self, operation: str) -> Never:
+            calls.append(operation)
+            raise AssertionError
+
+        def _open(self, name: str, mode: str = "rb") -> object:
+            del name, mode
+            return self._fail("open")
+
+        def _save(self, name: str, content: object) -> str:
+            del name, content
+            self._fail("save")
+
+        def delete(self, name: str) -> None:
+            del name
+            self._fail("delete")
+
+        def exists(self, name: str) -> bool:
+            del name
+            return self._fail("exists")
+
+        def size(self, name: str) -> int:
+            del name
+            return self._fail("size")
+
+        def url(self, name: str) -> str:
+            del name
+            return self._fail("url")
+
+    capabilities = _static_adapter_capabilities(NoIOStorage())
+
+    assert capabilities.identity_valid is True
+    assert capabilities.finalization is True
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("policy", "image"),
+    (
+        (FileUploadPolicy(allowed_content_types=("text/plain",)), True),
+        (FileUploadPolicy(allowed_extensions=("../unsafe",)), False),
+    ),
+)
+def test_policy_validation_rejects_semantically_unsafe_allowlists(
+    policy: FileUploadPolicy, image: bool
+) -> None:
+    assert _policy_is_safe(policy, image=image) is False

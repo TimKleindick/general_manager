@@ -8,6 +8,7 @@ from typing import ClassVar
 from unittest.mock import Mock
 from unittest.mock import patch
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import pytest
 from django.core.files.storage import Storage
@@ -19,8 +20,14 @@ from django.utils import timezone
 from general_manager.uploads.graphql_types import (
     StoredFile,
     StoredImage,
+    _final_object_version,
+    _safe_download_url,
+    _safe_exact_public_url,
     create_stored_file_value,
+    decode_local_download_capability,
+    issue_local_download_capability,
 )
+from general_manager.uploads import graphql_types
 from general_manager.uploads.adapters import ProxyUploadAdapter, UploadAdapterRegistry
 from general_manager.uploads.config import FileUploadPolicy
 from general_manager.uploads import services
@@ -210,6 +217,217 @@ def test_empty_file_resolves_to_null() -> None:
     )
 
     assert value is None
+
+
+def test_local_download_capability_round_trips_and_redacts_binding() -> None:
+    now = timezone.now()
+    intent_id = UUID("f5e592d1-29e8-4302-a6c9-cb72c30ae02a")
+
+    issued = issue_local_download_capability(
+        manager_name="ResolverManager",
+        object_id="7",
+        field_name="document",
+        current_key="documents/private-report.pdf",
+        expires_in=60,
+        intent_id=intent_id,
+        now=lambda: now,
+    )
+
+    assert tuple(issued) == (issued.url, now + timedelta(seconds=60))
+    assert issued[0] == issued.url
+    assert "private-report" not in repr(issued)
+    payload = decode_local_download_capability(
+        issued.url.rsplit("/", 1)[-1],
+        max_age=60,
+        now=lambda: now,
+    )
+    assert payload is not None
+    assert payload["i"] == str(intent_id)
+    assert payload["k"] != "documents/private-report.pdf"
+
+
+@pytest.mark.parametrize(
+    ("manager_name", "expires_in"),
+    [("", 60), ("ResolverManager", 0), ("ResolverManager", True)],
+)
+def test_local_download_capability_rejects_invalid_binding_or_ttl(
+    manager_name: str,
+    expires_in: int,
+) -> None:
+    with pytest.raises(ValueError):
+        issue_local_download_capability(
+            manager_name=manager_name,
+            object_id="7",
+            field_name="document",
+            current_key="documents/report.pdf",
+            expires_in=expires_in,
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {"v": 1},
+        {
+            "v": 1,
+            "m": "ResolverManager",
+            "o": "7",
+            "f": "document",
+            "k": "a" * 64,
+            "i": 7,
+            "e": 4_102_444_800,
+        },
+        {
+            "v": 1,
+            "m": "ResolverManager",
+            "o": "7",
+            "f": "document",
+            "k": "a" * 64,
+            "i": "not-a-uuid",
+            "e": 4_102_444_800,
+        },
+    ],
+)
+def test_local_download_capability_rejects_malformed_signed_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: object,
+) -> None:
+    monkeypatch.setattr(
+        graphql_types.signing,
+        "loads",
+        lambda *_args, **_kwargs: payload,
+    )
+
+    assert (
+        decode_local_download_capability(
+            "signed-value",
+            max_age=60,
+            now=lambda: timezone.now(),
+        )
+        is None
+    )
+
+
+def test_local_download_capability_rejects_empty_or_bad_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert decode_local_download_capability("", max_age=60) is None
+
+    def reject_signature(*_args: object, **_kwargs: object) -> object:
+        raise graphql_types.signing.BadSignature
+
+    monkeypatch.setattr(graphql_types.signing, "loads", reject_signature)
+    assert decode_local_download_capability("tampered", max_age=60) is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        None,
+        "https://cdn.test/file#fragment",
+        "/relative/file?credential=secret",
+        "file:///tmp/report.pdf",
+    ],
+)
+def test_download_url_validator_rejects_unsafe_adapter_output(url: object) -> None:
+    with pytest.raises(ValueError):
+        _safe_download_url(url, allow_relative=True)
+
+
+@pytest.mark.parametrize(
+    ("url", "version_id"),
+    [
+        (None, "v1"),
+        ("https://cdn.test/file?versionId=v1", None),
+        ("https://cdn.test/file?versionId", "v1"),
+    ],
+)
+def test_exact_public_url_validator_rejects_malformed_version_binding(
+    url: object,
+    version_id: str | None,
+) -> None:
+    version = ObjectVersion(
+        version_id=version_id,
+        etag=None,
+        checksum_sha256="a" * 64,
+        size=1,
+        content_type="application/pdf",
+    )
+
+    with pytest.raises(ValueError):
+        _safe_exact_public_url(url, version=version)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {
+            "version_id": None,
+            "etag": None,
+            "checksum_sha256": "bad",
+            "size": 1,
+            "content_type": "application/pdf",
+        },
+        {
+            "version_id": "bad\nidentity",
+            "etag": None,
+            "checksum_sha256": "a" * 64,
+            "size": 1,
+            "content_type": "application/pdf",
+        },
+        {
+            "version_id": None,
+            "etag": None,
+            "checksum_sha256": "a" * 64,
+            "size": 1,
+            "content_type": "invalid media type",
+        },
+        {
+            "version_id": None,
+            "etag": None,
+            "checksum_sha256": "a" * 64,
+            "size": -1,
+            "content_type": "application/pdf",
+        },
+    ],
+)
+def test_retained_version_validator_rejects_malformed_storage_identity(
+    metadata: dict[str, object],
+) -> None:
+    assert _final_object_version(SimpleNamespace(final_object_version=metadata)) is None
+
+
+def test_stored_file_value_rejects_invalid_manager_and_field_bindings() -> None:
+    row = ResolverRecord(id=7, document="documents/report.pdf")
+
+    assert (
+        create_stored_file_value(
+            object(),
+            _info(),
+            field_name="document",
+            manager_name="MissingManager",
+        )
+        is None
+    )
+    assert (
+        create_stored_file_value(
+            ResolverManager(row),
+            _info(),
+            field_name="missing",
+            manager_name="ResolverManager",
+        )
+        is None
+    )
+    assert (
+        create_stored_file_value(
+            ResolverManager(row),
+            _info(),
+            field_name="id",
+            manager_name="ResolverManager",
+        )
+        is None
+    )
 
 
 @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": False}})

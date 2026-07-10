@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import tempfile
 from threading import Barrier, Event
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 from uuid import uuid4
@@ -20,7 +21,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
 from django.core.files.storage import FileSystemStorage
-from django.db import close_old_connections, models
+from django.db import OperationalError, close_old_connections, models
 from django.http import HttpResponse
 from django.test import RequestFactory, override_settings
 from django.utils import timezone
@@ -1106,3 +1107,473 @@ def test_lease_is_bounded_by_intent_expiry_and_renewed_with_compare_and_swap(
     assert renewed is not None
     assert renewed.lease_expires_at <= renewable.intent.expires_at
     assert views._renew_transfer_lease(claimed) is None
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_rate_counter_recovers_from_eviction_and_sanitizes_cache_failures() -> None:
+    from general_manager.uploads import views
+
+    with (
+        patch.object(views.cache, "add", side_effect=[False, True]),
+        patch.object(views.cache, "incr", side_effect=ValueError("evicted")),
+    ):
+        assert views._increment_rate_counter("key", window_seconds=60) == 1
+
+    with patch.object(views.cache, "add", side_effect=RuntimeError("cache-password")):
+        with pytest.raises(views._TransferFailure) as failure:
+            views._increment_rate_counter("key", window_seconds=60)
+
+    assert failure.value.error.code == "UPLOAD_STORAGE_ERROR"
+    assert "cache-password" not in failure.value.error.message
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_rate_limit_sanitizes_backend_lookup_and_enforces_global_budget() -> None:
+    from general_manager.uploads import views
+
+    class BrokenCaches:
+        def __getitem__(self, _alias: str) -> object:
+            raise RuntimeError("backend-password")
+
+    with patch.object(views, "caches", BrokenCaches()):
+        with pytest.raises(views._TransferFailure) as unavailable:
+            views._enforce_transfer_rate_limit(1, FileUploadSettings(enabled=True))
+    assert unavailable.value.error.code == "UPLOAD_STORAGE_ERROR"
+    assert "backend-password" not in unavailable.value.error.message
+
+    settings = FileUploadSettings(
+        enabled=True,
+        max_transfer_attempts_per_user=10,
+        max_transfer_attempts_global=1,
+    )
+    with patch.object(views, "_increment_rate_counter", side_effect=[1, 2]):
+        with pytest.raises(views._TransferFailure) as limited:
+            views._enforce_transfer_rate_limit(1, settings)
+    assert limited.value.error.code == "UPLOAD_RATE_LIMITED"
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_intent_query_failures_map_to_stable_storage_errors(
+    owner: object,
+    pending_upload: Callable[..., PendingUpload],
+) -> None:
+    from general_manager.uploads import views
+
+    upload = pending_upload()
+    with patch.object(
+        views.UploadIntent.objects, "using", side_effect=RuntimeError("db-password")
+    ):
+        with pytest.raises(views._TransferFailure) as lookup:
+            views._owned_intent(upload.intent.id, owner.pk)
+    with patch.object(
+        views.UploadIntent.objects,
+        "using",
+        side_effect=RuntimeError("expiry-password"),
+    ):
+        with pytest.raises(views._TransferFailure) as expiry:
+            views._mark_expired(upload.intent, owner.pk, at=timezone.now())
+
+    assert lookup.value.error.code == "UPLOAD_STORAGE_ERROR"
+    assert expiry.value.error.code == "UPLOAD_STORAGE_ERROR"
+    assert "db-password" not in lookup.value.error.message
+    assert "expiry-password" not in expiry.value.error.message
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_transfer_lifecycle_database_failures_are_fail_closed_or_bounded(
+    owner: object,
+    pending_upload: Callable[..., PendingUpload],
+) -> None:
+    from general_manager.uploads import views
+
+    upload = pending_upload()
+    claim = views.TransferClaim(
+        intent_id=upload.intent.id,
+        owner_pk=owner.pk,
+        lease_expires_at=timezone.now(),
+        intent_expires_at=timezone.now() + timedelta(minutes=1),
+        base_stage_key=upload.intent.staging_key,
+        stage_key=f"{upload.intent.staging_key}.proxy-attempt-1",
+        attempt_number=1,
+    )
+    version = ObjectVersion(
+        version_id=None,
+        etag=None,
+        checksum_sha256=hashlib.sha256(b"abc").hexdigest(),
+        size=3,
+        content_type="image/png",
+    )
+
+    with patch.object(
+        views.UploadIntent.objects, "using", side_effect=RuntimeError("db-password")
+    ):
+        with pytest.raises(views._TransferFailure) as renewal:
+            views._renew_transfer_lease(claim)
+        with pytest.raises(views._TransferFailure) as completion:
+            views._complete_transfer(claim, version=version, uploaded_at=timezone.now())
+        views._release_unstarted_transfer(claim)
+
+    assert renewal.value.error.code == "UPLOAD_STORAGE_ERROR"
+    assert completion.value.error.code == "UPLOAD_STORAGE_ERROR"
+    assert "db-password" not in renewal.value.error.message
+    assert "db-password" not in completion.value.error.message
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_claim_transfer_retries_sqlite_busy_with_bounded_backoff() -> None:
+    from general_manager.uploads import views
+
+    recovered = object()
+    with (
+        patch.object(
+            views,
+            "_claim_transfer_once",
+            side_effect=[OperationalError("database is locked"), recovered],
+        ),
+        patch.object(views, "_is_sqlite_busy_error", return_value=True),
+        patch.object(views.time, "monotonic", side_effect=[10.0, 10.1]),
+        patch.object(views.secrets, "randbelow", return_value=0),
+        patch.object(views.time, "sleep") as sleep,
+    ):
+        result = views._claim_transfer(uuid4(), 1)
+
+    assert result is recovered
+    sleep.assert_called_once()
+    delay = sleep.call_args.args[0]
+    assert 0 < delay <= views._SQLITE_BUSY_MAX_DELAY_SECONDS
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_claim_transfer_stops_on_non_busy_or_expired_retry_budget() -> None:
+    from general_manager.uploads import views
+
+    error = OperationalError("disk I/O failure")
+    with (
+        patch.object(views, "_claim_transfer_once", side_effect=error),
+        patch.object(views, "_is_sqlite_busy_error", return_value=False),
+    ):
+        with pytest.raises(views._TransferFailure) as non_busy:
+            views._claim_transfer(uuid4(), 1)
+    assert non_busy.value.error.code == "UPLOAD_STORAGE_ERROR"
+
+    with (
+        patch.object(views, "_claim_transfer_once", side_effect=error),
+        patch.object(views, "_is_sqlite_busy_error", return_value=True),
+        patch.object(views.time, "monotonic", side_effect=[10.0, 11.0]),
+    ):
+        with pytest.raises(views._TransferFailure) as exhausted:
+            views._claim_transfer(uuid4(), 1)
+    assert exhausted.value.error.code == "UPLOAD_STORAGE_ERROR"
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_claim_once_redacts_missing_and_database_failure(owner: object) -> None:
+    from general_manager.uploads import views
+
+    settings = FileUploadSettings(enabled=True)
+    with pytest.raises(views._TransferFailure) as missing:
+        views._claim_transfer_once(uuid4(), owner.pk, settings=settings)
+    assert missing.value.error.code == "UPLOAD_NOT_FOUND"
+
+    with patch.object(
+        views.UploadIntent.objects, "using", side_effect=RuntimeError("db-password")
+    ):
+        with pytest.raises(views._TransferFailure) as unavailable:
+            views._claim_transfer_once(uuid4(), owner.pk, settings=settings)
+    assert unavailable.value.error.code == "UPLOAD_STORAGE_ERROR"
+    assert "db-password" not in unavailable.value.error.message
+
+
+def _claim_for_stream() -> object:
+    from general_manager.uploads import views
+
+    now = timezone.now()
+    return views.TransferClaim(
+        intent_id=uuid4(),
+        owner_pk=1,
+        lease_expires_at=now + timedelta(seconds=10),
+        intent_expires_at=now + timedelta(minutes=1),
+        base_stage_key="gm-staging/base",
+        stage_key="gm-staging/base.proxy-attempt-1",
+        attempt_number=1,
+    )
+
+
+@pytest.mark.parametrize("attempt_count", [True, -1, "1"])
+def test_attempt_key_iteration_rejects_invalid_persisted_counts(
+    attempt_count: object,
+) -> None:
+    from general_manager.uploads import views
+
+    intent = SimpleNamespace(
+        transfer_attempt_count=attempt_count,
+        staging_key="gm-staging/base",
+    )
+    with pytest.raises(views._TransferFailure) as failure:
+        tuple(views.iter_proxy_attempt_stage_keys(intent))
+    assert failure.value.error.code == "UPLOAD_STORAGE_ERROR"
+
+
+def test_attempt_stage_key_rejects_empty_or_oversized_names() -> None:
+    from general_manager.uploads import views
+
+    for base in ("", "x" * 1024):
+        with pytest.raises(views._TransferFailure) as failure:
+            views._attempt_staging_key(base, 1)
+        assert failure.value.error.code == "UPLOAD_STORAGE_ERROR"
+
+
+@pytest.mark.parametrize("raw", [True, object(), "not-a-number", "-1"])
+def test_content_length_parser_rejects_ambiguous_or_invalid_values(raw: object) -> None:
+    from general_manager.uploads import views
+
+    request = SimpleNamespace(META={"CONTENT_LENGTH": raw})
+    with pytest.raises(views._TransferFailure) as failure:
+        views._parse_content_length(request)
+    assert failure.value.error.code == "UPLOAD_SIZE_MISMATCH"
+
+
+def test_bounded_stream_sanitizes_read_type_and_lease_failures() -> None:
+    from general_manager.uploads import views
+
+    class BrokenRead:
+        def read(self, _size: int) -> bytes:
+            raise RuntimeError("request-secret")
+
+    class TextRead:
+        def read(self, _size: int) -> object:
+            return "not-bytes"
+
+    for request in (BrokenRead(), TextRead()):
+        chunks = views._BoundedRequestChunks(
+            request,
+            _claim_for_stream(),
+            expected_size=1,
+            maximum_size=1,
+        )
+        with pytest.raises(views._TransferFailure) as failure:
+            tuple(chunks)
+        assert failure.value.error.code == "UPLOAD_STORAGE_ERROR"
+
+    request = SimpleNamespace(read=lambda _size: b"a")
+    chunks = views._BoundedRequestChunks(
+        request,
+        _claim_for_stream(),
+        expected_size=1,
+        maximum_size=1,
+    )
+    with patch.object(views, "_renew_transfer_lease", return_value=None):
+        with pytest.raises(views._TransferFailure) as conflict:
+            next(iter(chunks))
+    assert conflict.value.error.code == "UPLOAD_TRANSFER_CONFLICT"
+
+
+def test_object_version_validation_maps_each_untrusted_mismatch() -> None:
+    from general_manager.uploads import views
+
+    checksum = hashlib.sha256(b"a").hexdigest()
+    cases = (
+        (object(), "UPLOAD_STORAGE_ERROR", checksum),
+        (
+            ObjectVersion(None, None, checksum, 2, "image/png"),
+            "UPLOAD_SIZE_MISMATCH",
+            checksum,
+        ),
+        (
+            ObjectVersion(None, None, "b" * 64, 1, "image/png"),
+            "UPLOAD_CHECKSUM_MISMATCH",
+            checksum,
+        ),
+        (
+            ObjectVersion(None, None, checksum, 1, "text/plain"),
+            "INVALID_FILE_TYPE",
+            checksum,
+        ),
+        (
+            ObjectVersion("", None, checksum, 1, "image/png"),
+            "UPLOAD_STORAGE_ERROR",
+            checksum,
+        ),
+        (
+            ObjectVersion(None, None, "invalid", 1, "image/png"),
+            "UPLOAD_STORAGE_ERROR",
+            "invalid",
+        ),
+    )
+    for value, code, expected_checksum in cases:
+        with pytest.raises(views._TransferFailure) as failure:
+            views._validate_object_version(
+                value,
+                expected_size=1,
+                expected_content_type="image/png",
+                expected_checksum=expected_checksum,
+            )
+        assert failure.value.error.code == code
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_adapter_resolution_rejects_malformed_identity_and_fingerprint_failure(
+    pending_upload: Callable[..., PendingUpload],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from general_manager.uploads import views
+
+    upload = pending_upload()
+    upload.intent.adapter_version = 1  # type: ignore[assignment]
+    with pytest.raises(views._TransferFailure) as malformed:
+        views._resolve_adapter(upload.intent)
+    assert malformed.value.error.code == "UPLOAD_STORAGE_CHANGED"
+
+    class BrokenFingerprintAdapter(RecordingProxyAdapter):
+        def storage_fingerprint(self) -> str:
+            raise RuntimeError("storage-password")
+
+    upload.intent.adapter_version = "1"
+    monkeypatch.setattr(
+        views.upload_adapter_registry,
+        "resolve_by_id",
+        lambda *_args, **_kwargs: BrokenFingerprintAdapter(),
+    )
+    with pytest.raises(views._TransferFailure) as fingerprint:
+        views._resolve_adapter(upload.intent)
+    assert fingerprint.value.error.code == "UPLOAD_STORAGE_CHANGED"
+    assert "storage-password" not in fingerprint.value.error.message
+
+
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": False}})
+def test_transfer_and_download_endpoints_are_hidden_when_disabled() -> None:
+    from general_manager.uploads.views import private_download_view, proxy_upload_view
+
+    upload = proxy_upload_view(
+        _request(user=AnonymousUser(), authorization=None),
+        uuid4(),
+    )
+    download = private_download_view(RequestFactory().get("/private/file"), "invalid")
+
+    assert upload.status_code == 404
+    assert _payload(upload)["error"]["code"] == "UPLOAD_NOT_FOUND"
+    assert download.status_code == 404
+    assert _payload(download)["error"]["code"] == "FILE_NOT_FOUND"
+
+
+def test_private_download_endpoint_rejects_unsupported_methods() -> None:
+    from general_manager.uploads.views import private_download_view
+
+    response = private_download_view(RequestFactory().post("/private/file"), "invalid")
+
+    assert response.status_code == 405
+    assert response.headers["Allow"] == "GET, HEAD"
+    assert _payload(response)["error"]["code"] == "METHOD_NOT_ALLOWED"
+
+
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True, "MAX_BYTES": 2}})
+def test_transfer_rejects_declared_size_above_global_limit(
+    owner: object,
+    pending_upload: Callable[..., PendingUpload],
+) -> None:
+    from general_manager.uploads.views import proxy_upload_view
+
+    upload = pending_upload(body=b"abc")
+    response = proxy_upload_view(
+        _request(user=owner, authorization=upload.authorization),
+        upload.intent.id,
+    )
+
+    assert response.status_code == 413
+    assert _payload(response)["error"]["code"] == "UPLOAD_SIZE_MISMATCH"
+    upload.intent.refresh_from_db()
+    assert upload.intent.state == UploadIntentState.PENDING
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_adapter_resolution_exception_releases_claim_and_is_sanitized(
+    owner: object,
+    pending_upload: Callable[..., PendingUpload],
+) -> None:
+    from general_manager.uploads import views
+
+    upload = pending_upload()
+    with patch.object(views, "_resolve_adapter", side_effect=RuntimeError("secret")):
+        response = views.proxy_upload_view(
+            _request(user=owner, authorization=upload.authorization),
+            upload.intent.id,
+        )
+
+    assert response.status_code == 503
+    assert _payload(response)["error"]["code"] == "UPLOAD_STORAGE_ERROR"
+    assert "secret" not in response.content.decode()
+    upload.intent.refresh_from_db()
+    assert upload.intent.state == UploadIntentState.PENDING
+
+
+def test_proxy_boundary_sanitizes_unexpected_failures() -> None:
+    from general_manager.uploads import views
+
+    with patch.object(views, "_transfer", side_effect=RuntimeError("secret")):
+        response = views.proxy_upload_view(
+            _request(user=AnonymousUser(), authorization=None),
+            uuid4(),
+        )
+
+    assert response.status_code == 503
+    assert _payload(response)["error"]["code"] == "UPLOAD_STORAGE_ERROR"
+    assert "secret" not in response.content.decode()
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_observability_failure_does_not_undo_completed_transfer(
+    owner: object,
+    pending_upload: Callable[..., PendingUpload],
+) -> None:
+    from general_manager.uploads import views
+
+    upload = pending_upload()
+    claim = views._claim_transfer(upload.intent.id, owner.pk)
+    version = ObjectVersion(
+        version_id=None,
+        etag=None,
+        checksum_sha256=upload.intent.declared_checksum_sha256,
+        size=upload.intent.declared_size,
+        content_type=upload.intent.declared_content_type,
+    )
+    with patch.object(
+        views, "record_upload_transition", side_effect=RuntimeError("metrics-secret")
+    ):
+        views._complete_transfer(claim, version=version, uploaded_at=timezone.now())
+
+    upload.intent.refresh_from_db()
+    assert upload.intent.state == UploadIntentState.UPLOADED
+
+
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_optional_download_metadata_and_hostile_basename_fallbacks(
+    owner: object,
+    pending_upload: Callable[..., PendingUpload],
+) -> None:
+    from general_manager.uploads import views
+
+    with patch.object(
+        views.UploadIntent.objects, "using", side_effect=RuntimeError("db-secret")
+    ):
+        assert views._download_metadata(
+            manager_name="Manager",
+            object_id="1",
+            field_name="avatar",
+            current_key="avatars/a.png",
+            database_alias="default",
+        ) == (None, None)
+
+    upload = pending_upload(
+        final_target_pk=str(owner.pk),
+        final_key="avatars/a.png",
+        original_filename="friendly.png",
+        verified_content_type="image/png",
+    )
+    assert views._download_metadata(
+        manager_name=upload.intent.manager_name,
+        object_id=str(owner.pk),
+        field_name=upload.intent.field_name,
+        current_key="avatars/a.png",
+        database_alias="default",
+    ) == ("friendly.png", "image/png")
+    assert views._download_basename("folder/bad\x00name.png") == "download"

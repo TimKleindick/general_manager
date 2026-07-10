@@ -61,6 +61,17 @@ def _uploads_explicitly_disabled() -> bool:
     return isinstance(configured, Mapping) and configured.get("ENABLED", False) is False
 
 
+def _load_registered_managers() -> tuple[type[object], ...] | None:
+    """Return the live GraphQL manager registry, or ``None`` when unavailable."""
+
+    try:
+        from general_manager.api.graphql import GraphQL
+
+        return tuple(GraphQL.manager_registry.values())
+    except Exception:  # noqa: BLE001 - checks never break Django startup
+        return None
+
+
 def run_upload_checks(
     *,
     manager_database: object = ...,
@@ -87,12 +98,7 @@ def run_upload_checks(
 
     if _uploads_explicitly_disabled():
         if managers is None:
-            try:
-                from general_manager.api.graphql import GraphQL
-
-                managers = tuple(GraphQL.manager_registry.values())
-            except Exception:  # noqa: BLE001 - checks never break Django startup
-                managers = ()
+            managers = _load_registered_managers() or ()
         return _check_disabled_managers(managers)
     try:
         settings = get_file_upload_settings()
@@ -113,11 +119,8 @@ def run_upload_checks(
         )
     issues.extend(_check_adapter_registrations())
     if managers is None:
-        try:
-            from general_manager.api.graphql import GraphQL
-
-            managers = tuple(GraphQL.manager_registry.values())
-        except Exception:  # noqa: BLE001 - registry failures become safe checks
+        managers = _load_registered_managers()
+        if managers is None:
             return [*issues, _error("Upload managers could not be inspected.", "E003")]
     for manager in managers:
         issues.extend(_check_manager(manager, settings))
@@ -147,7 +150,7 @@ def _check_disabled_managers(
             ):
                 continue
             try:
-                _model, model_field = services._resolve_file_field(
+                _model, model_field = services.resolve_file_field(
                     cast(Any, interface), name
                 )
             except Exception:  # noqa: BLE001, S112 - require a proven ORM field
@@ -214,7 +217,7 @@ def _check_manager(
             issues.append(_error("An upload field policy is invalid.", "E003"))
             continue
         try:
-            _model, model_field = services._resolve_file_field(
+            _model, model_field = services.resolve_file_field(
                 cast(Any, interface), name
             )
             if not isinstance(model_field, (models.FileField, models.ImageField)):
@@ -255,14 +258,14 @@ def _static_adapter_capabilities(storage: object) -> _AdapterCapabilities:
     """Inspect configured adapter shape without invoking storage/network methods."""
 
     registry = services.upload_adapter_registry
-    factory = registry._resolve_explicit_factory(storage)  # type: ignore[arg-type]
+    factory = registry.explicit_factory_for(storage)  # type: ignore[arg-type]
     if factory is not None:
         declared = _declared_factory_capabilities(factory)
         if declared is not None:
             return declared
         adapter_type = factory if isinstance(factory, type) else None
         if adapter_type is None:
-            return _AdapterCapabilities(True, True, False, uncertain=True)
+            return _AdapterCapabilities(True, False, False, uncertain=True)
         adapter_id = inspect.getattr_static(adapter_type, "adapter_id", None)
         adapter_version = inspect.getattr_static(adapter_type, "adapter_version", None)
         identity_valid = bool(
@@ -373,9 +376,7 @@ def _looks_like_s3_static(storage: object) -> bool:
 
 
 def _check_adapter_registrations() -> list[CheckMessage]:
-    registrations = inspect.getattr_static(
-        services.upload_adapter_registry, "_registrations", {}
-    )
+    registrations = services.upload_adapter_registry.registrations_snapshot()
     if not isinstance(registrations, Mapping):
         return [_error("Upload adapter registrations are invalid.", "E004")]
     for storage_class, factory in registrations.items():

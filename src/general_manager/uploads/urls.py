@@ -81,6 +81,8 @@ def add_file_upload_urls() -> None:
         for existing in patterns
         if not getattr(existing, _UPLOAD_ROUTE_MARKER, False)
     ]
+    # Resolve representative upload URLs against only project-owned patterns to
+    # detect routes that would shadow either framework endpoint.
     representative_paths = (
         f"/{configured.http_upload_path}00000000-0000-4000-8000-000000000001",
         f"/{configured.http_upload_path}download/gm-private-capability",

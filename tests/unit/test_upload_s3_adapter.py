@@ -13,6 +13,7 @@ import pytest
 from django.test import override_settings
 
 from general_manager.uploads.adapters import (
+    ClaimedObject,
     ProxyUploadAdapter,
     PublicUploadUrlUnsupportedError,
     UploadAdapterRegistry,
@@ -20,6 +21,7 @@ from general_manager.uploads.adapters import (
 from general_manager.uploads import finalization
 from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
+    UploadChecksumMismatchError,
     UploadStorageError,
     UploadObjectMissingError,
     UploadStorageChangedError,
@@ -1515,3 +1517,790 @@ def test_s3_fingerprint_and_repr_exclude_endpoint_credentials() -> None:
     assert "user" not in loggable
     assert "password" not in loggable
     assert "secret" not in loggable
+
+
+def test_s3_proxy_exposes_only_supported_instructions_and_urls() -> None:
+    client = FakeS3Client(versioning=False)
+    storage = FakeS3Storage(client, public=True)
+    storage.upload_staging_prefix_private = True
+    adapter = S3ProxyUploadAdapter(storage)
+
+    assert adapter.supports_direct(storage) is False
+    assert adapter.supports_public_urls is True
+    with pytest.raises(ValueError, match="upload_url is required"):
+        adapter.create_upload_instructions(
+            stage_key="gm-staging/proxy.bin",
+            upload_url=None,
+            content_type="text/plain",
+            size=3,
+            checksum_sha256="a" * 64,
+        )
+
+    instructions = adapter.create_upload_instructions(
+        stage_key="gm-staging/proxy.bin",
+        upload_url="/uploads/proxy/intent",
+        content_type="text/plain",
+        size=3,
+        checksum_sha256="a" * 64,
+        headers={"X-Upload-Token": "token"},
+    )
+
+    assert instructions.transport is UploadTransport.PROXY
+    assert instructions.url == "/uploads/proxy/intent"
+    assert instructions.headers == {"X-Upload-Token": "token"}
+    assert adapter.public_url("files/proxy.bin").endswith("/files/proxy.bin")
+    assert adapter.storage_fingerprint().startswith("sha256:")
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.private_download_url("files/proxy.bin", expires_in=60)
+
+    private_adapter = S3ProxyUploadAdapter(FakeS3Storage(FakeS3Client()))
+    with pytest.raises(PublicUploadUrlUnsupportedError):
+        private_adapter.public_url("files/private.bin")
+
+
+def test_s3_proxy_rejects_invalid_stream_metadata_before_writing() -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+
+    with pytest.raises(UploadChecksumMismatchError):
+        adapter.save_stage(
+            "gm-staging/checksum.bin",
+            [b"payload"],
+            content_type="text/plain",
+            checksum_sha256="0" * 64,
+        )
+    with pytest.raises(UploadStorageError, match="size did not match"):
+        adapter.save_stage(
+            "gm-staging/size.bin",
+            [b"payload"],
+            content_type="text/plain",
+            size=8,
+        )
+
+    assert client.put_calls == []
+
+
+def test_s3_proxy_stage_write_is_retry_safe_and_preserves_upload_errors() -> None:
+    payload = b"retry-safe payload"
+    checksum = hashlib.sha256(payload).hexdigest()
+    identity = {
+        "gm-stage-state": "completed",
+        "gm-checksum-sha256": checksum,
+    }
+    client = FakeS3Client(versioning=False)
+    client.objects[("gm-staging/retry.bin", None)] = {
+        "VersionId": None,
+        "ETag": '"existing"',
+        "ChecksumSHA256": base64.b64encode(bytes.fromhex(checksum)).decode("ascii"),
+        "ContentLength": len(payload),
+        "ContentType": "text/plain",
+        "Metadata": identity,
+        "Body": payload,
+    }
+    client.operation_errors["put"] = PreconditionError()
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+
+    retried = adapter.save_stage(
+        "gm-staging/retry.bin",
+        [payload],
+        content_type="text/plain",
+        checksum_sha256=checksum,
+        size=len(payload),
+    )
+
+    assert retried.etag == '"existing"'
+
+    explicit = UploadStorageChangedError()
+    client.operation_errors["put"] = explicit
+    with pytest.raises(UploadStorageChangedError) as captured:
+        adapter.save_stage(
+            "gm-staging/explicit.bin",
+            [payload],
+            content_type="text/plain",
+        )
+    assert captured.value is explicit
+
+
+def test_s3_proxy_stage_write_distinguishes_conflicts_from_outages() -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    client.operation_errors["put"] = PreconditionError()
+
+    with pytest.raises(UploadTransferConflictError):
+        adapter.save_stage(
+            "gm-staging/conflict.bin",
+            [b"payload"],
+            content_type="text/plain",
+        )
+
+    client.operation_errors["put"] = FakeSDKError()
+    with pytest.raises(UploadStorageError) as captured:
+        adapter.save_stage(
+            "gm-staging/outage.bin",
+            [b"payload"],
+            content_type="text/plain",
+        )
+    assert isinstance(captured.value.__cause__, FakeSDKError)
+
+
+def test_s3_proxy_detects_stage_metadata_changed_after_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeS3Client(versioning=False)
+    original_put = client.put_object
+
+    def put_with_changed_metadata(**kwargs: Any) -> dict[str, Any]:
+        response = original_put(**kwargs)
+        client.objects[(kwargs["Key"], None)]["Metadata"] = {}
+        return response
+
+    monkeypatch.setattr(client, "put_object", put_with_changed_metadata)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+
+    with pytest.raises(UploadStorageChangedError):
+        adapter.save_stage(
+            "gm-staging/changed.bin",
+            [b"payload"],
+            content_type="text/plain",
+        )
+
+
+def test_s3_proxy_materialization_retries_matching_destination() -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    version = adapter.save_stage(
+        "gm-staging/retry-materialize.bin",
+        [b"payload"],
+        content_type="text/plain",
+    )
+    intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+
+    adapter.materialize(
+        "gm-staging/retry-materialize.bin",
+        version,
+        "files/retry-materialize.bin",
+        intent_id=intent_id,
+    )
+    assert (
+        adapter.materialize(
+            "gm-staging/retry-materialize.bin",
+            version,
+            "files/retry-materialize.bin",
+            intent_id=intent_id,
+        )
+        == "files/retry-materialize.bin"
+    )
+
+    checksum_only = ObjectVersion(
+        version_id=None,
+        etag=None,
+        checksum_sha256=version.checksum_sha256,
+        size=version.size,
+    )
+    with pytest.raises(UploadBackendUnsupportedError, match="requires an ETag"):
+        adapter.materialize(
+            "gm-staging/retry-materialize.bin",
+            checksum_only,
+            "files/no-etag.bin",
+            intent_id=intent_id,
+        )
+
+
+@pytest.mark.parametrize(
+    ("race", "error", "expected_exception"),
+    [
+        ("matching", FakeSDKError(), None),
+        ("occupied", FakeSDKError(), UploadTransferConflictError),
+        (None, PreconditionError(), UploadTransferConflictError),
+        (None, FakeSDKError(), UploadStorageError),
+    ],
+)
+def test_s3_proxy_materialization_normalizes_write_races(
+    monkeypatch: pytest.MonkeyPatch,
+    race: str | None,
+    error: Exception,
+    expected_exception: type[Exception] | None,
+) -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    stage_key = "gm-staging/materialize-race.bin"
+    final_key = "files/materialize-race.bin"
+    version = adapter.save_stage(stage_key, [b"payload"], content_type="text/plain")
+    intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+
+    def racing_put(**kwargs: Any) -> dict[str, Any]:
+        if kwargs["Key"] == final_key and race is not None:
+            metadata = dict(kwargs["Metadata"])
+            if race == "occupied":
+                metadata["gm-intent-id"] = "different-intent"
+            client.objects[(final_key, None)] = {
+                **client.objects[(stage_key, None)],
+                "Metadata": metadata,
+            }
+        raise error
+
+    monkeypatch.setattr(client, "put_object", racing_put)
+
+    if expected_exception is None:
+        assert (
+            adapter.materialize(
+                stage_key,
+                version,
+                final_key,
+                intent_id=intent_id,
+            )
+            == final_key
+        )
+    else:
+        with pytest.raises(expected_exception):
+            adapter.materialize(
+                stage_key,
+                version,
+                final_key,
+                intent_id=intent_id,
+            )
+
+
+def test_s3_proxy_detects_destination_changed_after_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    stage_key = "gm-staging/changed-final.bin"
+    final_key = "files/changed-final.bin"
+    version = adapter.save_stage(stage_key, [b"payload"], content_type="text/plain")
+    original_put = client.put_object
+
+    def put_with_changed_metadata(**kwargs: Any) -> dict[str, Any]:
+        response = original_put(**kwargs)
+        if kwargs["Key"] == final_key:
+            client.objects[(final_key, None)]["Metadata"] = {}
+        return response
+
+    monkeypatch.setattr(client, "put_object", put_with_changed_metadata)
+
+    with pytest.raises(UploadStorageChangedError):
+        adapter.materialize(
+            stage_key,
+            version,
+            final_key,
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+
+
+def test_s3_proxy_reads_require_an_etag_and_normalize_backend_failures() -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    version = adapter.save_stage(
+        "gm-staging/read.bin",
+        [b"payload"],
+        content_type="text/plain",
+    )
+    checksum_only = ObjectVersion(
+        version_id=None,
+        etag=None,
+        checksum_sha256=version.checksum_sha256,
+        size=version.size,
+    )
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.open_stage("gm-staging/read.bin", checksum_only)
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.delete_stage("gm-staging/read.bin")
+
+    client.operation_errors["get"] = MissingObjectError()
+    with pytest.raises(UploadObjectMissingError):
+        adapter.open_stage("gm-staging/read.bin", version)
+    client.operation_errors["get"] = FakeSDKError()
+    with pytest.raises(UploadStorageError):
+        adapter.open_stage("gm-staging/read.bin", version)
+
+
+def test_s3_proxy_download_inspection_binds_the_claimed_object() -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    key = "files/download.bin"
+    version = adapter.save_stage(key, [b"payload"], content_type="text/plain")
+
+    assert adapter.inspect_replaced_object(key) == version
+    assert adapter.inspect_download(key, version) == version
+    with adapter.open_download(key, version) as opened:
+        assert opened.read() == b"payload"
+
+    changed = ObjectVersion(
+        version_id=version.version_id,
+        etag='"changed"',
+        checksum_sha256=version.checksum_sha256,
+        size=version.size,
+        content_type=version.content_type,
+    )
+    with pytest.raises(UploadStorageChangedError):
+        adapter.inspect_download(key, changed)
+    del client.objects[(key, None)]
+    with pytest.raises(UploadObjectMissingError):
+        adapter.inspect_download(key, version)
+    with pytest.raises(UploadObjectMissingError):
+        adapter.inspect_staged(key)
+
+    client.operation_errors["head"] = FakeSDKError()
+    with pytest.raises(UploadStorageError):
+        adapter.inspect_staged(key)
+
+
+def test_s3_proxy_materialized_inspection_and_deletion_require_intent_identity() -> (
+    None
+):
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    stage_key = "gm-staging/final-inspection.bin"
+    final_key = "files/final-inspection.bin"
+    intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    version = adapter.save_stage(stage_key, [b"payload"], content_type="text/plain")
+
+    with pytest.raises(UploadObjectMissingError):
+        adapter.inspect_materialized(final_key, version, intent_id=intent_id)
+
+    adapter.materialize(stage_key, version, final_key, intent_id=intent_id)
+    final_version = adapter.inspect_materialized(
+        final_key,
+        version,
+        intent_id=intent_id,
+    )
+    with pytest.raises(UploadStorageChangedError):
+        adapter.inspect_materialized(
+            final_key,
+            version,
+            intent_id=UUID("1aeff4c6-4895-4114-a984-b3d136083d33"),
+        )
+
+    adapter.delete_materialized(final_key, final_version, intent_id=intent_id)
+    assert (final_key, None) not in client.objects
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_exception"),
+    [
+        (MissingObjectError(), UploadObjectMissingError),
+        (PreconditionError(), UploadStorageChangedError),
+        (FakeSDKError(), UploadStorageError),
+    ],
+)
+def test_s3_proxy_delete_normalizes_conditional_backend_failures(
+    error: Exception,
+    expected_exception: type[Exception],
+) -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    key = "gm-staging/delete-error.bin"
+    version = adapter.save_stage(key, [b"payload"], content_type="text/plain")
+    client.operation_errors["delete"] = error
+
+    with pytest.raises(expected_exception):
+        adapter.delete_stage(key, version)
+
+
+def test_s3_proxy_cleanup_claims_tolerate_absence_but_reject_replacement() -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    key = "files/claimed.bin"
+    version = adapter.save_stage(key, [b"payload"], content_type="text/plain")
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    claimed = adapter.plan_replaced_object_claim(key, version, cleanup_id=cleanup_id)
+
+    with pytest.raises(UploadStorageChangedError):
+        adapter.claim_replaced_object(
+            key,
+            ClaimedObject(key="files/different.bin", version=version),
+            cleanup_id=cleanup_id,
+        )
+
+    del client.objects[(key, None)]
+    adapter.claim_replaced_object(key, claimed, cleanup_id=cleanup_id)
+    adapter.delete_claimed_object(claimed, cleanup_id=cleanup_id)
+
+    version = adapter.save_stage(key, [b"payload"], content_type="text/plain")
+    claimed = adapter.plan_replaced_object_claim(key, version, cleanup_id=cleanup_id)
+    client.objects[(key, None)]["ETag"] = '"replacement"'
+    with pytest.raises(UploadStorageChangedError):
+        adapter.claim_replaced_object(key, claimed, cleanup_id=cleanup_id)
+
+
+def test_s3_direct_rejects_malformed_signing_and_incomplete_copy_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeS3Client()
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    def malformed_url(*args: Any, **kwargs: Any) -> str:
+        del args, kwargs
+        return ""
+
+    monkeypatch.setattr(client, "generate_presigned_url", malformed_url)
+
+    with pytest.raises(UploadStorageError, match="malformed upload instructions"):
+        adapter.create_upload_instructions(
+            stage_key="gm-staging/malformed.bin",
+            upload_url=None,
+            content_type="text/plain",
+            size=7,
+            checksum_sha256=hashlib.sha256(b"payload").hexdigest(),
+        )
+
+    checksum_only = ObjectVersion(
+        version_id=None,
+        etag='"etag"',
+        checksum_sha256="a" * 64,
+        size=1,
+    )
+    with pytest.raises(UploadBackendUnsupportedError, match="VersionId and ETag"):
+        adapter.materialize(
+            "gm-staging/incomplete.bin",
+            checksum_only,
+            "files/incomplete.bin",
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("race", "error", "expected_exception"),
+    [
+        ("matching", FakeSDKError(), None),
+        ("occupied", FakeSDKError(), UploadTransferConflictError),
+        (None, PreconditionError(), UploadTransferConflictError),
+        (None, FakeSDKError(), UploadStorageError),
+    ],
+)
+def test_s3_direct_materialization_normalizes_copy_races(
+    monkeypatch: pytest.MonkeyPatch,
+    race: str | None,
+    error: Exception,
+    expected_exception: type[Exception] | None,
+) -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    final_key = "files/copy-race.bin"
+    intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+
+    def racing_copy(**kwargs: Any) -> dict[str, Any]:
+        if race is not None:
+            metadata = dict(kwargs["Metadata"])
+            if race == "occupied":
+                metadata["gm-intent-id"] = "different-intent"
+            client.objects[(final_key, "raced-version")] = {
+                **client.objects[("gm-staging/intent.bin", "stage-version-1")],
+                "VersionId": "raced-version",
+                "Metadata": metadata,
+            }
+        raise error
+
+    monkeypatch.setattr(client, "copy_object", racing_copy)
+
+    if expected_exception is None:
+        assert (
+            adapter.materialize(
+                "gm-staging/intent.bin",
+                version,
+                final_key,
+                intent_id=intent_id,
+            )
+            == final_key
+        )
+    else:
+        with pytest.raises(expected_exception):
+            adapter.materialize(
+                "gm-staging/intent.bin",
+                version,
+                final_key,
+                intent_id=intent_id,
+            )
+
+
+def test_s3_direct_detects_destination_changed_after_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    original_copy = client.copy_object
+
+    def copy_with_changed_metadata(**kwargs: Any) -> dict[str, Any]:
+        response = original_copy(**kwargs)
+        client.objects[(kwargs["Key"], "final-version")]["Metadata"] = {}
+        return response
+
+    monkeypatch.setattr(client, "copy_object", copy_with_changed_metadata)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    with pytest.raises(UploadStorageChangedError, match="materialization identity"):
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            "files/changed-copy.bin",
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+
+
+def test_s3_direct_stream_rejects_missing_and_non_bytes_bodies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    no_version = ObjectVersion(
+        version_id=None,
+        etag=version.etag,
+        checksum_sha256=version.checksum_sha256,
+        size=version.size,
+    )
+
+    with pytest.raises(UploadBackendUnsupportedError, match="VersionId"):
+        adapter.open_stage("gm-staging/intent.bin", no_version)
+
+    def missing_body(**kwargs: Any) -> dict[str, object]:
+        del kwargs
+        return {"Body": object()}
+
+    monkeypatch.setattr(client, "get_object", missing_body)
+    with pytest.raises(UploadStorageError, match="without a body"):
+        adapter.open_stage("gm-staging/intent.bin", version)
+
+    class TextBody:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def read(self, size: int = -1) -> str:
+            del size
+            return "not bytes"
+
+        def close(self) -> None:
+            self.closed = True
+
+    body = TextBody()
+
+    def text_body(**kwargs: Any) -> dict[str, object]:
+        del kwargs
+        return {"Body": body}
+
+    monkeypatch.setattr(client, "get_object", text_body)
+    with pytest.raises(UploadStorageError):
+        adapter.open_stage("gm-staging/intent.bin", version)
+    assert body.closed is True
+
+
+@pytest.mark.parametrize("failure", ["oversized", "short", "checksum"])
+def test_s3_direct_stream_verifies_size_and_checksum(failure: str) -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    if failure == "oversized":
+        expected = ObjectVersion(
+            version_id=version.version_id,
+            etag=version.etag,
+            checksum_sha256=version.checksum_sha256,
+            size=version.size - 1,
+        )
+    elif failure == "short":
+        client.objects[("gm-staging/intent.bin", "stage-version-1")]["Body"] = b"short"
+        expected = version
+    else:
+        expected = ObjectVersion(
+            version_id=version.version_id,
+            etag=version.etag,
+            checksum_sha256="a" * 64,
+            size=version.size,
+        )
+
+    with pytest.raises(UploadStorageChangedError):
+        adapter.open_stage("gm-staging/intent.bin", expected)
+
+
+@pytest.mark.parametrize(
+    ("close_error", "expected_exception"),
+    [
+        (FakeSDKError(), UploadStorageError),
+        (UploadStorageChangedError(), UploadStorageChangedError),
+    ],
+)
+def test_s3_direct_stream_propagates_body_close_failures(
+    close_error: Exception,
+    expected_exception: type[Exception],
+) -> None:
+    class FailingCloseBody(BytesIO):
+        def close(self) -> None:
+            raise close_error
+
+    client = FakeS3Client()
+    version = _stage(client)
+    client.body_factory = FailingCloseBody
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    with pytest.raises(expected_exception):
+        adapter.open_stage("gm-staging/intent.bin", version)
+
+
+def test_s3_direct_cleanup_requires_the_exact_immutable_object() -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    no_version = ObjectVersion(
+        version_id=None,
+        etag=version.etag,
+        checksum_sha256=version.checksum_sha256,
+        size=version.size,
+    )
+
+    assert adapter.inspect_replaced_object("gm-staging/intent.bin") == version
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.plan_replaced_object_claim(
+            "gm-staging/intent.bin",
+            no_version,
+            cleanup_id=cleanup_id,
+        )
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.delete_object("gm-staging/intent.bin", no_version)
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.delete_claimed_object(
+            ClaimedObject(key="gm-staging/intent.bin", version=no_version),
+            cleanup_id=cleanup_id,
+        )
+
+    claimed = adapter.plan_replaced_object_claim(
+        "gm-staging/intent.bin",
+        version,
+        cleanup_id=cleanup_id,
+    )
+    with pytest.raises(UploadStorageChangedError):
+        adapter.claim_replaced_object(
+            "different-key",
+            claimed,
+            cleanup_id=cleanup_id,
+        )
+
+    missing = ObjectVersion(
+        version_id="missing-version",
+        etag=version.etag,
+        checksum_sha256=version.checksum_sha256,
+        size=version.size,
+    )
+    del client.objects[("gm-staging/intent.bin", "stage-version-1")]
+    with pytest.raises(UploadObjectMissingError):
+        adapter.delete_object("gm-staging/intent.bin", missing)
+
+    _stage(client)
+    changed = ObjectVersion(
+        version_id=version.version_id,
+        etag='"changed"',
+        checksum_sha256=version.checksum_sha256,
+        size=version.size,
+    )
+    with pytest.raises(UploadStorageChangedError):
+        adapter.delete_object("gm-staging/intent.bin", changed)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_exception"),
+    [
+        (MissingObjectError(), UploadObjectMissingError),
+        (FakeSDKError(), UploadStorageError),
+    ],
+)
+def test_s3_direct_claimed_deletion_normalizes_backend_failures(
+    error: Exception,
+    expected_exception: type[Exception],
+) -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    client.operation_errors["delete"] = error
+
+    with pytest.raises(expected_exception):
+        adapter.delete_claimed_object(
+            ClaimedObject(key="gm-staging/intent.bin", version=version),
+            cleanup_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+
+
+def test_s3_direct_delete_stage_maps_missing_version() -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    client.operation_errors["delete"] = MissingVersionError()
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    with pytest.raises(UploadObjectMissingError):
+        adapter.delete_stage("gm-staging/intent.bin", version)
+
+
+def test_s3_direct_retained_download_rejects_missing_or_changed_identity() -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    no_version = ObjectVersion(
+        version_id=None,
+        etag=version.etag,
+        checksum_sha256=version.checksum_sha256,
+        size=version.size,
+    )
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.inspect_download("gm-staging/intent.bin", no_version)
+    with pytest.raises(PublicUploadUrlUnsupportedError):
+        adapter.public_download_url("gm-staging/intent.bin", version=no_version)
+
+    changed = ObjectVersion(
+        version_id=version.version_id,
+        etag=version.etag,
+        checksum_sha256="a" * 64,
+        size=version.size,
+    )
+    with pytest.raises(UploadStorageChangedError):
+        adapter.inspect_download("gm-staging/intent.bin", changed)
+    with adapter.open_download("gm-staging/intent.bin", version) as opened:
+        assert opened.read() == b"immutable staged payload"
+
+
+@pytest.mark.parametrize(
+    "returned_url",
+    [
+        "",
+        "https://uploads.s3.us-east-1.amazonaws.com/files/report.txt?invalid",
+    ],
+)
+def test_s3_public_download_rejects_malformed_storage_urls(
+    monkeypatch: pytest.MonkeyPatch,
+    returned_url: str,
+) -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    storage = FakeS3Storage(client, public=True)
+    storage.upload_staging_prefix_private = True
+
+    def malformed_url(*args: Any, **kwargs: Any) -> str:
+        del args, kwargs
+        return returned_url
+
+    monkeypatch.setattr(storage, "url", malformed_url)
+    adapter = S3UploadAdapter(storage)
+
+    expected = (
+        UploadStorageError if returned_url == "" else PublicUploadUrlUnsupportedError
+    )
+    with pytest.raises(expected):
+        adapter.public_download_url("files/report.txt", version=version)
+
+
+def test_s3_signing_preserves_explicit_upload_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeS3Client()
+    explicit = UploadStorageChangedError()
+
+    def raise_explicit(*args: Any, **kwargs: Any) -> str:
+        raise explicit
+
+    monkeypatch.setattr(client, "generate_presigned_url", raise_explicit)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    with pytest.raises(UploadStorageChangedError) as captured:
+        adapter.private_download_url("files/report.txt", expires_in=60)
+    assert captured.value is explicit
