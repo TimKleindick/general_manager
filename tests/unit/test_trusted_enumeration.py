@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from typing import ClassVar, cast
 
@@ -190,6 +191,35 @@ def test_scope_resets_after_exception_and_does_not_leak() -> None:
         interface_class(code=7)
 
     assert evidence.membership_dependency_calls == 1
+    assert possible_values_calls == [1]
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_scope_revokes_context_inherited_by_child_task_after_exit() -> None:
+    interface_class, _, possible_values_calls = (
+        _interface_with_counted_possible_values()
+    )
+    evidence = EvidenceDouble(allowed=True)
+
+    async def exercise_child_task() -> None:
+        release_child = asyncio.Event()
+
+        async def validate_after_parent_scope_exits() -> None:
+            await release_child.wait()
+            with pytest.raises(InvalidInputValueError):
+                interface_class(code=7)
+
+        with _trusted_enumeration_scope(interface_class, {"code": evidence}):
+            child = asyncio.create_task(validate_after_parent_scope_exits())
+            await asyncio.sleep(0)
+
+        release_child.set()
+        await child
+
+    asyncio.run(exercise_child_task())
+
+    assert evidence.authorization_calls == []
+    assert evidence.membership_dependency_calls == 0
     assert possible_values_calls == [1]
 
 

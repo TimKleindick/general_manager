@@ -264,12 +264,20 @@ class _TrustedEnumerationEvidence(Protocol):
     def track_membership_dependency(self) -> None: ...
 
 
+@dataclass(slots=True)
+class _TrustedEnumerationLease:
+    """Shared revocation state for contexts that inherit a trusted scope."""
+
+    active: bool = True
+
+
 @dataclass(frozen=True, slots=True)
 class _TrustedEnumerationScope:
     """Private evidence available while validating one exact interface class."""
 
     interface_class: type[object]
     evidence_by_name: Mapping[str, _TrustedEnumerationEvidence]
+    lease: _TrustedEnumerationLease
 
 
 _TRUSTED_ENUMERATION_SCOPE: ContextVar[_TrustedEnumerationScope | None] = ContextVar(
@@ -284,12 +292,14 @@ def _trusted_enumeration_scope(
     evidence_by_name: Mapping[str, _TrustedEnumerationEvidence],
 ) -> Iterator[None]:
     """Temporarily install trusted enumeration evidence for an interface class."""
+    lease = _TrustedEnumerationLease()
     token = _TRUSTED_ENUMERATION_SCOPE.set(
-        _TrustedEnumerationScope(interface_class, evidence_by_name)
+        _TrustedEnumerationScope(interface_class, evidence_by_name, lease)
     )
     try:
         yield
     finally:
+        lease.active = False
         _TRUSTED_ENUMERATION_SCOPE.reset(token)
 
 
@@ -1117,7 +1127,11 @@ class InterfaceBase(ABC):
     ) -> bool:
         """Return whether exact scoped evidence authorizes skipping membership."""
         scope = _TRUSTED_ENUMERATION_SCOPE.get()
-        if scope is None or scope.interface_class is not type(self):
+        if (
+            scope is None
+            or not scope.lease.active
+            or scope.interface_class is not type(self)
+        ):
             return False
         evidence = scope.evidence_by_name.get(name)
         if evidence is None or not evidence.authorizes(
