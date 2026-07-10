@@ -363,16 +363,17 @@ def test_data_change_mixed_run_cache_invalidation_work(
         )
         for index in range(RUN_CACHE_ENTRY_COUNT)
     }
-    unrelated_keys = frozenset(
-        ("unrelated", index) for index in range(RUN_CACHE_ENTRY_COUNT)
-    )
+    unrelated_values = {
+        ("unrelated", index): ("unrelated-value", index)
+        for index in range(RUN_CACHE_ENTRY_COUNT)
+    }
 
     with CalculationRunContext() as context:
         for prefix in RUN_CACHE_PREFIXES:
             for index in range(RUN_CACHE_ENTRY_COUNT):
                 context.set((prefix, index), index)
-        for key in unrelated_keys:
-            context.set(key, key[1])
+        for key, value in unrelated_values.items():
+            context.set(key, value)
         context.set_dependency_cache_hits(dependency_hits)
 
         initial_targeted_count = sum(
@@ -383,7 +384,7 @@ def test_data_change_mixed_run_cache_invalidation_work(
         assert initial_targeted_count == 5_500
         assert len(context._values) == 6_000
 
-        phase_snapshots: list[frozenset[Hashable]] = []
+        phase_snapshots: list[dict[Hashable, object]] = []
         original_discard_prefix = context.discard_prefix
 
         def counted_discard_prefix(
@@ -405,7 +406,7 @@ def test_data_change_mixed_run_cache_invalidation_work(
             _context: CalculationRunContext,
         ) -> None:
             original_clear_trusted_orm_managers()
-            phase_snapshots.append(frozenset(context._values))
+            phase_snapshots.append(dict(context._values))
 
         monkeypatch.setattr(
             context,
@@ -431,9 +432,8 @@ def test_data_change_mixed_run_cache_invalidation_work(
                 isinstance(key, tuple) and key and key[0] in RUN_CACHE_PREFIXES
                 for key in snapshot
             )
-            assert unrelated_keys <= snapshot
-            assert snapshot == unrelated_keys
-        assert unrelated_keys <= context._values.keys()
+            assert snapshot == unrelated_values
+        assert context._values == unrelated_values
         assert all(
             context.get_dependency_cache_hit(key) is hit
             for key, hit in dependency_hits.items()
