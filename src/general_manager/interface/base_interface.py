@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 from abc import ABC
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 import inspect
 from types import MappingProxyType
@@ -16,6 +18,7 @@ from typing import (
     Callable,
     Literal,
     TypedDict,
+    Protocol,
     cast,
 )
 from django.conf import settings
@@ -246,6 +249,48 @@ class _InputParsingPlan:
     dependency_items: tuple[tuple[str, tuple[str, ...]], ...]
     has_dependencies: bool
     field_state: tuple[tuple[str, int, bool, tuple[str, ...]], ...]
+
+
+class _TrustedEnumerationEvidence(Protocol):
+    """Authorize one pre-enumerated value and track its membership dependency."""
+
+    def authorizes(
+        self,
+        input_field: "Input[type[object]]",
+        value: object,
+        identification: Mapping[str, object],
+    ) -> bool: ...
+
+    def track_membership_dependency(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _TrustedEnumerationScope:
+    """Private evidence available while validating one exact interface class."""
+
+    interface_class: type[object]
+    evidence_by_name: Mapping[str, _TrustedEnumerationEvidence]
+
+
+_TRUSTED_ENUMERATION_SCOPE: ContextVar[_TrustedEnumerationScope | None] = ContextVar(
+    "general_manager_trusted_enumeration_scope",
+    default=None,
+)
+
+
+@contextmanager
+def _trusted_enumeration_scope(
+    interface_class: type[object],
+    evidence_by_name: Mapping[str, _TrustedEnumerationEvidence],
+) -> Iterator[None]:
+    """Temporarily install trusted enumeration evidence for an interface class."""
+    token = _TRUSTED_ENUMERATION_SCOPE.set(
+        _TrustedEnumerationScope(interface_class, evidence_by_name)
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_ENUMERATION_SCOPE.reset(token)
 
 
 class InterfaceBase(ABC):
@@ -1038,6 +1083,13 @@ class InterfaceBase(ABC):
             return
         if not _should_validate_possible_values():
             return
+        if self._skip_trusted_possible_values_membership(
+            name,
+            input_field,
+            value,
+            identification,
+        ):
+            return
 
         allowed_values = input_field.resolve_possible_values(
             identification,
@@ -1055,6 +1107,27 @@ class InterfaceBase(ABC):
 
         if value not in allowed_values:
             raise InvalidInputValueError(name, value, allowed_values)
+
+    def _skip_trusted_possible_values_membership(
+        self,
+        name: str,
+        input_field: "Input[type[object]]",
+        value: object,
+        identification: Mapping[str, object],
+    ) -> bool:
+        """Return whether exact scoped evidence authorizes skipping membership."""
+        scope = _TRUSTED_ENUMERATION_SCOPE.get()
+        if scope is None or scope.interface_class is not type(self):
+            return False
+        evidence = scope.evidence_by_name.get(name)
+        if evidence is None or not evidence.authorizes(
+            input_field,
+            value,
+            identification,
+        ):
+            return False
+        evidence.track_membership_dependency()
+        return True
 
     @classmethod
     def create(cls, *args: object, **kwargs: object) -> dict[str, object]:
