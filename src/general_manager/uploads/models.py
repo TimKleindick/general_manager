@@ -30,6 +30,27 @@ TERMINAL_UPLOAD_INTENT_STATES: frozenset[str] = frozenset(
 )
 
 
+class UploadQuotaLock(models.Model):
+    """The single durable row used to serialize upload quota admission."""
+
+    id: models.PositiveSmallIntegerField[int] = models.PositiveSmallIntegerField(
+        primary_key=True,
+        default=1,
+        editable=False,
+    )
+    generation: models.PositiveBigIntegerField[int] = models.PositiveBigIntegerField(
+        default=0
+    )
+
+    class Meta:
+        constraints: ClassVar[tuple[models.BaseConstraint, ...]] = (
+            models.CheckConstraint(  # type: ignore[call-arg]
+                condition=models.Q(id=1),
+                name="gm_upload_quota_lock_singleton",
+            ),
+        )
+
+
 class UploadIntent(models.Model):
     """A field-bound, single-use authorization to stage one uploaded object."""
 

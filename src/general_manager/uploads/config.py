@@ -68,6 +68,12 @@ class FileUploadSettings:
     max_bytes: int = 25_000_000
     max_pending_intents_per_user: int = 20
     max_pending_bytes_per_user: int = 100_000_000
+    max_pending_intents_global: int = 1_000
+    max_pending_bytes_global: int = 5_000_000_000
+    begin_rate_limit_window_seconds: int = 60
+    max_begin_attempts_per_user: int = 30
+    max_begin_attempts_global: int = 1_000
+    allow_insecure_http: bool = False
     max_image_pixels: int = 40_000_000
     token_ttl_seconds: int = 900
     download_url_ttl_seconds: int = 300
@@ -115,6 +121,12 @@ _SETTING_NAMES = {
     "MAX_BYTES",
     "MAX_PENDING_INTENTS_PER_USER",
     "MAX_PENDING_BYTES_PER_USER",
+    "MAX_PENDING_INTENTS_GLOBAL",
+    "MAX_PENDING_BYTES_GLOBAL",
+    "BEGIN_RATE_LIMIT_WINDOW_SECONDS",
+    "MAX_BEGIN_ATTEMPTS_PER_USER",
+    "MAX_BEGIN_ATTEMPTS_GLOBAL",
+    "ALLOW_INSECURE_HTTP",
     "MAX_IMAGE_PIXELS",
     "TOKEN_TTL_SECONDS",
     "DOWNLOAD_URL_TTL_SECONDS",
@@ -139,6 +151,10 @@ def get_file_upload_settings() -> FileUploadSettings:
     delete_replaced_files = _boolean(
         "DELETE_REPLACED_FILES",
         configured.get("DELETE_REPLACED_FILES", defaults.delete_replaced_files),
+    )
+    allow_insecure_http = _boolean(
+        "ALLOW_INSECURE_HTTP",
+        configured.get("ALLOW_INSECURE_HTTP", defaults.allow_insecure_http),
     )
     http_upload_path = _safe_prefix(
         "HTTP_UPLOAD_PATH",
@@ -173,6 +189,42 @@ def get_file_upload_settings() -> FileUploadSettings:
                 "MAX_PENDING_BYTES_PER_USER", defaults.max_pending_bytes_per_user
             ),
         ),
+        max_pending_intents_global=_positive_integer(
+            "MAX_PENDING_INTENTS_GLOBAL",
+            configured.get(
+                "MAX_PENDING_INTENTS_GLOBAL",
+                defaults.max_pending_intents_global,
+            ),
+        ),
+        max_pending_bytes_global=_positive_integer(
+            "MAX_PENDING_BYTES_GLOBAL",
+            configured.get(
+                "MAX_PENDING_BYTES_GLOBAL",
+                defaults.max_pending_bytes_global,
+            ),
+        ),
+        begin_rate_limit_window_seconds=_positive_integer(
+            "BEGIN_RATE_LIMIT_WINDOW_SECONDS",
+            configured.get(
+                "BEGIN_RATE_LIMIT_WINDOW_SECONDS",
+                defaults.begin_rate_limit_window_seconds,
+            ),
+        ),
+        max_begin_attempts_per_user=_positive_integer(
+            "MAX_BEGIN_ATTEMPTS_PER_USER",
+            configured.get(
+                "MAX_BEGIN_ATTEMPTS_PER_USER",
+                defaults.max_begin_attempts_per_user,
+            ),
+        ),
+        max_begin_attempts_global=_positive_integer(
+            "MAX_BEGIN_ATTEMPTS_GLOBAL",
+            configured.get(
+                "MAX_BEGIN_ATTEMPTS_GLOBAL",
+                defaults.max_begin_attempts_global,
+            ),
+        ),
+        allow_insecure_http=allow_insecure_http,
         max_image_pixels=_positive_integer(
             "MAX_IMAGE_PIXELS",
             configured.get("MAX_IMAGE_PIXELS", defaults.max_image_pixels),

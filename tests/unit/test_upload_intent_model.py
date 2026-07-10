@@ -17,7 +17,7 @@ from django.db import IntegrityError, migrations, models, transaction
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
-from general_manager.uploads.models import UploadIntent
+from general_manager.uploads.models import UploadIntent, UploadQuotaLock
 from general_manager.uploads.tokens import (
     digest_upload_token,
     issue_upload_token,
@@ -84,6 +84,15 @@ class UploadIntentModelTests(TestCase):
             **_intent_data(**overrides),
         )
 
+    def test_quota_lock_is_seeded_and_constrained_to_one_fixed_row(self) -> None:
+        """Keep global admission serialization independent of user ordering."""
+        lock, _created = UploadQuotaLock.objects.get_or_create(pk=1)
+
+        assert lock.generation == 0
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                UploadQuotaLock.objects.create(pk=2)
+
     def test_intent_stores_only_token_digest_and_matches_raw_token(self) -> None:
         """Persist a one-way digest while accepting only the issued raw token."""
         token, digest = issue_upload_token()
@@ -136,17 +145,6 @@ class UploadIntentModelTests(TestCase):
         assert user_field.remote_field.on_delete is models.SET_NULL
         assert user_field.remote_field.related_name == "+"
         assert user_field.db_index is False
-
-    def test_deleting_owner_preserves_intent_for_cleanup(self) -> None:
-        """Retain staged-object recovery metadata after its owner is deleted."""
-        intent = self.make_intent()
-        intent_id = intent.pk
-
-        self.user.delete()
-
-        persisted = UploadIntent.objects.get(pk=intent_id)
-        assert persisted.user is None
-        assert persisted.staging_key == "uploads/staging/intent/avatar.png"
 
     def test_canonical_target_id_round_trips_beyond_255_characters(self) -> None:
         """Persist long serialized canonical IDs without a varchar ceiling."""
@@ -277,7 +275,7 @@ class UploadIntentSwappableUserMigrationTests(SimpleTestCase):
             from django.contrib.auth import get_user_model
             from django.core.management import call_command
             from django.db import connection, models
-            from general_manager.uploads.models import UploadIntent
+            from general_manager.uploads.models import UploadIntent, UploadQuotaLock
 
             call_command("migrate", run_syncdb=True, verbosity=0, interactive=False)
 
@@ -289,6 +287,30 @@ class UploadIntentSwappableUserMigrationTests(SimpleTestCase):
             assert user_field.null is True
             assert user_field.remote_field.on_delete is models.SET_NULL
             assert upload_intent._meta.db_table in connection.introspection.table_names()
+            assert UploadQuotaLock.objects.filter(pk=1, generation=0).exists()
+
+            owner = custom_user.objects.create_user(username="deleted-upload-owner")
+            intent = UploadIntent.objects.create(
+                user=owner,
+                token_digest="a" * 64,
+                manager_name="Profile",
+                field_name="avatar",
+                operation="create",
+                adapter_id="proxy",
+                adapter_version="1",
+                storage_fingerprint="sha256:" + "b" * 64,
+                staging_key="uploads/staging/intent/avatar.png",
+                original_filename="avatar.png",
+                declared_size=3,
+                declared_content_type="image/png",
+                declared_checksum_sha256="c" * 64,
+                expires_at=django.utils.timezone.now(),
+            )
+            intent_id = intent.pk
+            owner.delete()
+            persisted = UploadIntent.objects.get(pk=intent_id)
+            assert persisted.user is None
+            assert persisted.staging_key == "uploads/staging/intent/avatar.png"
 
             with connection.cursor() as cursor:
                 constraints = connection.introspection.get_constraints(

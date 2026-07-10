@@ -6,18 +6,33 @@ import base64
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+import hashlib
 import inspect
 import ntpath
 import re
+import secrets
+import sqlite3
+import time
 import unicodedata
 from typing import Protocol, cast
+from urllib.parse import quote, unquote, urlsplit
 from uuid import UUID, uuid4
 
+from django.conf import settings as django_settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache, caches
+from django.core.cache.backends.base import BaseCache
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core import signing
 from django.core.signing import BadSignature
-from django.db import DEFAULT_DB_ALIAS, models, router, transaction
+from django.db import (
+    DEFAULT_DB_ALIAS,
+    OperationalError,
+    connections,
+    models,
+    router,
+    transaction,
+)
 from django.utils import timezone
 
 from general_manager.cache.dependency_index import serialize_dependency_identifier
@@ -51,12 +66,13 @@ from general_manager.uploads.errors import (
     UploadStorageError,
     UploadTargetUnavailableError,
 )
-from general_manager.uploads.models import UploadIntent
+from general_manager.uploads.models import UploadIntent, UploadQuotaLock
 from general_manager.uploads.tokens import issue_upload_token
 from general_manager.uploads.types import (
     ChecksumAlgorithm,
     UploadIntentState,
     UploadOperation,
+    UploadTransport,
 )
 
 
@@ -65,12 +81,19 @@ _CONTENT_TYPE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$"
 )
 _HEX_SHA256 = re.compile(r"^[0-9A-Fa-f]{64}$")
-_ACTIVE_QUOTA_STATES = (
+_HTTP_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_ADAPTER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_STORAGE_FINGERPRINT = re.compile(r"^[!-~]{1,255}$")
+_EXPIRING_QUOTA_STATES = (
     UploadIntentState.PENDING.value,
     UploadIntentState.TRANSFERRING.value,
     UploadIntentState.UPLOADED.value,
 )
 _TRANSFER_CREDENTIAL_SALT = "general_manager.uploads.transfer"
+_SQLITE_BUSY_RETRY_ATTEMPTS = 6
+_SQLITE_BUSY_RETRY_DEADLINE_SECONDS = 0.25
+_SQLITE_BUSY_BASE_DELAY_SECONDS = 0.002
+_SQLITE_BUSY_MAX_DELAY_SECONDS = 0.02
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,17 +149,13 @@ class _UploadInterface(Protocol):
 type BeginUploadRateLimitHook = Callable[[object, object], object | None]
 
 
-def _allow_begin_upload(_user: object, _request: object) -> None:
-    """Default hook for projects that do not configure request-rate limiting."""
-
-
-_begin_upload_rate_limit_hook: BeginUploadRateLimitHook = _allow_begin_upload
+_begin_upload_rate_limit_hook: BeginUploadRateLimitHook | None = None
 upload_adapter_registry = UploadAdapterRegistry()
 
 
 def set_begin_upload_rate_limit_hook(
     hook: BeginUploadRateLimitHook | None,
-) -> BeginUploadRateLimitHook:
+) -> BeginUploadRateLimitHook | None:
     """Install a process-local rate-limit hook and return the previous hook.
 
     Hooks should raise :class:`UploadRateLimitExceededError` when admission is
@@ -146,8 +165,55 @@ def set_begin_upload_rate_limit_hook(
 
     global _begin_upload_rate_limit_hook
     previous = _begin_upload_rate_limit_hook
-    _begin_upload_rate_limit_hook = hook or _allow_begin_upload
+    _begin_upload_rate_limit_hook = hook
     return previous
+
+
+def _rate_limit_key(scope: str) -> str:
+    digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()
+    return f"general_manager:upload_begin:{digest}"
+
+
+def _increment_rate_limit_counter(key: str, *, window_seconds: int) -> int:
+    try:
+        if cache.add(key, 1, timeout=window_seconds):
+            return 1
+        try:
+            return int(cache.incr(key, 1))
+        except ValueError:
+            if cache.add(key, 1, timeout=window_seconds):
+                return 1
+            return int(cache.incr(key, 1))
+    except Exception as exc:
+        raise UploadStorageError from exc
+
+
+def _enforce_default_begin_rate_limit(
+    user: object,
+    settings: FileUploadSettings,
+) -> None:
+    try:
+        backend = caches["default"]
+    except Exception as exc:
+        raise UploadStorageError from exc
+    if type(backend).incr is BaseCache.incr:
+        raise UploadStorageError
+    global_total = _increment_rate_limit_counter(
+        _rate_limit_key("global"),
+        window_seconds=settings.begin_rate_limit_window_seconds,
+    )
+    if global_total > settings.max_begin_attempts_global:
+        raise UploadRateLimitExceededError
+
+    owner_pk = getattr(user, "pk", None)
+    if getattr(user, "is_authenticated", False) is not True or owner_pk is None:
+        return
+    user_total = _increment_rate_limit_counter(
+        _rate_limit_key(f"user:{owner_pk}"),
+        window_seconds=settings.begin_rate_limit_window_seconds,
+    )
+    if user_total > settings.max_begin_attempts_per_user:
+        raise UploadRateLimitExceededError
 
 
 def issue_upload_transfer_credential(
@@ -207,12 +273,21 @@ def begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
     avoid issuing intents for absent or unreadable objects.
     """
 
-    owner_pk = _authenticated_user_pk(user)
-    if _begin_upload_rate_limit_hook(user, request):
-        raise UploadRateLimitExceededError
-
-    values = cast(_BeginRequest, request)
     settings = get_file_upload_settings()
+    if _begin_upload_rate_limit_hook is None:
+        _enforce_default_begin_rate_limit(user, settings)
+    else:
+        try:
+            denied = bool(_begin_upload_rate_limit_hook(user, request))
+        except UploadError:
+            raise
+        except Exception as exc:
+            raise UploadStorageError from exc
+        if denied:
+            raise UploadRateLimitExceededError
+
+    owner_pk = _authenticated_user_pk(user)
+    values = cast(_BeginRequest, request)
     if not settings.enabled:
         raise UploadBackendUnsupportedError
 
@@ -240,7 +315,9 @@ def begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
 
     try:
         adapter = upload_adapter_registry.resolve(model_field.storage)
+        adapter_id, adapter_version = _validate_adapter_identity(adapter)
         storage_fingerprint = adapter.storage_fingerprint()
+        _validate_storage_fingerprint(storage_fingerprint)
     except UploadError:
         raise
     except Exception as exc:
@@ -251,65 +328,82 @@ def begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
     upload_url = f"/{settings.http_upload_path}{intent_id}"
 
     user_model = get_user_model()
-    with transaction.atomic(using=database_alias):
-        try:
-            owner = (
-                user_model._default_manager.using(database_alias)
-                .select_for_update()
-                .get(pk=owner_pk)
-            )
-        except user_model.DoesNotExist as exc:
-            raise UploadAuthenticationError from exc
 
-        _enforce_pending_quotas(
-            owner_pk=owner_pk,
-            size=size,
-            settings=settings,
-            database_alias=database_alias,
-        )
-        expires_at = timezone.now() + timedelta(seconds=settings.token_ttl_seconds)
-        transfer_credential = issue_upload_transfer_credential(
-            intent_id=intent_id,
-            owner_pk=owner_pk,
-            adapter_id=adapter.adapter_id,
-        )
-        transfer_headers = {"Authorization": f"GMUpload {transfer_credential}"}
-        expires_in = max(
-            1,
-            int((expires_at - timezone.now()).total_seconds()),
-        )
-        try:
-            instructions = adapter.create_upload_instructions(
-                stage_key=stage_key,
-                upload_url=upload_url,
-                content_type=content_type,
+    def admit() -> tuple[UploadInstructions, datetime]:
+        with transaction.atomic(using=database_alias):
+            _acquire_global_quota_lock(database_alias)
+            user_manager = user_model._default_manager.using(database_alias)
+            try:
+                owner = user_manager.select_for_update().get(pk=owner_pk)
+            except user_model.DoesNotExist as exc:
+                raise UploadAuthenticationError from exc
+
+            _enforce_pending_quotas(
+                owner_pk=owner_pk,
                 size=size,
-                checksum_sha256=checksum_sha256,
-                headers=transfer_headers,
-                expires_in=expires_in,
+                settings=settings,
+                database_alias=database_alias,
             )
-        except UploadError:
-            raise
-        except Exception as exc:
-            raise UploadStorageError from exc
-        UploadIntent.objects.using(database_alias).create(
-            id=intent_id,
-            user=owner,
-            token_digest=token_digest,
-            manager_name=manager_class.__name__,
-            field_name=model_field.name,
-            operation=operation.value,
-            target_id=target_id,
-            adapter_id=adapter.adapter_id,
-            adapter_version=str(adapter.adapter_version),
-            storage_fingerprint=storage_fingerprint,
-            staging_key=stage_key,
-            original_filename=filename,
-            declared_size=size,
-            declared_content_type=content_type,
-            declared_checksum_sha256=checksum_sha256,
-            expires_at=expires_at,
-        )
+            expires_at = timezone.now() + timedelta(seconds=settings.token_ttl_seconds)
+            transfer_credential = issue_upload_transfer_credential(
+                intent_id=intent_id,
+                owner_pk=owner_pk,
+                adapter_id=adapter_id,
+            )
+            transfer_headers = {"Authorization": f"GMUpload {transfer_credential}"}
+            expires_in = max(
+                1,
+                int((expires_at - timezone.now()).total_seconds()),
+            )
+            try:
+                instructions = adapter.create_upload_instructions(
+                    stage_key=stage_key,
+                    upload_url=upload_url,
+                    content_type=content_type,
+                    size=size,
+                    checksum_sha256=checksum_sha256,
+                    headers=transfer_headers,
+                    expires_in=expires_in,
+                )
+                _validate_upload_instructions(
+                    instructions,
+                    stage_key=stage_key,
+                    required_proxy_authorization=transfer_headers["Authorization"],
+                    allow_insecure_http=bool(
+                        django_settings.DEBUG and settings.allow_insecure_http
+                    ),
+                )
+                current_adapter_identity = _validate_adapter_identity(adapter)
+            except UploadError:
+                raise
+            except Exception as exc:
+                raise UploadStorageError from exc
+            if current_adapter_identity != (adapter_id, adapter_version):
+                raise UploadStorageError
+            UploadIntent.objects.using(database_alias).create(
+                id=intent_id,
+                user=owner,
+                token_digest=token_digest,
+                manager_name=manager_class.__name__,
+                field_name=model_field.name,
+                operation=operation.value,
+                target_id=target_id,
+                adapter_id=adapter_id,
+                adapter_version=str(adapter_version),
+                storage_fingerprint=storage_fingerprint,
+                staging_key=stage_key,
+                original_filename=filename,
+                declared_size=size,
+                declared_content_type=content_type,
+                declared_checksum_sha256=checksum_sha256,
+                expires_at=expires_at,
+            )
+        return instructions, expires_at
+
+    instructions, expires_at = _run_admission_transaction(
+        database_alias=database_alias,
+        operation=admit,
+    )
 
     return BeginFileUploadResult(
         intent_id=intent_id,
@@ -325,6 +419,178 @@ def _authenticated_user_pk(user: object) -> object:
     if is_authenticated is not True or pk is None:
         raise UploadAuthenticationError
     return pk
+
+
+def _validate_adapter_identity(adapter: object) -> tuple[str, int]:
+    adapter_id = getattr(adapter, "adapter_id", None)
+    adapter_version = getattr(adapter, "adapter_version", None)
+    if (
+        not isinstance(adapter_id, str)
+        or _ADAPTER_ID.fullmatch(adapter_id) is None
+        or isinstance(adapter_version, bool)
+        or not isinstance(adapter_version, int)
+        or adapter_version <= 0
+        or len(str(adapter_version)) > 64
+    ):
+        raise UploadStorageError
+    return adapter_id, adapter_version
+
+
+def _validate_storage_fingerprint(value: object) -> None:
+    if not isinstance(value, str) or _STORAGE_FINGERPRINT.fullmatch(value) is None:
+        raise UploadStorageError
+
+
+def _validate_upload_instructions(
+    instructions: object,
+    *,
+    stage_key: str,
+    required_proxy_authorization: str,
+    allow_insecure_http: bool,
+) -> None:
+    if type(instructions) is not UploadInstructions:
+        raise UploadStorageError
+    typed = instructions
+    if (
+        not isinstance(typed.transport, UploadTransport)
+        or typed.method != "PUT"
+        or typed.fields
+    ):
+        raise UploadStorageError
+
+    url = typed.url
+    if (
+        not isinstance(url, str)
+        or not url
+        or len(url) > 8192
+        or any(unicodedata.category(character).startswith("C") for character in url)
+    ):
+        raise UploadStorageError
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise UploadStorageError from exc
+    if typed.transport is UploadTransport.DIRECT:
+        allowed_schemes = {"https"}
+        if allow_insecure_http:
+            allowed_schemes.add("http")
+        if (
+            parsed.scheme not in allowed_schemes
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+        ):
+            raise UploadStorageError
+    else:
+        try:
+            decoded_url = unquote(url, errors="strict")
+        except UnicodeError as exc:
+            raise UploadStorageError from exc
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or not parsed.path.startswith("/")
+            or parsed.query
+            or parsed.fragment
+            or any(
+                unicodedata.category(character).startswith("C")
+                for character in decoded_url
+            )
+            or stage_key in decoded_url
+        ):
+            raise UploadStorageError
+
+    if len(typed.headers) > 64:
+        raise UploadStorageError
+    encoded_stage_key = quote(stage_key, safe="")
+    normalized_header_names: set[str] = set()
+    authorization_values: list[str] = []
+    for name, value in typed.headers.items():
+        if (
+            not isinstance(name, str)
+            or _HTTP_HEADER_NAME.fullmatch(name) is None
+            or len(name) > 255
+            or not isinstance(value, str)
+            or not value
+            or len(value) > 8192
+            or any(
+                unicodedata.category(character).startswith("C") for character in value
+            )
+            or stage_key in name
+            or stage_key in value
+            or encoded_stage_key in name
+            or encoded_stage_key in value
+        ):
+            raise UploadStorageError
+        normalized_name = name.casefold()
+        if normalized_name in normalized_header_names:
+            raise UploadStorageError
+        normalized_header_names.add(normalized_name)
+        if normalized_name == "authorization":
+            authorization_values.append(value)
+
+    if typed.transport is UploadTransport.PROXY:
+        if authorization_values != [required_proxy_authorization]:
+            raise UploadStorageError
+    elif authorization_values:
+        raise UploadStorageError
+
+
+def _run_admission_transaction(
+    *,
+    database_alias: str,
+    operation: Callable[[], tuple[UploadInstructions, datetime]],
+) -> tuple[UploadInstructions, datetime]:
+    """Retry a complete SQLite admission transaction after transient locking."""
+
+    deadline = time.monotonic() + _SQLITE_BUSY_RETRY_DEADLINE_SECONDS
+    for attempt in range(_SQLITE_BUSY_RETRY_ATTEMPTS):
+        try:
+            return operation()
+        except OperationalError as exc:
+            if not _is_sqlite_busy_error(exc, database_alias=database_alias):
+                raise
+            remaining = deadline - time.monotonic()
+            if attempt + 1 >= _SQLITE_BUSY_RETRY_ATTEMPTS or remaining <= 0:
+                raise UploadStorageError from exc
+            base_delay = min(
+                _SQLITE_BUSY_BASE_DELAY_SECONDS * (2**attempt),
+                _SQLITE_BUSY_MAX_DELAY_SECONDS,
+            )
+            jitter = base_delay * secrets.randbelow(1_001) / 1_000
+            time.sleep(min(base_delay + jitter, remaining))
+    raise AssertionError("unreachable")
+
+
+def _is_sqlite_busy_error(error: OperationalError, *, database_alias: str) -> bool:
+    if connections[database_alias].vendor != "sqlite":
+        return False
+    cause = error.__cause__
+    error_code = getattr(cause, "sqlite_errorcode", None)
+    if error_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+        return True
+    message = str(error).casefold()
+    return any(
+        marker in message
+        for marker in (
+            "database is busy",
+            "database is locked",
+            "database table is locked",
+        )
+    )
+
+
+def _acquire_global_quota_lock(database_alias: str) -> None:
+    """Serialize global quota checks on one fixed, migration-seeded row."""
+
+    manager = UploadQuotaLock.objects.using(database_alias)
+    manager.get_or_create(pk=1, defaults={"generation": 0})
+    if connections[database_alias].features.has_select_for_update:
+        manager.select_for_update().get(pk=1)
+    # SQLite ignores SELECT FOR UPDATE. Updating this same row acquires its
+    # database write lock before any quota reads and is harmless elsewhere.
+    manager.filter(pk=1).update(generation=models.F("generation") + 1)
 
 
 def _resolve_manager(value: object) -> type[GeneralManager]:
@@ -572,12 +838,22 @@ def _enforce_pending_quotas(
     database_alias: str,
 ) -> None:
     active = UploadIntent.objects.using(database_alias).filter(
-        user_id=owner_pk,
-        state__in=_ACTIVE_QUOTA_STATES,
-        expires_at__gt=timezone.now(),
+        models.Q(state=UploadIntentState.FINALIZING.value)
+        | models.Q(
+            state__in=_EXPIRING_QUOTA_STATES,
+            expires_at__gt=timezone.now(),
+        )
     )
-    if active.count() >= settings.max_pending_intents_per_user:
+    global_count = active.count()
+    if global_count >= settings.max_pending_intents_global:
         raise UploadQuotaExceededError
-    total = active.aggregate(total=models.Sum("declared_size"))["total"] or 0
+    global_bytes = active.aggregate(total=models.Sum("declared_size"))["total"] or 0
+    if global_bytes + size > settings.max_pending_bytes_global:
+        raise UploadQuotaExceededError
+
+    user_active = active.filter(user_id=owner_pk)
+    if user_active.count() >= settings.max_pending_intents_per_user:
+        raise UploadQuotaExceededError
+    total = user_active.aggregate(total=models.Sum("declared_size"))["total"] or 0
     if total + size > settings.max_pending_bytes_per_user:
         raise UploadQuotaExceededError
