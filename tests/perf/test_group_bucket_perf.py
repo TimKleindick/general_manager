@@ -252,16 +252,15 @@ def test_group_bucket_construction_work(
         return GroupBucket(manager_class, ("group_key",), source_bucket)
 
     counters.reset()
-    if expected_groups == ROW_COUNT:
+    if expected_groups == ROW_COUNT and pytestconfig.getoption("verbose") >= 2:
         diagnostic = capture_diagnostics(construct_group_bucket)
         bucket = diagnostic.result
         observations = counters.snapshot()
-        if pytestconfig.getoption("verbose") >= 2:
-            print(
-                "GROUP_10000_DIAGNOSTIC "
-                f"elapsed={diagnostic.elapsed_seconds:.6f}s "
-                f"peak={diagnostic.peak_bytes}B"
-            )
+        print(
+            "GROUP_10000_DIAGNOSTIC "
+            f"elapsed={diagnostic.elapsed_seconds:.6f}s "
+            f"peak={diagnostic.peak_bytes}B"
+        )
     else:
         bucket = construct_group_bucket()
         observations = counters.snapshot()
@@ -281,3 +280,34 @@ def test_group_bucket_construction_work(
 
     for name, observed in zip(PERF_NAMES[expected_groups], observations, strict=True):
         perf_budgets.assert_observation(name, observed)
+
+
+def test_default_verbosity_skips_group_diagnostics(
+    source_managers: list[GroupPerfManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DefaultVerbosityConfig:
+        @staticmethod
+        def getoption(name: str) -> int:
+            assert name == "verbose"
+            return 0
+
+    def fail_capture_diagnostics(callback: Callable[[], object]) -> Any:
+        pytest.fail("capture_diagnostics ran at default verbosity")
+
+    monkeypatch.setattr(
+        "tests.perf.test_group_bucket_perf.capture_diagnostics",
+        fail_capture_diagnostics,
+    )
+    names = PERF_NAMES[ROW_COUNT]
+    budgets = PerfBudgets(
+        dict(zip(names, (ROW_COUNT, ROW_COUNT, ROW_COUNT), strict=True))
+    )
+
+    test_group_bucket_construction_work(
+        ROW_COUNT,
+        source_managers,
+        monkeypatch,
+        budgets,
+        cast(pytest.Config, DefaultVerbosityConfig()),
+    )
