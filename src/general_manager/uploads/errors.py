@@ -150,3 +150,21 @@ class UploadDatabaseMismatchError(UploadError):
 
     code = "UPLOAD_DATABASE_MISMATCH"
     default_message = "The requested upload destination is not available."
+
+
+_FRAMEWORK_UPLOAD_ERROR_TYPES: frozenset[type[UploadError]] = frozenset(
+    value
+    for value in tuple(globals().values())
+    if isinstance(value, type)
+    and issubclass(value, UploadError)
+    and value.__module__ == __name__
+)
+
+
+def stable_upload_error(error: UploadError) -> UploadError:
+    """Return a fresh framework-owned public error for one caught failure."""
+
+    error_type = type(error)
+    if error_type not in _FRAMEWORK_UPLOAD_ERROR_TYPES:
+        return UploadStorageError()
+    return error_type()

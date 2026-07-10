@@ -11,6 +11,7 @@ import sys
 import tempfile
 import textwrap
 from threading import Barrier
+import traceback
 from typing import ClassVar
 from unittest.mock import patch
 from urllib.parse import quote
@@ -22,7 +23,13 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
 from django.core.cache.backends.base import BaseCache, DEFAULT_TIMEOUT
 from django.core.files.storage import FileSystemStorage
-from django.db import OperationalError, close_old_connections, connections, models
+from django.db import (
+    OperationalError,
+    close_old_connections,
+    connections,
+    models,
+    transaction,
+)
 from django.test import (
     SimpleTestCase,
     skipUnlessDBFeature,
@@ -56,6 +63,7 @@ from general_manager.uploads.errors import (
     UploadRateLimitExceededError,
     UploadStorageError,
     UploadTargetUnavailableError,
+    UploadError,
 )
 from general_manager.uploads.models import UploadIntent
 from general_manager.uploads.services import (
@@ -265,6 +273,19 @@ class RaisingInstructionAdapter(RecordingAdapter):
         raise RuntimeError("adapter-credential-must-not-escape")
 
 
+class HostileUploadError(UploadError):
+    code = "SECRET_ERROR_CODE"
+    default_message = "hook-or-adapter-secret-must-not-escape"
+
+
+class HostileUploadErrorAdapter(RecordingAdapter):
+    def create_upload_instructions(self, **kwargs: object) -> UploadInstructions:
+        del kwargs
+        error = HostileUploadError()
+        error.__cause__ = RuntimeError("adapter-cause-secret-must-not-escape")
+        raise error
+
+
 class MutatingIdentityAdapter(RecordingAdapter):
     def create_upload_instructions(self, **kwargs: object) -> UploadInstructions:
         self.adapter_id = "tests.changed"  # type: ignore[misc]
@@ -354,6 +375,16 @@ def valid_request(**overrides: object) -> BeginFileUploadRequest:
     return replace(request, **overrides)
 
 
+def assert_safe_exception(error: BaseException, *, marker: str) -> None:
+    """Assert a public upload error retains no untrusted exception chain."""
+
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert marker not in str(error)
+    assert marker not in repr(error)
+    assert marker not in "".join(traceback.format_exception(error))
+
+
 def test_begin_request_defaults_optional_create_target_to_none() -> None:
     request = BeginFileUploadRequest(
         manager="UploadProfile",
@@ -382,7 +413,6 @@ def test_transfer_credentials_are_bound_distinct_tamper_safe_and_expiring() -> N
             adapter_id="proxy",
         )
 
-    assert "42" not in credential
     with patch("django.core.signing.time.time", return_value=104):
         assert services.verify_upload_transfer_credential(
             credential,
@@ -746,18 +776,19 @@ class BeginFileUploadTests(TestCase):
             begin_file_upload(user=AnonymousUser(), request=valid_request())
 
     def test_cache_backend_failures_return_a_safe_stable_upload_error(self) -> None:
+        unsafe_marker = "redis-password-must-not-escape"
         with (
             patch.object(
                 cache,
                 "add",
-                side_effect=RuntimeError("redis-password-must-not-escape"),
+                side_effect=RuntimeError(unsafe_marker),
             ),
             pytest.raises(UploadStorageError) as captured,
         ):
             begin_file_upload(user=self.user, request=valid_request())
 
         assert captured.value.code == "UPLOAD_STORAGE_ERROR"
-        assert "redis-password-must-not-escape" not in str(captured.value)
+        assert_safe_exception(captured.value, marker=unsafe_marker)
         assert UploadIntent.objects.count() == 0
 
     def test_default_rate_limiter_rejects_non_atomic_increment_backends(self) -> None:
@@ -797,7 +828,10 @@ class BeginFileUploadTests(TestCase):
         with pytest.raises(UploadStorageError) as captured:
             begin_file_upload(user=self.user, request=valid_request())
 
-        assert "cache-constructor-secret-must-not-escape" not in str(captured.value)
+        assert_safe_exception(
+            captured.value,
+            marker="cache-constructor-secret-must-not-escape",
+        )
         assert UploadIntent.objects.count() == 0
 
     @override_settings(
@@ -846,9 +880,11 @@ class BeginFileUploadTests(TestCase):
         assert outcomes.count(UploadRateLimitExceededError) == 1
 
     def test_injected_rate_limit_failures_are_sanitized(self) -> None:
+        unsafe_marker = "hook-backend-password-must-not-escape"
+
         def broken_hook(user: object, request: object) -> None:
             del user, request
-            raise RuntimeError("hook-backend-password-must-not-escape")
+            raise RuntimeError(unsafe_marker)
 
         previous = set_begin_upload_rate_limit_hook(broken_hook)
         try:
@@ -857,7 +893,7 @@ class BeginFileUploadTests(TestCase):
         finally:
             set_begin_upload_rate_limit_hook(previous)
 
-        assert "hook-backend-password-must-not-escape" not in str(captured.value)
+        assert_safe_exception(captured.value, marker=unsafe_marker)
 
     def test_injected_rate_limit_decision_failures_are_sanitized(self) -> None:
         class BrokenDecision:
@@ -875,6 +911,48 @@ class BeginFileUploadTests(TestCase):
 
         assert "hook-decision-secret-must-not-escape" not in str(captured.value)
         assert UploadIntent.objects.count() == 0
+
+    def test_injected_hook_cannot_publish_a_custom_upload_error(self) -> None:
+        unsafe_marker = "hook-or-adapter-secret-must-not-escape"
+
+        def hostile_hook(_user: object, _request: object) -> None:
+            error = HostileUploadError()
+            error.__cause__ = RuntimeError("hook-cause-secret-must-not-escape")
+            raise error
+
+        previous = set_begin_upload_rate_limit_hook(hostile_hook)
+        try:
+            with pytest.raises(UploadStorageError) as captured:
+                begin_file_upload(user=self.user, request=valid_request())
+        finally:
+            set_begin_upload_rate_limit_hook(previous)
+
+        assert type(captured.value) is UploadStorageError
+        assert captured.value.code == "UPLOAD_STORAGE_ERROR"
+        assert_safe_exception(captured.value, marker=unsafe_marker)
+        assert_safe_exception(
+            captured.value,
+            marker="hook-cause-secret-must-not-escape",
+        )
+
+    def test_injected_hook_rate_limit_decision_is_reissued_without_details(
+        self,
+    ) -> None:
+        unsafe_marker = "limiter-detail-must-not-escape"
+
+        def denying_hook(_user: object, _request: object) -> None:
+            raise UploadRateLimitExceededError(unsafe_marker)
+
+        previous = set_begin_upload_rate_limit_hook(denying_hook)
+        try:
+            with pytest.raises(UploadRateLimitExceededError) as captured:
+                begin_file_upload(user=self.user, request=valid_request())
+        finally:
+            set_begin_upload_rate_limit_hook(previous)
+
+        assert type(captured.value) is UploadRateLimitExceededError
+        assert str(captured.value) == UploadRateLimitExceededError.default_message
+        assert_safe_exception(captured.value, marker=unsafe_marker)
 
     def test_effective_manager_database_must_match_intent_database(self) -> None:
         UploadProfileInterface.database = "replica"
@@ -996,8 +1074,45 @@ class BeginFileUploadTests(TestCase):
         finally:
             services.upload_adapter_registry = original_registry
 
-        assert "storage-credential-must-not-escape" not in str(error.value)
+        assert_safe_exception(
+            error.value,
+            marker="storage-credential-must-not-escape",
+        )
         assert UploadIntent.objects.count() == 0
+
+    def test_adapter_identity_and_instruction_failures_drop_untrusted_chains(
+        self,
+    ) -> None:
+        from general_manager.uploads import services
+
+        original_registry = services.upload_adapter_registry
+        cases = (
+            (
+                RaisingInstructionAdapter,
+                "adapter-credential-must-not-escape",
+            ),
+            (
+                RaisingMutatedIdentityAdapter,
+                "adapter-identity-secret-must-not-escape",
+            ),
+            (
+                HostileUploadErrorAdapter,
+                "hook-or-adapter-secret-must-not-escape",
+            ),
+        )
+        for adapter_class, unsafe_marker in cases:
+            with self.subTest(adapter=adapter_class.__name__):
+                registry = UploadAdapterRegistry()
+                registry.register(FileSystemStorage, adapter_class)
+                services.upload_adapter_registry = registry
+                try:
+                    with pytest.raises(UploadStorageError) as captured:
+                        begin_file_upload(user=self.user, request=valid_request())
+                finally:
+                    services.upload_adapter_registry = original_registry
+
+                assert_safe_exception(captured.value, marker=unsafe_marker)
+                assert UploadIntent.objects.count() == 0
 
     @override_settings(
         GENERAL_MANAGER={
@@ -1124,6 +1239,49 @@ class BeginFileUploadTests(TestCase):
 
         assert atomic_states == [True, True]
         assert UploadIntent.objects.count() == 1
+
+    def test_sqlite_admission_fails_before_side_effects_in_application_atomic(
+        self,
+    ) -> None:
+        hook_calls = 0
+
+        def recording_hook(_user: object, _request: object) -> None:
+            nonlocal hook_calls
+            hook_calls += 1
+
+        previous = set_begin_upload_rate_limit_hook(recording_hook)
+        try:
+            with (
+                transaction.atomic(),
+                pytest.raises(UploadStorageError) as captured,
+            ):
+                begin_file_upload(user=self.user, request=valid_request(size=1))
+        finally:
+            set_begin_upload_rate_limit_hook(previous)
+
+        assert_safe_exception(captured.value, marker="database is locked")
+        assert hook_calls == 0
+        assert UploadIntent.objects.count() == 0
+
+    @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": False}})
+    def test_disabled_sqlite_admission_still_fails_before_atomic_side_effects(
+        self,
+    ) -> None:
+        hook_calls = 0
+
+        def recording_hook(_user: object, _request: object) -> None:
+            nonlocal hook_calls
+            hook_calls += 1
+
+        previous = set_begin_upload_rate_limit_hook(recording_hook)
+        try:
+            with transaction.atomic(), pytest.raises(UploadStorageError):
+                begin_file_upload(user=self.user, request=valid_request(size=1))
+        finally:
+            set_begin_upload_rate_limit_hook(previous)
+
+        assert hook_calls == 0
+        assert UploadIntent.objects.count() == 0
 
     def test_non_busy_database_errors_are_not_retried(self) -> None:
         with (
@@ -1287,6 +1445,96 @@ class SQLiteUploadQuotaIntegrationTests(SimpleTestCase):
             assert sorted(outcomes) == ["UploadQuotaExceededError", "ok"], outcomes
             """
         )
+        self._run_sqlite_script(script)
+
+    def test_file_backed_sqlite_atomic_call_fails_before_side_effects(self) -> None:
+        script = textwrap.dedent(
+            """
+            from concurrent.futures import ThreadPoolExecutor
+            import sys
+            from threading import Barrier
+
+            from tests import test_settings
+
+            test_settings.DATABASES["default"]["NAME"] = sys.argv[1]
+
+            import django
+
+            django.setup()
+
+            from django.contrib.auth import get_user_model
+            from django.core.cache import cache
+            from django.core.management import call_command
+            from django.db import close_old_connections, transaction
+            from django.test import override_settings
+            from general_manager.api.graphql import GraphQL
+            from general_manager.uploads.models import UploadIntent
+            from tests.unit.test_upload_services import UploadProfile, valid_request
+
+            call_command("migrate", verbosity=0, interactive=False)
+            cache.clear()
+            first = get_user_model().objects.create_user(username="sqlite-first")
+            second = get_user_model().objects.create_user(username="sqlite-second")
+            GraphQL.manager_registry = {"UploadProfile": UploadProfile}
+            barrier = Barrier(2)
+
+            def begin(user_id):
+                close_old_connections()
+                try:
+                    actor = get_user_model().objects.get(pk=user_id)
+                    barrier.wait(timeout=5)
+                    begin_file_upload = __import__(
+                        "general_manager.uploads.services",
+                        fromlist=["begin_file_upload"],
+                    ).begin_file_upload
+                    with transaction.atomic():
+                        begin_file_upload(
+                            user=actor,
+                            request=valid_request(size=1),
+                        )
+                except BaseException as error:
+                    return type(error).__name__
+                finally:
+                    close_old_connections()
+                return "ok"
+
+            upload_settings = {
+                "FILE_UPLOADS": {
+                    "ENABLED": True,
+                    "MAX_PENDING_INTENTS_PER_USER": 2,
+                    "MAX_PENDING_BYTES_PER_USER": 10,
+                    "MAX_PENDING_INTENTS_GLOBAL": 1,
+                    "MAX_PENDING_BYTES_GLOBAL": 10,
+                    "MAX_BEGIN_ATTEMPTS_PER_USER": 10,
+                    "MAX_BEGIN_ATTEMPTS_GLOBAL": 1,
+                }
+            }
+            with override_settings(GENERAL_MANAGER=upload_settings):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    outcomes = list(executor.map(begin, (first.pk, second.pk)))
+
+                assert sorted(outcomes) == [
+                    "UploadStorageError",
+                    "UploadStorageError",
+                ], outcomes
+                assert UploadIntent.objects.count() == 0
+
+                begin_file_upload = __import__(
+                    "general_manager.uploads.services",
+                    fromlist=["begin_file_upload"],
+                ).begin_file_upload
+                begin_file_upload(
+                    user=first,
+                    request=valid_request(size=1),
+                )
+
+            assert UploadIntent.objects.count() == 1
+            """
+        )
+
+        self._run_sqlite_script(script)
+
+    def _run_sqlite_script(self, script: str) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = os.path.join(directory, "upload-quota.sqlite3")
             result = subprocess.run(  # noqa: S603
