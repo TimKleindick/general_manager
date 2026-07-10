@@ -52,6 +52,42 @@ commit. You can run them manually with `pre-commit run --all-files`.
   python -m pytest
   ```
 
+### Performance regression tests
+
+Performance tests remain enabled as regression gates in the normal test suite.
+To run only those tests, select the `perf` marker:
+
+```bash
+python -m pytest -m perf
+```
+
+For a focused database run or a complete calibration recording, use:
+
+```bash
+python -m pytest tests/perf/test_database_bucket_perf.py -vv
+GENERAL_MANAGER_RECORD_PERF=1 python -m pytest tests/perf -q -s
+```
+
+Deterministic integer ceilings for queries, callbacks, source yields,
+manager/group constructions, and cache work are CI pass/fail gates. Elapsed time
+and peak allocations are diagnostics only: representative cases emit them with
+`-vv`, but they never determine whether a test passes. Setup and fixture work
+must stay outside measured blocks, and functional correctness assertions must
+accompany the metrics.
+
+Calibrate a ceiling only after three complete recording runs produce identical,
+ordered `PERF_OBSERVATION` name/value output. Record the exact current counts
+without padding. Every budget name must be unique and observed exactly once;
+full-suite teardown validates the complete manifest. Budget increases require
+an inline explanation and performance-regression review. Lower a ceiling only
+after stable before/after evidence supports the change.
+
+The current deterministic counts describe the SQLite CI baseline. Add separate
+coverage if a backend needs its own budgets; do not assume these counts apply to
+unsupported databases. Issue #337 establishes measurement infrastructure and
+intentionally makes no claim of a direct runtime speedup. Later optimizations
+should use these baselines and lower them when stable evidence supports it.
+
 ## Documentation
 
 Documentation lives in the `docs/` directory and is published with MkDocs. To
