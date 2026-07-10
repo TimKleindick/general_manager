@@ -113,7 +113,7 @@ def add_file_upload_urls() -> None:
                 key,
             )
         )
-    urlconf.urlpatterns[:] = [*unowned, *generated]
+    urlconf.urlpatterns[:] = [*generated, *unowned]
     clear_url_caches()
 
 

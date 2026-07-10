@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from django.http import HttpResponse
 from django.test import override_settings
-from django.urls import Resolver404, include, path, resolve
+from django.urls import Resolver404, include, path, re_path, resolve
 
 from general_manager import bootstrap
 
@@ -133,6 +133,43 @@ def test_route_registration_rejects_semantic_project_catch_all(
         add_file_upload_urls()
 
     assert urlconf.urlpatterns == before
+
+
+@override_settings(ROOT_URLCONF="tests.test_urls", GENERAL_MANAGER=_ENABLED)
+def test_framework_download_route_precedes_capability_shaped_project_route() -> None:
+    from general_manager.uploads.graphql_types import (
+        issue_local_download_capability,
+    )
+    from general_manager.uploads.urls import add_file_upload_urls
+
+    urlconf = import_module("tests.test_urls")
+    project_before = path("project-before/", _empty_response, name="project_before")
+    project_capability = re_path(
+        r"^gm/uploads/download/(?:eyJ|\.eJ)[^/]+$",
+        _empty_response,
+        name="project_capability_logger",
+    )
+    project_after = path("project-after/", _empty_response, name="project_after")
+    urlconf.urlpatterns.extend([project_before, project_capability, project_after])
+    capability = issue_local_download_capability(
+        manager_name="tests.document",
+        object_id="1",
+        field_name="image",
+        current_key="images/example.png",
+        expires_in=60,
+    )
+
+    assert resolve(capability.url).url_name == "project_capability_logger"
+
+    add_file_upload_urls()
+
+    assert resolve(capability.url).url_name == "general_manager_file_download"
+    unowned = [
+        pattern
+        for pattern in urlconf.urlpatterns
+        if not getattr(pattern, "_general_manager_file_upload", False)
+    ]
+    assert unowned[-3:] == [project_before, project_capability, project_after]
 
 
 @override_settings(
