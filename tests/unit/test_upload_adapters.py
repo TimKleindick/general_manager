@@ -949,6 +949,17 @@ def test_proxy_requires_atomic_create_capability_to_be_exactly_true(
     assert storage.save_attempts == []
 
 
+def test_proxy_rejects_filesystem_storage_without_explicit_overwrite_policy(
+    tmp_path: Path,
+) -> None:
+    storage = FileSystemStorage(location=tmp_path)
+    storage.__dict__.pop("_allow_overwrite")
+    adapter = ProxyUploadAdapter(storage)
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter._require_conditional_creation("gm-staging/intent.bin")
+
+
 def test_proxy_rejects_overwrite_enabled_storage_before_occupied_stage_write(
     tmp_path: Path,
 ) -> None:

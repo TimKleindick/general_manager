@@ -5,8 +5,12 @@ calls work with other Django storages; only the transfer instructions change.
 
 ## Prerequisites
 
-Install GeneralManager's normal Django dependencies and Pillow when using
-`ImageField`. Apply the internal upload-intent migration in every environment:
+Install the image-upload extra when using `ImageField`. Apply the internal
+upload-intent migration in every environment:
+
+```bash
+pip install "GeneralManager[file-upload-image]"
+```
 
 ```bash
 python manage.py migrate

@@ -19,7 +19,8 @@ from uuid import UUID
 
 from django.core.files import File
 from django.core.files.base import ContentFile
-from django.core.files.storage import FileSystemStorage, Storage, storages
+from django.core.files import storage as django_storage
+from django.core.files.storage import FileSystemStorage, Storage
 
 from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
@@ -42,6 +43,19 @@ class PublicUploadUrlUnsupportedError(ValueError):
 
 
 _ExceptionT = TypeVar("_ExceptionT", bound=Exception)
+
+
+class _StorageHandler(Protocol):
+    def __getitem__(self, alias: str) -> Storage: ...
+
+
+class _FileSystemOverwritePolicy(Protocol):
+    _allow_overwrite: bool
+
+
+def _default_storage() -> Storage:
+    handler = cast(_StorageHandler, vars(django_storage)["storages"])
+    return handler["default"]
 
 
 def _exception(
@@ -306,7 +320,7 @@ class ProxyUploadAdapter:
         """Resolve the current default lazily so setting overrides take effect."""
         if self._provided_storage is not None:
             return self._provided_storage
-        return storages["default"]
+        return _default_storage()
 
     @property
     def supports_public_urls(self) -> bool:
@@ -1049,7 +1063,14 @@ class ProxyUploadAdapter:
         """
         storage = self.storage
         if isinstance(storage, FileSystemStorage):
-            if storage._allow_overwrite:
+            try:
+                allow_overwrite = cast(
+                    _FileSystemOverwritePolicy,
+                    storage,
+                )._allow_overwrite
+            except AttributeError:
+                allow_overwrite = None
+            if allow_overwrite is not False:
                 raise _exception(
                     UploadBackendUnsupportedError,
                     "The storage backend permits overwriting existing object keys.",
@@ -1141,7 +1162,7 @@ class UploadAdapterRegistry:
             self._registrations[storage_class] = factory
 
     def resolve(self, storage: Storage | None = None) -> UploadAdapter:
-        resolved_storage = storage if storage is not None else storages["default"]
+        resolved_storage = storage if storage is not None else _default_storage()
         with self._lock:
             explicit = self._resolve_explicit_factory(resolved_storage)
             if explicit is not None:
@@ -1164,7 +1185,7 @@ class UploadAdapterRegistry:
         storage: Storage | None = None,
     ) -> UploadAdapter | None:
         identity = (adapter_id, adapter_version)
-        resolved_storage = storage if storage is not None else storages["default"]
+        resolved_storage = storage if storage is not None else _default_storage()
         with self._lock:
             explicit = self._resolve_explicit_factory(resolved_storage)
             if explicit is not None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 from dataclasses import asdict
 from datetime import timedelta
 from io import BytesIO
@@ -618,6 +619,41 @@ def test_image_field_decodes_staged_content_before_domain_write(
     assert intent.state == UploadIntentState.REJECTED.value
     assert intent.finalization_error_code == "INVALID_IMAGE"
     assert not FinalizationRecord.objects.filter(label="must-not-persist").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_image_field_fails_safely_when_pillow_is_not_installed(
+    django_user_model: type[models.Model],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = django_user_model.objects.create_user(username="finalize-no-pillow")
+    intent, candidate = _uploaded_intent(
+        user,
+        field_name="image",
+        content=b"image bytes are not inspected without Pillow",
+        content_type="image/png",
+    )
+    original_import = builtins.__import__
+
+    def import_without_pillow(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "PIL":
+            raise ImportError
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_pillow)
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        FinalizationInterface.create(creator_id=user.pk, image=candidate)
+
+    intent.refresh_from_db()
+    assert intent.state == UploadIntentState.UPLOADED.value
 
 
 @pytest.mark.django_db(transaction=True)
