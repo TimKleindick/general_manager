@@ -39,14 +39,17 @@ class DiagnosticObservation(Generic[T]):
 
 
 def capture_diagnostics(callback: Callable[[], T]) -> DiagnosticObservation[T]:
-    tracemalloc.start()
+    owns_tracing = not tracemalloc.is_tracing()
+    if owns_tracing:
+        tracemalloc.start()
     started = perf_counter()
     try:
         result = callback()
         elapsed = perf_counter() - started
         _, peak_bytes = tracemalloc.get_traced_memory()
     finally:
-        tracemalloc.stop()
+        if owns_tracing:
+            tracemalloc.stop()
     return DiagnosticObservation(result, elapsed, peak_bytes)
 
 
@@ -58,14 +61,14 @@ class PerfBudgets:
 
     def assert_observation(self, name: str, observed: int) -> None:
         assert name in self._ceilings, f"missing performance budget: {name}"
-        self.observations[name] = observed
-        if self._record:
-            print(f"PERF_OBSERVATION {name}={observed}")
-            return
         ceiling = self._ceilings[name]
         assert type(ceiling) is int and ceiling >= 0, (
             f"invalid performance budget: {name}={ceiling!r}"
         )
+        self.observations[name] = observed
+        if self._record:
+            print(f"PERF_OBSERVATION {name}={observed}")
+            return
         assert observed <= ceiling, (
             f"{name}: observed={observed} exceeded ceiling={ceiling}"
         )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tracemalloc
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -93,7 +94,21 @@ def test_budget_rejects_an_invalid_ceiling(ceiling: object) -> None:
     with pytest.raises(AssertionError, match="invalid performance budget: INVALID"):
         budgets.assert_observation("INVALID", 1)
 
-    assert budgets.observations == {"INVALID": 1}
+    assert budgets.observations == {}
+
+
+@pytest.mark.parametrize("ceiling", ["1", True, 1.5, -1])
+def test_record_mode_rejects_an_invalid_ceiling_before_recording(
+    ceiling: object,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    budgets = PerfBudgets({"INVALID": ceiling}, record=True)
+
+    with pytest.raises(AssertionError, match="invalid performance budget: INVALID"):
+        budgets.assert_observation("INVALID", 1)
+
+    assert budgets.observations == {}
+    assert capsys.readouterr().out == ""
 
 
 def test_manifest_validation_reports_sorted_missing_unused_and_invalid_names() -> None:
@@ -128,11 +143,69 @@ def test_integer_zero_is_a_valid_budget() -> None:
 
 
 def test_capture_diagnostics_returns_result_elapsed_and_peak_bytes() -> None:
-    def build_values() -> list[int]:
-        return list(range(10))
+    allocation_size = 64 * 1024
+
+    def build_values() -> bytearray:
+        return bytearray(allocation_size)
 
     observation = capture_diagnostics(build_values)
 
-    assert observation.result == list(range(10))
+    assert len(observation.result) == allocation_size
     assert observation.elapsed_seconds >= 0
-    assert observation.peak_bytes >= 0
+    assert observation.peak_bytes > 0
+
+
+def test_capture_diagnostics_restores_inactive_tracing_after_success() -> None:
+    tracing_was_active = tracemalloc.is_tracing()
+    if tracing_was_active:
+        tracemalloc.stop()
+
+    try:
+        observation = capture_diagnostics(lambda: "result")
+
+        assert observation.result == "result"
+        assert not tracemalloc.is_tracing()
+    finally:
+        if tracing_was_active:
+            tracemalloc.start()
+        elif tracemalloc.is_tracing():
+            tracemalloc.stop()
+
+
+def test_capture_diagnostics_preserves_active_tracing_after_success() -> None:
+    tracing_was_active = tracemalloc.is_tracing()
+    if not tracing_was_active:
+        tracemalloc.start()
+
+    try:
+        observation = capture_diagnostics(lambda: "result")
+
+        assert observation.result == "result"
+        assert observation.peak_bytes >= 0
+        assert tracemalloc.is_tracing()
+    finally:
+        if tracing_was_active and not tracemalloc.is_tracing():
+            tracemalloc.start()
+        elif not tracing_was_active and tracemalloc.is_tracing():
+            tracemalloc.stop()
+
+
+def test_capture_diagnostics_propagates_exception_and_restores_tracing() -> None:
+    tracing_was_active = tracemalloc.is_tracing()
+    if not tracing_was_active:
+        tracemalloc.start()
+
+    def fail() -> None:
+        message = "callback failed"
+        raise RuntimeError(message)
+
+    try:
+        with pytest.raises(RuntimeError, match="callback failed"):
+            capture_diagnostics(fail)
+
+        assert tracemalloc.is_tracing()
+    finally:
+        if tracing_was_active and not tracemalloc.is_tracing():
+            tracemalloc.start()
+        elif not tracing_was_active and tracemalloc.is_tracing():
+            tracemalloc.stop()
