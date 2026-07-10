@@ -76,7 +76,12 @@ class UploadStorageError(UploadError):
 
 
 class UploadObjectMissingError(UploadStorageError):
-    """Internal exact-object absence signal used by idempotent cleanup."""
+    """Stable adapter signal that an exact object is already absent.
+
+    Custom adapters should raise this only when they can distinguish absence
+    from an outage. Cleanup treats it as idempotent success; client boundaries
+    always map it to a generic safe upload error.
+    """
 
     default_message = "The exact upload object no longer exists."
 

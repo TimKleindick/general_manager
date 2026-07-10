@@ -163,10 +163,13 @@ class _DirectRaceAdapter(ProxyUploadAdapter):
 
 
 def test_public_api_exports_upload_policy_and_adapter_registration() -> None:
+    from general_manager.uploads.errors import UploadObjectMissingError
+
     assert api.FileUploadPolicy is FileUploadPolicy
     assert callable(api.register_upload_adapter)
     assert api.UploadAdapter is UploadAdapter
     assert api.ExactPublicDownloadAdapter is ExactPublicDownloadAdapter
+    assert api.UploadObjectMissingError is UploadObjectMissingError
 
     class CustomStorage(FileSystemStorage):
         pass

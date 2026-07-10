@@ -75,11 +75,25 @@ attributes. Public exception classes are:
 - `UploadSizeMismatchError`, `UploadChecksumMismatchError`,
   `InvalidFileTypeError`, `InvalidImageError`;
 - `UploadBackendUnsupportedError`, `UploadStorageChangedError`,
-  `UploadFinalizationFailedError`, and `UploadStorageError`.
+  `UploadObjectMissingError`, `UploadFinalizationFailedError`, and
+  `UploadStorageError`.
 
 Adapters may raise these framework exceptions. Arbitrary subclasses, messages,
 and exception chains are sanitized at GraphQL/HTTP boundaries; do not rely on
 custom error codes reaching clients.
+
+Custom adapters should raise `UploadObjectMissingError` only when an exact
+inspect or cleanup operation can prove that its target is already absent. The
+cleanup worker treats that signal as idempotent success. Direct-upload
+preflight maps it to the generic client-safe `UPLOAD_INCOMPLETE` error; the
+exception message is never exposed to GraphQL clients.
+
+For local replacement cleanup, `gm-upload-old-claims/` is reserved internal
+storage. The built-in adapter's exact-delete contract assumes no application or
+external process mutates that namespace; GeneralManager's durable lease
+serializes framework workers. Storage integrations that cannot provide this
+exclusivity should not enable replacement deletion and should instead register
+an adapter with a backend-native atomic exact-delete operation.
 
 ::: general_manager.uploads.config.FileUploadPolicy
 

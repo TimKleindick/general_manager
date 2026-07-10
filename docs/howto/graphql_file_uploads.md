@@ -79,6 +79,14 @@ rejected. Both path settings must be safe relative paths ending in `/`.
 | `TERMINAL_RETENTION_SECONDS` | `86_400` | Retention for terminal intent metadata; must exceed the download URL TTL. |
 | `DELETE_REPLACED_FILES` | `False` | Deletes an old object only after safe exact claim and successful replacement. |
 
+When enabling local replacement deletion, reserve
+`gm-upload-old-claims/` exclusively for GeneralManager. Do not write, sync,
+restore, scan-and-rewrite, or manually clean paths below it while the
+application is running. GeneralManager serializes its own workers with a
+durable cleanup lease and re-verifies moved inode/checksum identities, but
+portable POSIX filesystems have no atomic compare-and-unlink primitive. If
+another process can mutate that namespace, keep `DELETE_REPLACED_FILES=False`.
+
 `TERMINAL_RETENTION_SECONDS` is a minimum age, not permission to discard live
 download metadata. A `CONSUMED` intent is retained beyond that age for as long as
 the current model row still references its `final_key`; cleanup deletes it only
@@ -87,7 +95,9 @@ This preserves exact-version verification for structured downloads.
 
 The default cache backend must implement atomic `add` and `incr`; unsafe
 fallback implementations fail closed with `UPLOAD_STORAGE_ERROR`. Admission is
-also serialized through the upload quota-lock database row.
+also serialized through the upload quota-lock database row. Authentication is
+validated before either global or per-user admission counters are incremented,
+so anonymous traffic cannot consume the authenticated global upload budget.
 
 ## Define file fields and policies
 
@@ -422,7 +432,11 @@ Post-commit and replacement support is the `UploadFinalizationAdapter` contract:
 also implement `ProxyUploadSink.save_stage`. `UploadInstructions`,
 `ObjectVersion`, and `ClaimedObject` are immutable boundary values. Raise a
 documented framework `UploadError` such as `UploadStorageError` or
-`UploadBackendUnsupportedError`; arbitrary exceptions are sanitized.
+`UploadBackendUnsupportedError`; arbitrary exceptions are sanitized. Raise the
+public `UploadObjectMissingError` only when an exact inspect/delete can prove
+that the object is already absent. Reconciliation treats that signal as
+idempotent cleanup success, while direct preflight maps it to the generic
+`UPLOAD_INCOMPLETE` client error.
 
 An adapter that exposes newly retained files publicly implements
 `ExactPublicDownloadAdapter.public_download_url(key, version=...)`. The returned

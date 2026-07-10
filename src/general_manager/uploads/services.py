@@ -67,6 +67,7 @@ from general_manager.uploads.errors import (
     UploadIncompleteError,
     UploadManagerInvalidError,
     UploadOperationInvalidError,
+    UploadObjectMissingError,
     UploadQuotaExceededError,
     UploadRateLimitExceededError,
     UploadChecksumMismatchError,
@@ -174,6 +175,17 @@ _begin_upload_rate_limit_hook: BeginUploadRateLimitHook | None = None
 upload_adapter_registry = UploadAdapterRegistry()
 
 
+def _validate_explicit_file_nulls(
+    manager_class: type[GeneralManager],
+    field_names: tuple[str, ...],
+) -> None:
+    interface = cast(_UploadInterface, manager_class.Interface)
+    for name in field_names:
+        _model, model_field = _resolve_file_field(interface, name)
+        if model_field.blank is not True:
+            raise UploadTokenInvalidError
+
+
 def _record_pending_intent_after_commit(intent: UploadIntent, *, alias: str) -> None:
     """Record durable intent creation only after its transaction commits."""
 
@@ -207,18 +219,29 @@ def preflight_upload_tokens(
         if name in values and values[name] is not None
     )
     raw_tokens = [(name, values.pop(name)) for name in token_fields]
-    if not raw_tokens:
+    explicit_null_fields = tuple(
+        name
+        for name in sorted(set(file_field_names))
+        if name in values and values[name] is None
+    )
+    if not raw_tokens and not explicit_null_fields:
         return
 
     failure: UploadError | None = None
     candidates: dict[str, UploadCandidate] | None = None
     try:
-        candidates = _preflight_upload_tokens(
-            user=user,
-            manager_class=manager_class,
-            operation=operation,
-            target_id=target_id,
-            raw_tokens=raw_tokens,
+        if explicit_null_fields:
+            _validate_explicit_file_nulls(manager_class, explicit_null_fields)
+        candidates = (
+            _preflight_upload_tokens(
+                user=user,
+                manager_class=manager_class,
+                operation=operation,
+                target_id=target_id,
+                raw_tokens=raw_tokens,
+            )
+            if raw_tokens
+            else {}
         )
     except UploadError as error:
         failure = stable_upload_error(error)
@@ -310,7 +333,7 @@ def _preflight_upload_tokens(
                 raise UploadIncompleteError
             try:
                 inspected = adapter.inspect_staged(intent.staging_key)
-            except (FileNotFoundError, ObjectDoesNotExist):
+            except (UploadObjectMissingError, FileNotFoundError, ObjectDoesNotExist):
                 raise UploadIncompleteError from None
             except UploadError:
                 raise
@@ -791,6 +814,7 @@ def _begin_file_upload(
         # SQLITE_BUSY. Fail before rate-limit, adapter, or database side effects;
         # deployments using ATOMIC_REQUESTS must exempt their GraphQL view.
         raise UploadStorageError
+    owner_pk = _authenticated_user_pk(user)
     if _begin_upload_rate_limit_hook is None:
         _enforce_default_begin_rate_limit(user, settings)
     else:
@@ -805,7 +829,6 @@ def _begin_file_upload(
         if denied:
             raise UploadRateLimitExceededError
 
-    owner_pk = _authenticated_user_pk(user)
     values = cast(_BeginRequest, request)
     if not settings.enabled:
         raise UploadBackendUnsupportedError

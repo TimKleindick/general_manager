@@ -113,7 +113,12 @@ SHA-256, and retain exact immutable versions until reconciliation completes.
 
 `DELETE_REPLACED_FILES` is off by default. Enabling it can still leave old
 objects when exact ownership/deletion is unsupported, and shared keys cannot
-always be detected. Cross-database upload sagas, resumable uploads, S3 multipart,
+always be detected. For the built-in filesystem adapter,
+`gm-upload-old-claims/` is framework-exclusive: only GeneralManager workers
+under the durable cleanup lease may mutate it. POSIX lacks portable atomic
+compare-and-unlink, so do not enable local replacement deletion where operators,
+sidecars, or application code can write that reserved namespace.
+Cross-database upload sagas, resumable uploads, S3 multipart,
 and built-in malware scanning are outside v1. See
 [GraphQL file uploads and downloads](file_uploads.md) for the full threat and
 consistency model.

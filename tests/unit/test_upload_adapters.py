@@ -32,6 +32,7 @@ from general_manager.uploads.errors import (
     UploadChecksumMismatchError,
     UploadStorageError,
     UploadObjectMissingError,
+    UploadStorageChangedError,
     UploadTransferConflictError,
 )
 from general_manager.uploads.types import ObjectVersion, UploadTransport
@@ -559,7 +560,7 @@ def test_filesystem_exact_delete_restores_key_when_quarantine_unlink_fails(
     assert not adapter.storage.exists(key)
 
 
-def test_filesystem_replaced_object_cleanup_fails_closed_without_data_movement(
+def test_filesystem_replaced_object_cleanup_claims_and_deletes_exact_inode(
     tmp_path: Path,
 ) -> None:
     adapter = _filesystem_adapter(tmp_path)
@@ -572,10 +573,13 @@ def test_filesystem_replaced_object_cleanup_fails_closed_without_data_movement(
         version,
         cleanup_id=cleanup_id,
     )
-    with pytest.raises(UploadBackendUnsupportedError):
-        adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
+    adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
 
-    assert adapter.storage.exists(old_key)
+    assert not adapter.storage.exists(old_key)
+    assert adapter.storage.exists(claimed.key)
+
+    adapter.delete_claimed_object(claimed, cleanup_id=cleanup_id)
+
     assert not adapter.storage.exists(claimed.key)
 
 
@@ -595,11 +599,149 @@ def test_filesystem_cleanup_rejects_same_bytes_recreated_before_first_claim(
     adapter.storage.delete(old_key)
     adapter.storage.save(old_key, ContentFile(b"same bytes"))
 
-    with pytest.raises(UploadBackendUnsupportedError):
+    with pytest.raises(UploadStorageChangedError):
         adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
 
     assert adapter.storage.exists(old_key)
     assert not adapter.storage.exists(claimed.key)
+
+
+def test_filesystem_cleanup_does_not_delete_recreated_claim(
+    tmp_path: Path,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    old_key = "existing/recreated-claim.bin"
+    adapter.storage.save(old_key, ContentFile(b"old payload"))
+    version = adapter.inspect_replaced_object(old_key)
+    claimed = adapter.plan_replaced_object_claim(
+        old_key,
+        version,
+        cleanup_id=cleanup_id,
+    )
+    adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
+    adapter.storage.delete(claimed.key)
+    adapter.storage.save(claimed.key, ContentFile(b"replacement payload"))
+
+    with pytest.raises(UploadStorageChangedError):
+        adapter.delete_claimed_object(claimed, cleanup_id=cleanup_id)
+
+    assert adapter.storage.exists(claimed.key)
+
+
+def test_filesystem_cleanup_does_not_unlink_claim_path_recreated_after_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    old_key = "existing/recreated-at-delete.bin"
+    adapter.storage.save(old_key, ContentFile(b"old payload"))
+    version = adapter.inspect_replaced_object(old_key)
+    claimed = adapter.plan_replaced_object_claim(
+        old_key,
+        version,
+        cleanup_id=cleanup_id,
+    )
+    adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
+    claim_path = adapter.storage.path(claimed.key)
+    real_unlink = adapters_module.os.unlink
+    real_replace = adapters_module.os.replace
+
+    def recreate_before_quarantine(source: str, destination: str) -> None:
+        if source == claim_path:
+            real_unlink(source)
+            Path(source).write_bytes(b"raced replacement")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(adapters_module.os, "replace", recreate_before_quarantine)
+
+    with pytest.raises(UploadStorageChangedError):
+        adapter.delete_claimed_object(claimed, cleanup_id=cleanup_id)
+
+    assert Path(claim_path).read_bytes() == b"raced replacement"
+
+
+def test_filesystem_cleanup_restores_object_raced_during_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    old_key = "existing/raced-during-claim.bin"
+    adapter.storage.save(old_key, ContentFile(b"old payload"))
+    version = adapter.inspect_replaced_object(old_key)
+    claimed = adapter.plan_replaced_object_claim(
+        old_key,
+        version,
+        cleanup_id=cleanup_id,
+    )
+    source_path = adapter.storage.path(old_key)
+    real_replace = adapters_module.os.replace
+
+    def race_replace(source: str, destination: str) -> None:
+        if source == source_path:
+            adapter.storage.delete(old_key)
+            adapter.storage.save(old_key, ContentFile(b"raced replacement"))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(adapters_module.os, "replace", race_replace)
+
+    with pytest.raises(UploadStorageChangedError):
+        adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
+
+    assert adapter.storage.open(old_key).read() == b"raced replacement"
+    assert not adapter.storage.exists(claimed.key)
+
+
+def test_filesystem_cleanup_resumes_after_crash_between_claim_and_record(
+    tmp_path: Path,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    old_key = "existing/crash-after-claim.bin"
+    adapter.storage.save(old_key, ContentFile(b"old payload"))
+    version = adapter.inspect_replaced_object(old_key)
+    claimed = adapter.plan_replaced_object_claim(
+        old_key,
+        version,
+        cleanup_id=cleanup_id,
+    )
+    claim_path = adapter.storage.path(claimed.key)
+    Path(claim_path).parent.mkdir(parents=True, exist_ok=True)
+    adapters_module.os.replace(adapter.storage.path(old_key), claim_path)
+
+    adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
+    adapter.delete_claimed_object(claimed, cleanup_id=cleanup_id)
+
+    assert not adapter.storage.exists(old_key)
+    assert not adapter.storage.exists(claimed.key)
+
+
+def test_proxy_missing_stage_cleanup_removes_owned_markers(tmp_path: Path) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    stage_key = _UUID_STAGE_KEY
+    version = _proxy_version(b"never persisted")
+    claim_key = adapters_module._stage_claim_marker(stage_key)
+    completed_key = adapters_module._stage_metadata_marker(stage_key)
+    adapter._acquire_marker(
+        claim_key,
+        adapters_module._stage_identity(version, state="claimed"),
+    )
+    adapter._acquire_marker(
+        completed_key,
+        adapters_module._stage_identity(version, state="completed"),
+    )
+
+    intent = SimpleNamespace(
+        id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        staging_key=stage_key,
+        transfer_attempt_count=0,
+    )
+    finalization._delete_staging_objects(adapter, intent, None)
+
+    assert not adapter.storage.exists(claim_key)
+    assert not adapter.storage.exists(completed_key)
 
 
 def test_filesystem_cleanup_claim_path_is_bounded_for_max_component_old_key(
@@ -616,13 +758,15 @@ def test_filesystem_cleanup_claim_path_is_bounded_for_max_component_old_key(
         version,
         cleanup_id=cleanup_id,
     )
-    with pytest.raises(UploadBackendUnsupportedError):
-        adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
+    adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
 
     assert claimed.key.startswith(f"gm-upload-old-claims/{cleanup_id.hex}/")
     assert max(map(len, claimed.key.split("/"))) <= 255
     assert len(claimed.key) < 1024
-    assert adapter.storage.exists(old_key)
+    assert not adapter.storage.exists(old_key)
+    assert adapter.storage.exists(claimed.key)
+    adapter.delete_claimed_object(claimed, cleanup_id=cleanup_id)
+    assert not adapter.storage.exists(claimed.key)
 
 
 def test_proxy_concurrent_same_stage_identity_converges_on_requested_key(

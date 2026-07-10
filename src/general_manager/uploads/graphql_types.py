@@ -458,6 +458,8 @@ class StoredFileValue:
             from general_manager.uploads import services
 
             configured = get_file_upload_settings()
+            if not configured.enabled:
+                return None, None
             intent = self._intent
             adapter = self._adapter
             if adapter is None:

@@ -274,6 +274,10 @@
       "general_manager.uploads.errors",
       "UploadManagerInvalidError"
     ],
+    "UploadObjectMissingError": [
+      "general_manager.uploads.errors",
+      "UploadObjectMissingError"
+    ],
     "UploadOperationInvalidError": [
       "general_manager.uploads.errors",
       "UploadOperationInvalidError"

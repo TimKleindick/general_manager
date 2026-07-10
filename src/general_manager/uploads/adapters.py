@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 import hashlib
 from io import BufferedIOBase
@@ -53,8 +54,18 @@ def _exception(
 
 def _filesystem_stat_identity(value: os.stat_result) -> str:
     """Encode the local inode identity observed through an open handle."""
-    return (
-        f"fs-v1:{value.st_dev}:{value.st_ino}:{value.st_mtime_ns}:{value.st_ctime_ns}"
+    return f"fs-v2:{value.st_dev}:{value.st_ino}:{value.st_mtime_ns}"
+
+
+def _same_filesystem_version(
+    current: ObjectVersion,
+    expected: ObjectVersion,
+) -> bool:
+    return bool(
+        current.version_id
+        and current.version_id == expected.version_id
+        and current.checksum_sha256 == expected.checksum_sha256
+        and current.size == expected.size
     )
 
 
@@ -543,7 +554,15 @@ class ProxyUploadAdapter:
             self._storage_delete(_stage_metadata_marker(stage_key))
             self._storage_delete(_stage_claim_marker(stage_key))
             return
-        self.delete_object(stage_key, version)
+        try:
+            self.delete_object(stage_key, version)
+        except UploadObjectMissingError:
+            self.delete_missing_stage_markers(stage_key)
+            raise
+        self.delete_missing_stage_markers(stage_key)
+
+    def delete_missing_stage_markers(self, stage_key: str) -> None:
+        """Remove only framework-owned metadata for an absent staged object."""
         self._storage_delete(_stage_metadata_marker(stage_key))
         self._storage_delete(_stage_claim_marker(stage_key))
 
@@ -671,11 +690,60 @@ class ProxyUploadAdapter:
         *,
         cleanup_id: UUID,
     ) -> None:
-        del key, claimed, cleanup_id
-        raise _exception(
-            UploadBackendUnsupportedError,
-            "Proxy storage cannot atomically claim a replaced object version.",
+        storage = self.storage
+        if not isinstance(storage, FileSystemStorage):
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "Proxy storage cannot atomically claim a replaced object version.",
+            )
+        planned = self.plan_replaced_object_claim(
+            key,
+            claimed.version,
+            cleanup_id=cleanup_id,
         )
+        if claimed != planned:
+            raise UploadStorageChangedError
+        source_path = storage.path(key)
+        claim_path = storage.path(claimed.key)
+        if os.path.exists(claim_path):
+            if not _same_filesystem_version(
+                self._inspect_filesystem_path(claim_path, key),
+                claimed.version,
+            ):
+                raise UploadStorageChangedError
+            return
+        if not os.path.exists(source_path):
+            raise UploadObjectMissingError
+        if not _same_filesystem_version(
+            self._inspect_filesystem_path(source_path, key),
+            claimed.version,
+        ):
+            raise UploadStorageChangedError
+        os.makedirs(os.path.dirname(claim_path), exist_ok=True)
+        try:
+            os.replace(source_path, claim_path)
+        except FileNotFoundError as exc:
+            if os.path.exists(claim_path) and (
+                _same_filesystem_version(
+                    self._inspect_filesystem_path(claim_path, key),
+                    claimed.version,
+                )
+            ):
+                return
+            raise UploadObjectMissingError from exc
+        except OSError as exc:
+            raise _exception(
+                UploadStorageError,
+                "The filesystem backend could not claim the replaced object.",
+            ) from exc
+        if not _same_filesystem_version(
+            self._inspect_filesystem_path(claim_path, key),
+            claimed.version,
+        ):
+            if not os.path.exists(source_path):
+                with suppress(OSError):
+                    os.replace(claim_path, source_path)
+            raise UploadStorageChangedError
 
     def delete_claimed_object(
         self,
@@ -683,10 +751,91 @@ class ProxyUploadAdapter:
         *,
         cleanup_id: UUID,
     ) -> None:
-        del claimed, cleanup_id
-        raise _exception(
-            UploadBackendUnsupportedError,
-            "Proxy storage cannot atomically delete a replaced object version.",
+        storage = self.storage
+        if not isinstance(storage, FileSystemStorage):
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "Proxy storage cannot atomically delete a replaced object version.",
+            )
+        expected_prefix = f"gm-upload-old-claims/{cleanup_id.hex}/"
+        if not claimed.key.startswith(expected_prefix):
+            raise UploadStorageChangedError
+        claim_path = storage.path(claimed.key)
+        # This reserved namespace is framework-exclusive. The durable cleanup
+        # lease serializes GeneralManager workers; applications and external
+        # processes must never create, replace, or delete paths below it. POSIX
+        # has no portable compare-and-unlink primitive, so exactness beyond the
+        # move-and-reverify boundary depends on that explicit storage contract.
+        delete_path = f"{claim_path}.deleting"
+        if os.path.exists(delete_path):
+            if not _same_filesystem_version(
+                self._inspect_filesystem_path(delete_path, claimed.key),
+                claimed.version,
+            ):
+                raise UploadStorageChangedError
+        else:
+            if not os.path.exists(claim_path):
+                return
+            if not _same_filesystem_version(
+                self._inspect_filesystem_path(claim_path, claimed.key),
+                claimed.version,
+            ):
+                raise UploadStorageChangedError
+            try:
+                os.replace(claim_path, delete_path)
+            except FileNotFoundError:
+                if not os.path.exists(delete_path):
+                    return
+            except OSError as exc:
+                raise _exception(
+                    UploadStorageError,
+                    "The filesystem backend could not quarantine the claimed object.",
+                ) from exc
+            if not _same_filesystem_version(
+                self._inspect_filesystem_path(delete_path, claimed.key),
+                claimed.version,
+            ):
+                if not os.path.exists(claim_path):
+                    with suppress(OSError):
+                        os.replace(delete_path, claim_path)
+                raise UploadStorageChangedError
+        try:
+            os.unlink(delete_path)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise _exception(
+                UploadStorageError,
+                "The filesystem backend could not delete the claimed object.",
+            ) from exc
+
+    def _inspect_filesystem_path(
+        self,
+        path: str,
+        content_type_key: str,
+    ) -> ObjectVersion:
+        try:
+            with open(path, "rb") as stored:
+                before = os.fstat(stored.fileno())
+                checksum, size = _checksum_stream(stored)
+                after = os.fstat(stored.fileno())
+        except FileNotFoundError as exc:
+            raise UploadObjectMissingError from exc
+        except OSError as exc:
+            raise UploadStorageError from exc
+        identity = _filesystem_stat_identity(before)
+        if identity != _filesystem_stat_identity(after):
+            raise UploadStorageChangedError
+        return ObjectVersion(
+            version_id=identity,
+            etag=None,
+            checksum_sha256=checksum,
+            size=size,
+            content_type=self._staged_content_type(
+                content_type_key,
+                checksum=checksum,
+                size=size,
+            ),
         )
 
     def inspect_materialized(
@@ -998,10 +1147,14 @@ class UploadAdapterRegistry:
             if explicit is not None:
                 return self._build_adapter(explicit, resolved_storage)
 
-            from general_manager.uploads.s3 import S3UploadAdapter
+            from general_manager.uploads.s3 import S3ProxyUploadAdapter, S3UploadAdapter
 
             if S3UploadAdapter.supports_direct(resolved_storage):
                 return S3UploadAdapter(resolved_storage)
+            try:
+                return S3ProxyUploadAdapter(resolved_storage)
+            except UploadBackendUnsupportedError:
+                pass
             return ProxyUploadAdapter(resolved_storage)
 
     def resolve_by_id(
@@ -1025,7 +1178,7 @@ class UploadAdapterRegistry:
             ):
                 return ProxyUploadAdapter(resolved_storage)
 
-            from general_manager.uploads.s3 import S3UploadAdapter
+            from general_manager.uploads.s3 import S3ProxyUploadAdapter, S3UploadAdapter
 
             if identity == (
                 S3UploadAdapter.adapter_id,
@@ -1033,6 +1186,14 @@ class UploadAdapterRegistry:
             ):
                 if S3UploadAdapter.supports_direct(resolved_storage):
                     return S3UploadAdapter(resolved_storage)
+            if identity == (
+                S3ProxyUploadAdapter.adapter_id,
+                S3ProxyUploadAdapter.adapter_version,
+            ):
+                try:
+                    return S3ProxyUploadAdapter(resolved_storage)
+                except UploadBackendUnsupportedError:
+                    return None
             return None
 
     def _resolve_explicit_factory(

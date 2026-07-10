@@ -768,12 +768,20 @@ class BeginFileUploadTests(TestCase):
             }
         }
     )
-    def test_global_rate_limiter_counts_anonymous_attempts(self) -> None:
+    def test_anonymous_attempts_do_not_consume_authenticated_global_budget(
+        self,
+    ) -> None:
         with pytest.raises(UploadAuthenticationError):
             begin_file_upload(user=AnonymousUser(), request=valid_request())
 
-        with pytest.raises(UploadRateLimitExceededError):
+        with pytest.raises(UploadAuthenticationError):
             begin_file_upload(user=AnonymousUser(), request=valid_request())
+
+        with pytest.raises(UploadManagerInvalidError):
+            begin_file_upload(
+                user=self.user,
+                request=valid_request(manager="Missing"),
+            )
 
     def test_cache_backend_failures_return_a_safe_stable_upload_error(self) -> None:
         unsafe_marker = "redis-password-must-not-escape"

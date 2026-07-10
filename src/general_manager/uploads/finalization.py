@@ -1709,6 +1709,13 @@ def _delete_staging_objects(
             try:
                 inspected = adapter.inspect_staged(key)
             except UploadObjectMissingError:
+                cleanup_markers = getattr(
+                    adapter,
+                    "delete_missing_stage_markers",
+                    None,
+                )
+                if callable(cleanup_markers):
+                    cleanup_markers(key)
                 continue
             if not _object_version_is_safe(inspected):
                 raise UploadStorageChangedError

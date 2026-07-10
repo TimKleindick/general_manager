@@ -34,6 +34,7 @@ from general_manager.uploads.adapters import (
 from general_manager.uploads.models import UploadIntent
 from general_manager.uploads.errors import (
     UploadDatabaseMismatchError,
+    UploadObjectMissingError,
     UploadStorageError,
 )
 from general_manager.uploads import services
@@ -69,6 +70,11 @@ _DIRECT_STORAGE = DirectPreflightStorage(
 class PreflightRecord(models.Model):
     avatar = models.ImageField(storage=_STORAGE, upload_to="avatars/", blank=True)
     document = models.FileField(storage=_STORAGE, upload_to="documents/", blank=True)
+    required_document = models.FileField(
+        storage=_STORAGE,
+        upload_to="required/",
+        blank=False,
+    )
     direct_document = models.FileField(
         storage=_DIRECT_STORAGE,
         upload_to="direct/",
@@ -112,6 +118,15 @@ class PreflightInterface(OrmInterfaceBase[PreflightRecord]):
             "document": {
                 "type": str,
                 "orm_field_kind": "file",
+                "is_required": False,
+                "is_editable": True,
+                "is_derived": False,
+                "default": NOT_PROVIDED,
+            },
+            "required_document": {
+                "type": str,
+                "orm_field_kind": "file",
+                "file_clearable": False,
                 "is_required": False,
                 "is_editable": True,
                 "is_derived": False,
@@ -576,6 +591,86 @@ def test_graphql_execution_keeps_omitted_and_explicit_null_distinct(
 
 @pytest.mark.django_db
 @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_graphql_update_rejects_explicit_null_for_non_clearable_file(
+    user: models.Model,
+) -> None:
+    mutation_type = generate_update_mutation_class(
+        PreflightManager,
+        {"success": graphene.Boolean()},
+    )
+    assert mutation_type is not None
+
+    class Query(graphene.ObjectType):
+        ready = graphene.Boolean(default_value=True)
+
+    schema = graphene.Schema(
+        query=Query,
+        mutation=type(
+            "Mutation",
+            (graphene.ObjectType,),
+            {"updateProfile": mutation_type.Field()},
+        ),
+    )
+    result = schema.execute(
+        'mutation { updateProfile(id: "7", requiredDocument: null) { success } }',
+        context_value=SimpleNamespace(user=user),
+    )
+
+    assert result.errors is not None
+    assert result.errors[0].extensions == {"code": "UPLOAD_TOKEN_INVALID"}
+    assert _RECEIVED_UPDATES == []
+
+
+@pytest.mark.django_db
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_non_clearable_null_scrubs_other_raw_file_tokens_before_error(
+    user: models.Model,
+) -> None:
+    _intent, token = _uploaded_intent(user)
+    mutation = generate_update_mutation_class(
+        PreflightManager,
+        {"success": graphene.Boolean()},
+    )
+    assert mutation is not None
+    info = SimpleNamespace(context=SimpleNamespace(user=user))
+
+    with pytest.raises(GraphQLError) as caught:
+        mutation.mutate(
+            None,
+            info,
+            id="7",
+            required_document=None,
+            avatar=token,
+        )
+
+    production_locals = repr(
+        [
+            frame.locals
+            for frame in traceback.TracebackException.from_exception(
+                caught.value,
+                capture_locals=True,
+            ).stack
+            if "/src/general_manager/" in frame.filename
+        ]
+    )
+    assert caught.value.extensions == {"code": "UPLOAD_TOKEN_INVALID"}
+    assert token not in production_locals
+    assert _RECEIVED_UPDATES == []
+
+
+@pytest.mark.django_db
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_graphql_update_omits_non_clearable_file_but_clears_blank_file(
+    user: models.Model,
+) -> None:
+    _execute_update(user, avatar=None)
+
+    assert _RECEIVED_UPDATES == [{"creator_id": user.pk, "avatar": None}]
+    assert "required_document" not in _RECEIVED_UPDATES[0]
+
+
+@pytest.mark.django_db
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
 @pytest.mark.parametrize(
     ("state", "expires_delta", "code"),
     [
@@ -619,6 +714,33 @@ def test_pending_proxy_cannot_bypass_transfer_state_when_stage_exists(
     assert caught.value.extensions == {"code": "UPLOAD_INCOMPLETE"}
     assert intent.state == UploadIntentState.PENDING.value
     assert not _RECEIVED_UPDATES
+
+
+@pytest.mark.django_db
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_missing_direct_stage_maps_to_safe_upload_incomplete(
+    user: models.Model,
+) -> None:
+    intent, token = _uploaded_intent(
+        user,
+        field="direct_document",
+        state=UploadIntentState.PENDING,
+        adapter_id=DirectPreflightAdapter.adapter_id,
+        adapter_version=DirectPreflightAdapter.adapter_version,
+        storage_fingerprint="sha256:direct-preflight-storage",
+    )
+    DirectPreflightAdapter.inspect_error = UploadObjectMissingError(
+        "internal missing-object detail"
+    )
+
+    with pytest.raises(GraphQLError) as caught:
+        _execute_update(user, direct_document=token)
+
+    assert caught.value.extensions == {"code": "UPLOAD_INCOMPLETE"}
+    assert caught.value.message == "The file upload could not be completed."
+    assert "internal missing-object detail" not in str(caught.value)
+    intent.refresh_from_db()
+    assert intent.state == UploadIntentState.PENDING.value
 
 
 @pytest.mark.django_db
