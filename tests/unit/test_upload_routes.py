@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from django.http import HttpResponse
 from django.test import override_settings
-from django.urls import path
+from django.urls import Resolver404, include, path, resolve
 
 from general_manager import bootstrap
 
@@ -67,6 +67,25 @@ def test_upload_routes_are_marked_idempotent_and_reset_safe() -> None:
 
 
 @override_settings(ROOT_URLCONF="tests.test_urls", GENERAL_MANAGER=_ENABLED)
+def test_upload_route_mutations_invalidate_django_resolver_caches() -> None:
+    from general_manager.uploads.urls import (
+        add_file_upload_urls,
+        clear_file_upload_urls,
+    )
+
+    concrete = "/gm/uploads/00000000-0000-4000-8000-000000000001"
+    with pytest.raises(Resolver404):
+        resolve(concrete)
+
+    add_file_upload_urls()
+    assert resolve(concrete).url_name == "general_manager_file_upload"
+
+    clear_file_upload_urls()
+    with pytest.raises(Resolver404):
+        resolve(concrete)
+
+
+@override_settings(ROOT_URLCONF="tests.test_urls", GENERAL_MANAGER=_ENABLED)
 def test_route_registration_rejects_unowned_path_collision_without_mutation() -> None:
     from general_manager.uploads.urls import add_file_upload_urls
 
@@ -77,6 +96,37 @@ def test_route_registration_rejects_unowned_path_collision_without_mutation() ->
         name="project_upload",
     )
     urlconf.urlpatterns.append(custom)
+    before = list(urlconf.urlpatterns)
+
+    with pytest.raises(ValueError, match="gm/uploads"):
+        add_file_upload_urls()
+
+    assert urlconf.urlpatterns == before
+
+
+@override_settings(ROOT_URLCONF="tests.test_urls", GENERAL_MANAGER=_ENABLED)
+@pytest.mark.parametrize(
+    "catch_all",
+    [
+        path("gm/uploads/<path:value>", _empty_response, name="project_catch_all"),
+        path(
+            "gm/uploads/download/<str:value>",
+            _empty_response,
+            name="project_download_catch_all",
+        ),
+        path(
+            "gm/uploads/",
+            include([path("<path:value>", _empty_response)]),
+        ),
+    ],
+)
+def test_route_registration_rejects_semantic_project_catch_all(
+    catch_all: object,
+) -> None:
+    from general_manager.uploads.urls import add_file_upload_urls
+
+    urlconf = import_module("tests.test_urls")
+    urlconf.urlpatterns.append(catch_all)
     before = list(urlconf.urlpatterns)
 
     with pytest.raises(ValueError, match="gm/uploads"):

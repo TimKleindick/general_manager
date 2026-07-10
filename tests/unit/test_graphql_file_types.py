@@ -143,8 +143,14 @@ def test_stored_file_output_schema_has_stable_nullable_shape() -> None:
             "name": None,
             "ofType": {"kind": "SCALAR", "name": "String"},
         },
-        "size": {"kind": "SCALAR", "name": "Int", "ofType": None},
+        "originalName": {
+            "kind": "NON_NULL",
+            "name": None,
+            "ofType": {"kind": "SCALAR", "name": "String"},
+        },
+        "size": {"kind": "SCALAR", "name": "BigIntScalar", "ofType": None},
         "contentType": {"kind": "SCALAR", "name": "String", "ofType": None},
+        "checksum": {"kind": "SCALAR", "name": "String", "ofType": None},
         "downloadUrl": {"kind": "SCALAR", "name": "String", "ofType": None},
         "expiresAt": {"kind": "SCALAR", "name": "DateTime", "ofType": None},
         "status": {

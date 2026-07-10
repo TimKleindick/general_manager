@@ -49,7 +49,11 @@ from general_manager.permission.graphql_capabilities import (
     get_capability_context,
     get_graphql_capabilities,
 )
-from general_manager.uploads.graphql_types import StoredFile, StoredImage
+from general_manager.uploads.graphql_types import (
+    StoredFile,
+    StoredImage,
+    create_stored_file_value,
+)
 from general_manager.utils.format_string import pascal_to_snake
 from general_manager.utils.type_checks import safe_issubclass
 
@@ -441,7 +445,31 @@ class GraphQL:
                 field_info,
             )
             resolver_name = f"resolve_{field_name}"
-            fields[resolver_name] = cls._create_resolver(field_name, field_type)
+            if field_info.get("orm_field_kind") in {"file", "image"}:
+
+                def resolve_stored_file(
+                    manager_instance: GeneralManager,
+                    info: GraphQLResolveInfo,
+                    *,
+                    _field_name: str = field_name,
+                    _manager_name: str = generalManagerClass.__name__,
+                ) -> object:
+                    if not cls._check_read_permission(
+                        manager_instance,
+                        info,
+                        _field_name,
+                    ):
+                        return None
+                    return create_stored_file_value(
+                        manager_instance,
+                        info,
+                        field_name=_field_name,
+                        manager_name=_manager_name,
+                    )
+
+                fields[resolver_name] = resolve_stored_file
+            else:
+                fields[resolver_name] = cls._create_resolver(field_name, field_type)
 
         # handle GraphQLProperty attributes
         for (

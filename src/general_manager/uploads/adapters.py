@@ -145,8 +145,32 @@ class UploadAdapter(Protocol):
         """Delete staged bytes, optionally constrained to an exact version."""
         ...
 
-    def private_download_url(self, key: str, *, expires_in: int) -> str:
+    def private_download_url(
+        self,
+        key: str,
+        *,
+        expires_in: int,
+        version: ObjectVersion | None = None,
+        response_content_type: str | None = None,
+        response_content_disposition: str | None = None,
+    ) -> str:
         """Return a private download URL supported by the backend."""
+        ...
+
+    def inspect_download(
+        self,
+        key: str,
+        version: ObjectVersion,
+    ) -> ObjectVersion:
+        """Return the exact retained object version available for download."""
+        ...
+
+    def open_download(
+        self,
+        key: str,
+        version: ObjectVersion,
+    ) -> IO[bytes]:
+        """Open the same retained version after verifying its immutable identity."""
         ...
 
     def public_url(self, key: str) -> str:
@@ -712,12 +736,46 @@ class ProxyUploadAdapter:
         self._storage_delete(_materialization_completed_marker(final_key))
         self._storage_delete(_materialization_marker(final_key))
 
-    def private_download_url(self, key: str, *, expires_in: int) -> str:
-        del key, expires_in
+    def private_download_url(
+        self,
+        key: str,
+        *,
+        expires_in: int,
+        version: ObjectVersion | None = None,
+        response_content_type: str | None = None,
+        response_content_disposition: str | None = None,
+    ) -> str:
+        del (
+            key,
+            expires_in,
+            version,
+            response_content_type,
+            response_content_disposition,
+        )
         raise _exception(
             UploadBackendUnsupportedError,
             "Proxy storage does not provide expiring private download URLs.",
         )
+
+    def inspect_download(
+        self,
+        key: str,
+        version: ObjectVersion,
+    ) -> ObjectVersion:
+        inspected = self.inspect_staged(key)
+        if (
+            inspected.checksum_sha256 != version.checksum_sha256
+            or inspected.size != version.size
+        ):
+            raise UploadStorageChangedError()
+        return version
+
+    def open_download(
+        self,
+        key: str,
+        version: ObjectVersion,
+    ) -> IO[bytes]:
+        return self.open_stage(key, version)
 
     def public_url(self, key: str) -> str:
         if not self.supports_public_urls:

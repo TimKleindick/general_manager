@@ -6,24 +6,34 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 import hashlib
+import mimetypes
+import posixpath
 import re
 import secrets
 import time
+from collections.abc import Mapping
 from typing import Any, Iterator, Never, cast
+from urllib.parse import quote
 from uuid import UUID
 
 from django.core.cache import cache, caches
 from django.core.cache.backends.base import BaseCache
-from django.db import OperationalError, models
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.db import DEFAULT_DB_ALIAS, OperationalError, models
+from django.http import FileResponse, HttpRequest, HttpResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
 from general_manager.uploads.adapters import ProxyUploadSink
 from general_manager.uploads.config import FileUploadSettings, get_file_upload_settings
+from general_manager.uploads.graphql_types import (
+    _final_object_version,
+    _key_digest,
+    decode_local_download_capability,
+)
 from general_manager.uploads.models import UploadIntent
 from general_manager.uploads.services import (
     _resolve_file_field,
+    _resolve_intent_adapter,
     _resolve_manager,
     _is_sqlite_busy_error,
     upload_adapter_registry,
@@ -113,6 +123,23 @@ _STORAGE_ERROR = _TransferError(
 _RATE_ERROR = _TransferError(
     "UPLOAD_RATE_LIMITED", 429, "Too many upload transfer requests were made."
 )
+_DOWNLOAD_METHOD_ERROR = _TransferError(
+    "METHOD_NOT_ALLOWED",
+    405,
+    "Only GET and HEAD are supported for file downloads.",
+)
+_DOWNLOAD_NOT_FOUND_ERROR = _TransferError(
+    "FILE_NOT_FOUND",
+    404,
+    "The requested file is not available.",
+)
+_SAFE_DOWNLOAD_MEDIA_TYPE = re.compile(
+    r"^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+)
+
+
+class _DownloadUnavailable(Exception):
+    """Internal, non-enumerating private download failure."""
 
 
 def _json_error(error: _TransferError) -> JsonResponse:
@@ -120,8 +147,10 @@ def _json_error(error: _TransferError) -> JsonResponse:
         {"error": {"code": error.code, "message": error.message}},
         status=error.status,
     )
-    if error.status == 405:
+    if error is _METHOD_ERROR:
         response["Allow"] = "PUT"
+    elif error is _DOWNLOAD_METHOD_ERROR:
+        response["Allow"] = "GET, HEAD"
     response["Cache-Control"] = "no-store"
     return response
 
@@ -684,7 +713,248 @@ def proxy_upload_view(request: HttpRequest, intent_id: UUID) -> HttpResponse:
 
 @csrf_exempt
 def private_download_view(request: HttpRequest, capability: str) -> HttpResponse:
-    """Reserve the framework-owned download route until Task 9 wires capabilities."""
+    """Stream the exact current field binding authorized by a signed capability."""
 
-    del request, capability
-    return _json_error(_NOT_FOUND_ERROR)
+    if request.method not in {"GET", "HEAD"}:
+        return _json_error(_DOWNLOAD_METHOD_ERROR)
+    try:
+        return _private_download(request, capability)
+    except Exception:  # noqa: BLE001 - every invalid binding is non-enumerating
+        return _json_error(_DOWNLOAD_NOT_FOUND_ERROR)
+
+
+def _private_download(request: HttpRequest, capability: str) -> HttpResponse:
+    configured = get_file_upload_settings()
+    if not configured.enabled:
+        raise _DownloadUnavailable
+    payload = decode_local_download_capability(
+        capability,
+        max_age=configured.download_url_ttl_seconds,
+    )
+    if payload is None:
+        raise _DownloadUnavailable
+    manager_name = payload["m"]
+    object_id = payload["o"]
+    field_name = payload["f"]
+    key_digest = payload["k"]
+    intent_id = payload["i"]
+    if not all(
+        isinstance(value, str)
+        for value in (manager_name, object_id, field_name, key_digest)
+    ):
+        raise _DownloadUnavailable
+    typed_manager_name = cast(str, manager_name)
+    typed_object_id = cast(str, object_id)
+    typed_field_name = cast(str, field_name)
+    typed_key_digest = cast(str, key_digest)
+    typed_intent_id = cast(str | None, intent_id)
+
+    manager_class = _resolve_manager(typed_manager_name)
+    interface = manager_class.Interface
+    model = getattr(interface, "_model", None)
+    if not isinstance(model, type) or not issubclass(model, models.Model):
+        raise _DownloadUnavailable
+    try:
+        model_field = model._meta.get_field(typed_field_name)
+        metadata = interface.get_attribute_types().get(typed_field_name)
+    except (LookupError, AttributeError, TypeError) as exc:
+        raise _DownloadUnavailable from exc
+    expected_kind = "image" if isinstance(model_field, models.ImageField) else "file"
+    if (
+        not isinstance(model_field, models.FileField)
+        or not isinstance(metadata, Mapping)
+        or metadata.get("orm_field_kind") != expected_kind
+    ):
+        raise _DownloadUnavailable
+
+    pk_field = model._meta.pk
+    if pk_field is None:
+        raise _DownloadUnavailable
+    try:
+        target_pk = pk_field.to_python(typed_object_id)
+    except Exception as exc:
+        raise _DownloadUnavailable from exc
+    alias = getattr(interface, "database", None) or DEFAULT_DB_ALIAS
+    try:
+        row = cast(Any, model)._base_manager.using(alias).get(pk=target_pk)
+    except Exception as exc:
+        raise _DownloadUnavailable from exc
+    current_value = getattr(row, typed_field_name, None)
+    current_key = getattr(current_value, "name", current_value)
+    if (
+        not isinstance(current_key, str)
+        or not current_key
+        or not secrets.compare_digest(
+            _key_digest(current_key),
+            typed_key_digest,
+        )
+    ):
+        raise _DownloadUnavailable
+
+    # Field-level permission was checked before the signed URL was issued. The
+    # capability is intentionally sufficient for browser elements that cannot
+    # attach an API Authorization header; the current row/key checks revoke it
+    # immediately on replacement or deletion.
+    storage = model_field.storage
+    retained_intent: UploadIntent | None = None
+    retained_version: ObjectVersion | None = None
+    opened: object | None = None
+    if typed_intent_id is not None:
+        try:
+            retained_intent = UploadIntent.objects.using(
+                configured.intent_database
+            ).get(
+                pk=UUID(typed_intent_id),
+                manager_name=typed_manager_name,
+                final_target_pk=str(row.pk),
+                field_name=typed_field_name,
+                final_key=current_key,
+                state=UploadIntentState.CONSUMED.value,
+            )
+            adapter = _resolve_intent_adapter(retained_intent, model_field)
+        except Exception as exc:
+            raise _DownloadUnavailable from exc
+        retained_version = _final_object_version(retained_intent)
+        if retained_version is None:
+            raise _DownloadUnavailable
+        try:
+            opened = adapter.open_download(current_key, retained_version)
+        except Exception as exc:
+            raise _DownloadUnavailable from exc
+        if not callable(getattr(opened, "read", None)) or not callable(
+            getattr(opened, "close", None)
+        ):
+            raise _DownloadUnavailable
+    else:
+        # Existing files without retained upload metadata use current-key
+        # behavior. Once a consumed intent owns this binding, an unbound legacy
+        # capability is rejected rather than silently weakening exactness.
+        try:
+            managed = (
+                UploadIntent.objects.using(configured.intent_database)
+                .filter(
+                    manager_name=typed_manager_name,
+                    final_target_pk=str(row.pk),
+                    field_name=typed_field_name,
+                    final_key=current_key,
+                    state=UploadIntentState.CONSUMED.value,
+                )
+                .exists()
+            )
+            exists = storage.exists(current_key)
+        except Exception as exc:
+            raise _DownloadUnavailable from exc
+        if managed or exists is not True:
+            raise _DownloadUnavailable
+
+    original_name: str | None
+    content_type: str | None
+    if retained_intent is not None:
+        original_name = retained_intent.original_filename
+        content_type = retained_intent.verified_content_type
+    else:
+        original_name, content_type = _download_metadata(
+            manager_name=typed_manager_name,
+            object_id=str(row.pk),
+            field_name=typed_field_name,
+            current_key=current_key,
+            database_alias=configured.intent_database,
+        )
+    filename = _download_basename(original_name or current_key)
+    media_type = _safe_download_content_type(content_type, filename)
+    if request.method == "HEAD":
+        response = HttpResponse(content_type=media_type)
+        if retained_version is not None:
+            size = retained_version.size
+            cast(Any, opened).close()
+        else:
+            try:
+                size = storage.size(current_key)
+            except Exception:  # noqa: BLE001 - length is optional for HEAD
+                size = None
+        if isinstance(size, int) and not isinstance(size, bool) and size >= 0:
+            response["Content-Length"] = str(size)
+    else:
+        if opened is None:
+            try:
+                opened = storage.open(current_key, "rb")
+            except Exception as exc:
+                raise _DownloadUnavailable from exc
+        try:
+            response = cast(
+                HttpResponse,
+                FileResponse(cast(Any, opened), content_type=media_type),
+            )
+        except Exception:
+            cast(Any, opened).close()
+            raise
+    _set_download_headers(response, filename)
+    return response
+
+
+def _download_metadata(
+    *,
+    manager_name: str,
+    object_id: str,
+    field_name: str,
+    current_key: str,
+    database_alias: str,
+) -> tuple[str | None, str | None]:
+    try:
+        intent = (
+            UploadIntent.objects.using(database_alias)
+            .filter(
+                manager_name=manager_name,
+                final_target_pk=object_id,
+                field_name=field_name,
+                final_key=current_key,
+            )
+            .order_by("-updated_at")
+            .only("original_filename", "verified_content_type")
+            .first()
+        )
+    except Exception:  # noqa: BLE001 - optional metadata never blocks a download
+        return None, None
+    if intent is None:
+        return None, None
+    return intent.original_filename, intent.verified_content_type
+
+
+def _download_basename(value: str) -> str:
+    basename = posixpath.basename(value.replace("\\", "/"))
+    if not basename or any(
+        ord(character) < 32 or ord(character) == 127 for character in basename
+    ):
+        return "download"
+    return basename[:255]
+
+
+def _safe_download_content_type(value: str | None, filename: str) -> str:
+    candidate = value.lower() if isinstance(value, str) else ""
+    if _SAFE_DOWNLOAD_MEDIA_TYPE.fullmatch(candidate):
+        return candidate
+    guessed, _encoding = mimetypes.guess_type(filename)
+    candidate = guessed.lower() if isinstance(guessed, str) else ""
+    return (
+        candidate
+        if _SAFE_DOWNLOAD_MEDIA_TYPE.fullmatch(candidate)
+        else "application/octet-stream"
+    )
+
+
+def _set_download_headers(response: HttpResponse, filename: str) -> None:
+    fallback = (
+        "".join(
+            character if 32 <= ord(character) < 127 else "_" for character in filename
+        )
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+    )
+    encoded = quote(filename, safe="!#$&+-.^_`|~")
+    response["Content-Disposition"] = (
+        f"inline; filename=\"{fallback}\"; filename*=utf-8''{encoded}"
+    )
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Referrer-Policy"] = "no-referrer"
+    response["Cache-Control"] = "private, no-store"
+    response["Content-Security-Policy"] = "sandbox"
