@@ -223,6 +223,47 @@ class ConditionalDeleteStorage(Storage):
         return self.result
 
 
+class EventuallyVisibleMarkerStorage(Storage):
+    supports_atomic_conditional_create = True
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.primary_key: str | None = None
+        self.pending_missing_reads = 0
+        self.pending_partial_reads = 0
+
+    def exists(self, name: str) -> bool:
+        return name in self.objects
+
+    def save(
+        self,
+        name: str,
+        content: object,
+        max_length: int | None = None,
+    ) -> str:
+        del max_length
+        payload = b"".join(content.chunks())  # type: ignore[attr-defined]
+        self.primary_key = name
+        self.pending_partial_reads = 1
+        self.objects[name] = payload
+        collision_key = f"{name}.collision"
+        self.objects[collision_key] = payload
+        return collision_key
+
+    def _open(self, name: str, mode: str = "rb") -> ContentFile:
+        del mode
+        if name == self.primary_key and self.pending_missing_reads:
+            self.pending_missing_reads -= 1
+            raise FileNotFoundError(name)
+        if name == self.primary_key and self.pending_partial_reads:
+            self.pending_partial_reads -= 1
+            return ContentFile(b"{")
+        return ContentFile(self.objects[name])
+
+    def delete(self, name: str) -> None:
+        self.objects.pop(name, None)
+
+
 class SeekabilityErrorBytes(BytesIO):
     def seekable(self) -> bool:
         raise OSError
@@ -367,6 +408,60 @@ def test_registry_registration_snapshot_is_immutable_and_detached() -> None:
 
     registry.register(UnknownStorage, factory)
     assert dict(snapshot) == {FileSystemStorage: factory}
+
+
+def test_marker_collision_waits_for_the_winner_to_finish_writing() -> None:
+    storage = EventuallyVisibleMarkerStorage()
+    adapter = ProxyUploadAdapter(storage)
+
+    adapter._acquire_marker(
+        "gm-upload-meta/marker.json",
+        {"intent_id": "same-intent", "state": "claimed"},
+    )
+
+    assert storage.pending_partial_reads == 0
+
+
+def test_existing_conflicting_marker_is_rejected_without_polling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = EventuallyVisibleMarkerStorage()
+    marker = "gm-upload-meta/marker.json"
+    storage.objects[marker] = json.dumps(
+        {"intent_id": "other-intent", "state": "claimed"}
+    ).encode()
+    adapter = ProxyUploadAdapter(storage)
+
+    monkeypatch.setattr(
+        "general_manager.uploads.adapters.time.sleep",
+        lambda _seconds: pytest.fail("definitive conflicts must not be polled"),
+    )
+
+    with pytest.raises(UploadTransferConflictError):
+        adapter._acquire_marker(
+            marker,
+            {"intent_id": "same-intent", "state": "claimed"},
+        )
+
+
+def test_marker_match_retries_exists_then_transient_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = EventuallyVisibleMarkerStorage()
+    marker = "gm-upload-meta/marker.json"
+    identity = {"intent_id": "same-intent", "state": "claimed"}
+    storage.objects[marker] = json.dumps(identity).encode()
+    storage.primary_key = marker
+    storage.pending_missing_reads = 1
+    adapter = ProxyUploadAdapter(storage)
+    monkeypatch.setattr(
+        "general_manager.uploads.adapters.time.sleep",
+        lambda _seconds: None,
+    )
+
+    adapter._acquire_marker(marker, identity)
+
+    assert storage.pending_missing_reads == 0
 
 
 def test_registry_resolves_registered_adapter_by_stable_id_and_version() -> None:

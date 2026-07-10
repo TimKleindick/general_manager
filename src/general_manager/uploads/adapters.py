@@ -12,6 +12,7 @@ import json
 import os
 from tempfile import SpooledTemporaryFile
 from threading import RLock
+import time
 from types import MappingProxyType
 from typing import IO, ClassVar, Protocol, TypeVar, cast, runtime_checkable
 from urllib.parse import urlsplit, urlunsplit
@@ -43,6 +44,9 @@ class PublicUploadUrlUnsupportedError(ValueError):
 
 
 _ExceptionT = TypeVar("_ExceptionT", bound=Exception)
+_MARKER_VISIBILITY_TIMEOUT_SECONDS = 0.25
+_MARKER_VISIBILITY_POLL_SECONDS = 0.001
+_MARKER_VISIBILITY_MAX_POLL_SECONDS = 0.02
 
 
 class _StorageHandler(Protocol):
@@ -1027,7 +1031,7 @@ class ProxyUploadAdapter:
 
     def _acquire_marker(self, key: str, identity: Mapping[str, object]) -> None:
         if self._storage_exists(key):
-            if self._marker_matches(key, identity):
+            if self._wait_for_marker_match(key, identity):
                 return
             raise _exception(
                 UploadTransferConflictError,
@@ -1043,12 +1047,57 @@ class ProxyUploadAdapter:
         if saved_key == key:
             return
         self._storage_delete(saved_key)
-        if self._marker_matches(key, identity):
+        if self._wait_for_marker_match(key, identity):
             return
         raise _exception(
             UploadTransferConflictError,
             "The upload materialization marker is already occupied.",
         )
+
+    def _wait_for_marker_match(
+        self,
+        key: str,
+        identity: Mapping[str, object],
+    ) -> bool:
+        deadline = time.monotonic() + _MARKER_VISIBILITY_TIMEOUT_SECONDS
+        poll_seconds = _MARKER_VISIBILITY_POLL_SECONDS
+        while True:
+            status = self._marker_match_status(key, identity)
+            if status is not None:
+                return status
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(poll_seconds, remaining))
+            poll_seconds = min(
+                poll_seconds * 2,
+                _MARKER_VISIBILITY_MAX_POLL_SECONDS,
+            )
+
+    def _marker_match_status(
+        self,
+        marker: str,
+        identity: Mapping[str, object],
+    ) -> bool | None:
+        """Return a match, a conflict, or an incomplete/transient read."""
+        if not self._storage_exists(marker):
+            return None
+        try:
+            with self._storage_open(marker) as stored:
+                payload = stored.read(4097)
+            if len(payload) > 4096:
+                return False
+            value = json.loads(payload)
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            UploadObjectMissingError,
+        ):
+            return None
+        except TypeError:
+            return False
+        return bool(value == dict(identity))
 
     def _require_conditional_creation(
         self,
@@ -1096,17 +1145,7 @@ class ProxyUploadAdapter:
         marker: str,
         identity: Mapping[str, object],
     ) -> bool:
-        if not self._storage_exists(marker):
-            return False
-        try:
-            with self._storage_open(marker) as stored:
-                payload = stored.read(4097)
-            if len(payload) > 4096:
-                return False
-            value = json.loads(payload)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
-            return False
-        return bool(value == dict(identity))
+        return self._marker_match_status(marker, identity) is True
 
     def _staged_content_type(
         self,
