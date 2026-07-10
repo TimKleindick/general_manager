@@ -5,15 +5,18 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+import hashlib
 import importlib.util
 import re
-from typing import IO, ClassVar, Protocol, TypeVar, cast
+from tempfile import SpooledTemporaryFile
+from typing import IO, ClassVar, NoReturn, Protocol, TypeVar, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from django.core.files.storage import Storage
 
 from general_manager.uploads.adapters import (
+    ClaimedObject,
     PublicUploadUrlUnsupportedError,
     UploadInstructions,
     build_storage_fingerprint,
@@ -48,6 +51,23 @@ def _sdk_call(operation: Callable[[], _ResultT], message: str) -> _ResultT:
         raise
     except Exception as exc:
         raise _exception(UploadStorageError, message) from exc
+
+
+def _close_body(body: object) -> None:
+    close = getattr(body, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception as exc:
+            raise UploadStorageError from exc
+
+
+def _raise_storage_error() -> NoReturn:
+    raise UploadStorageError
+
+
+def _raise_storage_changed() -> NoReturn:
+    raise UploadStorageChangedError
 
 
 class _S3ClientProtocol(Protocol):
@@ -256,11 +276,43 @@ class S3UploadAdapter:
         )
         body = response.get("Body")
         if body is None or not hasattr(body, "read"):
+            if body is not None:
+                _close_body(body)
             raise _exception(
                 UploadStorageError,
                 "S3 returned a staged object without a body.",
             )
-        return cast(IO[bytes], body)
+        spooled = SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
+        digest = hashlib.sha256()
+        received = 0
+        try:
+            while received <= version.size:
+                chunk = body.read(min(64 * 1024, version.size + 1 - received))
+                if not isinstance(chunk, bytes):
+                    _raise_storage_error()
+                if not chunk:
+                    break
+                received += len(chunk)
+                if received > version.size:
+                    _raise_storage_changed()
+                digest.update(chunk)
+                spooled.write(chunk)
+            if (
+                received != version.size
+                or digest.hexdigest() != version.checksum_sha256
+            ):
+                _raise_storage_changed()
+            spooled.seek(0)
+            return cast(IO[bytes], spooled)
+        except Exception:
+            spooled.close()
+            raise
+        finally:
+            try:
+                _close_body(body)
+            except UploadStorageError:
+                spooled.close()
+                raise
 
     def delete_stage(
         self,
@@ -277,6 +329,116 @@ class S3UploadAdapter:
         _sdk_call(
             lambda: self._client.delete_object(**parameters),
             "S3 could not delete the staged object.",
+        )
+
+    def inspect_materialized(
+        self,
+        final_key: str,
+        source_version: ObjectVersion,
+        *,
+        intent_id: UUID,
+    ) -> ObjectVersion:
+        response = self._head_optional(final_key)
+        identity = {
+            "gm-intent-id": str(intent_id),
+            "gm-checksum-sha256": source_version.checksum_sha256,
+        }
+        if response is None or not _matches_materialization(
+            response, source_version, identity
+        ):
+            raise _exception(
+                UploadStorageChangedError,
+                "The final S3 object is not owned by this upload intent.",
+            )
+        return _object_version(response)
+
+    def delete_materialized(
+        self,
+        final_key: str,
+        final_version: ObjectVersion,
+        *,
+        intent_id: UUID,
+    ) -> None:
+        current = self.inspect_materialized(
+            final_key,
+            final_version,
+            intent_id=intent_id,
+        )
+        if current != final_version:
+            raise UploadStorageChangedError()
+        self.delete_object(final_key, final_version)
+
+    def delete_object(self, key: str, version: ObjectVersion) -> None:
+        if not version.version_id:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 exact deletion requires an immutable VersionId.",
+            )
+        current = self._head_optional(key)
+        if current is None or _object_version(current) != version:
+            raise UploadStorageChangedError()
+        _sdk_call(
+            lambda: self._client.delete_object(
+                Bucket=self._bucket,
+                Key=key,
+                VersionId=version.version_id,
+            ),
+            "S3 could not delete the exact object version.",
+        )
+
+    def inspect_replaced_object(self, key: str) -> ObjectVersion:
+        """Return S3's immutable VersionId-backed object identity."""
+        return self.inspect_staged(key)
+
+    def plan_replaced_object_claim(
+        self,
+        key: str,
+        version: ObjectVersion,
+        *,
+        cleanup_id: UUID,
+    ) -> ClaimedObject:
+        del cleanup_id
+        if not version.version_id:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 cleanup claims require an immutable VersionId.",
+            )
+        return ClaimedObject(key=key, version=version)
+
+    def claim_replaced_object(
+        self,
+        key: str,
+        claimed: ClaimedObject,
+        *,
+        cleanup_id: UUID,
+    ) -> None:
+        planned = self.plan_replaced_object_claim(
+            key,
+            claimed.version,
+            cleanup_id=cleanup_id,
+        )
+        if claimed != planned:
+            raise UploadStorageChangedError()
+
+    def delete_claimed_object(
+        self,
+        claimed: ClaimedObject,
+        *,
+        cleanup_id: UUID,
+    ) -> None:
+        del cleanup_id
+        if not claimed.version.version_id:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 cleanup claims require an immutable VersionId.",
+            )
+        _sdk_call(
+            lambda: self._client.delete_object(
+                Bucket=self._bucket,
+                Key=claimed.key,
+                VersionId=claimed.version.version_id,
+            ),
+            "S3 could not delete the claimed object version.",
         )
 
     def private_download_url(self, key: str, *, expires_in: int) -> str:

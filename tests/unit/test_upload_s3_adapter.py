@@ -5,11 +5,12 @@ import hashlib
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar
 import tomllib
 from uuid import UUID
 
 import pytest
+from django.test import override_settings
 
 from general_manager.uploads.adapters import (
     ProxyUploadAdapter,
@@ -49,6 +50,7 @@ class FakeS3Client:
         self.presigned_url_calls: list[tuple[str, dict[str, Any]]] = []
         self.fail_operations: set[str] = set()
         self.operation_errors: dict[str, Exception] = {}
+        self.body_factory: Callable[[bytes], object] = BytesIO
         members = {"IfNoneMatch": object()} if conditional_copy else {}
         operation = SimpleNamespace(input_shape=SimpleNamespace(members=members))
         service_model = SimpleNamespace(operation_model=lambda _name: operation)
@@ -96,7 +98,7 @@ class FakeS3Client:
     def get_object(self, **kwargs: Any) -> dict[str, Any]:
         self._fail_if("get")
         value = self._lookup_object(**kwargs)
-        return {"Body": BytesIO(value["Body"])}
+        return {"Body": self.body_factory(value["Body"])}
 
     def copy_object(self, **kwargs: Any) -> dict[str, Any]:
         self._fail_if("copy")
@@ -605,6 +607,75 @@ def test_s3_inspects_and_opens_exact_immutable_version() -> None:
     assert opened.read() == b"immutable staged payload"
 
 
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"MAX_BYTES": 1}})
+def test_s3_exact_stream_does_not_reapply_global_size_over_field_policy() -> None:
+    client = FakeS3Client()
+    expected = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    with adapter.open_stage("gm-staging/intent.bin", expected) as opened:
+        assert opened.read() == b"immutable staged payload"
+
+
+def test_s3_spools_non_seekable_short_read_image_body_for_pillow() -> None:
+    from PIL import Image
+
+    class NonSeekableBody:
+        def __init__(self, content: bytes) -> None:
+            self.content = content
+            self.offset = 0
+            self.closed = False
+
+        def read(self, size: int = -1) -> bytes:
+            del size
+            if self.offset >= len(self.content):
+                return b""
+            chunk = self.content[self.offset : self.offset + 1]
+            self.offset += 1
+            return chunk
+
+        def close(self) -> None:
+            self.closed = True
+
+    encoded = BytesIO()
+    Image.new("RGB", (3, 2)).save(encoded, format="PNG")
+    payload = encoded.getvalue()
+    checksum = hashlib.sha256(payload).digest()
+    client = FakeS3Client()
+    bodies: list[NonSeekableBody] = []
+
+    def body_factory(content: bytes) -> NonSeekableBody:
+        body = NonSeekableBody(content)
+        bodies.append(body)
+        return body
+
+    client.body_factory = body_factory
+    client.objects[("gm-staging/image.png", "image-version-1")] = {
+        "VersionId": "image-version-1",
+        "ETag": '"image-etag"',
+        "ChecksumSHA256": base64.b64encode(checksum).decode("ascii"),
+        "ContentLength": len(payload),
+        "ContentType": "image/png",
+        "Metadata": {},
+        "Body": payload,
+    }
+    version = ObjectVersion(
+        version_id="image-version-1",
+        etag='"image-etag"',
+        checksum_sha256=checksum.hex(),
+        size=len(payload),
+        content_type="image/png",
+    )
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    with adapter.open_stage("gm-staging/image.png", version) as opened:
+        assert opened.seekable()
+        with Image.open(opened) as image:
+            assert image.size == (3, 2)
+
+    assert bodies[0].closed is True
+
+
 def test_s3_inspection_requests_checksum_metadata() -> None:
     client = FakeS3Client()
     _stage(client)
@@ -654,6 +725,64 @@ def test_s3_materializes_exact_version_conditionally_and_retries() -> None:
     assert call["Metadata"] == {
         "gm-intent-id": str(intent_id),
         "gm-checksum-sha256": version.checksum_sha256,
+    }
+
+
+def test_s3_inspects_and_deletes_exact_intent_owned_final_version() -> None:
+    client = FakeS3Client()
+    source_version = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    final_key = adapter.materialize(
+        "gm-staging/intent.bin",
+        source_version,
+        "files/report.txt",
+        intent_id=intent_id,
+    )
+
+    final_version = adapter.inspect_materialized(
+        final_key,
+        source_version,
+        intent_id=intent_id,
+    )
+    adapter.delete_materialized(
+        final_key,
+        final_version,
+        intent_id=intent_id,
+    )
+
+    assert final_version.version_id == "final-version"
+    assert client.delete_calls[-1] == {
+        "Bucket": "uploads",
+        "Key": "files/report.txt",
+        "VersionId": "final-version",
+    }
+
+
+def test_s3_replaced_object_claim_is_the_exact_persisted_version_id() -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+
+    claimed = adapter.plan_replaced_object_claim(
+        "gm-staging/intent.bin",
+        version,
+        cleanup_id=cleanup_id,
+    )
+    adapter.claim_replaced_object(
+        "gm-staging/intent.bin",
+        claimed,
+        cleanup_id=cleanup_id,
+    )
+    adapter.delete_claimed_object(claimed, cleanup_id=cleanup_id)
+
+    assert claimed.key == "gm-staging/intent.bin"
+    assert claimed.version.version_id == "stage-version-1"
+    assert client.delete_calls[-1] == {
+        "Bucket": "uploads",
+        "Key": "gm-staging/intent.bin",
+        "VersionId": "stage-version-1",
     }
 
 

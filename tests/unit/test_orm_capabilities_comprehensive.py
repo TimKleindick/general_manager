@@ -7,6 +7,7 @@ import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from uuid import UUID
 
 from django.apps import apps
 from django.db import models
@@ -15,6 +16,7 @@ from django.utils import timezone
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.capabilities.orm import (
     HistoryNotSupportedError,
+    OrmCreateCapability,
     OrmDeleteCapability,
     OrmHistoryCapability,
     OrmLifecycleCapability,
@@ -43,6 +45,7 @@ from general_manager.interface.utils.errors import (
     InvalidFieldTypeError,
     InvalidFieldValueError,
 )
+from general_manager.uploads.types import UploadCandidate
 
 
 class TestOrmPersistenceSupportCapability:
@@ -1756,6 +1759,69 @@ class TestOrmMutationCapability:
             assert result is mock_instance
             assert mock_instance.name == "test"
             assert mock_instance.value == 42
+
+    def test_create_reserves_upload_key_before_assigning_model_attributes(self):
+        """Keep internal UploadCandidate objects out of Django descriptors."""
+        capability = OrmCreateCapability()
+        candidate = UploadCandidate(
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+            filename="avatar.png",
+            size=3,
+            content_type="image/png",
+            checksum_sha256="a" * 64,
+        )
+        interface_cls = Mock()
+        instance = Mock()
+        interface_cls._model.return_value = instance
+        mutation = Mock()
+        mutation.assign_simple_attributes.return_value = instance
+        mutation.save_with_history.return_value = 42
+        prepared = Mock()
+        locked = Mock()
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.call_with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._normalize_payload",
+                return_value=({"avatar": candidate}, {}),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._mutation_capability_for",
+                return_value=mutation,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.prepare_upload_claims",
+                return_value=prepared,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.lock_upload_claims",
+                return_value=locked,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.reserve_upload_names",
+                return_value={"avatar": "avatars/reserved.png"},
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.run_upload_transaction",
+                side_effect=lambda _prepared, operation: operation(),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.mark_uploads_finalizing"
+            ) as mark_finalizing,
+        ):
+            result = capability.create(interface_cls, creator_id=7, avatar=candidate)
+
+        assert result == {"id": 42}
+        assert mutation.assign_simple_attributes.call_count == 2
+        mutation.assign_simple_attributes.assert_called_with(
+            interface_cls,
+            instance,
+            {"avatar": "avatars/reserved.png"},
+        )
+        mark_finalizing.assert_called_once_with(locked, target_pk=42)
 
     def test_assign_simple_attributes_skips_not_provided(self):
         """Test that assign_simple_attributes skips NOT_PROVIDED values."""

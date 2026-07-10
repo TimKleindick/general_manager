@@ -22,6 +22,15 @@ from general_manager.interface.utils.errors import (
     MissingActivationSupportError,
 )
 from general_manager.interface.utils.models import model_has_field
+from general_manager.uploads.finalization import (
+    has_upload_candidates,
+    lock_upload_claims,
+    mark_uploads_finalizing,
+    prepare_upload_claims,
+    reserve_upload_names,
+    run_upload_transaction,
+)
+from general_manager.uploads.types import UploadCandidate, UploadOperation
 
 from ._compat import call_update_change_reason, call_with_observability
 from .support import (
@@ -300,6 +309,54 @@ class OrmCreateCapability(BaseCapability):
                 interface_cls, local_kwargs
             )
             mutation = _mutation_capability_for(interface_cls)
+            if has_upload_candidates(normalized_simple):
+                prepared = prepare_upload_claims(
+                    interface_cls,
+                    normalized_simple,
+                    operation=UploadOperation.CREATE,
+                    actor_id=creator_id,
+                    target_pk=None,
+                )
+
+                def _create_claimed() -> MutationResult:
+                    locked = lock_upload_claims(prepared)
+                    instance = interface_cls._model()
+                    ordinary_values = {
+                        key: value
+                        for key, value in normalized_simple.items()
+                        if not isinstance(value, UploadCandidate)
+                    }
+                    instance = mutation.assign_simple_attributes(
+                        interface_cls,
+                        instance,
+                        ordinary_values,
+                    )
+                    reserved_values = reserve_upload_names(
+                        locked,
+                        instance,
+                        normalized_simple,
+                    )
+                    claimed_instance = mutation.assign_simple_attributes(
+                        interface_cls,
+                        instance,
+                        reserved_values,
+                    )
+                    claimed_pk = mutation.save_with_history(
+                        interface_cls,
+                        claimed_instance,
+                        creator_id=creator_id,
+                        history_comment=history_comment,
+                    )
+                    mutation.apply_many_to_many(
+                        interface_cls,
+                        claimed_instance,
+                        many_to_many_kwargs=normalized_many,
+                        history_comment=history_comment,
+                    )
+                    mark_uploads_finalizing(locked, target_pk=claimed_pk)
+                    return {"id": claimed_pk}
+
+                return run_upload_transaction(prepared, _create_claimed)
             instance = mutation.assign_simple_attributes(
                 interface_cls, interface_cls._model(), normalized_simple
             )
@@ -390,8 +447,58 @@ class OrmUpdateCapability(BaseCapability):
                 interface_instance.__class__,
                 only_active=False,
             )
-            instance = manager.get(pk=interface_instance.pk)
             mutation = _mutation_capability_for(interface_instance.__class__)
+            if has_upload_candidates(normalized_simple):
+                prepared = prepare_upload_claims(
+                    interface_instance.__class__,
+                    normalized_simple,
+                    operation=UploadOperation.UPDATE,
+                    actor_id=creator_id,
+                    target_pk=interface_instance.pk,
+                )
+
+                def _update_claimed() -> MutationResult:
+                    locked = lock_upload_claims(prepared)
+                    instance = manager.select_for_update().get(pk=interface_instance.pk)
+                    ordinary_values = {
+                        key: value
+                        for key, value in normalized_simple.items()
+                        if not isinstance(value, UploadCandidate)
+                    }
+                    instance = mutation.assign_simple_attributes(
+                        interface_instance.__class__,
+                        instance,
+                        ordinary_values,
+                    )
+                    reserved_values = reserve_upload_names(
+                        locked,
+                        instance,
+                        normalized_simple,
+                    )
+                    claimed_instance = mutation.assign_simple_attributes(
+                        interface_instance.__class__,
+                        instance,
+                        reserved_values,
+                    )
+                    claimed_pk = mutation.save_with_history(
+                        interface_instance.__class__,
+                        claimed_instance,
+                        creator_id=creator_id,
+                        history_comment=history_comment,
+                    )
+                    mutation.apply_many_to_many(
+                        interface_instance.__class__,
+                        claimed_instance,
+                        many_to_many_kwargs=normalized_many,
+                        history_comment=history_comment,
+                    )
+                    mark_uploads_finalizing(locked, target_pk=claimed_pk)
+                    return {"id": claimed_pk}
+
+                result = run_upload_transaction(prepared, _update_claimed)
+                discard_orm_instance_cache(interface_instance.__class__, result["id"])
+                return result
+            instance = manager.get(pk=interface_instance.pk)
             instance = mutation.assign_simple_attributes(
                 interface_instance.__class__, instance, normalized_simple
             )

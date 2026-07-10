@@ -111,10 +111,18 @@ class UploadIntentModelTests(TestCase):
 
         assert intent.state == UploadIntentState.PENDING
         assert intent.object_version == {}
+        assert intent.final_object_version == {}
+        assert intent.old_object_version == {}
+        assert intent.old_cleanup_key is None
+        assert intent.old_cleanup_version == {}
+        assert intent.old_cleanup_completed_at is None
+        assert intent.verified_width is None
+        assert intent.verified_height is None
         assert intent.transfer_attempt_count == 0
         assert intent.finalization_attempt_count == 0
         assert intent.finalization_error_code == ""
         assert intent.target_id is None
+        assert intent.final_target_pk is None
         assert intent.final_key is None
         assert intent.old_key is None
         assert intent.transfer_lease_expires_at is None
@@ -223,7 +231,10 @@ class UploadIntentModelTests(TestCase):
             "etag": "etag-7",
             "checksum_sha256": "c" * 64,
             "size": 3,
+            "content_type": "image/png",
         }
+        old_object_version = {**object_version, "version_id": "old-version"}
+        final_object_version = {**object_version, "version_id": "final-version"}
         intent = self.make_intent(
             operation=UploadOperation.UPDATE,
             target_id="profile:7",
@@ -234,6 +245,8 @@ class UploadIntentModelTests(TestCase):
             verified_content_type="image/png",
             verified_checksum_sha256="c" * 64,
             object_version=object_version,
+            old_object_version=old_object_version,
+            final_object_version=final_object_version,
             finalization_error_code="COPY_INTERRUPTED",
             finalization_attempt_count=2,
         )
@@ -244,6 +257,8 @@ class UploadIntentModelTests(TestCase):
         assert intent.final_key == "profiles/7/avatar.png"
         assert intent.old_key == "profiles/7/old-avatar.png"
         assert intent.object_version == object_version
+        assert intent.old_object_version == old_object_version
+        assert intent.final_object_version == final_object_version
         assert intent.finalization_error_code == "COPY_INTERRUPTED"
         assert intent.finalization_attempt_count == 2
 
@@ -257,6 +272,12 @@ class UploadIntentModelTests(TestCase):
 
         assert ("general_manager", "0006_chat_pending_confirmation_scoped_ids") in (
             migration.dependencies
+        )
+        finalization_migration = import_module(
+            "general_manager.migrations.0008_upload_finalization_versions"
+        ).Migration
+        assert ("general_manager", "0007_upload_intent") in (
+            finalization_migration.dependencies
         )
         assert migrations.swappable_dependency(settings.AUTH_USER_MODEL) in (
             migration.dependencies

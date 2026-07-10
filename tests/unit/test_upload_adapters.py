@@ -21,7 +21,9 @@ from general_manager.uploads.adapters import (
     PublicUploadUrlUnsupportedError,
     UploadAdapter,
     UploadAdapterRegistry,
+    UploadFinalizationAdapter,
 )
+from general_manager.uploads import adapters as adapters_module
 from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
     UploadChecksumMismatchError,
@@ -360,6 +362,7 @@ def test_proxy_adapter_satisfies_upload_and_streaming_sink_protocols(
 
     assert isinstance(adapter, UploadAdapter)
     assert isinstance(adapter, ProxyUploadSink)
+    assert isinstance(adapter, UploadFinalizationAdapter)
 
 
 def test_registry_uses_proxy_for_unknown_storage() -> None:
@@ -441,6 +444,136 @@ def test_proxy_streams_chunks_and_records_checksum(tmp_path: Path) -> None:
         content_type="application/octet-stream",
     )
     assert adapter.inspect_staged("gm-staging/intent.bin") == version
+
+
+def test_filesystem_proxy_deletes_exact_intent_owned_materialized_version(
+    tmp_path: Path,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    stage_key = _UUID_STAGE_KEY
+    final_key = _UUID_FINAL_KEY
+    source_version = adapter.save_stage(
+        stage_key,
+        [b"owned payload"],
+        content_type="application/octet-stream",
+    )
+    adapter.materialize(
+        stage_key,
+        source_version,
+        final_key,
+        intent_id=intent_id,
+    )
+    final_version = adapter.inspect_materialized(
+        final_key,
+        source_version,
+        intent_id=intent_id,
+    )
+
+    adapter.delete_materialized(
+        final_key,
+        final_version,
+        intent_id=intent_id,
+    )
+
+    assert not adapter.storage.exists(final_key)
+
+
+def test_filesystem_exact_delete_restores_key_when_quarantine_unlink_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    key = _UUID_STAGE_KEY
+    version = adapter.save_stage(
+        key,
+        [b"retryable delete"],
+        content_type="application/octet-stream",
+    )
+    real_unlink = adapters_module.os.unlink
+    attempts = 0
+
+    def fail_once(path: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError
+        real_unlink(path)
+
+    monkeypatch.setattr(adapters_module.os, "unlink", fail_once)
+
+    with pytest.raises(UploadStorageError):
+        adapter.delete_stage(key, version)
+    assert adapter.storage.exists(key)
+
+    adapter.delete_stage(key, version)
+    assert not adapter.storage.exists(key)
+
+
+def test_filesystem_replaced_object_cleanup_fails_closed_without_data_movement(
+    tmp_path: Path,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    old_key = "existing/retained-old.bin"
+    adapter.storage.save(old_key, ContentFile(b"old payload"))
+    version = adapter.inspect_replaced_object(old_key)
+    claimed = adapter.plan_replaced_object_claim(
+        old_key,
+        version,
+        cleanup_id=cleanup_id,
+    )
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
+
+    assert adapter.storage.exists(old_key)
+    assert not adapter.storage.exists(claimed.key)
+
+
+def test_filesystem_cleanup_rejects_same_bytes_recreated_before_first_claim(
+    tmp_path: Path,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    old_key = "existing/recreated-before-claim.bin"
+    adapter.storage.save(old_key, ContentFile(b"same bytes"))
+    version = adapter.inspect_replaced_object(old_key)
+    claimed = adapter.plan_replaced_object_claim(
+        old_key,
+        version,
+        cleanup_id=cleanup_id,
+    )
+    adapter.storage.delete(old_key)
+    adapter.storage.save(old_key, ContentFile(b"same bytes"))
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
+
+    assert adapter.storage.exists(old_key)
+    assert not adapter.storage.exists(claimed.key)
+
+
+def test_filesystem_cleanup_claim_path_is_bounded_for_max_component_old_key(
+    tmp_path: Path,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    old_key = f"existing/{'x' * 240}.bin"
+    adapter.storage.save(old_key, ContentFile(b"long-name payload"))
+    version = adapter.inspect_replaced_object(old_key)
+
+    claimed = adapter.plan_replaced_object_claim(
+        old_key,
+        version,
+        cleanup_id=cleanup_id,
+    )
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.claim_replaced_object(old_key, claimed, cleanup_id=cleanup_id)
+
+    assert claimed.key.startswith(f"gm-upload-old-claims/{cleanup_id.hex}/")
+    assert max(map(len, claimed.key.split("/"))) <= 255
+    assert len(claimed.key) < 1024
+    assert adapter.storage.exists(old_key)
 
 
 def test_proxy_concurrent_same_stage_identity_converges_on_requested_key(
@@ -867,9 +1000,7 @@ def test_proxy_opens_deletes_and_exposes_urls_only_when_explicit(
     claim_marker = _stage_marker("gm-upload-stage-claim", "gm-staging/intent.bin")
     assert private.storage.exists(completion_marker)
     assert private.storage.exists(claim_marker)
-    with pytest.raises(UploadBackendUnsupportedError):
-        private.delete_stage("gm-staging/intent.bin", version)
-    private.delete_stage("gm-staging/intent.bin")
+    private.delete_stage("gm-staging/intent.bin", version)
     assert not private.storage.exists("gm-staging/intent.bin")
     assert not private.storage.exists(completion_marker)
     assert not private.storage.exists(claim_marker)
