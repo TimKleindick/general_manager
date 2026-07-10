@@ -68,19 +68,45 @@ python -m pytest tests/perf/test_database_bucket_perf.py -vv
 GENERAL_MANAGER_RECORD_PERF=1 python -m pytest tests/perf -q -s
 ```
 
+The focused command's `-vv` enables diagnostic collection, but pytest still
+captures output from passing tests. Display the diagnostic lines by disabling
+capture:
+
+```bash
+python -m pytest tests/perf/test_database_bucket_perf.py -vv -s
+```
+
 Deterministic integer ceilings for queries, callbacks, source yields,
 manager/group constructions, and cache work are CI pass/fail gates. Elapsed time
-and peak allocations are diagnostics only: representative cases emit them with
-`-vv`, but they never determine whether a test passes. Setup and fixture work
-must stay outside measured blocks, and functional correctness assertions must
-accompany the metrics.
+and peak allocations are diagnostics only: representative cases collect them
+with `-vv`, but they never determine whether a test passes. Setup and fixture
+work must stay outside measured blocks, and functional correctness assertions
+must accompany the metrics.
 
-Calibrate a ceiling only after three complete recording runs produce identical,
-ordered `PERF_OBSERVATION` name/value output. Record the exact current counts
-without padding. Every budget name must be unique and observed exactly once;
-full-suite teardown validates the complete manifest. Budget increases require
-an inline explanation and performance-regression review. Lower a ceiling only
-after stable before/after evidence supports the change.
+Record mode prints the deterministic observations and bypasses ceiling
+enforcement. Functional assertions, budget validity and uniqueness, and the
+full-manifest safeguards remain active. A successful recording is therefore not
+proof that the regression gates pass; follow it with a normal enforced run such
+as `python -m pytest -m perf`.
+
+CI covers Python 3.12, 3.13, and 3.14. Calibrate a ceiling only after three
+complete recording runs in each relevant supported environment produce
+identical ordered name/value output within that environment. Compare only the
+ordered `PERF_OBSERVATION ` entries, not pytest progress or duration; from a
+saved log, extract the matches with
+`rg -o 'PERF_OBSERVATION [A-Z0-9_]+=[0-9]+' run.log`. Record exact current
+counts without padding.
+If stable counts differ by Python version, use the maximum stable count as the
+ceiling and add an adjacent comment in `tests/perf/budgets.py` with the
+per-version values and reason.
+
+Every budget name must be unique and observed exactly once. Full-manifest
+validation runs at pytest session finish only when all three budget workload
+modules (calculation, database, and group) were selected, no `-k` expression was
+used, and the session otherwise succeeded. A budget increase requires an
+adjacent explanatory comment in `tests/perf/budgets.py` and
+performance-regression review. Lower a ceiling only after stable before/after
+evidence supports the change.
 
 The current deterministic counts describe the SQLite CI baseline. Add separate
 coverage if a backend needs its own budgets; do not assume these counts apply to
