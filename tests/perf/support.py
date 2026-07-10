@@ -65,6 +65,9 @@ class PerfBudgets:
         assert type(ceiling) is int and ceiling >= 0, (
             f"invalid performance budget: {name}={ceiling!r}"
         )
+        assert name not in self.observations, (
+            f"duplicate performance observation: {name}"
+        )
         self.observations[name] = observed
         if self._record:
             print(f"PERF_OBSERVATION {name}={observed}")
