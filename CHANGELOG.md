@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## Unreleased
+
+### Features
+
+- Add field-bound, single-use GraphQL uploads for Django `FileField` and
+  `ImageField`, with proxy/local transfer, optional version-safe direct S3 PUT,
+  durable post-commit finalization, private structured downloads, quotas,
+  cleanup, checks, and metrics.
+
+### Breaking Changes
+
+- Replace the pre-release generated GraphQL `String` input/output for ORM file
+  fields with `UploadToken` mutation inputs and nested `StoredFile`/
+  `StoredImage` outputs when uploads are enabled. Existing database file names
+  need no data migration, but clients must begin/transfer/consume uploads and
+  update their selections.
+
+### Documentation
+
+- Document local and S3 upload setup, browser flows, security, reconciliation,
+  troubleshooting, and the custom adapter API.
+
 ## v0.61.0 (2026-07-07)
 
 ### Features

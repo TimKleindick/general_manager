@@ -13,5 +13,6 @@ Use the following guides to customise the schema:
 - [Custom GraphQL mutations](custom_mutations.md)
 - [Filtering and pagination](filters_pagination.md)
 - [GraphQL permission capabilities](permission_capabilities.md)
+- [File uploads and downloads](file_uploads.md)
 - [Security considerations](security.md)
 - [Subscriptions and dependency tracking](subscriptions.md)

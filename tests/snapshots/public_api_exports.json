@@ -118,6 +118,30 @@
     ]
   },
   "general_manager.api": {
+    "ClaimedObject": [
+      "general_manager.uploads.adapters",
+      "ClaimedObject"
+    ],
+    "ExactPublicDownloadAdapter": [
+      "general_manager.uploads.adapters",
+      "ExactPublicDownloadAdapter"
+    ],
+    "FileContentInspector": [
+      "general_manager.uploads.config",
+      "FileContentInspector"
+    ],
+    "FileInspection": [
+      "general_manager.uploads.config",
+      "FileInspection"
+    ],
+    "FileUploadConfigurationError": [
+      "general_manager.uploads.config",
+      "FileUploadConfigurationError"
+    ],
+    "FileUploadPolicy": [
+      "general_manager.uploads.config",
+      "FileUploadPolicy"
+    ],
     "GraphQL": [
       "general_manager.api.graphql",
       "GraphQL"
@@ -134,6 +158,26 @@
       "general_manager.api.property",
       "GraphQLPropertyWarmUpConfigurationError"
     ],
+    "InvalidFileTypeError": [
+      "general_manager.uploads.errors",
+      "InvalidFileTypeError"
+    ],
+    "InvalidImageError": [
+      "general_manager.uploads.errors",
+      "InvalidImageError"
+    ],
+    "InvalidUploadChecksumError": [
+      "general_manager.uploads.errors",
+      "InvalidUploadChecksumError"
+    ],
+    "InvalidUploadFilenameError": [
+      "general_manager.uploads.errors",
+      "InvalidUploadFilenameError"
+    ],
+    "InvalidUploadSizeError": [
+      "general_manager.uploads.errors",
+      "InvalidUploadSizeError"
+    ],
     "MeasurementScalar": [
       "general_manager.api.graphql",
       "MeasurementScalar"
@@ -142,9 +186,141 @@
       "general_manager.api.graphql",
       "MeasurementType"
     ],
+    "ObjectVersion": [
+      "general_manager.uploads.types",
+      "ObjectVersion"
+    ],
+    "ProxyUploadSink": [
+      "general_manager.uploads.adapters",
+      "ProxyUploadSink"
+    ],
     "RemoteInvalidationClient": [
       "general_manager.api.remote_invalidation_client",
       "RemoteInvalidationClient"
+    ],
+    "StoredFile": [
+      "general_manager.uploads.graphql_types",
+      "StoredFile"
+    ],
+    "StoredFileStatus": [
+      "general_manager.uploads.types",
+      "StoredFileStatus"
+    ],
+    "StoredImage": [
+      "general_manager.uploads.graphql_types",
+      "StoredImage"
+    ],
+    "UploadAdapter": [
+      "general_manager.uploads.adapters",
+      "UploadAdapter"
+    ],
+    "UploadAdapterFactory": [
+      "general_manager.uploads.adapters",
+      "UploadAdapterFactory"
+    ],
+    "UploadAlreadyConsumedError": [
+      "general_manager.uploads.errors",
+      "UploadAlreadyConsumedError"
+    ],
+    "UploadAuthenticationError": [
+      "general_manager.uploads.errors",
+      "UploadAuthenticationError"
+    ],
+    "UploadBackendUnsupportedError": [
+      "general_manager.uploads.errors",
+      "UploadBackendUnsupportedError"
+    ],
+    "UploadBindingMismatchError": [
+      "general_manager.uploads.errors",
+      "UploadBindingMismatchError"
+    ],
+    "UploadChecksumMismatchError": [
+      "general_manager.uploads.errors",
+      "UploadChecksumMismatchError"
+    ],
+    "UploadDatabaseMismatchError": [
+      "general_manager.uploads.errors",
+      "UploadDatabaseMismatchError"
+    ],
+    "UploadError": [
+      "general_manager.uploads.errors",
+      "UploadError"
+    ],
+    "UploadExpiredError": [
+      "general_manager.uploads.errors",
+      "UploadExpiredError"
+    ],
+    "UploadFieldInvalidError": [
+      "general_manager.uploads.errors",
+      "UploadFieldInvalidError"
+    ],
+    "UploadFinalizationAdapter": [
+      "general_manager.uploads.adapters",
+      "UploadFinalizationAdapter"
+    ],
+    "UploadFinalizationFailedError": [
+      "general_manager.uploads.errors",
+      "UploadFinalizationFailedError"
+    ],
+    "UploadIncompleteError": [
+      "general_manager.uploads.errors",
+      "UploadIncompleteError"
+    ],
+    "UploadInstructions": [
+      "general_manager.uploads.adapters",
+      "UploadInstructions"
+    ],
+    "UploadManagerInvalidError": [
+      "general_manager.uploads.errors",
+      "UploadManagerInvalidError"
+    ],
+    "UploadOperationInvalidError": [
+      "general_manager.uploads.errors",
+      "UploadOperationInvalidError"
+    ],
+    "UploadQuotaExceededError": [
+      "general_manager.uploads.errors",
+      "UploadQuotaExceededError"
+    ],
+    "UploadRateLimitExceededError": [
+      "general_manager.uploads.errors",
+      "UploadRateLimitExceededError"
+    ],
+    "UploadSizeMismatchError": [
+      "general_manager.uploads.errors",
+      "UploadSizeMismatchError"
+    ],
+    "UploadStorageChangedError": [
+      "general_manager.uploads.errors",
+      "UploadStorageChangedError"
+    ],
+    "UploadStorageError": [
+      "general_manager.uploads.errors",
+      "UploadStorageError"
+    ],
+    "UploadSupersededError": [
+      "general_manager.uploads.errors",
+      "UploadSupersededError"
+    ],
+    "UploadTargetUnavailableError": [
+      "general_manager.uploads.errors",
+      "UploadTargetUnavailableError"
+    ],
+    "UploadToken": [
+      "general_manager.uploads.graphql_types",
+      "UploadToken"
+    ],
+    "UploadTokenInvalidError": [
+      "general_manager.uploads.errors",
+      "UploadTokenInvalidError"
+    ],
+    "UploadTransferConflictError": [
+      "general_manager.uploads.errors",
+      "UploadTransferConflictError"
+    ],
+    "UploadTransport": [
+      "general_manager.uploads.types",
+      "UploadTransport"
     ],
     "graph_ql_mutation": [
       "general_manager.api.mutation",
@@ -153,6 +329,10 @@
     "graph_ql_property": [
       "general_manager.api.property",
       "graph_ql_property"
+    ],
+    "register_upload_adapter": [
+      "general_manager.uploads.public",
+      "register_upload_adapter"
     ]
   },
   "general_manager.bucket": {

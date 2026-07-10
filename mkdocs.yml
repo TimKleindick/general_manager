@@ -114,6 +114,7 @@ nav:
           - concepts/graphql/custom_mutations.md
           - concepts/graphql/filters_pagination.md
           - concepts/graphql/permission_capabilities.md
+          - concepts/graphql/file_uploads.md
           - concepts/graphql/subscriptions.md
           - concepts/graphql/security.md
       - Factories & Testing:
@@ -130,6 +131,8 @@ nav:
       - howto/add_permission_rule.md
       - howto/permission_walkthrough.md
       - howto/expose_via_graphql.md
+      - howto/graphql_file_uploads.md
+      - howto/graphql_file_uploads_s3.md
       - howto/search.md
       - howto/search_reconciliation.md
       - howto/cache_dependent_calculation.md

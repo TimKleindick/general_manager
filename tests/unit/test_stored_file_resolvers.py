@@ -153,6 +153,29 @@ class VersionedPublicAdapter(PublicDownloadAdapter):
         return True
 
 
+class ExactVersionPublicAdapter(VersionedPublicAdapter):
+    def public_download_url(
+        self,
+        key: str,
+        *,
+        version: ObjectVersion,
+    ) -> str:
+        return f"https://cdn.test/{key}?versionId={version.version_id}"
+
+
+class ConfigurableExactVersionPublicAdapter(ExactVersionPublicAdapter):
+    exact_url = ""
+
+    def public_download_url(
+        self,
+        key: str,
+        *,
+        version: ObjectVersion,
+    ) -> str:
+        del key, version
+        return self.exact_url
+
+
 def _info() -> SimpleNamespace:
     return SimpleNamespace(context=SimpleNamespace())
 
@@ -642,4 +665,102 @@ def test_retained_public_file_never_falls_back_to_latest_key(
 
     assert value is not None
     assert value.status is StoredFileStatus.AVAILABLE
+    assert value.download_url is None
+
+
+@override_settings(
+    GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True, "DOWNLOAD_URL_TTL_SECONDS": 60}}
+)
+def test_retained_public_file_uses_only_an_exact_version_public_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = ExactVersionPublicAdapter(_STORAGE)
+    registry = UploadAdapterRegistry()
+    registry.register(ResolverStorage, lambda _storage: adapter)
+    monkeypatch.setattr(services, "upload_adapter_registry", registry)
+
+    class FileUploads:
+        fields: ClassVar[dict[str, FileUploadPolicy]] = {
+            "document": FileUploadPolicy(public=True)
+        }
+
+    monkeypatch.setattr(ResolverManager, "FileUploads", FileUploads, raising=False)
+    intent = _intent(
+        adapter_id=adapter.adapter_id,
+        adapter_version=str(adapter.adapter_version),
+        storage_fingerprint=adapter.storage_fingerprint(),
+        final_object_version={
+            "version_id": "retained-version-1",
+            "etag": "retained-etag",
+            "checksum_sha256": "a" * 64,
+            "size": 123,
+            "content_type": "image/png",
+        },
+    )
+    value = create_stored_file_value(
+        ResolverManager(ResolverRecord(id=7, document="documents/report.pdf")),
+        _info(),
+        field_name="document",
+        manager_name="ResolverManager",
+        intent_lookup=lambda **_kwargs: intent,
+    )
+
+    assert value is not None
+    assert value.status is StoredFileStatus.AVAILABLE
+    assert value.download_url == (
+        "https://cdn.test/documents/report.pdf?versionId=retained-version-1"
+    )
+    assert value.download_url_expires_at is None
+
+
+@override_settings(
+    GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True, "DOWNLOAD_URL_TTL_SECONDS": 60}}
+)
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://cdn.test/file?versionId=wrong",
+        "https://cdn.test/file?versionId=retained-version-1&download=1",
+        "https://cdn.test/file?X-Amz-Signature=secret",
+        "https://user:password@cdn.test/file?versionId=retained-version-1",
+        "https://cdn.test/file?versionId=retained-version-1#fragment",
+    ],
+)
+def test_retained_public_file_rejects_inexact_or_credential_bearing_urls(
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+) -> None:
+    adapter = ConfigurableExactVersionPublicAdapter(_STORAGE)
+    adapter.exact_url = url
+    registry = UploadAdapterRegistry()
+    registry.register(ResolverStorage, lambda _storage: adapter)
+    monkeypatch.setattr(services, "upload_adapter_registry", registry)
+
+    class FileUploads:
+        fields: ClassVar[dict[str, FileUploadPolicy]] = {
+            "document": FileUploadPolicy(public=True)
+        }
+
+    monkeypatch.setattr(ResolverManager, "FileUploads", FileUploads, raising=False)
+    intent = _intent(
+        adapter_id=adapter.adapter_id,
+        adapter_version=str(adapter.adapter_version),
+        storage_fingerprint=adapter.storage_fingerprint(),
+        final_object_version={
+            "version_id": "retained-version-1",
+            "etag": "retained-etag",
+            "checksum_sha256": "a" * 64,
+            "size": 123,
+            "content_type": "image/png",
+        },
+    )
+    value = create_stored_file_value(
+        ResolverManager(ResolverRecord(id=7, document="documents/report.pdf")),
+        _info(),
+        field_name="document",
+        manager_name="ResolverManager",
+        intent_lookup=lambda **_kwargs: intent,
+    )
+
+    assert value is not None
     assert value.download_url is None

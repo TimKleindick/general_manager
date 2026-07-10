@@ -112,6 +112,153 @@ API_EXPORTS: LazyExportMap = {
     ),
     "graph_ql_property": ("general_manager.api.property", "graph_ql_property"),
     "graph_ql_mutation": ("general_manager.api.mutation", "graph_ql_mutation"),
+    "FileUploadPolicy": (
+        "general_manager.uploads.config",
+        "FileUploadPolicy",
+    ),
+    "FileInspection": ("general_manager.uploads.config", "FileInspection"),
+    "FileContentInspector": (
+        "general_manager.uploads.config",
+        "FileContentInspector",
+    ),
+    "FileUploadConfigurationError": (
+        "general_manager.uploads.config",
+        "FileUploadConfigurationError",
+    ),
+    "register_upload_adapter": (
+        "general_manager.uploads.public",
+        "register_upload_adapter",
+    ),
+    "UploadAdapter": ("general_manager.uploads.adapters", "UploadAdapter"),
+    "UploadFinalizationAdapter": (
+        "general_manager.uploads.adapters",
+        "UploadFinalizationAdapter",
+    ),
+    "ExactPublicDownloadAdapter": (
+        "general_manager.uploads.adapters",
+        "ExactPublicDownloadAdapter",
+    ),
+    "ProxyUploadSink": (
+        "general_manager.uploads.adapters",
+        "ProxyUploadSink",
+    ),
+    "UploadAdapterFactory": (
+        "general_manager.uploads.adapters",
+        "UploadAdapterFactory",
+    ),
+    "UploadInstructions": (
+        "general_manager.uploads.adapters",
+        "UploadInstructions",
+    ),
+    "ClaimedObject": ("general_manager.uploads.adapters", "ClaimedObject"),
+    "ObjectVersion": ("general_manager.uploads.types", "ObjectVersion"),
+    "UploadTransport": ("general_manager.uploads.types", "UploadTransport"),
+    "StoredFileStatus": ("general_manager.uploads.types", "StoredFileStatus"),
+    "UploadToken": ("general_manager.uploads.graphql_types", "UploadToken"),
+    "StoredFile": ("general_manager.uploads.graphql_types", "StoredFile"),
+    "StoredImage": ("general_manager.uploads.graphql_types", "StoredImage"),
+    "UploadError": ("general_manager.uploads.errors", "UploadError"),
+    "UploadExpiredError": (
+        "general_manager.uploads.errors",
+        "UploadExpiredError",
+    ),
+    "UploadTokenInvalidError": (
+        "general_manager.uploads.errors",
+        "UploadTokenInvalidError",
+    ),
+    "UploadIncompleteError": (
+        "general_manager.uploads.errors",
+        "UploadIncompleteError",
+    ),
+    "UploadAlreadyConsumedError": (
+        "general_manager.uploads.errors",
+        "UploadAlreadyConsumedError",
+    ),
+    "UploadTransferConflictError": (
+        "general_manager.uploads.errors",
+        "UploadTransferConflictError",
+    ),
+    "UploadSupersededError": (
+        "general_manager.uploads.errors",
+        "UploadSupersededError",
+    ),
+    "UploadBindingMismatchError": (
+        "general_manager.uploads.errors",
+        "UploadBindingMismatchError",
+    ),
+    "UploadSizeMismatchError": (
+        "general_manager.uploads.errors",
+        "UploadSizeMismatchError",
+    ),
+    "UploadChecksumMismatchError": (
+        "general_manager.uploads.errors",
+        "UploadChecksumMismatchError",
+    ),
+    "InvalidFileTypeError": (
+        "general_manager.uploads.errors",
+        "InvalidFileTypeError",
+    ),
+    "InvalidImageError": ("general_manager.uploads.errors", "InvalidImageError"),
+    "UploadBackendUnsupportedError": (
+        "general_manager.uploads.errors",
+        "UploadBackendUnsupportedError",
+    ),
+    "UploadStorageChangedError": (
+        "general_manager.uploads.errors",
+        "UploadStorageChangedError",
+    ),
+    "UploadFinalizationFailedError": (
+        "general_manager.uploads.errors",
+        "UploadFinalizationFailedError",
+    ),
+    "UploadStorageError": (
+        "general_manager.uploads.errors",
+        "UploadStorageError",
+    ),
+    "UploadAuthenticationError": (
+        "general_manager.uploads.errors",
+        "UploadAuthenticationError",
+    ),
+    "UploadManagerInvalidError": (
+        "general_manager.uploads.errors",
+        "UploadManagerInvalidError",
+    ),
+    "UploadFieldInvalidError": (
+        "general_manager.uploads.errors",
+        "UploadFieldInvalidError",
+    ),
+    "UploadOperationInvalidError": (
+        "general_manager.uploads.errors",
+        "UploadOperationInvalidError",
+    ),
+    "UploadTargetUnavailableError": (
+        "general_manager.uploads.errors",
+        "UploadTargetUnavailableError",
+    ),
+    "InvalidUploadFilenameError": (
+        "general_manager.uploads.errors",
+        "InvalidUploadFilenameError",
+    ),
+    "InvalidUploadSizeError": (
+        "general_manager.uploads.errors",
+        "InvalidUploadSizeError",
+    ),
+    "InvalidUploadChecksumError": (
+        "general_manager.uploads.errors",
+        "InvalidUploadChecksumError",
+    ),
+    "UploadQuotaExceededError": (
+        "general_manager.uploads.errors",
+        "UploadQuotaExceededError",
+    ),
+    "UploadRateLimitExceededError": (
+        "general_manager.uploads.errors",
+        "UploadRateLimitExceededError",
+    ),
+    "UploadDatabaseMismatchError": (
+        "general_manager.uploads.errors",
+        "UploadDatabaseMismatchError",
+    ),
 }
 
 

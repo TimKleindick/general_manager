@@ -82,6 +82,42 @@ When no provider is configured, the schema does not expose `me`.
 
 Set `AUTHENTICATION_BACKENDS` and middleware according to your project. The GraphQL view expects `info.context.user` to be populated. Denied permissions return a GraphQL error or an error entry in the mutation payload.
 
+## File capabilities and upload tokens
+
+GraphQL file uploads use three different credentials with deliberately different
+scope:
+
+- the authenticated GraphQL session creates a field/operation/target-bound
+  intent and later runs the complete manager permission check;
+- proxy transfer uses a distinct short-lived `GMUpload` authorization value (or
+  an S3 signature), never the consumption token in a URL;
+- private display/download uses a short-lived signed capability because an
+  `<img>` request cannot reliably add application authorization headers.
+
+Treat every token, returned header, and signed URL as a bearer secret. Require
+HTTPS, keep token and URL TTLs short, redact query strings/authorization headers,
+and never place them in analytics, exception locals, audit payloads, or browser
+console logs. GeneralManager logs only bounded intent/adapter/manager/field/state
+metadata and does not expose staging or filesystem paths.
+
+Local download capabilities revalidate the current manager/object/field binding
+and exact retained bytes on each `GET` or `HEAD`, so replacement invalidates an
+old local URL. S3 presigned URLs cannot be revoked and retain access until their
+TTL expires. Public mode is explicit and must be backed by an adapter that proves
+a genuinely public URL.
+
+Filename suffix and declared `Content-Type` are not content proof. `ImageField`
+decodes the image under finite dimension/pixel limits; strict general file
+formats require a bounded content inspector. Keep staging private, require
+SHA-256, and retain exact immutable versions until reconciliation completes.
+
+`DELETE_REPLACED_FILES` is off by default. Enabling it can still leave old
+objects when exact ownership/deletion is unsupported, and shared keys cannot
+always be detected. Cross-database upload sagas, resumable uploads, S3 multipart,
+and built-in malware scanning are outside v1. See
+[GraphQL file uploads and downloads](file_uploads.md) for the full threat and
+consistency model.
+
 ## Error propagation
 
 Explicit `GraphQLError` instances keep their existing object identity, message,

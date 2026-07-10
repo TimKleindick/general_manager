@@ -142,17 +142,31 @@ class FakeS3Storage:
         conditional_copy: object | None = None,
         default_acl: str | None = None,
         object_parameters: dict[str, object] | None = None,
+        ignore_url_parameters: bool = False,
+        custom_domain: str | None = None,
+        public_url_host: str = "uploads.s3.us-east-1.amazonaws.com",
     ) -> None:
         self.s3_client = client
         self.public = public
         self.endpoint_url = endpoint_url
         self.default_acl = default_acl
         self.object_parameters = object_parameters or {}
+        self.ignore_url_parameters = ignore_url_parameters
+        self.custom_domain = custom_domain
+        self.public_url_host = public_url_host
         if conditional_copy is not None:
             self.supports_conditional_copy = conditional_copy
 
-    def url(self, key: str) -> str:
-        return f"https://cdn.example.test/{key}"
+    def url(
+        self,
+        key: str,
+        parameters: dict[str, str] | None = None,
+    ) -> str:
+        url = f"https://{self.public_url_host}/{key}"
+        if parameters is not None and not self.ignore_url_parameters:
+            assert set(parameters) == {"VersionId"}
+            url = f"{url}?versionId={parameters['VersionId']}"
+        return url
 
 
 class OfficialLookingS3Storage:
@@ -899,8 +913,103 @@ def test_s3_deletes_exact_version_and_handles_private_and_public_urls() -> None:
     public = S3UploadAdapter(public_storage)
     assert public.supports_public_urls is True
     assert public.public_url("files/report.txt") == (
-        "https://cdn.example.test/files/report.txt"
+        "https://uploads.s3.us-east-1.amazonaws.com/files/report.txt"
     )
+    assert public.public_download_url(
+        "files/report.txt",
+        version=version,
+    ) == (
+        "https://uploads.s3.us-east-1.amazonaws.com/files/report.txt"
+        "?versionId=stage-version-1"
+    )
+
+
+def test_s3_public_download_rejects_storage_that_drops_version_id() -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    storage = FakeS3Storage(client, public=True, ignore_url_parameters=True)
+    storage.upload_staging_prefix_private = True
+    adapter = S3UploadAdapter(storage)
+
+    with pytest.raises(PublicUploadUrlUnsupportedError):
+        adapter.public_download_url("files/report.txt", version=version)
+
+
+def test_s3_public_download_rejects_custom_domain_even_when_query_is_preserved() -> (
+    None
+):
+    client = FakeS3Client()
+    version = _stage(client)
+    storage = FakeS3Storage(
+        client,
+        public=True,
+        custom_domain="cdn.example.test",
+    )
+    storage.upload_staging_prefix_private = True
+    adapter = S3UploadAdapter(storage)
+
+    with pytest.raises(PublicUploadUrlUnsupportedError):
+        adapter.public_download_url("files/report.txt", version=version)
+
+
+def test_s3_public_download_rejects_an_unexpected_non_s3_host() -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    storage = FakeS3Storage(
+        client,
+        public=True,
+        public_url_host="cdn.example.test",
+    )
+    storage.upload_staging_prefix_private = True
+    adapter = S3UploadAdapter(storage)
+
+    with pytest.raises(PublicUploadUrlUnsupportedError):
+        adapter.public_download_url("files/report.txt", version=version)
+
+
+def test_s3_public_download_requires_matching_custom_endpoint_origin() -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    storage = FakeS3Storage(
+        client,
+        public=True,
+        endpoint_url="https://objects.example.test:9443",
+        conditional_copy=True,
+        public_url_host="objects.example.test:9443",
+    )
+    storage.upload_staging_prefix_private = True
+    adapter = S3UploadAdapter(storage)
+
+    assert adapter.public_download_url("files/report.txt", version=version) == (
+        "https://objects.example.test:9443/files/report.txt?versionId=stage-version-1"
+    )
+
+
+@pytest.mark.parametrize(
+    ("endpoint_url", "public_url_host"),
+    [
+        ("https://objects.example.test:9443", "objects.example.test"),
+        ("http://objects.example.test", "objects.example.test"),
+    ],
+)
+def test_s3_public_download_rejects_custom_endpoint_scheme_or_port_mismatch(
+    endpoint_url: str,
+    public_url_host: str,
+) -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    storage = FakeS3Storage(
+        client,
+        public=True,
+        endpoint_url=endpoint_url,
+        conditional_copy=True,
+        public_url_host=public_url_host,
+    )
+    storage.upload_staging_prefix_private = True
+    adapter = S3UploadAdapter(storage)
+
+    with pytest.raises(PublicUploadUrlUnsupportedError):
+        adapter.public_download_url("files/report.txt", version=version)
 
 
 def test_s3_private_download_binds_exact_version_and_response_headers() -> None:

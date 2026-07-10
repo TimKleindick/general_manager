@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from importlib import import_module
+import os
+import subprocess
+import sys
 from types import SimpleNamespace
 
 from django.test import SimpleTestCase
@@ -11,6 +14,25 @@ from general_manager import apps as gm_apps
 
 
 class AppsUtilitiesTests(SimpleTestCase):
+    def test_django_startup_does_not_probe_private_public_api_exports(self) -> None:
+        python_path = ["src", "."]
+        if existing_python_path := os.environ.get("PYTHONPATH"):
+            python_path.append(existing_python_path)
+        environment = {
+            **os.environ,
+            "DJANGO_SETTINGS_MODULE": "tests.test_settings",
+            "PYTHONPATH": os.pathsep.join(python_path),
+        }
+        result = subprocess.run(  # noqa: S603 - trusted current interpreter
+            [sys.executable, "-c", "import django; django.setup()"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+        assert "missing public api export" not in result.stdout + result.stderr
+
     def test_import_optional_managers_module_imports_existing_module(self) -> None:
         """Import an app managers module when Django can find it."""
         app_config = SimpleNamespace(

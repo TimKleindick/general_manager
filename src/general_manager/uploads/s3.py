@@ -10,7 +10,7 @@ import importlib.util
 import re
 from tempfile import SpooledTemporaryFile
 from typing import IO, ClassVar, NoReturn, Protocol, TypeVar, cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 from uuid import UUID
 
 from django.core.files.storage import Storage
@@ -540,6 +540,61 @@ class S3UploadAdapter:
             "S3 storage could not create a public URL.",
         )
 
+    def public_download_url(
+        self,
+        key: str,
+        *,
+        version: ObjectVersion,
+    ) -> str:
+        """Return an unsigned public URL for one immutable S3 VersionId."""
+
+        if not self.supports_public_urls or not version.version_id:
+            raise _exception(
+                PublicUploadUrlUnsupportedError,
+                "This S3 storage lacks exact-version public URLs.",
+            )
+        if getattr(self.storage, "custom_domain", None):
+            raise _exception(
+                PublicUploadUrlUnsupportedError,
+                "S3 custom domains cannot prove exact-version URL semantics.",
+            )
+        url = _sdk_call(
+            lambda: self.storage.url(  # type: ignore[call-arg]
+                key,
+                parameters={"VersionId": version.version_id},
+            ),
+            "S3 storage could not create an exact public URL.",
+        )
+        if not isinstance(url, str) or not url:
+            raise _exception(
+                UploadStorageError,
+                "S3 storage returned a malformed exact public URL.",
+            )
+        parsed = urlsplit(url)
+        try:
+            parameters = parse_qsl(
+                parsed.query,
+                keep_blank_values=True,
+                strict_parsing=True,
+            )
+        except ValueError:
+            parameters = []
+        if parameters != [("versionId", version.version_id)]:
+            raise _exception(
+                PublicUploadUrlUnsupportedError,
+                "S3 public URLs must preserve the exact VersionId.",
+            )
+        if not _public_url_matches_s3_storage(
+            self.storage,
+            url=url,
+            bucket=self._bucket,
+        ):
+            raise _exception(
+                PublicUploadUrlUnsupportedError,
+                "S3 public URLs must use the configured S3 service endpoint.",
+            )
+        return url
+
     def storage_fingerprint(self) -> str:
         return build_storage_fingerprint(
             self.storage,
@@ -772,11 +827,59 @@ def _is_aws_s3_endpoint(storage: Storage) -> bool:
         return False
     if hostname is None:
         return False
+    return _is_aws_s3_hostname(hostname)
+
+
+def _is_aws_s3_hostname(hostname: str) -> bool:
     labels = hostname.lower().split(".")
     is_aws_domain = hostname.lower().endswith((".amazonaws.com", ".amazonaws.com.cn"))
     return is_aws_domain and any(
         label == "s3" or label.startswith("s3-") for label in labels
     )
+
+
+def _public_url_matches_s3_storage(
+    storage: Storage,
+    *,
+    url: str,
+    bucket: str,
+) -> bool:
+    origin = _url_origin(url)
+    if origin is None:
+        return False
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    scheme, hostname, port = origin
+    endpoint = getattr(storage, "endpoint_url", None)
+    if endpoint not in {None, ""} and not _is_aws_s3_endpoint(storage):
+        if not isinstance(endpoint, str):
+            return False
+        return origin == _url_origin(endpoint)
+    normalized = hostname
+    virtual_hosted = normalized.startswith(f"{bucket.lower()}.")
+    path_style = parsed.path.startswith(f"/{bucket}/")
+    return (
+        scheme == "https"
+        and port == 443
+        and _is_aws_s3_hostname(normalized)
+        and (virtual_hosted or path_style)
+    )
+
+
+def _url_origin(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    scheme = parsed.scheme.lower()
+    hostname = parsed.hostname
+    if scheme not in {"http", "https"} or hostname is None:
+        return None
+    effective_port = port if port is not None else (443 if scheme == "https" else 80)
+    return scheme, hostname.lower(), effective_port
 
 
 def _object_version(response: Mapping[str, object]) -> ObjectVersion:
