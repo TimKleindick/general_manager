@@ -264,10 +264,17 @@ def _trusted_dependency_snapshot(
 def _input_has_behavior_override(input_field: Input[type[object]]) -> bool:
     """Return whether an exact Input instance shadows trusted behavior methods."""
     instance_state = input_field.__dict__
-    return any(
-        override_name in instance_state
-        for override_name in _INPUT_BEHAVIOR_OVERRIDE_NAMES
-    )
+    if type(instance_state) is not dict:
+        return True
+    for state_name in instance_state:
+        if type(state_name) is not str:
+            return True
+        if any(
+            state_name == override_name
+            for override_name in _INPUT_BEHAVIOR_OVERRIDE_NAMES
+        ):
+            return True
+    return False
 
 
 def _trusted_dependency_names_match(
@@ -338,7 +345,14 @@ def _domain_has_exact_state(
     instance_state = source.__dict__
     if type(instance_state) is not dict:
         return False
-    return frozenset(instance_state) == expected_names
+    if len(instance_state) != len(expected_names):
+        return False
+    for state_name in instance_state:
+        if type(state_name) is not str:
+            return False
+        if not any(state_name == expected_name for expected_name in expected_names):
+            return False
+    return True
 
 
 def _sequence_enumeration_witness(

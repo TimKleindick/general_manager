@@ -409,6 +409,20 @@ class _UnsafeValue:
         return 1
 
 
+class _HostileStateKey:
+    def __init__(self) -> None:
+        self.hash_value = hash(("initial", id(self)))
+        self.callbacks: list[str] = []
+
+    def __hash__(self) -> int:
+        self.callbacks.append("hash")
+        return self.hash_value
+
+    def __eq__(self, other: object) -> bool:
+        self.callbacks.append("eq")
+        raise AssertionError(type(other).__name__)
+
+
 @pytest.mark.parametrize(
     "candidate",
     [
@@ -687,6 +701,61 @@ def test_domain_behavior_override_revokes_existing_evidence_without_execution(
     assert behavior_calls == []
 
 
+@pytest.mark.parametrize(
+    ("source", "candidate"),
+    [
+        (NumericRangeDomain(1, 5, 2), 3),
+        (
+            DateRangeDomain(date(2026, 1, 1), date(2026, 1, 3)),
+            date(2026, 1, 2),
+        ),
+    ],
+)
+def test_domain_hostile_state_key_prevents_evidence_without_running_hooks(
+    source: NumericRangeDomain | DateRangeDomain,
+    candidate: object,
+) -> None:
+    hostile_key = _HostileStateKey()
+    hostile_key.hash_value = hash("kind")
+    source.__dict__.pop("kind")
+    cast(dict[object, object], source.__dict__)[hostile_key] = None
+    hostile_key.callbacks.clear()
+    input_field = cast(
+        Input[type[object]], Input(type(candidate), possible_values=source)
+    )
+
+    assert _trusted_enumeration_evidence(input_field, source, candidate, {}) is None
+    assert hostile_key.callbacks == []
+
+
+@pytest.mark.parametrize(
+    ("source", "candidate"),
+    [
+        (NumericRangeDomain(1, 5, 2), 3),
+        (
+            DateRangeDomain(date(2026, 1, 1), date(2026, 1, 3)),
+            date(2026, 1, 2),
+        ),
+    ],
+)
+def test_domain_hostile_state_key_revokes_evidence_without_running_hooks(
+    source: NumericRangeDomain | DateRangeDomain,
+    candidate: object,
+) -> None:
+    input_field = cast(
+        Input[type[object]], Input(type(candidate), possible_values=source)
+    )
+    evidence = _static_evidence(input_field, source, candidate)
+    hostile_key = _HostileStateKey()
+    hostile_key.hash_value = hash("kind")
+    source.__dict__.pop("kind")
+    cast(dict[object, object], source.__dict__)[hostile_key] = None
+    hostile_key.callbacks.clear()
+
+    assert not evidence.authorizes(input_field, candidate, {})
+    assert hostile_key.callbacks == []
+
+
 def test_evidence_denies_changed_input_provider_or_normalized_value() -> None:
     source = ["VALUE"]
     input_field = cast(Input[type[object]], Input(str, possible_values=source))
@@ -845,6 +914,40 @@ def test_late_input_behavior_override_revokes_existing_evidence(
 
     assert not evidence.authorizes(input_field, 1, {})
     assert behavior_calls == []
+
+
+def test_input_hostile_state_key_prevents_evidence_without_running_hooks() -> None:
+    source = [1]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    hostile_key = _HostileStateKey()
+    hostile_key.hash_value = hash("resolve_possible_values")
+    cast(dict[object, object], input_field.__dict__)[hostile_key] = None
+    hostile_key.callbacks.clear()
+
+    assert (
+        _trusted_enumeration_evidence(
+            input_field,
+            source,
+            source[0],
+            {},
+            source_index=0,
+        )
+        is None
+    )
+    assert hostile_key.callbacks == []
+
+
+def test_input_hostile_state_key_revokes_evidence_without_running_hooks() -> None:
+    source = [1]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    evidence = _static_evidence(input_field, source, source[0], source_index=0)
+    hostile_key = _HostileStateKey()
+    hostile_key.hash_value = hash("resolve_possible_values")
+    cast(dict[object, object], input_field.__dict__)[hostile_key] = None
+    hostile_key.callbacks.clear()
+
+    assert not evidence.authorizes(input_field, source[0], {})
+    assert hostile_key.callbacks == []
 
 
 def test_evidence_tracking_delegates_to_source_witness() -> None:
