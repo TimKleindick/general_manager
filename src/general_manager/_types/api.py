@@ -42,6 +42,7 @@ __all__ = [
     "UploadIncompleteError",
     "UploadInstructions",
     "UploadManagerInvalidError",
+    "UploadObjectMissingError",
     "UploadOperationInvalidError",
     "UploadQuotaExceededError",
     "UploadRateLimitExceededError",
@@ -98,6 +99,7 @@ from general_manager.uploads.errors import UploadFinalizationFailedError
 from general_manager.uploads.errors import UploadIncompleteError
 from general_manager.uploads.adapters import UploadInstructions
 from general_manager.uploads.errors import UploadManagerInvalidError
+from general_manager.uploads.errors import UploadObjectMissingError
 from general_manager.uploads.errors import UploadOperationInvalidError
 from general_manager.uploads.errors import UploadQuotaExceededError
 from general_manager.uploads.errors import UploadRateLimitExceededError

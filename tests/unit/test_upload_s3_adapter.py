@@ -22,9 +22,11 @@ from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
     UploadStorageError,
     UploadObjectMissingError,
+    UploadStorageChangedError,
     UploadTransferConflictError,
 )
 from general_manager.uploads.s3 import S3UploadAdapter
+from general_manager.uploads.s3 import S3ProxyUploadAdapter
 from general_manager.uploads.types import ObjectVersion, UploadTransport
 
 
@@ -32,8 +34,18 @@ class MissingObjectError(Exception):
     response: ClassVar[dict[str, dict[str, str]]] = {"Error": {"Code": "NoSuchKey"}}
 
 
+class MissingVersionError(Exception):
+    response: ClassVar[dict[str, dict[str, str]]] = {"Error": {"Code": "NoSuchVersion"}}
+
+
 class FakeSDKError(Exception):
     response: ClassVar[dict[str, dict[str, str]]] = {"Error": {"Code": "InternalError"}}
+
+
+class PreconditionError(Exception):
+    response: ClassVar[dict[str, dict[str, str]]] = {
+        "Error": {"Code": "PreconditionFailed"}
+    }
 
 
 class FakeS3Client:
@@ -42,20 +54,32 @@ class FakeS3Client:
         *,
         versioning: bool = True,
         conditional_copy: bool = True,
+        conditional_put: bool = True,
         signature_version: object = "s3v4",
     ) -> None:
         self.versioning = versioning
         self.objects: dict[tuple[str, str | None], dict[str, Any]] = {}
         self.copy_calls: list[dict[str, Any]] = []
+        self.put_calls: list[dict[str, Any]] = []
         self.delete_calls: list[dict[str, Any]] = []
         self.head_calls: list[dict[str, Any]] = []
         self.presigned_url_calls: list[tuple[str, dict[str, Any]]] = []
         self.fail_operations: set[str] = set()
         self.operation_errors: dict[str, Exception] = {}
         self.body_factory: Callable[[bytes], object] = BytesIO
-        members = {"IfNoneMatch": object()} if conditional_copy else {}
-        operation = SimpleNamespace(input_shape=SimpleNamespace(members=members))
-        service_model = SimpleNamespace(operation_model=lambda _name: operation)
+        self.put_version_counter = 0
+
+        def operation_model(name: str) -> SimpleNamespace:
+            members: dict[str, object] = {}
+            if conditional_copy and name == "CopyObject":
+                members["IfNoneMatch"] = object()
+            if conditional_put and name == "PutObject":
+                members["IfNoneMatch"] = object()
+            if name in {"GetObject", "DeleteObject"}:
+                members["IfMatch"] = object()
+            return SimpleNamespace(input_shape=SimpleNamespace(members=members))
+
+        service_model = SimpleNamespace(operation_model=operation_model)
         self.meta = SimpleNamespace(
             service_model=service_model,
             config=SimpleNamespace(signature_version=signature_version),
@@ -100,30 +124,77 @@ class FakeS3Client:
     def get_object(self, **kwargs: Any) -> dict[str, Any]:
         self._fail_if("get")
         value = self._lookup_object(**kwargs)
+        if kwargs.get("IfMatch") is not None and kwargs["IfMatch"] != value["ETag"]:
+            raise PreconditionError
         return {"Body": self.body_factory(value["Body"])}
+
+    def put_object(self, **kwargs: Any) -> dict[str, Any]:
+        self._fail_if("put")
+        self.put_calls.append(dict(kwargs))
+        assert kwargs["IfNoneMatch"] == "*"
+        key = kwargs["Key"]
+        if any(object_key == key for object_key, _version in self.objects):
+            raise PreconditionError
+        body = kwargs["Body"]
+        payload = body.read() if hasattr(body, "read") else bytes(body)
+        checksum = base64.b64encode(hashlib.sha256(payload).digest()).decode("ascii")
+        etag = f'"{hashlib.md5(payload, usedforsecurity=False).hexdigest()}"'
+        self.put_version_counter += 1
+        version_id = (
+            f"proxy-put-version-{self.put_version_counter}" if self.versioning else None
+        )
+        self.objects[(key, version_id)] = {
+            "VersionId": version_id,
+            "ETag": etag,
+            "ChecksumSHA256": checksum,
+            "ContentLength": len(payload),
+            "ContentType": kwargs.get("ContentType"),
+            "Metadata": dict(kwargs.get("Metadata", {})),
+            "Body": payload,
+        }
+        return {
+            "VersionId": version_id,
+            "ETag": etag,
+            "ChecksumSHA256": checksum,
+        }
 
     def copy_object(self, **kwargs: Any) -> dict[str, Any]:
         self._fail_if("copy")
         self.copy_calls.append(dict(kwargs))
         source = kwargs["CopySource"]
-        assert source["VersionId"]
+        if "VersionId" in source:
+            assert source["VersionId"]
         assert kwargs["IfNoneMatch"] == "*"
-        value = self._lookup_object(Key=source["Key"], VersionId=source["VersionId"])
-        assert kwargs["CopySourceIfMatch"] == value["ETag"]
+        value = self._lookup_object(
+            Key=source["Key"],
+            VersionId=source.get("VersionId"),
+        )
+        if kwargs["CopySourceIfMatch"] != value["ETag"]:
+            raise PreconditionError
         source_checksum = base64.b64decode(value["ChecksumSHA256"]).hex()
         assert kwargs["Metadata"]["gm-checksum-sha256"] == source_checksum
         assert not any(key == kwargs["Key"] for key, _version in self.objects)
-        destination = (kwargs["Key"], "final-version")
+        destination_version = "final-version" if self.versioning else None
+        destination = (kwargs["Key"], destination_version)
         self.objects[destination] = {
             **value,
-            "VersionId": "final-version",
+            "VersionId": destination_version,
             "Metadata": dict(kwargs["Metadata"]),
         }
-        return {"VersionId": "final-version", "CopyObjectResult": {}}
+        return {"VersionId": destination_version, "CopyObjectResult": {}}
 
     def delete_object(self, **kwargs: Any) -> None:
         self._fail_if("delete")
         self.delete_calls.append(dict(kwargs))
+        if kwargs.get("IfMatch") is None:
+            self.objects.pop((kwargs["Key"], kwargs.get("VersionId")), None)
+            return
+        value = self._lookup_object(
+            Key=kwargs["Key"],
+            VersionId=kwargs.get("VersionId"),
+        )
+        if kwargs.get("IfMatch") is not None and kwargs["IfMatch"] != value["ETag"]:
+            raise PreconditionError
         self.objects.pop((kwargs["Key"], kwargs.get("VersionId")), None)
 
 
@@ -244,7 +315,247 @@ def test_s3_direct_mode_requires_versioning() -> None:
     storage = FakeS3Storage(client)
 
     assert S3UploadAdapter.supports_direct(storage) is False
-    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    resolved = UploadAdapterRegistry().resolve(storage)
+    assert isinstance(resolved, S3ProxyUploadAdapter)
+    assert resolved.adapter_id == "s3-proxy"
+    assert UploadAdapterRegistry().resolve_by_id("s3-proxy", 1, storage).__class__ is (
+        S3ProxyUploadAdapter
+    )
+
+
+def test_s3_proxy_stages_and_materializes_without_overwriting() -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    stage_key = "gm-staging/proxy.bin"
+    payload = b"proxied payload"
+    version = adapter.save_stage(
+        stage_key,
+        [payload[:4], payload[4:]],
+        content_type="text/plain",
+        checksum_sha256=hashlib.sha256(payload).hexdigest(),
+        size=len(payload),
+    )
+
+    assert version.version_id is None
+    assert version.etag is not None
+    assert adapter.inspect_staged(stage_key) == version
+    assert (
+        adapter.materialize(
+            stage_key,
+            version,
+            "files/proxy.bin",
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+        == "files/proxy.bin"
+    )
+
+    with pytest.raises(UploadTransferConflictError):
+        adapter.save_stage(
+            stage_key,
+            [b"different"],
+            content_type="text/plain",
+        )
+    assert client.objects[(stage_key, None)]["Body"] == payload
+
+
+def test_s3_proxy_fallback_does_not_require_conditional_copy() -> None:
+    client = FakeS3Client(versioning=False, conditional_copy=False)
+    storage = FakeS3Storage(client)
+
+    adapter = UploadAdapterRegistry().resolve(storage)
+
+    assert isinstance(adapter, S3ProxyUploadAdapter)
+    version = adapter.save_stage(
+        "gm-staging/no-copy.bin",
+        [b"streamed through server"],
+        content_type="application/octet-stream",
+    )
+    assert (
+        adapter.materialize(
+            "gm-staging/no-copy.bin",
+            version,
+            "files/no-copy.bin",
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+        == "files/no-copy.bin"
+    )
+    assert client.copy_calls == []
+
+
+def test_s3_proxy_materialization_rejects_source_and_destination_races() -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    stage_key = "gm-staging/race.bin"
+    version = adapter.save_stage(
+        stage_key,
+        [b"original"],
+        content_type="application/octet-stream",
+    )
+    replacement = b"replacement"
+    client.objects[(stage_key, None)] = {
+        **client.objects[(stage_key, None)],
+        "Body": replacement,
+        "ETag": '"replacement-etag"',
+        "ChecksumSHA256": base64.b64encode(hashlib.sha256(replacement).digest()).decode(
+            "ascii"
+        ),
+        "ContentLength": len(replacement),
+    }
+
+    with pytest.raises(UploadStorageChangedError):
+        adapter.materialize(
+            stage_key,
+            version,
+            "files/race.bin",
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+
+    client.objects[("files/occupied.bin", None)] = dict(
+        client.objects[(stage_key, None)]
+    )
+    with pytest.raises(UploadTransferConflictError):
+        adapter.materialize(
+            stage_key,
+            adapter.inspect_staged(stage_key),
+            "files/occupied.bin",
+            intent_id=UUID("1aeff4c6-4895-4114-a984-b3d136083d33"),
+        )
+
+
+def test_s3_proxy_exact_cleanup_preserves_recreated_object() -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    key = "gm-staging/delete-race.bin"
+    version = adapter.save_stage(
+        key,
+        [b"original"],
+        content_type="application/octet-stream",
+    )
+    replacement = b"replacement"
+    client.objects[(key, None)] = {
+        **client.objects[(key, None)],
+        "Body": replacement,
+        "ETag": '"replacement-etag"',
+        "ChecksumSHA256": base64.b64encode(hashlib.sha256(replacement).digest()).decode(
+            "ascii"
+        ),
+        "ContentLength": len(replacement),
+    }
+
+    with pytest.raises(UploadStorageChangedError):
+        adapter.delete_stage(key, version)
+
+    assert client.objects[(key, None)]["Body"] == replacement
+
+
+def test_s3_proxy_versioned_fallback_deletes_exact_version_not_delete_marker() -> None:
+    client = FakeS3Client(versioning=True, conditional_copy=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    key = "gm-staging/versioned-proxy.bin"
+    payload = b"versioned proxy payload"
+    version_id = "proxy-version-1"
+    client.objects[(key, version_id)] = {
+        "VersionId": version_id,
+        "ETag": '"proxy-etag-1"',
+        "ChecksumSHA256": base64.b64encode(hashlib.sha256(payload).digest()).decode(
+            "ascii"
+        ),
+        "ContentLength": len(payload),
+        "ContentType": "application/octet-stream",
+        "Metadata": {},
+        "Body": payload,
+    }
+
+    version = adapter.inspect_staged(key)
+    assert version.version_id == version_id
+
+    adapter.delete_stage(key, version)
+
+    assert (key, version_id) not in client.objects
+    assert client.delete_calls[-1]["VersionId"] == version_id
+
+
+def test_s3_proxy_maps_missing_exact_version_to_public_absence_signal() -> None:
+    client = FakeS3Client(versioning=True, conditional_copy=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    version = ObjectVersion(
+        version_id="already-deleted-version",
+        etag='"deleted-etag"',
+        checksum_sha256="a" * 64,
+        size=1,
+        content_type="application/octet-stream",
+    )
+    client.operation_errors["head"] = MissingVersionError()
+
+    with pytest.raises(UploadObjectMissingError):
+        adapter.delete_stage("gm-staging/deleted-version.bin", version)
+
+
+def test_s3_proxy_versioned_no_copy_flow_binds_source_and_final_versions() -> None:
+    client = FakeS3Client(versioning=True, conditional_copy=False)
+    storage = FakeS3Storage(client)
+    adapter = UploadAdapterRegistry().resolve(storage)
+    assert isinstance(adapter, S3ProxyUploadAdapter)
+    stage_key = "gm-staging/versioned-flow.bin"
+    final_key = "files/versioned-flow.bin"
+    version = adapter.save_stage(
+        stage_key,
+        [b"versioned flow"],
+        content_type="application/octet-stream",
+    )
+    assert version.version_id
+
+    adapter.materialize(
+        stage_key,
+        version,
+        final_key,
+        intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+    )
+    final_version = adapter.inspect_materialized(
+        final_key,
+        version,
+        intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+    )
+    assert final_version.version_id
+    assert final_version.version_id != version.version_id
+
+    adapter.delete_stage(stage_key, version)
+
+    assert (stage_key, version.version_id) not in client.objects
+    assert (final_key, final_version.version_id) in client.objects
+
+
+def test_s3_proxy_replaced_cleanup_conditionally_deletes_only_claimed_etag() -> None:
+    client = FakeS3Client(versioning=False)
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    key = "files/old.bin"
+    version = adapter.save_stage(
+        key,
+        [b"old payload"],
+        content_type="application/octet-stream",
+    )
+    cleanup_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
+    claimed = adapter.plan_replaced_object_claim(
+        key,
+        version,
+        cleanup_id=cleanup_id,
+    )
+    adapter.claim_replaced_object(key, claimed, cleanup_id=cleanup_id)
+    replacement = b"new payload"
+    client.objects[(key, None)] = {
+        **client.objects[(key, None)],
+        "Body": replacement,
+        "ETag": '"replacement-etag"',
+        "ChecksumSHA256": base64.b64encode(hashlib.sha256(replacement).digest()).decode(
+            "ascii"
+        ),
+        "ContentLength": len(replacement),
+    }
+
+    with pytest.raises(UploadStorageChangedError):
+        adapter.delete_claimed_object(claimed, cleanup_id=cleanup_id)
+
+    assert client.objects[(key, None)]["Body"] == replacement
 
 
 @pytest.mark.parametrize("signature_version", [None, "s3", "v2", 4, True])
@@ -272,7 +583,7 @@ def test_s3_direct_mode_requires_conditional_destination_copy() -> None:
     storage = FakeS3Storage(client)
 
     assert S3UploadAdapter.supports_direct(storage) is False
-    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    assert isinstance(UploadAdapterRegistry().resolve(storage), S3ProxyUploadAdapter)
 
 
 def test_s3_direct_construction_rejects_missing_if_none_match_model() -> None:
@@ -316,6 +627,18 @@ def test_s3_direct_construction_rejects_unapproved_custom_endpoint() -> None:
 
     with pytest.raises(UploadBackendUnsupportedError):
         S3UploadAdapter(storage)
+
+
+def test_s3_adapters_reject_insecure_aws_endpoint() -> None:
+    storage = FakeS3Storage(
+        FakeS3Client(versioning=False),
+        endpoint_url="http://s3.us-east-1.amazonaws.com",
+    )
+
+    assert S3UploadAdapter.supports_direct(storage) is False
+    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    with pytest.raises(UploadBackendUnsupportedError):
+        S3ProxyUploadAdapter(storage)
 
 
 def test_s3_registered_factory_cannot_bypass_constructor_capabilities() -> None:

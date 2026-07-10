@@ -212,6 +212,30 @@ def test_empty_file_resolves_to_null() -> None:
     assert value is None
 
 
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": False}})
+def test_disabled_uploads_do_not_issue_dead_local_download_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = ProxyUploadAdapter(_STORAGE)
+    registry = UploadAdapterRegistry()
+    registry.register(ResolverStorage, lambda _storage: adapter)
+    monkeypatch.setattr(services, "upload_adapter_registry", registry)
+    value = create_stored_file_value(
+        ResolverManager(
+            ResolverRecord(id=7, document="documents/read-only-existing.pdf")
+        ),
+        _info(),
+        field_name="document",
+        manager_name="ResolverManager",
+        intent_lookup=lambda **_kwargs: None,
+    )
+
+    assert value is not None
+    assert value.status is StoredFileStatus.AVAILABLE
+    assert value.download_url is None
+    assert value.expires_at is None
+
+
 def test_finalizing_file_has_processing_status_and_no_url() -> None:
     row = ResolverRecord(id=7, document="documents/current.txt")
     lookup = Mock(return_value=_intent(state=UploadIntentState.FINALIZING.value))

@@ -207,6 +207,10 @@ API_EXPORTS: LazyExportMap = {
         "general_manager.uploads.errors",
         "UploadStorageChangedError",
     ),
+    "UploadObjectMissingError": (
+        "general_manager.uploads.errors",
+        "UploadObjectMissingError",
+    ),
     "UploadFinalizationFailedError": (
         "general_manager.uploads.errors",
         "UploadFinalizationFailedError",

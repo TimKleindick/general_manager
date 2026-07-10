@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 import hashlib
 import importlib.util
@@ -59,6 +59,8 @@ def _close_body(body: object) -> None:
     if callable(close):
         try:
             close()
+        except UploadError:
+            raise
         except Exception as exc:
             raise UploadStorageError from exc
 
@@ -82,6 +84,8 @@ class _S3ClientProtocol(Protocol):
 
     def get_object(self, **kwargs: object) -> Mapping[str, object]: ...
 
+    def put_object(self, **kwargs: object) -> Mapping[str, object]: ...
+
     def copy_object(self, **kwargs: object) -> Mapping[str, object]: ...
 
     def delete_object(self, **kwargs: object) -> object: ...
@@ -92,6 +96,396 @@ class _S3ObjectOptions:
     staging_put_arguments: Mapping[str, object]
     staging_headers: Mapping[str, str]
     final_copy_arguments: Mapping[str, object]
+
+
+class S3ProxyUploadAdapter:
+    """Authenticated proxy adapter using conditional S3 object operations."""
+
+    adapter_id: ClassVar[str] = "s3-proxy"
+    adapter_version: ClassVar[int] = 1
+    _spool_memory_limit = 1024 * 1024
+
+    def __init__(self, storage: Storage) -> None:
+        client, bucket, object_options = _validate_proxy_support(storage)
+        self.storage = storage
+        self._client = client
+        self._bucket = bucket
+        self._object_options = object_options
+
+    @property
+    def supports_public_urls(self) -> bool:
+        return _storage_is_public(self.storage, self._object_options)
+
+    @classmethod
+    def supports_direct(cls, storage: Storage) -> bool:
+        del storage
+        return False
+
+    def create_upload_instructions(
+        self,
+        *,
+        stage_key: str,
+        upload_url: str | None,
+        content_type: str,
+        size: int,
+        checksum_sha256: str,
+        headers: Mapping[str, str] | None = None,
+        expires_in: int = 900,
+    ) -> UploadInstructions:
+        del stage_key, content_type, size, checksum_sha256, expires_in
+        if upload_url is None:
+            raise _exception(ValueError, "upload_url is required for proxy uploads.")
+        return UploadInstructions(
+            transport=UploadTransport.PROXY,
+            method="PUT",
+            url=upload_url,
+            headers=headers or {},
+        )
+
+    def save_stage(
+        self,
+        stage_key: str,
+        chunks: Iterable[bytes],
+        *,
+        content_type: str | None,
+        checksum_sha256: str | None = None,
+        size: int | None = None,
+    ) -> ObjectVersion:
+        with SpooledTemporaryFile(
+            max_size=self._spool_memory_limit,
+            mode="w+b",
+        ) as body:
+            digest = hashlib.sha256()
+            byte_count = 0
+            for chunk in chunks:
+                digest.update(chunk)
+                body.write(chunk)
+                byte_count += len(chunk)
+            actual_checksum = digest.hexdigest()
+            if checksum_sha256 is not None and checksum_sha256 != actual_checksum:
+                from general_manager.uploads.errors import UploadChecksumMismatchError
+
+                raise UploadChecksumMismatchError
+            if size is not None and size != byte_count:
+                raise _exception(
+                    UploadStorageError,
+                    "The staged upload size did not match.",
+                )
+            identity = {
+                "gm-stage-state": "completed",
+                "gm-checksum-sha256": actual_checksum,
+            }
+            body.seek(0)
+            try:
+                self._client.put_object(
+                    Bucket=self._bucket,
+                    Key=stage_key,
+                    Body=body,
+                    IfNoneMatch="*",
+                    ContentType=content_type or "application/octet-stream",
+                    ChecksumSHA256=_hex_checksum_to_base64(actual_checksum),
+                    Metadata=identity,
+                    **self._object_options.staging_put_arguments,
+                )
+            except UploadError:
+                raise
+            except Exception as exc:
+                existing = self._head_optional(stage_key)
+                if existing is not None and _matches_proxy_stage(
+                    existing,
+                    checksum=actual_checksum,
+                    size=byte_count,
+                    identity=identity,
+                ):
+                    return _proxy_object_version(existing)
+                if _is_precondition_error(exc) or existing is not None:
+                    raise _exception(
+                        UploadTransferConflictError,
+                        "The reserved staging S3 key is already occupied.",
+                    ) from exc
+                raise _exception(
+                    UploadStorageError,
+                    "S3 could not persist the proxied upload.",
+                ) from exc
+        stored = self._head_required(stage_key)
+        if not _matches_proxy_stage(
+            stored,
+            checksum=actual_checksum,
+            size=byte_count,
+            identity=identity,
+        ):
+            raise UploadStorageChangedError
+        return _proxy_object_version(stored)
+
+    def inspect_staged(self, stage_key: str) -> ObjectVersion:
+        response = self._head_required(stage_key)
+        return _proxy_object_version(response)
+
+    def materialize(
+        self,
+        stage_key: str,
+        version: ObjectVersion,
+        final_key: str,
+        *,
+        intent_id: UUID,
+    ) -> str:
+        if not version.etag:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 proxy materialization requires an ETag.",
+            )
+        identity = {
+            "gm-intent-id": str(intent_id),
+            "gm-checksum-sha256": version.checksum_sha256,
+        }
+        existing = self._head_optional(final_key)
+        if existing is not None:
+            if _matches_materialization(existing, version, identity):
+                return final_key
+            raise _exception(
+                UploadTransferConflictError,
+                "The reserved final S3 key is already occupied.",
+            )
+        try:
+            with self.open_stage(stage_key, version) as source:
+                self._client.put_object(
+                    Bucket=self._bucket,
+                    Key=final_key,
+                    Body=source,
+                    IfNoneMatch="*",
+                    ContentType=version.content_type or "application/octet-stream",
+                    ChecksumSHA256=_hex_checksum_to_base64(version.checksum_sha256),
+                    Metadata=identity,
+                    **self._object_options.final_copy_arguments,
+                )
+        except UploadError:
+            raise
+        except Exception as exc:
+            raced = self._head_optional(final_key)
+            if raced is not None and _matches_materialization(
+                raced,
+                version,
+                identity,
+            ):
+                return final_key
+            if raced is not None:
+                raise _exception(
+                    UploadTransferConflictError,
+                    "The reserved final S3 key is already occupied.",
+                ) from exc
+            if _is_precondition_error(exc):
+                raise UploadTransferConflictError from None
+            raise _exception(
+                UploadStorageError,
+                "S3 could not materialize the proxied upload.",
+            ) from exc
+        copied = self._head_optional(final_key)
+        if copied is None or not _matches_materialization(copied, version, identity):
+            raise UploadStorageChangedError
+        return final_key
+
+    def open_stage(self, stage_key: str, version: ObjectVersion) -> IO[bytes]:
+        if not version.etag:
+            raise UploadBackendUnsupportedError
+        try:
+            parameters: dict[str, object] = {
+                "Bucket": self._bucket,
+                "Key": stage_key,
+                "IfMatch": version.etag,
+            }
+            if version.version_id:
+                parameters["VersionId"] = version.version_id
+            response = self._client.get_object(
+                **parameters,
+            )
+        except Exception as exc:
+            if _is_missing_error(exc):
+                raise UploadObjectMissingError from exc
+            if _is_precondition_error(exc):
+                raise UploadStorageChangedError from None
+            raise UploadStorageError from exc
+        return _verified_body(response, version)
+
+    def delete_stage(
+        self,
+        stage_key: str,
+        version: ObjectVersion | None = None,
+    ) -> None:
+        if version is None:
+            raise UploadBackendUnsupportedError
+        self.delete_object(stage_key, version)
+
+    def inspect_materialized(
+        self,
+        final_key: str,
+        source_version: ObjectVersion,
+        *,
+        intent_id: UUID,
+    ) -> ObjectVersion:
+        response = self._head_optional(final_key)
+        identity = {
+            "gm-intent-id": str(intent_id),
+            "gm-checksum-sha256": source_version.checksum_sha256,
+        }
+        if response is None:
+            raise UploadObjectMissingError
+        if not _matches_materialization(response, source_version, identity):
+            raise UploadStorageChangedError
+        return _proxy_object_version(response)
+
+    def delete_materialized(
+        self,
+        final_key: str,
+        final_version: ObjectVersion,
+        *,
+        intent_id: UUID,
+    ) -> None:
+        del intent_id
+        self.delete_object(final_key, final_version)
+
+    def delete_object(self, key: str, version: ObjectVersion) -> None:
+        current = self._head_optional(key, version_id=version.version_id)
+        if current is None:
+            raise UploadObjectMissingError
+        inspected = _proxy_object_version(current)
+        if not _same_proxy_object(inspected, version) or not version.etag:
+            raise UploadStorageChangedError
+        try:
+            parameters: dict[str, object] = {
+                "Bucket": self._bucket,
+                "Key": key,
+                "IfMatch": version.etag,
+            }
+            if version.version_id:
+                parameters["VersionId"] = version.version_id
+            self._client.delete_object(**parameters)
+        except Exception as exc:
+            if _is_missing_error(exc):
+                raise UploadObjectMissingError from exc
+            if _is_precondition_error(exc):
+                raise UploadStorageChangedError from None
+            raise UploadStorageError from exc
+
+    def inspect_replaced_object(self, key: str) -> ObjectVersion:
+        return self.inspect_staged(key)
+
+    def plan_replaced_object_claim(
+        self,
+        key: str,
+        version: ObjectVersion,
+        *,
+        cleanup_id: UUID,
+    ) -> ClaimedObject:
+        del cleanup_id
+        return ClaimedObject(key=key, version=version)
+
+    def claim_replaced_object(
+        self,
+        key: str,
+        claimed: ClaimedObject,
+        *,
+        cleanup_id: UUID,
+    ) -> None:
+        planned = self.plan_replaced_object_claim(
+            key,
+            claimed.version,
+            cleanup_id=cleanup_id,
+        )
+        if claimed != planned or not claimed.version.etag:
+            raise UploadStorageChangedError
+        existing = self._head_optional(
+            key,
+            version_id=claimed.version.version_id,
+        )
+        if existing is None:
+            return
+        if not _same_proxy_object(
+            _proxy_object_version(existing),
+            claimed.version,
+        ):
+            raise UploadStorageChangedError
+
+    def delete_claimed_object(
+        self,
+        claimed: ClaimedObject,
+        *,
+        cleanup_id: UUID,
+    ) -> None:
+        del cleanup_id
+        try:
+            self.delete_object(claimed.key, claimed.version)
+        except UploadObjectMissingError:
+            return
+
+    def private_download_url(
+        self,
+        key: str,
+        *,
+        expires_in: int,
+        version: ObjectVersion | None = None,
+        response_content_type: str | None = None,
+        response_content_disposition: str | None = None,
+    ) -> str:
+        del (
+            key,
+            expires_in,
+            version,
+            response_content_type,
+            response_content_disposition,
+        )
+        raise UploadBackendUnsupportedError
+
+    def inspect_download(self, key: str, version: ObjectVersion) -> ObjectVersion:
+        response = self._head_optional(key, version_id=version.version_id)
+        if response is None:
+            raise UploadObjectMissingError
+        inspected = _proxy_object_version(response)
+        if not _same_proxy_object(inspected, version):
+            raise UploadStorageChangedError
+        return inspected
+
+    def open_download(self, key: str, version: ObjectVersion) -> IO[bytes]:
+        return self.open_stage(key, version)
+
+    def public_url(self, key: str) -> str:
+        if not self.supports_public_urls:
+            raise PublicUploadUrlUnsupportedError
+        return _sdk_call(
+            lambda: self.storage.url(key),
+            "S3 storage could not create a public URL.",
+        )
+
+    def storage_fingerprint(self) -> str:
+        return build_storage_fingerprint(
+            self.storage,
+            identity={"bucket": self._bucket},
+        )
+
+    def _head_optional(
+        self,
+        key: str,
+        *,
+        version_id: str | None = None,
+    ) -> Mapping[str, object] | None:
+        try:
+            parameters: dict[str, object] = {
+                "Bucket": self._bucket,
+                "Key": key,
+                "ChecksumMode": "ENABLED",
+            }
+            if version_id:
+                parameters["VersionId"] = version_id
+            return self._client.head_object(**parameters)
+        except Exception as exc:
+            if _is_missing_error(exc):
+                return None
+            raise UploadStorageError from exc
+
+    def _head_required(self, key: str) -> Mapping[str, object]:
+        value = self._head_optional(key)
+        if value is None:
+            raise UploadObjectMissingError
+        return value
 
 
 class S3UploadAdapter:
@@ -332,10 +726,15 @@ class S3UploadAdapter:
             )
         parameters: dict[str, object] = {"Bucket": self._bucket, "Key": stage_key}
         parameters["VersionId"] = version.version_id
-        _sdk_call(
-            lambda: self._client.delete_object(**parameters),
-            "S3 could not delete the staged object.",
-        )
+        try:
+            self._client.delete_object(**parameters)
+        except Exception as exc:
+            if _is_missing_error(exc):
+                raise UploadObjectMissingError from exc
+            raise _exception(
+                UploadStorageError,
+                "S3 could not delete the staged object.",
+            ) from exc
 
     def inspect_materialized(
         self,
@@ -440,14 +839,19 @@ class S3UploadAdapter:
                 UploadBackendUnsupportedError,
                 "S3 cleanup claims require an immutable VersionId.",
             )
-        _sdk_call(
-            lambda: self._client.delete_object(
+        try:
+            self._client.delete_object(
                 Bucket=self._bucket,
                 Key=claimed.key,
                 VersionId=claimed.version.version_id,
-            ),
-            "S3 could not delete the claimed object version.",
-        )
+            )
+        except Exception as exc:
+            if _is_missing_error(exc):
+                raise UploadObjectMissingError from exc
+            raise _exception(
+                UploadStorageError,
+                "S3 could not delete the claimed object version.",
+            ) from exc
 
     def private_download_url(
         self,
@@ -708,6 +1112,61 @@ def _validate_direct_support(
     return client, bucket, object_options
 
 
+def _validate_proxy_support(
+    storage: Storage,
+) -> tuple[_S3ClientProtocol, str, _S3ObjectOptions]:
+    """Validate conditional server-side operations for safe proxy uploads."""
+    if not _looks_like_s3_storage(storage):
+        raise UploadBackendUnsupportedError
+    object_options = _storage_object_options(storage)
+    if (
+        _storage_is_public(storage, object_options)
+        and getattr(storage, "upload_staging_prefix_private", False) is not True
+    ):
+        raise UploadBackendUnsupportedError
+    bucket = getattr(storage, "bucket_name", None)
+    client = _client_for_storage(storage)
+    if not isinstance(bucket, str) or not bucket or client is None:
+        raise UploadBackendUnsupportedError
+    client_meta = getattr(client, "meta", None)
+    client_config = getattr(client_meta, "config", None)
+    if getattr(client_config, "signature_version", None) != "s3v4":
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "S3 proxy uploads require an explicitly configured SigV4 client.",
+        )
+    if not _is_aws_s3_endpoint(storage):
+        if not _storage_endpoint_is_https(storage):
+            raise UploadBackendUnsupportedError
+        if getattr(storage, "supports_conditional_copy", False) is not True:
+            raise UploadBackendUnsupportedError
+    required = (
+        ("PutObject", "IfNoneMatch"),
+        ("GetObject", "IfMatch"),
+        ("DeleteObject", "IfMatch"),
+    )
+    if not all(
+        _supports_operation_member(client, operation, member)
+        for operation, member in required
+    ):
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "S3 proxy uploads require conditional put, get, and delete support.",
+        )
+    return client, bucket, object_options
+
+
+def _storage_endpoint_is_https(storage: Storage) -> bool:
+    endpoint = getattr(storage, "endpoint_url", None)
+    if not isinstance(endpoint, str) or not endpoint:
+        return False
+    try:
+        parsed = urlsplit(endpoint)
+    except ValueError:
+        return False
+    return parsed.scheme.lower() == "https" and parsed.hostname is not None
+
+
 def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
     configured = getattr(storage, "object_parameters", {})
     if configured is None:
@@ -815,6 +1274,21 @@ def _supports_conditional_copy(client: _S3ClientProtocol) -> bool:
     return isinstance(members, Mapping) and "IfNoneMatch" in members
 
 
+def _supports_operation_member(
+    client: _S3ClientProtocol,
+    operation_name: str,
+    member: str,
+) -> bool:
+    try:
+        operation = client.meta.service_model.operation_model(  # type: ignore[attr-defined]
+            operation_name
+        )
+        members = operation.input_shape.members
+    except (AttributeError, KeyError, RuntimeError, TypeError):
+        return False
+    return isinstance(members, Mapping) and member in members
+
+
 def _is_aws_s3_endpoint(storage: Storage) -> bool:
     endpoint = getattr(storage, "endpoint_url", None)
     if endpoint is None or endpoint == "":
@@ -822,9 +1296,12 @@ def _is_aws_s3_endpoint(storage: Storage) -> bool:
     if not isinstance(endpoint, str):
         return False
     try:
-        hostname = urlsplit(endpoint).hostname
+        parsed = urlsplit(endpoint)
     except ValueError:
         return False
+    if parsed.scheme.lower() != "https":
+        return False
+    hostname = parsed.hostname
     if hostname is None:
         return False
     return _is_aws_s3_hostname(hostname)
@@ -909,6 +1386,99 @@ def _object_version(response: Mapping[str, object]) -> ObjectVersion:
     )
 
 
+def _proxy_object_version(response: Mapping[str, object]) -> ObjectVersion:
+    version_id = response.get("VersionId")
+    etag = response.get("ETag")
+    checksum = response.get("ChecksumSHA256")
+    size = response.get("ContentLength")
+    content_type = response.get("ContentType")
+    if (
+        not isinstance(etag, str)
+        or not etag
+        or not isinstance(checksum, str)
+        or not isinstance(size, int)
+    ):
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "S3 proxy objects require ETag, SHA-256, and size.",
+        )
+    return ObjectVersion(
+        version_id=(version_id if isinstance(version_id, str) and version_id else None),
+        etag=etag,
+        checksum_sha256=_base64_checksum_to_hex(checksum),
+        size=size,
+        content_type=content_type if isinstance(content_type, str) else None,
+    )
+
+
+def _same_proxy_object(
+    current: ObjectVersion,
+    expected: ObjectVersion,
+) -> bool:
+    return bool(
+        current.etag
+        and expected.etag
+        and (not expected.version_id or current.version_id == expected.version_id)
+        and current.etag == expected.etag
+        and current.checksum_sha256 == expected.checksum_sha256
+        and current.size == expected.size
+    )
+
+
+def _matches_proxy_stage(
+    response: Mapping[str, object],
+    *,
+    checksum: str,
+    size: int,
+    identity: Mapping[str, str],
+) -> bool:
+    metadata = response.get("Metadata")
+    if not isinstance(metadata, Mapping):
+        return False
+    if any(metadata.get(key) != value for key, value in identity.items()):
+        return False
+    try:
+        inspected = _proxy_object_version(response)
+    except UploadError:
+        return False
+    return inspected.checksum_sha256 == checksum and inspected.size == size
+
+
+def _verified_body(
+    response: Mapping[str, object],
+    version: ObjectVersion,
+) -> IO[bytes]:
+    body = response.get("Body")
+    if body is None or not hasattr(body, "read"):
+        if body is not None:
+            _close_body(body)
+        raise UploadStorageError
+    spooled = SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
+    digest = hashlib.sha256()
+    received = 0
+    try:
+        while received <= version.size:
+            chunk = body.read(min(64 * 1024, version.size + 1 - received))
+            if not isinstance(chunk, bytes):
+                _raise_storage_error()
+            if not chunk:
+                break
+            received += len(chunk)
+            if received > version.size:
+                _raise_storage_changed()
+            digest.update(chunk)
+            spooled.write(chunk)
+        if received != version.size or digest.hexdigest() != version.checksum_sha256:
+            _raise_storage_changed()
+        spooled.seek(0)
+        return cast(IO[bytes], spooled)
+    except Exception:
+        spooled.close()
+        raise
+    finally:
+        _close_body(body)
+
+
 def _matches_materialization(
     response: Mapping[str, object],
     version: ObjectVersion,
@@ -969,7 +1539,7 @@ def _error_code(exc: Exception) -> str | None:
 
 
 def _is_missing_error(exc: Exception) -> bool:
-    return _error_code(exc) in {"404", "NoSuchKey", "NotFound"}
+    return _error_code(exc) in {"404", "NoSuchKey", "NoSuchVersion", "NotFound"}
 
 
 def _is_precondition_error(exc: Exception) -> bool:

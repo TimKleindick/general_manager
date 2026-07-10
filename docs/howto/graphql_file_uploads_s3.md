@@ -214,12 +214,32 @@ The accepted URL is non-expiring and identifies the immutable version.
 
 ## Proxy fallback
 
-Fallback to `PROXY` is expected—not an error—when optional dependencies are
-missing, versioning is disabled/unverifiable, SigV4 is not explicit, conditional
-copy is unavailable, a custom endpoint is not opted in, staging could be public,
-or object options are unsupported. The application streams the same bounded
-bytes through Django storage. Keep the proxy route reachable and sized in the
-reverse proxy even when S3 normally operates in direct mode.
+When versioning is disabled/unverifiable or conditional copy is unavailable,
+GeneralManager selects the distinct `s3-proxy` adapter. The authenticated Django
+endpoint spools and verifies the bounded request, then uses S3 `PutObject
+IfNoneMatch: *`, `GetObject IfMatch`, and `DeleteObject IfMatch`. Finalization
+streams the exact staged ETag through the server into a conditionally created
+destination; it never falls back to an `exists()`/`save()` overwrite race.
+Replacement cleanup likewise deletes only the previously recorded ETag. The
+adapter identity is persisted as `s3-proxy` so retries resolve the same contract
+after a restart.
+
+If bucket versioning is enabled but another direct prerequisite (such as
+conditional copy) is missing, `s3-proxy` retains every returned `VersionId` and
+uses version-specific head/get/delete operations. Cleanup therefore removes the
+exact staged or replaced version rather than merely adding a delete marker.
+Truly unversioned buckets use the recorded ETag plus SHA-256 and conditional
+`IfMatch` operations instead.
+
+The proxy fallback still requires an HTTPS S3 endpoint, an explicitly configured
+SigV4 client, SHA-256 metadata, and SDK support for those conditional put/get/delete
+members. Custom endpoints must also opt in with
+`supports_conditional_copy=True` as an explicit statement that their conditional
+S3 semantics are compatible. Public staging, unsupported object options, missing
+optional dependencies, unsafe transport/signing, or absent conditional operations
+fail closed instead of using Django storage's potentially overwriting `save()`.
+Keep the proxy route reachable and sized in the reverse proxy even when S3
+normally operates in direct mode.
 
 `python manage.py check` may emit `general_manager.uploads.W001` when static
 inspection cannot prove runtime capabilities. It emits an `E004`/`E005` error
@@ -236,9 +256,10 @@ when safe finalization or requested public URL capability is known to be absent.
   content type, checksum base64, and proxy/CDN header rewriting.
 - **`AccessDenied`**: check bucket policy, object ownership, KMS grants, staging
   prefix, conditional copy, and version-specific get/delete permissions.
-- **Response says `PROXY`**: run Django checks, verify bucket versioning through
-  the actual role, inspect boto's signature version and operation model, and
-  confirm a custom endpoint declares real conditional-copy support.
+- **Response says `PROXY`**: this may be the safe `s3-proxy` fallback. Verify
+  bucket versioning through the actual role, inspect boto's signature version
+  and Put/Get/Delete operation models, and confirm a custom endpoint declares
+  compatible conditional semantics.
 - **`UPLOAD_STORAGE_CHANGED`**: storage configuration/fingerprint changed or an
   exact version/metadata no longer matches. Restore the original configuration
   and reconcile; never point the intent at a different bucket/version.

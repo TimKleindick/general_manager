@@ -1268,7 +1268,7 @@ def test_superseded_candidate_preserves_stable_state_error(
 @override_settings(
     GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True, "DELETE_REPLACED_FILES": True}}
 )
-def test_filesystem_replacement_retains_old_file_when_exact_delete_is_unsupported(
+def test_filesystem_replacement_completes_exact_old_file_cleanup(
     django_user_model: type[models.Model],
 ) -> None:
     user = django_user_model.objects.create_user(username="finalize-delete-old")
@@ -1284,9 +1284,9 @@ def test_filesystem_replacement_retains_old_file_when_exact_delete_is_unsupporte
 
     intent.refresh_from_db()
     assert intent.state == UploadIntentState.CONSUMED.value
-    assert _STORAGE.exists("existing/delete-after.bin")
+    assert not _STORAGE.exists("existing/delete-after.bin")
     assert intent.old_cleanup_key
-    assert intent.old_cleanup_completed_at is None
+    assert intent.old_cleanup_completed_at is not None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1381,12 +1381,15 @@ def test_recreated_old_key_survives_repeated_terminal_cleanup(
         target_id=serialize_dependency_identifier({"id": record.pk}),
     )
     FinalizationInterface(record.pk).update(creator_id=user.pk, avatar=candidate)
-    assert _STORAGE.exists(old_key)
+    intent.refresh_from_db()
+    assert intent.old_cleanup_completed_at is not None
+    assert not _STORAGE.exists(old_key)
+    _STORAGE.save(old_key, ContentFile(b"same-bytes"))
 
     finalization.finalize_upload_intent(intent.id)
 
     intent.refresh_from_db()
-    assert intent.old_cleanup_completed_at is None
+    assert intent.old_cleanup_completed_at is not None
     assert _STORAGE.exists(old_key)
 
 
@@ -1394,7 +1397,7 @@ def test_recreated_old_key_survives_repeated_terminal_cleanup(
 @override_settings(
     GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True, "DELETE_REPLACED_FILES": True}}
 )
-def test_concurrent_terminal_cleanup_never_moves_unsupported_filesystem_object(
+def test_concurrent_terminal_cleanup_is_idempotent_after_filesystem_claim(
     django_user_model: type[models.Model],
 ) -> None:
     user = django_user_model.objects.create_user(username="finalize-old-concurrent")
@@ -1419,8 +1422,8 @@ def test_concurrent_terminal_cleanup_never_moves_unsupported_filesystem_object(
         )
 
     intent.refresh_from_db()
-    assert intent.old_cleanup_completed_at is None
-    assert _STORAGE.exists(old_key)
+    assert intent.old_cleanup_completed_at is not None
+    assert not _STORAGE.exists(old_key)
     assert not _STORAGE.exists(intent.old_cleanup_key)
 
 
@@ -1465,8 +1468,8 @@ def test_old_cleanup_recovers_crash_after_durable_plan_before_storage_claim(
         finalization.finalize_upload_intent(intent.id)
 
     intent.refresh_from_db()
-    assert intent.old_cleanup_completed_at is None
-    assert _STORAGE.exists(old_key)
+    assert intent.old_cleanup_completed_at is not None
+    assert not _STORAGE.exists(old_key)
 
 
 @pytest.mark.django_db(transaction=True)

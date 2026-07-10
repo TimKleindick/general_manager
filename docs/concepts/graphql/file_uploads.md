@@ -59,6 +59,16 @@ old object. Shared keys cannot always be detected, so do not enable deletion if
 records may deliberately share file names. Local storage uses exact inode and
 checksum claims and refuses deletion when ownership cannot be proven.
 
+`gm-upload-old-claims/` is a framework-exclusive local-storage namespace.
+Server-derived claim paths plus the durable cleanup lease serialize
+GeneralManager workers; application code, operators, sidecars, and other
+processes must not create, replace, or delete anything below that prefix. POSIX
+does not provide a portable compare-and-unlink operation, so the local adapter
+moves a claim into that reserved namespace, re-verifies inode/checksum identity,
+and then deletes under this explicit exclusivity contract. Deployments that
+cannot reserve the namespace must leave `DELETE_REPLACED_FILES=False` or provide
+a custom adapter with an atomic exact-delete primitive.
+
 If another update or deletion wins before finalization completes, reconciliation
 marks the intent `SUPERSEDED` and removes only objects it can prove belong to
 that intent. A replacement also invalidates previously issued local download
@@ -143,8 +153,11 @@ fail closed with `downloadUrl: null`. Public URLs have no expiry.
 
 - Upload-enabled managers must use the same database alias as
   `FILE_UPLOADS.INTENT_DATABASE`; cross-database sagas are not supported.
-- Direct S3 requires versioning and safe conditional copy. Otherwise S3 uses the
-  proxy path.
+- Direct S3 requires versioning and safe conditional copy. When those two direct
+  prerequisites are missing, the `s3-proxy` adapter can use authenticated,
+  conditional put/get/delete operations without weakening exact-object or
+  no-overwrite guarantees. Unsafe signing, transport, or conditional-operation
+  capabilities still fail closed.
 - There is no GraphQL multipart upload, resumable upload, S3 multipart upload,
   deduplication, asset library, transformation pipeline, or built-in virus
   scanner.
