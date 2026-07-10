@@ -19,6 +19,12 @@ REQUIRED_BUDGET_WORKLOAD_MODULES = frozenset(
 )
 
 
+def _selects_perf_workload_node(argument: str) -> bool:
+    path, separator, _node = argument.partition("::")
+    module_name = path.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+    return bool(separator and module_name in REQUIRED_BUDGET_WORKLOAD_MODULES)
+
+
 def should_validate_perf_manifest(
     selected_modules: AbstractSet[str],
     *,
@@ -29,7 +35,9 @@ def should_validate_perf_manifest(
     return (
         not failed
         and not keyword_expression
-        and not any("::" in argument for argument in selection_arguments)
+        and not any(
+            _selects_perf_workload_node(argument) for argument in selection_arguments
+        )
         and REQUIRED_BUDGET_WORKLOAD_MODULES <= selected_modules
     )
 

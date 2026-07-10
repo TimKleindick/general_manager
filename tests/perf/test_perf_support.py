@@ -92,6 +92,18 @@ def test_manifest_validation_accepts_complete_suite_selections(
     )
 
 
+def test_manifest_validation_ignores_an_unrelated_node_selection() -> None:
+    assert perf_conftest.should_validate_perf_manifest(
+        REQUIRED_BUDGET_WORKLOAD_MODULES,
+        keyword_expression="",
+        selection_arguments=(
+            "tests/perf",
+            "tests/unit/test_general_manager.py::test_unrelated_case",
+        ),
+        failed=False,
+    )
+
+
 def _perf_session(
     *module_names: str,
     keyword_expression: str = "",
