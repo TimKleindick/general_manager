@@ -563,6 +563,9 @@ def handle_graph_ql(
         schema_kwargs["directives"] = _build_schema_directives(custom_directives)
     schema = graphene.Schema(**schema_kwargs)
     GraphQL._schema = schema
+    from general_manager.uploads.urls import add_file_upload_urls
+
+    add_file_upload_urls()
     add_graphql_url(schema)
 
 

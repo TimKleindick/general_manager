@@ -111,6 +111,7 @@ class UploadIntentModelTests(TestCase):
 
         assert intent.state == UploadIntentState.PENDING
         assert intent.object_version == {}
+        assert intent.transfer_attempt_count == 0
         assert intent.finalization_attempt_count == 0
         assert intent.finalization_error_code == ""
         assert intent.target_id is None
@@ -162,6 +163,7 @@ class UploadIntentModelTests(TestCase):
             {"declared_size": -1},
             {"verified_size": -1},
             {"finalization_attempt_count": -1},
+            {"transfer_attempt_count": -1},
         )
 
         for invalid in invalid_values:

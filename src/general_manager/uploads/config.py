@@ -73,6 +73,12 @@ class FileUploadSettings:
     begin_rate_limit_window_seconds: int = 60
     max_begin_attempts_per_user: int = 30
     max_begin_attempts_global: int = 1_000
+    transfer_lease_seconds: int = 60
+    transfer_credential_ttl_seconds: int = 900
+    transfer_rate_limit_window_seconds: int = 60
+    max_transfer_attempts_per_user: int = 120
+    max_transfer_attempts_global: int = 5_000
+    max_transfer_attempts_per_intent: int = 10
     allow_insecure_http: bool = False
     max_image_pixels: int = 40_000_000
     token_ttl_seconds: int = 900
@@ -126,6 +132,12 @@ _SETTING_NAMES = {
     "BEGIN_RATE_LIMIT_WINDOW_SECONDS",
     "MAX_BEGIN_ATTEMPTS_PER_USER",
     "MAX_BEGIN_ATTEMPTS_GLOBAL",
+    "TRANSFER_LEASE_SECONDS",
+    "TRANSFER_CREDENTIAL_TTL_SECONDS",
+    "TRANSFER_RATE_LIMIT_WINDOW_SECONDS",
+    "MAX_TRANSFER_ATTEMPTS_PER_USER",
+    "MAX_TRANSFER_ATTEMPTS_GLOBAL",
+    "MAX_TRANSFER_ATTEMPTS_PER_INTENT",
     "ALLOW_INSECURE_HTTP",
     "MAX_IMAGE_PIXELS",
     "TOKEN_TTL_SECONDS",
@@ -222,6 +234,45 @@ def get_file_upload_settings() -> FileUploadSettings:
             configured.get(
                 "MAX_BEGIN_ATTEMPTS_GLOBAL",
                 defaults.max_begin_attempts_global,
+            ),
+        ),
+        transfer_lease_seconds=_positive_integer(
+            "TRANSFER_LEASE_SECONDS",
+            configured.get("TRANSFER_LEASE_SECONDS", defaults.transfer_lease_seconds),
+        ),
+        transfer_credential_ttl_seconds=_positive_integer(
+            "TRANSFER_CREDENTIAL_TTL_SECONDS",
+            configured.get(
+                "TRANSFER_CREDENTIAL_TTL_SECONDS",
+                defaults.transfer_credential_ttl_seconds,
+            ),
+        ),
+        transfer_rate_limit_window_seconds=_positive_integer(
+            "TRANSFER_RATE_LIMIT_WINDOW_SECONDS",
+            configured.get(
+                "TRANSFER_RATE_LIMIT_WINDOW_SECONDS",
+                defaults.transfer_rate_limit_window_seconds,
+            ),
+        ),
+        max_transfer_attempts_per_user=_positive_integer(
+            "MAX_TRANSFER_ATTEMPTS_PER_USER",
+            configured.get(
+                "MAX_TRANSFER_ATTEMPTS_PER_USER",
+                defaults.max_transfer_attempts_per_user,
+            ),
+        ),
+        max_transfer_attempts_global=_positive_integer(
+            "MAX_TRANSFER_ATTEMPTS_GLOBAL",
+            configured.get(
+                "MAX_TRANSFER_ATTEMPTS_GLOBAL",
+                defaults.max_transfer_attempts_global,
+            ),
+        ),
+        max_transfer_attempts_per_intent=_positive_integer(
+            "MAX_TRANSFER_ATTEMPTS_PER_INTENT",
+            configured.get(
+                "MAX_TRANSFER_ATTEMPTS_PER_INTENT",
+                defaults.max_transfer_attempts_per_intent,
             ),
         ),
         allow_insecure_http=allow_insecure_http,
