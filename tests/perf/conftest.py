@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator, Set as AbstractSet
+from typing import Protocol, cast
 
 import pytest
 
@@ -31,6 +32,10 @@ def should_validate_perf_manifest(
     )
 
 
+class TerminalReporter(Protocol):
+    def write_line(self, message: str, **markup: bool) -> None: ...
+
+
 class PerfManifestValidationPlugin:
     def __init__(self) -> None:
         self._reset()
@@ -39,11 +44,10 @@ class PerfManifestValidationPlugin:
         self._selected_modules: frozenset[str] = frozenset()
         self._keyword_expression = ""
         self._failed = False
-
-    def pytest_sessionstart(self, session: pytest.Session) -> None:
-        self._reset()
+        self._perf_budgets: PerfBudgets | None = None
 
     def pytest_collection_finish(self, session: pytest.Session) -> None:
+        self._reset()
         self._selected_modules = frozenset(item.path.name for item in session.items)
         keyword_expression = session.config.getoption("keyword")
         assert isinstance(keyword_expression, str)
@@ -53,6 +57,9 @@ class PerfManifestValidationPlugin:
         if report.when in {"setup", "call", "teardown"} and report.failed:
             self._failed = True
 
+    def capture_perf_budgets(self, perf_budgets: PerfBudgets) -> None:
+        self._perf_budgets = perf_budgets
+
     def should_validate_manifest(self) -> bool:
         return should_validate_perf_manifest(
             self._selected_modules,
@@ -60,12 +67,27 @@ class PerfManifestValidationPlugin:
             failed=self._failed,
         )
 
+    def pytest_sessionfinish(
+        self,
+        session: pytest.Session,
+        exitstatus: int | pytest.ExitCode,
+    ) -> None:
+        del exitstatus
+        if self._perf_budgets is None or not self.should_validate_manifest():
+            return
+        try:
+            self._perf_budgets.validate_manifest(set(self._perf_budgets.observations))
+        except AssertionError as error:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+            reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+            if reporter is not None:
+                cast(TerminalReporter, reporter).write_line(
+                    f"performance budget manifest validation failed: {error}",
+                    red=True,
+                )
+
 
 _perf_manifest_validation = PerfManifestValidationPlugin()
-
-
-def pytest_sessionstart(session: pytest.Session) -> None:
-    _perf_manifest_validation.pytest_sessionstart(session)
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
@@ -76,12 +98,11 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     _perf_manifest_validation.pytest_runtest_logreport(report)
 
 
-def validate_perf_budget_manifest(
-    validation: PerfManifestValidationPlugin,
-    perf_budgets: PerfBudgets,
+def pytest_sessionfinish(
+    session: pytest.Session,
+    exitstatus: int | pytest.ExitCode,
 ) -> None:
-    if validation.should_validate_manifest():
-        perf_budgets.validate_manifest(set(perf_budgets.observations))
+    _perf_manifest_validation.pytest_sessionfinish(session, exitstatus)
 
 
 @pytest.fixture(scope="session")
@@ -93,8 +114,8 @@ def perf_budgets() -> PerfBudgets:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def validate_complete_perf_budget_manifest(
+def capture_perf_budget_observations(
     perf_budgets: PerfBudgets,
 ) -> Iterator[None]:
     yield
-    validate_perf_budget_manifest(_perf_manifest_validation, perf_budgets)
+    _perf_manifest_validation.capture_perf_budgets(perf_budgets)

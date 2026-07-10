@@ -71,10 +71,41 @@ def _perf_session(*module_names: str, keyword_expression: str = "") -> pytest.Se
     )
 
 
-def _perf_report(*, failed: bool, skipped: bool = False) -> pytest.TestReport:
+def _perf_report(
+    *,
+    failed: bool,
+    skipped: bool = False,
+    when: str = "call",
+) -> pytest.TestReport:
     return cast(
         pytest.TestReport,
-        SimpleNamespace(when="call", failed=failed, skipped=skipped),
+        SimpleNamespace(when=when, failed=failed, skipped=skipped),
+    )
+
+
+class _TerminalReporter:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def write_line(self, message: str, **_kwargs: object) -> None:
+        self.messages.append(message)
+
+
+def _finish_session(
+    reporter: _TerminalReporter,
+    *,
+    exitstatus: pytest.ExitCode = pytest.ExitCode.OK,
+) -> pytest.Session:
+    return cast(
+        pytest.Session,
+        SimpleNamespace(
+            exitstatus=exitstatus,
+            config=SimpleNamespace(
+                pluginmanager=SimpleNamespace(
+                    get_plugin=lambda _name: reporter,
+                )
+            ),
+        ),
     )
 
 
@@ -95,27 +126,65 @@ def test_plugin_does_not_treat_a_skip_as_a_failure() -> None:
     assert plugin.should_validate_manifest()
 
 
-def test_plugin_failure_state_resets_at_the_next_session_start() -> None:
+def test_plugin_state_resets_at_each_collection_finish() -> None:
     plugin = perf_conftest.PerfManifestValidationPlugin()
     full_session = _perf_session(*REQUIRED_BUDGET_WORKLOAD_MODULES)
     plugin.pytest_collection_finish(full_session)
+    stale_budgets = PerfBudgets({"OBSERVED": 0, "UNUSED": 0})
+    stale_budgets.assert_observation("OBSERVED", 0)
+    plugin.capture_perf_budgets(stale_budgets)
     plugin.pytest_runtest_logreport(_perf_report(failed=True))
     assert not plugin.should_validate_manifest()
 
-    plugin.pytest_sessionstart(full_session)
-    plugin.pytest_collection_finish(full_session)
+    plugin.pytest_collection_finish(_perf_session("test_database_bucket_perf.py"))
+    assert not plugin.should_validate_manifest()
 
+    plugin.pytest_collection_finish(full_session)
     assert plugin.should_validate_manifest()
 
+    reporter = _TerminalReporter()
+    finish_session = _finish_session(reporter)
+    plugin.pytest_sessionfinish(finish_session, pytest.ExitCode.OK)
 
-def test_complete_selection_validates_the_observed_manifest() -> None:
+    assert finish_session.exitstatus == pytest.ExitCode.OK
+    assert reporter.messages == []
+
+
+def test_session_finish_reports_an_invalid_complete_manifest() -> None:
     plugin = perf_conftest.PerfManifestValidationPlugin()
     plugin.pytest_collection_finish(_perf_session(*REQUIRED_BUDGET_WORKLOAD_MODULES))
     budgets = PerfBudgets({"OBSERVED": 0, "UNUSED": 0})
     budgets.assert_observation("OBSERVED", 0)
+    plugin.capture_perf_budgets(budgets)
+    reporter = _TerminalReporter()
+    finish_session = _finish_session(reporter)
 
-    with pytest.raises(AssertionError, match=r"unused=\['UNUSED'\]"):
-        perf_conftest.validate_perf_budget_manifest(plugin, budgets)
+    plugin.pytest_sessionfinish(finish_session, pytest.ExitCode.OK)
+
+    assert finish_session.exitstatus == pytest.ExitCode.TESTS_FAILED
+    assert reporter.messages == [
+        "performance budget manifest validation failed: "
+        "missing=[]; unused=['UNUSED']; invalid=[]"
+    ]
+
+
+def test_final_teardown_failure_suppresses_manifest_validation() -> None:
+    plugin = perf_conftest.PerfManifestValidationPlugin()
+    plugin.pytest_collection_finish(_perf_session(*REQUIRED_BUDGET_WORKLOAD_MODULES))
+    budgets = PerfBudgets({"OBSERVED": 0, "UNUSED": 0})
+    budgets.assert_observation("OBSERVED", 0)
+    plugin.capture_perf_budgets(budgets)
+    plugin.pytest_runtest_logreport(_perf_report(failed=True, when="teardown"))
+    reporter = _TerminalReporter()
+    finish_session = _finish_session(
+        reporter,
+        exitstatus=pytest.ExitCode.TESTS_FAILED,
+    )
+
+    plugin.pytest_sessionfinish(finish_session, pytest.ExitCode.TESTS_FAILED)
+
+    assert finish_session.exitstatus == pytest.ExitCode.TESTS_FAILED
+    assert reporter.messages == []
 
 
 def test_narrow_selection_skips_global_unused_manifest_validation() -> None:
@@ -123,8 +192,14 @@ def test_narrow_selection_skips_global_unused_manifest_validation() -> None:
     plugin.pytest_collection_finish(_perf_session("test_database_bucket_perf.py"))
     budgets = PerfBudgets({"OBSERVED": 0, "UNUSED": 0})
     budgets.assert_observation("OBSERVED", 0)
+    plugin.capture_perf_budgets(budgets)
+    reporter = _TerminalReporter()
+    finish_session = _finish_session(reporter)
 
-    perf_conftest.validate_perf_budget_manifest(plugin, budgets)
+    plugin.pytest_sessionfinish(finish_session, pytest.ExitCode.OK)
+
+    assert finish_session.exitstatus == pytest.ExitCode.OK
+    assert reporter.messages == []
 
 
 def test_counter_increments_by_one_by_default() -> None:
