@@ -8,8 +8,9 @@
 
 ::: general_manager.api.graphql.BigIntScalar
 
-Stable imports from `general_manager.api` are limited to `GraphQL`,
-`MeasurementType`, and `MeasurementScalar`. Stable imports from
+Stable imports from `general_manager.api` include `GraphQL`,
+`MeasurementType`, `MeasurementScalar`, and the file-upload contracts documented
+below. Stable imports from
 `general_manager.api.graphql` are limited to the compatibility exports `GraphQL`,
 `MeasurementType`, `MeasurementScalar`, and `BigIntScalar`. The implementation keeps lower-level helpers,
 constants, pagination types, permission-plan adapters, and exception mappers in
@@ -18,6 +19,87 @@ are not stable import paths. Some internal types may still appear in generated
 reference pages or type-checker-visible implementation annotations when they are
 part of generated GraphQL plumbing; that visibility does not make them public
 import targets.
+
+## File uploads
+
+Use the lazy stable imports from `general_manager.api`; modules under
+`general_manager.uploads` are implementation locations, not additional public
+import promises.
+
+Configuration and inspection:
+
+- `FileUploadPolicy` configures one manager file field.
+- `FileInspection` is the credential-free bounded value passed to a
+  `FileContentInspector`.
+- `FileUploadConfigurationError` reports invalid policy/settings construction.
+
+GraphQL contracts:
+
+- `UploadToken` is the opaque generated mutation scalar.
+- `StoredFile` and `StoredImage` are generated structured output types.
+- `StoredFileStatus` contains `AVAILABLE`, `PROCESSING`, and `FAILED`.
+- `UploadTransport` contains `DIRECT` and `PROXY`.
+
+Custom storage extension contracts:
+
+- `register_upload_adapter(storage_class, factory)` registers one global
+  `UploadAdapterFactory` before upload use.
+- `UploadAdapter` is the complete transfer/inspect/download protocol.
+- `UploadFinalizationAdapter` is the exact post-commit and replacement cleanup
+  protocol.
+- `ExactPublicDownloadAdapter` is the optional unsigned immutable public URL
+  protocol required for retained uploads in public mode.
+- `ProxyUploadSink` adds streaming `save_stage` for proxy adapters.
+- `UploadInstructions`, `ObjectVersion`, and `ClaimedObject` are immutable
+  boundary values. Instruction credentials and object-version identities have
+  redacted reprs; treat a `ClaimedObject` key as sensitive operational data and
+  do not log it.
+
+See [the setup and custom-adapter guide](../howto/graphql_file_uploads.md) for
+method semantics and contract testing. Persistence models, token/digest helpers,
+the registry instance, local capability codecs, and finalization functions are
+not public API.
+
+Expected failures derive from `UploadError` and carry stable `code` class
+attributes. Public exception classes are:
+
+- `UploadAuthenticationError`, `UploadManagerInvalidError`,
+  `UploadFieldInvalidError`, `UploadOperationInvalidError`,
+  `UploadTargetUnavailableError`;
+- `InvalidUploadFilenameError`, `InvalidUploadSizeError`,
+  `InvalidUploadChecksumError`, `UploadQuotaExceededError`,
+  `UploadRateLimitExceededError`, `UploadDatabaseMismatchError`;
+- `UploadExpiredError`, `UploadTokenInvalidError`, `UploadIncompleteError`,
+  `UploadAlreadyConsumedError`, `UploadTransferConflictError`,
+  `UploadSupersededError`, `UploadBindingMismatchError`;
+- `UploadSizeMismatchError`, `UploadChecksumMismatchError`,
+  `InvalidFileTypeError`, `InvalidImageError`;
+- `UploadBackendUnsupportedError`, `UploadStorageChangedError`,
+  `UploadFinalizationFailedError`, and `UploadStorageError`.
+
+Adapters may raise these framework exceptions. Arbitrary subclasses, messages,
+and exception chains are sanitized at GraphQL/HTTP boundaries; do not rely on
+custom error codes reaching clients.
+
+::: general_manager.uploads.config.FileUploadPolicy
+
+::: general_manager.uploads.config.FileInspection
+
+::: general_manager.uploads.public.register_upload_adapter
+
+::: general_manager.uploads.adapters.UploadAdapter
+
+::: general_manager.uploads.adapters.UploadFinalizationAdapter
+
+::: general_manager.uploads.adapters.ExactPublicDownloadAdapter
+
+::: general_manager.uploads.adapters.ProxyUploadSink
+
+::: general_manager.uploads.graphql_types.UploadToken
+
+::: general_manager.uploads.graphql_types.StoredFile
+
+::: general_manager.uploads.graphql_types.StoredImage
 
 `MeasurementScalar` parses string inputs such as `"12.5 m/s"` into
 `Measurement` values and serializes stored measurements with the canonical

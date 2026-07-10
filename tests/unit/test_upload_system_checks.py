@@ -323,6 +323,41 @@ def test_system_check_warns_when_s3_direct_security_is_not_static(settings) -> N
     assert "general_manager.uploads.W001" in {error.id for error in errors}
 
 
+def test_system_check_rejects_public_builtin_s3_with_custom_domain(settings) -> None:
+    _enabled(settings)
+
+    class Client:
+        meta = SimpleNamespace(
+            config=SimpleNamespace(signature_version="s3v4"),
+            service_model=SimpleNamespace(
+                operation_model=lambda _name: SimpleNamespace(
+                    input_shape=SimpleNamespace(members={"IfNoneMatch": object()})
+                )
+            ),
+        )
+
+    class PublicCustomDomainS3(Storage):
+        _gm_s3_storage = True
+        bucket_name = "bucket"
+        s3_client = Client()
+        versioning_enabled = True
+        public = True
+        upload_staging_prefix_private = True
+        custom_domain = "cdn.example.test"
+        object_parameters: ClassVar[dict[str, object]] = {}
+
+    with patch(
+        "general_manager.uploads.checks.services._resolve_file_field",
+        return_value=(
+            models.Model,
+            models.ImageField(storage=PublicCustomDomainS3()),
+        ),
+    ):
+        errors = run_upload_checks(managers=(_FakeManager,))
+
+    assert "general_manager.uploads.E005" in {error.id for error in errors}
+
+
 def test_system_check_rejects_non_string_policy_key(settings) -> None:
     _enabled(settings)
 

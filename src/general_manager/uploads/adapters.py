@@ -246,6 +246,20 @@ class UploadFinalizationAdapter(Protocol):
 
 
 @runtime_checkable
+class ExactPublicDownloadAdapter(Protocol):
+    """Optional adapter capability for immutable, non-credential public URLs."""
+
+    def public_download_url(
+        self,
+        key: str,
+        *,
+        version: ObjectVersion,
+    ) -> str:
+        """Return a public URL bound to exactly ``version`` of ``key``."""
+        ...
+
+
+@runtime_checkable
 class ProxyUploadSink(UploadAdapter, Protocol):
     """Upload adapter that can accept a proxy stream through Django storage."""
 

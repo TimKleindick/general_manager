@@ -184,7 +184,7 @@ class GeneralmanagerConfig(AppConfig):
         configure_workflow_beat_schedule_from_settings(settings)
         configure_search_reconcile_beat_schedule_from_settings(settings)
         configure_graphql_warmup_beat_schedule_from_settings(settings)
-        from general_manager.search import indexer as _search_indexer  # noqa: F401
+        import general_manager.search.indexer as _search_indexer  # noqa: F401
 
         from general_manager.conf import get_setting
 

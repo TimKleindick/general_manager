@@ -11,7 +11,7 @@ import mimetypes
 import posixpath
 import re
 from typing import Any, TYPE_CHECKING, cast
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 from uuid import UUID
 
 from django.conf import settings as django_settings
@@ -23,6 +23,7 @@ from graphql.language import StringValueNode
 
 from general_manager.api.graphql_errors import BigIntScalar
 from general_manager.uploads.adapters import (
+    ExactPublicDownloadAdapter,
     PublicUploadUrlUnsupportedError,
     UploadAdapter,
 )
@@ -474,14 +475,25 @@ class StoredFileValue:
             ):
                 return None, None
             if policy.public is True:
-                if adapter.supports_public_urls is not True or (
+                if adapter.supports_public_urls is not True:
+                    return None, None
+                if (
                     intent is not None
                     and getattr(intent, "state", None)
                     == UploadIntentState.CONSUMED.value
                 ):
-                    return None, None
-                url = adapter.public_url(self.key)
-                return (_safe_download_url(url, allow_relative=True), None)
+                    if version is None or not isinstance(
+                        adapter, ExactPublicDownloadAdapter
+                    ):
+                        return None, None
+                    url = adapter.public_download_url(self.key, version=version)
+                    return (_safe_exact_public_url(url, version=version), None)
+                return (
+                    _safe_download_url(
+                        adapter.public_url(self.key), allow_relative=True
+                    ),
+                    None,
+                )
 
             expires_in = configured.download_url_ttl_seconds
             response_type = self.content_type or "application/octet-stream"
@@ -570,6 +582,33 @@ def _safe_download_url(value: object, *, allow_relative: bool) -> str:
         raise _InvalidDownloadValue
     if not parsed.netloc:
         raise _InvalidDownloadValue
+    return value
+
+
+def _safe_exact_public_url(value: object, *, version: ObjectVersion) -> str:
+    """Accept a public immutable path or one exact non-credential S3 version query."""
+
+    if not isinstance(value, str) or len(value) > 8192:
+        raise _InvalidDownloadValue
+    parsed = urlsplit(value)
+    if not parsed.query:
+        return _safe_download_url(value, allow_relative=True)
+    if not version.version_id or len(parsed.query) > 2048:
+        raise _InvalidDownloadValue
+    try:
+        parameters = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+        )
+    except ValueError:
+        raise _InvalidDownloadValue from None
+    if parameters != [("versionId", version.version_id)]:
+        raise _InvalidDownloadValue
+    queryless = urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, "", parsed.fragment)
+    )
+    _safe_download_url(queryless, allow_relative=True)
     return value
 
 

@@ -303,6 +303,8 @@ def _static_adapter_capabilities(storage: object) -> _AdapterCapabilities:
             or _static_value(storage, "default_acl", None)
             in {"public-read", "public-read-write"}
         )
+        custom_domain = _static_value(storage, "custom_domain", None)
+        exact_public = custom_domain in {None, ""}
         versioning = _static_value(storage, "versioning_enabled", None) is True
         endpoint = _static_value(storage, "endpoint_url", None)
         aws_endpoint = endpoint in {None, ""}
@@ -337,7 +339,7 @@ def _static_adapter_capabilities(storage: object) -> _AdapterCapabilities:
         return _AdapterCapabilities(
             True,
             True,
-            explicit_public and direct_safe,
+            explicit_public and direct_safe and exact_public,
             uncertain=not direct_safe,
         )
 
