@@ -2,6 +2,99 @@
 
 <!-- version list -->
 
+## v0.62.0 (2026-07-10)
+
+### Bug Fixes
+
+- Align file upload CI dependencies
+  ([`f2b9a6e`](https://github.com/TimKleindick/general_manager/commit/f2b9a6ebef1374a8de2a7201a56d726d45fa1b32))
+
+- Enforce adapter no-overwrite guarantees
+  ([`8bfa850`](https://github.com/TimKleindick/general_manager/commit/8bfa850742f64c9415a6d847cf3d5d936b4c9c62))
+
+- Enforce upload staging invariants
+  ([`2e39e76`](https://github.com/TimKleindick/general_manager/commit/2e39e76569b15f22a2f98526809ad9cf0a7b1956))
+
+- Fail closed for opaque upload storage
+  ([`def8eb6`](https://github.com/TimKleindick/general_manager/commit/def8eb6313fad8c182306212fe12de6d87f5fb82))
+
+- Harden file upload configuration contracts
+  ([`9e41de7`](https://github.com/TimKleindick/general_manager/commit/9e41de7c3c8534afae50c922b32823fc56b44359))
+
+- Harden GraphQL file upload lifecycle
+  ([`bb20eae`](https://github.com/TimKleindick/general_manager/commit/bb20eae46e36e351e4ce7bd48efcb468f37efec8))
+
+- Harden upload adapter contracts
+  ([`8d416fe`](https://github.com/TimKleindick/general_manager/commit/8d416fe2a7310c9732300179082c777e64972429))
+
+- Harden upload admission boundaries
+  ([`a66431c`](https://github.com/TimKleindick/general_manager/commit/a66431c04782e92b77e8b18fd172996ecaaad50c))
+
+- Harden upload checks and coverage
+  ([`5904425`](https://github.com/TimKleindick/general_manager/commit/5904425543d54c5d1b95dd6a758afbbad8b283d8))
+
+- Install image upload test dependencies
+  ([`09e299a`](https://github.com/TimKleindick/general_manager/commit/09e299a5b70ffc4a14d22d8a05e080075579121f))
+
+- Keep file filters input-compatible
+  ([`f99f43c`](https://github.com/TimKleindick/general_manager/commit/f99f43cc7f0a51b3767cf173ead6d2085fef60b8))
+
+- Make upload admission deterministic
+  ([`c5d432c`](https://github.com/TimKleindick/general_manager/commit/c5d432cf70f92763e87265cb7ecee43d81b768be))
+
+- Preserve upload intents after user deletion
+  ([`8befda1`](https://github.com/TimKleindick/general_manager/commit/8befda1a011b83a3e180dc3fe10b5310977df7dd))
+
+- Prevent upload route shadowing
+  ([`be240d3`](https://github.com/TimKleindick/general_manager/commit/be240d30e15679d08e504d8c4913ec3d5e6c159f))
+
+- Reject unsafe Unicode upload paths
+  ([`89ba428`](https://github.com/TimKleindick/general_manager/commit/89ba4285c30e9da6b06937ec303d32f7c7093928))
+
+- Support S3 bucket owner enforcement
+  ([`3c953ec`](https://github.com/TimKleindick/general_manager/commit/3c953ece2a2aeff208031be9bd8254fa7504e7bb))
+
+- Tolerate in-flight upload markers
+  ([`79fc099`](https://github.com/TimKleindick/general_manager/commit/79fc099f73feeec7b35636573324ab0e02c2b4d0))
+
+### Documentation
+
+- Document GraphQL file uploads
+  ([`85c42f1`](https://github.com/TimKleindick/general_manager/commit/85c42f1b4a22b33cb35686c1b78e33e1ee0b26d3))
+
+### Features
+
+- Add file upload configuration contracts
+  ([`f360e86`](https://github.com/TimKleindick/general_manager/commit/f360e8627ac8addcd5c7d825bce1b002143b8e88))
+
+- Add upload storage adapters
+  ([`37222dd`](https://github.com/TimKleindick/general_manager/commit/37222dd1a0c112968437469b543ae3cfad84600f))
+
+- Create GraphQL upload intents
+  ([`7e1c4b0`](https://github.com/TimKleindick/general_manager/commit/7e1c4b0ab4e50b62d3300d268b3586de0dfaca96))
+
+- Expose secure uploaded file downloads
+  ([`84ffe9e`](https://github.com/TimKleindick/general_manager/commit/84ffe9e51839800b8c1057ca9a0ad3901fb32972))
+
+- Finalize uploaded files after commit
+  ([`9869050`](https://github.com/TimKleindick/general_manager/commit/986905046cb42b84aed181b20549e7d046887804))
+
+- Generate typed GraphQL file fields
+  ([`33780f3`](https://github.com/TimKleindick/general_manager/commit/33780f315c104b6dc59d4ac1c43d24f285ea7814))
+
+- Persist file upload intents
+  ([`507aa4a`](https://github.com/TimKleindick/general_manager/commit/507aa4ae15e96026f2ed2337cf89e85b866d6118))
+
+- Preflight upload tokens before permissions
+  ([`7b9f9fd`](https://github.com/TimKleindick/general_manager/commit/7b9f9fd0afd1bff6d706f5f2fe450eb267619e60))
+
+- Reconcile and clean file uploads
+  ([`d4fcf19`](https://github.com/TimKleindick/general_manager/commit/d4fcf194bd44398929c3918bd6e40f87cbfcc0f4))
+
+- Stream proxy file uploads
+  ([`633c785`](https://github.com/TimKleindick/general_manager/commit/633c78552171f0278a2e4ade78acaafd58b34e9e))
+
+
 ## Unreleased
 
 ### Features
