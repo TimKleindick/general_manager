@@ -526,6 +526,7 @@ def handle_graph_ql(
         GraphQL.create_graphql_interface(general_manager_class)
         GraphQL.create_graphql_mutation(general_manager_class)
 
+    GraphQL.register_file_upload_mutation()
     GraphQL.register_search_query()
     GraphQL.register_current_user_capabilities()
 
