@@ -24,6 +24,7 @@ from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
     UploadChecksumMismatchError,
     UploadError,
+    UploadObjectMissingError,
     UploadStorageChangedError,
     UploadStorageError,
     UploadTransferConflictError,
@@ -681,6 +682,8 @@ class ProxyUploadAdapter:
         *,
         intent_id: UUID,
     ) -> ObjectVersion:
+        if not self._storage_exists(final_key):
+            raise UploadObjectMissingError
         claim_identity = _materialization_identity(
             intent_id=intent_id,
             checksum_sha256=source_version.checksum_sha256,
@@ -800,6 +803,8 @@ class ProxyUploadAdapter:
     def _storage_open(self, key: str) -> IO[bytes]:
         try:
             return cast(IO[bytes], self.storage.open(key, "rb"))
+        except FileNotFoundError as exc:
+            raise UploadObjectMissingError from exc
         except OSError as exc:
             raise _exception(
                 UploadStorageError,

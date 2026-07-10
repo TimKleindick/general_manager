@@ -17,9 +17,11 @@ from general_manager.uploads.adapters import (
     PublicUploadUrlUnsupportedError,
     UploadAdapterRegistry,
 )
+from general_manager.uploads import finalization
 from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
     UploadStorageError,
+    UploadObjectMissingError,
     UploadTransferConflictError,
 )
 from general_manager.uploads.s3 import S3UploadAdapter
@@ -179,6 +181,48 @@ def _stage(client: FakeS3Client) -> ObjectVersion:
         size=len(payload),
         content_type="text/plain",
     )
+
+
+def test_s3_inspection_distinguishes_missing_object_from_storage_outage() -> None:
+    client = FakeS3Client()
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    with pytest.raises(UploadObjectMissingError):
+        adapter.inspect_staged("gm-staging/missing.bin")
+
+
+def test_s3_cleanup_accepts_real_missing_pending_attempt_and_superseded_final() -> None:
+    client = FakeS3Client()
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    source = ObjectVersion(
+        version_id="stage-version-1",
+        etag='"etag-1"',
+        checksum_sha256="a" * 64,
+        size=1,
+        content_type="application/octet-stream",
+    )
+    intent = SimpleNamespace(
+        id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        staging_key="gm-staging/missing.bin",
+        transfer_attempt_count=1,
+        final_key="files/missing.bin",
+        final_object_version={},
+    )
+
+    finalization._delete_staging_objects(adapter, intent, source)
+    finalization._delete_superseded_final(adapter, intent, source)
+
+    assert client.delete_calls == [
+        {
+            "Bucket": "uploads",
+            "Key": "gm-staging/missing.bin",
+            "VersionId": "stage-version-1",
+        }
+    ]
+
+    client.operation_errors["head"] = FakeSDKError()
+    with pytest.raises(UploadStorageError):
+        adapter.inspect_staged("gm-staging/missing.bin")
 
 
 def test_s3_direct_mode_requires_versioning() -> None:

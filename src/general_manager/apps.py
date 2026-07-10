@@ -167,6 +167,9 @@ class GeneralmanagerConfig(AppConfig):
         """
         self.install_startup_hook_runner()
         self.register_system_checks()
+        from general_manager.uploads.checks import register_upload_checks
+
+        register_upload_checks()
         _autoload_app_managers_modules()
         self.initialize_general_manager_classes(
             GeneralManagerMeta.pending_attribute_initialization,

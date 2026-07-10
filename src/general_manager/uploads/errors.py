@@ -75,6 +75,12 @@ class UploadStorageError(UploadError):
     code = "UPLOAD_STORAGE_ERROR"
 
 
+class UploadObjectMissingError(UploadStorageError):
+    """Internal exact-object absence signal used by idempotent cleanup."""
+
+    default_message = "The exact upload object no longer exists."
+
+
 class UploadAuthenticationError(UploadError):
     """Raised when beginning an upload has no durable authenticated owner."""
 

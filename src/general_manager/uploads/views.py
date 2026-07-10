@@ -31,6 +31,13 @@ from general_manager.uploads.graphql_types import (
     decode_local_download_capability,
 )
 from general_manager.uploads.models import UploadIntent
+from general_manager.uploads.metrics import (
+    observe_upload_duration,
+    record_upload_bytes,
+    record_upload_failure,
+    record_upload_transition,
+    upload_error_label,
+)
 from general_manager.uploads.services import (
     _resolve_file_field,
     _resolve_intent_adapter,
@@ -223,18 +230,26 @@ def _owned_intent(intent_id: UUID, owner_pk: object) -> UploadIntent:
 def _mark_expired(intent: UploadIntent, owner_pk: object, *, at: datetime) -> None:
     settings = get_file_upload_settings()
     try:
-        UploadIntent.objects.using(settings.intent_database).filter(
-            pk=intent.pk,
-            user_id=owner_pk,
-            expires_at__lte=at,
-            state__in=(
-                UploadIntentState.PENDING.value,
-                UploadIntentState.TRANSFERRING.value,
-            ),
-        ).update(
-            state=UploadIntentState.EXPIRED.value,
-            transfer_lease_expires_at=None,
+        updated = (
+            UploadIntent.objects.using(settings.intent_database)
+            .filter(
+                pk=intent.pk,
+                user_id=owner_pk,
+                expires_at__lte=at,
+                state__in=(
+                    UploadIntentState.PENDING.value,
+                    UploadIntentState.TRANSFERRING.value,
+                ),
+            )
+            .update(
+                state=UploadIntentState.EXPIRED.value,
+                transfer_lease_expires_at=None,
+            )
         )
+        if updated == 1:
+            intent.state = UploadIntentState.EXPIRED.value
+            intent.transfer_lease_expires_at = None
+            record_upload_transition(intent, UploadIntentState.EXPIRED.value)
     except Exception as exc:
         raise _TransferFailure(_STORAGE_ERROR) from exc
 
@@ -604,6 +619,28 @@ def _complete_transfer(
         raise _TransferFailure(_STORAGE_ERROR) from exc
     if updated != 1:
         _fail(_CONFLICT_ERROR)
+    try:
+        intent = (
+            UploadIntent.objects.using(settings.intent_database)
+            .only(
+                "id",
+                "adapter_id",
+                "manager_name",
+                "field_name",
+                "verified_size",
+                "declared_size",
+            )
+            .get(pk=claim.intent_id)
+        )
+        record_upload_transition(intent, UploadIntentState.UPLOADED.value)
+        record_upload_bytes(
+            adapter=intent.adapter_id,
+            transport="proxy",
+            byte_count=version.size,
+            intent=intent,
+        )
+    except Exception as error:  # noqa: BLE001 - observability cannot affect transfer
+        del error
 
 
 def _transfer(request: HttpRequest, intent_id: UUID) -> HttpResponse:
@@ -701,13 +738,48 @@ def _transfer(request: HttpRequest, intent_id: UUID) -> HttpResponse:
 def proxy_upload_view(request: HttpRequest, intent_id: UUID) -> HttpResponse:
     """Accept one bounded proxy transfer without exposing internal metadata."""
 
+    started_at = time.monotonic()
     if request.method != "PUT":
         return _json_error(_METHOD_ERROR)
     try:
-        return _transfer(request, intent_id)
+        response = _transfer(request, intent_id)
+        observe_upload_duration(
+            adapter="unknown",
+            operation="transfer",
+            result="completed",
+            seconds=time.monotonic() - started_at,
+            correlation_id=intent_id,
+        )
+        return response  # noqa: TRY300 - success returns before HTTP error mapping
     except _TransferFailure as failure:
+        record_upload_failure(
+            adapter="unknown",
+            operation="transfer",
+            error=upload_error_label(failure.error.code),
+            correlation_id=intent_id,
+        )
+        observe_upload_duration(
+            adapter="unknown",
+            operation="transfer",
+            result="failed",
+            seconds=time.monotonic() - started_at,
+            correlation_id=intent_id,
+        )
         return _json_error(failure.error)
     except Exception:  # noqa: BLE001 - public HTTP boundary must fail closed
+        record_upload_failure(
+            adapter="unknown",
+            operation="transfer",
+            error="storage_error",
+            correlation_id=intent_id,
+        )
+        observe_upload_duration(
+            adapter="unknown",
+            operation="transfer",
+            result="failed",
+            seconds=time.monotonic() - started_at,
+            correlation_id=intent_id,
+        )
         return _json_error(_STORAGE_ERROR)
 
 

@@ -23,6 +23,7 @@ from general_manager.uploads.adapters import (
 )
 from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
+    UploadObjectMissingError,
     UploadStorageChangedError,
     UploadError,
     UploadStorageError,
@@ -185,14 +186,19 @@ class S3UploadAdapter:
         )
 
     def inspect_staged(self, stage_key: str) -> ObjectVersion:
-        response = _sdk_call(
-            lambda: self._client.head_object(
+        try:
+            response = self._client.head_object(
                 Bucket=self._bucket,
                 Key=stage_key,
                 ChecksumMode="ENABLED",
-            ),
-            "S3 could not inspect the staged object.",
-        )
+            )
+        except Exception as exc:
+            if _is_missing_error(exc):
+                raise UploadObjectMissingError from exc
+            raise _exception(
+                UploadStorageError,
+                "S3 could not inspect the staged object.",
+            ) from exc
         return _object_version(response)
 
     def materialize(
@@ -343,9 +349,9 @@ class S3UploadAdapter:
             "gm-intent-id": str(intent_id),
             "gm-checksum-sha256": source_version.checksum_sha256,
         }
-        if response is None or not _matches_materialization(
-            response, source_version, identity
-        ):
+        if response is None:
+            raise UploadObjectMissingError
+        if not _matches_materialization(response, source_version, identity):
             raise _exception(
                 UploadStorageChangedError,
                 "The final S3 object is not owned by this upload intent.",
@@ -375,7 +381,9 @@ class S3UploadAdapter:
                 "S3 exact deletion requires an immutable VersionId.",
             )
         current = self._head_optional(key)
-        if current is None or _object_version(current) != version:
+        if current is None:
+            raise UploadObjectMissingError
+        if _object_version(current) != version:
             raise UploadStorageChangedError()
         _sdk_call(
             lambda: self._client.delete_object(

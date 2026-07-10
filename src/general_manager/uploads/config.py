@@ -100,6 +100,11 @@ class FileUploadSettings:
     max_inspection_bytes: int = 1_048_576
     token_ttl_seconds: int = 900
     download_url_ttl_seconds: int = 300
+    cleanup_batch_size: int = 100
+    cleanup_min_age_seconds: int = 3_600
+    cleanup_lease_seconds: int = 300
+    cleanup_failure_cooldown_seconds: int = 60
+    terminal_retention_seconds: int = 86_400
     delete_replaced_files: bool = False
 
 
@@ -179,6 +184,11 @@ _SETTING_NAMES = {
     "MAX_INSPECTION_BYTES",
     "TOKEN_TTL_SECONDS",
     "DOWNLOAD_URL_TTL_SECONDS",
+    "CLEANUP_BATCH_SIZE",
+    "CLEANUP_MIN_AGE_SECONDS",
+    "CLEANUP_LEASE_SECONDS",
+    "CLEANUP_FAILURE_COOLDOWN_SECONDS",
+    "TERMINAL_RETENTION_SECONDS",
     "DELETE_REPLACED_FILES",
 }
 _MALFORMED_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
@@ -342,6 +352,31 @@ def get_file_upload_settings() -> FileUploadSettings:
                 "DOWNLOAD_URL_TTL_SECONDS", defaults.download_url_ttl_seconds
             ),
             maximum=604_800,
+        ),
+        cleanup_batch_size=_positive_integer(
+            "CLEANUP_BATCH_SIZE",
+            configured.get("CLEANUP_BATCH_SIZE", defaults.cleanup_batch_size),
+        ),
+        cleanup_min_age_seconds=_positive_integer(
+            "CLEANUP_MIN_AGE_SECONDS",
+            configured.get("CLEANUP_MIN_AGE_SECONDS", defaults.cleanup_min_age_seconds),
+        ),
+        cleanup_lease_seconds=_positive_integer(
+            "CLEANUP_LEASE_SECONDS",
+            configured.get("CLEANUP_LEASE_SECONDS", defaults.cleanup_lease_seconds),
+        ),
+        cleanup_failure_cooldown_seconds=_positive_integer(
+            "CLEANUP_FAILURE_COOLDOWN_SECONDS",
+            configured.get(
+                "CLEANUP_FAILURE_COOLDOWN_SECONDS",
+                defaults.cleanup_failure_cooldown_seconds,
+            ),
+        ),
+        terminal_retention_seconds=_positive_integer(
+            "TERMINAL_RETENTION_SECONDS",
+            configured.get(
+                "TERMINAL_RETENTION_SECONDS", defaults.terminal_retention_seconds
+            ),
         ),
         delete_replaced_files=delete_replaced_files,
     )

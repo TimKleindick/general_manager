@@ -144,6 +144,23 @@ class UploadIntent(models.Model):
     old_cleanup_completed_at: models.DateTimeField[datetime | None] = (
         models.DateTimeField(null=True, blank=True)
     )
+    cleanup_completed_at: models.DateTimeField[datetime | None] = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+    cleanup_error_code: models.CharField[str] = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+    )
+    cleanup_lease_expires_at: models.DateTimeField[datetime | None] = (
+        models.DateTimeField(null=True, blank=True)
+    )
+    cleanup_lease_token: models.CharField[str] = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+    )
 
     state: models.CharField[str] = models.CharField(
         max_length=16,

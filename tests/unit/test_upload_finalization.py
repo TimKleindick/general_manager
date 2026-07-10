@@ -8,16 +8,18 @@ from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
-from threading import Barrier
+import time
+from threading import Barrier, Event
 from types import SimpleNamespace
 from typing import ClassVar
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
-from django.db import connection, models, transaction
+from django.db import close_old_connections, connection, models, transaction
 from django.db.models import NOT_PROVIDED
 from django.test import override_settings
 from django.utils import timezone
@@ -47,6 +49,7 @@ from general_manager.uploads.errors import (
     UploadStorageError,
     UploadSupersededError,
 )
+from general_manager.uploads.graphql_types import create_stored_file_value
 from general_manager.uploads.models import UploadIntent
 from general_manager.uploads.tokens import issue_upload_token
 from general_manager.uploads.types import (
@@ -378,6 +381,102 @@ def test_create_commits_reserved_key_then_post_commit_consumes(
     assert intent.id.hex in record.avatar.name
     assert not _STORAGE.exists(intent.staging_key)
     assert _STORAGE.exists(record.avatar.name)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(
+    GENERAL_MANAGER={
+        "FILE_UPLOADS": {
+            "ENABLED": True,
+            "DOWNLOAD_URL_TTL_SECONDS": 60,
+            "TERMINAL_RETENTION_SECONDS": 86400,
+        }
+    }
+)
+def test_retention_preserves_consumed_download_metadata_while_binding_is_live(
+    django_user_model: type[models.Model],
+) -> None:
+    user = django_user_model.objects.create_user(username="retained-download-owner")
+    intent, candidate = _uploaded_intent(user)
+    result = FinalizationInterface.create(creator_id=user.pk, avatar=candidate)
+    record = FinalizationRecord.objects.get(pk=result["id"])
+    intent.refresh_from_db()
+    old = timezone.now() - timedelta(days=2)
+    UploadIntent.objects.filter(pk=intent.pk).update(
+        cleanup_completed_at=old,
+        updated_at=old,
+    )
+    issued_at = old + timedelta(seconds=86399)
+    manager = FinalizationManager._from_trusted_orm_instance(record)
+    issued = create_stored_file_value(
+        manager,
+        SimpleNamespace(context=SimpleNamespace()),
+        field_name="avatar",
+        manager_name=FinalizationManager.__name__,
+        now=lambda: issued_at,
+    )
+    assert issued is not None
+    assert issued.download_url is not None
+    assert issued.download_url_expires_at == issued_at + timedelta(seconds=60)
+
+    future = issued_at + timedelta(seconds=120)
+    counts = finalization.run_upload_cleanup(
+        batch_size=10, older_than_seconds=1, at=future
+    )
+
+    assert counts.deleted == 0
+    assert counts.skipped == 1
+    assert UploadIntent.objects.filter(pk=intent.pk).exists()
+    assert record.avatar.name == intent.final_key
+    resolved_later = create_stored_file_value(
+        manager,
+        SimpleNamespace(context=SimpleNamespace()),
+        field_name="avatar",
+        manager_name=FinalizationManager.__name__,
+        now=lambda: future,
+    )
+    assert resolved_later is not None
+    assert resolved_later.download_url is not None
+    assert resolved_later.checksum == intent.verified_checksum_sha256
+    assert resolved_later.original_name == intent.original_filename
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_retention_deletes_consumed_metadata_after_binding_changes(
+    django_user_model: type[models.Model],
+    caplog,
+) -> None:
+    caplog.set_level("INFO", logger="general_manager.uploads")
+    user = django_user_model.objects.create_user(username="released-download-owner")
+    intent, candidate = _uploaded_intent(user)
+    result = FinalizationInterface.create(creator_id=user.pk, avatar=candidate)
+    record = FinalizationRecord.objects.get(pk=result["id"])
+    record.avatar = "created/replacement.bin"
+    record.save(update_fields=("avatar",))
+    intent.refresh_from_db()
+    old = timezone.now() - timedelta(days=2)
+    UploadIntent.objects.filter(pk=intent.pk).update(
+        cleanup_completed_at=old,
+        updated_at=old,
+    )
+
+    counts = finalization.run_upload_cleanup(batch_size=10, older_than_seconds=1)
+
+    assert counts.deleted == 1
+    assert not UploadIntent.objects.filter(pk=intent.pk).exists()
+    deletion = next(
+        record.upload
+        for record in caplog.records
+        if getattr(record, "upload", {}).get("event") == "upload_operation"
+        and record.upload.get("result") == "completed"
+    )
+    assert deletion["intent_id"] == str(intent.id)
+    assert deletion["adapter"] == intent.adapter_id
+    assert deletion["manager"] == intent.manager_name
+    assert deletion["field"] == intent.field_name
+    assert deletion["state"] == UploadIntentState.CONSUMED.value
+    assert deletion["declared_size"] == intent.declared_size
     assert FinalizationAdapter.materialize_calls == 1
     assert intent.target_id is None
     assert intent.final_target_pk == str(record.pk)
@@ -429,6 +528,9 @@ def test_replacement_failure_retains_stage_old_file_and_finalizing_state(
     assert intent.old_key == "existing/old.bin"
     assert intent.finalization_attempt_count == 1
     assert intent.finalization_error_code == "UPLOAD_STORAGE_ERROR"
+    assert intent.cleanup_lease_expires_at is not None
+    assert intent.cleanup_lease_expires_at > timezone.now()
+    assert intent.cleanup_lease_token == ""
     assert _STORAGE.exists(intent.staging_key)
     assert _STORAGE.exists("existing/old.bin")
 
@@ -874,6 +976,9 @@ def test_failed_callback_can_be_reconciled_idempotently(
     assert intent.state == UploadIntentState.FINALIZING.value
 
     FinalizationAdapter.fail_materialize = False
+    UploadIntent.objects.filter(pk=intent.pk).update(
+        cleanup_lease_expires_at=timezone.now() - timedelta(seconds=1)
+    )
     finalization.finalize_upload_intent(intent.id)
     finalization.finalize_upload_intent(intent.id)
 
@@ -977,6 +1082,9 @@ def test_superseded_retry_deletes_exact_materialized_version_after_state_loss(
     _STORAGE.save("newer/superseding.bin", ContentFile(b"newer"))
     FinalizationRecord.objects.filter(pk=result["id"]).update(
         avatar="newer/superseding.bin"
+    )
+    UploadIntent.objects.filter(pk=intent.pk).update(
+        cleanup_lease_expires_at=timezone.now() - timedelta(seconds=1)
     )
 
     finalization.finalize_upload_intent(intent.id)
@@ -1458,6 +1566,9 @@ def test_materialized_final_is_reused_after_state_update_failure(
     assert intent.finalization_error_code == "UPLOAD_STORAGE_ERROR"
     assert _STORAGE.exists(record.avatar.name)
     assert _STORAGE.exists(intent.staging_key)
+    UploadIntent.objects.filter(pk=intent.pk).update(
+        cleanup_lease_expires_at=timezone.now() - timedelta(seconds=1)
+    )
 
     finalization.finalize_upload_intent(intent.id)
 
@@ -1485,6 +1596,71 @@ def test_consumed_cleanup_failure_is_retryable_without_rematerializing(
     finalization.finalize_upload_intent(intent.id)
 
     assert not _STORAGE.exists(intent.staging_key)
+    assert FinalizationAdapter.materialize_calls == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(
+    GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True, "CLEANUP_LEASE_SECONDS": 1}}
+)
+def test_blocking_materialization_heartbeat_prevents_second_worker_reclaim(
+    django_user_model: type[models.Model],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = django_user_model.objects.create_user(username="finalize-heartbeat")
+    intent, candidate = _uploaded_intent(user)
+    callbacks: list[object] = []
+
+    def capture_callback(callback: object, **_kwargs: object) -> None:
+        callbacks.append(callback)
+
+    monkeypatch.setattr(finalization.transaction, "on_commit", capture_callback)
+    FinalizationInterface.create(creator_id=user.pk, avatar=candidate)
+    intent.refresh_from_db()
+    assert intent.state == UploadIntentState.FINALIZING.value
+
+    entered = Event()
+    release = Event()
+    original_materialize = FinalizationAdapter.materialize
+
+    def blocking_materialize(self, *args: object, **kwargs: object) -> str:
+        owned = UploadIntent.objects.get(pk=intent.id)
+        assert owned.cleanup_lease_token
+        assert owned.cleanup_lease_expires_at is not None
+        assert owned.cleanup_lease_expires_at > timezone.now()
+        entered.set()
+        assert release.wait(timeout=5)
+        return original_materialize(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    def finalize() -> str:
+        close_old_connections()
+        try:
+            return finalization.finalize_upload_intent(intent.id)
+        finally:
+            close_old_connections()
+
+    with (
+        patch.object(FinalizationAdapter, "materialize", blocking_materialize),
+        ThreadPoolExecutor(max_workers=1) as executor,
+    ):
+        future = executor.submit(finalize)
+        assert entered.wait(timeout=5)
+        time.sleep(1.25)
+        second_claim = finalization._start_finalization_attempt(
+            intent.id,
+            alias="default",
+            expected_lease_expires_at=None,
+            expected_lease_token=None,
+        )
+        assert second_claim is None
+        release.set()
+        assert future.result(timeout=5) == UploadIntentState.CONSUMED.value
+
+    intent.refresh_from_db()
+    assert intent.state == UploadIntentState.CONSUMED.value
+    assert intent.cleanup_lease_expires_at is None
+    assert intent.cleanup_lease_token == ""
+    assert intent.cleanup_completed_at is not None
     assert FinalizationAdapter.materialize_calls == 1
 
 

@@ -17,6 +17,7 @@ import unicodedata
 from typing import Protocol, cast
 from urllib.parse import quote, unquote, urlsplit
 from uuid import UUID, uuid4
+from functools import partial
 
 from django.conf import settings as django_settings
 from django.contrib.auth import get_user_model
@@ -78,6 +79,13 @@ from general_manager.uploads.errors import (
     stable_upload_error,
 )
 from general_manager.uploads.models import UploadIntent, UploadQuotaLock
+from general_manager.uploads.metrics import (
+    observe_upload_duration,
+    record_upload_bytes,
+    record_upload_failure,
+    record_upload_transition,
+    upload_error_label,
+)
 from general_manager.uploads.tokens import issue_upload_token
 from general_manager.uploads.types import (
     ChecksumAlgorithm,
@@ -164,6 +172,16 @@ type BeginUploadRateLimitHook = Callable[[object, object], object | None]
 
 _begin_upload_rate_limit_hook: BeginUploadRateLimitHook | None = None
 upload_adapter_registry = UploadAdapterRegistry()
+
+
+def _record_pending_intent_after_commit(intent: UploadIntent, *, alias: str) -> None:
+    """Record durable intent creation only after its transaction commits."""
+
+    transaction.on_commit(
+        partial(record_upload_transition, intent, UploadIntentState.PENDING.value),
+        using=alias,
+        robust=True,
+    )
 
 
 def preflight_upload_tokens(
@@ -567,6 +585,26 @@ def _persist_direct_preflight(
                         "updated_at",
                     ),
                 )
+                transaction.on_commit(
+                    partial(
+                        record_upload_transition,
+                        current,
+                        UploadIntentState.UPLOADED.value,
+                    ),
+                    using=database_alias,
+                    robust=True,
+                )
+                transaction.on_commit(
+                    partial(
+                        record_upload_bytes,
+                        adapter=current.adapter_id,
+                        transport="direct",
+                        byte_count=plan.version.size,
+                        intent=current,
+                    ),
+                    using=database_alias,
+                    robust=True,
+                )
             else:
                 if current.state != UploadIntentState.UPLOADED.value:
                     _raise_for_unusable_state(current)
@@ -688,9 +726,19 @@ def verify_upload_transfer_credential(
 def begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
     """Create an upload intent without exposing internal exception chains."""
 
+    started_at = time.monotonic()
+    correlation_id = uuid4()
     failure: UploadError | None = None
     try:
-        return _begin_file_upload(user, request)
+        result = _begin_file_upload(user, request, correlation_id=correlation_id)
+        observe_upload_duration(
+            adapter="unknown",
+            operation="begin",
+            result="completed",
+            seconds=time.monotonic() - started_at,
+            correlation_id=correlation_id,
+        )
+        return result  # noqa: TRY300 - success returns before sanitized failure path
     except UploadError as error:
         # Public upload errors can originate while handling user, cache, database,
         # or adapter exceptions. Detach every underlying exception before the
@@ -700,13 +748,31 @@ def begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
         failure.__context__ = None
         failure.__traceback__ = None
         failure.__suppress_context__ = True
+        record_upload_failure(
+            adapter="unknown",
+            operation="begin",
+            error=upload_error_label(failure.code),
+            correlation_id=correlation_id,
+        )
+        observe_upload_duration(
+            adapter="unknown",
+            operation="begin",
+            result="failed",
+            seconds=time.monotonic() - started_at,
+            correlation_id=correlation_id,
+        )
 
     if failure is None:  # pragma: no cover - the except branch always assigns it
         raise AssertionError("unreachable")
     raise failure
 
 
-def _begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
+def _begin_file_upload(
+    user: object,
+    request: object,
+    *,
+    correlation_id: UUID | None = None,
+) -> BeginFileUploadResult:
     """Validate and durably create one upload intent for ``user``.
 
     This admission step deliberately does not evaluate create/update permission
@@ -775,7 +841,7 @@ def _begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
         raise UploadStorageError from None
     except Exception as exc:
         raise UploadStorageError from exc
-    intent_id = uuid4()
+    intent_id = correlation_id or uuid4()
     stage_key = f"{settings.staging_prefix}{uuid4().hex}/{uuid4().hex}"
     token, token_digest = issue_upload_token()
     upload_url = f"/{settings.http_upload_path}{intent_id}"
@@ -833,7 +899,7 @@ def _begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
                 raise UploadStorageError from exc
             if current_adapter_identity != (adapter_id, adapter_version):
                 raise UploadStorageError
-            UploadIntent.objects.using(database_alias).create(
+            intent = UploadIntent.objects.using(database_alias).create(
                 id=intent_id,
                 user_id=owner_pk,
                 token_digest=token_digest,
@@ -851,6 +917,7 @@ def _begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
                 declared_checksum_sha256=checksum_sha256,
                 expires_at=expires_at,
             )
+            _record_pending_intent_after_commit(intent, alias=database_alias)
         return instructions, expires_at
 
     instructions, expires_at = _run_admission_transaction(

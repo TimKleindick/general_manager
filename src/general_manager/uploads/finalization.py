@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 import os
 import re
@@ -13,16 +14,20 @@ import sqlite3
 import time
 import unicodedata
 import warnings
-from typing import TYPE_CHECKING, IO, Any, TypeVar, cast
-from uuid import UUID
+from threading import Event, Lock, Thread
+from typing import TYPE_CHECKING, IO, Any, Literal, TypeVar, cast
+from uuid import UUID, uuid4
 
 from django.db import (
     DEFAULT_DB_ALIAS,
     OperationalError,
+    close_old_connections,
     connections,
     models,
     transaction,
 )
+from django.db.models import Q, QuerySet
+from django.core.exceptions import ObjectDoesNotExist
 from django.utils import timezone
 
 from general_manager.cache.dependency_index import serialize_dependency_identifier
@@ -45,11 +50,23 @@ from general_manager.uploads.errors import (
     UploadBindingMismatchError,
     UploadError,
     UploadExpiredError,
+    UploadObjectMissingError,
     UploadStorageChangedError,
     UploadStorageError,
     stable_upload_error,
 )
-from general_manager.uploads.models import UploadIntent, UploadQuotaLock
+from general_manager.uploads.models import (
+    TERMINAL_UPLOAD_INTENT_STATES,
+    UploadIntent,
+    UploadQuotaLock,
+)
+from general_manager.uploads.metrics import (
+    observe_upload_duration,
+    record_upload_cleanup,
+    record_upload_failure,
+    record_upload_transition,
+    upload_error_label,
+)
 from general_manager.uploads.types import (
     ObjectVersion,
     UploadCandidate,
@@ -74,6 +91,8 @@ _FRAMEWORK_STORAGE_PREFIXES = (
     "gm-upload-stage-meta/",
 )
 _HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_BATCH_SIZE_ERROR = "batch_size must be a positive integer"
+_OLDER_THAN_ERROR = "older_than_seconds must be a positive integer"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +107,114 @@ class _PreparedCandidate:
     old_version: ObjectVersion | None
     image_width: int | None
     image_height: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class UploadCleanupCounts:
+    """Safe aggregate results from one bounded cleanup invocation."""
+
+    reconciled: int = 0
+    expired: int = 0
+    cleaned: int = 0
+    deleted: int = 0
+    failed: int = 0
+    skipped: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _UploadObservabilitySnapshot:
+    id: UUID
+    adapter_id: str
+    manager_name: str
+    field_name: str
+    state: str
+    declared_size: int
+    verified_size: int | None
+
+
+class _FinalizationBusy(Exception):
+    """Internal SQLite retry signal retaining exact lease ownership."""
+
+    def __init__(
+        self, lease_expires_at: datetime | None, lease_token: str | None
+    ) -> None:
+        self.lease_expires_at = lease_expires_at
+        self.lease_token = lease_token
+        super().__init__("upload finalization database contention")
+
+
+class _FinalizationLeaseLost(Exception):
+    """Raised when storage work can no longer prove finalization ownership."""
+
+
+class _FinalizationLeaseHeartbeat:
+    """Renew one token-owned lease while an adapter performs blocking I/O."""
+
+    def __init__(self, intent_id: UUID, *, alias: str, lease_token: str) -> None:
+        self.intent_id = intent_id
+        self.alias = alias
+        self.lease_token = lease_token
+        lease_seconds = get_file_upload_settings().cleanup_lease_seconds
+        self.interval = max(0.05, min(5.0, lease_seconds / 3))
+        self._stop = Event()
+        self._lock = Lock()
+        self._lost = False
+        self._lease_expires_at: datetime | None = None
+        self._thread = Thread(
+            target=self._run,
+            name="gm-upload-finalization-heartbeat",
+            daemon=True,
+        )
+
+    def __enter__(self) -> _FinalizationLeaseHeartbeat:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=max(1.0, self.interval * 2))
+
+    @property
+    def lost(self) -> bool:
+        with self._lock:
+            return self._lost
+
+    @property
+    def lease_expires_at(self) -> datetime | None:
+        with self._lock:
+            return self._lease_expires_at
+
+    def _run(self) -> None:
+        close_old_connections()
+        try:
+            while not self._stop.wait(self.interval):
+                try:
+                    renewed = _renew_finalization_lease(
+                        self.intent_id,
+                        alias=self.alias,
+                        lease_token=self.lease_token,
+                    )
+                except Exception:  # noqa: BLE001 - uncertain renewal fails closed
+                    renewed = None
+                with self._lock:
+                    self._lease_expires_at = renewed
+                    self._lost = renewed is None
+                if renewed is None:
+                    return
+        finally:
+            close_old_connections()
+
+
+def _record_transition_after_commit(
+    intent: UploadIntent, state: str, *, alias: str
+) -> None:
+    """Record a transition only after its database transaction commits."""
+
+    transaction.on_commit(
+        partial(record_upload_transition, intent, state),
+        using=alias,
+        robust=True,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,14 +316,54 @@ def prepare_upload_claims(
             raise
         except Exception:  # noqa: BLE001 - policy resolution boundary fails closed
             raise UploadStorageError from None
+        inspection_started_at = time.monotonic()
         try:
             inspected = adapter.inspect_staged(intent.staging_key)
-        except UploadError:
+        except UploadError as error:
+            record_upload_failure(
+                adapter=intent.adapter_id,
+                operation="validation",
+                error=upload_error_label(error.code),
+                intent=intent,
+            )
+            observe_upload_duration(
+                adapter=intent.adapter_id,
+                operation="validation",
+                result="failed",
+                seconds=time.monotonic() - inspection_started_at,
+                intent=intent,
+            )
             raise
         except Exception:  # noqa: BLE001 - custom adapter boundary fails closed
+            record_upload_failure(
+                adapter=intent.adapter_id,
+                operation="validation",
+                error="storage_error",
+                intent=intent,
+            )
+            observe_upload_duration(
+                adapter=intent.adapter_id,
+                operation="validation",
+                result="failed",
+                seconds=time.monotonic() - inspection_started_at,
+                intent=intent,
+            )
             raise UploadStorageError from None
         if type(inspected) is not ObjectVersion or inspected != recorded:
+            record_upload_failure(
+                adapter=intent.adapter_id,
+                operation="validation",
+                error="storage_changed",
+                intent=intent,
+            )
             raise UploadStorageChangedError
+        observe_upload_duration(
+            adapter=intent.adapter_id,
+            operation="validation",
+            result="completed",
+            seconds=time.monotonic() - inspection_started_at,
+            intent=intent,
+        )
         try:
             image_width, image_height = _validate_staged_content(
                 adapter,
@@ -373,7 +540,7 @@ def mark_uploads_finalizing(
     for item in locked.prepared.candidates:
         transaction.on_commit(
             partial(
-                finalize_upload_intent,
+                _finalize_committed_upload_intent,
                 item.intent_id,
                 database_alias=locked.prepared.database_alias,
             ),
@@ -382,34 +549,118 @@ def mark_uploads_finalizing(
         )
 
 
+def _finalize_committed_upload_intent(intent_id: UUID, *, database_alias: str) -> None:
+    try:
+        intent = UploadIntent.objects.using(database_alias).get(pk=intent_id)
+        record_upload_transition(intent, UploadIntentState.FINALIZING.value)
+    except Exception as error:  # noqa: BLE001 - observability stays isolated
+        del error
+    finalize_upload_intent(intent_id, database_alias=database_alias)
+
+
 def finalize_upload_intent(
     intent_id: UUID,
     *,
     database_alias: str | None = None,
-) -> None:
+    reconciliation_lease_expires_at: datetime | None = None,
+    reconciliation_lease_token: str | None = None,
+) -> str:
+    """Time and run one failure-isolated finalization attempt."""
+
+    started_at = time.monotonic()
+    adapter_id: str = "unknown"
+    observability_intent: UploadIntent | None = None
+    alias = services._normalized_database_alias(
+        database_alias or get_file_upload_settings().intent_database
+    )
+    try:
+        observability_intent = UploadIntent.objects.using(alias).get(pk=intent_id)
+        adapter_id = observability_intent.adapter_id
+    except Exception as error:  # noqa: BLE001 - metrics lookup is optional
+        del error
+    deadline = time.monotonic() + _SQLITE_RETRY_DEADLINE_SECONDS
+    outcome = "failed"
+    for attempt in range(_SQLITE_RETRY_ATTEMPTS):
+        try:
+            outcome = _finalize_upload_intent(
+                intent_id,
+                database_alias=database_alias,
+                reconciliation_lease_expires_at=reconciliation_lease_expires_at,
+                reconciliation_lease_token=reconciliation_lease_token,
+            )
+            break
+        except _FinalizationBusy as busy:
+            reconciliation_lease_expires_at = busy.lease_expires_at
+            reconciliation_lease_token = busy.lease_token
+            remaining = deadline - time.monotonic()
+            if attempt + 1 >= _SQLITE_RETRY_ATTEMPTS or remaining <= 0:
+                recorded = _record_finalization_failure(
+                    intent_id,
+                    alias=alias,
+                    error=UploadStorageError(),
+                    lease_expires_at=reconciliation_lease_expires_at,
+                    lease_token=reconciliation_lease_token,
+                )
+                outcome = "failed" if recorded else "skipped"
+                break
+            delay = min(0.002 * (2**attempt), 0.02)
+            jitter = delay * secrets.randbelow(1001) / 1000
+            time.sleep(min(delay + jitter, remaining))
+    observe_upload_duration(
+        adapter=adapter_id,
+        operation="finalization",
+        result="completed"
+        if outcome
+        in {UploadIntentState.CONSUMED.value, UploadIntentState.SUPERSEDED.value}
+        else "skipped"
+        if outcome == "skipped"
+        else "failed",
+        seconds=time.monotonic() - started_at,
+        intent=observability_intent,
+    )
+    return outcome
+
+
+def _finalize_upload_intent(
+    intent_id: UUID,
+    *,
+    database_alias: str | None = None,
+    reconciliation_lease_expires_at: datetime | None = None,
+    reconciliation_lease_token: str | None = None,
+) -> str:
     """Idempotently materialize one durable ``FINALIZING`` intent."""
 
     alias = services._normalized_database_alias(
         database_alias or get_file_upload_settings().intent_database
     )
+    lease_expires_at: datetime | None = reconciliation_lease_expires_at
+    lease_token: str | None = reconciliation_lease_token
     try:
         initial = UploadIntent.objects.using(alias).get(pk=intent_id)
         if initial.state in {
             UploadIntentState.CONSUMED.value,
             UploadIntentState.SUPERSEDED.value,
         }:
-            _retry_terminal_cleanup(initial, alias=alias)
-            return
+            _cleanup_terminal_intent(initial.id, alias=alias)
+            return initial.state
         if initial.state != UploadIntentState.FINALIZING.value:
-            return
-        if not _start_finalization_attempt(intent_id, alias=alias):
+            return "skipped"
+        lease_claim = _start_finalization_attempt(
+            intent_id,
+            alias=alias,
+            expected_lease_expires_at=reconciliation_lease_expires_at,
+            expected_lease_token=reconciliation_lease_token,
+        )
+        if lease_claim is None:
             current = UploadIntent.objects.using(alias).get(pk=intent_id)
             if current.state in {
                 UploadIntentState.CONSUMED.value,
                 UploadIntentState.SUPERSEDED.value,
             }:
-                _retry_terminal_cleanup(current, alias=alias)
-            return
+                _cleanup_terminal_intent(current.id, alias=alias)
+                return current.state
+            return "skipped"
+        lease_expires_at, lease_token = lease_claim
         intent = UploadIntent.objects.using(alias).get(pk=intent_id)
         manager_class = services._resolve_manager(intent.manager_name)
         interface_cls = cast(OrmInterfaceClass, manager_class.Interface)
@@ -425,52 +676,87 @@ def finalize_upload_intent(
             model=model,
             model_field=model_field,
             target_pk=target_pk,
+            lease_expires_at=lease_expires_at,
+            lease_token=lease_token,
         )
         if attempt_state == "done":
-            return
+            return "skipped"
         if attempt_state == "superseded":
-            _cleanup_superseded(adapter, intent, version)
-            return
-        actual_key = adapter.materialize(
-            intent.staging_key,
-            version,
-            cast(str, intent.final_key),
-            intent_id=intent.id,
+            _cleanup_terminal_intent(intent.id, alias=alias)
+            return UploadIntentState.SUPERSEDED.value
+        renewed = _renew_finalization_lease(
+            intent.id, alias=alias, lease_token=lease_token
         )
-        _validate_final_key(
-            actual_key,
-            model_field,
-            get_file_upload_settings().staging_prefix,
-            intent_id=intent.id,
+        lease_expires_at = _require_renewed_finalization_lease(renewed)
+        with _FinalizationLeaseHeartbeat(
+            intent.id, alias=alias, lease_token=lease_token
+        ) as heartbeat:
+            actual_key = adapter.materialize(
+                intent.staging_key,
+                version,
+                cast(str, intent.final_key),
+                intent_id=intent.id,
+            )
+            _validate_final_key(
+                actual_key,
+                model_field,
+                get_file_upload_settings().staging_prefix,
+                intent_id=intent.id,
+            )
+            finalization_adapter = _require_finalization_adapter(
+                adapter,
+                actual_key=actual_key,
+                reserved_key=intent.final_key,
+            )
+            final_version = finalization_adapter.inspect_materialized(
+                actual_key,
+                version,
+                intent_id=intent.id,
+            )
+            _validate_materialized_version(final_version, version)
+        _require_live_finalization_heartbeat(heartbeat)
+        renewed = _renew_finalization_lease(
+            intent.id, alias=alias, lease_token=lease_token
         )
-        finalization_adapter = _require_finalization_adapter(
-            adapter,
-            actual_key=actual_key,
-            reserved_key=intent.final_key,
-        )
-        final_version = finalization_adapter.inspect_materialized(
-            actual_key,
-            version,
-            intent_id=intent.id,
-        )
-        _validate_materialized_version(final_version, version)
-        consumed = _complete_finalization(
+        lease_expires_at = _require_renewed_finalization_lease(renewed)
+        completion = _complete_finalization(
             intent_id,
             alias=alias,
             model=model,
             model_field=model_field,
             target_pk=target_pk,
             final_version=final_version,
+            lease_expires_at=lease_expires_at,
+            lease_token=lease_token,
         )
         intent.refresh_from_db(using=alias)
-        if not consumed:
-            _cleanup_superseded(adapter, intent, version)
-            return
-        _cleanup_consumed(
-            adapter, intent, version, model, model_field, target_pk, alias
-        )
+        if completion == "stale":
+            return "skipped"
+        if completion == "superseded":
+            _cleanup_terminal_intent(intent.id, alias=alias)
+            return UploadIntentState.SUPERSEDED.value
+        _cleanup_terminal_intent(intent.id, alias=alias)
+        return UploadIntentState.CONSUMED.value  # noqa: TRY300 - saga success path
+    except OperationalError as error:
+        if not _is_sqlite_busy(error, alias):
+            recorded = _record_finalization_failure(
+                intent_id,
+                alias=alias,
+                error=error,
+                lease_expires_at=lease_expires_at,
+                lease_token=lease_token,
+            )
+            return "failed" if recorded else "skipped"
+        raise _FinalizationBusy(lease_expires_at, lease_token) from None
     except Exception as error:  # noqa: BLE001 - callbacks never invalidate a commit
-        _record_finalization_failure(intent_id, alias=alias, error=error)
+        recorded = _record_finalization_failure(
+            intent_id,
+            alias=alias,
+            error=error,
+            lease_expires_at=lease_expires_at,
+            lease_token=lease_token,
+        )
+        return "failed" if recorded else "skipped"
 
 
 def _validate_candidate_binding(
@@ -515,10 +801,18 @@ def _begin_finalization_attempt(
     model: type[models.Model],
     model_field: models.FileField,
     target_pk: object,
+    lease_expires_at: datetime,
+    lease_token: str,
 ) -> str:
     with transaction.atomic(using=alias):
         intent = UploadIntent.objects.using(alias).select_for_update().get(pk=intent_id)
         if intent.state != UploadIntentState.FINALIZING.value:
+            return "done"
+        if (
+            intent.cleanup_lease_token != lease_token
+            or intent.cleanup_lease_expires_at is None
+            or intent.cleanup_lease_expires_at <= timezone.now()
+        ):
             return "done"
         target = _locked_target(model, target_pk, alias)
         if (
@@ -526,7 +820,20 @@ def _begin_finalization_attempt(
             or _field_name(getattr(target, model_field.name)) != intent.final_key
         ):
             intent.state = UploadIntentState.SUPERSEDED.value
-            intent.save(using=alias, update_fields=("state", "updated_at"))
+            intent.cleanup_lease_expires_at = None
+            intent.cleanup_lease_token = ""
+            intent.save(
+                using=alias,
+                update_fields=(
+                    "state",
+                    "cleanup_lease_expires_at",
+                    "cleanup_lease_token",
+                    "updated_at",
+                ),
+            )
+            _record_transition_after_commit(
+                intent, UploadIntentState.SUPERSEDED.value, alias=alias
+            )
             return "superseded"
         intent.finalization_error_code = ""
         intent.save(
@@ -539,17 +846,104 @@ def _begin_finalization_attempt(
         return "proceed"
 
 
-def _start_finalization_attempt(intent_id: UUID, *, alias: str) -> bool:
+def _start_finalization_attempt(
+    intent_id: UUID,
+    *,
+    alias: str,
+    expected_lease_expires_at: datetime | None,
+    expected_lease_token: str | None,
+) -> tuple[datetime, str] | None:
     with transaction.atomic(using=alias):
         intent = UploadIntent.objects.using(alias).select_for_update().get(pk=intent_id)
         if intent.state != UploadIntentState.FINALIZING.value:
-            return False
-        intent.finalization_attempt_count += 1
+            return None
+        now = timezone.now()
+        new_claim = expected_lease_expires_at is None and expected_lease_token is None
+        if new_claim:
+            if (
+                intent.cleanup_lease_expires_at is not None
+                and intent.cleanup_lease_expires_at > now
+            ):
+                return None
+            lease_expires_at = now + timedelta(
+                seconds=get_file_upload_settings().cleanup_lease_seconds
+            )
+            intent.cleanup_lease_expires_at = lease_expires_at
+            lease_token = uuid4().hex
+            intent.cleanup_lease_token = lease_token
+        else:
+            if (
+                expected_lease_expires_at is None
+                or not expected_lease_token
+                or intent.cleanup_lease_expires_at != expected_lease_expires_at
+                or intent.cleanup_lease_token != expected_lease_token
+                or expected_lease_expires_at <= now
+            ):
+                return None
+            lease_expires_at = expected_lease_expires_at
+            lease_token = expected_lease_token
+        if new_claim:
+            intent.finalization_attempt_count += 1
+        intent.finalization_error_code = ""
         intent.save(
             using=alias,
-            update_fields=("finalization_attempt_count", "updated_at"),
+            update_fields=(
+                "cleanup_lease_expires_at",
+                "cleanup_lease_token",
+                "finalization_attempt_count",
+                "finalization_error_code",
+                "updated_at",
+            ),
         )
-        return True
+        return lease_expires_at, lease_token
+
+
+def _renew_finalization_lease(
+    intent_id: UUID, *, alias: str, lease_token: str
+) -> datetime | None:
+    return _retry_sqlite_busy(
+        lambda: _renew_finalization_lease_once(
+            intent_id, alias=alias, lease_token=lease_token
+        ),
+        alias=alias,
+    )
+
+
+def _require_renewed_finalization_lease(value: datetime | None) -> datetime:
+    if value is None:
+        raise _FinalizationLeaseLost
+    return value
+
+
+def _require_live_finalization_heartbeat(
+    heartbeat: _FinalizationLeaseHeartbeat,
+) -> None:
+    if heartbeat.lost:
+        raise _FinalizationLeaseLost
+
+
+def _renew_finalization_lease_once(
+    intent_id: UUID, *, alias: str, lease_token: str
+) -> datetime | None:
+    now = timezone.now()
+    renewed_until = now + timedelta(
+        seconds=get_file_upload_settings().cleanup_lease_seconds
+    )
+    with transaction.atomic(using=alias):
+        renewed = (
+            UploadIntent.objects.using(alias)
+            .filter(
+                pk=intent_id,
+                state=UploadIntentState.FINALIZING.value,
+                cleanup_lease_token=lease_token,
+                cleanup_lease_expires_at__gt=now,
+            )
+            .update(
+                cleanup_lease_expires_at=renewed_until,
+                updated_at=now,
+            )
+        )
+    return renewed_until if renewed == 1 else None
 
 
 def _complete_finalization(
@@ -560,24 +954,47 @@ def _complete_finalization(
     model_field: models.FileField,
     target_pk: object,
     final_version: ObjectVersion,
-) -> bool:
+    lease_expires_at: datetime,
+    lease_token: str,
+) -> str:
     with transaction.atomic(using=alias):
         intent = UploadIntent.objects.using(alias).select_for_update().get(pk=intent_id)
         if intent.state == UploadIntentState.CONSUMED.value:
-            return True
+            return "consumed"
         if intent.state != UploadIntentState.FINALIZING.value:
-            return False
+            return "stale"
+        if (
+            intent.cleanup_lease_token != lease_token
+            or intent.cleanup_lease_expires_at is None
+            or intent.cleanup_lease_expires_at <= timezone.now()
+        ):
+            return "stale"
         target = _locked_target(model, target_pk, alias)
         if (
             target is None
             or _field_name(getattr(target, model_field.name)) != intent.final_key
         ):
             intent.state = UploadIntentState.SUPERSEDED.value
-            intent.save(using=alias, update_fields=("state", "updated_at"))
-            return False
+            intent.cleanup_lease_expires_at = None
+            intent.cleanup_lease_token = ""
+            intent.save(
+                using=alias,
+                update_fields=(
+                    "state",
+                    "cleanup_lease_expires_at",
+                    "cleanup_lease_token",
+                    "updated_at",
+                ),
+            )
+            _record_transition_after_commit(
+                intent, UploadIntentState.SUPERSEDED.value, alias=alias
+            )
+            return "superseded"
         intent.state = UploadIntentState.CONSUMED.value
         intent.consumed_at = timezone.now()
         intent.finalization_error_code = ""
+        intent.cleanup_lease_expires_at = None
+        intent.cleanup_lease_token = ""
         intent.final_object_version = asdict(final_version)
         intent.save(
             using=alias,
@@ -585,11 +1002,16 @@ def _complete_finalization(
                 "state",
                 "consumed_at",
                 "finalization_error_code",
+                "cleanup_lease_expires_at",
+                "cleanup_lease_token",
                 "final_object_version",
                 "updated_at",
             ),
         )
-        return True
+        _record_transition_after_commit(
+            intent, UploadIntentState.CONSUMED.value, alias=alias
+        )
+        return "consumed"
 
 
 def _cleanup_consumed(
@@ -695,6 +1117,20 @@ def _mark_old_cleanup_completed(intent_id: UUID, *, alias: str) -> None:
     )
 
 
+def _mark_old_cleanup_resolved(intent_id: UUID, *, alias: str) -> None:
+    """Durably resolve an old-file cleanup that cannot be proven safe."""
+
+    UploadIntent.objects.using(alias).filter(
+        pk=intent_id,
+        state=UploadIntentState.CONSUMED.value,
+        old_key__isnull=False,
+        old_cleanup_completed_at__isnull=True,
+    ).update(
+        old_cleanup_completed_at=timezone.now(),
+        updated_at=timezone.now(),
+    )
+
+
 def _cleanup_superseded(
     adapter: UploadAdapter,
     intent: UploadIntent,
@@ -747,24 +1183,661 @@ def _retry_terminal_cleanup(intent: UploadIntent, *, alias: str) -> None:
     )
 
 
+def run_upload_cleanup(
+    *,
+    batch_size: int | None = None,
+    older_than_seconds: int | None = None,
+    dry_run: bool = False,
+    at: datetime | None = None,
+) -> UploadCleanupCounts:
+    """Reconcile and clean at most one configured batch of upload intents.
+
+    Finalization is always attempted before expiry and terminal cleanup. One
+    shared budget bounds database rows and storage work across all phases.
+    """
+
+    settings = get_file_upload_settings()
+    limit = settings.cleanup_batch_size if batch_size is None else batch_size
+    age = (
+        settings.cleanup_min_age_seconds
+        if older_than_seconds is None
+        else older_than_seconds
+    )
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise ValueError(_BATCH_SIZE_ERROR)
+    if isinstance(age, bool) or not isinstance(age, int) or age <= 0:
+        raise ValueError(_OLDER_THAN_ERROR)
+    now = at or timezone.now()
+    alias = services._normalized_database_alias(settings.intent_database)
+    remaining = limit
+    values = {
+        "reconciled": 0,
+        "expired": 0,
+        "cleaned": 0,
+        "deleted": 0,
+        "failed": 0,
+        "skipped": 0,
+    }
+
+    finalizing_limit = remaining if remaining <= 1 else max(1, remaining // 4)
+    finalizing_ids: list[UUID]
+    try:
+        finalizing_ids = _cleanup_candidate_ids(
+            UploadIntent.objects.using(alias)
+            .filter(state=UploadIntentState.FINALIZING.value)
+            .filter(
+                Q(cleanup_lease_expires_at__isnull=True)
+                | Q(cleanup_lease_expires_at__lte=now)
+            ),
+            limit=finalizing_limit,
+        )
+    except (OperationalError, UploadStorageError):
+        finalizing_ids = []
+        values["failed"] += 1
+        remaining -= 1
+    remaining -= len(finalizing_ids)
+    if dry_run:
+        values["reconciled"] += len(finalizing_ids)
+        for intent_id in finalizing_ids:
+            record_upload_cleanup(
+                operation="finalization",
+                result="dry_run",
+                intent=_upload_intent_snapshot(intent_id, alias=alias),
+            )
+    else:
+        for intent_id in finalizing_ids:
+            snapshot = _upload_intent_snapshot(intent_id, alias=alias)
+            outcome = finalize_upload_intent(
+                intent_id,
+                database_alias=alias,
+            )
+            if outcome in {
+                UploadIntentState.CONSUMED.value,
+                UploadIntentState.SUPERSEDED.value,
+            }:
+                values["reconciled"] += 1
+                record_upload_cleanup(
+                    operation="finalization", result="completed", intent=snapshot
+                )
+            elif outcome == "failed":
+                values["failed"] += 1
+                record_upload_cleanup(
+                    operation="finalization", result="failed", intent=snapshot
+                )
+            else:
+                values["skipped"] += 1
+                record_upload_cleanup(
+                    operation="finalization", result="skipped", intent=snapshot
+                )
+
+    expiry_cutoff = now - timedelta(seconds=age)
+    if remaining:
+        expiry_limit = remaining if remaining <= 1 else max(1, remaining // 3)
+        expiring = (
+            UploadIntent.objects.using(alias)
+            .filter(
+                expires_at__lte=expiry_cutoff,
+                state__in=(
+                    UploadIntentState.PENDING.value,
+                    UploadIntentState.TRANSFERRING.value,
+                    UploadIntentState.UPLOADED.value,
+                ),
+            )
+            .filter(
+                ~Q(state=UploadIntentState.TRANSFERRING.value)
+                | Q(transfer_lease_expires_at__isnull=True)
+                | Q(transfer_lease_expires_at__lte=now)
+            )
+        )
+        try:
+            expiring_ids = _cleanup_candidate_ids(expiring, limit=expiry_limit)
+        except (OperationalError, UploadStorageError):
+            expiring_ids = []
+            values["failed"] += 1
+            remaining -= 1
+        remaining -= len(expiring_ids)
+        if dry_run:
+            values["expired"] += len(expiring_ids)
+        else:
+            for intent_id in expiring_ids:
+                try:
+                    expired = _expire_upload_intent(intent_id, alias=alias, at=now)
+                except (OperationalError, UploadStorageError):
+                    values["failed"] += 1
+                    continue
+                if not expired:
+                    values["skipped"] += 1
+                    continue
+                values["expired"] += 1
+                intent = UploadIntent.objects.using(alias).get(pk=intent_id)
+                record_upload_transition(intent, UploadIntentState.EXPIRED.value)
+                try:
+                    cleaned = _cleanup_terminal_intent(intent_id, alias=alias, at=now)
+                except (OperationalError, UploadStorageError):
+                    values["failed"] += 1
+                    continue
+                if cleaned:
+                    values["cleaned"] += 1
+                else:
+                    values[_cleanup_miss_count(intent_id, alias=alias, at=now)] += 1
+
+    terminal_cutoff = now - timedelta(seconds=age)
+    if remaining:
+        terminal_limit = remaining if remaining <= 1 else max(1, remaining // 2)
+        terminal = (
+            UploadIntent.objects.using(alias)
+            .filter(
+                state__in=tuple(TERMINAL_UPLOAD_INTENT_STATES),
+                cleanup_completed_at__isnull=True,
+                updated_at__lte=terminal_cutoff,
+            )
+            .filter(
+                Q(cleanup_lease_expires_at__isnull=True)
+                | Q(cleanup_lease_expires_at__lte=now)
+            )
+        )
+        try:
+            terminal_ids = _cleanup_candidate_ids(terminal, limit=terminal_limit)
+        except (OperationalError, UploadStorageError):
+            terminal_ids = []
+            values["failed"] += 1
+            remaining -= 1
+        remaining -= len(terminal_ids)
+        if dry_run:
+            values["cleaned"] += len(terminal_ids)
+        else:
+            for intent_id in terminal_ids:
+                try:
+                    cleaned = _cleanup_terminal_intent(intent_id, alias=alias, at=now)
+                except (OperationalError, UploadStorageError):
+                    values["failed"] += 1
+                    continue
+                if cleaned:
+                    values["cleaned"] += 1
+                else:
+                    values[_cleanup_miss_count(intent_id, alias=alias, at=now)] += 1
+
+    retention_cutoff = now - timedelta(seconds=settings.terminal_retention_seconds)
+    if remaining:
+        deletable = UploadIntent.objects.using(alias).filter(
+            state__in=tuple(TERMINAL_UPLOAD_INTENT_STATES),
+            cleanup_completed_at__isnull=False,
+            cleanup_completed_at__lte=retention_cutoff,
+        )
+        try:
+            deletable_ids = _cleanup_candidate_ids(deletable, limit=remaining)
+        except (OperationalError, UploadStorageError):
+            deletable_ids = []
+            values["failed"] += 1
+        for intent_id in deletable_ids:
+            outcome, snapshot = _delete_retained_intent(
+                intent_id,
+                alias=alias,
+                retention_cutoff=retention_cutoff,
+                dry_run=dry_run,
+            )
+            if outcome == "deleted":
+                values["deleted"] += 1
+                record_upload_cleanup(
+                    operation="cleanup",
+                    result="dry_run" if dry_run else "completed",
+                    intent=snapshot,
+                )
+            elif outcome == "failed":
+                values["failed"] += 1
+                record_upload_cleanup(
+                    operation="cleanup", result="failed", intent=snapshot
+                )
+            else:
+                values["skipped"] += 1
+                record_upload_cleanup(
+                    operation="cleanup", result="skipped", intent=snapshot
+                )
+    if dry_run:
+        record_upload_cleanup(operation="cleanup", result="dry_run")
+    return UploadCleanupCounts(**values)
+
+
+def _delete_retained_intent(
+    intent_id: UUID,
+    *,
+    alias: str,
+    retention_cutoff: datetime,
+    dry_run: bool,
+) -> tuple[str, _UploadObservabilitySnapshot | None]:
+    """Delete terminal metadata only after its canonical file binding is gone."""
+
+    snapshot = _upload_intent_snapshot(intent_id, alias=alias)
+    try:
+        return _retry_sqlite_busy(
+            lambda: _delete_retained_intent_once(
+                intent_id,
+                alias=alias,
+                retention_cutoff=retention_cutoff,
+                dry_run=dry_run,
+            ),
+            alias=alias,
+        )
+    except Exception:  # noqa: BLE001 - retention fails closed on uncertain bindings
+        return "failed", snapshot
+
+
+def _delete_retained_intent_once(
+    intent_id: UUID,
+    *,
+    alias: str,
+    retention_cutoff: datetime,
+    dry_run: bool,
+) -> tuple[str, _UploadObservabilitySnapshot | None]:
+    with transaction.atomic(using=alias):
+        if not dry_run:
+            _serialize_sqlite_claims(alias)
+        intent = UploadIntent.objects.using(alias).select_for_update().get(pk=intent_id)
+        snapshot = _observability_snapshot(intent)
+        if (
+            intent.state not in TERMINAL_UPLOAD_INTENT_STATES
+            or intent.cleanup_completed_at is None
+            or intent.cleanup_completed_at > retention_cutoff
+        ):
+            return "skipped", snapshot
+        if intent.state == UploadIntentState.CONSUMED.value:
+            manager_class = services._resolve_manager(intent.manager_name)
+            interface_cls = cast(OrmInterfaceClass, manager_class.Interface)
+            model, model_field = services._resolve_file_field(
+                cast(Any, interface_cls), intent.field_name
+            )
+            target_pk = _parse_target_pk(intent.final_target_pk, model)
+            try:
+                target = (
+                    cast(Any, model)
+                    ._base_manager.using(alias)
+                    .select_for_update()
+                    .get(pk=target_pk)
+                )
+            except ObjectDoesNotExist:
+                target = None
+            if (
+                target is not None
+                and _field_name(getattr(target, model_field.name)) == intent.final_key
+            ):
+                return "skipped", snapshot
+        if not dry_run:
+            intent.delete(using=alias)
+        return "deleted", snapshot
+
+
+def _cleanup_miss_count(intent_id: UUID, *, alias: str, at: datetime) -> str:
+    current = (
+        UploadIntent.objects.using(alias)
+        .filter(pk=intent_id)
+        .only("cleanup_completed_at", "cleanup_lease_expires_at")
+        .first()
+    )
+    if current is None or current.cleanup_completed_at is not None:
+        return "skipped"
+    if (
+        current.cleanup_lease_expires_at is not None
+        and current.cleanup_lease_expires_at > at
+    ):
+        return "skipped"
+    return "failed"
+
+
+def _upload_intent_snapshot(
+    intent_id: UUID, *, alias: str
+) -> _UploadObservabilitySnapshot | None:
+    try:
+        return _observability_snapshot(
+            UploadIntent.objects.using(alias).get(pk=intent_id)
+        )
+    except Exception:  # noqa: BLE001 - observability lookup is failure-isolated
+        return None
+
+
+def _observability_snapshot(intent: UploadIntent) -> _UploadObservabilitySnapshot:
+    return _UploadObservabilitySnapshot(
+        id=intent.id,
+        adapter_id=intent.adapter_id,
+        manager_name=intent.manager_name,
+        field_name=intent.field_name,
+        state=intent.state,
+        declared_size=intent.declared_size,
+        verified_size=intent.verified_size,
+    )
+
+
+def _cleanup_candidate_ids(
+    queryset: QuerySet[UploadIntent], *, limit: int
+) -> list[UUID]:
+    if limit <= 0:
+        return []
+    alias = queryset.db
+    return _retry_sqlite_busy(
+        lambda: _cleanup_candidate_ids_once(queryset, limit=limit), alias=alias
+    )
+
+
+def _cleanup_candidate_ids_once(
+    queryset: QuerySet[UploadIntent], *, limit: int
+) -> list[UUID]:
+    alias = queryset.db
+    with transaction.atomic(using=alias):
+        ordered = queryset.order_by("created_at", "id")
+        if connections[alias].features.has_select_for_update_skip_locked:
+            ordered = ordered.select_for_update(skip_locked=True)
+        elif connections[alias].features.has_select_for_update:
+            ordered = ordered.select_for_update()
+        return list(ordered.values_list("id", flat=True)[:limit])
+
+
+def _expire_upload_intent(intent_id: UUID, *, alias: str, at: datetime) -> bool:
+    return _retry_sqlite_busy(
+        lambda: _expire_upload_intent_once(intent_id, alias=alias, at=at),
+        alias=alias,
+    )
+
+
+def _expire_upload_intent_once(intent_id: UUID, *, alias: str, at: datetime) -> bool:
+    with transaction.atomic(using=alias):
+        _serialize_sqlite_claims(alias)
+        queryset = UploadIntent.objects.using(alias).select_for_update()
+        intent = queryset.get(pk=intent_id)
+        if intent.expires_at > at or intent.state not in {
+            UploadIntentState.PENDING.value,
+            UploadIntentState.TRANSFERRING.value,
+            UploadIntentState.UPLOADED.value,
+        }:
+            return False
+        if (
+            intent.state == UploadIntentState.TRANSFERRING.value
+            and intent.transfer_lease_expires_at is not None
+            and intent.transfer_lease_expires_at > at
+        ):
+            return False
+        intent.state = UploadIntentState.EXPIRED.value
+        intent.transfer_lease_expires_at = None
+        intent.save(
+            using=alias,
+            update_fields=("state", "transfer_lease_expires_at", "updated_at"),
+        )
+        return True
+
+
+def _cleanup_terminal_intent(
+    intent_id: UUID, *, alias: str, at: datetime | None = None
+) -> bool:
+    del at  # selection time must never shorten a lease claimed after slow work
+    claim = _claim_terminal_cleanup(intent_id, alias=alias)
+    if claim is True:
+        return True
+    if claim is None:
+        return False
+    intent, lease_expires_at, lease_token = claim
+    try:
+        _delete_intent_owned_objects(intent, alias=alias)
+    except Exception as error:  # noqa: BLE001 - adapters are untrusted boundaries
+        code = (
+            stable_upload_error(error).code
+            if isinstance(error, UploadError)
+            else UploadStorageError.code
+        )
+        UploadIntent.objects.using(alias).filter(
+            pk=intent_id,
+            cleanup_completed_at__isnull=True,
+            cleanup_lease_expires_at=lease_expires_at,
+            cleanup_lease_token=lease_token,
+        ).update(
+            cleanup_error_code=code,
+            cleanup_lease_expires_at=None,
+            cleanup_lease_token="",
+            updated_at=timezone.now(),
+        )
+        record_upload_cleanup(operation="cleanup", result="failed", intent=intent)
+        return False
+    completed_at = timezone.now()
+    completed = (
+        UploadIntent.objects.using(alias)
+        .filter(
+            pk=intent_id,
+            cleanup_completed_at__isnull=True,
+            cleanup_lease_expires_at=lease_expires_at,
+            cleanup_lease_token=lease_token,
+        )
+        .update(
+            cleanup_completed_at=completed_at,
+            cleanup_error_code="",
+            cleanup_lease_expires_at=None,
+            cleanup_lease_token="",
+            updated_at=completed_at,
+        )
+    )
+    if completed != 1:
+        record_upload_cleanup(operation="cleanup", result="skipped", intent=intent)
+        return False
+    record_upload_cleanup(
+        operation=_terminal_cleanup_operation(intent.state),
+        result="completed",
+        intent=intent,
+    )
+    return True
+
+
+def _claim_terminal_cleanup(
+    intent_id: UUID, *, alias: str
+) -> tuple[UploadIntent, datetime, str] | Literal[True] | None:
+    return _retry_sqlite_busy(
+        lambda: _claim_terminal_cleanup_once(intent_id, alias=alias), alias=alias
+    )
+
+
+def _claim_terminal_cleanup_once(
+    intent_id: UUID, *, alias: str
+) -> tuple[UploadIntent, datetime, str] | Literal[True] | None:
+    lease_seconds = get_file_upload_settings().cleanup_lease_seconds
+    with transaction.atomic(using=alias):
+        _serialize_sqlite_claims(alias)
+        intent = UploadIntent.objects.using(alias).select_for_update().get(pk=intent_id)
+        if intent.state not in TERMINAL_UPLOAD_INTENT_STATES:
+            return None
+        if intent.cleanup_completed_at is not None:
+            return True
+        now = timezone.now()
+        if (
+            intent.cleanup_lease_expires_at is not None
+            and intent.cleanup_lease_expires_at > now
+        ):
+            return None
+        lease_expires_at = now + timedelta(seconds=lease_seconds)
+        lease_token = uuid4().hex
+        intent.cleanup_lease_expires_at = lease_expires_at
+        intent.cleanup_lease_token = lease_token
+        intent.cleanup_error_code = ""
+        intent.save(
+            using=alias,
+            update_fields=(
+                "cleanup_lease_expires_at",
+                "cleanup_lease_token",
+                "cleanup_error_code",
+                "updated_at",
+            ),
+        )
+        return intent, lease_expires_at, lease_token
+
+
+def _terminal_cleanup_operation(state: str) -> str:
+    if state in {"expired", "rejected", "consumed", "superseded"}:
+        return state
+    return "cleanup"
+
+
+def _delete_intent_owned_objects(intent: UploadIntent, *, alias: str) -> None:
+    manager_class = services._resolve_manager(intent.manager_name)
+    interface_cls = cast(OrmInterfaceClass, manager_class.Interface)
+    model, model_field = services._resolve_file_field(
+        cast(Any, interface_cls), intent.field_name
+    )
+    adapter = services._resolve_intent_adapter(intent, model_field)
+    source_version = _version_from_metadata(intent.object_version)
+    _delete_staging_objects(adapter, intent, source_version)
+    if intent.state == UploadIntentState.SUPERSEDED.value:
+        _delete_superseded_final(adapter, intent, source_version)
+    elif intent.state == UploadIntentState.CONSUMED.value:
+        _delete_consumed_old_object(
+            adapter,
+            intent,
+            model=model,
+            model_field=model_field,
+            alias=alias,
+        )
+
+
+def _delete_staging_objects(
+    adapter: UploadAdapter,
+    intent: UploadIntent,
+    source_version: ObjectVersion | None,
+) -> None:
+    from general_manager.uploads.views import iter_proxy_attempt_stage_keys
+
+    keys: list[str] = [intent.staging_key]
+    attempt_marker = ".proxy-attempt-"
+    if attempt_marker in intent.staging_key:
+        keys.append(intent.staging_key.rsplit(attempt_marker, 1)[0])
+    keys.extend(iter_proxy_attempt_stage_keys(intent))
+    for key in dict.fromkeys(keys):
+        version = source_version if key == intent.staging_key else None
+        if version is None:
+            try:
+                inspected = adapter.inspect_staged(key)
+            except UploadObjectMissingError:
+                continue
+            if not _object_version_is_safe(inspected):
+                raise UploadStorageChangedError
+            version = inspected
+        with suppress(UploadObjectMissingError):
+            adapter.delete_stage(key, version)
+
+
+def _delete_superseded_final(
+    adapter: UploadAdapter,
+    intent: UploadIntent,
+    source_version: ObjectVersion | None,
+) -> None:
+    if not intent.final_key:
+        return
+    if source_version is None or not isinstance(adapter, UploadFinalizationAdapter):
+        raise UploadStorageChangedError
+    final_version = _version_from_metadata(intent.final_object_version)
+    try:
+        if final_version is None:
+            final_version = adapter.inspect_materialized(
+                intent.final_key,
+                source_version,
+                intent_id=intent.id,
+            )
+        adapter.delete_materialized(
+            intent.final_key, final_version, intent_id=intent.id
+        )
+    except UploadObjectMissingError:
+        return
+
+
+def _delete_consumed_old_object(
+    adapter: UploadAdapter,
+    intent: UploadIntent,
+    *,
+    model: type[models.Model],
+    model_field: models.FileField,
+    alias: str,
+) -> None:
+    settings = get_file_upload_settings()
+    if not intent.old_key:
+        return
+    if intent.old_cleanup_completed_at is not None:
+        return
+    if not isinstance(adapter, UploadFinalizationAdapter):
+        raise UploadBackendUnsupportedError
+    existing = _claimed_old_object(intent)
+    if existing is not None:
+        adapter.claim_replaced_object(
+            intent.old_key,
+            existing,
+            cleanup_id=intent.id,
+        )
+        adapter.delete_claimed_object(existing, cleanup_id=intent.id)
+        _mark_old_cleanup_completed(intent.id, alias=alias)
+        return
+    if not settings.delete_replaced_files:
+        return
+    target_pk = _parse_target_pk(intent.final_target_pk, model)
+    try:
+        target = cast(Any, model)._base_manager.using(alias).get(pk=target_pk)
+    except ObjectDoesNotExist:
+        _mark_old_cleanup_resolved(intent.id, alias=alias)
+        return
+    if _field_name(getattr(target, model_field.name)) != intent.final_key:
+        _mark_old_cleanup_resolved(intent.id, alias=alias)
+        return
+    planned = _plan_old_cleanup_claim(adapter, intent.id, alias=alias, allow_new=True)
+    if planned is None:
+        _mark_old_cleanup_resolved(intent.id, alias=alias)
+        return
+    old_key, claimed = planned
+    adapter.claim_replaced_object(old_key, claimed, cleanup_id=intent.id)
+    adapter.delete_claimed_object(claimed, cleanup_id=intent.id)
+    _mark_old_cleanup_completed(intent.id, alias=alias)
+
+
 def _record_finalization_failure(
     intent_id: UUID,
     *,
     alias: str,
     error: Exception,
-) -> None:
+    lease_expires_at: datetime | None = None,
+    lease_token: str | None = None,
+) -> bool:
     code = (
         stable_upload_error(error).code
         if isinstance(error, UploadError)
         else UploadStorageError.code
     )
     try:
-        UploadIntent.objects.using(alias).filter(
+        intent = UploadIntent.objects.using(alias).get(pk=intent_id)
+        snapshot = _observability_snapshot(intent)
+        queryset = UploadIntent.objects.using(alias).filter(
             pk=intent_id,
             state=UploadIntentState.FINALIZING.value,
-        ).update(finalization_error_code=code, updated_at=timezone.now())
+        )
+        now = timezone.now()
+        if lease_expires_at is not None and lease_token:
+            queryset = queryset.filter(cleanup_lease_token=lease_token)
+        else:
+            queryset = queryset.filter(
+                Q(cleanup_lease_expires_at__isnull=True, cleanup_lease_token="")
+                | Q(cleanup_lease_expires_at__lte=now, cleanup_lease_token="")
+            )
+        cooldown_until = now + timedelta(
+            seconds=get_file_upload_settings().cleanup_failure_cooldown_seconds
+        )
+        updated = queryset.update(
+            finalization_error_code=code,
+            cleanup_lease_expires_at=cooldown_until,
+            cleanup_lease_token="",
+            updated_at=now,
+        )
+        if updated != 1:
+            return False
+        record_upload_failure(
+            adapter=intent.adapter_id,
+            operation="finalization",
+            error="storage_error"
+            if code == UploadStorageError.code
+            else "finalization_failed",
+            intent=snapshot,
+        )
+        return True  # noqa: TRY300 - successful compare-and-set persistence
     except Exception as persistence_error:  # noqa: BLE001 - callback stays robust
         del persistence_error
+        return False
 
 
 def _database_alias(interface_cls: OrmInterfaceClass) -> str:
@@ -1073,23 +2146,56 @@ def _reject_content_intent(
     *,
     database_alias: str,
 ) -> None:
+    started_at = time.monotonic()
     public_error = stable_upload_error(error)
     try:
-        UploadIntent.objects.using(database_alias).filter(
-            pk=intent.pk,
-            state=UploadIntentState.UPLOADED.value,
-            user_id=getattr(intent, "user_id", None),
-            manager_name=intent.manager_name,
-            field_name=intent.field_name,
-            operation=intent.operation,
-            target_id=intent.target_id,
-            object_version=intent.object_version,
-        ).update(
-            state=UploadIntentState.REJECTED.value,
-            finalization_error_code=public_error.code,
-            updated_at=timezone.now(),
+        updated = (
+            UploadIntent.objects.using(database_alias)
+            .filter(
+                pk=intent.pk,
+                state=UploadIntentState.UPLOADED.value,
+                user_id=getattr(intent, "user_id", None),
+                manager_name=intent.manager_name,
+                field_name=intent.field_name,
+                operation=intent.operation,
+                target_id=intent.target_id,
+                object_version=intent.object_version,
+            )
+            .update(
+                state=UploadIntentState.REJECTED.value,
+                finalization_error_code=public_error.code,
+                updated_at=timezone.now(),
+            )
         )
+        if updated == 1:
+            intent.state = UploadIntentState.REJECTED.value
+            intent.finalization_error_code = public_error.code
+            record_upload_transition(intent, UploadIntentState.REJECTED.value)
+            record_upload_failure(
+                adapter=intent.adapter_id,
+                operation="validation",
+                error=upload_error_label(public_error.code),
+                intent=intent,
+            )
+            observe_upload_duration(
+                adapter=intent.adapter_id,
+                operation="validation",
+                result="failed",
+                seconds=time.monotonic() - started_at,
+            )
     except Exception:  # noqa: BLE001 - content rejection persistence fails closed
+        record_upload_failure(
+            adapter=intent.adapter_id,
+            operation="validation",
+            error="storage_error",
+            intent=intent,
+        )
+        observe_upload_duration(
+            adapter=intent.adapter_id,
+            operation="validation",
+            result="failed",
+            seconds=time.monotonic() - started_at,
+        )
         raise UploadStorageError from None
 
 
@@ -1141,6 +2247,25 @@ def _serialize_sqlite_claims(alias: str) -> None:
     manager = UploadQuotaLock.objects.using(alias)
     manager.get_or_create(pk=1, defaults={"generation": 0})
     manager.filter(pk=1).update(generation=models.F("generation") + 1)
+
+
+def _retry_sqlite_busy(operation: Callable[[], _T], *, alias: str) -> _T:
+    """Retry a whole fresh atomic operation only for recognized SQLite BUSY."""
+
+    deadline = time.monotonic() + _SQLITE_RETRY_DEADLINE_SECONDS
+    for attempt in range(_SQLITE_RETRY_ATTEMPTS):
+        try:
+            return operation()
+        except OperationalError as error:
+            if not _is_sqlite_busy(error, alias):
+                raise
+            remaining = deadline - time.monotonic()
+            if attempt + 1 >= _SQLITE_RETRY_ATTEMPTS or remaining <= 0:
+                raise UploadStorageError from None
+            delay = min(0.002 * (2**attempt), 0.02)
+            jitter = delay * secrets.randbelow(1001) / 1000
+            time.sleep(min(delay + jitter, remaining))
+    raise AssertionError("unreachable")
 
 
 def _is_sqlite_busy(error: OperationalError, alias: str) -> bool:

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 import hashlib
 from io import BytesIO
 import json
 from pathlib import Path
 from threading import Barrier
+from types import SimpleNamespace
 from typing import ClassVar
 from uuid import UUID
 
@@ -24,10 +26,12 @@ from general_manager.uploads.adapters import (
     UploadFinalizationAdapter,
 )
 from general_manager.uploads import adapters as adapters_module
+from general_manager.uploads import finalization
 from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
     UploadChecksumMismatchError,
     UploadStorageError,
+    UploadObjectMissingError,
     UploadTransferConflictError,
 )
 from general_manager.uploads.types import ObjectVersion, UploadTransport
@@ -205,6 +209,51 @@ class CrashBeforeKeyStorage(FileSystemStorage):
 
 _UUID_STAGE_KEY = "gm-staging/9c90741f-72ce-4f34-886c-297bc019db16.bin"
 _UUID_FINAL_KEY = "files/1aeff4c6-4895-4114-a984-b3d136083d33.bin"
+
+
+def test_proxy_inspection_distinguishes_missing_object_from_storage_outage(
+    tmp_path: Path,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+
+    with pytest.raises(UploadObjectMissingError):
+        adapter.inspect_staged(_UUID_STAGE_KEY)
+
+
+def test_proxy_inspection_preserves_storage_outage_as_retryable_error() -> None:
+    adapter = ProxyUploadAdapter(FailingOperationStorage("open"))
+
+    with pytest.raises(UploadStorageError):
+        adapter.inspect_staged(_UUID_STAGE_KEY)
+
+
+def test_proxy_cleanup_accepts_real_missing_pending_attempts(tmp_path: Path) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    intent = SimpleNamespace(
+        id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        staging_key=_UUID_STAGE_KEY,
+        transfer_attempt_count=2,
+    )
+
+    finalization._delete_staging_objects(adapter, intent, None)
+
+
+def test_proxy_cleanup_accepts_real_missing_superseded_final(tmp_path: Path) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    version = ObjectVersion(
+        version_id=None,
+        etag=None,
+        checksum_sha256="a" * 64,
+        size=1,
+        content_type="application/octet-stream",
+    )
+    intent = SimpleNamespace(
+        id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        final_key=_UUID_FINAL_KEY,
+        final_object_version=asdict(version),
+    )
+
+    finalization._delete_superseded_final(adapter, intent, version)
 
 
 def _intent_marker(prefix: str, final_key: str) -> str:
