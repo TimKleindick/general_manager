@@ -137,8 +137,44 @@ class ValueInterface(CalculationInterface):
     id = Input(int, possible_values=range(50))
 
 
+_REGISTRIES_BEFORE_VALUE_MANAGER = (
+    tuple(GeneralManagerMeta.all_classes),
+    tuple(GeneralManagerMeta.read_only_classes),
+    tuple(GeneralManagerMeta.pending_attribute_initialization),
+    tuple(GeneralManagerMeta.pending_graphql_interfaces),
+)
+
+
 class ValueManager(GeneralManager):
     Interface = ValueInterface
+
+
+for manager_registry in (
+    GeneralManagerMeta.all_classes,
+    GeneralManagerMeta.read_only_classes,
+    GeneralManagerMeta.pending_attribute_initialization,
+    GeneralManagerMeta.pending_graphql_interfaces,
+):
+    while ValueManager in manager_registry:
+        manager_registry.remove(ValueManager)
+ValueInterface._parent_class = ValueManager
+assert (
+    tuple(GeneralManagerMeta.all_classes),
+    tuple(GeneralManagerMeta.read_only_classes),
+    tuple(GeneralManagerMeta.pending_attribute_initialization),
+    tuple(GeneralManagerMeta.pending_graphql_interfaces),
+) == _REGISTRIES_BEFORE_VALUE_MANAGER
+
+
+def test_manager_valued_workload_is_registry_isolated() -> None:
+    for registry in (
+        GeneralManagerMeta.all_classes,
+        GeneralManagerMeta.read_only_classes,
+        GeneralManagerMeta.pending_attribute_initialization,
+        GeneralManagerMeta.pending_graphql_interfaces,
+    ):
+        assert ValueManager not in registry
+    assert ValueInterface._parent_class is ValueManager
 
 
 class CountingManagerBucket(Bucket[ValueManager]):

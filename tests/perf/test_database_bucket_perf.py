@@ -70,6 +70,42 @@ RUN_CACHE_PREFIXES = (
 )
 
 
+def _assert_mixed_cache_observations(
+    perf_budgets: PerfBudgets,
+    *,
+    discard_calls: int,
+    key_inspections: int,
+) -> None:
+    perf_budgets.assert_observation(
+        "RUN_CACHE_MIXED_500_DISCARD_CALLS",
+        discard_calls,
+    )
+    perf_budgets.assert_observation(
+        "RUN_CACHE_MIXED_500_KEY_INSPECTIONS",
+        key_inspections,
+    )
+
+
+def test_mixed_cache_observations_accept_improvements_below_the_ceiling() -> None:
+    budgets = PerfBudgets(
+        {
+            "RUN_CACHE_MIXED_500_DISCARD_CALLS": 22,
+            "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 44_000,
+        }
+    )
+
+    _assert_mixed_cache_observations(
+        budgets,
+        discard_calls=11,
+        key_inspections=22_000,
+    )
+
+    assert budgets.observations == {
+        "RUN_CACHE_MIXED_500_DISCARD_CALLS": 11,
+        "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 22_000,
+    }
+
+
 class RawDeleteQuerySet(Protocol):
     @property
     def db(self) -> str: ...
@@ -146,6 +182,21 @@ def test_database_performance_manager_is_registry_isolated() -> None:
         GeneralManagerMeta.pending_graphql_interfaces,
     ):
         assert PerfUserManager not in registry
+
+
+def _expected_repeated_fk_parent_ids(
+    parent_ids: tuple[int, ...],
+) -> tuple[int, ...]:
+    assert len(parent_ids) == 10
+    return tuple(parent_ids[index // 100] for index in range(1_000))
+
+
+def test_repeated_fk_shape_uses_consecutive_blocks_per_parent() -> None:
+    parent_ids = tuple(range(1, 11))
+
+    assert _expected_repeated_fk_parent_ids(parent_ids) == tuple(
+        parent_id for parent_id in parent_ids for _ in range(100)
+    )
 
 
 def _unrestricted_database_access() -> AbstractContextManager[None]:
@@ -515,17 +566,12 @@ def test_data_change_mixed_run_cache_invalidation_work(
             for key, hit in dependency_hits.items()
         )
         assert len(context._dependency_cache_hits) == RUN_CACHE_ENTRY_COUNT
-        assert observed_discard_calls == 22
-        assert observed_key_inspections == 44_000
+        _assert_mixed_cache_observations(
+            perf_budgets,
+            discard_calls=observed_discard_calls,
+            key_inspections=observed_key_inspections,
+        )
         assert diagnostic_captures.value == int(diagnostics_enabled)
-        perf_budgets.assert_observation(
-            "RUN_CACHE_MIXED_500_DISCARD_CALLS",
-            observed_discard_calls,
-        )
-        perf_budgets.assert_observation(
-            "RUN_CACHE_MIXED_500_KEY_INSPECTIONS",
-            observed_key_inspections,
-        )
         if diagnostics_enabled:
             print(
                 "RUN_CACHE_MIXED_500_DIAGNOSTIC "
@@ -766,8 +812,8 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
             [parent_model(name=f"repeated-{index:02d}") for index in range(10)]
         )
         repeated_parent_ids = tuple(int(parent.pk) for parent in repeated_parent_rows)
-        expected_repeated_parent_ids = tuple(
-            repeated_parent_ids[index % 10] for index in range(1_000)
+        expected_repeated_parent_ids = _expected_repeated_fk_parent_ids(
+            repeated_parent_ids
         )
         child_model.objects.bulk_create(
             [
