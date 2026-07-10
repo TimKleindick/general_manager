@@ -14,6 +14,7 @@ from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 from tests.perf.support import (
     Counter,
     DiagnosticObservation,
@@ -51,12 +52,43 @@ class PerfUserInterface(InterfaceBase):
         return interface
 
 
+def _manager_registry_snapshot() -> tuple[tuple[type[GeneralManager], ...], ...]:
+    return (
+        tuple(GeneralManagerMeta.all_classes),
+        tuple(GeneralManagerMeta.read_only_classes),
+        tuple(GeneralManagerMeta.pending_attribute_initialization),
+        tuple(GeneralManagerMeta.pending_graphql_interfaces),
+    )
+
+
+_REGISTRIES_BEFORE_PERF_USER_MANAGER = _manager_registry_snapshot()
+
+
 class PerfUserManager(GeneralManager):
     pass
 
 
+for manager_registry in (
+    GeneralManagerMeta.pending_graphql_interfaces,
+    GeneralManagerMeta.all_classes,
+    GeneralManagerMeta.read_only_classes,
+    GeneralManagerMeta.pending_attribute_initialization,
+):
+    while PerfUserManager in manager_registry:
+        manager_registry.remove(PerfUserManager)
+assert _manager_registry_snapshot() == _REGISTRIES_BEFORE_PERF_USER_MANAGER
 PerfUserManager.Interface = PerfUserInterface
 PerfUserInterface._parent_class = PerfUserManager
+
+
+def test_database_performance_manager_is_registry_isolated() -> None:
+    for registry in (
+        GeneralManagerMeta.all_classes,
+        GeneralManagerMeta.read_only_classes,
+        GeneralManagerMeta.pending_attribute_initialization,
+        GeneralManagerMeta.pending_graphql_interfaces,
+    ):
+        assert PerfUserManager not in registry
 
 
 @pytest.fixture(scope="module")
@@ -156,6 +188,7 @@ def _assert_operation_result(
     assert len(managers) == len(primary_keys)
     assert managers[0].identification["id"] == primary_keys[0]
     assert managers[-1].identification["id"] == primary_keys[-1]
+    assert [manager.identification["id"] for manager in managers] == list(primary_keys)
 
 
 def _assert_phase_budget(
@@ -178,6 +211,7 @@ def test_database_bucket_terminal_operation_work(
     perf_budgets: PerfBudgets,
     pytestconfig: pytest.Config,
 ) -> None:
+    registries_before = _manager_registry_snapshot()
     included_primary_keys = perf_user_primary_keys[:row_count]
     middle_primary_key = included_primary_keys[row_count // 2]
     queryset = User.objects.filter(
@@ -311,3 +345,4 @@ def test_database_bucket_terminal_operation_work(
         f"{budget_prefix}_WARM",
         warm_observation,
     )
+    assert _manager_registry_snapshot() == registries_before
