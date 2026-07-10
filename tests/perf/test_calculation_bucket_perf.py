@@ -12,6 +12,7 @@ from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.interfaces.calculation import CalculationInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
+from general_manager.manager.meta import GeneralManagerMeta
 from tests.perf.support import (
     Counter,
     CountingIterable,
@@ -48,30 +49,42 @@ class CombinationCounters:
         )
 
 
+class CalculationManagerDouble:
+    identification: dict[str, object]
+
+
 def _make_calculation_manager(
     name: str,
     inputs: dict[str, object],
     constructor_counter: Counter,
 ) -> type[GeneralManager]:
-    interface = type(
-        f"{name}Interface",
-        (CalculationInterface,),
-        {"__module__": __name__, **inputs},
+    interface = cast(
+        type[CalculationInterface],
+        type(
+            f"{name}Interface",
+            (CalculationInterface,),
+            {
+                "__module__": __name__,
+                "input_fields": inputs,
+                **inputs,
+            },
+        ),
     )
 
     def __init__(
-        self: GeneralManager,
+        self: CalculationManagerDouble,
         *args: object,
         **kwargs: object,
     ) -> None:
         constructor_counter.increment()
-        GeneralManager.__init__(self, *args, **kwargs)
+        parsed_interface = interface(*args, **kwargs)
+        self.identification = parsed_interface.identification
 
-    return cast(
+    manager = cast(
         type[GeneralManager],
         type(
             name,
-            (GeneralManager,),
+            (CalculationManagerDouble,),
             {
                 "__module__": __name__,
                 "Interface": interface,
@@ -79,6 +92,8 @@ def _make_calculation_manager(
             },
         ),
     )
+    interface._parent_class = manager
+    return manager
 
 
 def _assert_combination_observations(
@@ -92,6 +107,30 @@ def _assert_combination_observations(
         strict=True,
     ):
         perf_budgets.assert_observation(f"{prefix}_{suffix}", observed)
+
+
+def test_calculation_manager_fixture_does_not_grow_global_registries() -> None:
+    registries_before = (
+        tuple(GeneralManagerMeta.all_classes),
+        tuple(GeneralManagerMeta.read_only_classes),
+        tuple(GeneralManagerMeta.pending_attribute_initialization),
+        tuple(GeneralManagerMeta.pending_graphql_interfaces),
+    )
+    constructor_counter = Counter()
+
+    manager = _make_calculation_manager(
+        "RegistryIsolatedCalculationManager",
+        {"value": Input(int, possible_values=range(2))},
+        constructor_counter,
+    )
+    CalculationBucket(manager).generate_combinations()
+
+    assert (
+        tuple(GeneralManagerMeta.all_classes),
+        tuple(GeneralManagerMeta.read_only_classes),
+        tuple(GeneralManagerMeta.pending_attribute_initialization),
+        tuple(GeneralManagerMeta.pending_graphql_interfaces),
+    ) == registries_before
 
 
 class ValueInterface(CalculationInterface):
@@ -184,19 +223,11 @@ def test_static_5x10_cold_and_warm_generation(
     a_values = CountingIterable(range(5), counters.a_yields)
     b_values = CountingIterable(range(10), counters.b_yields)
 
-    def possible_a_values() -> CountingIterable[int]:
-        counters.callbacks.increment()
-        return a_values
-
-    def possible_b_values() -> CountingIterable[int]:
-        counters.callbacks.increment()
-        return b_values
-
     manager = _make_calculation_manager(
         "Static5x10Manager",
         {
-            "b": Input(int, possible_values=possible_b_values),
-            "a": Input(int, possible_values=possible_a_values),
+            "b": Input(int, possible_values=b_values),
+            "a": Input(int, possible_values=a_values),
         },
         counters.constructors,
     )
@@ -214,6 +245,8 @@ def test_static_5x10_cold_and_warm_generation(
     assert cold[0] == {"a": 0, "b": 0}
     assert cold[-1] == {"a": 4, "b": 9}
     assert warm is cold
+    assert cold_observations[2] == 0
+    assert warm_observations[2] == 0
     _assert_combination_observations(
         perf_budgets, "CALC_STATIC_5X10_COLD", cold_observations
     )
@@ -319,6 +352,13 @@ def test_equivalent_5x10_plans_reuse_possible_values(
     assert first[0] == {"a": 0, "b": 0}
     assert first[-1] == {"a": 4, "b": 49}
     assert first is not second
+    assert all(left is not right for left, right in zip(first, second, strict=True))
+    first[0]["temporary"] = True
+    try:
+        assert "temporary" not in second[0]
+    finally:
+        del first[0]["temporary"]
+    assert first == second
     _assert_combination_observations(
         perf_budgets, "CALC_EQUIVALENT_5X10_FIRST", first_observations
     )
