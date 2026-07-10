@@ -154,11 +154,32 @@ def _unrestricted_database_access() -> AbstractContextManager[None]:
 
 def _delete_perf_users(prefix: str) -> int:
     """Delete relation-free perf users without traversing collected test models."""
+    if not prefix.startswith(USERNAME_PREFIX):
+        message = f"performance user prefix must start with {USERNAME_PREFIX!r}"
+        raise ValueError(message)
     queryset = cast(
         RawDeleteQuerySet,
         User.objects.filter(username__startswith=prefix),
     )
+    # This private API intentionally bypasses relation collection for fixture-only rows.
     return queryset._raw_delete(using=queryset.db)
+
+
+@pytest.mark.parametrize("prefix", ["", "perf-db", "perf-", "users-"])
+def test_delete_perf_users_rejects_a_prefix_outside_its_namespace(
+    prefix: str,
+) -> None:
+    with (
+        patch(
+            "tests.perf.test_database_bucket_perf.User.objects.filter"
+        ) as filter_users,
+        pytest.raises(
+            ValueError, match="performance user prefix must start with 'perf-db-'"
+        ),
+    ):
+        _delete_perf_users(prefix)
+
+    filter_users.assert_not_called()
 
 
 def test_delete_perf_users_removes_only_the_requested_prefix() -> None:

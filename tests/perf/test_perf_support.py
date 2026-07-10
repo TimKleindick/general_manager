@@ -187,6 +187,33 @@ def test_final_teardown_failure_suppresses_manifest_validation() -> None:
     assert reporter.messages == []
 
 
+@pytest.mark.parametrize(
+    "exitstatus",
+    [
+        pytest.ExitCode.TESTS_FAILED,
+        pytest.ExitCode.INTERRUPTED,
+        pytest.ExitCode.INTERNAL_ERROR,
+        pytest.ExitCode.USAGE_ERROR,
+        pytest.ExitCode.NO_TESTS_COLLECTED,
+    ],
+)
+def test_non_ok_session_exit_suppresses_manifest_validation(
+    exitstatus: pytest.ExitCode,
+) -> None:
+    plugin = perf_conftest.PerfManifestValidationPlugin()
+    plugin.pytest_collection_finish(_perf_session(*REQUIRED_BUDGET_WORKLOAD_MODULES))
+    budgets = PerfBudgets({"OBSERVED": 0, "UNUSED": 0})
+    budgets.assert_observation("OBSERVED", 0)
+    plugin.capture_perf_budgets(budgets)
+    reporter = _TerminalReporter()
+    finish_session = _finish_session(reporter, exitstatus=exitstatus)
+
+    plugin.pytest_sessionfinish(finish_session, exitstatus)
+
+    assert finish_session.exitstatus == exitstatus
+    assert reporter.messages == []
+
+
 def test_narrow_selection_skips_global_unused_manifest_validation() -> None:
     plugin = perf_conftest.PerfManifestValidationPlugin()
     plugin.pytest_collection_finish(_perf_session("test_database_bucket_perf.py"))
@@ -261,6 +288,35 @@ def test_record_mode_collects_and_prints_without_enforcing(
     budgets = PerfBudgets({"CASE_CALLBACKS": 0}, record=True)
 
     budgets.assert_observation("CASE_CALLBACKS", 7)
+
+    assert budgets.observations == {"CASE_CALLBACKS": 7}
+    assert capsys.readouterr().out == "PERF_OBSERVATION CASE_CALLBACKS=7\n"
+
+
+def test_budget_rejects_a_duplicate_observation_before_enforcing() -> None:
+    budgets = PerfBudgets({"CASE_QUERIES": 1})
+    budgets.assert_observation("CASE_QUERIES", 1)
+
+    with pytest.raises(
+        AssertionError,
+        match="duplicate performance observation: CASE_QUERIES",
+    ):
+        budgets.assert_observation("CASE_QUERIES", 2)
+
+    assert budgets.observations == {"CASE_QUERIES": 1}
+
+
+def test_record_mode_rejects_a_duplicate_without_printing_it(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    budgets = PerfBudgets({"CASE_CALLBACKS": 0}, record=True)
+    budgets.assert_observation("CASE_CALLBACKS", 7)
+
+    with pytest.raises(
+        AssertionError,
+        match="duplicate performance observation: CASE_CALLBACKS",
+    ):
+        budgets.assert_observation("CASE_CALLBACKS", 8)
 
     assert budgets.observations == {"CASE_CALLBACKS": 7}
     assert capsys.readouterr().out == "PERF_OBSERVATION CASE_CALLBACKS=7\n"

@@ -72,8 +72,11 @@ class PerfManifestValidationPlugin:
         session: pytest.Session,
         exitstatus: int | pytest.ExitCode,
     ) -> None:
-        del exitstatus
-        if self._perf_budgets is None or not self.should_validate_manifest():
+        if (
+            exitstatus != pytest.ExitCode.OK
+            or self._perf_budgets is None
+            or not self.should_validate_manifest()
+        ):
             return
         try:
             self._perf_budgets.validate_manifest(set(self._perf_budgets.observations))
