@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Literal, Self, cast
 
@@ -28,6 +29,7 @@ ROW_COUNT = 10_000
 USERNAME_PREFIX = "perf-db-"
 RowCount = Literal[999, 1000, 1001, 10000]
 Operation = Literal["first", "get", "contains", "count", "list"]
+DatabaseAccess = Callable[[], AbstractContextManager[None]]
 
 
 class PerfUserInterface(InterfaceBase):
@@ -91,28 +93,71 @@ def test_database_performance_manager_is_registry_isolated() -> None:
         assert PerfUserManager not in registry
 
 
+def _unrestricted_database_access() -> AbstractContextManager[None]:
+    return nullcontext()
+
+
+@contextmanager
+def _managed_perf_users(
+    prefix: str,
+    total: int,
+    *,
+    database_access: DatabaseAccess = _unrestricted_database_access,
+) -> Iterator[tuple[int, ...]]:
+    try:
+        with database_access():
+            User.objects.filter(username__startswith=prefix).delete()
+            users = [User(username=f"{prefix}{index:05d}") for index in range(total)]
+            created_users = User.objects.bulk_create(users)
+            primary_keys = tuple(int(user.pk) for user in created_users)
+            assert len(primary_keys) == total
+            assert primary_keys == tuple(
+                range(primary_keys[0], primary_keys[0] + total)
+            )
+        yield primary_keys
+    finally:
+        with database_access():
+            User.objects.filter(username__startswith=prefix).delete()
+
+
+def test_managed_perf_users_replaces_stale_rows_and_cleans_up_after_failure() -> None:
+    prefix = "perf-db-lifecycle-"
+    shared_prefix_sentinel = User.objects.create(
+        username=f"{USERNAME_PREFIX}shared-sentinel"
+    )
+    try:
+        User.objects.create(username=f"{prefix}stale")
+
+        with pytest.raises(RuntimeError, match="forced fixture body failure"):
+            with _managed_perf_users(prefix, 2) as primary_keys:
+                assert len(primary_keys) == 2
+                assert list(
+                    User.objects.filter(username__startswith=prefix)
+                    .order_by("pk")
+                    .values_list("username", flat=True)
+                ) == [f"{prefix}00000", f"{prefix}00001"]
+                assert User.objects.filter(pk=shared_prefix_sentinel.pk).exists()
+                message = "forced fixture body failure"
+                raise RuntimeError(message)
+
+        assert not User.objects.filter(username__startswith=prefix).exists()
+        assert User.objects.filter(pk=shared_prefix_sentinel.pk).exists()
+    finally:
+        User.objects.filter(username__startswith=prefix).delete()
+        User.objects.filter(pk=shared_prefix_sentinel.pk).delete()
+
+
 @pytest.fixture(scope="module")
 def perf_user_primary_keys(
     django_db_setup: None,
     django_db_blocker: DjangoDbBlocker,
 ) -> Iterator[tuple[int, ...]]:
-    users = [
-        User(username=f"{USERNAME_PREFIX}{index:05d}") for index in range(ROW_COUNT)
-    ]
-    with django_db_blocker.unblock():
-        created_users = User.objects.bulk_create(users)
-        primary_keys = tuple(int(user.pk) for user in created_users)
-
-    assert len(primary_keys) == ROW_COUNT
-    assert primary_keys == tuple(range(primary_keys[0], primary_keys[0] + ROW_COUNT))
-    yield primary_keys
-
-    with django_db_blocker.unblock():
-        User.objects.filter(
-            pk__gte=primary_keys[0],
-            pk__lte=primary_keys[-1],
-            username__startswith=USERNAME_PREFIX,
-        ).delete()
+    with _managed_perf_users(
+        USERNAME_PREFIX,
+        ROW_COUNT,
+        database_access=django_db_blocker.unblock,
+    ) as primary_keys:
+        yield primary_keys
 
 
 @dataclass
@@ -161,7 +206,10 @@ def _invoke_operation(
         return target_manager in bucket
     if operation == "count":
         return bucket.count()
-    return list(bucket)
+    if operation == "list":
+        return list(bucket)
+    message = f"unsupported operation: {operation}"
+    raise AssertionError(message)
 
 
 def _assert_operation_result(
@@ -184,11 +232,17 @@ def _assert_operation_result(
     if operation == "count":
         assert result == len(primary_keys)
         return
-    managers = cast(list[PerfUserManager], result)
-    assert len(managers) == len(primary_keys)
-    assert managers[0].identification["id"] == primary_keys[0]
-    assert managers[-1].identification["id"] == primary_keys[-1]
-    assert [manager.identification["id"] for manager in managers] == list(primary_keys)
+    if operation == "list":
+        managers = cast(list[PerfUserManager], result)
+        assert len(managers) == len(primary_keys)
+        assert managers[0].identification["id"] == primary_keys[0]
+        assert managers[-1].identification["id"] == primary_keys[-1]
+        assert [manager.identification["id"] for manager in managers] == list(
+            primary_keys
+        )
+        return
+    message = f"unsupported operation: {operation}"
+    raise AssertionError(message)
 
 
 def _assert_phase_budget(
@@ -199,6 +253,22 @@ def _assert_phase_budget(
     assert observation.primary_key_constructors == 0
     perf_budgets.assert_observation(f"{prefix}_QUERIES", observation.queries)
     perf_budgets.assert_observation(f"{prefix}_CONSTRUCTORS", observation.constructors)
+
+
+def test_invoke_operation_rejects_an_unknown_operation() -> None:
+    bucket = DatabaseBucket(
+        cast(models.QuerySet[models.Model], User.objects.none()),
+        PerfUserManager,
+    )
+    target_manager = PerfUserManager(0)
+
+    with pytest.raises(AssertionError, match="unsupported operation: unknown"):
+        _invoke_operation(cast(Operation, "unknown"), bucket, 0, target_manager)
+
+
+def test_assert_operation_result_rejects_an_unknown_operation() -> None:
+    with pytest.raises(AssertionError, match="unsupported operation: unknown"):
+        _assert_operation_result(cast(Operation, "unknown"), object(), (), 0)
 
 
 @pytest.mark.parametrize("row_count", [999, 1000, 1001, 10000])
