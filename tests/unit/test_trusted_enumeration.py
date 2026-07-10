@@ -3,24 +3,27 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from copy import copy
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
 import struct
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 from uuid import UUID
 
 import pytest
 from django.test import override_settings
 
 from general_manager.bucket.calculation_bucket import (
+    CalculationBucket,
     _EnumerationEvidence,
     _TrustedToken,
     _trusted_candidate_token,
     _trusted_enumeration_evidence,
 )
+from general_manager.interface import CalculationInterface
 from general_manager.interface.base_interface import (
     InterfaceBase,
     InvalidInputConstraintError,
@@ -29,6 +32,27 @@ from general_manager.interface.base_interface import (
     _trusted_enumeration_scope,
 )
 from general_manager.manager.input import DateRangeDomain, Input, NumericRangeDomain
+from general_manager.manager.general_manager import GeneralManager
+
+
+def _calculation_bucket_with_inputs(
+    input_fields: dict[str, Input[type[object]]],
+) -> CalculationBucket[GeneralManager]:
+    class EnumerationInterface(CalculationInterface):
+        pass
+
+    EnumerationInterface.input_fields = input_fields
+
+    class EnumerationManager:
+        Interface = EnumerationInterface
+
+        def __init__(self, **identification: object) -> None:
+            interface = EnumerationInterface(**identification)
+            self.identification = interface.identification
+
+    manager_class = cast(type[GeneralManager], EnumerationManager)
+    EnumerationInterface._parent_class = manager_class
+    return CalculationBucket(manager_class)
 
 
 class EvidenceDouble:
@@ -978,3 +1002,191 @@ def test_evidence_tracking_delegates_to_source_witness() -> None:
     evidence.track_membership_dependency()
 
     assert witness.track_calls == 1
+
+
+def test_private_materialization_retains_identity_keyed_evidence_off_dicts() -> None:
+    source = [1, 2]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+
+    combinations = bucket._materialize_combinations(expose=False)
+
+    assert combinations == [{"code": 1}, {"code": 2}]
+    assert all(type(combination) is dict for combination in combinations)
+    assert all("_evidence" not in combination for combination in combinations)
+    assert bucket._lookup_combination_evidence(combinations[0]) is not None
+    assert bucket._lookup_combination_evidence(combinations[1]) is not None
+    assert repr(combinations) == "[{'code': 1}, {'code': 2}]"
+
+
+def test_source_position_is_captured_before_input_filters() -> None:
+    source = [1, 2, 3]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+    bucket._filters = {"code": {"filter_funcs": [lambda value: cast(int, value) >= 2]}}
+
+    combinations = bucket._materialize_combinations(expose=False)
+    evidence = bucket._lookup_combination_evidence(combinations[0])
+
+    assert combinations == [{"code": 2}, {"code": 3}]
+    assert evidence is not None
+    assert evidence["code"].authorizes(input_field, 2, {})
+    source.insert(0, 0)
+    assert not evidence["code"].authorizes(input_field, 2, {})
+
+
+@pytest.mark.parametrize(
+    "possible_values",
+    [
+        lambda: [1],
+        iter([1]),
+    ],
+)
+def test_callable_and_iterator_sources_do_not_retain_evidence(
+    possible_values: object,
+) -> None:
+    input_field = cast(
+        Input[type[object]],
+        Input(int, possible_values=cast(Any, possible_values)),
+    )
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+
+    combinations = bucket._materialize_combinations(expose=False)
+
+    assert combinations == [{"code": 1}]
+    assert bucket._lookup_combination_evidence(combinations[0]) is None
+
+
+def test_public_generation_permanently_invalidates_private_evidence() -> None:
+    source = [1]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+    combinations = bucket._materialize_combinations(expose=False)
+    assert bucket._lookup_combination_evidence(combinations[0]) is not None
+
+    public_combinations = bucket.generate_combinations()
+
+    assert public_combinations is combinations
+    assert bucket._lookup_combination_evidence(combinations[0]) is None
+    assert bucket._evidence_exposed
+    assert bucket._materialize_combinations(expose=False) is combinations
+    assert bucket._lookup_combination_evidence(combinations[0]) is None
+
+
+def test_slice_revokes_original_evidence_and_does_not_transfer_it() -> None:
+    source = [1, 2]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+    combinations = bucket._materialize_combinations(expose=False)
+    assert bucket._lookup_combination_evidence(combinations[0]) is not None
+
+    sliced = bucket[:1]
+
+    assert isinstance(sliced, CalculationBucket)
+    assert sliced._data == [{"code": 1}]
+    assert sliced._data is not None
+    assert sliced._data[0] is combinations[0]
+    assert bucket._lookup_combination_evidence(combinations[0]) is None
+    assert sliced._lookup_combination_evidence(sliced._data[0]) is None
+
+
+def test_copy_pickle_union_and_none_never_transfer_evidence() -> None:
+    source = [1]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+    combinations = bucket._materialize_combinations(expose=False)
+    assert bucket._lookup_combination_evidence(combinations[0]) is not None
+
+    copied = bucket.all()
+    shallow_copied = copy(bucket)
+    combined = bucket | bucket
+    empty = bucket.none()
+    reduced = bucket.__reduce__()
+    assert isinstance(reduced, tuple)
+    reduced_class = cast(Any, reduced[0])
+    reduced_args = cast(tuple[object, ...], reduced[1])
+    reduced_state = cast(dict[str, object], reduced[2])
+    restored = reduced_class(*reduced_args)
+    restored.__setstate__(reduced_state)
+
+    assert copied._combination_evidence == {}
+    assert shallow_copied._combination_evidence == {}
+    assert combined._combination_evidence == {}
+    assert empty._combination_evidence == {}
+    assert restored._combination_evidence == {}
+    assert set(reduced_state) == {"data"}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_publicly_exposed_stale_combination_keeps_membership_error() -> None:
+    source = [1]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+    public_combinations = bucket.generate_combinations()
+    assert public_combinations == [{"code": 1}]
+    source[0] = 2
+
+    expected_error = r"^Invalid value for code: 1, allowed: \[2\]\.$"
+    with pytest.raises(InvalidInputValueError, match=expected_error):
+        _ = bucket[0]
+    with pytest.raises(InvalidInputValueError, match=expected_error):
+        next(iter(bucket))
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_publicly_mutated_combination_keeps_membership_error() -> None:
+    source = [1]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+    public_combinations = bucket.generate_combinations()
+    public_combinations[0]["code"] = 3
+
+    with pytest.raises(
+        InvalidInputValueError,
+        match=r"^Invalid value for code: 3, allowed: \[1\]\.$",
+    ):
+        _ = bucket[0]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda source: source.insert(0, 0),
+        lambda source: source.pop(0),
+        lambda source: source.reverse(),
+        lambda source: source.__setitem__(0, 9),
+    ],
+)
+def test_private_sequence_evidence_detects_source_structure_changes(
+    mutate: Callable[[list[int]], object],
+) -> None:
+    source = [1, 2]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+    combinations = bucket._materialize_combinations(expose=False)
+    evidence = bucket._lookup_combination_evidence(combinations[0])
+    assert evidence is not None
+
+    mutate(source)
+
+    assert not evidence["code"].authorizes(input_field, 1, {})
+
+
+def test_materialization_error_clears_partially_registered_evidence() -> None:
+    source = [1, 2]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+    expected_error = RuntimeError("filter failed")
+
+    def fail_for_second(value: object) -> bool:
+        if value == 2:
+            raise expected_error
+        return True
+
+    bucket._filters = {"code": {"filter_funcs": [fail_for_second]}}
+
+    with pytest.raises(RuntimeError, match="filter failed"):
+        bucket._materialize_combinations(expose=False)
+
+    assert bucket._data is None
+    assert bucket._combination_evidence == {}

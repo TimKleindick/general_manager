@@ -35,11 +35,7 @@ from general_manager.manager.input import (
     InputDomain,
     NumericRangeDomain,
 )
-from general_manager.utils.filter_parser import (
-    FilterFunction,
-    ParsedFilters,
-    parse_filters,
-)
+from general_manager.utils.filter_parser import ParsedFilters, parse_filters
 
 if TYPE_CHECKING:
     from general_manager.api.property import GraphQLProperty
@@ -522,15 +518,6 @@ class SortedFilters(TypedDict):
     input_excludes: ParsedFilters
 
 
-def _build_exclude_filter(exclude_func: FilterFunction) -> FilterFunction:
-    """Create a lazy predicate that keeps values an exclude does not reject."""
-
-    def includes_value(value: object) -> bool:
-        return not exclude_func(value)
-
-    return includes_value
-
-
 class InvalidCalculationInterfaceError(TypeError):
     """Raised when a CalculationBucket is initialized with a non-CalculationInterface manager."""
 
@@ -685,8 +672,42 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self._excludes = parse_filters(self.exclude_definitions, possible_values)
 
         self._data: list[Combination] | None = None
+        self._combination_evidence: dict[
+            int, tuple[Combination, dict[str, _EnumerationEvidence]]
+        ] = {}
+        self._evidence_exposed = False
         self.sort_key = sort_key
         self.reverse = reverse
+
+    def _register_combination_evidence(
+        self,
+        combination: Combination,
+        evidence_by_name: dict[str, _EnumerationEvidence],
+    ) -> None:
+        """Retain private provenance for one exact combination dictionary."""
+        if self._evidence_exposed or not evidence_by_name:
+            return
+        self._combination_evidence[id(combination)] = (
+            combination,
+            evidence_by_name.copy(),
+        )
+
+    def _lookup_combination_evidence(
+        self, combination: Combination
+    ) -> dict[str, _EnumerationEvidence] | None:
+        """Return provenance only when the identity-keyed entry still matches."""
+        if self._evidence_exposed:
+            return None
+        entry = self._combination_evidence.get(id(combination))
+        if entry is None or entry[0] is not combination:
+            return None
+        return entry[1]
+
+    def _invalidate_combination_evidence(self, *, exposed: bool = False) -> None:
+        """Revoke all retained provenance, optionally permanently for this bucket."""
+        self._combination_evidence.clear()
+        if exposed:
+            self._evidence_exposed = True
 
     def __eq__(self, other: object) -> bool:
         """
@@ -736,6 +757,39 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             None
         """
         self._data = cast(list[Combination] | None, state.get("data"))
+        self._combination_evidence = {}
+        self._evidence_exposed = True
+
+    def __copy__(self) -> CalculationBucket[GeneralManagerType]:
+        """Return an untrusted shallow copy of this bucket."""
+        copied = self.__class__(
+            self._manager_class,
+            self.filter_definitions.copy(),
+            self.exclude_definitions.copy(),
+            self.sort_key,
+            self.reverse,
+        )
+        copied._data = (
+            None if self._data is None else [combo.copy() for combo in self._data]
+        )
+        copied._evidence_exposed = True
+        return copied
+
+    def __deepcopy__(
+        self, memo: dict[int, object]
+    ) -> CalculationBucket[GeneralManagerType]:
+        """Return an untrusted deep copy without copying private provenance."""
+        copied = self.__class__(
+            self._manager_class,
+            deepcopy(self.filter_definitions, memo),
+            deepcopy(self.exclude_definitions, memo),
+            deepcopy(self.sort_key, memo),
+            self.reverse,
+        )
+        memo[id(self)] = copied
+        copied._data = deepcopy(self._data, memo)
+        copied._evidence_exposed = True
+        return copied
 
     def __or__(
         self,
@@ -827,7 +881,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             return self._data[:limit], str(len(self._data)), len(self._data) > limit
 
         if self._normalized_sort_key() is not None or self.reverse:
-            combinations = self.generate_combinations()
+            combinations = self._materialize_combinations(expose=False)
             return (
                 combinations[:limit],
                 str(len(combinations)),
@@ -840,7 +894,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             sorted_inputs = self.topological_sort_inputs()
             sorted_filters = self._sort_filters(sorted_inputs)
             if self._uses_static_iterator_possible_values(sorted_inputs):
-                combinations = self.generate_combinations()
+                combinations = self._materialize_combinations(expose=False)
                 return (
                     combinations[:limit],
                     str(len(combinations)),
@@ -1018,7 +1072,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Yields:
             GeneralManagerType: Manager constructed from each valid set of inputs.
         """
-        combinations = self.generate_combinations()
+        combinations = self._materialize_combinations(expose=False)
         for combo in combinations:
             yield self._manager_class(**combo)
 
@@ -1113,7 +1167,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """Return the identification dictionaries from manager instances."""
         return [manager.identification for manager in managers]
 
-    def generate_combinations(self) -> List[Combination]:
+    def _materialize_combinations(self, *, expose: bool) -> List[Combination]:
         """
         Compute (and cache) the list of valid input combinations.
 
@@ -1142,54 +1196,67 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if self._data is None:
             from general_manager.cache.run_context import ensure_calculation_run_context
 
-            with ensure_calculation_run_context():
-                sorted_inputs = self.topological_sort_inputs()
-                sorted_filters = self._sort_filters(sorted_inputs)
-                current_combinations = self._generate_input_combinations(
-                    sorted_inputs,
-                    sorted_filters["input_filters"],
-                    sorted_filters["input_excludes"],
-                )
-                sort_key = self._normalized_sort_key()
-                needs_manager_access = (
-                    bool(sorted_filters["prop_filters"])
-                    or bool(sorted_filters["prop_excludes"])
-                    or not self._sort_uses_only_inputs(sort_key)
-                )
+            self._invalidate_combination_evidence()
+            try:
+                with ensure_calculation_run_context():
+                    sorted_inputs = self.topological_sort_inputs()
+                    sorted_filters = self._sort_filters(sorted_inputs)
+                    current_combinations = self._generate_input_combinations(
+                        sorted_inputs,
+                        sorted_filters["input_filters"],
+                        sorted_filters["input_excludes"],
+                        retain_evidence=True,
+                    )
+                    sort_key = self._normalized_sort_key()
+                    needs_manager_access = (
+                        bool(sorted_filters["prop_filters"])
+                        or bool(sorted_filters["prop_excludes"])
+                        or not self._sort_uses_only_inputs(sort_key)
+                    )
 
-                if needs_manager_access:
-                    manager_combinations = self._manager_combinations(
-                        current_combinations
-                    )
-                    manager_combinations = self._filter_prop_combinations(
-                        manager_combinations,
-                        sorted_filters["prop_filters"],
-                        sorted_filters["prop_excludes"],
-                    )
-                    if sort_key is not None:
-                        getters = [attrgetter(key) for key in sort_key]
-                        manager_combinations = sorted(
+                    if needs_manager_access:
+                        manager_combinations = self._manager_combinations(
+                            current_combinations
+                        )
+                        manager_combinations = self._filter_prop_combinations(
                             manager_combinations,
-                            key=lambda manager_obj: tuple(
-                                getter(manager_obj) for getter in getters
-                            ),
+                            sorted_filters["prop_filters"],
+                            sorted_filters["prop_excludes"],
                         )
-                    identifications = self._manager_identifications(
-                        manager_combinations
-                    )
-                else:
-                    identifications = current_combinations
-                    if sort_key is not None:
-                        identifications = self._sort_dict_combinations(
-                            identifications,
-                            sort_key,
+                        if sort_key is not None:
+                            getters = [attrgetter(key) for key in sort_key]
+                            manager_combinations = sorted(
+                                manager_combinations,
+                                key=lambda manager_obj: tuple(
+                                    getter(manager_obj) for getter in getters
+                                ),
+                            )
+                        identifications = self._manager_identifications(
+                            manager_combinations
                         )
+                        self._invalidate_combination_evidence()
+                    else:
+                        identifications = current_combinations
+                        if sort_key is not None:
+                            identifications = self._sort_dict_combinations(
+                                identifications,
+                                sort_key,
+                            )
 
-                if self.reverse:
-                    identifications.reverse()
-                self._data = identifications
+                    if self.reverse:
+                        identifications.reverse()
+                    self._data = identifications
+            except BaseException:
+                self._invalidate_combination_evidence()
+                raise
 
+        if expose:
+            self._invalidate_combination_evidence(exposed=True)
         return self._data
+
+    def generate_combinations(self) -> List[Combination]:
+        """Return cached combinations and permanently revoke private provenance."""
+        return self._materialize_combinations(expose=True)
 
     def topological_sort_inputs(self) -> List[str]:
         """
@@ -1293,6 +1360,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         excludes: ParsedFilters,
         *,
         snapshot_iterables: bool,
+        retain_evidence: bool = False,
     ) -> Generator[Combination, None, None]:
         """
         Yield valid assignments of input fields satisfying filters and excludes.
@@ -1328,6 +1396,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         def helper(
             index: int,
             current_combo: Combination,
+            current_evidence: dict[str, _EnumerationEvidence],
         ) -> Generator[Combination, None, None]:
             """
             Recursively emit input combinations that satisfy filters and excludes.
@@ -1340,7 +1409,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 Combination: Completed combination of input values.
             """
             if index == len(sorted_inputs):
-                yield current_combo.copy()
+                combination = current_combo.copy()
+                if retain_evidence:
+                    self._register_combination_evidence(
+                        combination,
+                        current_evidence,
+                    )
+                yield combination
                 return
             input_name: str = sorted_inputs[index]
             input_field = self.input_fields[input_name]
@@ -1350,7 +1425,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             )
             if possible_values is None:
                 if input_passes_filters(input_name, current_combo):
-                    yield from helper(index + 1, current_combo)
+                    yield from helper(index + 1, current_combo, current_evidence)
                 return
 
             field_filters = filters.get(input_name, {})
@@ -1363,33 +1438,58 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 possible_values = possible_values.filter(**filter_kwargs).exclude(
                     **exclude_kwargs
                 )
+                indexed_values: Iterable[tuple[int, object]] = enumerate(
+                    possible_values
+                )
+                resolved_source: object | None = None
             else:
-                filter_funcs = field_filters.get("filter_funcs", [])
-                for filter_func in filter_funcs:
-                    possible_values = filter(filter_func, possible_values)
-
-                exclude_funcs = field_excludes.get("filter_funcs", [])
-                for exclude_func in exclude_funcs:
-                    possible_values = filter(
-                        _build_exclude_filter(exclude_func), possible_values
-                    )
+                resolved_source = possible_values
+                indexed_values = enumerate(possible_values)
                 if snapshot_iterables:
-                    possible_values = list(possible_values)
+                    indexed_values = list(indexed_values)
 
-            for value in possible_values:
+            for source_index, value in indexed_values:
+                if resolved_source is not None:
+                    if any(
+                        not filter_func(value)
+                        for filter_func in field_filters.get("filter_funcs", [])
+                    ):
+                        continue
+                    if any(
+                        exclude_func(value)
+                        for exclude_func in field_excludes.get("filter_funcs", [])
+                    ):
+                        continue
                 if not isinstance(value, input_field.type):
                     continue
+                evidence = None
+                if retain_evidence and resolved_source is not None:
+                    evidence = _trusted_enumeration_evidence(
+                        input_field,
+                        resolved_source,
+                        value,
+                        current_combo,
+                        source_index=source_index,
+                    )
                 current_combo[input_name] = value
-                yield from helper(index + 1, current_combo)
-                del current_combo[input_name]
+                if evidence is not None:
+                    current_evidence[input_name] = evidence
+                try:
+                    yield from helper(index + 1, current_combo, current_evidence)
+                finally:
+                    current_combo.pop(input_name, None)
+                    if evidence is not None:
+                        current_evidence.pop(input_name, None)
 
-        yield from helper(0, {})
+        yield from helper(0, {}, {})
 
     def _generate_input_combinations(
         self,
         sorted_inputs: List[str],
         filters: ParsedFilters,
         excludes: ParsedFilters,
+        *,
+        retain_evidence: bool = False,
     ) -> List[Combination]:
         """
         Generate all valid assignments of input fields that satisfy filters.
@@ -1409,6 +1509,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 filters,
                 excludes,
                 snapshot_iterables=True,
+                retain_evidence=retain_evidence,
             )
         )
 
@@ -1519,7 +1620,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             int: Cached number of combinations.
         """
-        return len(self.generate_combinations())
+        return len(self._materialize_combinations(expose=False))
 
     def __getitem__(
         self, item: int | slice
@@ -1534,9 +1635,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             GeneralManagerType | CalculationBucket[GeneralManagerType]:
                 Manager instance for single indices or bucket wrapping the sliced combinations.
         """
-        items = self.generate_combinations()
+        items = self._materialize_combinations(expose=False)
         result = items[item]
         if isinstance(result, list):
+            self._invalidate_combination_evidence(exposed=True)
             new_bucket = CalculationBucket(
                 self._manager_class,
                 self.filter_definitions.copy(),
@@ -1545,6 +1647,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 self.reverse,
             )
             new_bucket._data = result
+            new_bucket._evidence_exposed = True
             return new_bucket
         return self._manager_class(**result)
 
