@@ -223,6 +223,14 @@ class GraphQL:
         clear_schema_index_cache()
 
     @classmethod
+    def register_file_upload_mutation(cls) -> None:
+        """Register the generic begin-upload mutation when the feature is enabled."""
+
+        from general_manager.uploads.graphql import register_file_upload_mutation
+
+        register_file_upload_mutation(cls._mutations)
+
+    @classmethod
     def get_registry_snapshot(cls) -> GraphQLRegistry:
         """
         Return a snapshot of the current registry state as a :class:`GraphQLRegistry` dataclass.

@@ -73,3 +73,80 @@ class UploadFinalizationFailedError(UploadError):
 
 class UploadStorageError(UploadError):
     code = "UPLOAD_STORAGE_ERROR"
+
+
+class UploadAuthenticationError(UploadError):
+    """Raised when beginning an upload has no durable authenticated owner."""
+
+    code = "UNAUTHENTICATED"
+    default_message = "Authentication is required to upload a file."
+
+
+class UploadManagerInvalidError(UploadError):
+    """Raised when the requested manager is not in the live GraphQL registry."""
+
+    code = "UPLOAD_MANAGER_INVALID"
+    default_message = "The requested upload destination is not available."
+
+
+class UploadFieldInvalidError(UploadError):
+    """Raised when the requested field is not an editable ORM file field."""
+
+    code = "UPLOAD_FIELD_INVALID"
+    default_message = "The requested upload destination is not available."
+
+
+class UploadOperationInvalidError(UploadError):
+    """Raised when create/update target inputs are inconsistent."""
+
+    code = "UPLOAD_OPERATION_INVALID"
+    default_message = "The requested upload operation is invalid."
+
+
+class UploadTargetUnavailableError(UploadError):
+    """Hide whether an update target is absent or unreadable by the actor."""
+
+    code = "UPLOAD_TARGET_UNAVAILABLE"
+    default_message = "The requested upload target is not available."
+
+
+class InvalidUploadFilenameError(UploadError):
+    """Raised when a client filename is not one safe basename."""
+
+    code = "INVALID_UPLOAD_FILENAME"
+    default_message = "The upload filename is invalid."
+
+
+class InvalidUploadSizeError(UploadError):
+    """Raised when a declared byte size is malformed or outside policy."""
+
+    code = "INVALID_UPLOAD_SIZE"
+    default_message = "The upload size is invalid."
+
+
+class InvalidUploadChecksumError(UploadError):
+    """Raised when a declared checksum is not one valid SHA-256 digest."""
+
+    code = "INVALID_UPLOAD_CHECKSUM"
+    default_message = "The upload checksum is invalid."
+
+
+class UploadQuotaExceededError(UploadError):
+    """Raised when the owner has no pending-intent capacity."""
+
+    code = "UPLOAD_QUOTA_EXCEEDED"
+    default_message = "The pending upload limit has been reached."
+
+
+class UploadRateLimitExceededError(UploadError):
+    """Raised by a configured begin-upload request-rate hook."""
+
+    code = "UPLOAD_RATE_LIMITED"
+    default_message = "Too many upload requests were made."
+
+
+class UploadDatabaseMismatchError(UploadError):
+    """Raised when manager and upload-intent writes cannot be atomic."""
+
+    code = "UPLOAD_DATABASE_MISMATCH"
+    default_message = "The requested upload destination is not available."

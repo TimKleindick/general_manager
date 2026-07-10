@@ -53,8 +53,6 @@ class _S3ClientProtocol(Protocol):
 
     def get_bucket_versioning(self, **kwargs: object) -> Mapping[str, object]: ...
 
-    def generate_presigned_post(self, **kwargs: object) -> Mapping[str, object]: ...
-
     def generate_presigned_url(self, operation: str, **kwargs: object) -> str: ...
 
     def head_object(self, **kwargs: object) -> Mapping[str, object]: ...
@@ -68,7 +66,8 @@ class _S3ClientProtocol(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class _S3ObjectOptions:
-    staging_post_fields: Mapping[str, str]
+    staging_put_arguments: Mapping[str, object]
+    staging_headers: Mapping[str, str]
     final_copy_arguments: Mapping[str, object]
 
 
@@ -110,44 +109,37 @@ class S3UploadAdapter:
     ) -> UploadInstructions:
         del upload_url, headers
         checksum_base64 = _hex_checksum_to_base64(checksum_sha256)
-        fields = {
-            "key": stage_key,
-            "Content-Type": content_type,
-            "x-amz-checksum-sha256": checksum_base64,
+        params: dict[str, object] = {
+            "Bucket": self._bucket,
+            "Key": stage_key,
+            "ContentType": content_type,
+            "ContentLength": size,
+            "ChecksumSHA256": checksum_base64,
+            **self._object_options.staging_put_arguments,
         }
-        fields.update(self._object_options.staging_post_fields)
-        conditions: list[object] = [
-            {"key": stage_key},
-            {"Content-Type": content_type},
-            {"x-amz-checksum-sha256": checksum_base64},
-            ["content-length-range", size, size],
-        ]
-        conditions.extend(
-            {key: value}
-            for key, value in self._object_options.staging_post_fields.items()
-        )
-        response = _sdk_call(
-            lambda: self._client.generate_presigned_post(
-                Bucket=self._bucket,
-                Key=stage_key,
-                Fields=fields,
-                Conditions=conditions,
+        url = _sdk_call(
+            lambda: self._client.generate_presigned_url(
+                "put_object",
+                Params=params,
                 ExpiresIn=expires_in,
             ),
             "S3 could not create upload instructions.",
         )
-        url = response.get("url")
-        response_fields = response.get("fields")
-        if not isinstance(url, str) or not isinstance(response_fields, Mapping):
+        if not isinstance(url, str) or not url:
             raise _exception(
                 UploadStorageError,
                 "S3 returned malformed upload instructions.",
             )
         return UploadInstructions(
             transport=UploadTransport.DIRECT,
-            method="POST",
+            method="PUT",
             url=url,
-            fields={str(key): str(value) for key, value in response_fields.items()},
+            headers={
+                "Content-Type": content_type,
+                "Content-Length": str(size),
+                "x-amz-checksum-sha256": checksum_base64,
+                **self._object_options.staging_headers,
+            },
         )
 
     def inspect_staged(self, stage_key: str) -> ObjectVersion:
@@ -427,14 +419,15 @@ def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
             "S3 KMS key and bucket-key options require aws:kms encryption.",
         )
 
-    post_names = {
-        "ACL": "acl",
+    header_names = {
+        "ACL": "x-amz-acl",
         "ServerSideEncryption": "x-amz-server-side-encryption",
         "SSEKMSKeyId": "x-amz-server-side-encryption-aws-kms-key-id",
         "BucketKeyEnabled": "x-amz-server-side-encryption-bucket-key-enabled",
         "StorageClass": "x-amz-storage-class",
     }
-    staging_post_fields: dict[str, str] = {}
+    staging_put_arguments: dict[str, object] = {}
+    staging_headers: dict[str, str] = {}
     final_copy_arguments: dict[str, object] = {}
     for name, value in values.items():
         if name == "BucketKeyEnabled":
@@ -443,7 +436,8 @@ def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
                     UploadBackendUnsupportedError,
                     "S3 BucketKeyEnabled must be a boolean.",
                 )
-            staging_post_fields[post_names[name]] = str(value).lower()
+            staging_put_arguments[name] = value
+            staging_headers[header_names[name]] = str(value).lower()
             final_copy_arguments[name] = value
             continue
         if not isinstance(value, str) or not value:
@@ -452,12 +446,15 @@ def _storage_object_options(storage: Storage) -> _S3ObjectOptions:
                 "S3 object parameter values must be non-empty strings.",
             )
         if name == "ACL" and value == "bucket-owner-full-control":
-            staging_post_fields[post_names[name]] = value
+            staging_put_arguments[name] = value
+            staging_headers[header_names[name]] = value
         elif name not in {"ACL", "StorageClass"}:
-            staging_post_fields[post_names[name]] = value
+            staging_put_arguments[name] = value
+            staging_headers[header_names[name]] = value
         final_copy_arguments[name] = value
     return _S3ObjectOptions(
-        staging_post_fields=staging_post_fields,
+        staging_put_arguments=staging_put_arguments,
+        staging_headers=staging_headers,
         final_copy_arguments=final_copy_arguments,
     )
 

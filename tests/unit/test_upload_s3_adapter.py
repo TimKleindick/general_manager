@@ -45,7 +45,7 @@ class FakeS3Client:
         self.copy_calls: list[dict[str, Any]] = []
         self.delete_calls: list[dict[str, Any]] = []
         self.head_calls: list[dict[str, Any]] = []
-        self.presigned_post_calls: list[dict[str, Any]] = []
+        self.presigned_url_calls: list[tuple[str, dict[str, Any]]] = []
         self.fail_operations: set[str] = set()
         self.operation_errors: dict[str, Exception] = {}
         members = {"IfNoneMatch": object()} if conditional_copy else {}
@@ -63,18 +63,13 @@ class FakeS3Client:
         assert kwargs["Bucket"] == "uploads"
         return {"Status": "Enabled" if self.versioning else "Suspended"}
 
-    def generate_presigned_post(self, **kwargs: Any) -> dict[str, Any]:
-        self._fail_if("presign_post")
-        self.presigned_post_calls.append(dict(kwargs))
-        return {
-            "url": "https://signed.example.test/upload?credential=secret",
-            "fields": dict(kwargs["Fields"]),
-        }
-
     def generate_presigned_url(self, operation: str, **kwargs: Any) -> str:
-        self._fail_if("presign_get")
-        assert operation == "get_object"
+        self._fail_if(f"presign_{'put' if operation == 'put_object' else 'get'}")
+        self.presigned_url_calls.append((operation, dict(kwargs)))
         assert kwargs["Params"]["Bucket"] == "uploads"
+        if operation == "put_object":
+            return "https://signed.example.test/upload?signature=secret"
+        assert operation == "get_object"
         return "https://signed.example.test/get?signature=secret"
 
     def head_object(self, **kwargs: Any) -> dict[str, Any]:
@@ -299,9 +294,22 @@ def test_s3_presigned_upload_binds_stage_metadata() -> None:
     )
 
     assert instructions.transport is UploadTransport.DIRECT
-    assert instructions.method == "POST"
-    assert instructions.fields["key"] == "gm-staging/intent.bin"
-    assert instructions.fields["Content-Type"] == "text/plain"
+    assert instructions.method == "PUT"
+    assert instructions.fields == {}
+    assert instructions.headers["Content-Type"] == "text/plain"
+    assert instructions.headers["Content-Length"] == "7"
+    assert instructions.headers["x-amz-checksum-sha256"] == base64.b64encode(
+        bytes.fromhex(checksum)
+    ).decode("ascii")
+    operation, call = client.presigned_url_calls[0]
+    assert operation == "put_object"
+    assert call["Params"] == {
+        "Bucket": "uploads",
+        "Key": "gm-staging/intent.bin",
+        "ContentType": "text/plain",
+        "ContentLength": 7,
+        "ChecksumSHA256": instructions.headers["x-amz-checksum-sha256"],
+    }
     assert "gm-staging/intent.bin" not in repr(instructions)
     assert "credential=secret" not in repr(instructions)
 
@@ -319,11 +327,8 @@ def test_s3_bucket_owner_enforced_staging_omits_acl() -> None:
         checksum_sha256=checksum,
     )
 
-    assert "acl" not in instructions.fields
-    assert not any(
-        isinstance(condition, dict) and "acl" in condition
-        for condition in client.presigned_post_calls[0]["Conditions"]
-    )
+    assert "x-amz-acl" not in instructions.headers
+    assert "ACL" not in client.presigned_url_calls[0][1]["Params"]
 
 
 def test_s3_staging_propagates_safe_bucket_owner_acl() -> None:
@@ -345,9 +350,9 @@ def test_s3_staging_propagates_safe_bucket_owner_acl() -> None:
         checksum_sha256=checksum,
     )
 
-    assert instructions.fields["acl"] == "bucket-owner-full-control"
-    assert {"acl": "bucket-owner-full-control"} in (
-        client.presigned_post_calls[0]["Conditions"]
+    assert instructions.headers["x-amz-acl"] == "bucket-owner-full-control"
+    assert client.presigned_url_calls[0][1]["Params"]["ACL"] == (
+        "bucket-owner-full-control"
     )
     adapter.materialize(
         "gm-staging/intent.bin",
@@ -418,7 +423,7 @@ def test_s3_public_bucket_policy_allows_explicit_private_staging_prefix() -> Non
         checksum_sha256=checksum,
     )
 
-    assert "acl" not in instructions.fields
+    assert "x-amz-acl" not in instructions.headers
 
 
 def test_s3_stages_private_with_kms_and_applies_public_acl_on_final_copy() -> None:
@@ -451,16 +456,18 @@ def test_s3_stages_private_with_kms_and_applies_public_acl_on_final_copy() -> No
         intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
     )
 
-    expected_fields = {
+    expected_headers = {
         "x-amz-server-side-encryption": "aws:kms",
         "x-amz-server-side-encryption-aws-kms-key-id": "alias/uploads",
         "x-amz-server-side-encryption-bucket-key-enabled": "true",
     }
-    assert expected_fields.items() <= instructions.fields.items()
-    assert "acl" not in instructions.fields
-    assert "x-amz-storage-class" not in instructions.fields
-    conditions = client.presigned_post_calls[0]["Conditions"]
-    assert all({key: value} in conditions for key, value in expected_fields.items())
+    assert expected_headers.items() <= instructions.headers.items()
+    assert "x-amz-acl" not in instructions.headers
+    assert "x-amz-storage-class" not in instructions.headers
+    put_params = client.presigned_url_calls[0][1]["Params"]
+    assert put_params["ServerSideEncryption"] == "aws:kms"
+    assert put_params["SSEKMSKeyId"] == "alias/uploads"
+    assert put_params["BucketKeyEnabled"] is True
     copy = client.copy_calls[0]
     assert copy["ACL"] == "public-read"
     assert copy["ServerSideEncryption"] == "aws:kms"
@@ -493,8 +500,8 @@ def test_s3_archive_storage_class_is_final_only(storage_class: str) -> None:
         intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
     )
 
-    assert "acl" not in instructions.fields
-    assert "x-amz-storage-class" not in instructions.fields
+    assert "x-amz-acl" not in instructions.headers
+    assert "x-amz-storage-class" not in instructions.headers
     assert client.copy_calls[0]["StorageClass"] == storage_class
 
 
@@ -688,7 +695,7 @@ def test_s3_delete_without_version_id_fails_closed() -> None:
 
 @pytest.mark.parametrize(
     "operation",
-    ["presign_post", "head", "get", "delete", "presign_get"],
+    ["presign_put", "head", "get", "delete", "presign_get"],
 )
 def test_s3_normalizes_sdk_failures(operation: str) -> None:
     client = FakeS3Client()
@@ -703,7 +710,7 @@ def test_s3_normalizes_sdk_failures(operation: str) -> None:
     )
 
     with pytest.raises(UploadStorageError) as captured:
-        if operation == "presign_post":
+        if operation == "presign_put":
             adapter.create_upload_instructions(
                 stage_key="gm-staging/intent.bin",
                 upload_url=None,
