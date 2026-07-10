@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
+import struct
 from typing import ClassVar, cast
 from uuid import UUID
 
@@ -535,6 +536,57 @@ def test_set_evidence_authorization_rejects_new_unsafe_member_without_hooks() ->
     assert unsafe_member.callbacks == []
 
 
+def _same_bits_float(value: float) -> float:
+    replacement = cast(float, struct.unpack("!d", struct.pack("!d", value))[0])
+    assert replacement is not value
+    return replacement
+
+
+@pytest.mark.parametrize("source_type", [set, frozenset])
+def test_set_evidence_creation_requires_exact_emitted_nan_identity(
+    source_type: type[set[object]] | type[frozenset[object]],
+) -> None:
+    emitted_nan = float("nan")
+    separate_same_bits_nan = _same_bits_float(emitted_nan)
+    source = source_type((emitted_nan,))
+    input_field = cast(Input[type[object]], Input(float, possible_values=source))
+
+    assert (
+        _trusted_enumeration_evidence(
+            input_field,
+            source,
+            separate_same_bits_nan,
+            {},
+        )
+        is None
+    )
+
+
+def test_mutable_set_evidence_revokes_replaced_same_bits_nan() -> None:
+    emitted_nan = float("nan")
+    replacement_nan = _same_bits_float(emitted_nan)
+    source: set[object] = {emitted_nan}
+    input_field = cast(Input[type[object]], Input(float, possible_values=source))
+    evidence = _static_evidence(input_field, source, emitted_nan)
+
+    source.remove(emitted_nan)
+    source.add(replacement_nan)
+
+    assert not evidence.authorizes(input_field, emitted_nan, {})
+    assert not evidence.authorizes(input_field, replacement_nan, {})
+
+
+def test_frozenset_evidence_authorizes_only_exact_emitted_nan() -> None:
+    emitted_nan = float("nan")
+    separate_same_bits_nan = _same_bits_float(emitted_nan)
+    source: frozenset[object] = frozenset((emitted_nan,))
+    input_field = cast(Input[type[object]], Input(float, possible_values=source))
+    evidence = _static_evidence(input_field, source, emitted_nan)
+
+    assert evidence.authorizes(input_field, emitted_nan, {})
+    assert not evidence.authorizes(input_field, separate_same_bits_nan, {})
+
+
 @pytest.mark.parametrize(
     ("source", "candidate"),
     [
@@ -700,7 +752,7 @@ def test_evidence_tracking_delegates_to_source_witness() -> None:
         def __init__(self) -> None:
             self.track_calls = 0
 
-        def authorizes(self) -> bool:
+        def authorizes(self, _value: object) -> bool:
             return True
 
         def track_membership_dependency(self) -> None:

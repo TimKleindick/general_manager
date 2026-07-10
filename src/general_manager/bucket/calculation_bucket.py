@@ -61,7 +61,7 @@ class _TrustedToken:
 class _EnumerationWitness(Protocol):
     """Validate that an enumerated candidate remains backed by its source."""
 
-    def authorizes(self) -> bool: ...
+    def authorizes(self, value: object) -> bool: ...
 
     def track_membership_dependency(self) -> None: ...
 
@@ -84,7 +84,7 @@ class _SequenceEnumerationWitness(_StaticEnumerationWitness):
     candidate: object
     candidate_token: _TrustedToken
 
-    def authorizes(self) -> bool:
+    def authorizes(self, _value: object) -> bool:
         try:
             current = self.source[self.source_index]
         except IndexError:
@@ -100,16 +100,17 @@ class _SetEnumerationWitness(_StaticEnumerationWitness):
     """Prove that an emitted safe scalar remains in the exact set source."""
 
     source: set[object] | frozenset[object]
+    candidate: object
     candidate_token: _TrustedToken
-    screened_member_tokens: frozenset[_TrustedToken]
 
-    def authorizes(self) -> bool:
+    def authorizes(self, value: object) -> bool:
+        if value is not self.candidate:
+            return False
         if type(self.source) is frozenset:
-            return self.candidate_token in self.screened_member_tokens
-        current_member_tokens = _trusted_set_member_tokens(self.source)
-        return (
-            current_member_tokens is not None
-            and self.candidate_token in current_member_tokens
+            return True
+        return _trusted_set_contains_identity(
+            self.source,
+            self.candidate,
         )
 
 
@@ -121,7 +122,7 @@ class _NumericRangeEnumerationWitness(_StaticEnumerationWitness):
     configuration: tuple[_TrustedToken, _TrustedToken, _TrustedToken]
     candidate: int | float
 
-    def authorizes(self) -> bool:
+    def authorizes(self, _value: object) -> bool:
         configuration = _numeric_range_configuration(self.source)
         return configuration == self.configuration
 
@@ -139,7 +140,7 @@ class _DateRangeEnumerationWitness(_StaticEnumerationWitness):
     ]
     candidate: date
 
-    def authorizes(self) -> bool:
+    def authorizes(self, _value: object) -> bool:
         configuration = _date_range_configuration(self.source)
         return configuration == self.configuration
 
@@ -179,7 +180,7 @@ class _EnumerationEvidence:
             return False
         if _trusted_candidate_token(value) != self.candidate_token:
             return False
-        return self.witness.authorizes()
+        return self.witness.authorizes(value)
 
     def track_membership_dependency(self) -> None:
         self.witness.track_membership_dependency()
@@ -324,26 +325,27 @@ def _sequence_enumeration_witness(
 
 def _set_enumeration_witness(
     source: set[object] | frozenset[object],
+    candidate: object,
     candidate_token: _TrustedToken,
 ) -> _SetEnumerationWitness | None:
     """Screen a set before building a hook-free scalar membership witness."""
-    member_tokens = _trusted_set_member_tokens(source)
-    if member_tokens is None or candidate_token not in member_tokens:
+    if not _trusted_set_contains_identity(source, candidate):
         return None
-    return _SetEnumerationWitness(source, candidate_token, member_tokens)
+    return _SetEnumerationWitness(source, candidate, candidate_token)
 
 
-def _trusted_set_member_tokens(
+def _trusted_set_contains_identity(
     source: set[object] | frozenset[object],
-) -> frozenset[_TrustedToken] | None:
-    """Snapshot safe set members without hashing or comparing source values."""
-    member_tokens: list[_TrustedToken] = []
+    candidate: object,
+) -> bool:
+    """Find one identical member while screening every source value as safe."""
+    contains_candidate = False
     for member in source:
-        member_token = _trusted_candidate_token(member)
-        if member_token is None:
-            return None
-        member_tokens.append(member_token)
-    return frozenset(member_tokens)
+        if _trusted_candidate_token(member) is None:
+            return False
+        if member is candidate:
+            contains_candidate = True
+    return contains_candidate
 
 
 def _numeric_range_enumeration_witness(
@@ -435,6 +437,7 @@ def _trusted_enumeration_evidence(
     elif source_type is set or source_type is frozenset:
         witness = _set_enumeration_witness(
             cast(set[object] | frozenset[object], resolved_source),
+            candidate,
             candidate_token,
         )
     elif source_type is NumericRangeDomain:
