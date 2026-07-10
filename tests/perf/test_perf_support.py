@@ -59,16 +59,71 @@ def test_manifest_validation_skips_a_keyword_selection() -> None:
     )
 
 
-def _perf_session(*module_names: str, keyword_expression: str = "") -> pytest.Session:
+def test_manifest_validation_skips_explicit_node_selections() -> None:
+    selected_nodes = tuple(
+        f"tests/perf/{module}::test_selected_case"
+        for module in sorted(REQUIRED_BUDGET_WORKLOAD_MODULES)
+    )
+
+    assert not perf_conftest.should_validate_perf_manifest(
+        REQUIRED_BUDGET_WORKLOAD_MODULES,
+        keyword_expression="",
+        selection_arguments=selected_nodes,
+        failed=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "selection_arguments",
+    [
+        ("tests/perf",),
+        tuple(f"tests/perf/{name}" for name in REQUIRED_BUDGET_WORKLOAD_MODULES),
+        ("-m", "perf"),
+    ],
+)
+def test_manifest_validation_accepts_complete_suite_selections(
+    selection_arguments: tuple[str, ...],
+) -> None:
+    assert perf_conftest.should_validate_perf_manifest(
+        REQUIRED_BUDGET_WORKLOAD_MODULES,
+        keyword_expression="",
+        selection_arguments=selection_arguments,
+        failed=False,
+    )
+
+
+def _perf_session(
+    *module_names: str,
+    keyword_expression: str = "",
+    selection_arguments: tuple[str, ...] = (),
+) -> pytest.Session:
     return cast(
         pytest.Session,
         SimpleNamespace(
             items=[SimpleNamespace(path=Path(name)) for name in module_names],
             config=SimpleNamespace(
                 getoption=lambda _option: keyword_expression,
+                invocation_params=SimpleNamespace(args=selection_arguments),
             ),
         ),
     )
+
+
+def test_plugin_skips_manifest_for_explicit_node_selections() -> None:
+    plugin = perf_conftest.PerfManifestValidationPlugin()
+    selected_nodes = tuple(
+        f"tests/perf/{module}::test_selected_case"
+        for module in sorted(REQUIRED_BUDGET_WORKLOAD_MODULES)
+    )
+
+    plugin.pytest_collection_finish(
+        _perf_session(
+            *REQUIRED_BUDGET_WORKLOAD_MODULES,
+            selection_arguments=selected_nodes,
+        )
+    )
+
+    assert not plugin.should_validate_manifest()
 
 
 def _perf_report(

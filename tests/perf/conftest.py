@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator, Set as AbstractSet
+from collections.abc import Iterator, Sequence, Set as AbstractSet
 from typing import Protocol, cast
 
 import pytest
@@ -23,11 +23,13 @@ def should_validate_perf_manifest(
     selected_modules: AbstractSet[str],
     *,
     keyword_expression: str,
+    selection_arguments: Sequence[str] = (),
     failed: bool,
 ) -> bool:
     return (
         not failed
         and not keyword_expression
+        and not any("::" in argument for argument in selection_arguments)
         and REQUIRED_BUDGET_WORKLOAD_MODULES <= selected_modules
     )
 
@@ -43,6 +45,7 @@ class PerfManifestValidationPlugin:
     def _reset(self) -> None:
         self._selected_modules: frozenset[str] = frozenset()
         self._keyword_expression = ""
+        self._selection_arguments: tuple[str, ...] = ()
         self._failed = False
         self._perf_budgets: PerfBudgets | None = None
 
@@ -52,6 +55,9 @@ class PerfManifestValidationPlugin:
         keyword_expression = session.config.getoption("keyword")
         assert isinstance(keyword_expression, str)
         self._keyword_expression = keyword_expression
+        self._selection_arguments = tuple(
+            str(argument) for argument in session.config.invocation_params.args
+        )
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         if report.when in {"setup", "call", "teardown"} and report.failed:
@@ -64,6 +70,7 @@ class PerfManifestValidationPlugin:
         return should_validate_perf_manifest(
             self._selected_modules,
             keyword_expression=self._keyword_expression,
+            selection_arguments=self._selection_arguments,
             failed=self._failed,
         )
 
