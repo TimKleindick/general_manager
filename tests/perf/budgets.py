@@ -90,6 +90,9 @@ PERF_CEILINGS: dict[str, int] = {
     "DB_LIST_10000_COLD_CONSTRUCTORS": 10_000,
     "DB_LIST_10000_WARM_QUERIES": 0,
     "DB_LIST_10000_WARM_CONSTRUCTORS": 10_000,
+    # Calculation run-cache invalidation workloads.
+    "RUN_CACHE_MIXED_500_DISCARD_CALLS": 22,
+    "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 44_000,
     # Calculation bucket combination workloads.
     "CALC_STATIC_5X10_COLD_A_YIELDS": 5,
     "CALC_STATIC_5X10_COLD_B_YIELDS": 50,

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Hashable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
+from types import MethodType
 from typing import Literal, Self, cast
 
 import pytest
@@ -12,7 +13,23 @@ from django.test.utils import CaptureQueriesContext
 from pytest_django.plugin import DjangoDbBlocker
 
 from general_manager.bucket.database_bucket import DatabaseBucket
-from general_manager.cache.run_context import CalculationRunContext
+from general_manager.cache.dependency_cache import DependencyCacheHit
+from general_manager.cache.run_context import (
+    BUCKET_INDEX_PREFIX,
+    ORM_BUCKET_EXISTS_PREFIX,
+    ORM_BUCKET_FIRST_ROW_PREFIX,
+    ORM_BUCKET_MANAGER_RESULT_PREFIX,
+    ORM_BUCKET_RESULT_PREFIX,
+    ORM_BUCKET_ROW_RESULT_PREFIX,
+    ORM_MODEL_RELATION_PREFETCH_PREFIX,
+    ORM_MODEL_ROW_INDEX_PREFIX,
+    ORM_QUERY_BUCKET_PREFIX,
+    ORM_RELATION_MANAGER_PREFIX,
+    TRUSTED_ORM_MANAGER_PREFIX,
+    CalculationRunContext,
+    current_calculation_run_context,
+)
+from general_manager.cache.signals import data_change, post_data_change, pre_data_change
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
@@ -30,6 +47,30 @@ USERNAME_PREFIX = "perf-db-"
 RowCount = Literal[999, 1000, 1001, 10000]
 Operation = Literal["first", "get", "contains", "count", "list"]
 DatabaseAccess = Callable[[], AbstractContextManager[None]]
+RUN_CACHE_ENTRY_COUNT = 500
+RUN_CACHE_PREFIXES = (
+    ORM_BUCKET_RESULT_PREFIX,
+    ORM_BUCKET_ROW_RESULT_PREFIX,
+    ORM_BUCKET_MANAGER_RESULT_PREFIX,
+    ORM_BUCKET_FIRST_ROW_PREFIX,
+    ORM_MODEL_ROW_INDEX_PREFIX,
+    ORM_MODEL_RELATION_PREFETCH_PREFIX,
+    ORM_RELATION_MANAGER_PREFIX,
+    ORM_QUERY_BUCKET_PREFIX,
+    ORM_BUCKET_EXISTS_PREFIX,
+    BUCKET_INDEX_PREFIX,
+    TRUSTED_ORM_MANAGER_PREFIX,
+)
+
+
+class RunCacheMutationTarget:
+    def __init__(self, body_calls: Counter) -> None:
+        self._body_calls = body_calls
+
+    @data_change
+    def mutate(self) -> Self:
+        self._body_calls.increment()
+        return self
 
 
 class PerfUserInterface(InterfaceBase):
@@ -269,6 +310,156 @@ def test_invoke_operation_rejects_an_unknown_operation() -> None:
 def test_assert_operation_result_rejects_an_unknown_operation() -> None:
     with pytest.raises(AssertionError, match="unsupported operation: unknown"):
         _assert_operation_result(cast(Operation, "unknown"), object(), (), 0)
+
+
+def test_data_change_mixed_run_cache_invalidation_work(
+    monkeypatch: pytest.MonkeyPatch,
+    perf_budgets: PerfBudgets,
+    pytestconfig: pytest.Config,
+) -> None:
+    monkeypatch.setattr(pre_data_change, "send", lambda **_kwargs: [])
+    monkeypatch.setattr(post_data_change, "send", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        "general_manager.cache.dependency_index.begin_dependency_data_change",
+        lambda: 0,
+    )
+    monkeypatch.setattr(
+        "general_manager.cache.dependency_index.end_dependency_data_change",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "general_manager.cache.dependency_index.is_dependency_data_change_active",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "general_manager.cache.dependency_index."
+        "drain_invalidated_cache_keys_for_graphql_rewarm",
+        lambda: (),
+    )
+
+    diagnostic_captures = Counter()
+    original_capture_diagnostics = capture_diagnostics
+
+    def counted_capture_diagnostics(
+        callback: Callable[[], RunCacheMutationTarget],
+    ) -> DiagnosticObservation[RunCacheMutationTarget]:
+        diagnostic_captures.increment()
+        return original_capture_diagnostics(callback)
+
+    monkeypatch.setattr(
+        "tests.perf.test_database_bucket_perf.capture_diagnostics",
+        counted_capture_diagnostics,
+    )
+    diagnostics_enabled = pytestconfig.getoption("verbose") >= 2
+
+    body_calls = Counter()
+    discard_calls = Counter()
+    key_inspections = Counter()
+    target = RunCacheMutationTarget(body_calls)
+    dependency_hits = {
+        f"mixed-run-cache-{index}": DependencyCacheHit(
+            value=index,
+            dependencies=frozenset(),
+        )
+        for index in range(RUN_CACHE_ENTRY_COUNT)
+    }
+    unrelated_keys = frozenset(
+        ("unrelated", index) for index in range(RUN_CACHE_ENTRY_COUNT)
+    )
+
+    with CalculationRunContext() as context:
+        for prefix in RUN_CACHE_PREFIXES:
+            for index in range(RUN_CACHE_ENTRY_COUNT):
+                context.set((prefix, index), index)
+        for key in unrelated_keys:
+            context.set(key, key[1])
+        context.set_dependency_cache_hits(dependency_hits)
+
+        initial_targeted_count = sum(
+            1
+            for key in context._values
+            if isinstance(key, tuple) and key and key[0] in RUN_CACHE_PREFIXES
+        )
+        assert initial_targeted_count == 5_500
+        assert len(context._values) == 6_000
+
+        phase_snapshots: list[frozenset[Hashable]] = []
+        original_discard_prefix = context.discard_prefix
+
+        def counted_discard_prefix(
+            _context: CalculationRunContext,
+            prefix: tuple[Hashable, ...],
+        ) -> None:
+            discard_calls.increment()
+            key_inspections.increment(len(context._values))
+            original_discard_prefix(prefix)
+
+        monkeypatch.setattr(
+            context,
+            "discard_prefix",
+            MethodType(counted_discard_prefix, context),
+        )
+        original_clear_trusted_orm_managers = context.clear_trusted_orm_managers
+
+        def observed_clear_trusted_orm_managers(
+            _context: CalculationRunContext,
+        ) -> None:
+            original_clear_trusted_orm_managers()
+            phase_snapshots.append(frozenset(context._values))
+
+        monkeypatch.setattr(
+            context,
+            "clear_trusted_orm_managers",
+            MethodType(observed_clear_trusted_orm_managers, context),
+        )
+
+        if diagnostics_enabled:
+            diagnostic = capture_diagnostics(target.mutate)
+            result = diagnostic.result
+        else:
+            result = target.mutate()
+
+        observed_discard_calls = discard_calls.value
+        observed_key_inspections = key_inspections.value
+        observed_phase_snapshots = tuple(phase_snapshots)
+
+        assert body_calls.value == 1
+        assert result is target
+        assert len(observed_phase_snapshots) == 2
+        for snapshot in observed_phase_snapshots:
+            assert not any(
+                isinstance(key, tuple) and key and key[0] in RUN_CACHE_PREFIXES
+                for key in snapshot
+            )
+            assert unrelated_keys <= snapshot
+            assert snapshot == unrelated_keys
+        assert unrelated_keys <= context._values.keys()
+        assert all(
+            context.get_dependency_cache_hit(key) is hit
+            for key, hit in dependency_hits.items()
+        )
+        assert len(context._dependency_cache_hits) == RUN_CACHE_ENTRY_COUNT
+        assert observed_discard_calls == 22
+        assert observed_key_inspections == 44_000
+        assert diagnostic_captures.value == int(diagnostics_enabled)
+        perf_budgets.assert_observation(
+            "RUN_CACHE_MIXED_500_DISCARD_CALLS",
+            observed_discard_calls,
+        )
+        perf_budgets.assert_observation(
+            "RUN_CACHE_MIXED_500_KEY_INSPECTIONS",
+            observed_key_inspections,
+        )
+        if diagnostics_enabled:
+            print(
+                "RUN_CACHE_MIXED_500_DIAGNOSTIC "
+                f"elapsed={diagnostic.elapsed_seconds:.6f}s "
+                f"peak={diagnostic.peak_bytes}B"
+            )
+
+    assert context._values == {}
+    assert context._dependency_cache_hits == {}
+    assert current_calculation_run_context() is None
 
 
 @pytest.mark.parametrize("row_count", [999, 1000, 1001, 10000])
