@@ -484,6 +484,25 @@ def test_sequence_evidence_denies_replaced_or_removed_candidate() -> None:
     assert not evidence.authorizes(input_field, candidate, {})
 
 
+@pytest.mark.parametrize("source_type", [list, tuple])
+def test_sequence_evidence_denies_distinct_same_bits_nan_after_normalization(
+    source_type: type[list[object]] | type[tuple[object, ...]],
+) -> None:
+    emitted_nan = float("nan")
+    normalized_nan = _same_bits_float(emitted_nan)
+    source = source_type((emitted_nan,))
+    input_field = cast(Input[type[object]], Input(float, possible_values=source))
+    evidence = _static_evidence(
+        input_field,
+        source,
+        emitted_nan,
+        source_index=0,
+    )
+
+    assert evidence.authorizes(input_field, emitted_nan, {})
+    assert not evidence.authorizes(input_field, normalized_nan, {})
+
+
 def test_set_evidence_requires_current_membership_in_same_source() -> None:
     source = {1, 2}
     input_field = cast(Input[type[object]], Input(int, possible_values=source))
@@ -607,6 +626,65 @@ def test_exact_builtin_domain_evidence_authorizes_emitted_candidate(
     evidence = _static_evidence(input_field, source, candidate)
 
     assert evidence.authorizes(input_field, candidate, {})
+
+
+@pytest.mark.parametrize(
+    ("source", "candidate"),
+    [
+        (NumericRangeDomain(1, 5, 2), 3),
+        (
+            DateRangeDomain(date(2026, 1, 1), date(2026, 1, 3)),
+            date(2026, 1, 2),
+        ),
+    ],
+)
+def test_domain_behavior_override_prevents_evidence_creation_without_execution(
+    source: NumericRangeDomain | DateRangeDomain,
+    candidate: object,
+) -> None:
+    behavior_calls: list[object] = []
+
+    def overridden_contains(value: object) -> bool:
+        behavior_calls.append(value)
+        return False
+
+    object.__setattr__(source, "contains", overridden_contains)
+    input_field = cast(
+        Input[type[object]], Input(type(candidate), possible_values=source)
+    )
+
+    assert _trusted_enumeration_evidence(input_field, source, candidate, {}) is None
+    assert behavior_calls == []
+
+
+@pytest.mark.parametrize(
+    ("source", "candidate"),
+    [
+        (NumericRangeDomain(1, 5, 2), 3),
+        (
+            DateRangeDomain(date(2026, 1, 1), date(2026, 1, 3)),
+            date(2026, 1, 2),
+        ),
+    ],
+)
+def test_domain_behavior_override_revokes_existing_evidence_without_execution(
+    source: NumericRangeDomain | DateRangeDomain,
+    candidate: object,
+) -> None:
+    input_field = cast(
+        Input[type[object]], Input(type(candidate), possible_values=source)
+    )
+    evidence = _static_evidence(input_field, source, candidate)
+    behavior_calls: list[object] = []
+
+    def overridden_contains(value: object) -> bool:
+        behavior_calls.append(value)
+        return False
+
+    object.__setattr__(source, "contains", overridden_contains)
+
+    assert not evidence.authorizes(input_field, candidate, {})
+    assert behavior_calls == []
 
 
 def test_evidence_denies_changed_input_provider_or_normalized_value() -> None:
@@ -745,6 +823,28 @@ def test_input_subclass_is_rejected_before_accessing_hostile_attributes() -> Non
         is None
     )
     assert input_field.callbacks == []
+
+
+@pytest.mark.parametrize(
+    "override_name",
+    ["resolve_possible_values", "normalize", "cast", "_build_dependency_values"],
+)
+def test_late_input_behavior_override_revokes_existing_evidence(
+    override_name: str,
+) -> None:
+    source = [1]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    evidence = _static_evidence(input_field, source, source[0], source_index=0)
+    behavior_calls: list[int] = []
+
+    def overridden_behavior(*_args: object, **_kwargs: object) -> object:
+        behavior_calls.append(1)
+        return source
+
+    input_field.__dict__[override_name] = overridden_behavior
+
+    assert not evidence.authorizes(input_field, 1, {})
+    assert behavior_calls == []
 
 
 def test_evidence_tracking_delegates_to_source_witness() -> None:

@@ -49,6 +49,17 @@ if TYPE_CHECKING:
 type Combination = dict[str, object]
 type RawFilterDefinitions = dict[str, object]
 
+_INPUT_BEHAVIOR_OVERRIDE_NAMES = frozenset(
+    {
+        "resolve_possible_values",
+        "normalize",
+        "cast",
+        "_build_dependency_values",
+    }
+)
+_NUMERIC_RANGE_STATE_NAMES = frozenset({"kind", "min_value", "max_value", "step"})
+_DATE_RANGE_STATE_NAMES = frozenset({"kind", "start", "end", "frequency", "step"})
+
 
 @dataclass(frozen=True, slots=True)
 class _TrustedToken:
@@ -84,7 +95,9 @@ class _SequenceEnumerationWitness(_StaticEnumerationWitness):
     candidate: object
     candidate_token: _TrustedToken
 
-    def authorizes(self, _value: object) -> bool:
+    def authorizes(self, value: object) -> bool:
+        if value is not self.candidate:
+            return False
         try:
             current = self.source[self.source_index]
         except IndexError:
@@ -163,6 +176,8 @@ class _EnumerationEvidence:
         identification: Mapping[str, object],
     ) -> bool:
         if input_field is not self.input_field:
+            return False
+        if _input_has_behavior_override(input_field):
             return False
         if input_field.possible_values is not self.provider:
             return False
@@ -246,6 +261,15 @@ def _trusted_dependency_snapshot(
     return tuple(tokens)
 
 
+def _input_has_behavior_override(input_field: Input[type[object]]) -> bool:
+    """Return whether an exact Input instance shadows trusted behavior methods."""
+    instance_state = input_field.__dict__
+    return any(
+        override_name in instance_state
+        for override_name in _INPUT_BEHAVIOR_OVERRIDE_NAMES
+    )
+
+
 def _trusted_dependency_names_match(
     current_names: list[str],
     expected_names: tuple[str, ...],
@@ -263,6 +287,10 @@ def _numeric_range_configuration(
     source: NumericRangeDomain,
 ) -> tuple[_TrustedToken, _TrustedToken, _TrustedToken] | None:
     """Return safe exact built-in configuration for a numeric range."""
+    if not _domain_has_exact_state(source, _NUMERIC_RANGE_STATE_NAMES):
+        return None
+    if type(source.kind) is not str or source.kind != "numeric_range":
+        return None
     values = (source.min_value, source.max_value, source.step)
     if any(type(value) not in {int, float} for value in values):
         return None
@@ -279,8 +307,12 @@ def _date_range_configuration(
     source: DateRangeDomain,
 ) -> tuple[_TrustedToken, _TrustedToken, _TrustedToken, _TrustedToken] | None:
     """Return safe exact built-in configuration for a date range."""
+    if not _domain_has_exact_state(source, _DATE_RANGE_STATE_NAMES):
+        return None
     if (
-        type(source.start) is not date
+        type(source.kind) is not str
+        or source.kind != "date_range"
+        or type(source.start) is not date
         or type(source.end) is not date
         or type(source.frequency) is not str
         or type(source.step) is not int
@@ -296,6 +328,17 @@ def _date_range_configuration(
         tuple[_TrustedToken, _TrustedToken, _TrustedToken, _TrustedToken],
         tokens,
     )
+
+
+def _domain_has_exact_state(
+    source: NumericRangeDomain | DateRangeDomain,
+    expected_names: frozenset[str],
+) -> bool:
+    """Reject instance behavior shadows without reading or invoking them."""
+    instance_state = source.__dict__
+    if type(instance_state) is not dict:
+        return False
+    return frozenset(instance_state) == expected_names
 
 
 def _sequence_enumeration_witness(
@@ -400,15 +443,7 @@ def _trusted_enumeration_evidence(
     provider = input_field.possible_values
     if callable(provider):
         return None
-    if any(
-        override_name in input_field.__dict__
-        for override_name in (
-            "resolve_possible_values",
-            "normalize",
-            "cast",
-            "_build_dependency_values",
-        )
-    ):
+    if _input_has_behavior_override(input_field):
         return None
     if provider is not resolved_source:
         return None
