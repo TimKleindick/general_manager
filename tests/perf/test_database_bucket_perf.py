@@ -666,21 +666,18 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
     def _inject_perf_budgets(self, perf_budgets: PerfBudgets) -> None:
         self.perf_budgets = perf_budgets
 
-    def test_foreign_key_traversal_and_history_read_write_work(self) -> None:
-        parent_model = cast(
+    @staticmethod
+    def _database_model(manager_class: type[GeneralManager]) -> type[models.Model]:
+        return cast(
             type[models.Model],
-            cast(Any, self.Perf337Parent.Interface)._model,
+            cast(Any, manager_class.Interface)._model,
         )
-        child_model = cast(
-            type[models.Model],
-            cast(Any, self.Perf337Child.Interface)._model,
-        )
-        history_model = cast(
-            type[models.Model],
-            cast(Any, self.Perf337History.Interface)._model,
-        )
-        history_rows = cast(Any, history_model).history
 
+    def _seed_foreign_key_workloads(
+        self,
+    ) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        parent_model = self._database_model(self.Perf337Parent)
+        child_model = self._database_model(self.Perf337Child)
         unique_parent_rows = parent_model.objects.bulk_create(
             [parent_model(name=f"unique-{index:04d}") for index in range(1_000)]
         )
@@ -714,7 +711,13 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
             ]
         )
 
-        fk_observations: dict[str, int] = {}
+        return unique_parent_ids, expected_repeated_parent_ids
+
+    def _measure_foreign_key_shape(
+        self,
+        shape: str,
+        expected_parent_ids: tuple[int, ...],
+    ) -> dict[str, int]:
         original_parent_init = cast(
             Callable[..., None],
             self.Perf337Parent.Interface.__init__,
@@ -731,87 +734,92 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
 
             return counted_parent_init
 
-        for shape, expected_parent_ids in (
-            ("UNIQUE", unique_parent_ids),
-            ("REPEATED", expected_repeated_parent_ids),
+        child_bucket = self.Perf337Child.filter(shape=shape.lower()).sort("position")
+        parent_constructors = Counter()
+        with patch.object(
+            self.Perf337Parent.Interface,
+            "__init__",
+            count_parent_constructions(parent_constructors),
         ):
-            child_bucket = self.Perf337Child.filter(shape=shape.lower()).sort(
-                "position"
-            )
-            parent_constructors = Counter()
-
-            with patch.object(
-                self.Perf337Parent.Interface,
-                "__init__",
-                count_parent_constructions(parent_constructors),
-            ):
-                with CalculationRunContext():
-                    parent_constructors.reset()
-                    with CaptureQueriesContext(connection) as cold_queries:
-                        cold_children = tuple(child_bucket)
-                        assert all(
-                            not cast(
-                                Any, child._interface
-                            )._instance._state.fields_cache
-                            for child in cold_children
-                        )
-                        cold_parents = tuple(
-                            cast(GeneralManager | None, child.parent)
-                            for child in cold_children
-                        )
-                    cold_parent_ids = tuple(
-                        cast(int, parent.identification["id"])
-                        for parent in cold_parents
-                        if parent is not None
+            with CalculationRunContext():
+                parent_constructors.reset()
+                with CaptureQueriesContext(connection) as cold_queries:
+                    cold_children = tuple(child_bucket)
+                    assert all(
+                        not cast(Any, child._interface)._instance._state.fields_cache
+                        for child in cold_children
                     )
-                    cold_constructor_count = parent_constructors.value
-                    cold_query_count = len(cold_queries)
-
-                    parent_constructors.reset()
-                    with CaptureQueriesContext(connection) as warm_queries:
-                        warm_children = tuple(child_bucket)
-                        warm_parents = tuple(
-                            cast(GeneralManager | None, child.parent)
-                            for child in warm_children
-                        )
-                    warm_parent_ids = tuple(
-                        cast(int, parent.identification["id"])
-                        for parent in warm_parents
-                        if parent is not None
+                    cold_parents = tuple(
+                        cast(GeneralManager | None, child.parent)
+                        for child in cold_children
                     )
-                    warm_constructor_count = parent_constructors.value
-                    warm_query_count = len(warm_queries)
+                cold_parent_ids = tuple(
+                    cast(int, parent.identification["id"])
+                    for parent in cold_parents
+                    if parent is not None
+                )
+                cold_constructor_count = parent_constructors.value
+                cold_query_count = len(cold_queries)
 
-            assert len(cold_children) == 1_000
-            assert len(warm_children) == 1_000
-            assert tuple(
-                cast(int, child.identification["id"]) for child in warm_children
-            ) == tuple(cast(int, child.identification["id"]) for child in cold_children)
-            assert all(
-                not cast(Any, child._interface)._instance._state.fields_cache
-                for child in cold_children
-            )
-            assert cold_parent_ids == expected_parent_ids
-            assert warm_parent_ids == expected_parent_ids
-            assert len(set(cold_parent_ids)) == (1_000 if shape == "UNIQUE" else 10)
-            assert len(set(warm_parent_ids)) == (1_000 if shape == "UNIQUE" else 10)
+                parent_constructors.reset()
+                with CaptureQueriesContext(connection) as warm_queries:
+                    warm_children = tuple(child_bucket)
+                    warm_parents = tuple(
+                        cast(GeneralManager | None, child.parent)
+                        for child in warm_children
+                    )
+                warm_parent_ids = tuple(
+                    cast(int, parent.identification["id"])
+                    for parent in warm_parents
+                    if parent is not None
+                )
+                warm_constructor_count = parent_constructors.value
+                warm_query_count = len(warm_queries)
 
-            prefix = f"DB_FK_{shape}"
-            fk_observations[f"{prefix}_COLD_QUERIES"] = cold_query_count
-            fk_observations[f"{prefix}_COLD_CONSTRUCTORS"] = cold_constructor_count
-            fk_observations[f"{prefix}_WARM_QUERIES"] = warm_query_count
-            fk_observations[f"{prefix}_WARM_CONSTRUCTORS"] = warm_constructor_count
+        assert len(cold_children) == 1_000
+        assert len(warm_children) == 1_000
+        assert tuple(
+            cast(int, child.identification["id"]) for child in warm_children
+        ) == tuple(cast(int, child.identification["id"]) for child in cold_children)
+        assert all(
+            not cast(Any, child._interface)._instance._state.fields_cache
+            for child in cold_children
+        )
+        assert cold_parent_ids == expected_parent_ids
+        assert warm_parent_ids == expected_parent_ids
+        expected_distinct = 1_000 if shape == "UNIQUE" else 10
+        assert len(set(cold_parent_ids)) == expected_distinct
+        assert len(set(warm_parent_ids)) == expected_distinct
 
+        prefix = f"DB_FK_{shape}"
+        return {
+            f"{prefix}_COLD_QUERIES": cold_query_count,
+            f"{prefix}_COLD_CONSTRUCTORS": cold_constructor_count,
+            f"{prefix}_WARM_QUERIES": warm_query_count,
+            f"{prefix}_WARM_CONSTRUCTORS": warm_constructor_count,
+        }
+
+    def _seed_history_workload(
+        self,
+    ) -> tuple[
+        type[models.Model],
+        tuple[GeneralManager, ...],
+        tuple[int, ...],
+        datetime,
+        datetime,
+    ]:
+        history_model = self._database_model(self.Perf337History)
+        history_rows = cast(Any, history_model).history
         base_time = datetime(2025, 1, 15, 12, tzinfo=UTC)
         with patch("django.utils.timezone.now", return_value=base_time):
-            history_managers = [
+            history_managers = tuple(
                 self.Perf337History.create(
                     revision=0,
                     creator_id=None,
                     ignore_permission=True,
                 )
                 for _ in range(100)
-            ]
+            )
 
         for revision in range(1, 4):
             round_time = base_time + timedelta(minutes=revision)
@@ -846,8 +854,21 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
             )
             == (4,) * 100
         )
+        return (
+            history_model,
+            history_managers,
+            expected_history_ids,
+            base_time,
+            search_time,
+        )
 
+    def _measure_history_read(
+        self,
+        search_time: datetime,
+        expected_history_ids: tuple[int, ...],
+    ) -> dict[str, int]:
         history_read_callbacks = Counter()
+        history_capture_active = False
         original_get_historical_queryset = OrmHistoryCapability.get_historical_queryset
 
         def counted_get_historical_queryset(
@@ -855,6 +876,7 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
             interface_cls: type[OrmInterfaceBase[models.Model]],
             historical_search_time: datetime,
         ) -> models.QuerySet[models.Model]:
+            assert history_capture_active
             history_read_callbacks.increment()
             return original_get_historical_queryset(
                 capability,
@@ -867,10 +889,11 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
             "get_historical_queryset",
             counted_get_historical_queryset,
         ):
-            historical_bucket = self.Perf337History.filter(
-                search_date=search_time
-            ).sort("id")
             with CaptureQueriesContext(connection) as history_read_queries:
+                history_capture_active = True
+                historical_bucket = self.Perf337History.filter(
+                    search_date=search_time
+                ).sort("id")
                 historical_managers = tuple(historical_bucket)
                 historical_ids = tuple(
                     cast(int, manager.identification["id"])
@@ -879,6 +902,7 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
                 historical_revisions = tuple(
                     manager.revision for manager in historical_managers
                 )
+                history_capture_active = False
             history_read_query_count = len(history_read_queries)
             history_read_callback_count = history_read_callbacks.value
 
@@ -886,7 +910,18 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
         assert historical_ids == expected_history_ids
         assert set(historical_ids) == set(expected_history_ids)
         assert historical_revisions == (3,) * 100
+        return {
+            "DB_HISTORY_READ_100_QUERIES": history_read_query_count,
+            "DB_HISTORY_READ_100_CALLBACKS": history_read_callback_count,
+        }
 
+    def _measure_history_write(
+        self,
+        history_model: type[models.Model],
+        history_managers: tuple[GeneralManager, ...],
+        base_time: datetime,
+    ) -> dict[str, int]:
+        history_rows = cast(Any, history_model).history
         history_count_before_write = history_rows.count()
         history_write_callbacks = Counter()
         original_save_with_history = OrmMutationCapability.save_with_history
@@ -936,13 +971,45 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
         )
         assert history_rows.count() == history_count_before_write + 100
         assert history_rows.count() == 600
+        return {
+            "DB_HISTORY_WRITE_100_QUERIES": history_write_query_count,
+            "DB_HISTORY_WRITE_100_CALLBACKS": history_write_callback_count,
+        }
+
+    def test_foreign_key_traversal_and_history_read_write_work(self) -> None:
+        unique_parent_ids, expected_repeated_parent_ids = (
+            self._seed_foreign_key_workloads()
+        )
+        fk_observations: dict[str, int] = {}
+        for shape, expected_parent_ids in (
+            ("UNIQUE", unique_parent_ids),
+            ("REPEATED", expected_repeated_parent_ids),
+        ):
+            fk_observations.update(
+                self._measure_foreign_key_shape(shape, expected_parent_ids)
+            )
+
+        (
+            history_model,
+            history_managers,
+            expected_history_ids,
+            base_time,
+            search_time,
+        ) = self._seed_history_workload()
+        history_read_observations = self._measure_history_read(
+            search_time,
+            expected_history_ids,
+        )
+        history_write_observations = self._measure_history_write(
+            history_model,
+            history_managers,
+            base_time,
+        )
 
         observations = {
             **fk_observations,
-            "DB_HISTORY_READ_100_QUERIES": history_read_query_count,
-            "DB_HISTORY_READ_100_CALLBACKS": history_read_callback_count,
-            "DB_HISTORY_WRITE_100_QUERIES": history_write_query_count,
-            "DB_HISTORY_WRITE_100_CALLBACKS": history_write_callback_count,
+            **history_read_observations,
+            **history_write_observations,
         }
         assert set(observations) == {
             "DB_FK_UNIQUE_COLD_QUERIES",
