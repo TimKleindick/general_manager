@@ -84,6 +84,9 @@ class UploadIntent(models.Model):
     adapter_version: models.CharField[str] = models.CharField(max_length=64)
     storage_fingerprint: models.CharField[str] = models.CharField(max_length=255)
     staging_key: models.CharField[str] = models.CharField(max_length=1024)
+    transfer_attempt_count: models.PositiveIntegerField[int] = (
+        models.PositiveIntegerField(default=0)
+    )
     final_key: models.CharField[str | None] = models.CharField(
         max_length=1024,
         null=True,
@@ -169,6 +172,10 @@ class UploadIntent(models.Model):
             models.CheckConstraint(  # type: ignore[call-arg]
                 condition=models.Q(finalization_attempt_count__gte=0),
                 name="gm_upload_attempt_count_gte_0",
+            ),
+            models.CheckConstraint(  # type: ignore[call-arg]
+                condition=models.Q(transfer_attempt_count__gte=0),
+                name="gm_upload_transfer_attempt_gte_0",
             ),
         )
 

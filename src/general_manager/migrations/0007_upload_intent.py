@@ -81,6 +81,7 @@ class Migration(migrations.Migration):
                 ("adapter_version", models.CharField(max_length=64)),
                 ("storage_fingerprint", models.CharField(max_length=255)),
                 ("staging_key", models.CharField(max_length=1024)),
+                ("transfer_attempt_count", models.PositiveIntegerField(default=0)),
                 ("final_key", models.CharField(blank=True, max_length=1024, null=True)),
                 ("old_key", models.CharField(blank=True, max_length=1024, null=True)),
                 ("original_filename", models.CharField(max_length=255)),
@@ -167,6 +168,10 @@ class Migration(migrations.Migration):
                     models.CheckConstraint(  # type: ignore[call-arg]
                         condition=models.Q(("finalization_attempt_count__gte", 0)),
                         name="gm_upload_attempt_count_gte_0",
+                    ),
+                    models.CheckConstraint(  # type: ignore[call-arg]
+                        condition=models.Q(("transfer_attempt_count__gte", 0)),
+                        name="gm_upload_transfer_attempt_gte_0",
                     ),
                 ),
             },

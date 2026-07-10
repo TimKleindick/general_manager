@@ -18,6 +18,7 @@ from simple_history.models import HistoricalChanges
 from general_manager.api.graphql import GraphQL
 from general_manager.api.remote_api import clear_remote_api_urls
 from general_manager.api.remote_invalidation import clear_remote_invalidation_routes
+from general_manager.uploads.urls import clear_file_upload_urls
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.cache.cache_decorator import _SENTINEL
 from general_manager.cache.dependency_index import (
@@ -142,6 +143,7 @@ def _default_remote_api_url_clear() -> None:
     """Remove auto-generated RemoteAPI URL patterns from the root URLconf."""
     clear_remote_api_urls()
     clear_remote_invalidation_routes()
+    clear_file_upload_urls()
 
 
 def _get_historical_changes_related_models(
