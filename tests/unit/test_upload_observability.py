@@ -27,6 +27,7 @@ from general_manager.uploads.models import UploadIntent
 from general_manager.uploads.types import ObjectVersion, UploadIntentState
 from general_manager.uploads.views import TransferClaim, _complete_transfer
 from general_manager.uploads import finalization
+from general_manager.uploads import metrics
 from general_manager.uploads.finalization import _record_finalization_failure
 from general_manager.uploads import services
 
@@ -205,6 +206,63 @@ def test_metrics_reject_unbounded_or_sensitive_labels_without_calling_backend() 
         restore_upload_metrics_backend(previous)
 
     assert backend.failures == Counter()
+
+
+def test_metrics_backend_rejects_objects_without_the_backend_protocol() -> None:
+    with pytest.raises(TypeError, match=r"increment.*observe"):
+        set_upload_metrics_backend(object())  # type: ignore[arg-type]
+
+
+def test_invalid_metric_values_are_ignored_without_backend_calls() -> None:
+    backend = RecordingBackend()
+    previous = set_upload_metrics_backend(backend)
+    try:
+        record_upload_transition(SimpleNamespace(adapter_id="bad adapter"), "uploaded")
+        record_upload_bytes(adapter="proxy", transport="proxy", byte_count=True)
+        record_upload_cleanup(operation="unknown", result="completed")
+        observe_upload_duration(
+            adapter="proxy",
+            operation="transfer",
+            result="completed",
+            seconds=-1,
+        )
+        record_upload_cleanup(
+            operation="expired",
+            result="completed",
+            intent=SimpleNamespace(adapter_id="bad adapter"),
+        )
+    finally:
+        restore_upload_metrics_backend(previous)
+
+    assert backend.transitions == Counter()
+    assert backend.bytes == []
+    assert backend.cleanups == Counter({("expired", "completed"): 1})
+    assert backend.durations == []
+
+
+def test_metrics_isolate_hostile_attributes_and_logging_handlers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class HostileIntent:
+        adapter_id = "proxy"
+
+        @property
+        def id(self) -> object:
+            raise RuntimeError
+
+    def fail_logging(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError
+
+    monkeypatch.setattr(metrics._logger, "info", fail_logging)
+    monkeypatch.setattr(metrics._logger, "warning", fail_logging)
+
+    record_upload_transition(HostileIntent(), "uploaded", from_state="pending")
+    record_upload_failure(
+        adapter="proxy",
+        operation="transfer",
+        error="storage_error",
+        correlation_id="not-a-uuid",
+    )
 
 
 def _persisted_intent(state: UploadIntentState) -> UploadIntent:

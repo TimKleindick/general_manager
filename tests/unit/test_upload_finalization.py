@@ -22,6 +22,7 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
 from django.db import close_old_connections, connection, models, transaction
 from django.db.models import NOT_PROVIDED
+from django.db.utils import OperationalError
 from django.test import override_settings
 from django.utils import timezone
 
@@ -1781,3 +1782,594 @@ def test_concurrent_consumption_has_one_winner_and_one_stable_replay_error(
     assert outcomes == ["created", "replayed"]
     assert intent.state == UploadIntentState.CONSUMED.value
     assert FinalizationRecord.objects.filter(label__in=("one", "two")).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_cleanup_dry_run_reports_each_phase_without_mutating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finalizing = [uuid4(), uuid4()]
+    expiring = [uuid4()]
+    terminal = [uuid4()]
+    retained = [uuid4(), uuid4(), uuid4()]
+    batches = iter([finalizing, expiring, terminal, retained])
+    events: list[dict[str, object]] = []
+    outcomes = iter(["deleted", "failed", "skipped"])
+
+    def delete_retained(
+        intent_id: UUID,
+        *,
+        alias: str,
+        retention_cutoff: object,
+        dry_run: bool,
+    ) -> tuple[str, SimpleNamespace]:
+        assert alias == "default"
+        assert retention_cutoff is not None
+        assert dry_run is True
+        return next(outcomes), SimpleNamespace(id=intent_id)
+
+    monkeypatch.setattr(
+        finalization,
+        "_cleanup_candidate_ids",
+        lambda _queryset, *, limit: next(batches)[:limit],
+    )
+    monkeypatch.setattr(
+        finalization,
+        "_upload_intent_snapshot",
+        lambda intent_id, *, alias: SimpleNamespace(id=intent_id, alias=alias),
+    )
+    monkeypatch.setattr(
+        finalization,
+        "_delete_retained_intent",
+        delete_retained,
+    )
+    monkeypatch.setattr(
+        finalization,
+        "record_upload_cleanup",
+        lambda **values: events.append(values),
+    )
+
+    counts = finalization.run_upload_cleanup(
+        batch_size=20,
+        older_than_seconds=1,
+        dry_run=True,
+    )
+
+    assert counts.reconciled == 2
+    assert counts.expired == 1
+    assert counts.cleaned == 1
+    assert counts.deleted == 1
+    assert counts.failed == 1
+    assert counts.skipped == 1
+    assert {(event["operation"], event["result"]) for event in events} >= {
+        ("finalization", "dry_run"),
+        ("cleanup", "dry_run"),
+        ("cleanup", "failed"),
+        ("cleanup", "skipped"),
+    }
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_cleanup_dry_run_retains_eligible_intent_metadata(
+    django_user_model: type[models.Model],
+) -> None:
+    user = django_user_model.objects.create_user(username="dry-run-retention")
+    intent, _candidate = _uploaded_intent(user)
+    old = timezone.now() - timedelta(days=2)
+    UploadIntent.objects.filter(pk=intent.pk).update(
+        state=UploadIntentState.EXPIRED.value,
+        cleanup_completed_at=old,
+        updated_at=old,
+    )
+    before = UploadIntent.objects.filter(pk=intent.pk).values().get()
+
+    counts = finalization.run_upload_cleanup(
+        batch_size=1,
+        older_than_seconds=1,
+        at=timezone.now(),
+        dry_run=True,
+    )
+
+    assert counts.deleted == 1
+    assert UploadIntent.objects.filter(pk=intent.pk).exists()
+    assert UploadIntent.objects.filter(pk=intent.pk).values().get() == before
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+@pytest.mark.parametrize(
+    ("outcome", "counter"),
+    [
+        (UploadIntentState.CONSUMED.value, "reconciled"),
+        ("failed", "failed"),
+        ("busy", "skipped"),
+    ],
+)
+def test_cleanup_classifies_live_finalization_outcomes(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+    counter: str,
+) -> None:
+    intent_id = uuid4()
+    batches = iter([[intent_id], [], [], []])
+    events: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        finalization,
+        "_cleanup_candidate_ids",
+        lambda _queryset, *, limit: next(batches)[:limit],
+    )
+    monkeypatch.setattr(
+        finalization,
+        "_upload_intent_snapshot",
+        lambda selected, *, alias: SimpleNamespace(id=selected, alias=alias),
+    )
+    monkeypatch.setattr(
+        finalization,
+        "finalize_upload_intent",
+        lambda _selected, *, database_alias: (
+            outcome if database_alias == "default" else "failed"
+        ),
+    )
+    monkeypatch.setattr(
+        finalization,
+        "record_upload_cleanup",
+        lambda **values: events.append(values),
+    )
+
+    counts = finalization.run_upload_cleanup(
+        batch_size=2,
+        older_than_seconds=1,
+    )
+
+    assert getattr(counts, counter) == 1
+    assert [event["result"] for event in events] == [
+        "completed" if counter == "reconciled" else counter
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_cleanup_continues_after_expiry_races_and_storage_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    django_user_model: type[models.Model],
+) -> None:
+    user = django_user_model.objects.create_user(username="cleanup-expiry-outcomes")
+    cleaned_intent, _ = _uploaded_intent(user)
+    raced_intent, _ = _uploaded_intent(user, field_name="document")
+    failed_intent, _ = _uploaded_intent(user, field_name="image")
+    batches = iter([[], [cleaned_intent.id, raced_intent.id, failed_intent.id], [], []])
+
+    monkeypatch.setattr(
+        finalization,
+        "_cleanup_candidate_ids",
+        lambda _queryset, *, limit: next(batches)[:limit],
+    )
+
+    def expire(intent_id: UUID, **kwargs: object) -> bool:
+        if intent_id == failed_intent.id:
+            raise UploadStorageError
+        return intent_id == cleaned_intent.id
+
+    monkeypatch.setattr(finalization, "_expire_upload_intent", expire)
+    monkeypatch.setattr(
+        finalization, "_cleanup_terminal_intent", lambda *_args, **_kwargs: True
+    )
+    monkeypatch.setattr(
+        finalization, "record_upload_transition", lambda *_args, **_kwargs: None
+    )
+
+    counts = finalization.run_upload_cleanup(
+        batch_size=10,
+        older_than_seconds=1,
+    )
+
+    assert counts.expired == 1
+    assert counts.cleaned == 1
+    assert counts.skipped == 1
+    assert counts.failed == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_cleanup_classifies_terminal_cleanup_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleaned_id, skipped_id, failed_id = uuid4(), uuid4(), uuid4()
+    batches = iter([[], [], [cleaned_id, skipped_id, failed_id], []])
+    monkeypatch.setattr(
+        finalization,
+        "_cleanup_candidate_ids",
+        lambda _queryset, *, limit: next(batches)[:limit],
+    )
+
+    def cleanup(intent_id: UUID, **kwargs: object) -> bool:
+        if intent_id == failed_id:
+            raise UploadStorageError
+        return intent_id == cleaned_id
+
+    monkeypatch.setattr(finalization, "_cleanup_terminal_intent", cleanup)
+    monkeypatch.setattr(
+        finalization,
+        "_cleanup_miss_count",
+        lambda *_args, **_kwargs: "skipped",
+    )
+
+    counts = finalization.run_upload_cleanup(
+        batch_size=10,
+        older_than_seconds=1,
+    )
+
+    assert counts.cleaned == 1
+    assert counts.skipped == 1
+    assert counts.failed == 1
+
+
+@pytest.mark.parametrize(
+    ("batch_size", "older_than_seconds", "message"),
+    [(True, 1, "batch_size"), (1, 0, "older_than_seconds")],
+)
+def test_cleanup_rejects_boolean_and_nonpositive_limits(
+    batch_size: int,
+    older_than_seconds: int,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        finalization.run_upload_cleanup(
+            batch_size=batch_size,
+            older_than_seconds=older_than_seconds,
+        )
+
+
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": False}})
+def test_prepare_upload_claims_requires_candidates_and_enabled_uploads() -> None:
+    with pytest.raises(UploadBindingMismatchError):
+        finalization.prepare_upload_claims(
+            FinalizationInterface,
+            {},
+            operation=UploadOperation.CREATE,
+            actor_id=1,
+            target_pk=None,
+        )
+
+    candidate = UploadCandidate(
+        intent_id=uuid4(),
+        filename="portrait.bin",
+        size=1,
+        content_type="application/octet-stream",
+        checksum_sha256="a" * 64,
+    )
+    with pytest.raises(UploadStorageError):
+        finalization.prepare_upload_claims(
+            FinalizationInterface,
+            {"avatar": candidate},
+            operation=UploadOperation.CREATE,
+            actor_id=1,
+            target_pk=None,
+        )
+
+
+def test_binding_helpers_reject_inconsistent_manager_and_target_identity() -> None:
+    class OrphanInterface:
+        _parent_class = None
+
+    with pytest.raises(UploadBindingMismatchError):
+        finalization._manager_name(OrphanInterface)  # type: ignore[arg-type]
+    with pytest.raises(UploadBindingMismatchError):
+        finalization._target_identifier(UploadOperation.CREATE, 1)
+    with pytest.raises(UploadBindingMismatchError):
+        finalization._target_identifier(UploadOperation.UPDATE, None)
+
+
+def test_version_metadata_and_bounded_reads_fail_closed() -> None:
+    assert finalization._version_from_metadata({"size": 1}) is None
+    malformed = {
+        "version_id": None,
+        "etag": None,
+        "checksum_sha256": "a" * 64,
+        "size": "not-an-integer",
+        "content_type": "text/plain",
+    }
+    assert finalization._version_from_metadata(malformed) is None
+
+    class ObjectVersionSubclass(ObjectVersion):
+        pass
+
+    assert (
+        finalization._object_version_is_safe(
+            ObjectVersionSubclass(None, None, "a" * 64, 1, "text/plain")
+        )
+        is False
+    )
+    with pytest.raises(UploadStorageError):
+        finalization._read_bounded_prefix(  # type: ignore[arg-type]
+            SimpleNamespace(read=lambda _size: "not-bytes"),
+            limit=4,
+            expected_size=1,
+        )
+    with pytest.raises(UploadStorageChangedError):
+        finalization._read_bounded_prefix(
+            BytesIO(b""),
+            limit=4,
+            expected_size=1,
+        )
+
+
+def test_file_content_inspection_rejects_unverified_or_mismatched_detection() -> None:
+    version = ObjectVersion(None, None, "a" * 64, 1, "text/plain")
+    adapter = SimpleNamespace(open_stage=lambda *_args: BytesIO(b"x"))
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        finalization._inspect_file_content(
+            adapter,  # type: ignore[arg-type]
+            _STORAGE_ROOT,
+            version,
+            policy=FileUploadPolicy(allowed_content_types=("text/plain",)),
+            original_filename="file.txt",
+            max_inspection_bytes=4,
+        )
+    with pytest.raises(InvalidFileTypeError):
+        finalization._inspect_file_content(
+            adapter,  # type: ignore[arg-type]
+            _STORAGE_ROOT,
+            version,
+            policy=FileUploadPolicy(content_inspector=lambda _context: None),
+            original_filename="file.txt",
+            max_inspection_bytes=4,
+        )
+    with pytest.raises(InvalidFileTypeError):
+        finalization._inspect_file_content(
+            adapter,  # type: ignore[arg-type]
+            _STORAGE_ROOT,
+            version,
+            policy=FileUploadPolicy(content_inspector=lambda _context: "image/png"),
+            original_filename="file.txt",
+            max_inspection_bytes=4,
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_target_helpers_reject_invalid_ids_and_return_missing_rows() -> None:
+    with pytest.raises(UploadStorageChangedError):
+        finalization._parse_target_pk(None, FinalizationRecord)
+    assert finalization._locked_target(FinalizationRecord, 999_999, "default") is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sqlite_retry_only_retries_recognized_contention(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def nonbusy() -> None:
+        raise OperationalError
+
+    with pytest.raises(OperationalError):
+        finalization._retry_sqlite_busy(nonbusy, alias="default")
+
+    monkeypatch.setattr(finalization, "_is_sqlite_busy", lambda _error, _alias: True)
+    monkeypatch.setattr(finalization.secrets, "randbelow", lambda _maximum: 0)
+    monkeypatch.setattr(finalization.time, "sleep", lambda _seconds: None)
+
+    def always_busy() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise OperationalError
+
+    with pytest.raises(UploadStorageError):
+        finalization._retry_sqlite_busy(always_busy, alias="default")
+
+    assert attempts == finalization._SQLITE_RETRY_ATTEMPTS
+
+
+def test_consumed_cleanup_swallows_stage_failure_when_no_old_file() -> None:
+    class StageFailureAdapter:
+        def delete_stage(self, stage_key: str, version: ObjectVersion) -> None:
+            assert stage_key == _STORAGE_ROOT
+            assert version.size == 1
+            raise OSError
+
+    finalization._cleanup_consumed(
+        StageFailureAdapter(),  # type: ignore[arg-type]
+        SimpleNamespace(staging_key=_STORAGE_ROOT, old_key=None),
+        ObjectVersion(None, None, "a" * 64, 1, "text/plain"),
+        FinalizationRecord,
+        FinalizationRecord._meta.get_field("avatar"),  # type: ignore[arg-type]
+        1,
+        "default",
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_consumed_cleanup_claims_exact_old_object_and_swallows_uncertainty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    final_key = "files/current.bin"
+    old_key = "files/old.bin"
+    target = FinalizationRecord.objects.create(avatar=final_key)
+    version = ObjectVersion(None, None, "a" * 64, 1, "text/plain")
+    intent = SimpleNamespace(
+        id=uuid4(),
+        staging_key=_STORAGE_ROOT,
+        old_key=old_key,
+        old_cleanup_completed_at=None,
+        final_key=final_key,
+    )
+    claimed = ClaimedObject(key="claims/old.bin", version=version)
+    adapter = FinalizationAdapter(_STORAGE)
+    events: list[str] = []
+
+    monkeypatch.setattr(adapter, "delete_stage", lambda *_args: None)
+    monkeypatch.setattr(
+        finalization,
+        "_plan_old_cleanup_claim",
+        lambda *_args, **_kwargs: (old_key, claimed),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "claim_replaced_object",
+        lambda key, _selected, *, cleanup_id: (
+            events.append(f"claim:{key}") if cleanup_id == intent.id else None
+        ),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "delete_claimed_object",
+        lambda _selected, *, cleanup_id: (
+            events.append("delete") if cleanup_id == intent.id else None
+        ),
+    )
+    monkeypatch.setattr(
+        finalization,
+        "_mark_old_cleanup_completed",
+        lambda intent_id, *, alias: (
+            events.append("complete")
+            if intent_id == intent.id and alias == "default"
+            else None
+        ),
+    )
+
+    finalization._cleanup_consumed(
+        adapter,
+        intent,
+        version,
+        FinalizationRecord,
+        FinalizationRecord._meta.get_field("avatar"),  # type: ignore[arg-type]
+        target.pk,
+        "default",
+    )
+
+    assert events == [f"claim:{old_key}", "delete", "complete"]
+
+    def fail_claim(
+        key: str,
+        selected: ClaimedObject,
+        *,
+        cleanup_id: UUID,
+    ) -> None:
+        assert key == old_key
+        assert selected == claimed
+        assert cleanup_id == intent.id
+        raise OSError
+
+    events.clear()
+    monkeypatch.setattr(adapter, "claim_replaced_object", fail_claim)
+    finalization._cleanup_consumed(
+        adapter,
+        intent,
+        version,
+        FinalizationRecord,
+        FinalizationRecord._meta.get_field("avatar"),  # type: ignore[arg-type]
+        target.pk,
+        "default",
+    )
+
+    assert events == []
+
+
+def test_superseded_cleanup_retains_objects_when_exact_deletion_is_uncertain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    version = ObjectVersion(None, None, "a" * 64, 1, "text/plain")
+    intent = SimpleNamespace(
+        id=uuid4(),
+        staging_key=_STORAGE_ROOT,
+        final_key="files/materialized.bin",
+        final_object_version={},
+    )
+    adapter = FinalizationAdapter(_STORAGE)
+    calls: list[str] = []
+
+    def fail_stage(stage_key: str, selected: ObjectVersion) -> None:
+        assert stage_key == intent.staging_key
+        assert selected == version
+        calls.append("stage")
+        raise OSError
+
+    def inspect_final(
+        final_key: str,
+        source: ObjectVersion,
+        *,
+        intent_id: UUID,
+    ) -> ObjectVersion:
+        assert final_key == intent.final_key
+        assert source == version
+        assert intent_id == intent.id
+        calls.append("inspect")
+        return version
+
+    def fail_final(
+        final_key: str,
+        selected: ObjectVersion,
+        *,
+        intent_id: UUID,
+    ) -> None:
+        assert final_key == intent.final_key
+        assert selected == version
+        assert intent_id == intent.id
+        calls.append("final")
+        raise OSError
+
+    monkeypatch.setattr(adapter, "delete_stage", fail_stage)
+    monkeypatch.setattr(adapter, "inspect_materialized", inspect_final)
+    monkeypatch.setattr(adapter, "delete_materialized", fail_final)
+
+    finalization._cleanup_superseded(adapter, intent, version)
+
+    assert calls == ["stage", "inspect", "final"]
+
+
+def test_terminal_cleanup_dispatches_by_persisted_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    version = ObjectVersion(None, None, "a" * 64, 1, "text/plain")
+    adapter = FinalizationAdapter(_STORAGE)
+    field = FinalizationRecord._meta.get_field("avatar")
+    calls: list[str] = []
+    monkeypatch.setattr(
+        services,
+        "_resolve_manager",
+        lambda _name: SimpleNamespace(Interface=FinalizationInterface),
+    )
+    monkeypatch.setattr(
+        services,
+        "_resolve_file_field",
+        lambda _interface, _field_name: (FinalizationRecord, field),
+    )
+    monkeypatch.setattr(
+        services,
+        "_resolve_intent_adapter",
+        lambda _intent, _field: adapter,
+    )
+    monkeypatch.setattr(services, "_stored_object_version", lambda _intent: version)
+    monkeypatch.setattr(
+        finalization,
+        "_cleanup_superseded",
+        lambda _adapter, _intent, _version: calls.append("superseded"),
+    )
+    monkeypatch.setattr(
+        finalization,
+        "_cleanup_consumed",
+        lambda *_args: calls.append("consumed"),
+    )
+    common = {
+        "manager_name": FinalizationManager.__name__,
+        "field_name": "avatar",
+        "final_target_pk": "1",
+    }
+
+    finalization._retry_terminal_cleanup(
+        SimpleNamespace(state=UploadIntentState.SUPERSEDED.value, **common),
+        alias="default",
+    )
+    finalization._retry_terminal_cleanup(
+        SimpleNamespace(state=UploadIntentState.CONSUMED.value, **common),
+        alias="default",
+    )
+    finalization._retry_terminal_cleanup(
+        SimpleNamespace(state=UploadIntentState.REJECTED.value, **common),
+        alias="default",
+    )
+
+    assert calls == ["superseded", "consumed"]

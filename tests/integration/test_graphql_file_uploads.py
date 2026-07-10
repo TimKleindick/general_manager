@@ -193,6 +193,8 @@ def test_public_api_exports_upload_policy_and_adapter_registration() -> None:
 def test_public_adapter_registration_rejects_invalid_storage_classes() -> None:
     with pytest.raises(TypeError, match=r"django\.core\.files\.storage\.Storage"):
         api.register_upload_adapter(str, lambda storage: ProxyUploadAdapter(storage))
+    with pytest.raises(TypeError, match="factory must be callable"):
+        api.register_upload_adapter(FileSystemStorage, None)  # type: ignore[arg-type]
 
 
 class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):

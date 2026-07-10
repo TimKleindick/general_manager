@@ -1106,14 +1106,35 @@ def _run_admission_transaction(
     raise AssertionError("unreachable")
 
 
+def _connection_atomic_blocks(connection: object) -> tuple[object, ...] | None:
+    """Read Django's atomic-block stack through one compatibility boundary."""
+
+    try:
+        blocks = getattr(connection, "atomic_blocks")  # noqa: B009 - compatibility seam
+    except (AttributeError, TypeError):
+        return None
+    if not isinstance(blocks, (list, tuple)):
+        return None
+    return tuple(blocks)
+
+
+def _atomic_block_is_from_testcase(block: object) -> bool:
+    """Read Django's testcase marker conservatively across supported versions."""
+
+    try:
+        return getattr(block, "_from_testcase") is True  # noqa: B009 - compatibility seam
+    except (AttributeError, TypeError):
+        return False
+
+
 def _sqlite_has_application_atomic_block(database_alias: str) -> bool:
     connection = connections[database_alias]
     if connection.vendor != "sqlite":
         return False
-    return any(
-        not getattr(block, "_from_testcase", False)
-        for block in connection.atomic_blocks
-    )
+    blocks = _connection_atomic_blocks(connection)
+    if blocks is None or not blocks:
+        return bool(getattr(connection, "in_atomic_block", False))
+    return any(not _atomic_block_is_from_testcase(block) for block in blocks)
 
 
 def _is_sqlite_busy_error(error: OperationalError, *, database_alias: str) -> bool:
@@ -1190,6 +1211,15 @@ def _resolve_file_field(
     ):
         raise UploadFieldInvalidError
     return model, model_field
+
+
+def resolve_file_field(
+    interface: _UploadInterface,
+    value: object,
+) -> tuple[type[models.Model], models.FileField]:
+    """Resolve one editable ORM upload field for startup inspection."""
+
+    return _resolve_file_field(interface, value)
 
 
 def _resolve_policy(

@@ -31,13 +31,13 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **options: Any) -> None:
         del args
-        settings = get_file_upload_settings()
+        upload_settings = get_file_upload_settings()
         batch_size = options.get("batch_size")
         older_than = options.get("older_than")
         if batch_size is None:
-            batch_size = settings.cleanup_batch_size
+            batch_size = upload_settings.cleanup_batch_size
         if older_than is None:
-            older_than = settings.cleanup_min_age_seconds
+            older_than = upload_settings.cleanup_min_age_seconds
         if (
             isinstance(batch_size, bool)
             or not isinstance(batch_size, int)

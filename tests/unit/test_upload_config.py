@@ -121,6 +121,11 @@ def test_file_policy_rejects_non_callable_content_inspector() -> None:
         FileUploadPolicy(content_inspector="not-callable")  # type: ignore[arg-type]
 
 
+def test_file_policy_rejects_non_boolean_public_flag() -> None:
+    with pytest.raises(FileUploadConfigurationError, match="public must be a boolean"):
+        FileUploadPolicy(public=1)  # type: ignore[arg-type]
+
+
 def test_file_policy_defensively_copies_allowed_value_sequences() -> None:
     content_types = ["image/png"]
     extensions = [".png"]
@@ -192,6 +197,8 @@ def test_file_policy_rejects_empty_or_non_string_allowed_values(
         {"TERMINAL_RETENTION_SECONDS": -1},
         {"HTTP_UPLOAD_PATH": "../uploads/"},
         {"STAGING_PREFIX": "/gm-staging/"},
+        {"STAGING_PREFIX": "gm-staging"},
+        {"INTENT_DATABASE": 1},
     ],
 )
 def test_upload_settings_reject_invalid_values(settings, configured: object) -> None:

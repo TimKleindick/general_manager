@@ -12,6 +12,7 @@ import tempfile
 import textwrap
 from threading import Barrier
 import traceback
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
 from urllib.parse import quote
@@ -1269,6 +1270,24 @@ class BeginFileUploadTests(TestCase):
         assert_safe_exception(captured.value, marker="database is locked")
         assert hook_calls == 0
         assert UploadIntent.objects.count() == 0
+
+    def test_sqlite_atomic_detection_excludes_testcase_and_detects_atomic_requests_blocks(
+        self,
+    ) -> None:
+        from general_manager.uploads import services
+
+        assert services._sqlite_has_application_atomic_block("default") is False
+        with transaction.atomic():
+            assert services._sqlite_has_application_atomic_block("default") is True
+
+    def test_sqlite_atomic_detection_fails_closed_without_atomic_block_internals(
+        self,
+    ) -> None:
+        from general_manager.uploads import services
+
+        connection = SimpleNamespace(vendor="sqlite", in_atomic_block=True)
+        with patch.object(services, "connections", {"default": connection}):
+            assert services._sqlite_has_application_atomic_block("default") is True
 
     @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": False}})
     def test_disabled_sqlite_admission_still_fails_before_atomic_side_effects(

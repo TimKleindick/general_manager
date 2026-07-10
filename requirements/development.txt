@@ -1,5 +1,5 @@
 -r base.txt
--e .[file-upload-image]
+-e .[file-upload-image]  # Provides Pillow for image-upload development and tests.
 
 ipython==9.0.2
 pytest==9.0.3

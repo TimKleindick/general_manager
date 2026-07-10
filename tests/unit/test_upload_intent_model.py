@@ -70,6 +70,10 @@ def test_upload_token_verification_safely_rejects_invalid_values(
     assert verify_upload_token(token, invalid) is False
 
 
+def test_upload_token_verification_rejects_unencodable_unicode() -> None:
+    assert verify_upload_token("\ud800", "a" * 64) is False
+
+
 class UploadIntentModelTests(TestCase):
     """Exercise upload intent persistence against the configured database."""
 

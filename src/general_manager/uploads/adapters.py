@@ -1161,6 +1161,23 @@ class UploadAdapterRegistry:
                 )
             self._registrations[storage_class] = factory
 
+    def explicit_factory_for(
+        self,
+        storage: Storage,
+    ) -> UploadAdapterFactory | None:
+        """Return the registered factory selected for ``storage``, if any."""
+
+        with self._lock:
+            return self._resolve_explicit_factory(storage)
+
+    def registrations_snapshot(
+        self,
+    ) -> Mapping[type[Storage], UploadAdapterFactory]:
+        """Return an immutable point-in-time view of registered factories."""
+
+        with self._lock:
+            return MappingProxyType(dict(self._registrations))
+
     def resolve(self, storage: Storage | None = None) -> UploadAdapter:
         resolved_storage = storage if storage is not None else _default_storage()
         with self._lock:

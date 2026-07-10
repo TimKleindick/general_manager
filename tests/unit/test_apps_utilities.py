@@ -155,9 +155,17 @@ class AppsUtilitiesTests(SimpleTestCase):
                 "register_system_checks",
                 side_effect=lambda: call_order.append("register_checks"),
             ):
-                with patch(
-                    "general_manager.apps._autoload_app_managers_modules",
-                    side_effect=lambda *_args, **_kwargs: call_order.append("autoload"),
+                with (
+                    patch(
+                        "general_manager.uploads.checks.register_upload_checks",
+                        side_effect=lambda: call_order.append("register_upload_checks"),
+                    ),
+                    patch(
+                        "general_manager.apps._autoload_app_managers_modules",
+                        side_effect=lambda *_args, **_kwargs: call_order.append(
+                            "autoload"
+                        ),
+                    ),
                 ):
                     with patch.object(
                         config,
@@ -221,6 +229,7 @@ class AppsUtilitiesTests(SimpleTestCase):
         assert call_order == [
             "install_runner",
             "register_checks",
+            "register_upload_checks",
             "autoload",
             "initialize",
             "configure_audit",
@@ -256,10 +265,18 @@ class AppsUtilitiesTests(SimpleTestCase):
                     "register_system_checks",
                     side_effect=lambda: call_order.append("register_checks"),
                 ):
-                    with patch(
-                        "general_manager.apps._autoload_app_managers_modules",
-                        side_effect=lambda *_args, **_kwargs: call_order.append(
-                            "autoload"
+                    with (
+                        patch(
+                            "general_manager.uploads.checks.register_upload_checks",
+                            side_effect=lambda: call_order.append(
+                                "register_upload_checks"
+                            ),
+                        ),
+                        patch(
+                            "general_manager.apps._autoload_app_managers_modules",
+                            side_effect=lambda *_args, **_kwargs: call_order.append(
+                                "autoload"
+                            ),
                         ),
                     ):
                         with patch.object(
@@ -346,6 +363,7 @@ class AppsUtilitiesTests(SimpleTestCase):
         assert call_order == [
             "install_runner",
             "register_checks",
+            "register_upload_checks",
             "autoload",
             "initialize",
             "remote_api",
