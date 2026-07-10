@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import tracemalloc
 from dataclasses import FrozenInstanceError
+from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
+from tests.perf import conftest as perf_conftest
 from tests.perf.support import (
     Counter,
     CountingIterable,
@@ -14,6 +18,113 @@ from tests.perf.support import (
 )
 
 pytestmark = pytest.mark.perf
+
+
+REQUIRED_BUDGET_WORKLOAD_MODULES = {
+    "test_calculation_bucket_perf.py",
+    "test_database_bucket_perf.py",
+    "test_group_bucket_perf.py",
+}
+
+
+def test_manifest_validation_skips_a_narrow_module_selection() -> None:
+    assert not perf_conftest.should_validate_perf_manifest(
+        {"test_database_bucket_perf.py"},
+        keyword_expression="",
+        failed=False,
+    )
+
+
+def test_manifest_validation_runs_when_all_required_modules_are_selected() -> None:
+    assert perf_conftest.should_validate_perf_manifest(
+        REQUIRED_BUDGET_WORKLOAD_MODULES | {"test_workflow_perf.py"},
+        keyword_expression="",
+        failed=False,
+    )
+
+
+def test_manifest_validation_skips_after_a_test_failure() -> None:
+    assert not perf_conftest.should_validate_perf_manifest(
+        REQUIRED_BUDGET_WORKLOAD_MODULES,
+        keyword_expression="",
+        failed=True,
+    )
+
+
+def test_manifest_validation_skips_a_keyword_selection() -> None:
+    assert not perf_conftest.should_validate_perf_manifest(
+        REQUIRED_BUDGET_WORKLOAD_MODULES,
+        keyword_expression="database",
+        failed=False,
+    )
+
+
+def _perf_session(*module_names: str, keyword_expression: str = "") -> pytest.Session:
+    return cast(
+        pytest.Session,
+        SimpleNamespace(
+            items=[SimpleNamespace(path=Path(name)) for name in module_names],
+            config=SimpleNamespace(
+                getoption=lambda _option: keyword_expression,
+            ),
+        ),
+    )
+
+
+def _perf_report(*, failed: bool, skipped: bool = False) -> pytest.TestReport:
+    return cast(
+        pytest.TestReport,
+        SimpleNamespace(when="call", failed=failed, skipped=skipped),
+    )
+
+
+def test_plugin_uses_collected_module_basenames_after_deselection() -> None:
+    plugin = perf_conftest.PerfManifestValidationPlugin()
+
+    plugin.pytest_collection_finish(_perf_session(*REQUIRED_BUDGET_WORKLOAD_MODULES))
+
+    assert plugin.should_validate_manifest()
+
+
+def test_plugin_does_not_treat_a_skip_as_a_failure() -> None:
+    plugin = perf_conftest.PerfManifestValidationPlugin()
+    plugin.pytest_collection_finish(_perf_session(*REQUIRED_BUDGET_WORKLOAD_MODULES))
+
+    plugin.pytest_runtest_logreport(_perf_report(failed=False, skipped=True))
+
+    assert plugin.should_validate_manifest()
+
+
+def test_plugin_failure_state_resets_at_the_next_session_start() -> None:
+    plugin = perf_conftest.PerfManifestValidationPlugin()
+    full_session = _perf_session(*REQUIRED_BUDGET_WORKLOAD_MODULES)
+    plugin.pytest_collection_finish(full_session)
+    plugin.pytest_runtest_logreport(_perf_report(failed=True))
+    assert not plugin.should_validate_manifest()
+
+    plugin.pytest_sessionstart(full_session)
+    plugin.pytest_collection_finish(full_session)
+
+    assert plugin.should_validate_manifest()
+
+
+def test_complete_selection_validates_the_observed_manifest() -> None:
+    plugin = perf_conftest.PerfManifestValidationPlugin()
+    plugin.pytest_collection_finish(_perf_session(*REQUIRED_BUDGET_WORKLOAD_MODULES))
+    budgets = PerfBudgets({"OBSERVED": 0, "UNUSED": 0})
+    budgets.assert_observation("OBSERVED", 0)
+
+    with pytest.raises(AssertionError, match=r"unused=\['UNUSED'\]"):
+        perf_conftest.validate_perf_budget_manifest(plugin, budgets)
+
+
+def test_narrow_selection_skips_global_unused_manifest_validation() -> None:
+    plugin = perf_conftest.PerfManifestValidationPlugin()
+    plugin.pytest_collection_finish(_perf_session("test_database_bucket_perf.py"))
+    budgets = PerfBudgets({"OBSERVED": 0, "UNUSED": 0})
+    budgets.assert_observation("OBSERVED", 0)
+
+    perf_conftest.validate_perf_budget_manifest(plugin, budgets)
 
 
 def test_counter_increments_by_one_by_default() -> None:

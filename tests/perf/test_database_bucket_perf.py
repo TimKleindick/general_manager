@@ -5,7 +5,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import MethodType
-from typing import Any, Literal, Self, cast
+from typing import Any, Literal, Protocol, Self, cast
 from unittest.mock import patch
 
 import pytest
@@ -68,6 +68,13 @@ RUN_CACHE_PREFIXES = (
     BUCKET_INDEX_PREFIX,
     TRUSTED_ORM_MANAGER_PREFIX,
 )
+
+
+class RawDeleteQuerySet(Protocol):
+    @property
+    def db(self) -> str: ...
+
+    def _raw_delete(self, using: str) -> int: ...
 
 
 class RunCacheMutationTarget:
@@ -145,6 +152,30 @@ def _unrestricted_database_access() -> AbstractContextManager[None]:
     return nullcontext()
 
 
+def _delete_perf_users(prefix: str) -> int:
+    """Delete relation-free perf users without traversing collected test models."""
+    queryset = cast(
+        RawDeleteQuerySet,
+        User.objects.filter(username__startswith=prefix),
+    )
+    return queryset._raw_delete(using=queryset.db)
+
+
+def test_delete_perf_users_removes_only_the_requested_prefix() -> None:
+    prefix = "perf-db-delete-target-"
+    sentinel_prefix = "perf-db-delete-sentinel-"
+    target = User.objects.create(username=f"{prefix}user")
+    sentinel = User.objects.create(username=f"{sentinel_prefix}user")
+    try:
+        assert _delete_perf_users(prefix) == 1
+
+        assert not User.objects.filter(pk=target.pk).exists()
+        assert User.objects.filter(pk=sentinel.pk).exists()
+    finally:
+        _delete_perf_users(prefix)
+        _delete_perf_users(sentinel_prefix)
+
+
 @contextmanager
 def _managed_perf_users(
     prefix: str,
@@ -154,7 +185,7 @@ def _managed_perf_users(
 ) -> Iterator[tuple[int, ...]]:
     try:
         with database_access():
-            User.objects.filter(username__startswith=prefix).delete()
+            _delete_perf_users(prefix)
             users = [User(username=f"{prefix}{index:05d}") for index in range(total)]
             created_users = User.objects.bulk_create(users)
             primary_keys = tuple(int(user.pk) for user in created_users)
@@ -165,14 +196,13 @@ def _managed_perf_users(
         yield primary_keys
     finally:
         with database_access():
-            User.objects.filter(username__startswith=prefix).delete()
+            _delete_perf_users(prefix)
 
 
 def test_managed_perf_users_replaces_stale_rows_and_cleans_up_after_failure() -> None:
     prefix = "perf-db-lifecycle-"
-    shared_prefix_sentinel = User.objects.create(
-        username=f"{USERNAME_PREFIX}shared-sentinel"
-    )
+    shared_prefix = f"{USERNAME_PREFIX}shared-sentinel-"
+    shared_prefix_sentinel = User.objects.create(username=f"{shared_prefix}user")
     try:
         User.objects.create(username=f"{prefix}stale")
 
@@ -191,8 +221,8 @@ def test_managed_perf_users_replaces_stale_rows_and_cleans_up_after_failure() ->
         assert not User.objects.filter(username__startswith=prefix).exists()
         assert User.objects.filter(pk=shared_prefix_sentinel.pk).exists()
     finally:
-        User.objects.filter(username__startswith=prefix).delete()
-        User.objects.filter(pk=shared_prefix_sentinel.pk).delete()
+        _delete_perf_users(prefix)
+        _delete_perf_users(shared_prefix)
 
 
 @pytest.fixture(scope="module")
