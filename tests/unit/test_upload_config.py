@@ -45,6 +45,11 @@ def test_upload_settings_default_to_secure_finite_values(settings) -> None:
         max_inspection_bytes=1_048_576,
         token_ttl_seconds=900,
         download_url_ttl_seconds=300,
+        cleanup_batch_size=100,
+        cleanup_min_age_seconds=3_600,
+        cleanup_lease_seconds=300,
+        cleanup_failure_cooldown_seconds=60,
+        terminal_retention_seconds=86_400,
         delete_replaced_files=False,
     )
     assert value.enabled is False
@@ -163,6 +168,11 @@ def test_file_policy_rejects_empty_or_non_string_allowed_values(
         {"MAX_INSPECTION_BYTES": 0},
         {"DOWNLOAD_URL_TTL_SECONDS": 0},
         {"DOWNLOAD_URL_TTL_SECONDS": 604_801},
+        {"CLEANUP_BATCH_SIZE": 0},
+        {"CLEANUP_MIN_AGE_SECONDS": False},
+        {"CLEANUP_LEASE_SECONDS": 0},
+        {"CLEANUP_FAILURE_COOLDOWN_SECONDS": False},
+        {"TERMINAL_RETENTION_SECONDS": -1},
         {"HTTP_UPLOAD_PATH": "../uploads/"},
         {"STAGING_PREFIX": "/gm-staging/"},
     ],
