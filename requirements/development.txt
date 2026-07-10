@@ -1,5 +1,5 @@
 -r base.txt
--e .
+-e .[file-upload-image]
 
 ipython==9.0.2
 pytest==9.0.3

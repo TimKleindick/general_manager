@@ -2038,7 +2038,10 @@ def _validate_staged_content(
         return None, None
     try:
         from PIL import Image, UnidentifiedImageError
+    except ImportError:
+        raise UploadBackendUnsupportedError from None
 
+    try:
         try:
             staged_object = adapter.open_stage(staging_key, version)
         except UploadError:
