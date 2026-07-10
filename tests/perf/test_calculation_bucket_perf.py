@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from typing import cast
 
 import pytest
+from django.test import override_settings
 
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.calculation_bucket import CalculationBucket
@@ -94,6 +95,107 @@ def _make_calculation_manager(
     )
     interface._parent_class = manager
     return manager
+
+
+def _make_default_calculation_manager(
+    name: str,
+    field_name: str,
+    input_field: Input[type[object]],
+) -> tuple[type[GeneralManager], Input[type[object]]]:
+    """Build a real calculation manager without leaving metaclass registry state."""
+    interface = cast(
+        type[CalculationInterface],
+        type(
+            f"{name}Interface",
+            (CalculationInterface,),
+            {"__module__": __name__, field_name: input_field},
+        ),
+    )
+    registries_before = (
+        tuple(GeneralManagerMeta.all_classes),
+        tuple(GeneralManagerMeta.read_only_classes),
+        tuple(GeneralManagerMeta.pending_attribute_initialization),
+        tuple(GeneralManagerMeta.pending_graphql_interfaces),
+    )
+    manager = cast(
+        type[GeneralManager],
+        type(
+            name,
+            (GeneralManager,),
+            {"__module__": __name__, "Interface": interface},
+        ),
+    )
+    for registry in (
+        GeneralManagerMeta.all_classes,
+        GeneralManagerMeta.read_only_classes,
+        GeneralManagerMeta.pending_attribute_initialization,
+        GeneralManagerMeta.pending_graphql_interfaces,
+    ):
+        while manager in registry:
+            registry.remove(manager)
+    manager.Interface._parent_class = manager
+    assert manager.__init__ is GeneralManager.__init__
+    assert (
+        tuple(GeneralManagerMeta.all_classes),
+        tuple(GeneralManagerMeta.read_only_classes),
+        tuple(GeneralManagerMeta.pending_attribute_initialization),
+        tuple(GeneralManagerMeta.pending_graphql_interfaces),
+    ) == registries_before
+    return manager, manager.Interface.input_fields[field_name]
+
+
+@pytest.mark.parametrize("size", [400, 800])
+def test_large_list_input_enumeration_work(
+    size: int,
+    monkeypatch: pytest.MonkeyPatch,
+    perf_budgets: PerfBudgets,
+) -> None:
+    values = list(range(10_000_000, 10_000_000 + size))
+    manager, tracked_input = _make_default_calculation_manager(
+        f"LargeListEnumeration{size}Manager",
+        "value",
+        Input(int, possible_values=values),
+    )
+    resolution_calls = Counter()
+    membership_scan_steps = Counter()
+    original_resolve = cast(Callable[..., object], Input.resolve_possible_values)
+
+    def counted_resolve(
+        input_field: Input[type[object]],
+        identification: dict[str, object] | None = None,
+        *,
+        cache_context: tuple[type[object], str] | None = None,
+    ) -> object:
+        resolved = original_resolve(
+            input_field,
+            identification,
+            cache_context=cache_context,
+        )
+        if input_field is tracked_input:
+            resolution_calls.increment()
+            # The first call enumerates the source. Membership check i then scans
+            # the i - 1 values that precede the matching object in this exact list.
+            if resolution_calls.value > 1:
+                membership_scan_steps.increment(resolution_calls.value - 2)
+        return resolved
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+
+    with override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True):
+        managers = list(CalculationBucket(manager))
+
+    resolved_values = [item.identification["value"] for item in managers]
+    assert len(managers) == size
+    assert resolved_values == values
+    assert all(
+        resolved is original
+        for resolved, original in zip(resolved_values, values, strict=True)
+    )
+    prefix = f"CALC_ENUM_LIST_{size}"
+    perf_budgets.assert_observation(
+        f"{prefix}_MEMBERSHIP_SCAN_STEPS", membership_scan_steps.value
+    )
+    perf_budgets.assert_observation(f"{prefix}_RESOLUTIONS", resolution_calls.value)
 
 
 def _assert_combination_observations(

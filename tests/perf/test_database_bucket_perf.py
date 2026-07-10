@@ -11,10 +11,12 @@ from unittest.mock import patch
 import pytest
 from django.contrib.auth.models import User
 from django.db import connection, models
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from pytest_django.plugin import DjangoDbBlocker
 
 from general_manager.bucket.database_bucket import DatabaseBucket
+from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.run_context import (
     BUCKET_INDEX_PREFIX,
@@ -33,11 +35,13 @@ from general_manager.cache.run_context import (
 )
 from general_manager.cache.signals import data_change, post_data_change, pre_data_change
 from general_manager.interface import DatabaseInterface
+from general_manager.interface.interfaces.calculation import CalculationInterface
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.capabilities.orm.history import OrmHistoryCapability
 from general_manager.interface.capabilities.orm.mutations import OrmMutationCapability
 from general_manager.interface.orm_interface import OrmInterfaceBase
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from tests.perf.support import (
@@ -326,6 +330,77 @@ def perf_user_primary_keys(
         database_access=django_db_blocker.unblock,
     ) as primary_keys:
         yield primary_keys
+
+
+def _make_database_enumeration_manager(
+    name: str,
+    source: DatabaseBucket[PerfUserManager],
+) -> type[GeneralManager]:
+    """Build a default calculation manager and isolate all metaclass registries."""
+    interface = cast(
+        type[CalculationInterface],
+        type(
+            f"{name}Interface",
+            (CalculationInterface,),
+            {
+                "__module__": __name__,
+                "value": Input(PerfUserManager, possible_values=source),
+            },
+        ),
+    )
+    registries_before = _manager_registry_snapshot()
+    manager = cast(
+        type[GeneralManager],
+        type(
+            name,
+            (GeneralManager,),
+            {"__module__": __name__, "Interface": interface},
+        ),
+    )
+    for registry in (
+        GeneralManagerMeta.all_classes,
+        GeneralManagerMeta.read_only_classes,
+        GeneralManagerMeta.pending_attribute_initialization,
+        GeneralManagerMeta.pending_graphql_interfaces,
+    ):
+        while manager in registry:
+            registry.remove(manager)
+    manager.Interface._parent_class = manager
+    assert manager.__init__ is GeneralManager.__init__
+    assert _manager_registry_snapshot() == registries_before
+    return manager
+
+
+@pytest.mark.parametrize("size", [400, 800])
+def test_database_manager_input_enumeration_work(
+    size: int,
+    perf_user_primary_keys: tuple[int, ...],
+    perf_budgets: PerfBudgets,
+) -> None:
+    included_primary_keys = perf_user_primary_keys[:size]
+    queryset = User.objects.filter(pk__in=included_primary_keys).order_by("pk")
+    source = DatabaseBucket(
+        cast(models.QuerySet[models.Model], queryset),
+        PerfUserManager,
+    )
+    manager = _make_database_enumeration_manager(
+        f"DatabaseEnumeration{size}Manager",
+        source,
+    )
+
+    with (
+        override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+        CaptureQueriesContext(connection) as captured_queries,
+    ):
+        managers = list(CalculationBucket(manager))
+
+    assert len(managers) == size
+    assert [
+        cast(dict[str, object], item.identification["value"])["id"] for item in managers
+    ] == list(included_primary_keys)
+    prefix = f"CALC_ENUM_MANAGER_{size}"
+    perf_budgets.assert_observation(f"{prefix}_QUERIES", len(captured_queries))
+    perf_budgets.assert_observation(f"{prefix}_MANAGERS", len(managers))
 
 
 @dataclass
