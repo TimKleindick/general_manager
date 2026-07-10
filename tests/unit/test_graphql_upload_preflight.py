@@ -276,6 +276,18 @@ class DirectPreflightAdapter:
         del key, expires_in
         raise NotImplementedError
 
+    def inspect_download(
+        self,
+        key: str,
+        version: ObjectVersion,
+    ) -> ObjectVersion:
+        del key
+        return version
+
+    def open_download(self, key: str, version: ObjectVersion) -> IO[bytes]:
+        del key, version
+        raise NotImplementedError
+
     def public_url(self, key: str) -> str:
         del key
         raise NotImplementedError

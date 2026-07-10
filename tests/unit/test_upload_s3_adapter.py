@@ -859,6 +859,97 @@ def test_s3_deletes_exact_version_and_handles_private_and_public_urls() -> None:
     )
 
 
+def test_s3_private_download_binds_exact_version_and_response_headers() -> None:
+    client = FakeS3Client()
+    version = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    assert (
+        adapter.private_download_url(
+            "files/report.txt",
+            expires_in=45,
+            version=version,
+            response_content_type="text/plain",
+            response_content_disposition=(
+                "inline; filename=\"report.txt\"; filename*=utf-8''report.txt"
+            ),
+        )
+        == "https://signed.example.test/get?signature=secret"
+    )
+    assert client.presigned_url_calls == [
+        (
+            "get_object",
+            {
+                "Params": {
+                    "Bucket": "uploads",
+                    "Key": "files/report.txt",
+                    "VersionId": "stage-version-1",
+                    "ResponseContentType": "text/plain",
+                    "ResponseContentDisposition": (
+                        "inline; filename=\"report.txt\"; filename*=utf-8''report.txt"
+                    ),
+                },
+                "ExpiresIn": 45,
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize("expires_in", [True, 0, 604_801])
+def test_s3_private_download_rejects_invalid_sigv4_expiry(expires_in: object) -> None:
+    client = FakeS3Client()
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.private_download_url("files/report.txt", expires_in=expires_in)  # type: ignore[arg-type]
+
+    assert client.presigned_url_calls == []
+
+
+def test_s3_private_download_rejects_checksum_only_retained_version() -> None:
+    client = FakeS3Client()
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    checksum_only = ObjectVersion(
+        version_id=None,
+        etag=None,
+        checksum_sha256="a" * 64,
+        size=1,
+        content_type="text/plain",
+    )
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.private_download_url(
+            "files/report.txt",
+            expires_in=60,
+            version=checksum_only,
+        )
+
+    assert client.presigned_url_calls == []
+
+
+def test_s3_download_inspection_never_falls_back_to_latest_version() -> None:
+    client = FakeS3Client()
+    retained = _stage(client)
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    assert adapter.inspect_download("gm-staging/intent.bin", retained) == retained
+    del client.objects[("gm-staging/intent.bin", "stage-version-1")]
+    client.objects[("gm-staging/intent.bin", "newer-version")] = {
+        "VersionId": "newer-version",
+        "ETag": '"newer"',
+        "ChecksumSHA256": base64.b64encode(b"n" * 32).decode("ascii"),
+        "ContentLength": 5,
+        "ContentType": "text/plain",
+        "Metadata": {},
+        "Body": b"newer",
+    }
+
+    with pytest.raises(UploadStorageError):
+        adapter.inspect_download("gm-staging/intent.bin", retained)
+
+    assert client.head_calls[-1]["VersionId"] == "stage-version-1"
+
+
 def test_s3_delete_without_version_id_fails_closed() -> None:
     client = FakeS3Client()
     adapter = S3UploadAdapter(FakeS3Storage(client))

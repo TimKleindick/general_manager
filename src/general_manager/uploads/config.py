@@ -32,6 +32,15 @@ class FileUploadConfigurationError(ValueError):
         return cls(f"{name} must be a positive integer.")
 
     @classmethod
+    def maximum_integer(
+        cls,
+        name: str,
+        maximum: int,
+    ) -> FileUploadConfigurationError:
+        """Build the error for an integer above a backend protocol limit."""
+        return cls(f"{name} must be no greater than {maximum}.")
+
+    @classmethod
     def boolean(cls, name: str) -> FileUploadConfigurationError:
         """Build the error for a non-boolean flag."""
         return cls(f"{name} must be a boolean.")
@@ -327,11 +336,12 @@ def get_file_upload_settings() -> FileUploadSettings:
             "TOKEN_TTL_SECONDS",
             configured.get("TOKEN_TTL_SECONDS", defaults.token_ttl_seconds),
         ),
-        download_url_ttl_seconds=_positive_integer(
+        download_url_ttl_seconds=_bounded_positive_integer(
             "DOWNLOAD_URL_TTL_SECONDS",
             configured.get(
                 "DOWNLOAD_URL_TTL_SECONDS", defaults.download_url_ttl_seconds
             ),
+            maximum=604_800,
         ),
         delete_replaced_files=delete_replaced_files,
     )
@@ -369,6 +379,13 @@ def _positive_integer(name: str, value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise FileUploadConfigurationError.positive_integer(name)
     return value
+
+
+def _bounded_positive_integer(name: str, value: object, *, maximum: int) -> int:
+    normalized = _positive_integer(name, value)
+    if normalized > maximum:
+        raise FileUploadConfigurationError.maximum_integer(name, maximum)
+    return normalized
 
 
 def _normalize_policy_strings(

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from django.conf import settings as django_settings
-from django.urls import URLPattern, path
+from django.urls import Resolver404, URLPattern, clear_url_caches, path, resolve
 
 from general_manager.uploads.config import get_file_upload_settings
 from general_manager.uploads.views import private_download_view, proxy_upload_view
@@ -81,6 +81,16 @@ def add_file_upload_urls() -> None:
         for existing in patterns
         if not getattr(existing, _UPLOAD_ROUTE_MARKER, False)
     ]
+    representative_paths = (
+        f"/{configured.http_upload_path}00000000-0000-4000-8000-000000000001",
+        f"/{configured.http_upload_path}download/gm-private-capability",
+    )
+    for representative in representative_paths:
+        try:
+            resolve(representative, urlconf=cast(Any, tuple(unowned)))
+        except Resolver404:
+            continue
+        raise FileUploadRouteCollisionError(representative.lstrip("/"))
     generated: list[URLPattern] = []
     for key, route_pattern, view, name in route_specs:
         matching_owned = [
@@ -104,6 +114,7 @@ def add_file_upload_urls() -> None:
             )
         )
     urlconf.urlpatterns[:] = [*unowned, *generated]
+    clear_url_caches()
 
 
 def clear_file_upload_urls() -> None:
@@ -118,3 +129,4 @@ def clear_file_upload_urls() -> None:
         for pattern in urlconf.urlpatterns
         if not getattr(pattern, _UPLOAD_ROUTE_MARKER, False)
     ]
+    clear_url_caches()

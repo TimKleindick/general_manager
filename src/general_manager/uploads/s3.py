@@ -441,15 +441,85 @@ class S3UploadAdapter:
             "S3 could not delete the claimed object version.",
         )
 
-    def private_download_url(self, key: str, *, expires_in: int) -> str:
+    def private_download_url(
+        self,
+        key: str,
+        *,
+        expires_in: int,
+        version: ObjectVersion | None = None,
+        response_content_type: str | None = None,
+        response_content_disposition: str | None = None,
+    ) -> str:
+        if (
+            isinstance(expires_in, bool)
+            or not isinstance(expires_in, int)
+            or expires_in <= 0
+            or expires_in > _MAX_SIGV4_EXPIRY_SECONDS
+        ):
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 private download expiry exceeds the SigV4 limit.",
+            )
+        if version is not None and not version.version_id:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 retained downloads require an immutable VersionId.",
+            )
+        parameters: dict[str, object] = {"Bucket": self._bucket, "Key": key}
+        if version is not None and version.version_id:
+            parameters["VersionId"] = version.version_id
+        if response_content_type:
+            parameters["ResponseContentType"] = response_content_type
+        if response_content_disposition:
+            parameters["ResponseContentDisposition"] = response_content_disposition
         return _sdk_call(
             lambda: self._client.generate_presigned_url(
                 "get_object",
-                Params={"Bucket": self._bucket, "Key": key},
+                Params=parameters,
                 ExpiresIn=expires_in,
             ),
             "S3 could not create a private download URL.",
         )
+
+    def inspect_download(
+        self,
+        key: str,
+        version: ObjectVersion,
+    ) -> ObjectVersion:
+        if not version.version_id:
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 retained downloads require an immutable VersionId.",
+            )
+        response = _sdk_call(
+            lambda: self._client.head_object(
+                Bucket=self._bucket,
+                Key=key,
+                VersionId=version.version_id,
+                ChecksumMode="ENABLED",
+            ),
+            "S3 could not inspect the retained download version.",
+        )
+        inspected = _object_version(response)
+        if (
+            inspected.version_id != version.version_id
+            or inspected.checksum_sha256 != version.checksum_sha256
+            or inspected.size != version.size
+            or (
+                version.etag is not None
+                and inspected.etag is not None
+                and inspected.etag != version.etag
+            )
+        ):
+            raise UploadStorageChangedError()
+        return inspected
+
+    def open_download(
+        self,
+        key: str,
+        version: ObjectVersion,
+    ) -> IO[bytes]:
+        return self.open_stage(key, version)
 
     def public_url(self, key: str) -> str:
         if not self.supports_public_urls:

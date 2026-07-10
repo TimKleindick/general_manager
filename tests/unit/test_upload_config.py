@@ -162,6 +162,7 @@ def test_file_policy_rejects_empty_or_non_string_allowed_values(
         {"MAX_IMAGE_HEIGHT": False},
         {"MAX_INSPECTION_BYTES": 0},
         {"DOWNLOAD_URL_TTL_SECONDS": 0},
+        {"DOWNLOAD_URL_TTL_SECONDS": 604_801},
         {"HTTP_UPLOAD_PATH": "../uploads/"},
         {"STAGING_PREFIX": "/gm-staging/"},
     ],
