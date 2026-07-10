@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import hashlib
@@ -27,10 +27,10 @@ from django.core import signing
 from django.core.signing import BadSignature
 from django.db import (
     DEFAULT_DB_ALIAS,
+    DatabaseError,
     OperationalError,
     connections,
     models,
-    router,
     transaction,
 )
 from django.utils import timezone
@@ -40,6 +40,7 @@ from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.orm_interface import OrmInterfaceBase
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.uploads.adapters import (
+    UploadAdapter,
     UploadAdapterRegistry,
     UploadInstructions,
 )
@@ -54,23 +55,34 @@ from general_manager.uploads.errors import (
     InvalidUploadChecksumError,
     InvalidUploadFilenameError,
     InvalidUploadSizeError,
+    UploadAlreadyConsumedError,
     UploadError,
     UploadAuthenticationError,
     UploadBackendUnsupportedError,
+    UploadBindingMismatchError,
     UploadDatabaseMismatchError,
+    UploadExpiredError,
     UploadFieldInvalidError,
+    UploadIncompleteError,
     UploadManagerInvalidError,
     UploadOperationInvalidError,
     UploadQuotaExceededError,
     UploadRateLimitExceededError,
+    UploadChecksumMismatchError,
+    UploadSizeMismatchError,
     UploadStorageError,
+    UploadStorageChangedError,
+    UploadSupersededError,
     UploadTargetUnavailableError,
+    UploadTokenInvalidError,
     stable_upload_error,
 )
 from general_manager.uploads.models import UploadIntent, UploadQuotaLock
 from general_manager.uploads.tokens import issue_upload_token
 from general_manager.uploads.types import (
     ChecksumAlgorithm,
+    ObjectVersion,
+    UploadCandidate,
     UploadIntentState,
     UploadOperation,
     UploadTransport,
@@ -152,6 +164,414 @@ type BeginUploadRateLimitHook = Callable[[object, object], object | None]
 
 _begin_upload_rate_limit_hook: BeginUploadRateLimitHook | None = None
 upload_adapter_registry = UploadAdapterRegistry()
+
+
+def preflight_upload_tokens(
+    *,
+    user: object,
+    manager_class: type[GeneralManager],
+    operation: UploadOperation,
+    target_id: object | None,
+    file_field_names: tuple[str, ...],
+    values: MutableMapping[str, object],
+) -> None:
+    """Replace provided file tokens with redacted, field-bound candidates.
+
+    The input mapping is scrubbed of raw file tokens before database or storage
+    work begins. On success the corresponding keys are restored as immutable
+    :class:`UploadCandidate` values. On failure no candidate is installed and
+    only a fresh framework-owned upload error crosses this boundary.
+    """
+
+    token_fields = tuple(
+        name
+        for name in sorted(set(file_field_names))
+        if name in values and values[name] is not None
+    )
+    raw_tokens = [(name, values.pop(name)) for name in token_fields]
+    if not raw_tokens:
+        return
+
+    failure: UploadError | None = None
+    candidates: dict[str, UploadCandidate] | None = None
+    try:
+        candidates = _preflight_upload_tokens(
+            user=user,
+            manager_class=manager_class,
+            operation=operation,
+            target_id=target_id,
+            raw_tokens=raw_tokens,
+        )
+    except UploadError as error:
+        failure = stable_upload_error(error)
+    except Exception:  # noqa: BLE001 - public boundary fails closed
+        failure = UploadStorageError()
+
+    # Raw tokens exist only in this service frame. Explicitly discard the
+    # references before raising a traceback-free public error.
+    raw_tokens.clear()
+    if failure is not None:
+        failure.__cause__ = None
+        failure.__context__ = None
+        failure.__traceback__ = None
+        failure.__suppress_context__ = True
+        raise failure
+    if candidates is None:  # pragma: no cover - success always assigns it
+        raise AssertionError("unreachable")
+    values.update(candidates)
+
+
+@dataclass(frozen=True, slots=True)
+class _PreflightPlan:
+    field_name: str
+    intent: UploadIntent
+    token: str = field(repr=False)
+    version: ObjectVersion
+    direct: bool
+
+
+def _preflight_upload_tokens(
+    *,
+    user: object,
+    manager_class: type[GeneralManager],
+    operation: UploadOperation,
+    target_id: object | None,
+    raw_tokens: list[tuple[str, object]],
+) -> dict[str, UploadCandidate]:
+    settings = get_file_upload_settings()
+    if not settings.enabled:
+        raise UploadBackendUnsupportedError
+    try:
+        registered_manager = _resolve_manager(manager_class.__name__)
+    except UploadError:
+        raise UploadBindingMismatchError from None
+    if registered_manager is not manager_class:
+        raise UploadBindingMismatchError
+    owner_pk = _authenticated_user_pk(user)
+    interface = cast(_UploadInterface, manager_class.Interface)
+    database_alias = _normalized_database_alias(getattr(interface, "database", None))
+    intent_database_alias = _normalized_database_alias(settings.intent_database)
+    if database_alias != intent_database_alias:
+        raise UploadDatabaseMismatchError
+
+    canonical_target = _canonical_target_id(
+        manager_class,
+        operation=operation,
+        target_id=target_id,
+    )
+    plans: list[_PreflightPlan] = []
+    now = timezone.now()
+    for field_name, raw_token in raw_tokens:
+        if not isinstance(raw_token, str) or not raw_token:
+            raise UploadTokenInvalidError
+        intent = _intent_for_token(
+            raw_token,
+            database_alias=intent_database_alias,
+        )
+        _validate_intent_binding(
+            intent,
+            token=raw_token,
+            owner_pk=owner_pk,
+            manager_name=manager_class.__name__,
+            field_name=field_name,
+            operation=operation,
+            target_id=canonical_target,
+            at=now,
+        )
+        _model, model_field = _resolve_file_field(interface, field_name)
+        adapter = _resolve_intent_adapter(intent, model_field)
+        if intent.state == UploadIntentState.UPLOADED.value:
+            version = _stored_object_version(intent)
+            direct = False
+        elif intent.state == UploadIntentState.PENDING.value:
+            try:
+                supports_direct = type(adapter).supports_direct(model_field.storage)
+            except Exception:  # noqa: BLE001 - custom adapter boundary fails closed
+                raise UploadStorageChangedError from None
+            if supports_direct is not True:
+                raise UploadIncompleteError
+            try:
+                inspected = adapter.inspect_staged(intent.staging_key)
+            except (FileNotFoundError, ObjectDoesNotExist):
+                raise UploadIncompleteError from None
+            except UploadError:
+                raise
+            except Exception:  # noqa: BLE001 - untrusted adapter boundary
+                raise UploadStorageError from None
+            version = _validate_preflight_version(inspected, intent)
+            direct = True
+        else:
+            _raise_for_unusable_state(intent)
+        plans.append(
+            _PreflightPlan(
+                field_name=field_name,
+                intent=intent,
+                token=raw_token,
+                version=version,
+                direct=direct,
+            )
+        )
+
+    candidates = {plan.field_name: _candidate_from_plan(plan) for plan in plans}
+    if any(plan.direct for plan in plans):
+        _persist_direct_preflight(
+            plans,
+            owner_pk=owner_pk,
+            manager_name=manager_class.__name__,
+            operation=operation,
+            target_id=canonical_target,
+            database_alias=intent_database_alias,
+        )
+
+    return candidates
+
+
+def _candidate_from_plan(plan: _PreflightPlan) -> UploadCandidate:
+    try:
+        filename = _normalize_filename(plan.intent.original_filename)
+    except UploadError:
+        raise UploadStorageChangedError from None
+    if filename != plan.intent.original_filename:
+        raise UploadStorageChangedError
+    return UploadCandidate(
+        intent_id=plan.intent.id,
+        filename=filename,
+        size=plan.version.size,
+        content_type=plan.version.content_type or plan.intent.declared_content_type,
+        checksum_sha256=plan.version.checksum_sha256,
+    )
+
+
+def _canonical_target_id(
+    manager_class: type[GeneralManager],
+    *,
+    operation: UploadOperation,
+    target_id: object | None,
+) -> str | None:
+    if operation is UploadOperation.CREATE:
+        if target_id is not None:
+            raise UploadBindingMismatchError
+        return None
+    if operation is not UploadOperation.UPDATE or target_id is None:
+        raise UploadBindingMismatchError
+    try:
+        target = manager_class(id=target_id)
+        return serialize_dependency_identifier(target.identification)
+    except (ObjectDoesNotExist, AttributeError, KeyError, TypeError, ValueError):
+        raise UploadBindingMismatchError from None
+
+
+def _intent_for_token(token: str, *, database_alias: str) -> UploadIntent:
+    from general_manager.uploads.tokens import digest_upload_token
+
+    digest = digest_upload_token(token)
+    try:
+        intent = UploadIntent.objects.using(database_alias).get(token_digest=digest)
+    except UploadIntent.DoesNotExist:
+        raise UploadTokenInvalidError from None
+    except (DatabaseError, UploadIntent.MultipleObjectsReturned):
+        raise UploadStorageError from None
+    if not intent.matches_token(token):
+        raise UploadTokenInvalidError
+    return intent
+
+
+def _validate_intent_binding(
+    intent: UploadIntent,
+    *,
+    token: str,
+    owner_pk: object,
+    manager_name: str,
+    field_name: str,
+    operation: UploadOperation,
+    target_id: str | None,
+    at: datetime,
+) -> None:
+    if not intent.matches_token(token) or getattr(intent, "user_id", None) != owner_pk:
+        raise UploadTokenInvalidError
+    if intent.expires_at <= at or intent.state == UploadIntentState.EXPIRED.value:
+        raise UploadExpiredError
+    if (
+        intent.manager_name != manager_name
+        or intent.field_name != field_name
+        or intent.operation != operation.value
+        or intent.target_id != target_id
+    ):
+        raise UploadBindingMismatchError
+
+
+def _raise_for_unusable_state(intent: UploadIntent) -> None:
+    if intent.state in {
+        UploadIntentState.FINALIZING.value,
+        UploadIntentState.CONSUMED.value,
+    }:
+        raise UploadAlreadyConsumedError
+    if intent.state == UploadIntentState.SUPERSEDED.value:
+        raise UploadSupersededError
+    if intent.state == UploadIntentState.EXPIRED.value:
+        raise UploadExpiredError
+    if intent.state in {
+        UploadIntentState.PENDING.value,
+        UploadIntentState.TRANSFERRING.value,
+    }:
+        raise UploadIncompleteError
+    raise UploadTokenInvalidError
+
+
+def _resolve_intent_adapter(
+    intent: UploadIntent,
+    model_field: models.FileField,
+) -> UploadAdapter:
+    try:
+        adapter_version = int(intent.adapter_version)
+        adapter = upload_adapter_registry.resolve_by_id(
+            intent.adapter_id,
+            adapter_version,
+            model_field.storage,
+        )
+        current_identity = (
+            _validate_adapter_identity(adapter) if adapter is not None else None
+        )
+        fingerprint = adapter.storage_fingerprint() if adapter is not None else None
+        if fingerprint is not None:
+            _validate_storage_fingerprint(fingerprint)
+    except Exception:  # noqa: BLE001 - custom adapter boundary fails closed
+        raise UploadStorageChangedError from None
+    if (
+        adapter is None
+        or str(adapter_version) != intent.adapter_version
+        or current_identity != (intent.adapter_id, adapter_version)
+        or fingerprint != intent.storage_fingerprint
+    ):
+        raise UploadStorageChangedError
+    return adapter
+
+
+def _stored_object_version(intent: UploadIntent) -> ObjectVersion:
+    metadata = intent.object_version
+    if not isinstance(metadata, Mapping) or set(metadata) != {
+        "version_id",
+        "etag",
+        "checksum_sha256",
+        "size",
+        "content_type",
+    }:
+        raise UploadStorageChangedError
+    try:
+        version = ObjectVersion(
+            version_id=cast(str | None, metadata.get("version_id")),
+            etag=cast(str | None, metadata.get("etag")),
+            checksum_sha256=cast(str, metadata.get("checksum_sha256")),
+            size=cast(int, metadata.get("size")),
+            content_type=cast(str | None, metadata.get("content_type")),
+        )
+    except (TypeError, ValueError):
+        raise UploadStorageChangedError from None
+    version = _validate_preflight_version(version, intent)
+    if (
+        intent.verified_size != version.size
+        or intent.verified_content_type != version.content_type
+        or intent.verified_checksum_sha256 != version.checksum_sha256
+    ):
+        raise UploadStorageChangedError
+    return version
+
+
+def _validate_preflight_version(
+    version: object,
+    intent: UploadIntent,
+) -> ObjectVersion:
+    if type(version) is not ObjectVersion:
+        raise UploadStorageChangedError
+    typed = version
+    for identity in (typed.version_id, typed.etag):
+        if identity is not None and (
+            not isinstance(identity, str)
+            or not identity
+            or len(identity) > 1024
+            or any(
+                ord(character) < 32 or ord(character) == 127 for character in identity
+            )
+        ):
+            raise UploadStorageChangedError
+    if typed.size != intent.declared_size:
+        raise UploadSizeMismatchError
+    if typed.checksum_sha256 != intent.declared_checksum_sha256:
+        raise UploadChecksumMismatchError
+    if typed.content_type != intent.declared_content_type:
+        raise InvalidFileTypeError
+    return typed
+
+
+def _persist_direct_preflight(
+    plans: list[_PreflightPlan],
+    *,
+    owner_pk: object,
+    manager_name: str,
+    operation: UploadOperation,
+    target_id: str | None,
+    database_alias: str,
+) -> None:
+    now = timezone.now()
+    with transaction.atomic(using=database_alias):
+        locked = {
+            intent.id: intent
+            for intent in UploadIntent.objects.using(database_alias)
+            .select_for_update()
+            .filter(id__in=sorted(plan.intent.id for plan in plans))
+            .order_by("id")
+        }
+        if len(locked) != len({plan.intent.id for plan in plans}):
+            raise UploadTokenInvalidError
+        for plan in plans:
+            current = locked[plan.intent.id]
+            _validate_intent_binding(
+                current,
+                token=plan.token,
+                owner_pk=owner_pk,
+                manager_name=manager_name,
+                field_name=plan.field_name,
+                operation=operation,
+                target_id=target_id,
+                at=now,
+            )
+            if plan.direct:
+                if current.state == UploadIntentState.UPLOADED.value:
+                    if _stored_object_version(current) != plan.version:
+                        raise UploadStorageChangedError
+                    continue
+                if current.state != UploadIntentState.PENDING.value:
+                    _raise_for_unusable_state(current)
+                metadata = {
+                    "version_id": plan.version.version_id,
+                    "etag": plan.version.etag,
+                    "checksum_sha256": plan.version.checksum_sha256,
+                    "size": plan.version.size,
+                    "content_type": plan.version.content_type,
+                }
+                current.state = UploadIntentState.UPLOADED.value
+                current.verified_size = plan.version.size
+                current.verified_content_type = plan.version.content_type
+                current.verified_checksum_sha256 = plan.version.checksum_sha256
+                current.object_version = metadata
+                current.uploaded_at = now
+                current.save(
+                    using=database_alias,
+                    update_fields=(
+                        "state",
+                        "verified_size",
+                        "verified_content_type",
+                        "verified_checksum_sha256",
+                        "object_version",
+                        "uploaded_at",
+                        "updated_at",
+                    ),
+                )
+            else:
+                if current.state != UploadIntentState.UPLOADED.value:
+                    _raise_for_unusable_state(current)
+                if _stored_object_version(current) != plan.version:
+                    raise UploadStorageChangedError
 
 
 def set_begin_upload_rate_limit_hook(
@@ -326,9 +746,9 @@ def _begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
 
     manager_class = _resolve_manager(values.manager)
     interface = cast(_UploadInterface, manager_class.Interface)
-    model, model_field = _resolve_file_field(interface, values.field)
+    _model, model_field = _resolve_file_field(interface, values.field)
     policy = _resolve_policy(manager_class, str(values.field), settings)
-    database_alias = _effective_database_alias(interface, model)
+    database_alias = _normalized_database_alias(getattr(interface, "database", None))
     if database_alias != _normalized_database_alias(settings.intent_database):
         raise UploadDatabaseMismatchError
 
@@ -367,7 +787,7 @@ def _begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
             _acquire_global_quota_lock(database_alias)
             user_manager = user_model._default_manager.using(database_alias)
             try:
-                owner = user_manager.select_for_update().get(pk=owner_pk)
+                user_manager.select_for_update().get(pk=owner_pk)
             except user_model.DoesNotExist as exc:
                 raise UploadAuthenticationError from exc
 
@@ -415,7 +835,7 @@ def _begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
                 raise UploadStorageError
             UploadIntent.objects.using(database_alias).create(
                 id=intent_id,
-                user=owner,
+                user_id=owner_pk,
                 token_digest=token_digest,
                 manager_name=manager_class.__name__,
                 field_name=model_field.name,
@@ -702,16 +1122,6 @@ def _resolve_policy(
 
 def _normalized_database_alias(value: object) -> str:
     return value if isinstance(value, str) and value else DEFAULT_DB_ALIAS
-
-
-def _effective_database_alias(
-    interface: _UploadInterface,
-    model: type[models.Model],
-) -> str:
-    explicit = getattr(interface, "database", None)
-    if isinstance(explicit, str) and explicit:
-        return explicit
-    return _normalized_database_alias(router.db_for_write(model))
 
 
 def _normalize_operation(value: object) -> UploadOperation:
