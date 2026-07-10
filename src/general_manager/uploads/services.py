@@ -65,6 +65,7 @@ from general_manager.uploads.errors import (
     UploadRateLimitExceededError,
     UploadStorageError,
     UploadTargetUnavailableError,
+    stable_upload_error,
 )
 from general_manager.uploads.models import UploadIntent, UploadQuotaLock
 from general_manager.uploads.tokens import issue_upload_token
@@ -265,6 +266,27 @@ def verify_upload_transfer_credential(
 
 
 def begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
+    """Create an upload intent without exposing internal exception chains."""
+
+    failure: UploadError | None = None
+    try:
+        return _begin_file_upload(user, request)
+    except UploadError as error:
+        # Public upload errors can originate while handling user, cache, database,
+        # or adapter exceptions. Detach every underlying exception before the
+        # stable error crosses the service boundary.
+        failure = stable_upload_error(error)
+        failure.__cause__ = None
+        failure.__context__ = None
+        failure.__traceback__ = None
+        failure.__suppress_context__ = True
+
+    if failure is None:  # pragma: no cover - the except branch always assigns it
+        raise AssertionError("unreachable")
+    raise failure
+
+
+def _begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
     """Validate and durably create one upload intent for ``user``.
 
     This admission step deliberately does not evaluate create/update permission
@@ -274,13 +296,24 @@ def begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
     """
 
     settings = get_file_upload_settings()
+    intent_database_alias = _normalized_database_alias(settings.intent_database)
+    if (
+        intent_database_alias in connections.databases
+        and _sqlite_has_application_atomic_block(intent_database_alias)
+    ):
+        # SQLite cannot restart a nested savepoint as a fresh transaction after
+        # SQLITE_BUSY. Fail before rate-limit, adapter, or database side effects;
+        # deployments using ATOMIC_REQUESTS must exempt their GraphQL view.
+        raise UploadStorageError
     if _begin_upload_rate_limit_hook is None:
         _enforce_default_begin_rate_limit(user, settings)
     else:
         try:
             denied = bool(_begin_upload_rate_limit_hook(user, request))
+        except UploadRateLimitExceededError:
+            raise UploadRateLimitExceededError from None
         except UploadError:
-            raise
+            raise UploadStorageError from None
         except Exception as exc:
             raise UploadStorageError from exc
         if denied:
@@ -319,7 +352,7 @@ def begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
         storage_fingerprint = adapter.storage_fingerprint()
         _validate_storage_fingerprint(storage_fingerprint)
     except UploadError:
-        raise
+        raise UploadStorageError from None
     except Exception as exc:
         raise UploadStorageError from exc
     intent_id = uuid4()
@@ -375,7 +408,7 @@ def begin_file_upload(user: object, request: object) -> BeginFileUploadResult:
                 )
                 current_adapter_identity = _validate_adapter_identity(adapter)
             except UploadError:
-                raise
+                raise UploadStorageError from None
             except Exception as exc:
                 raise UploadStorageError from exc
             if current_adapter_identity != (adapter_id, adapter_version):
@@ -561,6 +594,16 @@ def _run_admission_transaction(
             jitter = base_delay * secrets.randbelow(1_001) / 1_000
             time.sleep(min(base_delay + jitter, remaining))
     raise AssertionError("unreachable")
+
+
+def _sqlite_has_application_atomic_block(database_alias: str) -> bool:
+    connection = connections[database_alias]
+    if connection.vendor != "sqlite":
+        return False
+    return any(
+        not getattr(block, "_from_testcase", False)
+        for block in connection.atomic_blocks
+    )
 
 
 def _is_sqlite_busy_error(error: OperationalError, *, database_alias: str) -> bool:

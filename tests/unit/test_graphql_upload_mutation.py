@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import UUID
+import traceback
 
 import graphene
 import pytest
@@ -16,6 +17,7 @@ from general_manager import bootstrap
 from general_manager.api.graphql import GraphQL
 from general_manager.uploads.adapters import UploadInstructions
 from general_manager.uploads.graphql import BeginFileUpload
+from general_manager.uploads.errors import UploadError, UploadStorageError
 from general_manager.uploads.services import BeginFileUploadResult
 from general_manager.uploads.types import UploadTransport
 
@@ -304,6 +306,91 @@ class GraphQLUploadMutationTests(SimpleTestCase):
         error = response.errors[0]
         assert error.extensions == {"code": "UNAUTHENTICATED"}
         assert "SecretManagerName" not in error.message
+
+    @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+    def test_graphql_upload_errors_do_not_preserve_untrusted_exception_chains(
+        self,
+    ) -> None:
+        GraphQL.register_file_upload_mutation()
+        schema = _build_schema()
+        unsafe_marker = "storage-credential-must-not-escape"
+        unsafe_cause = RuntimeError(unsafe_marker)
+        unsafe_error = UploadStorageError()
+        unsafe_error.__cause__ = unsafe_cause
+        unsafe_error.__context__ = unsafe_cause
+
+        with patch(
+            "general_manager.uploads.graphql.begin_file_upload",
+            side_effect=unsafe_error,
+        ):
+            response = schema.execute(
+                """
+                mutation Begin($digest: String!, $size: BigIntScalar!) {
+                  beginFileUpload(
+                    manager: "UploadProfile"
+                    field: "avatar"
+                    operation: CREATE
+                    filename: "avatar.png"
+                    size: $size
+                    contentType: "image/png"
+                    checksum: {algorithm: SHA256, digest: $digest}
+                  ) { token }
+                }
+                """,
+                variable_values={"digest": "a" * 64, "size": "3"},
+                context_value=SimpleNamespace(user=SimpleNamespace(pk=1)),
+            )
+
+        assert response.errors is not None
+        error = response.errors[0]
+        assert error.extensions == {"code": "UPLOAD_STORAGE_ERROR"}
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        assert unsafe_marker not in "".join(traceback.format_exception(error))
+        original_error = error.original_error
+        assert original_error is not None
+        assert original_error.__cause__ is None
+        assert original_error.__context__ is None
+        assert unsafe_marker not in "".join(traceback.format_exception(original_error))
+
+    @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+    def test_graphql_does_not_publish_custom_upload_error_codes_or_messages(
+        self,
+    ) -> None:
+        class HostileUploadError(UploadError):
+            code = "SECRET_ERROR_CODE"
+            default_message = "graphql-service-secret-must-not-escape"
+
+        GraphQL.register_file_upload_mutation()
+        schema = _build_schema()
+        with patch(
+            "general_manager.uploads.graphql.begin_file_upload",
+            side_effect=HostileUploadError(),
+        ):
+            response = schema.execute(
+                """
+                mutation Begin($digest: String!, $size: BigIntScalar!) {
+                  beginFileUpload(
+                    manager: "UploadProfile"
+                    field: "avatar"
+                    operation: CREATE
+                    filename: "avatar.png"
+                    size: $size
+                    contentType: "image/png"
+                    checksum: {algorithm: SHA256, digest: $digest}
+                  ) { token }
+                }
+                """,
+                variable_values={"digest": "a" * 64, "size": "3"},
+                context_value=SimpleNamespace(user=SimpleNamespace(pk=1)),
+            )
+
+        assert response.errors is not None
+        error = response.errors[0]
+        assert error.extensions == {"code": "UPLOAD_STORAGE_ERROR"}
+        assert error.message == UploadStorageError.default_message
+        assert "SECRET_ERROR_CODE" not in str(error)
+        assert "graphql-service-secret-must-not-escape" not in str(error)
 
     @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
     @patch.object(bootstrap, "add_graphql_url")

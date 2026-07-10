@@ -10,7 +10,7 @@ from graphql import GraphQLError
 
 from general_manager.api.graphql_errors import BigIntScalar
 from general_manager.uploads.config import get_file_upload_settings
-from general_manager.uploads.errors import UploadError
+from general_manager.uploads.errors import UploadError, stable_upload_error
 from general_manager.uploads.services import (
     BeginFileUploadRequest,
     UploadChecksum,
@@ -114,6 +114,7 @@ class BeginFileUpload(graphene.Mutation):  # type: ignore[misc]
             if isinstance(checksum, Mapping)
             else getattr(checksum, "digest", None)
         )
+        graphql_error: GraphQLError | None = None
         try:
             result = begin_file_upload(
                 user=getattr(info.context, "user", None),
@@ -135,10 +136,16 @@ class BeginFileUpload(graphene.Mutation):  # type: ignore[misc]
                 ),
             )
         except UploadError as error:
-            raise GraphQLError(
-                error.default_message,
-                extensions={"code": error.code},
-            ) from error
+            public_error = stable_upload_error(error)
+            graphql_error = GraphQLError(
+                public_error.default_message,
+                extensions={"code": public_error.code},
+            )
+
+        if graphql_error is not None:
+            # Raise outside the handler so GraphQL never retains the service
+            # exception (or an unsafe chain supplied by a custom integration).
+            raise graphql_error
 
         instructions = result.instructions
         return BeginFileUpload(
