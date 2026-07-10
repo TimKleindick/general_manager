@@ -1,4 +1,14 @@
 PERF_CEILINGS: dict[str, int] = {
+    # Group bucket construction workloads.
+    "GROUP_10_YIELDS": 10_000,
+    "GROUP_10_CONSTRUCTORS": 10,
+    "GROUP_10_FILTER_CALLS": 10,
+    "GROUP_1000_YIELDS": 10_000,
+    "GROUP_1000_CONSTRUCTORS": 1_000,
+    "GROUP_1000_FILTER_CALLS": 1_000,
+    "GROUP_10000_YIELDS": 10_000,
+    "GROUP_10000_CONSTRUCTORS": 10_000,
+    "GROUP_10000_FILTER_CALLS": 10_000,
     # Calculation bucket combination workloads.
     "CALC_STATIC_5X10_COLD_A_YIELDS": 5,
     "CALC_STATIC_5X10_COLD_B_YIELDS": 50,
