@@ -1,7 +1,10 @@
 """Bucket implementation that enumerates calculation interface combinations."""
 
 from __future__ import annotations
-from collections.abc import Hashable, Iterable, Iterator
+from collections.abc import Hashable, Iterable, Iterator, Mapping
+from dataclasses import dataclass
+from datetime import date, datetime
+import struct
 from types import UnionType
 from itertools import islice
 from typing import (
@@ -15,7 +18,9 @@ from typing import (
     get_origin,
     get_args,
     cast,
+    Protocol,
 )
+from uuid import UUID
 from operator import attrgetter
 from copy import deepcopy
 from general_manager.interface.base_interface import (
@@ -24,7 +29,12 @@ from general_manager.interface.base_interface import (
 )
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.indexing import freeze_bucket_index_value
-from general_manager.manager.input import Input, InputDomain
+from general_manager.manager.input import (
+    DateRangeDomain,
+    Input,
+    InputDomain,
+    NumericRangeDomain,
+)
 from general_manager.utils.filter_parser import (
     FilterFunction,
     ParsedFilters,
@@ -38,6 +48,408 @@ if TYPE_CHECKING:
 
 type Combination = dict[str, object]
 type RawFilterDefinitions = dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _TrustedToken:
+    """Comparison-safe token for one exact immutable scalar value."""
+
+    kind: str
+    payload: object
+
+
+class _EnumerationWitness(Protocol):
+    """Validate that an enumerated candidate remains backed by its source."""
+
+    def authorizes(self) -> bool: ...
+
+    def track_membership_dependency(self) -> None: ...
+
+
+class _StaticEnumerationWitness:
+    """Base witness for sources with no external cache dependency to track."""
+
+    __slots__ = ()
+
+    def track_membership_dependency(self) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class _SequenceEnumerationWitness(_StaticEnumerationWitness):
+    """Prove that the exact sequence slot still contains the emitted object."""
+
+    source: list[object] | tuple[object, ...]
+    source_index: int
+    candidate: object
+    candidate_token: _TrustedToken
+
+    def authorizes(self) -> bool:
+        try:
+            current = self.source[self.source_index]
+        except IndexError:
+            return False
+        return (
+            current is self.candidate
+            and _trusted_candidate_token(current) == self.candidate_token
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _SetEnumerationWitness(_StaticEnumerationWitness):
+    """Prove that an emitted safe scalar remains in the exact set source."""
+
+    source: set[object] | frozenset[object]
+    candidate: object
+    candidate_token: _TrustedToken
+
+    def authorizes(self) -> bool:
+        if _trusted_candidate_token(self.candidate) != self.candidate_token:
+            return False
+        try:
+            return self.candidate in self.source
+        except Exception:  # noqa: BLE001 - mutated sets must only revoke evidence
+            return False
+
+
+@dataclass(frozen=True, slots=True)
+class _NumericRangeEnumerationWitness(_StaticEnumerationWitness):
+    """Prove that an exact numeric range still has its immutable configuration."""
+
+    source: NumericRangeDomain
+    configuration: tuple[_TrustedToken, _TrustedToken, _TrustedToken]
+    candidate: int | float
+
+    def authorizes(self) -> bool:
+        configuration = _numeric_range_configuration(self.source)
+        return configuration == self.configuration
+
+
+@dataclass(frozen=True, slots=True)
+class _DateRangeEnumerationWitness(_StaticEnumerationWitness):
+    """Prove that an exact date range still has its immutable configuration."""
+
+    source: DateRangeDomain
+    configuration: tuple[
+        _TrustedToken,
+        _TrustedToken,
+        _TrustedToken,
+        _TrustedToken,
+    ]
+    candidate: date
+
+    def authorizes(self) -> bool:
+        configuration = _date_range_configuration(self.source)
+        return configuration == self.configuration
+
+
+@dataclass(frozen=True, slots=True)
+class _EnumerationEvidence:
+    """Conservative proof that one candidate came from one static input source."""
+
+    input_field: Input[type[object]]
+    provider: object
+    dependency_names: tuple[str, ...]
+    dependency_tokens: tuple[_TrustedToken, ...]
+    candidate_token: _TrustedToken
+    witness: _EnumerationWitness
+
+    def authorizes(
+        self,
+        input_field: Input[type[object]],
+        value: object,
+        identification: Mapping[str, object],
+    ) -> bool:
+        if input_field is not self.input_field:
+            return False
+        if input_field.possible_values is not self.provider:
+            return False
+        if type(input_field.depends_on) is not list:
+            return False
+        if not _trusted_dependency_names_match(
+            input_field.depends_on,
+            self.dependency_names,
+        ):
+            return False
+        dependency_snapshot = _trusted_dependency_snapshot(
+            self.dependency_names, identification
+        )
+        if dependency_snapshot != self.dependency_tokens:
+            return False
+        if _trusted_candidate_token(value) != self.candidate_token:
+            return False
+        return self.witness.authorizes()
+
+    def track_membership_dependency(self) -> None:
+        self.witness.track_membership_dependency()
+
+
+def _trusted_candidate_token(value: object) -> _TrustedToken | None:
+    """Return a comparison-safe token for an eligible exact scalar."""
+    value_type = type(value)
+    if value_type is bool:
+        return _TrustedToken("bool", value)
+    if value_type is int:
+        return _TrustedToken("int", value)
+    if value_type is float:
+        return _TrustedToken("float", struct.pack("!d", value))
+    if value_type is str:
+        return _TrustedToken("str", value)
+    if value_type is bytes:
+        return _TrustedToken("bytes", value)
+    if value_type is date:
+        date_value = cast(date, value)
+        return _TrustedToken("date", date_value.toordinal())
+    if value_type is datetime:
+        datetime_value = cast(datetime, value)
+        if datetime_value.tzinfo is not None:
+            return None
+        return _TrustedToken(
+            "datetime",
+            (
+                datetime_value.year,
+                datetime_value.month,
+                datetime_value.day,
+                datetime_value.hour,
+                datetime_value.minute,
+                datetime_value.second,
+                datetime_value.microsecond,
+                datetime_value.fold,
+            ),
+        )
+    if value_type is UUID:
+        return _TrustedToken("uuid", cast(UUID, value).int)
+    return None
+
+
+def _trusted_dependency_snapshot(
+    dependency_names: tuple[str, ...],
+    identification: Mapping[str, object],
+) -> tuple[_TrustedToken, ...] | None:
+    """Tokenize declared dependency values without comparing arbitrary objects."""
+    if type(identification) is not dict:
+        return None
+    tokens: list[_TrustedToken] = []
+    for dependency_name in dependency_names:
+        if type(dependency_name) is not str:
+            return None
+        try:
+            dependency_value = identification[dependency_name]
+        except KeyError:
+            return None
+        token = _trusted_candidate_token(dependency_value)
+        if token is None:
+            return None
+        tokens.append(token)
+    return tuple(tokens)
+
+
+def _trusted_dependency_names_match(
+    current_names: list[str],
+    expected_names: tuple[str, ...],
+) -> bool:
+    """Compare dependency names only after proving every current value is a str."""
+    if len(current_names) != len(expected_names):
+        return False
+    for current_name, expected_name in zip(current_names, expected_names, strict=True):
+        if type(current_name) is not str or current_name != expected_name:
+            return False
+    return True
+
+
+def _numeric_range_configuration(
+    source: NumericRangeDomain,
+) -> tuple[_TrustedToken, _TrustedToken, _TrustedToken] | None:
+    """Return safe exact built-in configuration for a numeric range."""
+    values = (source.min_value, source.max_value, source.step)
+    if any(type(value) not in {int, float} for value in values):
+        return None
+    tokens = tuple(_trusted_candidate_token(value) for value in values)
+    if any(token is None for token in tokens):
+        return None
+    return cast(
+        tuple[_TrustedToken, _TrustedToken, _TrustedToken],
+        tokens,
+    )
+
+
+def _date_range_configuration(
+    source: DateRangeDomain,
+) -> tuple[_TrustedToken, _TrustedToken, _TrustedToken, _TrustedToken] | None:
+    """Return safe exact built-in configuration for a date range."""
+    if (
+        type(source.start) is not date
+        or type(source.end) is not date
+        or type(source.frequency) is not str
+        or type(source.step) is not int
+    ):
+        return None
+    tokens = tuple(
+        _trusted_candidate_token(value)
+        for value in (source.start, source.end, source.frequency, source.step)
+    )
+    if any(token is None for token in tokens):
+        return None
+    return cast(
+        tuple[_TrustedToken, _TrustedToken, _TrustedToken, _TrustedToken],
+        tokens,
+    )
+
+
+def _sequence_enumeration_witness(
+    source: list[object] | tuple[object, ...],
+    candidate: object,
+    candidate_token: _TrustedToken,
+    source_index: int | None,
+) -> _SequenceEnumerationWitness | None:
+    """Build an identity-and-position witness for an exact sequence."""
+    if type(source_index) is not int or source_index < 0:
+        return None
+    try:
+        source_candidate = source[source_index]
+    except IndexError:
+        return None
+    if source_candidate is not candidate:
+        return None
+    if _trusted_candidate_token(source_candidate) != candidate_token:
+        return None
+    return _SequenceEnumerationWitness(
+        source,
+        source_index,
+        candidate,
+        candidate_token,
+    )
+
+
+def _set_enumeration_witness(
+    source: set[object] | frozenset[object],
+    candidate: object,
+    candidate_token: _TrustedToken,
+) -> _SetEnumerationWitness | None:
+    """Build a constant-time membership witness for a safe exact set."""
+    try:
+        candidate_is_member = candidate in source
+    except Exception:  # noqa: BLE001 - unsafe set contents make evidence ineligible
+        return None
+    if not candidate_is_member:
+        return None
+    return _SetEnumerationWitness(source, candidate, candidate_token)
+
+
+def _numeric_range_enumeration_witness(
+    source: NumericRangeDomain,
+    candidate: object,
+) -> _NumericRangeEnumerationWitness | None:
+    """Build a witness for a safe candidate emitted by an exact numeric range."""
+    configuration = _numeric_range_configuration(source)
+    if configuration is None:
+        return None
+    expected_type = (
+        float
+        if any(
+            type(value) is float
+            for value in (source.min_value, source.max_value, source.step)
+        )
+        else int
+    )
+    if type(candidate) is not expected_type:
+        return None
+    numeric_candidate = cast(int | float, candidate)
+    return _NumericRangeEnumerationWitness(
+        source,
+        configuration,
+        numeric_candidate,
+    )
+
+
+def _date_range_enumeration_witness(
+    source: DateRangeDomain,
+    candidate: object,
+) -> _DateRangeEnumerationWitness | None:
+    """Build a witness for a safe candidate emitted by an exact date range."""
+    configuration = _date_range_configuration(source)
+    if configuration is None or type(candidate) is not date:
+        return None
+    date_candidate = candidate
+    return _DateRangeEnumerationWitness(source, configuration, date_candidate)
+
+
+def _trusted_enumeration_evidence(
+    input_field: Input[type[object]],
+    resolved_source: object,
+    candidate: object,
+    identification: dict[str, object],
+    *,
+    source_index: int | None = None,
+) -> _EnumerationEvidence | None:
+    """Build static-source evidence without resolving callable providers."""
+    provider = input_field.possible_values
+    if callable(provider):
+        return None
+    if type(input_field) is not Input:
+        return None
+    if any(
+        override_name in input_field.__dict__
+        for override_name in (
+            "resolve_possible_values",
+            "normalize",
+            "cast",
+            "_build_dependency_values",
+        )
+    ):
+        return None
+    if provider is not resolved_source:
+        return None
+    if type(input_field.depends_on) is not list:
+        return None
+    dependency_names = tuple(input_field.depends_on)
+    dependency_tokens = _trusted_dependency_snapshot(
+        dependency_names,
+        identification,
+    )
+    if dependency_tokens is None:
+        return None
+    candidate_token = _trusted_candidate_token(candidate)
+    if candidate_token is None:
+        return None
+
+    witness: _EnumerationWitness | None
+    source_type = type(resolved_source)
+    if source_type is list or source_type is tuple:
+        witness = _sequence_enumeration_witness(
+            cast(list[object] | tuple[object, ...], resolved_source),
+            candidate,
+            candidate_token,
+            source_index,
+        )
+    elif source_type is set or source_type is frozenset:
+        witness = _set_enumeration_witness(
+            cast(set[object] | frozenset[object], resolved_source),
+            candidate,
+            candidate_token,
+        )
+    elif source_type is NumericRangeDomain:
+        witness = _numeric_range_enumeration_witness(
+            cast(NumericRangeDomain, resolved_source),
+            candidate,
+        )
+    elif source_type is DateRangeDomain:
+        witness = _date_range_enumeration_witness(
+            cast(DateRangeDomain, resolved_source),
+            candidate,
+        )
+    else:
+        witness = None
+    if witness is None:
+        return None
+    return _EnumerationEvidence(
+        input_field=input_field,
+        provider=provider,
+        dependency_names=dependency_names,
+        dependency_tokens=dependency_tokens,
+        candidate_token=candidate_token,
+        witness=witness,
+    )
 
 
 class SortedFilters(TypedDict):

@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from enum import Enum
 from typing import ClassVar, cast
+from uuid import UUID
 
 import pytest
 from django.test import override_settings
 
+from general_manager.bucket.calculation_bucket import (
+    _EnumerationEvidence,
+    _TrustedToken,
+    _trusted_candidate_token,
+    _trusted_enumeration_evidence,
+)
 from general_manager.interface.base_interface import (
     InterfaceBase,
     InvalidInputConstraintError,
@@ -16,7 +27,7 @@ from general_manager.interface.base_interface import (
     InvalidInputValueError,
     _trusted_enumeration_scope,
 )
-from general_manager.manager.input import Input
+from general_manager.manager.input import DateRangeDomain, Input, NumericRangeDomain
 
 
 class EvidenceDouble:
@@ -333,3 +344,315 @@ def test_disabled_membership_validation_does_not_consult_evidence() -> None:
     assert evidence.authorization_calls == []
     assert evidence.membership_dependency_calls == 0
     assert possible_values_calls == []
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        True,
+        7,
+        1.25,
+        "value",
+        b"value",
+        date(2026, 7, 11),
+        datetime(2026, 7, 11, 8, 30),
+        UUID("12345678-1234-5678-1234-567812345678"),
+    ],
+)
+def test_trusted_candidate_token_accepts_only_exact_safe_scalars(
+    candidate: object,
+) -> None:
+    token = _trusted_candidate_token(candidate)
+
+    assert isinstance(token, _TrustedToken)
+    assert token == _trusted_candidate_token(candidate)
+
+
+class _IntegerSubclass(int):
+    pass
+
+
+class _DateSubclass(date):
+    pass
+
+
+class _EnumerationValue(Enum):
+    ITEM = 1
+
+
+@dataclass(frozen=True)
+class _FrozenValue:
+    code: int
+
+
+@dataclass
+class _MutableValue:
+    code: int
+
+
+class _UnsafeValue:
+    def __init__(self) -> None:
+        self.callbacks: list[str] = []
+
+    @property
+    def code(self) -> int:
+        self.callbacks.append("property")
+        return 1
+
+    def __eq__(self, other: object) -> bool:
+        self.callbacks.append("eq")
+        return self is other
+
+    def __hash__(self) -> int:
+        self.callbacks.append("hash")
+        return 1
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        Decimal("1.25"),
+        Decimal("sNaN"),
+        datetime(2026, 7, 11, tzinfo=timezone.utc),
+        _EnumerationValue.ITEM,
+        [1],
+        {"code": 1},
+        {1},
+        _FrozenValue(1),
+        _MutableValue(1),
+        _IntegerSubclass(1),
+        _DateSubclass(2026, 7, 11),
+    ],
+)
+def test_trusted_candidate_token_rejects_non_exact_or_unsafe_values(
+    candidate: object,
+) -> None:
+    assert _trusted_candidate_token(candidate) is None
+
+
+def test_trusted_candidate_token_rejects_custom_value_without_running_hooks() -> None:
+    candidate = _UnsafeValue()
+
+    assert _trusted_candidate_token(candidate) is None
+    assert candidate.callbacks == []
+
+
+def _static_evidence(
+    input_field: Input[type[object]],
+    source: object,
+    candidate: object,
+    identification: dict[str, object] | None = None,
+    *,
+    source_index: int | None = None,
+) -> _EnumerationEvidence:
+    evidence = _trusted_enumeration_evidence(
+        input_field,
+        source,
+        candidate,
+        {} if identification is None else identification,
+        source_index=source_index,
+    )
+    assert evidence is not None
+    return evidence
+
+
+@pytest.mark.parametrize("source", [[1, 2], (1, 2)])
+def test_sequence_evidence_requires_same_candidate_at_same_position(
+    source: list[int] | tuple[int, ...],
+) -> None:
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    evidence = _static_evidence(input_field, source, source[1], source_index=1)
+
+    assert evidence.authorizes(input_field, 2, {})
+
+    if isinstance(source, list):
+        source.reverse()
+        assert not evidence.authorizes(input_field, 2, {})
+
+
+def test_sequence_evidence_denies_replaced_or_removed_candidate() -> None:
+    candidate = "candidate value not expected to be interned"
+    source = ["first", candidate]
+    input_field = cast(Input[type[object]], Input(str, possible_values=source))
+    evidence = _static_evidence(input_field, source, candidate, source_index=1)
+
+    source[1] = "replacement"
+    assert not evidence.authorizes(input_field, candidate, {})
+
+    source[:] = ["first"]
+    assert not evidence.authorizes(input_field, candidate, {})
+
+
+def test_set_evidence_requires_current_membership_in_same_source() -> None:
+    source = {1, 2}
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    evidence = _static_evidence(input_field, source, 2)
+
+    assert evidence.authorizes(input_field, 2, {})
+    source.remove(2)
+    assert not evidence.authorizes(input_field, 2, {})
+
+
+@pytest.mark.parametrize(
+    ("source", "candidate"),
+    [
+        (NumericRangeDomain(1, 5, 2), 3),
+        (
+            DateRangeDomain(date(2026, 1, 1), date(2026, 1, 3)),
+            date(2026, 1, 2),
+        ),
+    ],
+)
+def test_exact_builtin_domain_evidence_authorizes_emitted_candidate(
+    source: NumericRangeDomain | DateRangeDomain,
+    candidate: object,
+) -> None:
+    input_field = cast(
+        Input[type[object]], Input(type(candidate), possible_values=source)
+    )
+    evidence = _static_evidence(input_field, source, candidate)
+
+    assert evidence.authorizes(input_field, candidate, {})
+
+
+def test_evidence_denies_changed_input_provider_or_normalized_value() -> None:
+    source = ["VALUE"]
+    input_field = cast(Input[type[object]], Input(str, possible_values=source))
+    evidence = _static_evidence(input_field, source, source[0], source_index=0)
+
+    assert not evidence.authorizes(
+        cast(Input[type[object]], Input(str, possible_values=source)), "VALUE", {}
+    )
+
+    input_field.possible_values = ["VALUE"]
+    assert not evidence.authorizes(input_field, "VALUE", {})
+
+    input_field.possible_values = source
+    assert not evidence.authorizes(input_field, "value", {})
+
+
+def test_static_dependency_snapshot_must_remain_safe_present_and_equal() -> None:
+    source = [10]
+    input_field = cast(
+        Input[type[object]], Input(int, possible_values=source, depends_on=["root"])
+    )
+    evidence = _static_evidence(
+        input_field,
+        source,
+        source[0],
+        {"root": "A"},
+        source_index=0,
+    )
+
+    assert evidence.authorizes(input_field, 10, {"root": "A"})
+    assert not evidence.authorizes(input_field, 10, {})
+    assert not evidence.authorizes(input_field, 10, {"root": "B"})
+    assert not evidence.authorizes(input_field, 10, {"root": _UnsafeValue()})
+
+    input_field.depends_on.append("other")
+    assert not evidence.authorizes(input_field, 10, {"root": "A", "other": 1})
+
+
+def test_changed_dependency_names_deny_without_running_custom_equality() -> None:
+    source = [10]
+    input_field = cast(
+        Input[type[object]], Input(int, possible_values=source, depends_on=["root"])
+    )
+    evidence = _static_evidence(
+        input_field,
+        source,
+        source[0],
+        {"root": "A"},
+        source_index=0,
+    )
+    unsafe_name = _UnsafeValue()
+    cast(list[object], input_field.depends_on)[0] = unsafe_name
+
+    assert not evidence.authorizes(input_field, 10, {"root": "A"})
+    assert unsafe_name.callbacks == []
+
+
+def test_unsafe_or_missing_static_dependency_prevents_evidence_creation() -> None:
+    source = [10]
+    input_field = cast(
+        Input[type[object]], Input(int, possible_values=source, depends_on=["root"])
+    )
+
+    assert (
+        _trusted_enumeration_evidence(input_field, source, 10, {}, source_index=0)
+        is None
+    )
+    assert (
+        _trusted_enumeration_evidence(
+            input_field,
+            source,
+            10,
+            {"root": _UnsafeValue()},
+            source_index=0,
+        )
+        is None
+    )
+
+
+def test_callable_provider_is_rejected_without_invocation() -> None:
+    calls: list[int] = []
+
+    def provider() -> list[int]:
+        calls.append(1)
+        return [1]
+
+    input_field = cast(Input[type[object]], Input(int, possible_values=provider))
+
+    assert _trusted_enumeration_evidence(input_field, [1], 1, {}) is None
+    assert calls == []
+
+
+def test_custom_sources_and_input_subclasses_are_ineligible() -> None:
+    class CustomInput(Input[type[int]]):
+        pass
+
+    class CustomIterable:
+        def __iter__(self) -> Iterator[int]:
+            yield 1
+
+    source = CustomIterable()
+    exact_input = cast(Input[type[object]], Input(int, possible_values=source))
+    custom_input = cast(Input[type[object]], CustomInput(int, possible_values=[1]))
+
+    assert _trusted_enumeration_evidence(exact_input, source, 1, {}) is None
+    assert (
+        _trusted_enumeration_evidence(
+            custom_input, custom_input.possible_values, 1, {}, source_index=0
+        )
+        is None
+    )
+
+
+def test_evidence_tracking_delegates_to_source_witness() -> None:
+    class WitnessDouble:
+        def __init__(self) -> None:
+            self.track_calls = 0
+
+        def authorizes(self) -> bool:
+            return True
+
+        def track_membership_dependency(self) -> None:
+            self.track_calls += 1
+
+    source = [1]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    token = _trusted_candidate_token(1)
+    assert token is not None
+    witness = WitnessDouble()
+    evidence = _EnumerationEvidence(
+        input_field=input_field,
+        provider=source,
+        dependency_names=(),
+        dependency_tokens=(),
+        candidate_token=token,
+        witness=witness,
+    )
+
+    evidence.track_membership_dependency()
+
+    assert witness.track_calls == 1
