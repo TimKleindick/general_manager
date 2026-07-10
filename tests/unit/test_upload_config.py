@@ -26,6 +26,12 @@ def test_upload_settings_default_to_secure_finite_values(settings) -> None:
         max_bytes=25_000_000,
         max_pending_intents_per_user=20,
         max_pending_bytes_per_user=100_000_000,
+        max_pending_intents_global=1_000,
+        max_pending_bytes_global=5_000_000_000,
+        begin_rate_limit_window_seconds=60,
+        max_begin_attempts_per_user=30,
+        max_begin_attempts_global=1_000,
+        allow_insecure_http=False,
         max_image_pixels=40_000_000,
         token_ttl_seconds=900,
         download_url_ttl_seconds=300,
@@ -35,6 +41,12 @@ def test_upload_settings_default_to_secure_finite_values(settings) -> None:
     assert value.intent_database == "default"
     assert value.max_bytes > 0
     assert value.max_pending_intents_per_user > 0
+    assert value.max_pending_intents_global > value.max_pending_intents_per_user
+    assert value.max_pending_bytes_global > value.max_pending_bytes_per_user
+    assert value.begin_rate_limit_window_seconds > 0
+    assert value.max_begin_attempts_per_user > 0
+    assert value.max_begin_attempts_global > value.max_begin_attempts_per_user
+    assert value.allow_insecure_http is False
     assert value.download_url_ttl_seconds > 0
 
 
@@ -98,6 +110,12 @@ def test_file_policy_rejects_empty_or_non_string_allowed_values(
         {"MAX_BYTES": True},
         {"MAX_BYTES": 0},
         {"MAX_PENDING_INTENTS_PER_USER": -1},
+        {"MAX_PENDING_INTENTS_GLOBAL": 0},
+        {"MAX_PENDING_BYTES_GLOBAL": True},
+        {"BEGIN_RATE_LIMIT_WINDOW_SECONDS": 0},
+        {"MAX_BEGIN_ATTEMPTS_PER_USER": -1},
+        {"MAX_BEGIN_ATTEMPTS_GLOBAL": False},
+        {"ALLOW_INSECURE_HTTP": 1},
         {"DOWNLOAD_URL_TTL_SECONDS": 0},
         {"HTTP_UPLOAD_PATH": "../uploads/"},
         {"STAGING_PREFIX": "/gm-staging/"},

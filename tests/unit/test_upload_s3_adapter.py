@@ -39,6 +39,7 @@ class FakeS3Client:
         *,
         versioning: bool = True,
         conditional_copy: bool = True,
+        signature_version: object = "s3v4",
     ) -> None:
         self.versioning = versioning
         self.objects: dict[tuple[str, str | None], dict[str, Any]] = {}
@@ -51,7 +52,10 @@ class FakeS3Client:
         members = {"IfNoneMatch": object()} if conditional_copy else {}
         operation = SimpleNamespace(input_shape=SimpleNamespace(members=members))
         service_model = SimpleNamespace(operation_model=lambda _name: operation)
-        self.meta = SimpleNamespace(service_model=service_model)
+        self.meta = SimpleNamespace(
+            service_model=service_model,
+            config=SimpleNamespace(signature_version=signature_version),
+        )
 
     def _fail_if(self, operation: str) -> None:
         if operation in self.operation_errors:
@@ -183,6 +187,19 @@ def test_s3_direct_mode_requires_versioning() -> None:
     assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
 
 
+@pytest.mark.parametrize("signature_version", [None, "s3", "v2", 4, True])
+def test_s3_direct_mode_requires_explicit_sigv4_configuration(
+    signature_version: object,
+) -> None:
+    client = FakeS3Client(signature_version=signature_version)
+    storage = FakeS3Storage(client)
+
+    assert S3UploadAdapter.supports_direct(storage) is False
+    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    with pytest.raises(UploadBackendUnsupportedError):
+        S3UploadAdapter(storage)
+
+
 def test_s3_direct_construction_rejects_suspended_versioning() -> None:
     storage = FakeS3Storage(FakeS3Client(versioning=False))
 
@@ -312,6 +329,42 @@ def test_s3_presigned_upload_binds_stage_metadata() -> None:
     }
     assert "gm-staging/intent.bin" not in repr(instructions)
     assert "credential=secret" not in repr(instructions)
+
+
+def test_s3_presigned_put_rejects_objects_above_the_single_put_limit() -> None:
+    client = FakeS3Client()
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.create_upload_instructions(
+            stage_key="gm-staging/intent.bin",
+            upload_url=None,
+            content_type="application/octet-stream",
+            size=5 * 1024**3 + 1,
+            checksum_sha256="a" * 64,
+        )
+
+    assert client.presigned_url_calls == []
+
+
+@pytest.mark.parametrize("expires_in", [604_801, 10_000_000])
+def test_s3_presigned_put_rejects_expiry_beyond_sigv4_limit(
+    expires_in: int,
+) -> None:
+    client = FakeS3Client()
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.create_upload_instructions(
+            stage_key="gm-staging/intent.bin",
+            upload_url=None,
+            content_type="application/octet-stream",
+            size=1,
+            checksum_sha256="a" * 64,
+            expires_in=expires_in,
+        )
+
+    assert client.presigned_url_calls == []
 
 
 def test_s3_bucket_owner_enforced_staging_omits_acl() -> None:

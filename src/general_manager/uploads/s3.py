@@ -30,6 +30,8 @@ from general_manager.uploads.types import ObjectVersion, UploadTransport
 
 _ExceptionT = TypeVar("_ExceptionT", bound=Exception)
 _ResultT = TypeVar("_ResultT")
+_MAX_SINGLE_PUT_BYTES = 5 * 1024**3
+_MAX_SIGV4_EXPIRY_SECONDS = 604_800
 
 
 def _exception(
@@ -108,6 +110,26 @@ class S3UploadAdapter:
         expires_in: int = 900,
     ) -> UploadInstructions:
         del upload_url, headers
+        if (
+            isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 0
+            or size > _MAX_SINGLE_PUT_BYTES
+        ):
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 direct uploads require a valid single-PUT object size.",
+            )
+        if (
+            isinstance(expires_in, bool)
+            or not isinstance(expires_in, int)
+            or expires_in <= 0
+            or expires_in > _MAX_SIGV4_EXPIRY_SECONDS
+        ):
+            raise _exception(
+                UploadBackendUnsupportedError,
+                "S3 direct upload expiry exceeds the SigV4 limit.",
+            )
         checksum_base64 = _hex_checksum_to_base64(checksum_sha256)
         params: dict[str, object] = {
             "Bucket": self._bucket,
@@ -363,6 +385,13 @@ def _validate_direct_support(
         raise _exception(
             UploadBackendUnsupportedError,
             "The storage does not expose a version-capable S3 client.",
+        )
+    client_meta = getattr(client, "meta", None)
+    client_config = getattr(client_meta, "config", None)
+    if getattr(client_config, "signature_version", None) != "s3v4":
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "S3 direct uploads require an explicitly configured SigV4 client.",
         )
     if not _supports_conditional_copy(client):
         raise _exception(
