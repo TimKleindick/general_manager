@@ -207,7 +207,12 @@ def _managed_perf_users(
     try:
         with database_access():
             _delete_perf_users(prefix)
-            users = [User(username=f"{prefix}{index:05d}") for index in range(total)]
+            # Explicit negative IDs keep this large fixture from advancing the shared
+            # auth_user sequence used by tests that create ordinary positive IDs.
+            users = [
+                User(id=index - total, username=f"{prefix}{index:05d}")
+                for index in range(total)
+            ]
             created_users = User.objects.bulk_create(users)
             primary_keys = tuple(int(user.pk) for user in created_users)
             assert len(primary_keys) == total
@@ -244,6 +249,19 @@ def test_managed_perf_users_replaces_stale_rows_and_cleans_up_after_failure() ->
     finally:
         _delete_perf_users(prefix)
         _delete_perf_users(shared_prefix)
+
+
+def test_managed_perf_users_do_not_consume_ordinary_positive_primary_keys() -> None:
+    prefix = "perf-db-primary-key-namespace-"
+    ordinary_before = User.objects.create(username=f"{prefix}ordinary-before")
+    try:
+        with _managed_perf_users(prefix, 3) as primary_keys:
+            assert primary_keys == (-3, -2, -1)
+
+        ordinary_after = User.objects.create(username=f"{prefix}ordinary-after")
+        assert ordinary_after.pk == ordinary_before.pk + 1
+    finally:
+        _delete_perf_users(prefix)
 
 
 @pytest.fixture(scope="module")
