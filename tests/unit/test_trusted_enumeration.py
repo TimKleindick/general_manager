@@ -493,6 +493,48 @@ def test_set_evidence_requires_current_membership_in_same_source() -> None:
     assert not evidence.authorizes(input_field, 2, {})
 
 
+class _CollidingUnsafeSetMember:
+    def __init__(self, collision_hash: int) -> None:
+        self.collision_hash = collision_hash
+        self.callbacks: list[str] = []
+
+    def __hash__(self) -> int:
+        self.callbacks.append("hash")
+        return self.collision_hash
+
+    def __eq__(self, other: object) -> bool:
+        self.callbacks.append("eq")
+        return False
+
+
+@pytest.mark.parametrize("source_type", [set, frozenset])
+def test_set_evidence_creation_rejects_unsafe_members_without_running_hooks(
+    source_type: type[set[object]] | type[frozenset[object]],
+) -> None:
+    candidate = 2
+    unsafe_member = _CollidingUnsafeSetMember(hash(candidate))
+    source = source_type((candidate, unsafe_member))
+    unsafe_member.callbacks.clear()
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+
+    assert _trusted_enumeration_evidence(input_field, source, candidate, {}) is None
+    assert unsafe_member.callbacks == []
+
+
+def test_set_evidence_authorization_rejects_new_unsafe_member_without_hooks() -> None:
+    candidate = 2
+    source: set[object] = {candidate, 3}
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    evidence = _static_evidence(input_field, source, candidate)
+    unsafe_member = _CollidingUnsafeSetMember(hash(candidate))
+    source.remove(candidate)
+    source.add(unsafe_member)
+    unsafe_member.callbacks.clear()
+
+    assert not evidence.authorizes(input_field, candidate, {})
+    assert unsafe_member.callbacks == []
+
+
 @pytest.mark.parametrize(
     ("source", "candidate"),
     [
@@ -626,6 +668,31 @@ def test_custom_sources_and_input_subclasses_are_ineligible() -> None:
         )
         is None
     )
+
+
+def test_input_subclass_is_rejected_before_accessing_hostile_attributes() -> None:
+    class HostileInput(Input[type[int]]):
+        callbacks: list[str]
+
+        def __init__(self) -> None:
+            object.__setattr__(self, "callbacks", [])
+
+        def __getattribute__(self, name: str) -> object:
+            if name != "callbacks":
+                callbacks = cast(list[str], object.__getattribute__(self, "callbacks"))
+                callbacks.append(name)
+                raise AssertionError(name)
+            return object.__getattribute__(self, name)
+
+    input_field = HostileInput()
+
+    assert (
+        _trusted_enumeration_evidence(
+            cast(Input[type[object]], input_field), [1], 1, {}, source_index=0
+        )
+        is None
+    )
+    assert input_field.callbacks == []
 
 
 def test_evidence_tracking_delegates_to_source_witness() -> None:

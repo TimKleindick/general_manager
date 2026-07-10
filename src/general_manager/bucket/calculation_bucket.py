@@ -100,16 +100,17 @@ class _SetEnumerationWitness(_StaticEnumerationWitness):
     """Prove that an emitted safe scalar remains in the exact set source."""
 
     source: set[object] | frozenset[object]
-    candidate: object
     candidate_token: _TrustedToken
+    screened_member_tokens: frozenset[_TrustedToken]
 
     def authorizes(self) -> bool:
-        if _trusted_candidate_token(self.candidate) != self.candidate_token:
-            return False
-        try:
-            return self.candidate in self.source
-        except Exception:  # noqa: BLE001 - mutated sets must only revoke evidence
-            return False
+        if type(self.source) is frozenset:
+            return self.candidate_token in self.screened_member_tokens
+        current_member_tokens = _trusted_set_member_tokens(self.source)
+        return (
+            current_member_tokens is not None
+            and self.candidate_token in current_member_tokens
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,17 +324,26 @@ def _sequence_enumeration_witness(
 
 def _set_enumeration_witness(
     source: set[object] | frozenset[object],
-    candidate: object,
     candidate_token: _TrustedToken,
 ) -> _SetEnumerationWitness | None:
-    """Build a constant-time membership witness for a safe exact set."""
-    try:
-        candidate_is_member = candidate in source
-    except Exception:  # noqa: BLE001 - unsafe set contents make evidence ineligible
+    """Screen a set before building a hook-free scalar membership witness."""
+    member_tokens = _trusted_set_member_tokens(source)
+    if member_tokens is None or candidate_token not in member_tokens:
         return None
-    if not candidate_is_member:
-        return None
-    return _SetEnumerationWitness(source, candidate, candidate_token)
+    return _SetEnumerationWitness(source, candidate_token, member_tokens)
+
+
+def _trusted_set_member_tokens(
+    source: set[object] | frozenset[object],
+) -> frozenset[_TrustedToken] | None:
+    """Snapshot safe set members without hashing or comparing source values."""
+    member_tokens: list[_TrustedToken] = []
+    for member in source:
+        member_token = _trusted_candidate_token(member)
+        if member_token is None:
+            return None
+        member_tokens.append(member_token)
+    return frozenset(member_tokens)
 
 
 def _numeric_range_enumeration_witness(
@@ -383,10 +393,10 @@ def _trusted_enumeration_evidence(
     source_index: int | None = None,
 ) -> _EnumerationEvidence | None:
     """Build static-source evidence without resolving callable providers."""
+    if type(input_field) is not Input:
+        return None
     provider = input_field.possible_values
     if callable(provider):
-        return None
-    if type(input_field) is not Input:
         return None
     if any(
         override_name in input_field.__dict__
@@ -425,7 +435,6 @@ def _trusted_enumeration_evidence(
     elif source_type is set or source_type is frozenset:
         witness = _set_enumeration_witness(
             cast(set[object] | frozenset[object], resolved_source),
-            candidate,
             candidate_token,
         )
     elif source_type is NumericRangeDomain:
