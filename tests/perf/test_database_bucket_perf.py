@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Hashable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from types import MethodType
-from typing import Literal, Self, cast
+from typing import Any, Literal, Self, cast
+from unittest.mock import patch
 
 import pytest
 from django.contrib.auth.models import User
@@ -30,9 +32,14 @@ from general_manager.cache.run_context import (
     current_calculation_run_context,
 )
 from general_manager.cache.signals import data_change, post_data_change, pre_data_change
+from general_manager.interface import DatabaseInterface
 from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.capabilities.orm.history import OrmHistoryCapability
+from general_manager.interface.capabilities.orm.mutations import OrmMutationCapability
+from general_manager.interface.orm_interface import OrmInterfaceBase
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
+from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from tests.perf.support import (
     Counter,
     DiagnosticObservation,
@@ -607,3 +614,349 @@ def test_database_bucket_terminal_operation_work(
         warm_observation,
     )
     assert _manager_registry_snapshot() == registries_before
+
+
+class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
+    perf_budgets: PerfBudgets
+    Perf337Parent: type[GeneralManager]
+    Perf337Child: type[GeneralManager]
+    Perf337History: type[GeneralManager]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        class Perf337Parent(GeneralManager):
+            name: str
+
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=64)
+
+        class Perf337Child(GeneralManager):
+            shape: str
+            position: int
+            parent: Perf337Parent | None
+
+            class Interface(DatabaseInterface):
+                shape = models.CharField(max_length=16)
+                position = models.IntegerField()
+                parent = models.ForeignKey(
+                    "general_manager.Perf337Parent",
+                    on_delete=models.CASCADE,
+                    related_name="perf337_children",
+                    null=True,
+                    blank=True,
+                )
+
+        class Perf337History(GeneralManager):
+            revision: int
+
+            class Interface(DatabaseInterface):
+                historical_lookup_buffer_seconds = 0
+                revision = models.IntegerField()
+
+        cls.Perf337Parent = Perf337Parent
+        cls.Perf337Child = Perf337Child
+        cls.Perf337History = Perf337History
+        cls.general_manager_classes = [
+            Perf337Parent,
+            Perf337Child,
+            Perf337History,
+        ]
+
+    @pytest.fixture(autouse=True)
+    def _inject_perf_budgets(self, perf_budgets: PerfBudgets) -> None:
+        self.perf_budgets = perf_budgets
+
+    def test_foreign_key_traversal_and_history_read_write_work(self) -> None:
+        parent_model = cast(
+            type[models.Model],
+            cast(Any, self.Perf337Parent.Interface)._model,
+        )
+        child_model = cast(
+            type[models.Model],
+            cast(Any, self.Perf337Child.Interface)._model,
+        )
+        history_model = cast(
+            type[models.Model],
+            cast(Any, self.Perf337History.Interface)._model,
+        )
+        history_rows = cast(Any, history_model).history
+
+        unique_parent_rows = parent_model.objects.bulk_create(
+            [parent_model(name=f"unique-{index:04d}") for index in range(1_000)]
+        )
+        unique_parent_ids = tuple(int(parent.pk) for parent in unique_parent_rows)
+        child_model.objects.bulk_create(
+            [
+                child_model(
+                    shape="unique",
+                    position=index,
+                    parent_id=unique_parent_ids[index],
+                )
+                for index in range(1_000)
+            ]
+        )
+
+        repeated_parent_rows = parent_model.objects.bulk_create(
+            [parent_model(name=f"repeated-{index:02d}") for index in range(10)]
+        )
+        repeated_parent_ids = tuple(int(parent.pk) for parent in repeated_parent_rows)
+        expected_repeated_parent_ids = tuple(
+            repeated_parent_ids[index % 10] for index in range(1_000)
+        )
+        child_model.objects.bulk_create(
+            [
+                child_model(
+                    shape="repeated",
+                    position=index,
+                    parent_id=expected_repeated_parent_ids[index],
+                )
+                for index in range(1_000)
+            ]
+        )
+
+        fk_observations: dict[str, int] = {}
+        original_parent_init = cast(
+            Callable[..., None],
+            self.Perf337Parent.Interface.__init__,
+        )
+
+        def count_parent_constructions(counter: Counter) -> Callable[..., None]:
+            def counted_parent_init(
+                interface: InterfaceBase,
+                *args: object,
+                **kwargs: object,
+            ) -> None:
+                counter.increment()
+                original_parent_init(interface, *args, **kwargs)
+
+            return counted_parent_init
+
+        for shape, expected_parent_ids in (
+            ("UNIQUE", unique_parent_ids),
+            ("REPEATED", expected_repeated_parent_ids),
+        ):
+            child_bucket = self.Perf337Child.filter(shape=shape.lower()).sort(
+                "position"
+            )
+            parent_constructors = Counter()
+
+            with patch.object(
+                self.Perf337Parent.Interface,
+                "__init__",
+                count_parent_constructions(parent_constructors),
+            ):
+                with CalculationRunContext():
+                    parent_constructors.reset()
+                    with CaptureQueriesContext(connection) as cold_queries:
+                        cold_children = tuple(child_bucket)
+                        assert all(
+                            not cast(
+                                Any, child._interface
+                            )._instance._state.fields_cache
+                            for child in cold_children
+                        )
+                        cold_parents = tuple(
+                            cast(GeneralManager | None, child.parent)
+                            for child in cold_children
+                        )
+                    cold_parent_ids = tuple(
+                        cast(int, parent.identification["id"])
+                        for parent in cold_parents
+                        if parent is not None
+                    )
+                    cold_constructor_count = parent_constructors.value
+                    cold_query_count = len(cold_queries)
+
+                    parent_constructors.reset()
+                    with CaptureQueriesContext(connection) as warm_queries:
+                        warm_children = tuple(child_bucket)
+                        warm_parents = tuple(
+                            cast(GeneralManager | None, child.parent)
+                            for child in warm_children
+                        )
+                    warm_parent_ids = tuple(
+                        cast(int, parent.identification["id"])
+                        for parent in warm_parents
+                        if parent is not None
+                    )
+                    warm_constructor_count = parent_constructors.value
+                    warm_query_count = len(warm_queries)
+
+            assert len(cold_children) == 1_000
+            assert len(warm_children) == 1_000
+            assert tuple(
+                cast(int, child.identification["id"]) for child in warm_children
+            ) == tuple(cast(int, child.identification["id"]) for child in cold_children)
+            assert all(
+                not cast(Any, child._interface)._instance._state.fields_cache
+                for child in cold_children
+            )
+            assert cold_parent_ids == expected_parent_ids
+            assert warm_parent_ids == expected_parent_ids
+            assert len(set(cold_parent_ids)) == (1_000 if shape == "UNIQUE" else 10)
+            assert len(set(warm_parent_ids)) == (1_000 if shape == "UNIQUE" else 10)
+
+            prefix = f"DB_FK_{shape}"
+            fk_observations[f"{prefix}_COLD_QUERIES"] = cold_query_count
+            fk_observations[f"{prefix}_COLD_CONSTRUCTORS"] = cold_constructor_count
+            fk_observations[f"{prefix}_WARM_QUERIES"] = warm_query_count
+            fk_observations[f"{prefix}_WARM_CONSTRUCTORS"] = warm_constructor_count
+
+        base_time = datetime(2025, 1, 15, 12, tzinfo=UTC)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            history_managers = [
+                self.Perf337History.create(
+                    revision=0,
+                    creator_id=None,
+                    ignore_permission=True,
+                )
+                for _ in range(100)
+            ]
+
+        for revision in range(1, 4):
+            round_time = base_time + timedelta(minutes=revision)
+            with patch("django.utils.timezone.now", return_value=round_time):
+                for manager in history_managers:
+                    manager.update(
+                        revision=revision,
+                        creator_id=None,
+                        ignore_permission=True,
+                    )
+
+        search_time = base_time + timedelta(minutes=3, seconds=30)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=base_time + timedelta(minutes=4),
+        ):
+            for manager in history_managers:
+                manager.update(
+                    revision=4,
+                    creator_id=None,
+                    ignore_permission=True,
+                )
+
+        expected_history_ids = tuple(
+            cast(int, manager.identification["id"]) for manager in history_managers
+        )
+        assert history_rows.count() == 500
+        assert tuple(manager.revision for manager in history_managers) == (4,) * 100
+        assert (
+            tuple(
+                history_model.objects.order_by("pk").values_list("revision", flat=True)
+            )
+            == (4,) * 100
+        )
+
+        history_read_callbacks = Counter()
+        original_get_historical_queryset = OrmHistoryCapability.get_historical_queryset
+
+        def counted_get_historical_queryset(
+            capability: OrmHistoryCapability,
+            interface_cls: type[OrmInterfaceBase[models.Model]],
+            historical_search_time: datetime,
+        ) -> models.QuerySet[models.Model]:
+            history_read_callbacks.increment()
+            return original_get_historical_queryset(
+                capability,
+                interface_cls,
+                historical_search_time,
+            )
+
+        with patch.object(
+            OrmHistoryCapability,
+            "get_historical_queryset",
+            counted_get_historical_queryset,
+        ):
+            historical_bucket = self.Perf337History.filter(
+                search_date=search_time
+            ).sort("id")
+            with CaptureQueriesContext(connection) as history_read_queries:
+                historical_managers = tuple(historical_bucket)
+                historical_ids = tuple(
+                    cast(int, manager.identification["id"])
+                    for manager in historical_managers
+                )
+                historical_revisions = tuple(
+                    manager.revision for manager in historical_managers
+                )
+            history_read_query_count = len(history_read_queries)
+            history_read_callback_count = history_read_callbacks.value
+
+        assert len(historical_managers) == 100
+        assert historical_ids == expected_history_ids
+        assert set(historical_ids) == set(expected_history_ids)
+        assert historical_revisions == (3,) * 100
+
+        history_count_before_write = history_rows.count()
+        history_write_callbacks = Counter()
+        original_save_with_history = OrmMutationCapability.save_with_history
+
+        def counted_save_with_history(
+            capability: OrmMutationCapability,
+            interface_cls: type[OrmInterfaceBase[models.Model]],
+            instance: models.Model,
+            *,
+            creator_id: int | None,
+            history_comment: str | None,
+        ) -> object:
+            history_write_callbacks.increment()
+            return original_save_with_history(
+                capability,
+                interface_cls,
+                instance,
+                creator_id=creator_id,
+                history_comment=history_comment,
+            )
+
+        with patch.object(
+            OrmMutationCapability,
+            "save_with_history",
+            counted_save_with_history,
+        ):
+            with patch(
+                "django.utils.timezone.now",
+                return_value=base_time + timedelta(minutes=5),
+            ):
+                with CaptureQueriesContext(connection) as history_write_queries:
+                    for manager in history_managers:
+                        manager.update(
+                            revision=5,
+                            creator_id=None,
+                            ignore_permission=True,
+                        )
+            history_write_query_count = len(history_write_queries)
+            history_write_callback_count = history_write_callbacks.value
+
+        assert tuple(manager.revision for manager in history_managers) == (5,) * 100
+        assert (
+            tuple(
+                history_model.objects.order_by("pk").values_list("revision", flat=True)
+            )
+            == (5,) * 100
+        )
+        assert history_rows.count() == history_count_before_write + 100
+        assert history_rows.count() == 600
+
+        observations = {
+            **fk_observations,
+            "DB_HISTORY_READ_100_QUERIES": history_read_query_count,
+            "DB_HISTORY_READ_100_CALLBACKS": history_read_callback_count,
+            "DB_HISTORY_WRITE_100_QUERIES": history_write_query_count,
+            "DB_HISTORY_WRITE_100_CALLBACKS": history_write_callback_count,
+        }
+        assert set(observations) == {
+            "DB_FK_UNIQUE_COLD_QUERIES",
+            "DB_FK_UNIQUE_COLD_CONSTRUCTORS",
+            "DB_FK_UNIQUE_WARM_QUERIES",
+            "DB_FK_UNIQUE_WARM_CONSTRUCTORS",
+            "DB_FK_REPEATED_COLD_QUERIES",
+            "DB_FK_REPEATED_COLD_CONSTRUCTORS",
+            "DB_FK_REPEATED_WARM_QUERIES",
+            "DB_FK_REPEATED_WARM_CONSTRUCTORS",
+            "DB_HISTORY_READ_100_QUERIES",
+            "DB_HISTORY_READ_100_CALLBACKS",
+            "DB_HISTORY_WRITE_100_QUERIES",
+            "DB_HISTORY_WRITE_100_CALLBACKS",
+        }
+        for name, observed in observations.items():
+            self.perf_budgets.assert_observation(name, observed)
