@@ -79,6 +79,10 @@ class UploadIntent(models.Model):
         null=True,
         blank=True,
     )
+    final_target_pk: models.TextField[str | None] = models.TextField(
+        null=True,
+        blank=True,
+    )
 
     adapter_id: models.CharField[str] = models.CharField(max_length=128)
     adapter_version: models.CharField[str] = models.CharField(max_length=64)
@@ -116,7 +120,30 @@ class UploadIntent(models.Model):
         null=True,
         blank=True,
     )
+    verified_width: models.PositiveBigIntegerField[int | None] = (
+        models.PositiveBigIntegerField(null=True, blank=True)
+    )
+    verified_height: models.PositiveBigIntegerField[int | None] = (
+        models.PositiveBigIntegerField(null=True, blank=True)
+    )
     object_version: models.JSONField[dict[str, Any]] = models.JSONField(default=dict)
+    final_object_version: models.JSONField[dict[str, Any]] = models.JSONField(
+        default=dict
+    )
+    old_object_version: models.JSONField[dict[str, Any]] = models.JSONField(
+        default=dict
+    )
+    old_cleanup_key: models.CharField[str | None] = models.CharField(
+        max_length=1024,
+        null=True,
+        blank=True,
+    )
+    old_cleanup_version: models.JSONField[dict[str, Any]] = models.JSONField(
+        default=dict
+    )
+    old_cleanup_completed_at: models.DateTimeField[datetime | None] = (
+        models.DateTimeField(null=True, blank=True)
+    )
 
     state: models.CharField[str] = models.CharField(
         max_length=16,

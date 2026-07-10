@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import hashlib
 from io import BufferedIOBase
 import json
+import os
 from tempfile import SpooledTemporaryFile
 from threading import RLock
 from types import MappingProxyType
@@ -22,6 +23,7 @@ from django.core.files.storage import FileSystemStorage, Storage, storages
 from general_manager.uploads.errors import (
     UploadBackendUnsupportedError,
     UploadChecksumMismatchError,
+    UploadError,
     UploadStorageChangedError,
     UploadStorageError,
     UploadTransferConflictError,
@@ -48,6 +50,13 @@ def _exception(
     return exception_type(message)
 
 
+def _filesystem_stat_identity(value: os.stat_result) -> str:
+    """Encode the local inode identity observed through an open handle."""
+    return (
+        f"fs-v1:{value.st_dev}:{value.st_ino}:{value.st_mtime_ns}:{value.st_ctime_ns}"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class UploadInstructions:
     """Client-safe instructions for transferring one staged object."""
@@ -68,6 +77,14 @@ class UploadInstructions:
         """Defensively copy caller-owned mappings into immutable views."""
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
         object.__setattr__(self, "fields", MappingProxyType(dict(self.fields)))
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedObject:
+    """Intent-owned exact object handle used by retry-safe cleanup."""
+
+    key: str
+    version: ObjectVersion
 
 
 @runtime_checkable
@@ -138,6 +155,68 @@ class UploadAdapter(Protocol):
 
     def storage_fingerprint(self) -> str:
         """Return a deterministic, non-secret storage identity."""
+        ...
+
+
+@runtime_checkable
+class UploadFinalizationAdapter(Protocol):
+    """Exact-version operations required by the post-commit saga."""
+
+    def inspect_materialized(
+        self,
+        final_key: str,
+        source_version: ObjectVersion,
+        *,
+        intent_id: UUID,
+    ) -> ObjectVersion:
+        """Return the exact intent-owned destination version."""
+        ...
+
+    def delete_materialized(
+        self,
+        final_key: str,
+        final_version: ObjectVersion,
+        *,
+        intent_id: UUID,
+    ) -> None:
+        """Delete only the exact destination version owned by ``intent_id``."""
+        ...
+
+    def delete_object(self, key: str, version: ObjectVersion) -> None:
+        """Delete one exact non-staging object version or fail closed."""
+        ...
+
+    def inspect_replaced_object(self, key: str) -> ObjectVersion:
+        """Inspect immutable identity for a potentially replaced object."""
+        ...
+
+    def plan_replaced_object_claim(
+        self,
+        key: str,
+        version: ObjectVersion,
+        *,
+        cleanup_id: UUID,
+    ) -> ClaimedObject:
+        """Return a deterministic claim handle without accessing storage."""
+        ...
+
+    def claim_replaced_object(
+        self,
+        key: str,
+        claimed: ClaimedObject,
+        *,
+        cleanup_id: UUID,
+    ) -> None:
+        """Idempotently bind an old object to a persisted cleanup handle."""
+        ...
+
+    def delete_claimed_object(
+        self,
+        claimed: ClaimedObject,
+        *,
+        cleanup_id: UUID,
+    ) -> None:
+        """Idempotently delete only an already-claimed object handle."""
         ...
 
 
@@ -425,7 +504,69 @@ class ProxyUploadAdapter:
             self._storage_delete(_stage_metadata_marker(stage_key))
             self._storage_delete(_stage_claim_marker(stage_key))
             return
+        self.delete_object(stage_key, version)
+        self._storage_delete(_stage_metadata_marker(stage_key))
+        self._storage_delete(_stage_claim_marker(stage_key))
+
+    def _delete_filesystem_object_exact(
+        self,
+        key: str,
+        version: ObjectVersion,
+    ) -> None:
         storage = self.storage
+        if not isinstance(storage, FileSystemStorage):  # pragma: no cover - caller
+            raise TypeError
+        original_path = storage.path(key)
+        quarantine_path = f"{original_path}.gm-delete-{version.checksum_sha256}"
+        if os.path.exists(quarantine_path):
+            self._delete_quarantine_exact(quarantine_path, version)
+        if not self._storage_exists(key):
+            return
+        if not self._object_matches(key, version):
+            raise UploadStorageChangedError()
+        try:
+            os.replace(original_path, quarantine_path)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise _exception(
+                UploadStorageError,
+                "The filesystem backend could not claim an exact object version.",
+            ) from exc
+        try:
+            self._delete_quarantine_exact(quarantine_path, version)
+        except Exception:
+            if os.path.exists(quarantine_path) and not os.path.exists(original_path):
+                try:
+                    os.replace(quarantine_path, original_path)
+                except OSError:
+                    pass
+            raise
+
+    @staticmethod
+    def _delete_quarantine_exact(
+        quarantine_path: str,
+        version: ObjectVersion,
+    ) -> None:
+        try:
+            with open(quarantine_path, "rb") as quarantined:
+                checksum, size = _checksum_stream(quarantined)
+            if checksum != version.checksum_sha256 or size != version.size:
+                raise UploadStorageChangedError()
+            os.unlink(quarantine_path)
+        except UploadError:
+            raise
+        except OSError as exc:
+            raise _exception(
+                UploadStorageError,
+                "The filesystem backend could not delete an exact object version.",
+            ) from exc
+
+    def delete_object(self, key: str, version: ObjectVersion) -> None:
+        storage = self.storage
+        if isinstance(storage, FileSystemStorage):
+            self._delete_filesystem_object_exact(key, version)
+            return
         try:
             supports_conditional_delete = storage.supports_atomic_conditional_delete  # type: ignore[attr-defined]
             conditional_delete = storage.delete_if_version  # type: ignore[attr-defined]
@@ -438,7 +579,7 @@ class ProxyUploadAdapter:
                 "The storage backend lacks atomic conditional deletion.",
             )
         try:
-            deleted = conditional_delete(stage_key, version)
+            deleted = conditional_delete(key, version)
         except OSError as exc:
             raise _exception(
                 UploadStorageError,
@@ -446,8 +587,130 @@ class ProxyUploadAdapter:
             ) from exc
         if deleted is not True:
             raise UploadStorageChangedError()
-        self._storage_delete(_stage_metadata_marker(stage_key))
-        self._storage_delete(_stage_claim_marker(stage_key))
+
+    def plan_replaced_object_claim(
+        self,
+        key: str,
+        version: ObjectVersion,
+        *,
+        cleanup_id: UUID,
+    ) -> ClaimedObject:
+        """Derive the intent-qualified local claim path without storage I/O."""
+        key_digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        return ClaimedObject(
+            key=f"gm-upload-old-claims/{cleanup_id.hex}/{key_digest}",
+            version=version,
+        )
+
+    def inspect_replaced_object(self, key: str) -> ObjectVersion:
+        """Persist an opened local inode identity for replacement cleanup."""
+        storage = self.storage
+        if not isinstance(storage, FileSystemStorage):
+            return self.inspect_staged(key)
+        path = storage.path(key)
+        try:
+            with open(path, "rb") as stored:
+                before = os.fstat(stored.fileno())
+                checksum, size = _checksum_stream(stored)
+                after = os.fstat(stored.fileno())
+        except OSError as exc:
+            raise UploadStorageError from exc
+        if _filesystem_stat_identity(before) != _filesystem_stat_identity(after):
+            raise UploadStorageChangedError()
+        return ObjectVersion(
+            version_id=_filesystem_stat_identity(before),
+            etag=None,
+            checksum_sha256=checksum,
+            size=size,
+            content_type=self._staged_content_type(key, checksum=checksum, size=size),
+        )
+
+    def claim_replaced_object(
+        self,
+        key: str,
+        claimed: ClaimedObject,
+        *,
+        cleanup_id: UUID,
+    ) -> None:
+        del key, claimed, cleanup_id
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "Proxy storage cannot atomically claim a replaced object version.",
+        )
+
+    def delete_claimed_object(
+        self,
+        claimed: ClaimedObject,
+        *,
+        cleanup_id: UUID,
+    ) -> None:
+        del claimed, cleanup_id
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "Proxy storage cannot atomically delete a replaced object version.",
+        )
+
+    def inspect_materialized(
+        self,
+        final_key: str,
+        source_version: ObjectVersion,
+        *,
+        intent_id: UUID,
+    ) -> ObjectVersion:
+        claim_identity = _materialization_identity(
+            intent_id=intent_id,
+            checksum_sha256=source_version.checksum_sha256,
+            state="claimed",
+        )
+        completed_identity = _materialization_identity(
+            intent_id=intent_id,
+            checksum_sha256=source_version.checksum_sha256,
+            state="completed",
+        )
+        if not self._marker_matches(
+            _materialization_marker(final_key), claim_identity
+        ) or not self._marker_matches(
+            _materialization_completed_marker(final_key), completed_identity
+        ):
+            raise UploadStorageChangedError()
+        inspected = self.inspect_staged(final_key)
+        if (
+            inspected.checksum_sha256 != source_version.checksum_sha256
+            or inspected.size != source_version.size
+        ):
+            raise UploadStorageChangedError()
+        return ObjectVersion(
+            version_id=inspected.version_id,
+            etag=inspected.etag,
+            checksum_sha256=inspected.checksum_sha256,
+            size=inspected.size,
+            content_type=source_version.content_type,
+        )
+
+    def delete_materialized(
+        self,
+        final_key: str,
+        final_version: ObjectVersion,
+        *,
+        intent_id: UUID,
+    ) -> None:
+        source_version = ObjectVersion(
+            version_id=final_version.version_id,
+            etag=final_version.etag,
+            checksum_sha256=final_version.checksum_sha256,
+            size=final_version.size,
+            content_type=final_version.content_type,
+        )
+        inspected = self.inspect_materialized(
+            final_key,
+            source_version,
+            intent_id=intent_id,
+        )
+        if inspected != final_version:
+            raise UploadStorageChangedError()
+        self.delete_object(final_key, final_version)
+        self._storage_delete(_materialization_completed_marker(final_key))
+        self._storage_delete(_materialization_marker(final_key))
 
     def private_download_url(self, key: str, *, expires_in: int) -> str:
         del key, expires_in

@@ -6,6 +6,7 @@ import pytest
 
 from general_manager.uploads.config import (
     FileUploadConfigurationError,
+    FileInspection,
     FileUploadPolicy,
     FileUploadSettings,
     get_file_upload_settings,
@@ -39,6 +40,9 @@ def test_upload_settings_default_to_secure_finite_values(settings) -> None:
         max_transfer_attempts_per_intent=10,
         allow_insecure_http=False,
         max_image_pixels=40_000_000,
+        max_image_width=16_384,
+        max_image_height=16_384,
+        max_inspection_bytes=1_048_576,
         token_ttl_seconds=900,
         download_url_ttl_seconds=300,
         delete_replaced_files=False,
@@ -58,6 +62,9 @@ def test_upload_settings_default_to_secure_finite_values(settings) -> None:
     assert value.max_transfer_attempts_global > value.max_transfer_attempts_per_user
     assert value.max_transfer_attempts_per_intent > 0
     assert value.allow_insecure_http is False
+    assert value.max_image_width > 0
+    assert value.max_image_height > 0
+    assert value.max_inspection_bytes > 0
     assert value.download_url_ttl_seconds > 0
 
 
@@ -72,6 +79,24 @@ def test_file_policy_overrides_global_limits_without_mutating_defaults() -> None
     assert base.max_bytes == 25_000_000
     with pytest.raises(FrozenInstanceError):
         base.max_bytes = 1  # type: ignore[misc]
+
+
+def test_file_policy_merges_callable_bounded_content_inspector() -> None:
+    def inspector(value: FileInspection) -> str:
+        assert "content" not in repr(value)
+        return "application/pdf"
+
+    merged = merge_file_upload_policy(
+        FileUploadPolicy(max_bytes=10),
+        FileUploadPolicy(content_inspector=inspector),
+    )
+
+    assert merged.content_inspector is inspector
+
+
+def test_file_policy_rejects_non_callable_content_inspector() -> None:
+    with pytest.raises(FileUploadConfigurationError):
+        FileUploadPolicy(content_inspector="not-callable")  # type: ignore[arg-type]
 
 
 def test_file_policy_defensively_copies_allowed_value_sequences() -> None:
@@ -133,6 +158,9 @@ def test_file_policy_rejects_empty_or_non_string_allowed_values(
         {"MAX_TRANSFER_ATTEMPTS_GLOBAL": False},
         {"MAX_TRANSFER_ATTEMPTS_PER_INTENT": 0},
         {"ALLOW_INSECURE_HTTP": 1},
+        {"MAX_IMAGE_WIDTH": 0},
+        {"MAX_IMAGE_HEIGHT": False},
+        {"MAX_INSPECTION_BYTES": 0},
         {"DOWNLOAD_URL_TTL_SECONDS": 0},
         {"HTTP_UPLOAD_PATH": "../uploads/"},
         {"STAGING_PREFIX": "/gm-staging/"},

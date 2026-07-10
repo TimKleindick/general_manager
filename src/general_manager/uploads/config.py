@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 import re
 from unicodedata import category
 from urllib.parse import unquote, urlsplit
@@ -56,6 +56,11 @@ class FileUploadConfigurationError(ValueError):
         """Build the error for a malformed policy allowlist."""
         return cls(f"{name} must be a non-empty sequence of non-empty strings.")
 
+    @classmethod
+    def callable(cls, name: str) -> FileUploadConfigurationError:
+        """Build the error for a non-callable hook."""
+        return cls(f"{name} must be callable.")
+
 
 @dataclass(frozen=True, slots=True)
 class FileUploadSettings:
@@ -81,9 +86,26 @@ class FileUploadSettings:
     max_transfer_attempts_per_intent: int = 10
     allow_insecure_http: bool = False
     max_image_pixels: int = 40_000_000
+    max_image_width: int = 16_384
+    max_image_height: int = 16_384
+    max_inspection_bytes: int = 1_048_576
     token_ttl_seconds: int = 900
     download_url_ttl_seconds: int = 300
     delete_replaced_files: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class FileInspection:
+    """Bounded, credential-free content passed to a configured inspector."""
+
+    content: bytes = field(repr=False)
+    size: int
+    original_filename: str
+    declared_content_type: str
+    truncated: bool
+
+
+type FileContentInspector = Callable[[FileInspection], str | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +116,7 @@ class FileUploadPolicy:
     allowed_content_types: Sequence[str] | None = None
     allowed_extensions: Sequence[str] | None = None
     public: bool | None = None
+    content_inspector: FileContentInspector | None = None
 
     def __post_init__(self) -> None:
         """Reject invalid values before a policy can be merged or exposed."""
@@ -101,6 +124,8 @@ class FileUploadPolicy:
             _positive_integer("max_bytes", self.max_bytes)
         if self.public is not None and not isinstance(self.public, bool):
             raise FileUploadConfigurationError.boolean("public")
+        if self.content_inspector is not None and not callable(self.content_inspector):
+            raise FileUploadConfigurationError.callable("content_inspector")
         object.__setattr__(
             self,
             "allowed_content_types",
@@ -140,6 +165,9 @@ _SETTING_NAMES = {
     "MAX_TRANSFER_ATTEMPTS_PER_INTENT",
     "ALLOW_INSECURE_HTTP",
     "MAX_IMAGE_PIXELS",
+    "MAX_IMAGE_WIDTH",
+    "MAX_IMAGE_HEIGHT",
+    "MAX_INSPECTION_BYTES",
     "TOKEN_TTL_SECONDS",
     "DOWNLOAD_URL_TTL_SECONDS",
     "DELETE_REPLACED_FILES",
@@ -280,6 +308,21 @@ def get_file_upload_settings() -> FileUploadSettings:
             "MAX_IMAGE_PIXELS",
             configured.get("MAX_IMAGE_PIXELS", defaults.max_image_pixels),
         ),
+        max_image_width=_positive_integer(
+            "MAX_IMAGE_WIDTH",
+            configured.get("MAX_IMAGE_WIDTH", defaults.max_image_width),
+        ),
+        max_image_height=_positive_integer(
+            "MAX_IMAGE_HEIGHT",
+            configured.get("MAX_IMAGE_HEIGHT", defaults.max_image_height),
+        ),
+        max_inspection_bytes=_positive_integer(
+            "MAX_INSPECTION_BYTES",
+            configured.get(
+                "MAX_INSPECTION_BYTES",
+                defaults.max_inspection_bytes,
+            ),
+        ),
         token_ttl_seconds=_positive_integer(
             "TOKEN_TTL_SECONDS",
             configured.get("TOKEN_TTL_SECONDS", defaults.token_ttl_seconds),
@@ -314,6 +357,11 @@ def merge_file_upload_policy(
             else base.allowed_extensions
         ),
         public=override.public if override.public is not None else base.public,
+        content_inspector=(
+            override.content_inspector
+            if override.content_inspector is not None
+            else base.content_inspector
+        ),
     )
 
 
