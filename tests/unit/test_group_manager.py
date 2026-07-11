@@ -1,5 +1,6 @@
 # type: ignore
 from datetime import date
+import pickle
 from typing import ClassVar
 from django.test import TestCase
 from general_manager.api.property import GraphQLProperty
@@ -9,6 +10,7 @@ from general_manager.manager.group_manager import (
 from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.bucket.group_bucket import GroupBucketKeysMismatchError
 from general_manager.measurement import Measurement
+from general_manager.cache.cache_tracker import DependencyTracker
 
 
 # Stub Interface to simulate attribute definitions
@@ -78,6 +80,12 @@ class ListBucket(list):
         return ListBucket(list(self) + list(other))
 
 
+class DependencyListBucket(ListBucket):
+    def __iter__(self):
+        DependencyTracker.track("DummyManager", "all", "snapshot")
+        yield from super().__iter__()
+
+
 class GroupBucketTests(TestCase):
     # Test that non-string group_by arguments raise TypeError
     def test_invalid_group_by_type_raises(self):
@@ -128,6 +136,9 @@ class GroupBucketTests(TestCase):
         b2 = GroupBucket(DummyManager, ("a",), ListBucket([DummyManager(a=2)]))
         combined = b1 | b2
         self.assertEqual(combined.count(), 2)
+
+        restored = pickle.loads(pickle.dumps(combined))  # noqa: S301 - local test data
+        self.assertEqual(restored.count(), 2)
 
     def test_or_rejects_different_grouping_keys(self):
         b1 = GroupBucket(DummyManager, ("a",), ListBucket([DummyManager(a=1, b="x")]))
@@ -265,6 +276,34 @@ class GroupBucketTests(TestCase):
         self.assertEqual(gb.count(), 2)
         gb = gb.group_by("b")
         self.assertEqual(gb.count(), 3)
+
+    def test_materialized_grouping_pickle_round_trip(self):
+        items = [
+            DummyManager(a=1, b="x"),
+            DummyManager(a=1, b="y"),
+            DummyManager(a=2, b="x"),
+        ]
+        bucket = GroupBucket(DummyManager, ("a",), ListBucket(items))
+
+        restored = pickle.loads(pickle.dumps(bucket))  # noqa: S301 - local test data
+
+        self.assertEqual(restored.count(), 2)
+        self.assertEqual(
+            [group._data.count() for group in restored],
+            [2, 1],
+        )
+
+    def test_materialized_grouping_replays_dependencies(self):
+        bucket = GroupBucket(
+            DummyManager,
+            ("a",),
+            DependencyListBucket([DummyManager(a=1), DummyManager(a=2)]),
+        )
+
+        with DependencyTracker() as dependencies:
+            bucket.count()
+
+        self.assertIn(("DummyManager", "all", "snapshot"), dependencies)
 
 
 class GroupManagerCombineValueTests(TestCase):

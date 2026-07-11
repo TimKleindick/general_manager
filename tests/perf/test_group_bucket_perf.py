@@ -80,6 +80,8 @@ class GroupCounters:
 
 
 class CountingGroupBucket(Bucket[Any]):
+    _group_materialization_safe = True
+
     def __init__(
         self,
         values: Sequence[GroupPerfManager],
@@ -299,6 +301,12 @@ def test_group_bucket_construction_work(
     assert all(group._data.count() == rows_per_group for group in bucket)
     assert counters.snapshot() == observations
     assert diagnostic_captures.value == int(diagnostics_enabled)
+
+    counters.reset()
+    sorted_bucket = bucket.sort("group_key")
+    assert sorted_bucket.count() == expected_groups
+    assert counters.source_yields.value == 0
+    assert counters.filter_calls.value == 0
 
     for name, observed in zip(PERF_NAMES[expected_groups], observations, strict=True):
         perf_budgets.assert_observation(name, observed)

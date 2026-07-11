@@ -1360,6 +1360,13 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(groups_by_country["US"]._data.count(), 1)
         self.assertEqual(groups_by_country[None]._data.count(), 1)
 
+    def test_group_by_run_context_avoids_per_group_queries(self):
+        with CalculationRunContext(), self.assertNumQueries(1):
+            grouped = self.TestHuman.all().group_by("name")
+            counts = [group._data.count() for group in grouped]
+
+        self.assertEqual(sorted(counts), [1, 1])
+
     def test_group_by_one_to_one_relation(self):
         first_request = self.ChangeRequest.create(
             title="First",
