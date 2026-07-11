@@ -226,6 +226,104 @@ class TestCalculationInterface(TestCase):
             )
         )
 
+    def test_calculation_input_accessor_rejects_resolver_code_mutation(self):
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+        resolver = next(
+            cell.cell_contents
+            for cell in accessor.__closure__
+            if type(cell.cell_contents) is FunctionType
+        )
+
+        def make_replacement():
+            first = None
+            second = None
+
+            def replacement(interface, field_name):
+                if first is second:
+                    return interface
+                return field_name
+
+            return replacement
+
+        resolver.__code__ = make_replacement().__code__
+
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                accessor, DummyCalculationInterface, "field1"
+            )
+        )
+
+    def test_calculation_input_accessor_rejects_resolver_interface_mutation(self):
+        class SubstitutedInterface(DummyCalculationInterface):
+            pass
+
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+        resolver = next(
+            cell.cell_contents
+            for cell in accessor.__closure__
+            if type(cell.cell_contents) is FunctionType
+        )
+        interface_cell = next(
+            cell
+            for cell in resolver.__closure__
+            if cell.cell_contents is DummyCalculationInterface
+        )
+        interface_cell.cell_contents = SubstitutedInterface
+
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                accessor, DummyCalculationInterface, "field1"
+            )
+        )
+
+    def test_calculation_input_accessor_rejects_resolver_dependency_mutation(self):
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+        resolver = next(
+            cell.cell_contents
+            for cell in accessor.__closure__
+            if type(cell.cell_contents) is FunctionType
+        )
+        recursive_cell = next(
+            cell for cell in resolver.__closure__ if cell.cell_contents is resolver
+        )
+        recursive_cell.cell_contents = lambda interface, field_name: (
+            interface,
+            field_name,
+        )[0]
+
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                accessor, DummyCalculationInterface, "field1"
+            )
+        )
+
+    def test_shared_resolver_remains_canonical_for_unchanged_accessors(self):
+        attributes = DummyCalculationInterface.get_attributes()
+        first = attributes["field1"]
+        second = attributes["field2"]
+        first_resolver = next(
+            cell.cell_contents
+            for cell in first.__closure__
+            if type(cell.cell_contents) is FunctionType
+        )
+        second_resolver = next(
+            cell.cell_contents
+            for cell in second.__closure__
+            if type(cell.cell_contents) is FunctionType
+        )
+
+        self.assertIs(first_resolver, second_resolver)
+        self.assertTrue(
+            _is_canonical_calculation_input_accessor(
+                first, DummyCalculationInterface, "field1"
+            )
+        )
+        self.assertTrue(
+            _is_canonical_calculation_input_accessor(
+                second, DummyCalculationInterface, "field2"
+            )
+        )
+
     def test_calculation_input_accessor_rejects_function_state_mutation(self):
         mutations = (
             lambda accessor: setattr(accessor, "__defaults__", (None,)),

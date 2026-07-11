@@ -34,16 +34,30 @@ _EMPTY_CLOSURE_CELL = object()
 
 
 @dataclass(frozen=True, slots=True)
-class _AccessorProvenance:
-    interface_cls: type["CalculationInterface"]
-    field_name: str
+class _ClosureCellProvenance:
+    cell: CellType
+    content: object
+    function: _FunctionProvenance | None
+
+
+@dataclass(frozen=True, slots=True)
+class _FunctionProvenance:
     code: CodeType
-    closure: tuple[tuple[CellType, object], ...]
+    closure: tuple[_ClosureCellProvenance, ...]
     defaults: tuple[object, ...] | None
     kwdefaults: dict[str, object] | None
     kwdefault_items: tuple[tuple[object, object], ...]
     annotations: dict[str, object]
     annotation_items: tuple[tuple[object, object], ...]
+    attributes: dict[str, object] | None
+    attribute_items: tuple[tuple[object, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _AccessorProvenance:
+    interface_cls: type["CalculationInterface"]
+    field_name: str
+    function: _FunctionProvenance
 
 
 _CALCULATION_INPUT_ACCESSOR_PROVENANCE: WeakKeyDictionary[
@@ -52,20 +66,39 @@ _CALCULATION_INPUT_ACCESSOR_PROVENANCE: WeakKeyDictionary[
 _CALCULATION_INPUT_ACCESSOR_PROVENANCE_LOCK = RLock()
 
 
-def _closure_snapshot(
-    accessor: FunctionType,
-) -> tuple[tuple[CellType, object], ...]:
-    closure = accessor.__closure__
-    if closure is None:
-        return ()
-    snapshot: list[tuple[CellType, object]] = []
-    for cell in closure:
+def _function_snapshot(
+    function: FunctionType,
+    seen: set[int],
+    *,
+    include_attributes: bool,
+) -> _FunctionProvenance:
+    seen.add(id(function))
+    closure_snapshot: list[_ClosureCellProvenance] = []
+    for cell in function.__closure__ or ():
         try:
             content = cell.cell_contents
         except ValueError:
             content = _EMPTY_CLOSURE_CELL
-        snapshot.append((cell, content))
-    return tuple(snapshot)
+        nested = None
+        if type(content) is FunctionType and id(content) not in seen:
+            nested = _function_snapshot(content, seen, include_attributes=True)
+        closure_snapshot.append(
+            _ClosureCellProvenance(cell=cell, content=content, function=nested)
+        )
+    kwdefaults = function.__kwdefaults__
+    annotations = function.__annotations__
+    attributes = function.__dict__ if include_attributes else None
+    return _FunctionProvenance(
+        code=function.__code__,
+        closure=tuple(closure_snapshot),
+        defaults=function.__defaults__,
+        kwdefaults=kwdefaults,
+        kwdefault_items=() if kwdefaults is None else tuple(kwdefaults.items()),
+        annotations=annotations,
+        annotation_items=tuple(annotations.items()),
+        attributes=attributes,
+        attribute_items=() if attributes is None else tuple(attributes.items()),
+    )
 
 
 def _register_calculation_input_accessor(
@@ -73,18 +106,10 @@ def _register_calculation_input_accessor(
     interface_cls: type["CalculationInterface"],
     field_name: str,
 ) -> None:
-    kwdefaults = accessor.__kwdefaults__
-    annotations = accessor.__annotations__
     provenance = _AccessorProvenance(
         interface_cls=interface_cls,
         field_name=field_name,
-        code=accessor.__code__,
-        closure=_closure_snapshot(accessor),
-        defaults=accessor.__defaults__,
-        kwdefaults=kwdefaults,
-        kwdefault_items=() if kwdefaults is None else tuple(kwdefaults.items()),
-        annotations=annotations,
-        annotation_items=tuple(annotations.items()),
+        function=_function_snapshot(accessor, set(), include_attributes=False),
     )
     with _CALCULATION_INPUT_ACCESSOR_PROVENANCE_LOCK:
         _CALCULATION_INPUT_ACCESSOR_PROVENANCE[accessor] = provenance
@@ -109,25 +134,53 @@ def _mapping_matches_snapshot(
     )
 
 
-def _closure_matches_snapshot(
-    accessor: FunctionType,
-    expected: tuple[tuple[CellType, object], ...],
+def _function_matches_snapshot(
+    function: FunctionType,
+    expected: _FunctionProvenance,
+    seen: set[int],
 ) -> bool:
-    closure = accessor.__closure__
-    if closure is None:
-        return not expected
-    if len(closure) != len(expected):
-        return False
-    for current_cell, (expected_cell, expected_content) in zip(
-        closure, expected, strict=True
+    function_id = id(function)
+    if function_id in seen:
+        return True
+    seen.add(function_id)
+    if (
+        function.__code__ is not expected.code
+        or function.__defaults__ is not expected.defaults
+        or not _mapping_matches_snapshot(
+            function.__kwdefaults__, expected.kwdefaults, expected.kwdefault_items
+        )
+        or not _mapping_matches_snapshot(
+            function.__annotations__,
+            expected.annotations,
+            expected.annotation_items,
+        )
+        or (
+            expected.attributes is not None
+            and not _mapping_matches_snapshot(
+                function.__dict__,
+                expected.attributes,
+                expected.attribute_items,
+            )
+        )
     ):
-        if current_cell is not expected_cell:
+        return False
+    closure = function.__closure__
+    if closure is None:
+        return not expected.closure
+    if len(closure) != len(expected.closure):
+        return False
+    for current_cell, expected_cell in zip(closure, expected.closure, strict=True):
+        if current_cell is not expected_cell.cell:
             return False
         try:
             current_content = current_cell.cell_contents
         except ValueError:
             current_content = _EMPTY_CLOSURE_CELL
-        if current_content is not expected_content:
+        if current_content is not expected_cell.content:
+            return False
+        if expected_cell.function is not None and not _function_matches_snapshot(
+            current_content, expected_cell.function, seen
+        ):
             return False
     return True
 
@@ -145,22 +198,11 @@ def _is_canonical_calculation_input_accessor(
     if provenance is None:
         return False
     state = accessor.__dict__
+    function = provenance.function
     return (
         provenance.interface_cls is interface_cls
         and provenance.field_name is field_name
-        and accessor.__code__ is provenance.code
-        and accessor.__defaults__ is provenance.defaults
-        and _mapping_matches_snapshot(
-            accessor.__kwdefaults__,
-            provenance.kwdefaults,
-            provenance.kwdefault_items,
-        )
-        and _mapping_matches_snapshot(
-            accessor.__annotations__,
-            provenance.annotations,
-            provenance.annotation_items,
-        )
-        and _closure_matches_snapshot(accessor, provenance.closure)
+        and _function_matches_snapshot(accessor, function, set())
         and len(state) == len(_CALCULATION_INPUT_ACCESSOR_STATE)
         and all(
             current_key is expected_key
