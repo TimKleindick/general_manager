@@ -734,6 +734,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             tuple[object, ...]: Reconstruction data representing the class, arguments, and state.
         """
+        self._invalidate_combination_evidence(exposed=True)
         return (
             self.__class__,
             (
@@ -1444,22 +1445,25 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 resolved_source: object | None = None
             else:
                 resolved_source = possible_values
-                indexed_values = enumerate(possible_values)
+                filter_funcs = field_filters.get("filter_funcs", [])
+                exclude_funcs = field_excludes.get("filter_funcs", [])
+
+                def filtered_indexed_values() -> Generator[
+                    tuple[int, object], None, None
+                ]:
+                    """Preserve callback order while retaining source positions."""
+                    for source_index, value in enumerate(possible_values):
+                        if any(not filter_func(value) for filter_func in filter_funcs):
+                            continue
+                        if any(exclude_func(value) for exclude_func in exclude_funcs):
+                            continue
+                        yield source_index, value
+
+                indexed_values = filtered_indexed_values()
                 if snapshot_iterables:
                     indexed_values = list(indexed_values)
 
             for source_index, value in indexed_values:
-                if resolved_source is not None:
-                    if any(
-                        not filter_func(value)
-                        for filter_func in field_filters.get("filter_funcs", [])
-                    ):
-                        continue
-                    if any(
-                        exclude_func(value)
-                        for exclude_func in field_excludes.get("filter_funcs", [])
-                    ):
-                        continue
                 if not isinstance(value, input_field.type):
                     continue
                 evidence = None

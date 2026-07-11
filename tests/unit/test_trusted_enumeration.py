@@ -1109,12 +1109,41 @@ def test_copy_pickle_union_and_none_never_transfer_evidence() -> None:
     restored = reduced_class(*reduced_args)
     restored.__setstate__(reduced_state)
 
+    assert bucket._combination_evidence == {}
+    assert bucket._evidence_exposed
     assert copied._combination_evidence == {}
     assert shallow_copied._combination_evidence == {}
     assert combined._combination_evidence == {}
     assert empty._combination_evidence == {}
     assert restored._combination_evidence == {}
     assert set(reduced_state) == {"data"}
+
+
+def test_snapshot_filters_finish_before_dependent_provider_runs() -> None:
+    events: list[str] = []
+
+    def filter_a(value: object) -> bool:
+        events.append(f"filter_a:{value}")
+        return True
+
+    def possible_b(a: int) -> list[int]:
+        events.append(f"provider_b:{a}")
+        return [a * 10]
+
+    input_a = cast(Input[type[object]], Input(int, possible_values=[1, 2]))
+    input_b = cast(Input[type[object]], Input(int, possible_values=possible_b))
+    bucket = _calculation_bucket_with_inputs({"a": input_a, "b": input_b})
+    bucket._filters = {"a": {"filter_funcs": [filter_a]}}
+
+    combinations = bucket._materialize_combinations(expose=False)
+
+    assert combinations == [{"a": 1, "b": 10}, {"a": 2, "b": 20}]
+    assert events == [
+        "filter_a:1",
+        "filter_a:2",
+        "provider_b:1",
+        "provider_b:2",
+    ]
 
 
 @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
