@@ -2,6 +2,7 @@
 
 from typing import ClassVar
 from unittest.mock import patch
+from datetime import date
 
 from django.contrib.auth import get_user_model
 from django.db import connection
@@ -244,6 +245,247 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         ).delete()
         with self.assertRaises(InvalidInputValueError):
             list(exposed)
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_database_dependency_metadata_mutation_revokes_batch_trust(self):
+        for name in ("Alice", "Bob"):
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+        mutations = {
+            "filters": lambda source: source.filters.__setitem__(
+                "name", ["changed-after-enumeration"]
+            ),
+            "excludes": lambda source: source.excludes.__setitem__(
+                "name", ["changed-after-enumeration"]
+            ),
+            "sort_keys": lambda source: setattr(source, "_sort_keys", ("name",)),
+            "sort_reverse": lambda source: setattr(source, "_sort_reverse", True),
+            "cacheability": lambda source: setattr(
+                source, "_run_scoped_cacheable", False
+            ),
+            "trusted_signature": lambda source: setattr(
+                source, "_trusted_query_signature", ("changed",)
+            ),
+            "query_signature_cache": lambda source: setattr(
+                source, "_query_signature_cache", None
+            ),
+            "search_date": lambda source: setattr(
+                source, "_search_date", date(2024, 1, 1)
+            ),
+        }
+
+        for mutation_name, mutate in mutations.items():
+            with self.subTest(mutation_name=mutation_name):
+                source = self.Employee.all()
+
+                class MetadataMutationCalculation(GeneralManager):
+                    class Interface(CalculationInterface):
+                        employee = Input(self.Employee, possible_values=source)
+
+                bucket = CalculationBucket(MetadataMutationCalculation)
+                self.assertEqual(len(bucket._materialize_combinations(expose=False)), 2)
+                mutate(source)
+
+                with (
+                    DependencyTracker() as dependencies,
+                    CaptureQueriesContext(connection) as queries,
+                ):
+                    managers = list(bucket)
+
+                self.assertEqual(len(managers), 2)
+                self.assertEqual(len(queries), 2)
+                if mutation_name == "filters":
+                    self.assertIn(
+                        (
+                            self.Employee.__name__,
+                            "filter",
+                            serialize_dependency_identifier(
+                                {"name": "changed-after-enumeration"}
+                            ),
+                        ),
+                        dependencies,
+                    )
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_static_filtered_database_source_keeps_two_query_batch_path(self):
+        for name in ("Alice", "Bob"):
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+        source = self.Employee.filter(name="Alice")
+
+        class FilteredSourceCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=source)
+
+        with CaptureQueriesContext(connection) as queries:
+            managers = list(CalculationBucket(FilteredSourceCalculation))
+
+        self.assertEqual(len(managers), 1)
+        self.assertEqual(len(queries), 2)
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_database_batch_dependency_replay_is_exact_per_next_and_nested(self):
+        for name in ("Alice", "Bob"):
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+        source = self.Employee.all()
+
+        class DependencyReplayCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=source)
+
+        bucket = CalculationBucket(DependencyReplayCalculation)
+        bucket._materialize_combinations(expose=False)
+        iterator = iter(bucket)
+        with DependencyTracker() as outer_dependencies:
+            with DependencyTracker() as first_dependencies:
+                next(iterator)
+        with DependencyTracker() as second_dependencies:
+            next(iterator)
+        iterator.close()
+
+        expected_source_dependencies = {(self.Employee.__name__, "all", "")}
+        for dependencies in (
+            outer_dependencies,
+            first_dependencies,
+            second_dependencies,
+        ):
+            source_dependencies = {
+                dependency
+                for dependency in dependencies
+                if dependency[0] == self.Employee.__name__
+            }
+            self.assertEqual(source_dependencies, expected_source_dependencies)
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_custom_calculation_construction_paths_do_not_use_database_trust(self):
+        for name in ("Alice", "Bob"):
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+
+        class CustomInput(Input):
+            pass
+
+        def custom_manager_class(source):
+            class CustomManagerCalculation(GeneralManager):
+                class Interface(CalculationInterface):
+                    employee = Input(self.Employee, possible_values=source)
+
+                def __init__(own, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+
+            return CustomManagerCalculation
+
+        def custom_interface_class(source):
+            class CustomInterfaceCalculation(GeneralManager):
+                class Interface(CalculationInterface):
+                    employee = Input(self.Employee, possible_values=source)
+
+                    def _process_input_field(own, *args, **kwargs):
+                        return super()._process_input_field(*args, **kwargs)
+
+            return CustomInterfaceCalculation
+
+        def custom_input_class(source):
+            class CustomInputCalculation(GeneralManager):
+                class Interface(CalculationInterface):
+                    employee = CustomInput(self.Employee, possible_values=source)
+
+            return CustomInputCalculation
+
+        def custom_tracking_class(source):
+            class CustomTrackingCalculation(GeneralManager):
+                class Interface(CalculationInterface):
+                    employee = Input(self.Employee, possible_values=source)
+
+                @classmethod
+                def _track_identification_dependency_active(own, identification):
+                    return super()._track_identification_dependency_active(
+                        identification
+                    )
+
+            return CustomTrackingCalculation
+
+        factories = (
+            custom_manager_class,
+            custom_interface_class,
+            custom_input_class,
+            custom_tracking_class,
+        )
+        for factory in factories:
+            with self.subTest(factory=factory.__name__):
+                source = self.Employee.all()
+                manager_class = factory(source)
+                with CaptureQueriesContext(connection) as queries:
+                    managers = list(CalculationBucket(manager_class))
+                self.assertEqual(len(managers), 2)
+                self.assertEqual(len(queries), 3)
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_database_candidate_identity_mutations_use_public_validation(self):
+        employees = [
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+            for name in ("Alice", "Bob")
+        ]
+
+        def prepared_bucket():
+            source = self.Employee.all()
+
+            class CandidateMutationCalculation(GeneralManager):
+                class Interface(CalculationInterface):
+                    employee = Input(self.Employee, possible_values=source)
+
+            bucket = CalculationBucket(CandidateMutationCalculation)
+            combinations = bucket._materialize_combinations(expose=False)
+            return bucket, combinations
+
+        valid_mutations = {
+            "replaced_identification": lambda combinations: object.__setattr__(
+                combinations[0]["employee"],
+                "_GeneralManager__id",
+                {"id": employees[0].identification["id"]},
+            ),
+            "changed_id": lambda combinations: combinations[0][
+                "employee"
+            ].identification.__setitem__("id", employees[1].identification["id"]),
+            "substituted_manager": lambda combinations: combinations[0].__setitem__(
+                "employee", employees[1]
+            ),
+        }
+        for mutation_name, mutate in valid_mutations.items():
+            with self.subTest(mutation_name=mutation_name):
+                bucket, combinations = prepared_bucket()
+                mutate(combinations)
+                with CaptureQueriesContext(connection) as queries:
+                    managers = list(bucket)
+                self.assertEqual(len(managers), 2)
+                self.assertEqual(len(queries), 2)
+
+        bucket, combinations = prepared_bucket()
+        del combinations[0]["employee"].identification["id"]
+        with self.assertRaises(InvalidInputValueError):
+            list(bucket)
+
+        bucket, combinations = prepared_bucket()
+        combinations[0]["employee"] = object()
+        with self.assertRaises(TypeError):
+            list(bucket)
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_callable_and_validator_database_inputs_keep_live_fallbacks(self):

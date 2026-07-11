@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Hashable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from copy import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import pickle
 from types import MethodType
 from typing import Any, Literal, Protocol, Self, cast
 from unittest.mock import patch
@@ -658,6 +660,141 @@ def test_database_trust_tracks_the_same_source_dependency_as_fallback() -> None:
         }
         assert optimized_source_dependencies == fallback_source_dependencies
         assert ("PerfUserManager", "all", "") in optimized_source_dependencies
+
+
+@pytest.mark.parametrize("source_kind", ["historical", "custom_bucket"])
+def test_unsupported_database_source_shapes_use_per_candidate_fallback(
+    source_kind: str,
+) -> None:
+    prefix = f"perf-db-enumeration-{source_kind}-"
+    with _managed_isolated_perf_users(prefix, 2) as primary_keys:
+        queryset = cast(
+            models.QuerySet[models.Model],
+            User.objects.filter(pk__in=primary_keys).order_by("pk"),
+        )
+        if source_kind == "historical":
+            source = DatabaseBucket(
+                queryset,
+                PerfUserManager,
+                search_date=datetime.now(UTC),
+            )
+        else:
+
+            class CustomDatabaseBucket(DatabaseBucket[PerfUserManager]):
+                pass
+
+            source = CustomDatabaseBucket(queryset, PerfUserManager)
+        manager = _make_database_enumeration_manager(
+            f"DatabaseEnumeration{source_kind.title()}Manager",
+            source,
+        )
+
+        with (
+            override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+            CaptureQueriesContext(connection) as queries,
+        ):
+            managers = list(CalculationBucket(manager))
+
+        assert len(managers) == 2
+        assert len(queries) == 3
+
+
+@pytest.mark.parametrize("override_kind", ["identification", "tracking"])
+def test_custom_database_source_manager_hooks_disable_batch_trust(
+    override_kind: str,
+) -> None:
+    prefix = f"perf-db-enumeration-source-{override_kind}-"
+    with _managed_isolated_perf_users(prefix, 2) as primary_keys:
+        if override_kind == "identification":
+            attributes: dict[str, object] = {
+                "identification": property(
+                    lambda manager: GeneralManager.identification.__get__(
+                        manager, type(manager)
+                    )
+                )
+            }
+        else:
+
+            @classmethod
+            def custom_tracking(
+                cls: type[GeneralManager], identification: dict[str, object]
+            ) -> None:
+                GeneralManager._track_identification_dependency_active.__func__(
+                    cls, identification
+                )
+
+            attributes = {"_track_identification_dependency_active": custom_tracking}
+        source_manager = cast(
+            type[GeneralManager],
+            type(
+                f"CustomSource{override_kind.title()}Manager",
+                (PerfUserManager,),
+                {"__module__": __name__, **attributes},
+            ),
+        )
+        for registry in (
+            GeneralManagerMeta.all_classes,
+            GeneralManagerMeta.read_only_classes,
+            GeneralManagerMeta.pending_attribute_initialization,
+            GeneralManagerMeta.pending_graphql_interfaces,
+        ):
+            while source_manager in registry:
+                registry.remove(source_manager)
+        source = DatabaseBucket(
+            cast(
+                models.QuerySet[models.Model],
+                User.objects.filter(pk__in=primary_keys).order_by("pk"),
+            ),
+            source_manager,
+        )
+        calculation_manager = _make_database_enumeration_manager_for_input(
+            f"CustomSource{override_kind.title()}Calculation",
+            cast(
+                Input[type[object]],
+                Input(source_manager, possible_values=source),
+            ),
+        )
+
+        with (
+            override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+            CaptureQueriesContext(connection) as queries,
+        ):
+            managers = list(CalculationBucket(calculation_manager))
+
+        assert len(managers) == 2
+        assert len(queries) == 3
+
+
+def test_database_copy_slice_and_pickle_use_live_membership_after_deletion() -> None:
+    prefix = "perf-db-enumeration-copy-slice-pickle-"
+    with _managed_isolated_perf_users(prefix, 2) as primary_keys:
+        source = DatabaseBucket(
+            cast(
+                models.QuerySet[models.Model],
+                User.objects.filter(pk__in=primary_keys).order_by("pk"),
+            ),
+            PerfUserManager,
+        )
+        manager_name = "DatabaseEnumerationLifecycleManager"
+        manager = _make_database_enumeration_manager(manager_name, source)
+        manager.__qualname__ = manager_name
+        globals()[manager_name] = manager
+        try:
+            bucket = CalculationBucket(manager)
+            bucket._materialize_combinations(expose=False)
+            copied = copy(bucket)
+            sliced = bucket[:]
+            restored = pickle.loads(pickle.dumps(bucket))  # noqa: S301
+        finally:
+            del globals()[manager_name]
+        User.objects.filter(pk=primary_keys[-1]).delete()
+
+        for candidate_bucket in (bucket, copied, sliced, restored):
+            with (
+                override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+                pytest.raises(InvalidInputValueError),
+            ):
+                list(candidate_bucket)
 
 
 @dataclass

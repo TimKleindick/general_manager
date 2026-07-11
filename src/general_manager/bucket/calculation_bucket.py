@@ -245,6 +245,39 @@ class _EnumerationEvidence:
         self.witness.track_membership_dependency()
 
 
+def _trusted_database_state_token(value: object) -> object | None:
+    """Freeze exact built-in database bucket state without invoking value hooks."""
+    if isinstance(value, type):
+        return ("class", id(value))
+    scalar_token = _trusted_candidate_token(value)
+    if scalar_token is not None:
+        return ("scalar", scalar_token)
+    if value is None:
+        return ("none",)
+    if type(value) is tuple:
+        tuple_tokens = tuple(_trusted_database_state_token(item) for item in value)
+        if any(item is None for item in tuple_tokens):
+            return None
+        return ("tuple", id(value), tuple_tokens)
+    if type(value) is list:
+        list_tokens = tuple(_trusted_database_state_token(item) for item in value)
+        if any(item is None for item in list_tokens):
+            return None
+        return ("list", id(value), list_tokens)
+    if type(value) is dict:
+        mapping = cast(dict[object, object], value)
+        mapping_items: list[tuple[str, object]] = []
+        for key, item_value in mapping.items():
+            if type(key) is not str:
+                return None
+            item_token = _trusted_database_state_token(item_value)
+            if item_token is None:
+                return None
+            mapping_items.append((key, item_token))
+        return ("dict", id(value), tuple(mapping_items))
+    return None
+
+
 def _database_source_signature(source: DatabaseBucket[GeneralManager]) -> object | None:
     """Return a fresh conservative signature for one exact live database source."""
     try:
@@ -269,6 +302,21 @@ def _database_source_signature(source: DatabaseBucket[GeneralManager]) -> object
     query_signature = source._query_signature()
     if query_signature is None:
         return None
+    filters_token = _trusted_database_state_token(source.filters)
+    excludes_token = _trusted_database_state_token(source.excludes)
+    sort_keys_token = _trusted_database_state_token(source._sort_keys)
+    trusted_signature_token = _trusted_database_state_token(
+        source._trusted_query_signature
+    )
+    if (
+        filters_token is None
+        or excludes_token is None
+        or sort_keys_token is None
+        or trusted_signature_token is None
+        or type(source._sort_reverse) is not bool
+        or type(source._run_scoped_cacheable) is not bool
+    ):
+        return None
     try:
         sql, params = source._data.query.sql_with_params()
     except (AttributeError, EmptyResultSet, FieldError, TypeError, ValueError):
@@ -285,6 +333,14 @@ def _database_source_signature(source: DatabaseBucket[GeneralManager]) -> object
         source._data.model,
         source._manager_class,
         source._search_date,
+        filters_token,
+        excludes_token,
+        sort_keys_token,
+        source._sort_reverse,
+        source._run_scoped_cacheable,
+        id(source._query_signature_cache),
+        id(source._trusted_query_signature),
+        trusted_signature_token,
     )
 
 
@@ -294,6 +350,19 @@ def _standard_database_manager_class(manager_class: type[object]) -> bool:
         issubclass(manager_class, GeneralManager)
         and type(manager_class) is GeneralManagerMeta
         and manager_class.__init__ is GeneralManager.__init__
+        and inspect.getattr_static(manager_class, "_track_identification_dependency")
+        is inspect.getattr_static(GeneralManager, "_track_identification_dependency")
+        and inspect.getattr_static(
+            manager_class, "_track_identification_dependency_active"
+        )
+        is inspect.getattr_static(
+            GeneralManager, "_track_identification_dependency_active"
+        )
+        and type.__getattribute__(
+            manager_class,
+            "_gm_uses_default_identification_dependency_active",
+        )
+        is True
         and _dispatch_matches(
             manager_class,
             _INSTANCE_DISPATCH_NAMES,
