@@ -93,6 +93,30 @@ _TERMINAL_MANAGER_STATE_NAMES = (
     "_manager_state_valid",
     "_manager_state_reason",
 )
+
+
+class _CalculationCacheIdentityToken:
+    """Hashable identity wrapper that never invokes the wrapped object's hooks."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: object) -> None:
+        self.value = value
+
+    def __hash__(self) -> int:
+        return id(self.value)
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return False
+        return self.value is cast(_CalculationCacheIdentityToken, other).value
+
+
+def _calculation_cache_identity_token(value: object) -> _CalculationCacheIdentityToken:
+    """Retain an object while keying only by identity."""
+    return _CalculationCacheIdentityToken(value)
+
+
 _NUMERIC_RANGE_STATE_NAMES = frozenset({"kind", "min_value", "max_value", "step"})
 _DATE_RANGE_STATE_NAMES = frozenset({"kind", "start", "end", "frequency", "step"})
 _DATABASE_BUCKET_STATE_NAMES = frozenset(
@@ -1362,7 +1386,7 @@ def _calculation_cache_clone(snapshot: object) -> object:
 def _calculation_cache_callable_token(value: object) -> object:
     """Return identity-only token for a provider/predicate, or unsupported."""
     if inspect.isfunction(value) or inspect.ismethod(value):
-        return ("callable", id(value))
+        return ("callable", _calculation_cache_identity_token(value))
     return _CALCULATION_RESULT_UNSUPPORTED
 
 
@@ -2671,9 +2695,16 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             return None
         from general_manager.api.property import GraphQLProperty
 
-        property_tokens: list[tuple[str, int, str, int]] = []
+        property_tokens: list[
+            tuple[
+                str, _CalculationCacheIdentityToken, str, _CalculationCacheIdentityToken
+            ]
+        ] = []
         for property_name, property_descriptor in vars(manager_class).items():
-            if type(property_descriptor) is not GraphQLProperty:
+            descriptor_type = type(property_descriptor)
+            if descriptor_type is not GraphQLProperty:
+                if issubclass(descriptor_type, GraphQLProperty):
+                    return None
                 continue
             property_cache = inspect.getattr_static(
                 property_descriptor,
@@ -2690,10 +2721,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 "_raw_fget",
                 _STATIC_ATTRIBUTE_MISSING,
             )
-            if type(property_name) is not str or not callable(raw_fget):
+            if type(property_name) is not str or not (
+                inspect.isfunction(raw_fget) or inspect.ismethod(raw_fget)
+            ):
                 return None
             property_tokens.append(
-                (property_name, id(property_descriptor), property_cache, id(raw_fget))
+                (
+                    property_name,
+                    _calculation_cache_identity_token(property_descriptor),
+                    property_cache,
+                    _calculation_cache_identity_token(raw_fget),
+                )
             )
 
         construction_plan = self._trusted_construction_plan()
@@ -2716,7 +2754,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 type(name) is str for name in dependencies
             ):
                 return None
-            type_token = (id(input_field.type), type(input_field.type).__name__)
+            type_token = (
+                _calculation_cache_identity_token(input_field.type),
+                type(input_field.type).__name__,
+            )
             min_token = _calculation_cache_freeze(input_field.min_value)
             max_token = _calculation_cache_freeze(input_field.max_value)
             if (
@@ -2738,6 +2779,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             elif type(source) is range:
                 source_token = ("range", source.start, source.stop, source.step)
             elif callable(source):
+                if dependencies:
+                    return None
                 callable_token = _calculation_cache_callable_token(source)
                 if callable_token is _CALCULATION_RESULT_UNSUPPORTED:
                     return None
@@ -2746,7 +2789,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 source_token = (
                     "provider",
                     callable_token,
-                    id(self._manager_class),
+                    _calculation_cache_identity_token(self._manager_class),
                     field_name,
                     tuple(dependencies),
                 )
@@ -2755,7 +2798,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             field_tokens.append(
                 (
                     field_name,
-                    id(input_field),
+                    _calculation_cache_identity_token(input_field),
                     type_token,
                     tuple(dependencies),
                     type(input_field.required),
@@ -2785,8 +2828,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             return None
         return (
             "calculation_result",
-            id(construction_plan.manager_class),
-            id(construction_plan.interface_class),
+            _calculation_cache_identity_token(construction_plan.manager_class),
+            _calculation_cache_identity_token(construction_plan.interface_class),
             tuple(field_tokens),
             filter_token,
             exclude_token,

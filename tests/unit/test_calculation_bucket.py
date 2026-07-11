@@ -2283,6 +2283,23 @@ class TestCalculationTerminalStreams(TestCase):
             second.generate_combinations()
         self.assertEqual(calls, 1)
 
+    def test_dependent_callable_provider_bypasses_result_cache(self) -> None:
+        class DependentCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                base = Input(int, possible_values=(0, 1))
+                value = Input(
+                    int,
+                    possible_values=lambda base: (base,),
+                    depends_on=["base"],
+                )
+
+        GeneralManagerMeta.ensure_attributes_initialized(DependentCalculation)
+        self.assertIsNone(
+            CalculationBucket(
+                DependentCalculation
+            )._calculation_result_cache_signature()
+        )
+
     def test_property_filtered_cache_hit_replays_dependencies(self) -> None:
         property_calls = 0
 
