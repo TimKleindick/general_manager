@@ -335,6 +335,55 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(dispatch_resolved.identification, employee.identification)
         self.assertIs(dispatch_outer.employee, dispatch_resolved)
 
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_custom_nested_manager_fallback_keeps_dependency_boundaries(self):
+        """Custom nested construction stays on the existing lazy path."""
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+
+        class OuterCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(OuterCalculation)
+        nested = RelatedManager("related-id")
+
+        with DependencyTracker() as construction_dependencies:
+            outer = OuterCalculation(nested)
+
+        expected_outer = (
+            OuterCalculation.__name__,
+            "identification",
+            serialize_dependency_identifier(outer.identification),
+        )
+        expected_nested = (
+            RelatedManager.__name__,
+            "identification",
+            '{"id": "related-id"}',
+        )
+        self.assertEqual(construction_dependencies, {expected_outer})
+        self.assertNotIn("_resolved_input_values", vars(outer._interface))
+        self.assertEqual(
+            outer.identification,
+            {"related": {"id": "related-id"}},
+        )
+
+        with DependencyTracker() as first_dependencies:
+            first = outer.related
+        with DependencyTracker() as later_dependencies:
+            second = outer.related
+
+        self.assertIsNot(first, nested)
+        self.assertIs(second, first)
+        self.assertEqual(first.identification, {"id": "related-id"})
+        self.assertEqual(first_dependencies, {expected_nested})
+        self.assertEqual(later_dependencies, {expected_nested})
+
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_static_database_input_batches_membership_with_exact_dependencies(self):
         for name in ("Alice", "Bob", "Carol"):

@@ -2081,6 +2081,420 @@ class TestCalculationInterface(TestCase):
                 self.assertNotIn("_resolved_input_values", vars(manager._interface))
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_nested_manager_construction_fallback_matrix_rebuilds_once(self):
+        """Nested manager customizations never opt into the hydration fast path."""
+
+        constructor_code = GeneralManager.__dict__["__init__"].__code__
+
+        def build_related(
+            case: str,
+            hook_calls: list[str],
+            dispatch_active: dict[str, bool],
+            hostile_calls: list[str],
+        ) -> type[GeneralManager]:
+            interface_class = type(
+                f"{case.title()}RelatedInterface",
+                (CalculationInterface,),
+                {
+                    "__module__": __name__,
+                    "id": Input(str),
+                },
+            )
+
+            def custom_new(cls, *_args, **_kwargs):
+                hook_calls.append("new")
+                return object.__new__(cls)
+
+            def custom_init(instance, *args, **kwargs):
+                hook_calls.append("init")
+                return GeneralManager.__init__(instance, *args, **kwargs)
+
+            def custom_identification(instance):
+                hook_calls.append("identification")
+                return object.__getattribute__(
+                    instance,
+                    "_GeneralManager__id",
+                )
+
+            def custom_validity(instance, *args, **kwargs):
+                hook_calls.append("validity")
+                return GeneralManager._ensure_manager_state_valid(
+                    instance,
+                    *args,
+                    **kwargs,
+                )
+
+            def custom_getattribute(instance, name):
+                if dispatch_active["value"] and name in {
+                    "_interface",
+                    "_attribute_value_cache",
+                    "_identification_dependency_cache",
+                    "_manager_state_valid",
+                    "_manager_state_reason",
+                }:
+                    hostile_calls.append(name)
+                    raise AssertionError
+                return object.__getattribute__(instance, name)
+
+            def custom_getattr(instance, name):
+                if dispatch_active["value"]:
+                    hostile_calls.append(name)
+                    raise AssertionError
+                raise AttributeError(name)
+
+            def custom_setattr(instance, name, value):
+                if dispatch_active["value"] and name in {
+                    "_interface",
+                    "_attribute_value_cache",
+                    "_identification_dependency_cache",
+                    "_manager_state_valid",
+                    "_manager_state_reason",
+                }:
+                    hostile_calls.append(name)
+                    raise AssertionError
+                object.__setattr__(instance, name, value)
+
+            @classmethod
+            def custom_dependency(cls, identification):
+                hook_calls.append("dependency")
+                return GeneralManager._track_identification_dependency_active.__func__(
+                    cls,
+                    identification,
+                )
+
+            @classmethod
+            def custom_dependency_entry(cls, identification):
+                hook_calls.append("dependency-entry")
+                return GeneralManager._track_identification_dependency.__func__(
+                    cls,
+                    identification,
+                )
+
+            def custom_own_dependency(instance):
+                hook_calls.append("own-dependency")
+                return GeneralManager._track_own_identification_dependency_active(
+                    instance,
+                )
+
+            manager_attrs: dict[str, object] = {
+                "__module__": __name__,
+                "Interface": interface_class,
+            }
+            if case == "new":
+                manager_attrs["__new__"] = custom_new
+            elif case == "init":
+                manager_attrs["__init__"] = custom_init
+            elif case == "getattribute":
+                manager_attrs["__getattribute__"] = custom_getattribute
+            elif case == "getattr":
+                manager_attrs["__getattr__"] = custom_getattr
+            elif case == "setattr":
+                manager_attrs["__setattr__"] = custom_setattr
+            elif case == "identification":
+                manager_attrs["identification"] = property(custom_identification)
+            elif case == "validity":
+                manager_attrs["_ensure_manager_state_valid"] = custom_validity
+            elif case == "dependency":
+                manager_attrs["_gm_uses_default_identification_dependency_active"] = (
+                    False
+                )
+                manager_attrs["_track_identification_dependency"] = (
+                    custom_dependency_entry
+                )
+                manager_attrs["_track_identification_dependency_active"] = (
+                    custom_dependency
+                )
+                manager_attrs["_track_own_identification_dependency_active"] = (
+                    custom_own_dependency
+                )
+
+            if case == "metaclass_call":
+
+                class CustomMeta(GeneralManagerMeta):
+                    def __call__(cls, *args, **kwargs):
+                        hook_calls.append("metaclass-call")
+                        return super().__call__(*args, **kwargs)
+
+                manager_class = CustomMeta(
+                    f"{case.title()}RelatedManager",
+                    (GeneralManager,),
+                    manager_attrs,
+                )
+            else:
+                manager_class = GeneralManagerMeta(
+                    f"{case.title()}RelatedManager",
+                    (GeneralManager,),
+                    manager_attrs,
+                )
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+            return manager_class
+
+        cases = (
+            "new",
+            "init",
+            "metaclass_call",
+            "getattribute",
+            "getattr",
+            "setattr",
+            "identification",
+            "validity",
+            "dependency",
+            "state_shape",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                hook_calls: list[str] = []
+                dispatch_active = {"value": False}
+                hostile_calls: list[str] = []
+                related_class = build_related(
+                    case,
+                    hook_calls,
+                    dispatch_active,
+                    hostile_calls,
+                )
+
+                class OuterCalculation(GeneralManager):
+                    class Interface(CalculationInterface):
+                        related = Input(related_class)
+
+                GeneralManagerMeta.ensure_attributes_initialized(OuterCalculation)
+                nested = related_class("related-id")
+                hook_calls.clear()
+                dispatch_active["value"] = True
+                if case == "state_shape":
+                    vars(nested)["unexpected_state"] = object()
+
+                outer = OuterCalculation(nested)
+                dispatch_active["value"] = False
+                self.assertNotIn(
+                    "_resolved_input_values",
+                    vars(outer._interface),
+                )
+                self.assertEqual(
+                    outer.identification,
+                    {"related": {"id": "related-id"}},
+                )
+                if case == "identification":
+                    self.assertEqual(hook_calls, ["identification"])
+                else:
+                    self.assertEqual(hook_calls, [])
+                self.assertEqual(hostile_calls, [])
+                hook_calls.clear()
+                with count_profiled_calls(
+                    constructor_code,
+                    lambda value, expected=related_class: value.__class__ is expected,
+                ) as nested_constructors:
+                    resolved = outer.related
+
+                self.assertEqual(nested_constructors.value, 1)
+                self.assertIsNot(resolved, nested)
+                self.assertEqual(
+                    resolved.identification,
+                    {"id": "related-id"},
+                )
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_nested_manager_identification_error_timing_is_unchanged(self):
+        hook_calls: list[str] = []
+
+        def raising_identification(_instance):
+            hook_calls.append("identification")
+            raise RuntimeError
+
+        class RelatedManager(GeneralManager):
+            identification = property(raising_identification)
+
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class OuterCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(OuterCalculation)
+        nested = RelatedManager("related-id")
+        with self.assertRaises(RuntimeError):
+            OuterCalculation(nested)
+        self.assertEqual(hook_calls, ["identification"])
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_nested_manager_hostile_state_is_hook_free_during_eligibility(self):
+        """Unsafe nested state is rejected without dispatching user objects."""
+
+        class HostileStateKey:
+            active = False
+            calls = 0
+
+            def __hash__(self):
+                if type(self).active:
+                    type(self).calls += 1
+                    raise AssertionError
+                return 1
+
+            def __eq__(self, _other):
+                if type(self).active:
+                    type(self).calls += 1
+                    raise AssertionError
+                return False
+
+        class HostileDescriptor:
+            def __get__(self, _instance, _owner):
+                HostileStateKey.calls += 1
+                raise AssertionError
+
+        class HostileMapping(dict):
+            def items(self):
+                HostileStateKey.calls += 1
+                raise AssertionError
+
+            def __iter__(self):
+                HostileStateKey.calls += 1
+                raise AssertionError
+
+        class HostileIdentificationValue:
+            active = False
+            calls = 0
+
+            def __getattribute__(self, name):
+                if type.__getattribute__(type(self), "active") and name not in {
+                    "active",
+                    "calls",
+                }:
+                    type.__setattr__(type(self), "calls", type(self).calls + 1)
+                    raise AssertionError
+                return object.__getattribute__(self, name)
+
+            def __hash__(self):
+                type(self).calls += 1
+                raise AssertionError
+
+            def __eq__(self, _other):
+                type(self).calls += 1
+                raise AssertionError
+
+            def __repr__(self):
+                type(self).calls += 1
+                raise AssertionError
+
+        def build_classes():
+            class RelatedManager(GeneralManager):
+                class Interface(CalculationInterface):
+                    id = Input(str)
+
+            class OuterCalculation(GeneralManager):
+                class Interface(CalculationInterface):
+                    related = Input(RelatedManager)
+
+            GeneralManagerMeta.ensure_attributes_initialized(OuterCalculation)
+            return RelatedManager, OuterCalculation
+
+        for case in (
+            "non_string_state_key",
+            "descriptor",
+            "mapping",
+            "identification_value",
+        ):
+            with self.subTest(case=case):
+                RelatedManager, OuterCalculation = build_classes()
+                nested = RelatedManager("related-id")
+                hostile_key = HostileStateKey()
+                if case == "non_string_state_key":
+                    dict.__setitem__(
+                        vars(nested),
+                        hostile_key,
+                        object(),
+                    )
+                    HostileStateKey.active = True
+                elif case == "descriptor":
+                    type.__setattr__(
+                        RelatedManager,
+                        "_identification_dependency_cache",
+                        HostileDescriptor(),
+                    )
+                elif case == "mapping":
+                    dict.__setitem__(
+                        vars(nested._interface),
+                        "identification",
+                        HostileMapping(id="related-id"),
+                    )
+                else:
+                    hostile_value = HostileIdentificationValue()
+                    private_id = vars(nested)["_GeneralManager__id"]
+                    dict.__setitem__(private_id, "id", hostile_value)
+                    HostileIdentificationValue.active = True
+
+                try:
+                    HostileStateKey.calls = 0
+                    HostileIdentificationValue.calls = 0
+                    outer = OuterCalculation(nested)
+                    self.assertIs(
+                        outer.identification["related"].get("id"),
+                        (
+                            hostile_value
+                            if case == "identification_value"
+                            else "related-id"
+                        ),
+                    )
+                    self.assertEqual(HostileStateKey.calls, 0)
+                    self.assertEqual(HostileIdentificationValue.calls, 0)
+                    if case == "identification_value":
+                        self.assertIs(outer.related, nested)
+                        self.assertIn(
+                            "_resolved_input_values",
+                            vars(outer._interface),
+                        )
+                    else:
+                        self.assertNotIn(
+                            "_resolved_input_values",
+                            vars(outer._interface),
+                        )
+                finally:
+                    HostileStateKey.active = False
+                    HostileIdentificationValue.active = False
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_nested_fallback_dependency_sets_are_exact_across_cache_paths(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+            def __init__(self, *args, **kwargs):
+                return super().__init__(*args, **kwargs)
+
+        class OuterCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(OuterCalculation)
+        nested = RelatedManager("related-id")
+
+        with DependencyTracker() as construction_dependencies:
+            outer = OuterCalculation(nested)
+
+        expected_outer = (
+            OuterCalculation.__name__,
+            "identification",
+            serialize_dependency_identifier(outer.identification),
+        )
+        expected_nested = (
+            RelatedManager.__name__,
+            "identification",
+            '{"id": "related-id"}',
+        )
+        self.assertEqual(construction_dependencies, {expected_outer})
+        self.assertNotIn("_resolved_input_values", vars(outer._interface))
+
+        with DependencyTracker() as first_dependencies:
+            first = outer.related
+        with DependencyTracker() as later_dependencies:
+            second = outer.related
+
+        self.assertIsNot(first, nested)
+        self.assertIs(second, first)
+        self.assertEqual(first_dependencies, {expected_nested})
+        self.assertEqual(later_dependencies, {expected_nested})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_custom_interface_metaclass_equality_is_not_invoked_by_seed(self):
         equality_calls = []
 
