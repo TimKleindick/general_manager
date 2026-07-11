@@ -274,6 +274,17 @@ class DatabaseBucketTestCase(TestCase):
         self.assertEqual(len(self.bucket), 3)
         self.assertEqual(self.bucket.count(), 3)
 
+    def test_list_uses_one_query_outside_run_context(self):
+        bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+
+        with self.assertNumQueries(1):
+            managers = list(bucket)
+
+        self.assertEqual(
+            [manager.identification["id"] for manager in managers],
+            [self.u1.id, self.u2.id, self.u3.id],
+        )
+
     def test_build_manager_dispatches_model_instances_and_primary_keys(self):
         with (
             patch.object(
@@ -725,19 +736,34 @@ class DatabaseBucketTestCase(TestCase):
             dependencies,
         )
 
-    def test_filtered_count_populates_primary_key_snapshot_for_iteration(self):
+    def test_filtered_count_keeps_scalar_cache_separate_from_iteration(self):
         bucket = DatabaseBucket(
             User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
             UserManager,
             {"username__in": [["alice", "bob"]]},
         )
 
-        with CalculationRunContext(), self.assertNumQueries(1):
+        with CalculationRunContext(), self.assertNumQueries(2):
+            self.assertEqual(bucket.count(), 2)
             self.assertEqual(bucket.count(), 2)
             self.assertEqual(
                 [manager.identification["id"] for manager in bucket],
                 [self.u1.id, self.u2.id],
             )
+
+    def test_equivalent_filtered_counts_reuse_scalar_count(self):
+        first_bucket = DatabaseBucket(
+            User.objects.filter(username__startswith="a"),
+            UserManager,
+        )
+        second_bucket = DatabaseBucket(
+            User.objects.filter(username__startswith="a"),
+            UserManager,
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(first_bucket.count(), 1)
+            self.assertEqual(second_bucket.count(), 1)
 
     def test_equivalent_first_reuses_row_inside_run_context(self):
         first_bucket = DatabaseBucket(
@@ -868,11 +894,26 @@ class DatabaseBucketTestCase(TestCase):
         User.objects.bulk_create(users)
         bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
 
-        with CalculationRunContext(), self.assertNumQueries(2):
+        with CalculationRunContext(), self.assertNumQueries(1):
             self.assertEqual(bucket.count(), MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 4)
             self.assertEqual(bucket.count(), MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 4)
 
-    def test_over_limit_iteration_bypasses_run_scoped_materialization(self):
+    def test_large_filtered_count_uses_one_scalar_query_and_reuses_result(self):
+        users = [
+            User(username=f"count-user-{index:04d}")
+            for index in range(MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1)
+        ]
+        User.objects.bulk_create(users)
+        bucket = DatabaseBucket(
+            User.objects.filter(username__startswith="count-user-"),
+            UserManager,
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(bucket.count(), MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1)
+            self.assertEqual(bucket.count(), MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1)
+
+    def test_over_limit_iteration_reuses_fallback_probe_state(self):
         first_bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
         second_bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
 
@@ -882,7 +923,7 @@ class DatabaseBucketTestCase(TestCase):
                 1,
             ),
             CalculationRunContext(),
-            self.assertNumQueries(4),
+            self.assertNumQueries(3),
         ):
             self.assertEqual(
                 [manager.identification["id"] for manager in first_bucket],

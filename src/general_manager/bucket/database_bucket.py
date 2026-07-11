@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from collections.abc import Callable, Collection, Hashable, Mapping
+from contextvars import ContextVar
 from datetime import date, datetime
 from typing import Generator, TypeVar, cast
 
@@ -33,6 +34,11 @@ MAX_RUN_SCOPED_BUCKET_RESULT_ROWS = 1000
 _QUERY_SIGNATURE_NOT_COMPUTED = object()
 _FIRST_ROW_CACHE_MISS = object()
 _FIRST_ROW_CACHE_NONE = object()
+_RUN_SCOPED_BUCKET_RESULT_TOO_LARGE = object()
+_LENGTH_HINT_PENDING_BUCKET: ContextVar[object | None] = ContextVar(
+    "general_manager_database_bucket_length_hint_pending",
+    default=None,
+)
 
 
 class DatabaseBucketTypeMismatchError(TypeError):
@@ -528,6 +534,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if signature is None:
             return None
         cached = context.get_orm_bucket_result(signature)
+        if cached is _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE:
+            return None
         if cached is not None:
             return cast(tuple[LookupValue, ...], cached)
 
@@ -543,6 +551,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 row.pk for row in self._data[: MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1]
             )
         if len(primary_keys) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS:
+            context.set_orm_bucket_result(
+                signature,
+                _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE,
+            )
             return None
         context.set_orm_bucket_result(signature, primary_keys)
         return primary_keys
@@ -558,11 +570,27 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if signature is None:
             return None
         cached = context.get_orm_bucket_rows(signature)
+        if cached is _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE:
+            return None
         if cached is not None:
             return cast(tuple[models.Model, ...], cached)
 
+        if (
+            context.get_orm_bucket_result(signature)
+            is _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE
+        ):
+            return None
+
         rows = tuple(self._data[: MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1])
         if len(rows) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS:
+            context.set_orm_bucket_rows(
+                signature,
+                _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE,
+            )
+            context.set_orm_bucket_result(
+                signature,
+                _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE,
+            )
             return None
         primary_keys = tuple(row.pk for row in rows)
         context.set_orm_bucket_rows(signature, rows)
@@ -588,6 +616,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if signature is None:
             return None
         cached = context.get_orm_bucket_result(signature)
+        if cached is _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE:
+            return None
         if cached is None:
             return None
         return cast(tuple[LookupValue, ...], cached)
@@ -601,7 +631,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if signature is None:
             return None
         cached = context.get_orm_bucket_rows(signature)
+        if cached is _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE:
+            return None
         if cached is None:
+            if (
+                context.get_orm_bucket_result(signature)
+                is _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE
+            ):
+                return None
             return None
         return cast(tuple[models.Model, ...], cached)
 
@@ -691,18 +728,6 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return kwargs["id"]
         return None
 
-    def _can_materialize_count_snapshot(self) -> bool:
-        """Return whether count/len may populate a bounded run-scoped snapshot."""
-        context = current_calculation_run_context()
-        if context is None:
-            return False
-        query = getattr(self._data, "query", None)
-        if not isinstance(query, Query):
-            return False
-        where = getattr(query, "where", None)
-        children = getattr(where, "children", None)
-        return bool(children)
-
     def _track_effective_dependencies(self) -> None:
         """Record the bucket's effective filter/exclude state when it is evaluated."""
         manager_name = type.__getattribute__(self._manager_class, "__name__")
@@ -759,23 +784,30 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Yields:
             GeneralManagerType: Manager instance for each primary key in the queryset.
         """
-        self._track_effective_dependencies()
-        managers = self._get_run_scoped_managers()
-        if managers is not None:
-            yield from managers
-            return
-        rows = self._get_run_scoped_rows()
-        if rows is not None:
-            for row in rows:
-                yield self._build_manager_from_instance(row)
-            return
-        primary_keys = self._peek_run_scoped_primary_keys()
-        if primary_keys is not None:
-            for primary_key in primary_keys:
-                yield self._build_manager_from_primary_key(primary_key)
-            return
-        for item in self._data:
-            yield self._build_manager_from_instance(item)
+        _LENGTH_HINT_PENDING_BUCKET.set(self)
+
+        def iterate() -> Generator[GeneralManagerType, None, None]:
+            if _LENGTH_HINT_PENDING_BUCKET.get() is self:
+                _LENGTH_HINT_PENDING_BUCKET.set(None)
+            self._track_effective_dependencies()
+            managers = self._get_run_scoped_managers()
+            if managers is not None:
+                yield from managers
+                return
+            rows = self._get_run_scoped_rows()
+            if rows is not None:
+                for row in rows:
+                    yield self._build_manager_from_instance(row)
+                return
+            primary_keys = self._peek_run_scoped_primary_keys()
+            if primary_keys is not None:
+                for primary_key in primary_keys:
+                    yield self._build_manager_from_primary_key(primary_key)
+                return
+            for item in self._data:
+                yield self._build_manager_from_instance(item)
+
+        return iterate()
 
     def __or__(
         self,
@@ -1131,13 +1163,21 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             int: Number of represented rows.
         """
         self._track_effective_dependencies()
-        if self._can_materialize_count_snapshot():
-            rows = self._get_run_scoped_rows()
-            if rows is not None:
-                return len(rows)
+        rows = self._peek_run_scoped_rows()
+        if rows is not None:
+            return len(rows)
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             return len(primary_keys)
+        context = current_calculation_run_context()
+        signature = self._query_signature() if context is not None else None
+        if context is not None and signature is not None:
+            cached_count = context.get_orm_bucket_count(signature)
+            if cached_count is not None:
+                return cast(int, cached_count)
+            count = int(self._data.count())
+            context.set_orm_bucket_count(signature, count)
+            return count
         return int(self._data.count())
 
     def all(self) -> DatabaseBucket[GeneralManagerType]:
@@ -1277,12 +1317,23 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Return the number of rows represented by the bucket.
 
-        Delegates to `count()` so dependency tracking, run-scoped snapshots, and
-        queryset fallback behavior stay aligned between both cardinality paths.
+        Delegates to `count()` for explicit cardinality requests. When called
+        as the length hint for ``list(bucket)``, it instead reuses the pending
+        iterator's bounded row snapshot or queryset result cache so iteration
+        does not issue a second query.
 
         Returns:
             int: Number of represented rows.
         """
+        if _LENGTH_HINT_PENDING_BUCKET.get() is self:
+            _LENGTH_HINT_PENDING_BUCKET.set(None)
+            self._track_effective_dependencies()
+            context = current_calculation_run_context()
+            if context is not None:
+                rows = self._get_run_scoped_rows()
+                if rows is not None:
+                    return len(rows)
+            return len(self._data)
         return self.count()
 
     def __str__(self) -> str:

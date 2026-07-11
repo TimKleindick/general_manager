@@ -26,6 +26,7 @@ from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import (
     BUCKET_INDEX_PREFIX,
     ORM_BUCKET_EXISTS_PREFIX,
+    ORM_BUCKET_COUNT_PREFIX,
     ORM_BUCKET_FIRST_ROW_PREFIX,
     ORM_BUCKET_MANAGER_RESULT_PREFIX,
     ORM_BUCKET_RESULT_PREFIX,
@@ -73,6 +74,7 @@ RUN_CACHE_PREFIXES = (
     ORM_BUCKET_ROW_RESULT_PREFIX,
     ORM_BUCKET_MANAGER_RESULT_PREFIX,
     ORM_BUCKET_FIRST_ROW_PREFIX,
+    ORM_BUCKET_COUNT_PREFIX,
     ORM_MODEL_ROW_INDEX_PREFIX,
     ORM_MODEL_RELATION_PREFETCH_PREFIX,
     ORM_RELATION_MANAGER_PREFIX,
@@ -1236,8 +1238,8 @@ def test_data_change_mixed_run_cache_invalidation_work(
             for key in context._values
             if isinstance(key, tuple) and key and key[0] in RUN_CACHE_PREFIXES
         )
-        assert initial_targeted_count == 5_500
-        assert len(context._values) == 6_000
+        assert initial_targeted_count == 6_000
+        assert len(context._values) == 6_500
 
         phase_snapshots: list[dict[Hashable, object]] = []
         original_discard_prefix = context.discard_prefix

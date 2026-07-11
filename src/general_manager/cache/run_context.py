@@ -29,6 +29,7 @@ ORM_BUCKET_RESULT_PREFIX = "orm_bucket_result"
 ORM_BUCKET_ROW_RESULT_PREFIX = "orm_bucket_row_result"
 ORM_BUCKET_MANAGER_RESULT_PREFIX = "orm_bucket_manager_result"
 ORM_BUCKET_FIRST_ROW_PREFIX = "orm_bucket_first_row"
+ORM_BUCKET_COUNT_PREFIX = "orm_bucket_count"
 ORM_MODEL_ROW_INDEX_PREFIX = "orm_model_row_index"
 ORM_MODEL_RELATION_PREFETCH_PREFIX = "orm_model_relation_prefetch"
 ORM_RELATION_MANAGER_PREFIX = "orm_relation_manager"
@@ -492,6 +493,14 @@ class CalculationRunContext:
         """Store or overwrite an ORM first-row result for the active run."""
         self.set((ORM_BUCKET_FIRST_ROW_PREFIX, key), value)
 
+    def get_orm_bucket_count(self, key: Hashable) -> object:
+        """Return a cached ORM bucket count, or ``None`` when absent."""
+        return self.get((ORM_BUCKET_COUNT_PREFIX, key))
+
+    def set_orm_bucket_count(self, key: Hashable, value: int) -> None:
+        """Store a scalar ORM bucket count for the active run."""
+        self.set((ORM_BUCKET_COUNT_PREFIX, key), value)
+
     def get_orm_query_bucket(self, key: Hashable) -> object:
         """Return a cached constructed ORM query bucket, or `None` when absent."""
         return self.get((ORM_QUERY_BUCKET_PREFIX, key))
@@ -514,6 +523,7 @@ class CalculationRunContext:
         self.discard_prefix((ORM_BUCKET_ROW_RESULT_PREFIX,))
         self.discard_prefix((ORM_BUCKET_MANAGER_RESULT_PREFIX,))
         self.discard_prefix((ORM_BUCKET_FIRST_ROW_PREFIX,))
+        self.discard_prefix((ORM_BUCKET_COUNT_PREFIX,))
         self.discard_prefix((ORM_MODEL_ROW_INDEX_PREFIX,))
         self.discard_prefix((ORM_MODEL_RELATION_PREFETCH_PREFIX,))
         self.discard_prefix((ORM_RELATION_MANAGER_PREFIX,))

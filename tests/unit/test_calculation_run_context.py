@@ -460,6 +460,18 @@ def test_orm_bucket_result_helpers_distinguish_empty_tuple_from_missing() -> Non
         assert ctx.get_orm_bucket_result(("query", "missing")) is None
 
 
+def test_orm_bucket_count_helpers_preserve_zero_and_clear_entries() -> None:
+    with CalculationRunContext() as ctx:
+        ctx.set_orm_bucket_count(("query", "empty"), 0)
+
+        assert ctx.get_orm_bucket_count(("query", "empty")) == 0
+        assert ctx.get_orm_bucket_count(("query", "missing")) is None
+
+        ctx.clear_orm_bucket_results()
+
+        assert ctx.get_orm_bucket_count(("query", "empty")) is None
+
+
 def test_orm_bucket_row_results_are_stored_and_cleared() -> None:
     rows = (object(), object())
 
