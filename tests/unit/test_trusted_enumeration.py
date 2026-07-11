@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABCMeta
-from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
@@ -2433,17 +2433,14 @@ def test_manager_candidates_from_custom_bucket_subclass_keep_fallback() -> None:
     assert outer._combination_evidence == {}
 
 
-@pytest.mark.parametrize("container_type", [list, tuple])
 @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
-def test_dependent_callable_scalar_provider_always_runs_full_validation(
-    container_type: type[list[object]] | type[tuple[object, ...]],
-) -> None:
+def test_dependent_callable_tuple_provider_always_runs_full_validation() -> None:
     calls: list[int] = []
-    returned_containers: list[list[object] | tuple[object, ...]] = []
+    returned_containers: list[tuple[int, ...]] = []
 
-    def possible_detail(code: int) -> list[object] | tuple[object, ...]:
+    def possible_detail(code: int) -> tuple[int, ...]:
         calls.append(code)
-        returned = container_type([code * 10])
+        returned = (code * 10,)
         returned_containers.append(returned)
         return returned
 
@@ -2467,116 +2464,122 @@ def test_dependent_callable_scalar_provider_always_runs_full_validation(
     assert bucket._combination_evidence == {}
 
 
-@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
-def test_dependent_callable_same_list_preserves_stable_dependency_calls() -> None:
-    calls: list[int] = []
-    returned_containers: list[list[int]] = []
-    shared = [10]
-
-    def possible_detail(code: int) -> list[int]:
-        calls.append(code)
-        returned_containers.append(shared)
-        return shared
-
-    bucket = _real_calculation_bucket(
-        cast(Input[type[object]], Input(int, possible_values=[1])),
-        interface_attributes={
-            "segment": Input(str, possible_values=["retail", "enterprise"]),
-            "detail": Input(
-                int,
-                possible_values=possible_detail,
-                depends_on=["code"],
-            ),
-        },
-    )
-
-    assert [manager.identification for manager in bucket] == [
-        {"code": 1, "segment": "retail", "detail": 10},
-        {"code": 1, "segment": "enterprise", "detail": 10},
-    ]
-    assert calls == [1, 1, 1]
-    assert all(returned is shared for returned in returned_containers)
-    assert bucket._combination_evidence == {}
-
-
-@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
-def test_dependent_callable_raise_with_stable_dependency_is_lazy() -> None:
-    calls: list[int] = []
-    provider_error = RuntimeError("stable dependent provider failed")
-
-    def possible_detail(code: int) -> list[int]:
-        calls.append(code)
-        if len(calls) == 2:
-            raise provider_error
-        return [code * 10]
-
-    bucket = _real_calculation_bucket(
-        cast(Input[type[object]], Input(int, possible_values=[1])),
-        interface_attributes={
-            "segment": Input(str, possible_values=["retail", "enterprise"]),
-            "detail": Input(
-                int,
-                possible_values=possible_detail,
-                depends_on=["code"],
-            ),
-        },
-    )
-
-    with pytest.raises(RuntimeError, match="stable dependent provider failed"):
-        list(bucket)
-
-    assert calls == [1, 1]
-    assert bucket._data == [
-        {"code": 1, "segment": "retail", "detail": 10},
-        {"code": 1, "segment": "enterprise", "detail": 10},
-    ]
-    assert bucket._combination_evidence == {}
-
-
 @pytest.mark.parametrize(
-    ("provider_kind", "expected_calls", "expected_error"),
+    ("provider_kind", "dependency_mode"),
     [
-        ("same_iterator", [1, 2, 1], InvalidInputValueError),
-        ("mutating", [1, 2, 1], InvalidInputValueError),
-        ("raising", [1, 2], RuntimeError),
+        pytest.param("fresh_list", "stable", id="fresh-list-stable"),
+        pytest.param("fresh_list", "changing", id="fresh-list-changing"),
+        pytest.param("same_list", "stable", id="same-list-stable"),
+        pytest.param("same_list", "changing", id="same-list-changing"),
+        pytest.param("mutating", "stable", id="mutating-stable"),
+        pytest.param("mutating", "changing", id="mutating-changing"),
+        pytest.param("raising", "stable", id="raising-stable"),
+        pytest.param("raising", "changing", id="raising-changing"),
     ],
 )
 @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
-def test_dependent_callable_fallback_preserves_mutation_and_exception_timing(
+def test_dependent_callable_scalar_provider_cross_product(
     provider_kind: str,
-    expected_calls: list[int],
-    expected_error: type[Exception],
+    dependency_mode: str,
 ) -> None:
     calls: list[int] = []
-    shared = iter([10])
+    returned_containers: list[list[int]] = []
+    mutation_snapshots: list[tuple[int, tuple[int, ...]]] = []
+    shared = [10]
     provider_error = RuntimeError("dependent provider failed")
+    changing = dependency_mode == "changing"
+    generation_calls = 2 if changing else 1
 
-    def possible_detail(code: int) -> Iterable[int]:
+    def possible_detail(code: int) -> list[int]:
         calls.append(code)
-        if provider_kind == "same_iterator":
-            return shared
-        if provider_kind == "mutating":
-            return [code * 10] if len(calls) <= 2 else []
-        if len(calls) == 2:
+        if provider_kind == "raising" and len(calls) == 2:
             raise provider_error
-        return [code * 10]
+        if provider_kind == "fresh_list" or provider_kind == "raising":
+            returned = [code * 10]
+        elif provider_kind == "same_list":
+            returned = shared
+        else:
+            shared[:] = [code * 10] if len(calls) <= generation_calls else []
+            mutation_snapshots.append((code, tuple(shared)))
+            returned = shared
+        returned_containers.append(returned)
+        return returned
 
+    code_values = [1, 2] if changing else [1]
+    segment_values = ["all"] if changing else ["retail", "enterprise"]
     bucket = _real_calculation_bucket(
-        cast(Input[type[object]], Input(int, possible_values=[1, 2])),
+        cast(Input[type[object]], Input(int, possible_values=code_values)),
         interface_attributes={
+            "segment": Input(str, possible_values=segment_values),
             "detail": Input(
                 int,
                 possible_values=possible_detail,
                 depends_on=["code"],
-            )
+            ),
         },
     )
 
-    match = "dependent provider failed" if expected_error is RuntimeError else None
-    with pytest.raises(expected_error, match=match):
-        list(bucket)
-
-    assert calls == expected_calls
+    if provider_kind in {"fresh_list", "same_list"}:
+        managers = list(bucket)
+        expected_identifications = (
+            [
+                {"code": 1, "segment": "all", "detail": 10},
+                {
+                    "code": 2,
+                    "segment": "all",
+                    "detail": 20 if provider_kind == "fresh_list" else 10,
+                },
+            ]
+            if changing
+            else [
+                {"code": 1, "segment": "retail", "detail": 10},
+                {"code": 1, "segment": "enterprise", "detail": 10},
+            ]
+        )
+        assert [
+            manager.identification for manager in managers
+        ] == expected_identifications
+        expected_calls = [1, 2, 1, 2] if changing else [1, 1, 1]
+        assert calls == expected_calls
+        if provider_kind == "fresh_list":
+            assert len({id(returned) for returned in returned_containers}) == len(
+                returned_containers
+            )
+        else:
+            assert all(returned is shared for returned in returned_containers)
+    elif provider_kind == "mutating":
+        with pytest.raises(InvalidInputValueError):
+            list(bucket)
+        assert calls == ([1, 2, 1] if changing else [1, 1])
+        assert all(returned is shared for returned in returned_containers)
+        assert mutation_snapshots == (
+            [(1, (10,)), (2, (20,)), (1, ())] if changing else [(1, (10,)), (1, ())]
+        )
+        assert shared == []
+        assert bucket._data == (
+            [
+                {"code": 1, "segment": "all", "detail": 10},
+                {"code": 2, "segment": "all", "detail": 20},
+            ]
+            if changing
+            else [
+                {"code": 1, "segment": "retail", "detail": 10},
+                {"code": 1, "segment": "enterprise", "detail": 10},
+            ]
+        )
+    else:
+        with pytest.raises(RuntimeError, match="dependent provider failed"):
+            list(bucket)
+        assert calls == ([1, 2] if changing else [1, 1])
+        assert len(returned_containers) == 1
+        assert returned_containers[0] == [10]
+        if changing:
+            assert bucket._data is None
+        else:
+            assert bucket._data == [
+                {"code": 1, "segment": "retail", "detail": 10},
+                {"code": 1, "segment": "enterprise", "detail": 10},
+            ]
     assert bucket._combination_evidence == {}
 
 

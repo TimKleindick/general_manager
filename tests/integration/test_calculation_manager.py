@@ -811,33 +811,39 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_dependent_callable_database_providers_disable_whole_pass_trust(self):
-        for name in ("Alice", "Bob"):
+        employees = [
             self.Employee.create(
                 name=name,
                 salary=Measurement(3000, "EUR"),
                 creator_id=self.user.id,
             )
+            for name in ("Alice", "Bob")
+        ]
+        employee_ids = [employee.identification["id"] for employee in employees]
 
-        for provider_kind in (
-            "same",
-            "same_stable",
-            "fresh",
-            "mutating",
-            "raising",
+        for provider_kind, dependency_mode in (
+            ("fresh", "stable"),
+            ("fresh", "changing"),
+            ("same", "stable"),
+            ("same", "changing"),
+            ("mutating", "stable"),
+            ("mutating", "changing"),
+            ("raising", "stable"),
+            ("raising", "changing"),
         ):
-            with self.subTest(provider_kind=provider_kind):
+            with self.subTest(
+                provider_kind=provider_kind,
+                dependency_mode=dependency_mode,
+            ):
                 source = self.Employee.all()
                 calls = []
                 returned_sources = []
+                mutation_events = []
                 provider_error = RuntimeError("database provider failed")
-                region_values = (
-                    ["EU"] if provider_kind == "same_stable" else ["EU", "US"]
-                )
-                segment_values = (
-                    ["retail", "enterprise"]
-                    if provider_kind == "same_stable"
-                    else ["all"]
-                )
+                changing = dependency_mode == "changing"
+                generation_calls = 2 if changing else 1
+                region_values = ["EU", "US"] if changing else ["EU"]
+                segment_values = ["all"] if changing else ["retail", "enterprise"]
 
                 def possible_employees(
                     region,
@@ -847,12 +853,15 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                     _source=source,
                     _provider_error=provider_error,
                     _returned_sources=returned_sources,
+                    _mutation_events=mutation_events,
+                    _generation_calls=generation_calls,
                 ):
                     _calls.append(region)
                     if _provider_kind == "raising" and len(_calls) == 2:
                         raise _provider_error
-                    if _provider_kind == "mutating" and len(_calls) > 2:
+                    if _provider_kind == "mutating" and len(_calls) > _generation_calls:
                         result = _source.none()
+                        _mutation_events.append((region, "empty"))
                     elif _provider_kind == "fresh":
                         result = self.Employee.all()
                     else:
@@ -871,12 +880,14 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                         )
 
                 bucket = CalculationBucket(DependentDatabaseCalculation)
-                if provider_kind == "raising":
+                if provider_kind == "raising" and changing:
                     with self.assertRaisesRegex(
                         RuntimeError, "database provider failed"
                     ):
-                        list(bucket)
+                        bucket._materialize_combinations(expose=False)
                     self.assertEqual(calls, ["EU", "US"])
+                    self.assertEqual(returned_sources, [source])
+                    self.assertIsNone(bucket._data)
                 else:
                     combinations = bucket._materialize_combinations(expose=False)
                     self.assertEqual(len(combinations), 4)
@@ -890,45 +901,71 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                     if provider_kind == "mutating":
                         with self.assertRaises(InvalidInputValueError):
                             list(bucket)
-                        self.assertEqual(calls, ["EU", "US", "EU"])
-                        self.assertIs(returned_sources[0], source)
-                        self.assertIs(returned_sources[1], source)
-                        self.assertIsNot(returned_sources[2], source)
+                        expected_calls = (
+                            ["EU", "US", "EU"] if changing else ["EU", "EU"]
+                        )
+                        self.assertEqual(calls, expected_calls)
+                        self.assertTrue(
+                            all(result is source for result in returned_sources[:-1])
+                        )
+                        self.assertIsNot(returned_sources[-1], source)
+                        self.assertEqual(mutation_events, [("EU", "empty")])
+                    elif provider_kind == "raising":
+                        with self.assertRaisesRegex(
+                            RuntimeError, "database provider failed"
+                        ):
+                            list(bucket)
+                        self.assertEqual(calls, ["EU", "EU"])
+                        self.assertEqual(returned_sources, [source])
+                        self.assertEqual(
+                            combinations,
+                            [
+                                {
+                                    "region": "EU",
+                                    "segment": segment,
+                                    "employee": employee,
+                                }
+                                for segment in ("retail", "enterprise")
+                                for employee in employees
+                            ],
+                        )
                     else:
                         managers = list(bucket)
                         self.assertEqual(len(managers), 4)
-                        if provider_kind == "same_stable":
-                            self.assertEqual(calls, ["EU"] * 5)
-                            self.assertEqual(
-                                [
-                                    manager.identification["region"]
-                                    for manager in managers
-                                ],
-                                ["EU"] * 4,
-                            )
-                            self.assertEqual(
-                                [
-                                    manager.identification["segment"]
-                                    for manager in managers
-                                ],
-                                ["retail", "retail", "enterprise", "enterprise"],
-                            )
-                        else:
-                            self.assertEqual(
-                                calls,
-                                ["EU", "US", "EU", "EU", "US", "US"],
-                            )
-                            self.assertEqual(
-                                [
-                                    manager.identification["region"]
-                                    for manager in managers
-                                ],
-                                ["EU", "EU", "US", "US"],
-                            )
+                        expected_calls = (
+                            ["EU", "US", "EU", "EU", "US", "US"]
+                            if changing
+                            else ["EU"] * 5
+                        )
+                        self.assertEqual(calls, expected_calls)
+                        expected_results = (
+                            [
+                                (region, "all", employee_id)
+                                for region in ("EU", "US")
+                                for employee_id in employee_ids
+                            ]
+                            if changing
+                            else [
+                                ("EU", segment, employee_id)
+                                for segment in ("retail", "enterprise")
+                                for employee_id in employee_ids
+                            ]
+                        )
+                        self.assertEqual(
+                            [
+                                (
+                                    manager.identification["region"],
+                                    manager.identification["segment"],
+                                    manager.identification["employee"]["id"],
+                                )
+                                for manager in managers
+                            ],
+                            expected_results,
+                        )
                         if provider_kind == "fresh":
                             self.assertEqual(
                                 len({id(result) for result in returned_sources}),
-                                6,
+                                len(returned_sources),
                             )
                         else:
                             self.assertTrue(
