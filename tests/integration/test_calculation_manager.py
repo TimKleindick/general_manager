@@ -810,6 +810,76 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(validator_calls, 2)
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_dependent_callable_database_providers_disable_whole_pass_trust(self):
+        for name in ("Alice", "Bob"):
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+
+        for provider_kind in ("same", "fresh", "mutating", "raising"):
+            with self.subTest(provider_kind=provider_kind):
+                source = self.Employee.all()
+                calls = []
+                provider_error = RuntimeError("database provider failed")
+
+                def possible_employees(
+                    region,
+                    *,
+                    _calls=calls,
+                    _provider_kind=provider_kind,
+                    _source=source,
+                    _provider_error=provider_error,
+                ):
+                    _calls.append(region)
+                    if _provider_kind == "raising" and len(_calls) == 2:
+                        raise _provider_error
+                    if _provider_kind == "mutating" and len(_calls) > 2:
+                        return _source.none()
+                    if _provider_kind == "fresh":
+                        return self.Employee.all()
+                    return _source
+
+                class DependentDatabaseCalculation(GeneralManager):
+                    class Interface(CalculationInterface):
+                        region = Input(str, possible_values=["EU", "US"])
+                        employee = Input(
+                            self.Employee,
+                            possible_values=possible_employees,
+                            depends_on=["region"],
+                        )
+
+                bucket = CalculationBucket(DependentDatabaseCalculation)
+                if provider_kind == "raising":
+                    with self.assertRaisesRegex(
+                        RuntimeError, "database provider failed"
+                    ):
+                        list(bucket)
+                    self.assertEqual(calls, ["EU", "US"])
+                else:
+                    combinations = bucket._materialize_combinations(expose=False)
+                    self.assertEqual(len(combinations), 4)
+                    self.assertTrue(bucket._combination_evidence)
+                    self.assertTrue(
+                        all(
+                            set(evidence) == {"region"}
+                            for _combination, evidence in bucket._combination_evidence.values()
+                        )
+                    )
+                    if provider_kind == "mutating":
+                        with self.assertRaises(InvalidInputValueError):
+                            list(bucket)
+                        self.assertEqual(calls, ["EU", "US", "EU"])
+                    else:
+                        self.assertEqual(len(list(bucket)), 4)
+                        self.assertEqual(
+                            calls,
+                            ["EU", "US", "EU", "EU", "US", "US"],
+                        )
+                self.assertEqual(bucket._combination_evidence, {})
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_database_preview_falls_back_and_preparation_errors_clear_evidence(self):
         for name in ("Alice", "Bob"):
             self.Employee.create(

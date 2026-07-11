@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABCMeta
-from collections.abc import Callable, Iterator, Mapping
-from copy import copy
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from copy import copy, deepcopy
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from enum import Enum
+import pickle
 import struct
 from typing import Any, ClassVar, cast
 from uuid import UUID
@@ -26,6 +27,7 @@ from general_manager.bucket.calculation_bucket import (
     _trusted_enumeration_evidence,
 )
 from general_manager.bucket.database_bucket import DatabaseBucket
+from general_manager.api.property import graph_ql_property
 from general_manager.interface import CalculationInterface
 from general_manager.interface.base_interface import (
     InterfaceBase,
@@ -2158,6 +2160,411 @@ def test_constructor_error_clears_evidence() -> None:
 
     with pytest.raises(RuntimeError, match="constructor failed"):
         next(iter(bucket))
+    assert bucket._combination_evidence == {}
+
+
+class _CountingOneShotIterator(Iterator[int]):
+    """Expose exact consumption while retaining normal iterator semantics."""
+
+    def __init__(self, values: list[int]) -> None:
+        self._iterator = iter(values)
+        self.next_calls = 0
+
+    def __next__(self) -> int:
+        self.next_calls += 1
+        return next(self._iterator)
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_static_one_shot_iterator_keeps_exhaustion_error_and_is_not_reread() -> None:
+    source = _CountingOneShotIterator([1, 2])
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=source))
+    )
+
+    with pytest.raises(
+        InvalidInputValueError,
+        match=r"^Invalid value for code: 1, allowed: ",
+    ):
+        next(iter(bucket))
+
+    # Three reads enumerate the source; validation performs one membership read
+    # and one formatting read while constructing the unchanged public error.
+    assert source.next_calls == 5
+    assert bucket._data == [{"code": 1}, {"code": 2}]
+    assert bucket._combination_evidence == {}
+
+    with pytest.raises(InvalidInputValueError):
+        next(iter(bucket))
+    assert source.next_calls == 7
+
+
+@pytest.mark.parametrize(
+    ("provider_kind", "expected_calls", "expected_identifications"),
+    [
+        ("fresh", 3, [{"code": 1}, {"code": 2}]),
+        ("same", 2, None),
+        ("mutating", 3, None),
+        ("raising", 2, None),
+    ],
+)
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_callable_iterator_providers_keep_calls_results_and_error_timing(
+    provider_kind: str,
+    expected_calls: int,
+    expected_identifications: list[dict[str, object]] | None,
+) -> None:
+    calls: list[int] = []
+    shared = iter([1, 2])
+    expected_error = RuntimeError("provider failed during validation")
+
+    def provider() -> Iterator[int] | list[int]:
+        calls.append(len(calls) + 1)
+        if provider_kind == "fresh":
+            return iter([1, 2])
+        if provider_kind == "same":
+            return shared
+        if provider_kind == "mutating":
+            return [1, 2] if len(calls) == 1 else [1]
+        if len(calls) == 2:
+            raise expected_error
+        return iter([1, 2])
+
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=provider))
+    )
+
+    if expected_identifications is not None:
+        assert [
+            manager.identification for manager in bucket
+        ] == expected_identifications
+    elif provider_kind == "raising":
+        with pytest.raises(RuntimeError, match="provider failed during validation"):
+            list(bucket)
+    else:
+        with pytest.raises(InvalidInputValueError):
+            list(bucket)
+
+    assert calls == list(range(1, expected_calls + 1))
+    assert bucket._combination_evidence == {}
+
+
+class _FallbackEnum(Enum):
+    VALUE = "value"
+
+
+@dataclass
+class _FallbackDataclass:
+    value: int
+
+
+class _FixedOffset(tzinfo):
+    def utcoffset(self, _value: datetime | None) -> timedelta:
+        return timedelta(hours=1)
+
+    def dst(self, _value: datetime | None) -> timedelta:
+        return timedelta(0)
+
+    def tzname(self, _value: datetime | None) -> str:
+        return "UTC+01:00"
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        [1],
+        {"value": 1},
+        Decimal("1.5"),
+        Decimal("sNaN"),
+        datetime(2026, 1, 1, tzinfo=_FixedOffset()),
+        _FallbackEnum.VALUE,
+        _FallbackDataclass(1),
+    ],
+)
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_unsupported_candidates_use_normal_membership_validation(
+    candidate: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolutions = 0
+    original = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+    bucket = _real_calculation_bucket(
+        cast(
+            Input[type[object]],
+            Input(type(candidate), possible_values=[candidate]),
+        )
+    )
+
+    assert next(iter(bucket)).identification == {"code": candidate}
+    assert resolutions == 2
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_hostile_custom_iterable_keeps_normal_equality_hooks_and_error() -> None:
+    class HostileValue:
+        equality_calls = 0
+
+        def __eq__(self, _other: object) -> bool:
+            type(self).equality_calls += 1
+            return False
+
+    class FreshIterable:
+        def __iter__(self) -> Iterator[HostileValue]:
+            yield HostileValue()
+
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(HostileValue, possible_values=FreshIterable()))
+    )
+
+    with pytest.raises(InvalidInputValueError):
+        next(iter(bucket))
+
+    assert HostileValue.equality_calls == 1
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_custom_domain_uses_normal_membership_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CustomNumericDomain(NumericRangeDomain):
+        pass
+
+    resolutions = 0
+    original = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+    bucket = _real_calculation_bucket(
+        cast(
+            Input[type[object]],
+            Input(int, possible_values=CustomNumericDomain(1, 2, 1)),
+        )
+    )
+
+    assert [manager.identification for manager in bucket] == [
+        {"code": 1},
+        {"code": 2},
+    ]
+    assert resolutions == 3
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_manager_candidates_from_non_database_bucket_keep_normal_membership() -> None:
+    source = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1]))
+    )
+    outer = _real_calculation_bucket(
+        cast(
+            Input[type[object]],
+            Input(source._manager_class, possible_values=source),
+        )
+    )
+
+    combinations = outer._materialize_combinations(expose=False)
+
+    assert len(combinations) == 1
+    assert outer._combination_evidence == {}
+    assert next(iter(outer)).identification["code"] == {"code": 1}
+    assert outer._combination_evidence == {}
+
+
+@pytest.mark.parametrize("container_type", [list, tuple])
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_dependent_callable_scalar_provider_always_runs_full_validation(
+    container_type: type[list[object]] | type[tuple[object, ...]],
+) -> None:
+    calls: list[int] = []
+
+    def possible_detail(code: int) -> list[object] | tuple[object, ...]:
+        calls.append(code)
+        return container_type([code * 10])
+
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1, 2])),
+        interface_attributes={
+            "detail": Input(
+                int,
+                possible_values=possible_detail,
+                depends_on=["code"],
+            )
+        },
+    )
+
+    assert [manager.identification for manager in bucket] == [
+        {"code": 1, "detail": 10},
+        {"code": 2, "detail": 20},
+    ]
+    assert calls == [1, 2, 1, 2]
+    assert bucket._combination_evidence == {}
+
+
+@pytest.mark.parametrize(
+    ("provider_kind", "expected_calls", "expected_error"),
+    [
+        ("same_iterator", [1, 2, 1], InvalidInputValueError),
+        ("mutating", [1, 2, 1], InvalidInputValueError),
+        ("raising", [1, 2], RuntimeError),
+    ],
+)
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_dependent_callable_fallback_preserves_mutation_and_exception_timing(
+    provider_kind: str,
+    expected_calls: list[int],
+    expected_error: type[Exception],
+) -> None:
+    calls: list[int] = []
+    shared = iter([10])
+    provider_error = RuntimeError("dependent provider failed")
+
+    def possible_detail(code: int) -> Iterable[int]:
+        calls.append(code)
+        if provider_kind == "same_iterator":
+            return shared
+        if provider_kind == "mutating":
+            return [code * 10] if len(calls) <= 2 else []
+        if len(calls) == 2:
+            raise provider_error
+        return [code * 10]
+
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1, 2])),
+        interface_attributes={
+            "detail": Input(
+                int,
+                possible_values=possible_detail,
+                depends_on=["code"],
+            )
+        },
+    )
+
+    match = "dependent provider failed" if expected_error is RuntimeError else None
+    with pytest.raises(expected_error, match=match):
+        list(bucket)
+
+    assert calls == expected_calls
+    assert bucket._combination_evidence == {}
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected_codes", "expected_resolutions"),
+    [
+        ("list", [1, 2], 1),
+        ("first", [1], 1),
+        ("last", [2], 1),
+        ("index", [1], 1),
+        ("slice", [1], 2),
+        ("get", [1], 1),
+        ("input_sort", [2, 1], 1),
+        ("property_sort", [2, 1], 3),
+        ("property_filter", [2], 2),
+        ("property_exclude", [1], 2),
+        ("reverse", [2, 1], 1),
+        ("contains", [1], 1),
+        ("str", [], 1),
+        ("repeated", [1, 2, 1, 2], 3),
+        ("all", [1, 2], 3),
+        ("none", [], 0),
+        ("union", [1, 2], 1),
+        ("deepcopy", [1, 2], 3),
+        ("pickle", [1, 2], 3),
+    ],
+)
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_bucket_operation_trust_and_fallback_matrix(
+    operation: str,
+    expected_codes: list[int],
+    expected_resolutions: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def negated(manager: GeneralManager) -> int:
+        return -cast(int, manager.identification["code"])
+
+    input_field = cast(Input[type[object]], Input(int, possible_values=[1, 2]))
+    bucket = _real_calculation_bucket(
+        input_field,
+        manager_attributes={
+            "negated": graph_ql_property(sortable=True, filterable=True)(negated)
+        },
+    )
+    resolutions = 0
+    original = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+
+    managers: list[GeneralManager]
+    if operation == "list":
+        managers = list(bucket)
+    elif operation == "first":
+        managers = [cast(GeneralManager, bucket.first())]
+    elif operation == "last":
+        managers = [cast(GeneralManager, bucket.last())]
+    elif operation == "index":
+        managers = [cast(GeneralManager, bucket[0])]
+    elif operation == "slice":
+        managers = list(cast(CalculationBucket[GeneralManager], bucket[:1]))
+    elif operation == "get":
+        managers = [bucket.get(code=1)]
+    elif operation == "input_sort":
+        managers = list(bucket.sort("code", reverse=True))
+    elif operation == "property_sort":
+        managers = list(bucket.sort("negated"))
+    elif operation == "property_filter":
+        managers = list(bucket.filter(negated__lt=-1))
+    elif operation == "property_exclude":
+        managers = list(bucket.exclude(negated__lt=-1))
+    elif operation == "reverse":
+        bucket.reverse = True
+        managers = list(bucket)
+    elif operation == "contains":
+        candidate = bucket._manager_class(code=1)
+        resolutions = 0
+        assert candidate in bucket
+        managers = [candidate]
+    elif operation == "str":
+        assert str(bucket).startswith("CalculationBucket (2)[")
+        managers = []
+    elif operation == "repeated":
+        managers = [*bucket, *bucket]
+    elif operation == "all":
+        managers = list(bucket.all())
+    elif operation == "none":
+        managers = list(bucket.none())
+    elif operation == "union":
+        managers = list(bucket | bucket)
+    elif operation == "deepcopy":
+        managers = list(deepcopy(bucket))
+    else:
+        reduced_class, reduced_args, reduced_state = cast(
+            tuple[Any, tuple[object, ...], dict[str, object]],
+            bucket.__reduce__()[:3],
+        )
+        restored = reduced_class(*reduced_args)
+        restored.__setstate__(
+            pickle.loads(pickle.dumps(reduced_state))  # noqa: S301
+        )
+        managers = list(restored)
+
+    assert [manager.identification["code"] for manager in managers] == expected_codes
+    assert resolutions == expected_resolutions
     assert bucket._combination_evidence == {}
 
 
