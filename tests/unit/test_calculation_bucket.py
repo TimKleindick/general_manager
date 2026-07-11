@@ -2685,6 +2685,10 @@ class TestCalculationTerminalStreams(TestCase):
                 _calculation_cache_filter_token(raw, parsed),
                 _CALCULATION_RESULT_UNSUPPORTED,
             )
+        self.assertIs(
+            _calculation_cache_filter_token({}, []),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
 
         for invalid_snapshot in (
             None,
