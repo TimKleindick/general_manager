@@ -8,6 +8,8 @@ from general_manager.bucket.calculation_bucket import (
     CalculationBucket,
     MissingCalculationMatchError,
     MultipleCalculationMatchError,
+    _BuiltinRangeEnumerationWitness,
+    _trusted_enumeration_evidence,
 )
 from general_manager.cache.run_context import (
     CALCULATION_BUCKET_RESULT_MISSING,
@@ -2392,4 +2394,44 @@ class TestCalculationTerminalStreams(TestCase):
         self.assertEqual(
             sorted_bucket._data,
             [{"value": 2}, {"value": 1}, {"value": 0}],
+        )
+
+    def test_terminal_stream_rejects_public_filter_maps_and_invalid_inputs(
+        self,
+    ) -> None:
+        for mutate in (
+            lambda current: current.filter_definitions.update({"value": {}}),
+            lambda current: current.exclude_definitions.update({"value": {}}),
+            lambda current: current.input_fields["value"].__dict__.update(
+                {"unexpected": object()}
+            ),
+            lambda current: current.input_fields.__setitem__("value", object()),
+        ):
+            current = self._make_scalar_bucket(range(3))
+            mutate(current)
+            self.assertFalse(current._terminal_stream_supported())
+
+        class CustomInitCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
+            def __init__(self, **identification):
+                super().__init__(**identification)
+
+        GeneralManagerMeta.ensure_attributes_initialized(CustomInitCalculation)
+        custom_bucket = CalculationBucket(CustomInitCalculation)
+        self.assertFalse(custom_bucket._terminal_stream_supported())
+        self.assertEqual(list(custom_bucket._iter_terminal_managers()), [])
+
+    def test_range_evidence_rejects_non_integer_candidates(self) -> None:
+        witness = _BuiltinRangeEnumerationWitness(range(3), "not-an-int", object())
+        self.assertFalse(witness.authorizes("not-an-int"))
+        input_field = Input(int, possible_values=range(3))
+        self.assertIsNone(
+            _trusted_enumeration_evidence(
+                input_field,
+                range(3),
+                "not-an-int",
+                {},
+            )
         )
