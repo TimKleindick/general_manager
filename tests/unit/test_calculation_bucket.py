@@ -2300,6 +2300,25 @@ class TestCalculationTerminalStreams(TestCase):
             )._calculation_result_cache_signature()
         )
 
+    def test_custom_input_metaclass_bypasses_result_cache(self) -> None:
+        class HostileMeta(type):
+            def __instancecheck__(cls, _instance: object) -> bool:
+                raise AssertionError
+
+        class CustomValue(metaclass=HostileMeta):
+            pass
+
+        class CustomTypeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(CustomValue, possible_values=(CustomValue(),))
+
+        GeneralManagerMeta.ensure_attributes_initialized(CustomTypeCalculation)
+        self.assertIsNone(
+            CalculationBucket(
+                CustomTypeCalculation
+            )._calculation_result_cache_signature()
+        )
+
     def test_property_filtered_cache_hit_replays_dependencies(self) -> None:
         property_calls = 0
 
