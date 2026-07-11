@@ -1115,6 +1115,76 @@ class TestCalculationInterface(TestCase):
         self.assertIsNone(original_ref())
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_dispatch_fallback_excludes_exact_reserved_name_aliases(self):
+        mirror_dispatch_calls = []
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        original_ref = ref(original)
+        manager = HydratedCalculation(original)
+        outer_identification = manager.identification
+        interface = manager._interface
+
+        def dynamic_name(value):
+            return value.encode().decode()
+
+        resolved_name = dynamic_name("_resolved_input_values")
+        seeded_name = dynamic_name("_gm_seeded_input_values_cache")
+        lazy_name = dynamic_name("_gm_lazy_input_values_cache")
+        self.assertIsNot(resolved_name, "_resolved_input_values")
+        self.assertIsNot(seeded_name, "_gm_seeded_input_values_cache")
+        self.assertIsNot(lazy_name, "_gm_lazy_input_values_cache")
+        replacement_state = {
+            dynamic_name("identification"): outer_identification,
+            resolved_name: {"related": original},
+            seeded_name: {"related": original},
+            lazy_name: set(),
+        }
+        object.__setattr__(interface, "__dict__", replacement_state)
+        original._invalidate_manager_state("stale")
+        interface_class = type(interface)
+
+        def custom_getattribute(current_interface, name):
+            if name in {
+                "_gm_seeded_input_values_cache",
+                "_gm_lazy_input_values_cache",
+            }:
+                mirror_dispatch_calls.append(name)
+            return object.__getattribute__(current_interface, name)
+
+        type.__setattr__(interface_class, "__getattribute__", custom_getattribute)
+        try:
+            resolved = manager.related
+        finally:
+            type.__delattr__(interface_class, "__getattribute__")
+
+        reserved_names = {
+            key
+            for key in vars(interface)
+            if type(key) is str
+            and key
+            in {
+                "_gm_seeded_input_values_cache",
+                "_gm_lazy_input_values_cache",
+            }
+        }
+        self.assertEqual(reserved_names, set())
+        self.assertEqual(mirror_dispatch_calls, [])
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+        del original
+        gc.collect()
+        self.assertIsNone(original_ref())
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_cross_field_normalizer_can_resolve_seeded_field_concurrently(self):
         worker_results = []
         worker_finished = threading.Event()

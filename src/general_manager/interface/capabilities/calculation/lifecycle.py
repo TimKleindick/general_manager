@@ -299,16 +299,18 @@ def _clear_seed_mirrors_if_safe(
         return
     retained_state: list[tuple[str, object]] = []
     for key, value in dict.items(state):
-        if key is _SEEDED_INPUT_VALUES_CACHE_NAME:
+        if type(key) is not str:
+            continue
+        if key == _SEEDED_INPUT_VALUES_CACHE_NAME:
             if type(value) is dict:
                 dict.clear(value)
-        elif key is _LAZY_INPUT_VALUES_CACHE_NAME:
+        elif key == _LAZY_INPUT_VALUES_CACHE_NAME:
             if type(value) is set:
                 set.clear(value)
-        elif key is _RESOLVED_INPUT_VALUES_CACHE_NAME:
+        elif key == _RESOLVED_INPUT_VALUES_CACHE_NAME:
             if type(value) is dict:
                 dict.clear(value)
-        elif type(key) is str:
+        else:
             retained_state.append((key, value))
     dict.clear(state)
     for key, value in retained_state:
