@@ -1419,6 +1419,7 @@ def _calculation_cache_filter_token(
                     # definition; user callbacks are identity keyed.
                     if (
                         inspect.isfunction(callback)
+                        and type(callback.__module__) is str
                         and callback.__module__ == "general_manager.utils.filter_parser"
                     ):
                         callback_tokens.append(("parsed", "generated"))
