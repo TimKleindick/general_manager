@@ -472,6 +472,28 @@ def test_orm_bucket_count_helpers_preserve_zero_and_clear_entries() -> None:
         assert ctx.get_orm_bucket_count(("query", "empty")) is None
 
 
+def test_orm_bucket_scalar_terminal_helpers_preserve_false_and_clear_entries() -> None:
+    with CalculationRunContext() as ctx:
+        ctx.set_orm_bucket_last_row(("query", "last"), None)
+        ctx.set_orm_bucket_get(("query", "get"), False)
+        ctx.set_orm_bucket_index(("query", "index"), "row")
+        ctx.set_orm_bucket_membership(("query", "contains"), False)
+
+        assert ctx.get_orm_bucket_last_row(("query", "last"), "missing") is None
+        assert ctx.get_orm_bucket_get(("query", "get"), "missing") is False
+        assert ctx.get_orm_bucket_index(("query", "index"), "missing") == "row"
+        assert ctx.get_orm_bucket_membership(("query", "contains"), "missing") is False
+
+        ctx.clear_orm_bucket_results()
+
+        assert ctx.get_orm_bucket_last_row(("query", "last"), "missing") == "missing"
+        assert ctx.get_orm_bucket_get(("query", "get"), "missing") == "missing"
+        assert ctx.get_orm_bucket_index(("query", "index"), "missing") == "missing"
+        assert (
+            ctx.get_orm_bucket_membership(("query", "contains"), "missing") == "missing"
+        )
+
+
 def test_orm_bucket_row_results_are_stored_and_cleared() -> None:
     rows = (object(), object())
 

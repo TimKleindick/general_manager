@@ -781,6 +781,110 @@ class DatabaseBucketTestCase(TestCase):
             self.assertEqual(first_bucket.first().identification["id"], self.u1.id)
             self.assertEqual(second_bucket.first().identification["id"], self.u1.id)
 
+    def test_equivalent_last_reuses_row_inside_run_context(self):
+        first_bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+        )
+        second_bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(first_bucket.last().identification["id"], self.u2.id)
+            self.assertEqual(second_bucket.last().identification["id"], self.u2.id)
+
+    def test_equivalent_last_reuses_empty_outcome_inside_run_context(self):
+        first_bucket = DatabaseBucket(
+            User.objects.filter(username="nobody"), UserManager
+        )
+        second_bucket = DatabaseBucket(
+            User.objects.filter(username="nobody"), UserManager
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertIsNone(first_bucket.last())
+            self.assertIsNone(second_bucket.last())
+
+    def test_equivalent_safe_get_reuses_row_inside_run_context(self):
+        first_bucket = DatabaseBucket(User.objects.all(), UserManager)
+        second_bucket = DatabaseBucket(User.objects.all(), UserManager)
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(
+                first_bucket.get(pk=self.u2.pk).identification["id"], self.u2.id
+            )
+            self.assertEqual(
+                second_bucket.get(id=self.u2.pk).identification["id"], self.u2.id
+            )
+
+    def test_equivalent_safe_get_reuses_missing_outcome_inside_run_context(self):
+        first_bucket = DatabaseBucket(User.objects.all(), UserManager)
+        second_bucket = DatabaseBucket(User.objects.all(), UserManager)
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            with self.assertRaises(User.DoesNotExist):
+                first_bucket.get(pk=999)
+            with self.assertRaises(User.DoesNotExist):
+                second_bucket.get(id=999)
+
+    def test_equivalent_scalar_indexes_reuse_rows_inside_run_context(self):
+        first_bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+        second_bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(first_bucket[1].identification["id"], self.u2.id)
+            self.assertEqual(second_bucket[1].identification["id"], self.u2.id)
+
+    def test_equivalent_scalar_indexes_reuse_out_of_range_outcome_inside_run_context(
+        self,
+    ):
+        first_bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+        second_bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            with self.assertRaises(IndexError):
+                first_bucket[999]
+            with self.assertRaises(IndexError):
+                second_bucket[999]
+
+    def test_equivalent_primary_key_membership_reuses_boolean_inside_run_context(self):
+        first_bucket = DatabaseBucket(User.objects.all(), UserManager)
+        second_bucket = DatabaseBucket(User.objects.all(), UserManager)
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertIn(self.u1, first_bucket)
+            self.assertIn(UserManager(self.u1.pk), second_bucket)
+
+    def test_equivalent_primary_key_membership_reuses_false_inside_run_context(self):
+        first_bucket = DatabaseBucket(User.objects.all(), UserManager)
+        second_bucket = DatabaseBucket(User.objects.all(), UserManager)
+        missing = User(id=999)
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertNotIn(missing, first_bucket)
+            self.assertNotIn(missing, second_bucket)
+
+    def test_equivalent_safe_get_reuses_duplicate_outcome_inside_run_context(self):
+        first_group = Group.objects.create(name="scalar-first-group")
+        second_group = Group.objects.create(name="scalar-second-group")
+        self.u1.groups.add(first_group, second_group)
+        first_bucket = DatabaseBucket(
+            User.objects.filter(groups__name__in=[first_group.name, second_group.name]),
+            UserManager,
+        )
+        second_bucket = DatabaseBucket(
+            User.objects.filter(groups__name__in=[first_group.name, second_group.name]),
+            UserManager,
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            with self.assertRaises(User.MultipleObjectsReturned):
+                first_bucket.get(pk=self.u1.pk)
+            with self.assertRaises(User.MultipleObjectsReturned):
+                second_bucket.get(id=self.u1.pk)
+
     def test_primary_key_snapshot_terminal_operations_without_row_snapshot(self):
         bucket = DatabaseBucket(
             User.objects.filter(username__in=["alice", "bob"]).order_by("username"),

@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Hashable, Mapping
 from contextvars import ContextVar
 from datetime import date, datetime
+from dataclasses import dataclass
 from typing import Generator, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, FieldError
@@ -34,11 +35,25 @@ MAX_RUN_SCOPED_BUCKET_RESULT_ROWS = 1000
 _QUERY_SIGNATURE_NOT_COMPUTED = object()
 _FIRST_ROW_CACHE_MISS = object()
 _FIRST_ROW_CACHE_NONE = object()
+_LAST_ROW_CACHE_MISS = object()
+_LAST_ROW_CACHE_NONE = object()
 _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE = object()
+_SAFE_GET_CACHE_MISS = object()
+_INDEX_CACHE_MISS = object()
+_INDEX_OUT_OF_RANGE = object()
+_MEMBERSHIP_CACHE_MISS = object()
 _LENGTH_HINT_PENDING_BUCKET: ContextVar[object | None] = ContextVar(
     "general_manager_database_bucket_length_hint_pending",
     default=None,
 )
+
+
+@dataclass(frozen=True)
+class _CachedGetException:
+    """Exception type and arguments replayed by a cached safe ``get``."""
+
+    exception_type: type[Exception]
+    args: tuple[object, ...]
 
 
 class DatabaseBucketTypeMismatchError(TypeError):
@@ -335,6 +350,23 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self._trusted_query_signature,
             operation,
             self._freeze_trusted_signature_payload(kwargs),
+        )
+
+    def _run_scoped_terminal_key(
+        self,
+        operation: str,
+        value: object,
+    ) -> tuple[Hashable, ...] | None:
+        """Return a cache key for a safe scalar terminal operation."""
+        if current_calculation_run_context() is None:
+            return None
+        signature = self._query_signature()
+        if signature is None:
+            return None
+        return (
+            signature,
+            operation,
+            self._freeze_trusted_signature_payload(value),
         )
 
     def __reduce__(self) -> str | tuple[object, ...]:
@@ -1147,7 +1179,23 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             if not primary_keys:
                 return None
             return self._build_manager_from_primary_key(primary_keys[-1])
+        context = current_calculation_run_context()
+        cache_key = self._run_scoped_terminal_key("last", "row")
+        if context is not None and cache_key is not None:
+            cached = context.get_orm_bucket_last_row(
+                cache_key,
+                _LAST_ROW_CACHE_MISS,
+            )
+            if cached is _LAST_ROW_CACHE_NONE:
+                return None
+            if cached is not _LAST_ROW_CACHE_MISS:
+                return self._build_manager_from_instance(cast(models.Model, cached))
         first_element = self._data.last()
+        if context is not None and cache_key is not None:
+            context.set_orm_bucket_last_row(
+                cache_key,
+                _LAST_ROW_CACHE_NONE if first_element is None else first_element,
+            )
         if first_element is None:
             return None
         return self._build_manager_from_instance(first_element)
@@ -1243,7 +1291,37 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 if match_count > 1:
                     raise self._data.model.MultipleObjectsReturned
                 raise self._data.model.DoesNotExist
-        element = self._data.get(**kwargs)
+        context = current_calculation_run_context()
+        requested_primary_key = self._snapshot_get_primary_key(kwargs)
+        cache_key = (
+            self._run_scoped_terminal_key("get", requested_primary_key)
+            if requested_primary_key is not None
+            else None
+        )
+        if context is not None and cache_key is not None:
+            cached = context.get_orm_bucket_get(cache_key, _SAFE_GET_CACHE_MISS)
+            if isinstance(cached, _CachedGetException):
+                raise cached.exception_type(*cached.args)
+            if cached is not _SAFE_GET_CACHE_MISS:
+                return self._build_manager_from_instance(cast(models.Model, cached))
+        try:
+            element = self._data.get(**kwargs)
+        except self._data.model.DoesNotExist as error:
+            if context is not None and cache_key is not None:
+                context.set_orm_bucket_get(
+                    cache_key,
+                    _CachedGetException(type(error), tuple(error.args)),
+                )
+            raise
+        except self._data.model.MultipleObjectsReturned as error:
+            if context is not None and cache_key is not None:
+                context.set_orm_bucket_get(
+                    cache_key,
+                    _CachedGetException(type(error), tuple(error.args)),
+                )
+            raise
+        if context is not None and cache_key is not None:
+            context.set_orm_bucket_get(cache_key, element)
         return self._build_manager_from_instance(element)
 
     def __getitem__(
@@ -1285,7 +1363,27 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             if item < 0:
                 raise ValueError
             return self._build_manager_from_primary_key(primary_keys[item])
-        return self._build_manager_from_instance(self._data[item])
+        context = current_calculation_run_context()
+        cache_key = (
+            self._run_scoped_terminal_key("index", item)
+            if isinstance(item, int) and item >= 0
+            else None
+        )
+        if context is not None and cache_key is not None:
+            cached = context.get_orm_bucket_index(cache_key, _INDEX_CACHE_MISS)
+            if cached is _INDEX_OUT_OF_RANGE:
+                raise IndexError
+            if cached is not _INDEX_CACHE_MISS:
+                return self._build_manager_from_instance(cast(models.Model, cached))
+        try:
+            element = self._data[item]
+        except IndexError:
+            if context is not None and cache_key is not None:
+                context.set_orm_bucket_index(cache_key, _INDEX_OUT_OF_RANGE)
+            raise
+        if context is not None and cache_key is not None:
+            context.set_orm_bucket_index(cache_key, element)
+        return self._build_manager_from_instance(element)
 
     def __bool__(self) -> bool:
         """
@@ -1381,7 +1479,19 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             return pk in primary_keys
-        return bool(self._data.filter(pk=pk).exists())
+        context = current_calculation_run_context()
+        cache_key = self._run_scoped_terminal_key("membership", pk)
+        if context is not None and cache_key is not None:
+            cached = context.get_orm_bucket_membership(
+                cache_key,
+                _MEMBERSHIP_CACHE_MISS,
+            )
+            if cached is not _MEMBERSHIP_CACHE_MISS:
+                return bool(cached)
+        present = bool(self._data.filter(pk=pk).exists())
+        if context is not None and cache_key is not None:
+            context.set_orm_bucket_membership(cache_key, present)
+        return present
 
     def _contains_all_primary_keys(
         self,

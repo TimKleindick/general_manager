@@ -30,6 +30,10 @@ ORM_BUCKET_ROW_RESULT_PREFIX = "orm_bucket_row_result"
 ORM_BUCKET_MANAGER_RESULT_PREFIX = "orm_bucket_manager_result"
 ORM_BUCKET_FIRST_ROW_PREFIX = "orm_bucket_first_row"
 ORM_BUCKET_COUNT_PREFIX = "orm_bucket_count"
+ORM_BUCKET_LAST_ROW_PREFIX = "orm_bucket_last_row"
+ORM_BUCKET_GET_PREFIX = "orm_bucket_get"
+ORM_BUCKET_INDEX_PREFIX = "orm_bucket_index"
+ORM_BUCKET_MEMBERSHIP_PREFIX = "orm_bucket_membership"
 ORM_MODEL_ROW_INDEX_PREFIX = "orm_model_row_index"
 ORM_MODEL_RELATION_PREFETCH_PREFIX = "orm_model_relation_prefetch"
 ORM_RELATION_MANAGER_PREFIX = "orm_relation_manager"
@@ -501,6 +505,42 @@ class CalculationRunContext:
         """Store a scalar ORM bucket count for the active run."""
         self.set((ORM_BUCKET_COUNT_PREFIX, key), value)
 
+    def get_orm_bucket_last_row(self, key: Hashable, default: object = None) -> object:
+        """Return a cached ORM bucket last-row result, or ``default``."""
+        return self.get((ORM_BUCKET_LAST_ROW_PREFIX, key), default)
+
+    def set_orm_bucket_last_row(self, key: Hashable, value: object) -> None:
+        """Store an ORM bucket last-row result for the active run."""
+        self.set((ORM_BUCKET_LAST_ROW_PREFIX, key), value)
+
+    def get_orm_bucket_get(self, key: Hashable, default: object = None) -> object:
+        """Return a cached safe ORM bucket ``get`` result, or ``default``."""
+        return self.get((ORM_BUCKET_GET_PREFIX, key), default)
+
+    def set_orm_bucket_get(self, key: Hashable, value: object) -> None:
+        """Store a safe ORM bucket ``get`` result for the active run."""
+        self.set((ORM_BUCKET_GET_PREFIX, key), value)
+
+    def get_orm_bucket_index(self, key: Hashable, default: object = None) -> object:
+        """Return a cached ORM bucket scalar-index result, or ``default``."""
+        return self.get((ORM_BUCKET_INDEX_PREFIX, key), default)
+
+    def set_orm_bucket_index(self, key: Hashable, value: object) -> None:
+        """Store an ORM bucket scalar-index result for the active run."""
+        self.set((ORM_BUCKET_INDEX_PREFIX, key), value)
+
+    def get_orm_bucket_membership(
+        self,
+        key: Hashable,
+        default: object = None,
+    ) -> object:
+        """Return a cached ORM bucket membership result, or ``default``."""
+        return self.get((ORM_BUCKET_MEMBERSHIP_PREFIX, key), default)
+
+    def set_orm_bucket_membership(self, key: Hashable, value: bool) -> None:
+        """Store an ORM bucket primary-key membership result for the active run."""
+        self.set((ORM_BUCKET_MEMBERSHIP_PREFIX, key), value)
+
     def get_orm_query_bucket(self, key: Hashable) -> object:
         """Return a cached constructed ORM query bucket, or `None` when absent."""
         return self.get((ORM_QUERY_BUCKET_PREFIX, key))
@@ -524,6 +564,10 @@ class CalculationRunContext:
         self.discard_prefix((ORM_BUCKET_MANAGER_RESULT_PREFIX,))
         self.discard_prefix((ORM_BUCKET_FIRST_ROW_PREFIX,))
         self.discard_prefix((ORM_BUCKET_COUNT_PREFIX,))
+        self.discard_prefix((ORM_BUCKET_LAST_ROW_PREFIX,))
+        self.discard_prefix((ORM_BUCKET_GET_PREFIX,))
+        self.discard_prefix((ORM_BUCKET_INDEX_PREFIX,))
+        self.discard_prefix((ORM_BUCKET_MEMBERSHIP_PREFIX,))
         self.discard_prefix((ORM_MODEL_ROW_INDEX_PREFIX,))
         self.discard_prefix((ORM_MODEL_RELATION_PREFETCH_PREFIX,))
         self.discard_prefix((ORM_RELATION_MANAGER_PREFIX,))
