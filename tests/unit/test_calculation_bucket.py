@@ -1988,6 +1988,39 @@ class TestCalculationTerminalStreams(TestCase):
             mutate(bucket.input_fields["value"])
             self.assertFalse(bucket._terminal_stream_supported())
 
+    def test_scalar_admission_rejects_manager_construction_overrides(self) -> None:
+        class NewOverrideCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
+            def __new__(cls, *args, **kwargs):
+                return super().__new__(cls)
+
+        class IdentificationOverrideCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
+            @property
+            def identification(self):
+                return super().identification
+
+        class InterfaceNewOverrideCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
+                def __new__(cls, *args, **kwargs):
+                    return super().__new__(cls)
+
+        for manager_class in (
+            NewOverrideCalculation,
+            IdentificationOverrideCalculation,
+            InterfaceNewOverrideCalculation,
+        ):
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+            self.assertFalse(
+                CalculationBucket(manager_class)._terminal_stream_supported()
+            )
+
     def test_last_remains_full_path(self) -> None:
         bucket = self._make_scalar_bucket(range(3))
 

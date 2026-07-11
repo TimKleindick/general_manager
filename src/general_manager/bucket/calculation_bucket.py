@@ -2924,6 +2924,21 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if type(self._excludes) is not dict or self._excludes:
             return False
 
+        # The trusted construction plan audits the canonical constructor hooks,
+        # but ``__new__`` and the public identification descriptor are also
+        # observable during terminal traversal.  A manager subclass may
+        # override either without changing those audited hooks, so keep those
+        # classes on the existing materialization path.
+        if (
+            inspect.getattr_static(self._manager_class, "__new__")
+            is not inspect.getattr_static(GeneralManager, "__new__")
+            or inspect.getattr_static(self._manager_class, "identification")
+            is not inspect.getattr_static(GeneralManager, "identification")
+            or inspect.getattr_static(self._manager_class.Interface, "__new__")
+            is not inspect.getattr_static(InterfaceBase, "__new__")
+        ):
+            return False
+
         construction_plan = self._trusted_construction_plan()
         if construction_plan is None:
             return False
