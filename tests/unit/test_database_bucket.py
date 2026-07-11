@@ -6,9 +6,11 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.contrib.auth.models import Group
+from django.db import connection
 from django.db.models import Prefetch, functions
 from django.db.models.query import QuerySet
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
 from general_manager.bucket.database_bucket import (
     DatabaseBucket,
@@ -926,7 +928,11 @@ class DatabaseBucketTestCase(TestCase):
             self.assertIsNone(bucket.last())
 
     def test_primary_key_snapshot_get_missing_and_duplicate_raise(self):
-        bucket = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
+        bucket = DatabaseBucket(
+            User.objects.filter(username="alice"),
+            UserManager,
+            {"username": ["alice"]},
+        )
 
         with CalculationRunContext() as context:
             signature = bucket._query_signature()
@@ -1578,18 +1584,154 @@ class DatabaseBucketTestCase(TestCase):
         empty = DatabaseBucket(User.objects.none(), UserManager)
         self.assertFalse(bool(empty))
 
-    def test_repr_and_str_include_model_and_count(self):
-        """
-        __repr__/__str__ should include useful debugging info like model and size.
-        """
-        r = repr(self.bucket)
-        s = str(self.bucket)
-        # Heuristic checks to avoid over-specifying format
-        self.assertTrue("DatabaseBucket" in r or "DatabaseBucket" in s)
-        self.assertTrue(
-            "User" in r or "auth.User" in r or "User" in s or "auth.User" in s
+    def test_repr_and_str_are_query_free_for_unevaluated_bucket(self):
+        """Formatting an unevaluated bucket must not trigger ORM evaluation."""
+        bucket = DatabaseBucket(
+            User.objects.filter(username="alice"),
+            UserManager,
+            {"username": ["alice"]},
         )
-        self.assertTrue("3" in r or "3" in s)
+        self.assertIsNone(bucket._data._result_cache)
+
+        with CaptureQueriesContext(connection) as queries:
+            representation = f"{bucket!s}\n{bucket!r}"
+
+        self.assertEqual(len(queries), 0)
+        self.assertIsNone(bucket._data._result_cache)
+        self.assertIn("DatabaseBucket", representation)
+        self.assertIn("User", representation)
+        self.assertIn("unevaluated", representation)
+        self.assertIn("username", representation)
+
+    def test_repr_and_str_report_cached_count_for_evaluated_buckets(self):
+        """Formatting uses an already-populated result cache for exact counts."""
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]), UserManager
+        )
+        list(bucket._data)
+
+        with CaptureQueriesContext(connection) as queries:
+            representation = f"{bucket!s}\n{bucket!r}"
+
+        self.assertEqual(len(queries), 0)
+        self.assertIn("2", representation)
+        self.assertNotIn("unevaluated", representation)
+
+        empty = DatabaseBucket(User.objects.filter(username="missing"), UserManager)
+        list(empty._data)
+        self.assertIn("0", f"{empty!s}\n{empty!r}")
+
+    def test_repr_and_str_keep_sensitive_filter_values_out(self):
+        """Only filter field names, never values, belong in a bucket preview."""
+        secret = {"token": "very-secret-token", "nested": ["private-value"]}
+        bucket = DatabaseBucket(
+            User.objects.all(),
+            UserManager,
+            {"username__in": [secret]},
+            {"email": [{"password": "another-secret"}]},
+        )
+
+        representation = f"{bucket!s}\n{bucket!r}"
+
+        self.assertIn("username__in", representation)
+        self.assertIn("email", representation)
+        self.assertNotIn("very-secret-token", representation)
+        self.assertNotIn("private-value", representation)
+        self.assertNotIn("another-secret", representation)
+        self.assertNotIn("password", representation)
+
+    def test_repr_and_str_cover_none_union_sorted_and_history_without_queries(self):
+        """All supported queryset shapes keep formatting lazy and query-free."""
+        buckets = (
+            DatabaseBucket(User.objects.none(), UserManager),
+            DatabaseBucket(
+                User.objects.filter(username="alice").union(
+                    User.objects.filter(username="bob")
+                ),
+                UserManager,
+            ),
+            DatabaseBucket(
+                User.objects.order_by("username"),
+                UserManager,
+                sort_keys=("username",),
+            ),
+            DatabaseBucket(
+                User.objects.filter(username="alice"),
+                SearchDateManager,
+                search_date=datetime(2020, 1, 1),
+            ),
+        )
+
+        with CaptureQueriesContext(connection) as queries:
+            representations = [f"{bucket!s}\n{bucket!r}" for bucket in buckets]
+
+        self.assertEqual(len(queries), 0)
+        self.assertTrue(all("unevaluated" in value for value in representations))
+
+    def test_repr_and_str_do_not_call_custom_queryset_side_effect_hooks(self):
+        """Custom queryset hooks must not execute merely to format a bucket."""
+
+        class HostileQuerySet(QuerySet):
+            def __repr__(self):
+                raise AssertionError
+
+            def __len__(self):
+                raise AssertionError
+
+            def __iter__(self):
+                raise AssertionError
+
+            def count(self):
+                raise AssertionError
+
+        source = User.objects.all()
+        queryset = HostileQuerySet(model=User, query=source.query, using=source.db)
+        bucket = DatabaseBucket(queryset, UserManager)
+
+        representation = f"{bucket!s}\n{bucket!r}"
+
+        self.assertIn("unevaluated", representation)
+
+    def test_repr_and_str_use_safe_run_cache_rows_without_compiling_signature(self):
+        """An existing trusted run snapshot supplies an exact count without SQL."""
+        bucket = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
+        bucket._set_trusted_query_signature(("representation", 1))
+
+        with CalculationRunContext() as context:
+            signature = bucket._query_signature()
+            context.set_orm_bucket_rows(signature, (self.u1,))
+            with patch.object(
+                bucket,
+                "_query_signature",
+                side_effect=AssertionError("representation compiled a signature"),
+            ):
+                with CaptureQueriesContext(connection) as queries:
+                    representation = f"{bucket!s}\n{bucket!r}"
+
+        self.assertEqual(len(queries), 0)
+        self.assertIn("1", representation)
+
+    def test_repr_and_str_swallow_metadata_access_errors(self):
+        """Broken queryset metadata falls back to explicit unknown markers."""
+
+        class MetadataErrorQuerySet:
+            @property
+            def model(self):
+                raise RuntimeError
+
+            @property
+            def db(self):
+                raise RuntimeError
+
+            def __repr__(self):
+                raise AssertionError
+
+        bucket = DatabaseBucket(MetadataErrorQuerySet(), UserManager)
+
+        representation = f"{bucket!s}\n{bucket!r}"
+
+        self.assertIn("unknown", representation)
+        self.assertNotIn("model metadata unavailable", representation)
 
     def test_property_filter_multiple_operators(self):
         """

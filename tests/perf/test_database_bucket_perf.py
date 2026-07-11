@@ -221,6 +221,44 @@ def test_database_performance_manager_is_registry_isolated() -> None:
         assert PerfUserManager not in registry
 
 
+def test_database_bucket_representations_keep_zero_query_budget(
+    perf_budgets: PerfBudgets,
+) -> None:
+    """Formatting never evaluates a queryset, before or after evaluation."""
+    prefix = "perf-db-representation-"
+    target = User.objects.create(username=f"{prefix}user")
+    try:
+        bucket = DatabaseBucket(
+            User.objects.filter(pk=target.pk),
+            PerfUserManager,
+        )
+        initial_cache = bucket._data._result_cache
+
+        with CaptureQueriesContext(connection) as unevaluated_queries:
+            unevaluated_representation = f"{bucket!s}\n{bucket!r}"
+
+        assert len(unevaluated_queries) == 0
+        assert bucket._data._result_cache is initial_cache
+        assert "unevaluated" in unevaluated_representation
+        perf_budgets.assert_observation(
+            "DB_BUCKET_REPR_UNEVALUATED_QUERIES",
+            len(unevaluated_queries),
+        )
+
+        list(bucket._data)
+        with CaptureQueriesContext(connection) as evaluated_queries:
+            evaluated_representation = f"{bucket!s}\n{bucket!r}"
+
+        assert len(evaluated_queries) == 0
+        assert "unevaluated" not in evaluated_representation
+        perf_budgets.assert_observation(
+            "DB_BUCKET_REPR_EVALUATED_QUERIES",
+            len(evaluated_queries),
+        )
+    finally:
+        _delete_perf_users(prefix)
+
+
 def test_orm_query_plan_reduces_repeated_selection_and_freezing(
     perf_budgets: PerfBudgets,
 ) -> None:

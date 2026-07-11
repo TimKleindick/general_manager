@@ -5,10 +5,12 @@ from collections.abc import Callable, Collection, Hashable, Mapping
 from contextvars import ContextVar
 from datetime import date, datetime
 from dataclasses import dataclass
+import inspect
 from typing import Generic, Generator, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, FieldError
 from django.db import models
+from django.db.models.query import QuerySet
 from django.db.models.sql.query import Query
 
 from general_manager.bucket.base_bucket import Bucket
@@ -42,6 +44,7 @@ _SAFE_GET_CACHE_MISS = object()
 _INDEX_CACHE_MISS = object()
 _INDEX_OUT_OF_RANGE = object()
 _MEMBERSHIP_CACHE_MISS = object()
+_REPRESENTATION_UNKNOWN = object()
 _LENGTH_HINT_PENDING_BUCKET: ContextVar[object | None] = ContextVar(
     "general_manager_database_bucket_length_hint_pending",
     default=None,
@@ -1638,23 +1641,151 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return len(self._data)
         return self.count()
 
-    def __str__(self) -> str:
-        """
-        Return a user-friendly representation of the bucket.
+    @staticmethod
+    def _representation_static_attribute(
+        value: object,
+        name: str,
+    ) -> object:
+        """Read an instance value without invoking custom descriptors."""
+        try:
+            result = inspect.getattr_static(value, name)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return _REPRESENTATION_UNKNOWN
+        if inspect.isroutine(result) or inspect.isdatadescriptor(result):
+            return _REPRESENTATION_UNKNOWN
+        return result
 
-        Returns:
-            str: Human-readable description of the queryset and manager class.
-        """
-        return f"{self._manager_class.__name__}Bucket {self._data} ({len(self._data)} items)"
+    def _representation_model_name(self) -> str:
+        model = self._representation_static_attribute(self._data, "model")
+        if not isinstance(model, type):
+            return "unknown"
+        try:
+            return cast(str, type.__getattribute__(model, "__name__"))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return "unknown"
+
+    def _representation_database_alias(self) -> str:
+        database = self._representation_static_attribute(self._data, "_db")
+        if isinstance(database, str):
+            return str.__str__(database)
+        if database is None and type(self._data) is QuerySet:
+            return "default"
+        return "unknown"
+
+    @staticmethod
+    def _representation_manager_name(manager_class: object) -> str:
+        if not isinstance(manager_class, type):
+            return "unknown"
+        try:
+            return cast(str, type.__getattribute__(manager_class, "__name__"))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return "unknown"
+
+    @staticmethod
+    def _representation_field_names(definitions: Mapping[str, object]) -> str:
+        """Return top-level lookup names without rendering their values."""
+        names: list[str] = []
+        try:
+            keys = dict.keys(definitions) if type(definitions) is dict else ()
+            for key in keys:
+                if isinstance(key, str):
+                    names.append(str.__str__(key))
+                else:
+                    names.append("unknown")
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return "unknown"
+        return ", ".join(names) if names else "none"
+
+    def _representation_cached_count(self) -> int | None:
+        """Return a count only from already materialized rows or safe run data."""
+        result_cache = self._representation_static_attribute(
+            self._data,
+            "_result_cache",
+        )
+        if type(result_cache) is list:
+            return len(cast(list[object], result_cache))
+        if type(result_cache) is tuple:
+            return len(cast(tuple[object, ...], result_cache))
+
+        context = current_calculation_run_context()
+        if context is None:
+            return None
+
+        signature = self._query_signature_cache
+        if signature is _QUERY_SIGNATURE_NOT_COMPUTED:
+            trusted_signature = self._trusted_query_signature
+            model = self._representation_static_attribute(self._data, "model")
+            database = self._representation_database_alias()
+            if trusted_signature is None or model is _REPRESENTATION_UNKNOWN:
+                return None
+            if database == "unknown":
+                return None
+            signature = (
+                self._manager_class,
+                model,
+                database,
+                "trusted",
+                trusted_signature,
+                self._search_date,
+                self._sort_keys,
+                self._sort_reverse,
+            )
+        if signature is None:
+            return None
+        try:
+            rows = context.get_orm_bucket_rows(signature)
+            if type(rows) is list:
+                return len(cast(list[object], rows))
+            if type(rows) is tuple:
+                return len(cast(tuple[object, ...], rows))
+            primary_keys = context.get_orm_bucket_result(signature)
+            if type(primary_keys) is list:
+                return len(cast(list[object], primary_keys))
+            if type(primary_keys) is tuple:
+                return len(cast(tuple[object, ...], primary_keys))
+            count = context.get_orm_bucket_count(signature)
+            if type(count) is int:
+                return count
+        except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
+            return None
+        return None
+
+    def _representation_count(self) -> str:
+        count = self._representation_cached_count()
+        return str(count) if count is not None else "unevaluated"
+
+    def _representation_sort_keys(self) -> str:
+        if self._sort_keys is None:
+            return "none"
+        names = [str.__str__(key) for key in self._sort_keys if isinstance(key, str)]
+        return ", ".join(names) if names else "unknown"
+
+    def __str__(self) -> str:
+        """Return a query-free user-facing bucket description."""
+        manager_name = self._representation_manager_name(self._manager_class)
+        return (
+            f"{manager_name}Bucket(model={self._representation_model_name()}, "
+            f"db={self._representation_database_alias()}, "
+            f"count={self._representation_count()}, "
+            f"filters={self._representation_field_names(self.filters)})"
+        )
 
     def __repr__(self) -> str:
-        """
-        Return a debug representation of the bucket.
-
-        Returns:
-            str: Detailed description including queryset, manager class, filters, and excludes.
-        """
-        return f"DatabaseBucket ({self._data}, manager_class={self._manager_class.__name__}, filters={self.filters}, excludes={self.excludes})"
+        """Return a query-free debug representation of the bucket."""
+        manager_name = self._representation_manager_name(self._manager_class)
+        search_date = "set" if self._search_date is not None else "none"
+        return (
+            "DatabaseBucket("
+            f"model={self._representation_model_name()}, "
+            f"db={self._representation_database_alias()}, "
+            f"manager_class={manager_name}, "
+            f"count={self._representation_count()}, "
+            f"filters={self._representation_field_names(self.filters)}, "
+            f"excludes={self._representation_field_names(self.excludes)}, "
+            f"search_date={search_date}, "
+            f"sort_keys={self._representation_sort_keys()}, "
+            f"sort_reverse={self._sort_reverse})"
+        )
 
     def __contains__(self, item: GeneralManagerType | models.Model) -> bool:
         """
