@@ -24,6 +24,7 @@ _CALCULATION_INPUT_ACCESSOR_TOKEN = object()
 _CALCULATION_INPUT_ACCESSOR_STATE = frozenset(
     {
         "_gm_calculation_input_accessor_token",
+        "_gm_calculation_input_accessor_self",
         "_gm_calculation_interface_cls",
         "_gm_calculation_field_name",
     }
@@ -43,6 +44,7 @@ def _is_canonical_calculation_input_accessor(
         state.keys() == _CALCULATION_INPUT_ACCESSOR_STATE
         and state["_gm_calculation_input_accessor_token"]
         is _CALCULATION_INPUT_ACCESSOR_TOKEN
+        and state["_gm_calculation_input_accessor_self"] is accessor
         and state["_gm_calculation_interface_cls"] is interface_cls
         and state["_gm_calculation_field_name"] is field_name
     )
@@ -167,6 +169,7 @@ class CalculationReadCapability(BaseCapability):
                     "_gm_calculation_input_accessor_token": (
                         _CALCULATION_INPUT_ACCESSOR_TOKEN
                     ),
+                    "_gm_calculation_input_accessor_self": _access,
                     "_gm_calculation_interface_cls": interface_cls,
                     "_gm_calculation_field_name": field_name,
                 }

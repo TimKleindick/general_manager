@@ -132,8 +132,10 @@ _MANAGER_ATTRIBUTE_DESCRIPTOR_STATE = frozenset(
         "_dependency_tracking_value_class",
         "_non_tracking_value_class",
         "_dependency_tracking_manager_class",
+        "_gm_manager_attribute_descriptor_installation",
     }
 )
+_MANAGER_ATTRIBUTE_DESCRIPTOR_TOKEN = object()
 
 
 class _ManagerAttributeDescriptor:
@@ -151,6 +153,9 @@ class _ManagerAttributeDescriptor:
             _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN
         )
         self._dependency_tracking_manager_class: type[GeneralManager] | None = None
+        self._gm_manager_attribute_descriptor_installation: (
+            tuple[object, object, object, object] | None
+        ) = None
 
     def __get__(
         self,
@@ -241,8 +246,16 @@ def _is_canonical_manager_attribute_descriptor(
     if type(descriptor) is not _ManagerAttributeDescriptor:
         return False
     state = descriptor.__dict__
+    if state.keys() != _MANAGER_ATTRIBUTE_DESCRIPTOR_STATE:
+        return False
+    installation = state["_gm_manager_attribute_descriptor_installation"]
     return (
-        state.keys() == _MANAGER_ATTRIBUTE_DESCRIPTOR_STATE
+        type(installation) is tuple
+        and len(installation) == 4
+        and installation[0] is _MANAGER_ATTRIBUTE_DESCRIPTOR_TOKEN
+        and installation[1] is descriptor
+        and installation[2] is manager_class
+        and installation[3] is field_name
         and state["_class"] is manager_class
         and state["_attr_name"] is field_name
     )
@@ -613,12 +626,19 @@ class GeneralManagerMeta(type):
         def descriptor_method(
             attr_name: str,
             new_class: type[GeneralManager],
-        ) -> object:
+        ) -> _ManagerAttributeDescriptor:
             """Create the stable private descriptor for one manager attribute."""
             return _ManagerAttributeDescriptor(attr_name, new_class)
 
         for attr_name in attributes:
-            setattr(new_class, attr_name, descriptor_method(attr_name, new_class))
+            descriptor = descriptor_method(attr_name, new_class)
+            setattr(new_class, attr_name, descriptor)
+            descriptor._gm_manager_attribute_descriptor_installation = (
+                _MANAGER_ATTRIBUTE_DESCRIPTOR_TOKEN,
+                descriptor,
+                new_class,
+                attr_name,
+            )
         type.__setattr__(new_class, "_gm_attributes_initialized", True)
 
 

@@ -150,6 +150,52 @@ class TestPropertyInitialization(SimpleTestCase):
             )
         )
 
+    def test_descriptor_provenance_requires_canonical_installation(self):
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+        installed = vars(DummyManager1)["test_field"]
+        fresh = type(installed)(installed._attr_name, DummyManager1)
+
+        self.assertFalse(
+            _is_canonical_manager_attribute_descriptor(
+                fresh, DummyManager1, fresh._attr_name
+            )
+        )
+
+        fresh.__dict__.update(installed.__dict__)
+        self.assertFalse(
+            _is_canonical_manager_attribute_descriptor(
+                fresh, DummyManager1, installed._attr_name
+            )
+        )
+
+    def test_descriptor_provenance_rejects_mutated_owner_and_field(self):
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+        descriptor = vars(DummyManager1)["test_field"]
+        descriptor._class = DummyManager2
+        self.assertFalse(
+            _is_canonical_manager_attribute_descriptor(
+                descriptor, DummyManager1, descriptor._attr_name
+            )
+        )
+
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+        descriptor = vars(DummyManager1)["test_field"]
+        descriptor._attr_name = "other_field"
+        self.assertFalse(
+            _is_canonical_manager_attribute_descriptor(
+                descriptor, DummyManager1, "test_field"
+            )
+        )
+
     def test_nested_manager_property(self):
         self.dummy_manager1._attributes = {
             "dummy_manager2": self.dummy_manager2,

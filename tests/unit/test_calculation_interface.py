@@ -131,6 +131,47 @@ class TestCalculationInterface(TestCase):
             )
         )
 
+    def test_calculation_input_accessor_rejects_copied_or_partial_provenance(self):
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+
+        def copied(interface):
+            return interface
+
+        copied.__dict__.update(accessor.__dict__)
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                copied, DummyCalculationInterface, "field1"
+            )
+        )
+
+        def partial(interface):
+            return interface
+
+        partial.__dict__.update(accessor.__dict__)
+        partial.__dict__.pop("_gm_calculation_field_name")
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                partial, DummyCalculationInterface, "field1"
+            )
+        )
+
+    def test_calculation_input_accessor_rejects_mutated_owner_and_field(self):
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+        accessor.__dict__["_gm_calculation_interface_cls"] = object
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                accessor, DummyCalculationInterface, "field1"
+            )
+        )
+
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+        accessor.__dict__["_gm_calculation_field_name"] = "field2"
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                accessor, DummyCalculationInterface, "field1"
+            )
+        )
+
     def test_get_attributes_passes_identification_to_dependent_inputs(self):
         class DependentCalculationInterface(CalculationInterface):
             input_fields: ClassVar[dict[str, Input]] = {
