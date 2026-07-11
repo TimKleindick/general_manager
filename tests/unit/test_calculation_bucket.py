@@ -16,6 +16,7 @@ from general_manager.bucket.calculation_bucket import (
     _calculation_cache_filter_token,
     _calculation_cache_freeze,
     _calculation_cache_identity_token,
+    _terminal_scalar_source_supported,
     _trusted_enumeration_evidence,
 )
 from general_manager.bucket import calculation_bucket as calculation_bucket_module
@@ -2692,6 +2693,46 @@ class TestCalculationTerminalStreams(TestCase):
         ):
             with self.assertRaises(TypeError):
                 _calculation_cache_clone(invalid_snapshot)
+
+    def test_result_cache_helpers_cover_scalar_sources_and_callable_edges(self) -> None:
+        identity = _CalculationCacheIdentityToken(object())
+        self.assertFalse(identity == object())
+        self.assertTrue(_terminal_scalar_source_supported((1, "value", 1.5)))
+        self.assertTrue(_terminal_scalar_source_supported(range(2)))
+        self.assertFalse(_terminal_scalar_source_supported((object(),)))
+
+        for value in (None, True, 1, 1.5, "value", b"bytes"):
+            self.assertIsNot(
+                _calculation_cache_freeze(value),
+                _CALCULATION_RESULT_UNSUPPORTED,
+            )
+        self.assertIsNot(
+            _calculation_cache_freeze([1, {"nested": frozenset({2})}]),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+
+        class CallableObject:
+            def __call__(self):
+                return None
+
+        self.assertIs(
+            _calculation_cache_callable_token(CallableObject()),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+
+        bucket = self._make_scalar_bucket(range(2))
+        self.assertIsNotNone(bucket._calculation_result_cache_signature())
+        self.assertIsNone(bucket._normalized_sort_key())
+        sorted_bucket = bucket.sort(key="value")
+        self.assertEqual(sorted_bucket._normalized_sort_key(), ("value",))
+        self.assertIsNotNone(sorted_bucket._bucket_index_source_signature())
+        self.assertEqual(
+            [manager.identification for manager in bucket.all()],
+            [
+                {"value": 0},
+                {"value": 1},
+            ],
+        )
 
     def test_terminal_stream_owns_one_run_context_and_cleans_evidence(self) -> None:
         bucket = self._make_scalar_bucket(range(2))
