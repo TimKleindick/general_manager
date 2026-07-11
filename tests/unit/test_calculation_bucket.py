@@ -2137,6 +2137,17 @@ class TestCalculationTerminalStreams(TestCase):
             second.generate_combinations()
         self.assertEqual(first.generate_combinations(), second.generate_combinations())
 
+    def test_cyclic_filter_metadata_bypasses_result_cache(self) -> None:
+        bucket = self._make_scalar_bucket((0, 1))
+        cyclic: dict[str, object] = {}
+        cyclic["self"] = cyclic
+        bucket.filter_definitions["metadata"] = cyclic
+
+        self.assertIsNone(bucket._calculation_result_cache_signature())
+        self.assertIsNone(
+            CalculationBucket._calculation_result_snapshots([{"value": cyclic}])
+        )
+
     def test_cache_hits_clone_nested_result_containers(self) -> None:
         class NestedCalculation(GeneralManager):
             class Interface(CalculationInterface):

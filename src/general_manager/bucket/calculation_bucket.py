@@ -1234,13 +1234,18 @@ def _terminal_scalar_type_supported(value_type: object) -> bool:
 
 
 def _calculation_cache_freeze(value: object) -> object:
-    """Return a conservative immutable token for cache-plan metadata.
+    """Return a conservative immutable token, or unsupported on recursion."""
+    try:
+        return _calculation_cache_freeze_inner(value, set())
+    except RecursionError:
+        return _CALCULATION_RESULT_UNSUPPORTED
 
-    Only exact built-in containers and scalar values are traversed.  This is
-    deliberately stricter than :func:`freeze_bucket_index_value`: framework
-    objects and user-defined equality/hash implementations must never
-    participate in a calculation-result cache key.
-    """
+
+def _calculation_cache_freeze_inner(
+    value: object,
+    active_containers: set[int],
+) -> object:
+    """Freeze exact built-ins while rejecting cycles and deep recursion."""
     value_type = type(value)
     if value is None:
         return ("none",)
@@ -1255,43 +1260,71 @@ def _calculation_cache_freeze(value: object) -> object:
     if value_type is bytes:
         return ("bytes", value)
     if value_type is tuple:
+        container_id = id(value)
+        if container_id in active_containers:
+            return _CALCULATION_RESULT_UNSUPPORTED
+        active_containers.add(container_id)
         frozen_items: list[object] = []
-        for item in cast(tuple[object, ...], value):
-            frozen_item = _calculation_cache_freeze(item)
-            if frozen_item is _CALCULATION_RESULT_UNSUPPORTED:
-                return _CALCULATION_RESULT_UNSUPPORTED
-            frozen_items.append(frozen_item)
+        try:
+            for item in cast(tuple[object, ...], value):
+                frozen_item = _calculation_cache_freeze_inner(item, active_containers)
+                if frozen_item is _CALCULATION_RESULT_UNSUPPORTED:
+                    return _CALCULATION_RESULT_UNSUPPORTED
+                frozen_items.append(frozen_item)
+        finally:
+            active_containers.remove(container_id)
         return ("tuple", tuple(frozen_items))
     if value_type is list:
+        container_id = id(value)
+        if container_id in active_containers:
+            return _CALCULATION_RESULT_UNSUPPORTED
+        active_containers.add(container_id)
         frozen_items = []
-        for item in cast(list[object], value):
-            frozen_item = _calculation_cache_freeze(item)
-            if frozen_item is _CALCULATION_RESULT_UNSUPPORTED:
-                return _CALCULATION_RESULT_UNSUPPORTED
-            frozen_items.append(frozen_item)
+        try:
+            for item in cast(list[object], value):
+                frozen_item = _calculation_cache_freeze_inner(item, active_containers)
+                if frozen_item is _CALCULATION_RESULT_UNSUPPORTED:
+                    return _CALCULATION_RESULT_UNSUPPORTED
+                frozen_items.append(frozen_item)
+        finally:
+            active_containers.remove(container_id)
         return ("list", tuple(frozen_items))
     if value_type is frozenset:
+        container_id = id(value)
+        if container_id in active_containers:
+            return _CALCULATION_RESULT_UNSUPPORTED
+        active_containers.add(container_id)
         frozen_items = []
-        for item in cast(frozenset[object], value):
-            frozen_item = _calculation_cache_freeze(item)
-            if frozen_item is _CALCULATION_RESULT_UNSUPPORTED:
-                return _CALCULATION_RESULT_UNSUPPORTED
-            frozen_items.append(frozen_item)
+        try:
+            for item in cast(frozenset[object], value):
+                frozen_item = _calculation_cache_freeze_inner(item, active_containers)
+                if frozen_item is _CALCULATION_RESULT_UNSUPPORTED:
+                    return _CALCULATION_RESULT_UNSUPPORTED
+                frozen_items.append(frozen_item)
+        finally:
+            active_containers.remove(container_id)
         try:
             return ("frozenset", frozenset(frozen_items))
         except TypeError:
             return _CALCULATION_RESULT_UNSUPPORTED
     if value_type is dict:
+        container_id = id(value)
+        if container_id in active_containers:
+            return _CALCULATION_RESULT_UNSUPPORTED
+        active_containers.add(container_id)
         dict_items: list[tuple[object, object]] = []
-        for key, item in cast(dict[object, object], value).items():
-            frozen_key = _calculation_cache_freeze(key)
-            frozen_item = _calculation_cache_freeze(item)
-            if (
-                frozen_key is _CALCULATION_RESULT_UNSUPPORTED
-                or frozen_item is _CALCULATION_RESULT_UNSUPPORTED
-            ):
-                return _CALCULATION_RESULT_UNSUPPORTED
-            dict_items.append((frozen_key, frozen_item))
+        try:
+            for key, item in cast(dict[object, object], value).items():
+                frozen_key = _calculation_cache_freeze_inner(key, active_containers)
+                frozen_item = _calculation_cache_freeze_inner(item, active_containers)
+                if (
+                    frozen_key is _CALCULATION_RESULT_UNSUPPORTED
+                    or frozen_item is _CALCULATION_RESULT_UNSUPPORTED
+                ):
+                    return _CALCULATION_RESULT_UNSUPPORTED
+                dict_items.append((frozen_key, frozen_item))
+        finally:
+            active_containers.remove(container_id)
         return ("dict", tuple(dict_items))
     return _CALCULATION_RESULT_UNSUPPORTED
 
