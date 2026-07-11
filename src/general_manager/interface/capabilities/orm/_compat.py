@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import inspect
 from typing import TypeVar
 
 from django.db import models
+from simple_history.utils import (
+    update_change_reason as _SIMPLE_HISTORY_UPDATE_CHANGE_REASON,
+)
 
 
 ResultT = TypeVar("ResultT")
@@ -63,3 +67,13 @@ def call_update_change_reason(instance: models.Model, reason: str) -> None:
     from general_manager.interface.capabilities import orm as orm_package
 
     orm_package.update_change_reason(instance, reason)
+
+
+def uses_default_update_change_reason() -> bool:
+    """Return whether the package still exposes simple-history's updater."""
+    from general_manager.interface.capabilities import orm as orm_package
+
+    return (
+        inspect.getattr_static(orm_package, "update_change_reason", None)
+        is _SIMPLE_HISTORY_UPDATE_CHANGE_REASON
+    )

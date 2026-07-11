@@ -8,11 +8,23 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.db import models
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from general_manager.interface import ExistingModelInterface
+from general_manager.interface.capabilities.orm import OrmMutationCapability
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+
+
+HISTORY_COMMENT_QUERY_BUDGETS = {
+    "create": 7,
+    "scalar": 9,
+    "m2m_only": 17,
+    "combined": 12,
+    "m2m_no_op": 16,
+}
 
 
 class AlwaysPassRule:
@@ -187,6 +199,124 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
             .last()
         )  # type: ignore[attr-defined]
         self.assertEqual(history.history_change_reason, "renamed")  # type: ignore[union-attr]
+
+    def test_scalar_history_comment_does_not_rewrite_built_in_history(self) -> None:
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.call_update_change_reason"
+        ) as update_reason:
+            self.customer_a.update(
+                creator_id=self.user2.pk,
+                history_comment="scalar-only",
+                name="Scalar Only",
+                ignore_permission=True,
+            )
+
+        update_reason.assert_not_called()
+        history = (
+            self.LegacyCustomer.history.filter(id=self.customer_a.id)
+            .order_by("-history_date")
+            .first()
+        )
+        self.assertEqual(history.history_change_reason, "scalar-only")  # type: ignore[union-attr]
+
+    def test_noop_many_to_many_history_comment_does_not_rewrite_built_in_history(
+        self,
+    ) -> None:
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.call_update_change_reason"
+        ) as update_reason:
+            self.customer_a.update(
+                creator_id=self.user2.pk,
+                history_comment="no-op-m2m",
+                owners_id_list=[self.user1.pk],
+                ignore_permission=True,
+            )
+
+        update_reason.assert_not_called()
+
+    def test_direct_save_restores_existing_history_reason(self) -> None:
+        instance = self.LegacyCustomer.all_objects.get(pk=self.customer_a.id)
+        instance.__dict__["_change_reason"] = "pre-existing"
+
+        with patch(
+            "general_manager.interface.capabilities.orm.mutations.call_update_change_reason"
+        ) as update_reason:
+            OrmMutationCapability().save_with_history(
+                self.CustomerInterface,
+                instance,
+                creator_id=self.user2.pk,
+                history_comment="direct-save",
+            )
+
+        update_reason.assert_not_called()
+        self.assertEqual(instance.__dict__["_change_reason"], "pre-existing")
+        history = (
+            self.LegacyCustomer.history.filter(id=self.customer_a.id)
+            .order_by("-history_date")
+            .first()
+        )
+        self.assertEqual(history.history_change_reason, "direct-save")  # type: ignore[union-attr]
+
+    def test_patched_history_updater_keeps_custom_fallback(self) -> None:
+        with patch(
+            "general_manager.interface.capabilities.orm.update_change_reason"
+        ) as update_reason:
+            self.customer_a.update(
+                creator_id=self.user2.pk,
+                history_comment="patched-updater",
+                name="Patched Updater",
+                ignore_permission=True,
+            )
+
+        self.assertEqual(update_reason.call_count, 2)
+
+    def test_scalar_history_comment_query_budget_is_bounded(self) -> None:
+        """The built-in history path removes four SQL statements (13 -> 9)."""
+        with CaptureQueriesContext(connection) as queries:
+            self.customer_a.update(
+                creator_id=self.user2.pk,
+                history_comment="query-budget",
+                name="Query Budget",
+                ignore_permission=True,
+            )
+
+        self.assertLessEqual(len(queries), HISTORY_COMMENT_QUERY_BUDGETS["scalar"])
+
+    def test_create_history_comment_query_budget(self) -> None:
+        """Create comments remove four SQL statements (11 -> 7)."""
+        with CaptureQueriesContext(connection) as queries:
+            self.CustomerManager.create(
+                creator_id=self.user1.pk,
+                history_comment="create-budget",
+                name="Create Budget",
+                notes="created",
+                ignore_permission=True,
+            )
+
+        self.assertLessEqual(len(queries), HISTORY_COMMENT_QUERY_BUDGETS["create"])
+
+    def test_many_to_many_history_comment_query_budgets(self) -> None:
+        """M2M workloads each remove the two updater pairs (21/16/20 -> 17/12/16)."""
+        workloads = (
+            ("m2m-only", {"owners_id_list": [self.user1.pk, self.user2.pk]}),
+            (
+                "combined",
+                {"name": "Combined", "owners_id_list": [self.user1.pk, self.user2.pk]},
+            ),
+            ("m2m-no-op", {"owners_id_list": [self.user1.pk]}),
+        )
+        for label, payload in workloads:
+            with CaptureQueriesContext(connection) as queries:
+                self.customer_a.update(
+                    creator_id=self.user2.pk,
+                    history_comment=f"{label}-budget",
+                    ignore_permission=True,
+                    **payload,
+                )
+            budget_key = label.replace("-", "_")
+            self.assertLessEqual(
+                len(queries), HISTORY_COMMENT_QUERY_BUDGETS[budget_key]
+            )
 
     def test_delete_marks_customer_inactive(self) -> None:
         """

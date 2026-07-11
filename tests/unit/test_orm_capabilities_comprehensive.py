@@ -1902,7 +1902,7 @@ class TestOrmMutationCapability:
                 ):
                     with patch(
                         "general_manager.interface.capabilities.orm.mutations.call_update_change_reason"
-                    ):
+                    ) as update_reason:
                         with patch(
                             "general_manager.interface.capabilities.orm.mutations.model_has_field",
                             return_value=False,
@@ -1921,6 +1921,7 @@ class TestOrmMutationCapability:
         assert result == 42
         assert instance._state.db == "replica"
         instance.save.assert_called_once_with(using="replica")
+        update_reason.assert_called_once_with(instance, "saved")
 
     def test_delete_hard_deletes_with_database_alias(self):
         """Test that hard delete records metadata and deletes via the configured alias."""

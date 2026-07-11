@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+import inspect
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import FieldError
 from django.db import models, transaction
 from django.db.models import NOT_PROVIDED
+from django.db.models.signals import m2m_changed
+from simple_history.manager import HistoryDescriptor
 
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.builtin import BaseCapability
+from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
     PayloadNormalizer,
 )
@@ -33,6 +40,8 @@ from general_manager.uploads.finalization import (
 from general_manager.uploads.types import UploadCandidate, UploadOperation
 
 from ._compat import call_update_change_reason, call_with_observability
+from ._compat import uses_default_update_change_reason
+from .history import OrmHistoryCapability
 from .support import (
     discard_orm_instance_cache,
     get_support_capability,
@@ -47,6 +56,133 @@ type OrmInterfaceInstance = "OrmInterfaceBase[models.Model]"
 type MutationPayload = dict[str, object]
 type ManyToManyPayload = dict[str, list[object]]
 type MutationResult = dict[str, object]
+
+_MISSING_HISTORY_REASON = object()
+
+
+def _simple_history_m2m_senders(
+    instance: models.Model,
+) -> tuple[type[models.Model], ...]:
+    """Return exact through senders tracked by simple-history for ``instance``."""
+    try:
+        marker = vars(instance.__class__._meta).get("simple_history_manager_attribute")
+        if type(marker) is not str:
+            return ()
+        descriptor = inspect.getattr_static(instance.__class__, marker)
+    except (AttributeError, TypeError):
+        return ()
+    if type(descriptor) is not HistoryDescriptor:
+        return ()
+    history_model = descriptor.model
+    fields = vars(history_model).get("_history_m2m_fields", ())
+    if not isinstance(fields, (list, tuple)) or not all(
+        type(field) is models.ManyToManyField for field in fields
+    ):
+        return ()
+    senders: list[type[models.Model]] = []
+    for field in fields:
+        try:
+            through = field.remote_field.through
+        except (AttributeError, FieldError, TypeError):
+            return ()
+        if not isinstance(through, type) or not issubclass(through, models.Model):
+            return ()
+        senders.append(through)
+    return tuple(senders)
+
+
+def _is_builtin_simple_history(
+    interface_cls: OrmInterfaceClass,
+    instance: models.Model,
+) -> bool:
+    """Admit only the exact built-in simple-history integration."""
+    if (
+        inspect.getattr_static(interface_cls, "get_capability_handler", None)
+        is not inspect.getattr_static(InterfaceBase, "get_capability_handler")
+        or not uses_default_update_change_reason()
+    ):
+        return False
+    try:
+        history_capability = interface_cls.get_capability_handler("history")
+        marker = vars(instance.__class__._meta).get("simple_history_manager_attribute")
+        if type(marker) is not str:
+            return False
+        descriptor = inspect.getattr_static(instance.__class__, marker)
+    except (AttributeError, TypeError):
+        return False
+    if type(history_capability) is not OrmHistoryCapability:
+        return False
+    if type(descriptor) is not HistoryDescriptor:
+        return False
+    history_model = descriptor.model
+    fields = vars(history_model).get("_history_m2m_fields", ())
+    return isinstance(fields, (list, tuple)) and all(
+        type(field) is models.ManyToManyField for field in fields
+    )
+
+
+@contextmanager
+def _history_reason_scope(
+    interface_cls: OrmInterfaceClass,
+    instance: models.Model,
+    reason: str | None,
+) -> Iterator[bool]:
+    """Install a built-in history reason and always restore prior state."""
+    enabled = bool(reason) and _is_builtin_simple_history(interface_cls, instance)
+    if not enabled:
+        yield False
+        return
+    previous = instance.__dict__.get("_change_reason", _MISSING_HISTORY_REASON)
+    try:
+        instance.__dict__["_change_reason"] = reason
+        yield True
+    finally:
+        if previous is _MISSING_HISTORY_REASON:
+            instance.__dict__.pop("_change_reason", None)
+        else:
+            instance.__dict__["_change_reason"] = previous
+
+
+@contextmanager
+def _track_history_m2m_events(
+    interface_cls: OrmInterfaceClass,
+    instance: models.Model,
+) -> Iterator[bool | Callable[[], bool]]:
+    """Track built-in simple-history M2M events for one mutation scope."""
+    if not _is_builtin_simple_history(interface_cls, instance):
+        yield False
+        return
+    senders = _simple_history_m2m_senders(instance)
+    if not senders:
+        yield False
+        return
+    expected_alias = instance._state.db or "default"
+    changed = False
+
+    def receiver(
+        sender: type[models.Model],
+        *,
+        instance: models.Model,
+        action: str,
+        using: str,
+        **_: object,
+    ) -> None:
+        nonlocal changed
+        if (
+            instance is target_instance
+            and action in {"post_add", "post_remove", "post_clear"}
+            and using == expected_alias
+        ):
+            changed = True
+
+    target_instance = instance
+    for sender in senders:
+        m2m_changed.connect(receiver, sender=sender, weak=False)
+    try:
+        yield lambda: changed
+    finally:
+        for sender in senders:
+            m2m_changed.disconnect(receiver, sender=sender)
 
 
 class OrmMutationCapability(BaseCapability):
@@ -176,26 +312,29 @@ class OrmMutationCapability(BaseCapability):
                     instance.save()
             return instance.pk
 
-        result = call_with_observability(
-            interface_cls,
-            operation="mutation.save_with_history",
-            payload=payload_snapshot,
-            func=_perform,
-        )
-        if history_comment:
-            call_update_change_reason(instance, history_comment)
-        return result
+        with _history_reason_scope(interface_cls, instance, history_comment):
+            result = call_with_observability(
+                interface_cls,
+                operation="mutation.save_with_history",
+                payload=payload_snapshot,
+                func=_perform,
+            )
+            if history_comment and not _is_builtin_simple_history(
+                interface_cls, instance
+            ):
+                call_update_change_reason(instance, history_comment)
+            return result
 
-    def apply_many_to_many(
+    def _apply_many_to_many_with_change(
         self,
         interface_cls: OrmInterfaceClass,
         instance: models.Model,
         *,
         many_to_many_kwargs: ManyToManyPayload,
         history_comment: str | None,
-    ) -> models.Model:
+    ) -> tuple[models.Model, bool]:
         """
-        Apply many-to-many updates to a model instance's related fields.
+        Apply many-to-many updates and report tracked history events.
 
         Parameters:
             interface_cls (type[OrmInterfaceBase]): Interface class owning the model (used for observability).
@@ -207,7 +346,7 @@ class OrmMutationCapability(BaseCapability):
             history_comment (str | None): Optional change reason to attach to the instance's history after updates.
 
         Returns:
-            models.Model: The same model instance after its many-to-many relations have been updated.
+            tuple: The updated instance and whether tracked history changed.
 
         Raises:
             AttributeError: If the derived relation manager does not exist.
@@ -220,6 +359,8 @@ class OrmMutationCapability(BaseCapability):
             "history_comment": history_comment,
         }
 
+        event_state: object = False
+
         def _perform() -> models.Model:
             """
             Apply the provided many-to-many id lists to the instance's related managers.
@@ -231,9 +372,12 @@ class OrmMutationCapability(BaseCapability):
             Returns:
                 models.Model: The same `instance` after its many-to-many relations have been updated.
             """
-            for key, value in many_to_many_kwargs.items():
-                field_name = key.removesuffix("_id_list")
-                getattr(instance, field_name).set(value)
+            nonlocal event_state
+            with _track_history_m2m_events(interface_cls, instance) as get_changed:
+                for key, value in many_to_many_kwargs.items():
+                    field_name = key.removesuffix("_id_list")
+                    getattr(instance, field_name).set(value)
+                event_state = get_changed() if callable(get_changed) else False
             return instance
 
         result = call_with_observability(
@@ -242,9 +386,27 @@ class OrmMutationCapability(BaseCapability):
             payload=payload_snapshot,
             func=_perform,
         )
-        if history_comment:
+        if history_comment and not _is_builtin_simple_history(interface_cls, instance):
             call_update_change_reason(instance, history_comment)
-        return result
+        return result, bool(event_state)
+
+    def apply_many_to_many(
+        self,
+        interface_cls: OrmInterfaceClass,
+        instance: models.Model,
+        *,
+        many_to_many_kwargs: ManyToManyPayload,
+        history_comment: str | None,
+    ) -> models.Model:
+        """Apply many-to-many updates without changing the public return value."""
+        with _history_reason_scope(interface_cls, instance, history_comment):
+            result, _changed = self._apply_many_to_many_with_change(
+                interface_cls,
+                instance,
+                many_to_many_kwargs=many_to_many_kwargs,
+                history_comment=history_comment,
+            )
+            return result
 
 
 class OrmCreateCapability(BaseCapability):
@@ -341,18 +503,21 @@ class OrmCreateCapability(BaseCapability):
                         instance,
                         reserved_values,
                     )
-                    claimed_pk = mutation.save_with_history(
-                        interface_cls,
-                        claimed_instance,
-                        creator_id=creator_id,
-                        history_comment=history_comment,
-                    )
-                    mutation.apply_many_to_many(
-                        interface_cls,
-                        claimed_instance,
-                        many_to_many_kwargs=normalized_many,
-                        history_comment=history_comment,
-                    )
+                    with _history_reason_scope(
+                        interface_cls, claimed_instance, history_comment
+                    ):
+                        claimed_pk = mutation.save_with_history(
+                            interface_cls,
+                            claimed_instance,
+                            creator_id=creator_id,
+                            history_comment=history_comment,
+                        )
+                        mutation.apply_many_to_many(
+                            interface_cls,
+                            claimed_instance,
+                            many_to_many_kwargs=normalized_many,
+                            history_comment=history_comment,
+                        )
                     mark_uploads_finalizing(locked, target_pk=claimed_pk)
                     return {"id": claimed_pk}
 
@@ -360,18 +525,19 @@ class OrmCreateCapability(BaseCapability):
             instance = mutation.assign_simple_attributes(
                 interface_cls, interface_cls._model(), normalized_simple
             )
-            pk = mutation.save_with_history(
-                interface_cls,
-                instance,
-                creator_id=creator_id,
-                history_comment=history_comment,
-            )
-            mutation.apply_many_to_many(
-                interface_cls,
-                instance,
-                many_to_many_kwargs=normalized_many,
-                history_comment=history_comment,
-            )
+            with _history_reason_scope(interface_cls, instance, history_comment):
+                pk = mutation.save_with_history(
+                    interface_cls,
+                    instance,
+                    creator_id=creator_id,
+                    history_comment=history_comment,
+                )
+                mutation.apply_many_to_many(
+                    interface_cls,
+                    instance,
+                    many_to_many_kwargs=normalized_many,
+                    history_comment=history_comment,
+                )
             return {"id": pk}
 
         return call_with_observability(
@@ -480,18 +646,21 @@ class OrmUpdateCapability(BaseCapability):
                         instance,
                         reserved_values,
                     )
-                    claimed_pk = mutation.save_with_history(
-                        interface_instance.__class__,
-                        claimed_instance,
-                        creator_id=creator_id,
-                        history_comment=history_comment,
-                    )
-                    mutation.apply_many_to_many(
-                        interface_instance.__class__,
-                        claimed_instance,
-                        many_to_many_kwargs=normalized_many,
-                        history_comment=history_comment,
-                    )
+                    with _history_reason_scope(
+                        interface_instance.__class__, claimed_instance, history_comment
+                    ):
+                        claimed_pk = mutation.save_with_history(
+                            interface_instance.__class__,
+                            claimed_instance,
+                            creator_id=creator_id,
+                            history_comment=history_comment,
+                        )
+                        mutation.apply_many_to_many(
+                            interface_instance.__class__,
+                            claimed_instance,
+                            many_to_many_kwargs=normalized_many,
+                            history_comment=history_comment,
+                        )
                     mark_uploads_finalizing(locked, target_pk=claimed_pk)
                     return {"id": claimed_pk}
 
@@ -502,19 +671,22 @@ class OrmUpdateCapability(BaseCapability):
             instance = mutation.assign_simple_attributes(
                 interface_instance.__class__, instance, normalized_simple
             )
-            pk = mutation.save_with_history(
-                interface_instance.__class__,
-                instance,
-                creator_id=creator_id,
-                history_comment=history_comment,
-            )
-            discard_orm_instance_cache(interface_instance.__class__, pk)
-            mutation.apply_many_to_many(
-                interface_instance.__class__,
-                instance,
-                many_to_many_kwargs=normalized_many,
-                history_comment=history_comment,
-            )
+            with _history_reason_scope(
+                interface_instance.__class__, instance, history_comment
+            ):
+                pk = mutation.save_with_history(
+                    interface_instance.__class__,
+                    instance,
+                    creator_id=creator_id,
+                    history_comment=history_comment,
+                )
+                discard_orm_instance_cache(interface_instance.__class__, pk)
+                mutation.apply_many_to_many(
+                    interface_instance.__class__,
+                    instance,
+                    many_to_many_kwargs=normalized_many,
+                    history_comment=history_comment,
+                )
             return {"id": pk}
 
         return call_with_observability(
