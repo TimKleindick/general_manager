@@ -11,8 +11,26 @@ from general_manager.cache.dependency_publish import (
     PendingDependencyCachePublication,
 )
 from general_manager.cache.run_context import (
+    BUCKET_INDEX_PREFIX,
     CALCULATION_BUCKET_RESULT_MISSING,
+    CALCULATION_BUCKET_RESULT_PREFIX,
     CalculationRunContext,
+    ORM_BUCKET_COUNT_PREFIX,
+    ORM_BUCKET_EXISTS_PREFIX,
+    ORM_BUCKET_FIRST_ROW_PREFIX,
+    ORM_BUCKET_GET_PREFIX,
+    ORM_BUCKET_INDEX_PREFIX,
+    ORM_BUCKET_LAST_ROW_PREFIX,
+    ORM_BUCKET_MANAGER_RESULT_PREFIX,
+    ORM_BUCKET_MEMBERSHIP_PREFIX,
+    ORM_BUCKET_RESULT_PREFIX,
+    ORM_BUCKET_ROW_RESULT_PREFIX,
+    ORM_DIRECT_RELATION_PREFETCH_PREFIX,
+    ORM_MODEL_RELATION_PREFETCH_PREFIX,
+    ORM_MODEL_ROW_INDEX_PREFIX,
+    ORM_QUERY_BUCKET_PREFIX,
+    ORM_RELATION_MANAGER_PREFIX,
+    TRUSTED_ORM_MANAGER_PREFIX,
     current_calculation_run_context,
     ensure_calculation_run_context,
 )
@@ -437,6 +455,114 @@ def test_discard_prefix_removes_matching_tuple_keys_only() -> None:
         assert ctx.get(("orm_instance", "Human", 2, "default")) == "bob"
         assert ctx.get(("other", "Human", 1)) == "other"
         assert ctx.get("plain") == "value"
+
+
+def test_discard_prefixes_scans_all_prefixes_and_preserves_unrelated_values() -> None:
+    with CalculationRunContext() as ctx:
+        ctx.set(("orm", "row", 1), "row")
+        ctx.set(("bucket", "index", 1), "index")
+        ctx.set(("orm", "other", 1), "other")
+        ctx.set(("plain",), "plain")
+        ctx.set("non-tuple", "non-tuple")
+
+        ctx.discard_prefixes((("orm",), ("bucket", "index")))
+
+        assert ctx.get(("orm", "row", 1)) is None
+        assert ctx.get(("bucket", "index", 1)) is None
+        assert ctx.get(("orm", "other", 1)) is None
+        assert ctx.get(("plain",)) == "plain"
+        assert ctx.get("non-tuple") == "non-tuple"
+
+
+def test_discard_prefixes_distinguishes_empty_iterable_from_empty_prefix() -> None:
+    with CalculationRunContext() as ctx:
+        ctx.set(("orm", 1), "orm")
+        ctx.set(("bucket", 1), "bucket")
+        ctx.set("plain", "plain")
+
+        ctx.discard_prefixes(())
+        assert ctx.get(("orm", 1)) == "orm"
+        assert ctx.get(("bucket", 1)) == "bucket"
+
+        ctx.discard_prefixes(((),))
+        assert ctx.get(("orm", 1)) is None
+        assert ctx.get(("bucket", 1)) is None
+        assert ctx.get("plain") == "plain"
+
+
+def test_discard_prefixes_handles_nested_overlapping_and_extra_components() -> None:
+    with CalculationRunContext() as ctx:
+        ctx.set(("orm",), "short")
+        ctx.set(("orm", "row"), "row")
+        ctx.set(("orm", "row", "field"), "field")
+        ctx.set(("ormx", "row"), "other")
+
+        ctx.discard_prefixes((("orm", "row", "field"), ("orm", "row")))
+
+        assert ctx.get(("orm",)) == "short"
+        assert ctx.get(("orm", "row")) is None
+        assert ctx.get(("orm", "row", "field")) is None
+        assert ctx.get(("ormx", "row")) == "other"
+
+
+def test_clear_mutation_cache_clears_all_namespaces_and_preserves_other_state() -> None:
+    prefixes = (
+        ORM_BUCKET_RESULT_PREFIX,
+        ORM_BUCKET_ROW_RESULT_PREFIX,
+        ORM_BUCKET_MANAGER_RESULT_PREFIX,
+        ORM_BUCKET_FIRST_ROW_PREFIX,
+        ORM_BUCKET_COUNT_PREFIX,
+        ORM_BUCKET_LAST_ROW_PREFIX,
+        ORM_BUCKET_GET_PREFIX,
+        ORM_BUCKET_INDEX_PREFIX,
+        ORM_BUCKET_MEMBERSHIP_PREFIX,
+        ORM_MODEL_ROW_INDEX_PREFIX,
+        ORM_MODEL_RELATION_PREFETCH_PREFIX,
+        ORM_DIRECT_RELATION_PREFETCH_PREFIX,
+        ORM_RELATION_MANAGER_PREFIX,
+        ORM_QUERY_BUCKET_PREFIX,
+        ORM_BUCKET_EXISTS_PREFIX,
+        BUCKET_INDEX_PREFIX,
+        TRUSTED_ORM_MANAGER_PREFIX,
+        CALCULATION_BUCKET_RESULT_PREFIX,
+    )
+    entry = make_pending_publication("preserve-publication")
+    hit = DependencyCacheHit(value="prefetched", dependencies=frozenset())
+
+    with (
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ),
+        mock.patch("general_manager.cache.dependency_publish.release_compute_lease"),
+        CalculationRunContext() as ctx,
+    ):
+        for prefix in prefixes:
+            ctx.set((prefix, "key"), "target")
+        ctx.set(("unrelated", "key"), "keep")
+        ctx.set("plain", "keep")
+        ctx.set_dependency_cache_hits({"prefetched": hit})
+        ctx.buffer_dependency_cache_publication(entry)
+
+        ctx.clear_mutation_cache()
+
+        assert all(ctx.get((prefix, "key")) is None for prefix in prefixes)
+        assert ctx.get(("unrelated", "key")) == "keep"
+        assert ctx.get("plain") == "keep"
+        assert ctx.get_dependency_cache_hit("prefetched") is hit
+        assert ctx.get_dependency_cache_hit(entry.cache_key).value == entry.result
+        assert entry.cache_key in ctx._dependency_cache_pending_publications
+
+
+def test_clear_mutation_cache_does_not_touch_nested_context_state() -> None:
+    with CalculationRunContext() as outer:
+        outer.set((ORM_BUCKET_RESULT_PREFIX, "outer"), "outer")
+
+        with CalculationRunContext() as inner:
+            inner.set((ORM_BUCKET_RESULT_PREFIX, "inner"), "inner")
+            inner.clear_mutation_cache()
+            assert inner.get((ORM_BUCKET_RESULT_PREFIX, "inner")) is None
+
+        assert outer.get((ORM_BUCKET_RESULT_PREFIX, "outer")) == "outer"
 
 
 def test_orm_bucket_result_helpers_store_and_clear_entries() -> None:

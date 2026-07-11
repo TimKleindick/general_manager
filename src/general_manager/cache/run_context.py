@@ -48,6 +48,28 @@ logger = get_logger("cache.run_context")
 OrmModelRowKey = tuple[Hashable, Hashable | None]
 CALCULATION_BUCKET_RESULT_MISSING = object()
 
+MUTATION_CACHE_PREFIXES = (
+    ORM_BUCKET_RESULT_PREFIX,
+    ORM_BUCKET_ROW_RESULT_PREFIX,
+    ORM_BUCKET_MANAGER_RESULT_PREFIX,
+    ORM_BUCKET_FIRST_ROW_PREFIX,
+    ORM_BUCKET_COUNT_PREFIX,
+    ORM_BUCKET_LAST_ROW_PREFIX,
+    ORM_BUCKET_GET_PREFIX,
+    ORM_BUCKET_INDEX_PREFIX,
+    ORM_BUCKET_MEMBERSHIP_PREFIX,
+    ORM_MODEL_ROW_INDEX_PREFIX,
+    ORM_MODEL_RELATION_PREFETCH_PREFIX,
+    ORM_DIRECT_RELATION_PREFETCH_PREFIX,
+    ORM_RELATION_MANAGER_PREFIX,
+    ORM_QUERY_BUCKET_PREFIX,
+    ORM_BUCKET_EXISTS_PREFIX,
+    BUCKET_INDEX_PREFIX,
+    TRUSTED_ORM_MANAGER_PREFIX,
+    CALCULATION_BUCKET_RESULT_PREFIX,
+)
+MUTATION_CACHE_KEY_PREFIXES = tuple((prefix,) for prefix in MUTATION_CACHE_PREFIXES)
+
 
 @dataclass(frozen=True)
 class BucketIndexRunCacheEntry:
@@ -311,8 +333,20 @@ class CalculationRunContext:
 
     def discard_prefix(self, prefix: tuple[Hashable, ...]) -> None:
         """Discard cached tuple keys whose leading items equal `prefix`."""
+        self.discard_prefixes((prefix,))
+
+    def discard_prefixes(
+        self,
+        prefixes: Iterable[tuple[Hashable, ...]],
+    ) -> None:
+        """Discard cached tuple keys matching any supplied leading prefix."""
+        prefixes = tuple(prefixes)
+        if not prefixes:
+            return
         for key in list(self._values):
-            if isinstance(key, tuple) and key[: len(prefix)] == prefix:
+            if isinstance(key, tuple) and any(
+                key[: len(prefix)] == prefix for prefix in prefixes
+            ):
                 del self._values[key]
 
     def get_orm_bucket_result(self, key: Hashable) -> object:
@@ -598,21 +632,25 @@ class CalculationRunContext:
 
     def clear_orm_bucket_results(self) -> None:
         """Discard all run-scoped ORM bucket result entries."""
-        self.discard_prefix((ORM_BUCKET_RESULT_PREFIX,))
-        self.discard_prefix((ORM_BUCKET_ROW_RESULT_PREFIX,))
-        self.discard_prefix((ORM_BUCKET_MANAGER_RESULT_PREFIX,))
-        self.discard_prefix((ORM_BUCKET_FIRST_ROW_PREFIX,))
-        self.discard_prefix((ORM_BUCKET_COUNT_PREFIX,))
-        self.discard_prefix((ORM_BUCKET_LAST_ROW_PREFIX,))
-        self.discard_prefix((ORM_BUCKET_GET_PREFIX,))
-        self.discard_prefix((ORM_BUCKET_INDEX_PREFIX,))
-        self.discard_prefix((ORM_BUCKET_MEMBERSHIP_PREFIX,))
-        self.discard_prefix((ORM_MODEL_ROW_INDEX_PREFIX,))
-        self.discard_prefix((ORM_MODEL_RELATION_PREFETCH_PREFIX,))
-        self.discard_prefix((ORM_DIRECT_RELATION_PREFETCH_PREFIX,))
-        self.discard_prefix((ORM_RELATION_MANAGER_PREFIX,))
-        self.discard_prefix((ORM_QUERY_BUCKET_PREFIX,))
-        self.discard_prefix((ORM_BUCKET_EXISTS_PREFIX,))
+        self.discard_prefixes(
+            (
+                (ORM_BUCKET_RESULT_PREFIX,),
+                (ORM_BUCKET_ROW_RESULT_PREFIX,),
+                (ORM_BUCKET_MANAGER_RESULT_PREFIX,),
+                (ORM_BUCKET_FIRST_ROW_PREFIX,),
+                (ORM_BUCKET_COUNT_PREFIX,),
+                (ORM_BUCKET_LAST_ROW_PREFIX,),
+                (ORM_BUCKET_GET_PREFIX,),
+                (ORM_BUCKET_INDEX_PREFIX,),
+                (ORM_BUCKET_MEMBERSHIP_PREFIX,),
+                (ORM_MODEL_ROW_INDEX_PREFIX,),
+                (ORM_MODEL_RELATION_PREFETCH_PREFIX,),
+                (ORM_DIRECT_RELATION_PREFETCH_PREFIX,),
+                (ORM_RELATION_MANAGER_PREFIX,),
+                (ORM_QUERY_BUCKET_PREFIX,),
+                (ORM_BUCKET_EXISTS_PREFIX,),
+            )
+        )
 
     def get_calculation_bucket_result(
         self,
@@ -652,7 +690,7 @@ class CalculationRunContext:
 
     def clear_calculation_bucket_results(self) -> None:
         """Discard all run-scoped calculation bucket result entries."""
-        self.discard_prefix((CALCULATION_BUCKET_RESULT_PREFIX,))
+        self.discard_prefixes(((CALCULATION_BUCKET_RESULT_PREFIX,),))
 
     def _bucket_index_cache_key(
         self,
@@ -711,11 +749,15 @@ class CalculationRunContext:
 
     def clear_bucket_indexes(self) -> None:
         """Discard all run-scoped bucket index entries."""
-        self.discard_prefix((BUCKET_INDEX_PREFIX,))
+        self.discard_prefixes(((BUCKET_INDEX_PREFIX,),))
 
     def clear_trusted_orm_managers(self) -> None:
         """Discard run-scoped manager wrappers built from trusted ORM rows."""
-        self.discard_prefix((TRUSTED_ORM_MANAGER_PREFIX,))
+        self.discard_prefixes(((TRUSTED_ORM_MANAGER_PREFIX,),))
+
+    def clear_mutation_cache(self) -> None:
+        """Discard every run-scoped cache namespace invalidated by mutations."""
+        self.discard_prefixes(MUTATION_CACHE_KEY_PREFIXES)
 
     def has(self, key: Hashable) -> bool:
         """Return whether key has a value in the active run."""

@@ -12,6 +12,7 @@ from general_manager.cache.dependency_index import (
     record_invalidated_cache_keys_for_graphql_rewarm,
 )
 from general_manager.cache.signals import data_change, pre_data_change, post_data_change
+from general_manager.cache.run_context import CalculationRunContext
 
 
 @contextmanager
@@ -93,6 +94,10 @@ class RecordingRaisingDummy:
         """Record a pending key and raise from a wrapped method."""
         record_invalidated_cache_keys_for_graphql_rewarm(("stale-key",))
         raise ValueError("boom")
+
+
+class PostSignalError(RuntimeError):
+    """Test-only failure raised by a post-change receiver."""
 
 
 class NestedDataChangeDummy:
@@ -321,6 +326,70 @@ class DataChangeSignalTests(TestCase):
 
         self.assertFalse(is_dependency_data_change_active())
         self.assertEqual(drain_invalidated_cache_keys_for_graphql_rewarm(), ())
+
+    def test_data_change_clears_mutation_cache_before_and_after_success(self):
+        """Successful mutations clear run-cache namespaces in both phases."""
+        with CalculationRunContext() as context:
+            context.set(("orm_bucket_result", "before"), "stale")
+            context.set(("bucket_index", "before"), "stale")
+            context.set(("trusted_orm_manager", "before"), "stale")
+            context.set(("calculation_bucket_result", "before"), "stale")
+            context.set(("unrelated", "before"), "keep")
+
+            with patch.object(
+                context,
+                "clear_mutation_cache",
+                wraps=context.clear_mutation_cache,
+            ) as clear_mutation_cache:
+                Dummy.create("warm")
+
+            self.assertEqual(clear_mutation_cache.call_count, 2)
+            self.assertEqual(context.get(("unrelated", "before")), "keep")
+            self.assertIsNone(context.get(("orm_bucket_result", "before")))
+            self.assertIsNone(context.get(("bucket_index", "before")))
+            self.assertIsNone(context.get(("trusted_orm_manager", "before")))
+            self.assertIsNone(context.get(("calculation_bucket_result", "before")))
+
+    def test_data_change_clears_mutation_cache_only_before_failure(self):
+        """Failed mutations clear stale run-cache state before invoking the body."""
+        with CalculationRunContext() as context:
+            context.set(("orm_bucket_result", "before"), "stale")
+            context.set(("unrelated", "before"), "keep")
+
+            with (
+                patch.object(
+                    context,
+                    "clear_mutation_cache",
+                    wraps=context.clear_mutation_cache,
+                ) as clear_mutation_cache,
+                self.assertRaisesRegex(ValueError, "boom"),
+            ):
+                RaisingDummy().update()
+
+            self.assertEqual(clear_mutation_cache.call_count, 1)
+            self.assertEqual(context.get(("unrelated", "before")), "keep")
+            self.assertIsNone(context.get(("orm_bucket_result", "before")))
+
+    def test_data_change_post_signal_error_keeps_both_cache_clears(self):
+        """Post-signal failures still retain the completed post-mutation clear."""
+
+        def raise_from_post_change(sender, **kwargs):
+            del sender, kwargs
+            raise PostSignalError
+
+        post_data_change.connect(raise_from_post_change, weak=False)
+        with CalculationRunContext() as context:
+            with (
+                patch.object(
+                    context,
+                    "clear_mutation_cache",
+                    wraps=context.clear_mutation_cache,
+                ) as clear_mutation_cache,
+                self.assertRaises(PostSignalError),
+            ):
+                Dummy.create("warm")
+
+            self.assertEqual(clear_mutation_cache.call_count, 2)
 
     def test_cleanup_failure_is_logged_when_wrapped_function_already_failed(self):
         """Cleanup errors are logged when another exception is already active."""

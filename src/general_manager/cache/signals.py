@@ -91,10 +91,7 @@ def data_change(
         begin_dependency_data_change()
         context = current_calculation_run_context()
         if context is not None:
-            context.clear_orm_bucket_results()
-            context.clear_bucket_indexes()
-            context.clear_trusted_orm_managers()
-            context.clear_calculation_bucket_results()
+            context.clear_mutation_cache()
         try:
             action = func.__name__
             if func.__name__ == "create":
@@ -122,10 +119,7 @@ def data_change(
 
             context = current_calculation_run_context()
             if context is not None:
-                context.clear_orm_bucket_results()
-                context.clear_bucket_indexes()
-                context.clear_trusted_orm_managers()
-                context.clear_calculation_bucket_results()
+                context.clear_mutation_cache()
 
             instance = result
             identification = getattr(instance, "identification", None)

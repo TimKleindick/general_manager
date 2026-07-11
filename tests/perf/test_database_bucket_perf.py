@@ -25,6 +25,7 @@ from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import (
     BUCKET_INDEX_PREFIX,
+    CALCULATION_BUCKET_RESULT_PREFIX,
     ORM_BUCKET_EXISTS_PREFIX,
     ORM_BUCKET_COUNT_PREFIX,
     ORM_BUCKET_FIRST_ROW_PREFIX,
@@ -92,6 +93,7 @@ RUN_CACHE_PREFIXES = (
     ORM_BUCKET_EXISTS_PREFIX,
     BUCKET_INDEX_PREFIX,
     TRUSTED_ORM_MANAGER_PREFIX,
+    CALCULATION_BUCKET_RESULT_PREFIX,
 )
 
 
@@ -114,20 +116,20 @@ def _assert_mixed_cache_observations(
 def test_mixed_cache_observations_accept_improvements_below_the_ceiling() -> None:
     budgets = PerfBudgets(
         {
-            "RUN_CACHE_MIXED_500_DISCARD_CALLS": 22,
-            "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 44_000,
+            "RUN_CACHE_MIXED_500_DISCARD_CALLS": 2,
+            "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 10_000,
         }
     )
 
     _assert_mixed_cache_observations(
         budgets,
-        discard_calls=11,
-        key_inspections=22_000,
+        discard_calls=1,
+        key_inspections=9_000,
     )
 
     assert budgets.observations == {
-        "RUN_CACHE_MIXED_500_DISCARD_CALLS": 11,
-        "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 22_000,
+        "RUN_CACHE_MIXED_500_DISCARD_CALLS": 1,
+        "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 9_000,
     }
 
 
@@ -1248,37 +1250,37 @@ def test_data_change_mixed_run_cache_invalidation_work(
             for key in context._values
             if isinstance(key, tuple) and key and key[0] in RUN_CACHE_PREFIXES
         )
-        assert initial_targeted_count == 8_500
-        assert len(context._values) == 9_000
+        assert initial_targeted_count == 9_000
+        assert len(context._values) == 9_500
 
         phase_snapshots: list[dict[Hashable, object]] = []
-        original_discard_prefix = context.discard_prefix
+        original_discard_prefixes = context.discard_prefixes
 
-        def counted_discard_prefix(
+        def counted_discard_prefixes(
             _context: CalculationRunContext,
-            prefix: tuple[Hashable, ...],
+            prefixes: tuple[tuple[Hashable, ...], ...],
         ) -> None:
             discard_calls.increment()
             key_inspections.increment(len(context._values))
-            original_discard_prefix(prefix)
+            original_discard_prefixes(prefixes)
 
         monkeypatch.setattr(
             context,
-            "discard_prefix",
-            MethodType(counted_discard_prefix, context),
+            "discard_prefixes",
+            MethodType(counted_discard_prefixes, context),
         )
-        original_clear_trusted_orm_managers = context.clear_trusted_orm_managers
+        original_clear_mutation_cache = context.clear_mutation_cache
 
-        def observed_clear_trusted_orm_managers(
+        def observed_clear_mutation_cache(
             _context: CalculationRunContext,
         ) -> None:
-            original_clear_trusted_orm_managers()
+            original_clear_mutation_cache()
             phase_snapshots.append(dict(context._values))
 
         monkeypatch.setattr(
             context,
-            "clear_trusted_orm_managers",
-            MethodType(observed_clear_trusted_orm_managers, context),
+            "clear_mutation_cache",
+            MethodType(observed_clear_mutation_cache, context),
         )
 
         if diagnostics_enabled:

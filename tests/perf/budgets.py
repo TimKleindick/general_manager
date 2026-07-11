@@ -121,8 +121,8 @@ PERF_CEILINGS: dict[str, int] = {
     "DB_HISTORY_WRITE_100_QUERIES": 600,
     "DB_HISTORY_WRITE_100_CALLBACKS": 100,
     # Calculation run-cache invalidation workloads.
-    "RUN_CACHE_MIXED_500_DISCARD_CALLS": 36,
-    "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 95_000,
+    "RUN_CACHE_MIXED_500_DISCARD_CALLS": 2,
+    "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 10_000,
     # Calculation bucket combination workloads.
     "CALC_STATIC_5X10_COLD_A_YIELDS": 5,
     "CALC_STATIC_5X10_COLD_B_YIELDS": 50,
