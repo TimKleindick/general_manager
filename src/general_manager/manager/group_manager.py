@@ -1,7 +1,7 @@
 """Utility manager that aggregates grouped GeneralManager data."""
 
 from __future__ import annotations
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from typing import Generic, cast, get_args
 from datetime import datetime, date, time
 from general_manager.api.property import GraphQLProperty
@@ -11,6 +11,15 @@ from general_manager.bucket.base_bucket import (
     Bucket,
     GeneralManagerType,
 )
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import Dependency
+
+
+def _is_stable_group_data(data: object) -> bool:
+    """Return whether group entries can be reused across aggregate reads."""
+    return type(data) is tuple or bool(
+        getattr(data, "_group_materialization_safe", False)
+    )
 
 
 def _freeze_manager_value(value: object) -> object:
@@ -84,6 +93,40 @@ class GroupManager(Generic[GeneralManagerType]):
         self._group_by_value = group_by_value
         self._data = data
         self._grouped_data: dict[str, object] = {}
+        self._materialized = _is_stable_group_data(data)
+        self._entries_snapshot: tuple[GeneralManagerType, ...] | None = None
+        self._captured_dependencies: frozenset[Dependency] = frozenset(
+            getattr(data, "_dependencies", ())
+        )
+        self._frozen_entries: frozenset[object] | None = None
+
+    def _replay_dependencies(self) -> None:
+        if self._materialized:
+            DependencyTracker._track_many_validated(self._captured_dependencies)
+
+    def _entries_for_read(self) -> Iterable[GeneralManagerType]:
+        if not self._materialized:
+            return self._data
+        if self._entries_snapshot is None:
+            with DependencyTracker() as captured_dependencies:
+                entries = tuple(self._data)
+            self._entries_snapshot = entries
+            self._captured_dependencies = frozenset(
+                (*self._captured_dependencies, *captured_dependencies)
+            )
+        self._replay_dependencies()
+        return self._entries_snapshot
+
+    def _frozen_entry_values(self) -> frozenset[object]:
+        if self._materialized and self._frozen_entries is not None:
+            self._replay_dependencies()
+            return self._frozen_entries
+        frozen_entries = frozenset(
+            _freeze_manager_value(entry) for entry in self._entries_for_read()
+        )
+        if self._materialized:
+            self._frozen_entries = frozen_entries
+        return frozen_entries
 
     def __hash__(self) -> int:
         """
@@ -104,7 +147,7 @@ class GroupManager(Generic[GeneralManagerType]):
             (
                 self._manager_class,
                 _freeze_manager_value(self._group_by_value),
-                frozenset(_freeze_manager_value(entry) for entry in self._data),
+                self._frozen_entry_values(),
             )
         )
 
@@ -122,8 +165,7 @@ class GroupManager(Generic[GeneralManagerType]):
             isinstance(other, self.__class__)
             and self._manager_class == other._manager_class
             and self._group_by_value == other._group_by_value
-            and frozenset(_freeze_manager_value(entry) for entry in self._data)
-            == frozenset(_freeze_manager_value(entry) for entry in other._data)
+            and self._frozen_entry_values() == other._frozen_entry_values()
         )
 
     def __repr__(self) -> str:
@@ -174,11 +216,19 @@ class GroupManager(Generic[GeneralManagerType]):
             Exception: Exceptions raised while iterating the underlying bucket
                 or reading grouped record attributes propagate unchanged.
         """
-        if item in self._group_by_value:
-            return self._group_by_value[item]
-        if item not in self._grouped_data:
-            self._grouped_data[item] = self.combine_value(item)
-        return self._grouped_data[item]
+        group_by_value = self.__dict__.get("_group_by_value")
+        if group_by_value is None:
+            raise AttributeError(item)
+        if item in group_by_value:
+            return group_by_value[item]
+        grouped_data = self.__dict__.get("_grouped_data")
+        if grouped_data is None:
+            raise AttributeError(item)
+        if item not in grouped_data:
+            grouped_data[item] = self.combine_value(item)
+        else:
+            self._replay_dependencies()
+        return grouped_data[item]
 
     def combine_value(self, item: str) -> object:
         """
@@ -228,43 +278,77 @@ class GroupManager(Generic[GeneralManagerType]):
         if data_type is None or not isinstance(data_type, type):
             raise MissingGroupAttributeError(self.__class__.__name__, item)
 
-        total_data: list[object] = []
-        for entry in self._data:
-            total_data.append(getattr(entry, item))
-
-        new_data: object = None
-        if all(i is None for i in total_data):
-            return new_data
-        total_data = [i for i in total_data if i is not None]
-
+        entries = self._entries_for_read()
         if issubclass(data_type, (Bucket, GeneralManager)):
-            for value in total_data:
+            new_data: object = None
+            for entry in entries:
+                value = getattr(entry, item)
+                if value is None:
+                    continue
                 if new_data is None:
                     new_data = value
                 else:
-                    new_data = value | new_data  # type: ignore[operator]
-        elif issubclass(data_type, list):
+                    new_data = value | new_data
+            return new_data
+        if issubclass(data_type, list):
             list_data: list[object] = []
-            for value in total_data:
-                list_data.extend(cast(list[object], value))
-            new_data = list_data
-        elif issubclass(data_type, dict):
+            saw_value = False
+            for entry in entries:
+                value = getattr(entry, item)
+                if value is not None:
+                    saw_value = True
+                    list_data.extend(cast(list[object], value))
+            return list_data if saw_value else None
+        if issubclass(data_type, dict):
             dict_data: dict[object, object] = {}
-            for value in total_data:
-                dict_data.update(cast(dict[object, object], value))
-            new_data = dict_data
-        elif issubclass(data_type, str):
+            saw_value = False
+            for entry in entries:
+                value = getattr(entry, item)
+                if value is not None:
+                    saw_value = True
+                    dict_data.update(cast(dict[object, object], value))
+            return dict_data if saw_value else None
+        if issubclass(data_type, str):
             text_data: list[str] = []
-            for value in total_data:
+            seen_text: set[str] = set()
+            saw_value = False
+            for entry in entries:
+                value = getattr(entry, item)
+                if value is None:
+                    continue
+                saw_value = True
                 text_value = str(value)
-                if text_value not in text_data:
+                if text_value not in seen_text:
+                    seen_text.add(text_value)
                     text_data.append(text_value)
-            new_data = ", ".join(text_data)
-        elif issubclass(data_type, bool):
-            new_data = any(total_data)
-        elif issubclass(data_type, (int, float, Measurement)):
-            new_data = sum(cast(list[int | float | Measurement], total_data))
-        elif issubclass(data_type, (datetime, date, time)):
-            new_data = max(cast(list[datetime | date | time], total_data))
-
-        return new_data
+            return ", ".join(text_data) if saw_value else None
+        if issubclass(data_type, bool):
+            saw_value = False
+            result = False
+            for entry in entries:
+                value = getattr(entry, item)
+                if value is not None:
+                    saw_value = True
+                    result = result or bool(value)
+            return result if saw_value else None
+        if issubclass(data_type, (int, float, Measurement)):
+            saw_value = False
+            numeric_result: object = 0
+            for entry in entries:
+                value = getattr(entry, item)
+                if value is not None:
+                    saw_value = True
+                    numeric_result = numeric_result + value
+            return numeric_result if saw_value else None
+        if issubclass(data_type, (datetime, date, time)):
+            temporal_result: object = None
+            for entry in entries:
+                value = getattr(entry, item)
+                if value is not None and (
+                    temporal_result is None or value > temporal_result
+                ):
+                    temporal_result = value
+            return temporal_result
+        for entry in entries:
+            getattr(entry, item)
+        return None

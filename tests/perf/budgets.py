@@ -20,6 +20,7 @@ PERF_CEILINGS: dict[str, int] = {
     "GROUP_10000_YIELDS": 10_000,
     "GROUP_10000_CONSTRUCTORS": 10_000,
     "GROUP_10000_FILTER_CALLS": 0,
+    "GROUP_MANAGER_10000_SOURCE_YIELDS": 1,
     # Database bucket terminal-operation workloads.
     "DB_FIRST_999_COLD_QUERIES": 1,
     "DB_FIRST_999_COLD_CONSTRUCTORS": 1,

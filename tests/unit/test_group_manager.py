@@ -2,15 +2,19 @@
 from datetime import date
 import pickle
 from typing import ClassVar
+from unittest.mock import patch
 from django.test import TestCase
 from general_manager.api.property import GraphQLProperty
 from general_manager.manager.group_manager import (
     GroupManager,
 )
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.bucket.group_bucket import GroupBucketKeysMismatchError
+from general_manager.bucket.base_bucket import Bucket
 from general_manager.measurement import Measurement
 from general_manager.cache.cache_tracker import DependencyTracker
+import general_manager.manager.group_manager as group_manager_module
 
 
 # Stub Interface to simulate attribute definitions
@@ -81,9 +85,50 @@ class ListBucket(list):
 
 
 class DependencyListBucket(ListBucket):
+    _group_materialization_safe = True
+
     def __iter__(self):
         DependencyTracker.track("DummyManager", "all", "snapshot")
         yield from super().__iter__()
+
+
+class IterationCounter:
+    value = 0
+
+
+class CountingMaterializedBucket(ListBucket):
+    _group_materialization_safe = True
+
+    def __init__(self, items, counter):
+        super().__init__(items)
+        self.counter = counter
+
+    def __iter__(self):
+        self.counter.value += 1
+        yield from super().__iter__()
+
+
+class CountingLiveBucket(ListBucket):
+    def __init__(self, items, counter):
+        super().__init__(items)
+        self.counter = counter
+
+    def __iter__(self):
+        self.counter.value += 1
+        yield from super().__iter__()
+
+
+class FailingMaterializedBucket(CountingMaterializedBucket):
+    def __init__(self, items, counter):
+        super().__init__(items, counter)
+        self.fail = True
+
+    def __iter__(self):
+        self.counter.value += 1
+        for index, item in enumerate(list.__iter__(self)):
+            if self.fail and index == 1:
+                raise RuntimeError
+            yield item
 
 
 class GroupBucketTests(TestCase):
@@ -342,6 +387,17 @@ class GroupManagerCombineValueTests(TestCase):
         gm = self.helper_make_group_manager([None, None], type(None))
         self.assertIsNone(gm.combine_value("field"))
 
+    def test_combine_empty_containers_preserves_non_none_values(self):
+        self.assertEqual(
+            self.helper_make_group_manager([[]], list).combine_value("field"), []
+        )
+        self.assertEqual(
+            self.helper_make_group_manager([{}], dict).combine_value("field"), {}
+        )
+        self.assertEqual(
+            self.helper_make_group_manager([""], str).combine_value("field"), ""
+        )
+
     def test_combine_none_and_value(self):
         gm = self.helper_make_group_manager([None, 1], int)
         self.assertEqual(gm.combine_value("field"), 1)
@@ -365,6 +421,173 @@ class GroupManagerCombineValueTests(TestCase):
         )
         result = gm.combine_value("field")
         self.assertEqual(result, Measurement(3, "m"))
+
+    def test_materialized_snapshot_reuses_source_for_multiple_aggregates(self):
+        DummyInterface.attr_types.update(
+            {
+                "field": {"type": int},
+                "label": {"type": str},
+            }
+        )
+        counter = IterationCounter()
+        entries = [
+            DummyManager(field=1, label="a"),
+            DummyManager(field=2, label="b"),
+            DummyManager(field=3, label="a"),
+        ]
+        manager = GroupManager(
+            DummyManager,
+            {},
+            CountingMaterializedBucket(entries, counter),
+        )
+
+        self.assertEqual(manager.combine_value("field"), 6)
+        self.assertEqual(manager.combine_value("label"), "a, b")
+        self.assertIsNone(manager.combine_value("id"))
+        self.assertEqual(counter.value, 1)
+
+    def test_live_snapshot_fallback_observes_mutations_for_aggregate_and_identity(self):
+        DummyInterface.attr_types["field"] = {"type": int}
+        counter = IterationCounter()
+        entries = [DummyManager(field=1)]
+        source = CountingLiveBucket(entries, counter)
+        manager = GroupManager(DummyManager, {}, source)
+        other = GroupManager(
+            DummyManager, {}, CountingLiveBucket(list(entries), counter)
+        )
+
+        self.assertEqual(manager.combine_value("field"), 1)
+        source.append(DummyManager(field=2))
+        self.assertEqual(manager.combine_value("field"), 3)
+        self.assertNotEqual(hash(manager), hash(other))
+        self.assertNotEqual(manager, other)
+        self.assertGreaterEqual(counter.value, 4)
+
+    def test_materialized_cache_hit_replays_dependencies_in_nested_trackers(self):
+        DummyInterface.attr_types["label"] = {"type": str}
+        manager = GroupManager(
+            DummyManager,
+            {},
+            DependencyListBucket([DummyManager(label="a")]),
+        )
+
+        with DependencyTracker() as outer:
+            with DependencyTracker() as inner:
+                self.assertEqual(manager.label, "a")
+
+        with DependencyTracker() as cache_hit:
+            self.assertEqual(manager.label, "a")
+
+        dependency = ("DummyManager", "all", "snapshot")
+        self.assertIn(dependency, outer)
+        self.assertIn(dependency, inner)
+        self.assertIn(dependency, cache_hit)
+
+    def test_materialized_identity_cache_hits_replay_dependencies(self):
+        DummyInterface.attr_types["label"] = {"type": str}
+        manager = GroupManager(
+            DummyManager,
+            {},
+            DependencyListBucket([DummyManager(label="a")]),
+        )
+
+        with DependencyTracker() as first_hash:
+            hash(manager)
+        with DependencyTracker() as second_hash:
+            hash(manager)
+        with DependencyTracker() as equality_hit:
+            _ = manager == manager
+
+        dependency = ("DummyManager", "all", "snapshot")
+        self.assertIn(dependency, first_hash)
+        self.assertIn(dependency, second_hash)
+        self.assertIn(dependency, equality_hit)
+
+    def test_materialized_identity_reuses_frozen_entries(self):
+        DummyInterface.attr_types["field"] = {"type": int}
+        counter = IterationCounter()
+        entry = object.__new__(GeneralManager)
+        entry._GeneralManager__id = {"id": 1}
+        source = CountingMaterializedBucket([entry], counter)
+        manager = GroupManager(DummyManager, {}, source)
+
+        with patch(
+            "general_manager.manager.group_manager._freeze_manager_value",
+            wraps=group_manager_module._freeze_manager_value,
+        ) as freeze:
+            hash(manager)
+            _ = manager == manager
+            first_manager_freezes = sum(
+                isinstance(call.args[0], GeneralManager)
+                for call in freeze.call_args_list
+            )
+            hash(manager)
+            _ = manager == manager
+            second_manager_freezes = sum(
+                isinstance(call.args[0], GeneralManager)
+                for call in freeze.call_args_list
+            )
+
+        self.assertEqual(first_manager_freezes, second_manager_freezes)
+        self.assertEqual(counter.value, 1)
+
+    def test_materialized_group_manager_pickle_preserves_cached_aggregate(self):
+        DummyInterface.attr_types["field"] = {"type": int}
+        manager = GroupManager(
+            DummyManager,
+            {},
+            CountingMaterializedBucket([DummyManager(field=3)], IterationCounter()),
+        )
+        self.assertEqual(manager.field, 3)
+
+        restored = pickle.loads(pickle.dumps(manager))  # noqa: S301 - local test data
+
+        self.assertEqual(restored.field, 3)
+
+    def test_identity_reflects_mutated_group_mapping(self):
+        DummyInterface.attr_types["field"] = {"type": int}
+        entry = DummyManager(field=1)
+        source = CountingMaterializedBucket([entry], IterationCounter())
+        manager = GroupManager(DummyManager, {}, source)
+        other = GroupManager(
+            DummyManager,
+            {},
+            CountingMaterializedBucket([entry], IterationCounter()),
+        )
+        self.assertEqual(manager, other)
+
+        manager._group_by_value["group"] = "new"
+
+        self.assertNotEqual(manager, other)
+
+    def test_failed_materialized_iteration_does_not_publish_partial_snapshot(self):
+        DummyInterface.attr_types["field"] = {"type": int}
+        counter = IterationCounter()
+        source = FailingMaterializedBucket(
+            [DummyManager(field=1), DummyManager(field=2)], counter
+        )
+        manager = GroupManager(DummyManager, {}, source)
+
+        with self.assertRaises(RuntimeError):
+            manager.combine_value("field")
+        source.fail = False
+
+        self.assertEqual(manager.combine_value("field"), 3)
+        self.assertEqual(counter.value, 2)
+
+    def test_manager_bucket_union_preserves_existing_order(self):
+        DummyInterface.attr_types["field"] = {"type": Bucket}
+        first = ListBucket([DummyManager(field=1)])
+        second = ListBucket([DummyManager(field=2)])
+        manager = GroupManager(
+            DummyManager,
+            {},
+            ListBucket([DummyManager(field=first), DummyManager(field=second)]),
+        )
+
+        combined = manager.combine_value("field")
+
+        self.assertEqual([entry.field for entry in combined], [2, 1])
 
     def test_iterate_group_manager(self):
         # Test that iterating over GroupManager yields correct items
