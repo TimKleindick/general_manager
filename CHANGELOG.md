@@ -2,6 +2,86 @@
 
 <!-- version list -->
 
+## v0.62.1 (2026-07-11)
+
+### Performance Improvements
+
+- Add deterministic performance budget support
+  ([`8f4950c`](https://github.com/TimKleindick/general_manager/commit/8f4950ce92986a7e0036f0e14e18a22f3fa26f1a))
+
+- Clarify performance calibration guidance
+  ([`06fa69e`](https://github.com/TimKleindick/general_manager/commit/06fa69e805559dda65f6f6163ad509061876b6b4))
+
+- Cover calculation bucket hot paths
+  ([`fc9dc4e`](https://github.com/TimKleindick/general_manager/commit/fc9dc4e11c24faf8a569ba7b945e7bdcc41a32b3))
+
+- Cover database bucket terminal hot paths
+  ([`9bf677e`](https://github.com/TimKleindick/general_manager/commit/9bf677ebd5a1caff7ccad609151e789a3d655cba))
+
+- Cover group bucket hot paths
+  ([`c784aeb`](https://github.com/TimKleindick/general_manager/commit/c784aeb253fabdc7d95cf9b2d9d22c85bc3f804b))
+
+- Cover mixed run-cache invalidation
+  ([`4b427ae`](https://github.com/TimKleindick/general_manager/commit/4b427ae678f3de6a4a5b21d0769440ba3a45fd74))
+
+- Cover relation and history hot paths
+  ([`d24e177`](https://github.com/TimKleindick/general_manager/commit/d24e177360b4bda0fafe411f2a63ded6f2be212b))
+
+- Document performance regression workflow
+  ([`1ebcd00`](https://github.com/TimKleindick/general_manager/commit/1ebcd00fc09ae76364d2eb8a3a5fa1911c8449b6))
+
+- Gate group diagnostics by verbosity
+  ([`f5135c4`](https://github.com/TimKleindick/general_manager/commit/f5135c47e88ab5324cccecb31b3f3a9b586927b9))
+
+- Harden calculation performance fixtures
+  ([`08381d4`](https://github.com/TimKleindick/general_manager/commit/08381d47ee0c98a7f14defbb95f1a3d3f8be5b75))
+
+- Harden database performance fixture lifecycle
+  ([`0b8c2ec`](https://github.com/TimKleindick/general_manager/commit/0b8c2ec4ac7e98e5de4e7038045b7f20684b2d1c))
+
+- Harden manifest and fixture safeguards
+  ([`dfd503b`](https://github.com/TimKleindick/general_manager/commit/dfd503b43bb5ed148d1989d473715b64f312e9e5))
+
+- Harden performance measurement support
+  ([`ff2ac96`](https://github.com/TimKleindick/general_manager/commit/ff2ac96615253c698428ef5ca5d89aa21fa41581))
+
+- Harden performance workload isolation
+  ([`450c3ca`](https://github.com/TimKleindick/general_manager/commit/450c3ca8a29cbb71b51aa7c3400c678bc22c6b87))
+
+- Include historical plan construction in measurement
+  ([`7c9ff1e`](https://github.com/TimKleindick/general_manager/commit/7c9ff1e4e87d30f8d9e5b8701bb128a9e380ba4f))
+
+- Isolate database fixture primary keys
+  ([`8105135`](https://github.com/TimKleindick/general_manager/commit/810513556cf089c1f5920692523c53fda5848f75))
+
+- Isolate database performance fixtures
+  ([`7a2ac64`](https://github.com/TimKleindick/general_manager/commit/7a2ac64995324df725f6fa3bbadf44e7a067ae57))
+
+- Keep group workloads single-pass
+  ([`704bbca`](https://github.com/TimKleindick/general_manager/commit/704bbca9d82012563582cd8c2fdca83adc3aee8a))
+
+- Plan issue 337 benchmark coverage
+  ([`8bf5f10`](https://github.com/TimKleindick/general_manager/commit/8bf5f104dce0694d99f980eeda6373abd70285c2))
+
+- Remove ignored planning artifacts
+  ([`5d970ee`](https://github.com/TimKleindick/general_manager/commit/5d970eed4f883e00fda76e5ef28abc67c0e0ebd0))
+
+- Scope manifest node selection
+  ([`8a07f99`](https://github.com/TimKleindick/general_manager/commit/8a07f99e1115eeba710988b0e1353e0b8995d7bd))
+
+- Specify issue 337 benchmark coverage
+  ([`ead5dec`](https://github.com/TimKleindick/general_manager/commit/ead5dec47ed668a9fcd4faa12c5d3f9da13da0a8))
+
+- Validate complete performance budget manifest
+  ([`9498914`](https://github.com/TimKleindick/general_manager/commit/949891471c2ef3d5bb78d3647218a9404315f2f7))
+
+- Validate manifest after final teardown
+  ([`1753145`](https://github.com/TimKleindick/general_manager/commit/1753145180e1fba3c360349d63668cfb780bc808))
+
+- Verify mixed-cache value preservation
+  ([`db9a804`](https://github.com/TimKleindick/general_manager/commit/db9a804f0a803a8077c8c3aba57faaab327e2d2d))
+
+
 ## v0.62.0 (2026-07-10)
 
 ### Bug Fixes
