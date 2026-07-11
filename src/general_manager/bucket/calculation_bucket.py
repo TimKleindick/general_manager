@@ -247,7 +247,11 @@ class _EnumerationEvidence:
 
 def _trusted_database_state_token(value: object) -> object | None:
     """Freeze exact built-in database bucket state without invoking value hooks."""
-    if isinstance(value, type):
+    try:
+        class_mro = type.__getattribute__(value, "__mro__")
+    except (AttributeError, TypeError):
+        class_mro = None
+    if type(class_mro) is tuple and class_mro and class_mro[0] is value:
         return ("class", id(value))
     scalar_token = _trusted_candidate_token(value)
     if scalar_token is not None:
@@ -308,11 +312,15 @@ def _database_source_signature(source: DatabaseBucket[GeneralManager]) -> object
     trusted_signature_token = _trusted_database_state_token(
         source._trusted_query_signature
     )
+    query_signature_cache_token = _trusted_database_state_token(
+        source._query_signature_cache
+    )
     if (
         filters_token is None
         or excludes_token is None
         or sort_keys_token is None
         or trusted_signature_token is None
+        or query_signature_cache_token is None
         or type(source._sort_reverse) is not bool
         or type(source._run_scoped_cacheable) is not bool
     ):
@@ -339,6 +347,7 @@ def _database_source_signature(source: DatabaseBucket[GeneralManager]) -> object
         source._sort_reverse,
         source._run_scoped_cacheable,
         id(source._query_signature_cache),
+        query_signature_cache_token,
         id(source._trusted_query_signature),
         trusted_signature_token,
     )

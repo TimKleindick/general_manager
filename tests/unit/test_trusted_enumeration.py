@@ -21,6 +21,7 @@ from general_manager.bucket.calculation_bucket import (
     CalculationBucket,
     _EnumerationEvidence,
     _TrustedToken,
+    _trusted_database_state_token,
     _trusted_candidate_token,
     _trusted_enumeration_evidence,
 )
@@ -2223,3 +2224,23 @@ def test_database_batch_membership_reuses_cached_primary_keys() -> None:
     assert bucket._contains_all_primary_keys((1, 1, 3))
     assert query.filter_calls == []
     assert query.evaluations == 0
+
+
+@pytest.mark.parametrize("container_name", ["filters", "excludes"])
+def test_database_state_token_rejects_hostile_class_attribute_without_hooks(
+    container_name: str,
+) -> None:
+    class HostileStateValue:
+        hook_calls = 0
+
+        def __getattribute__(self, name: str) -> object:
+            if name == "__class__":
+                type(self).hook_calls += 1
+                message = "hostile __class__ hook ran"
+                raise AssertionError(message)
+            return object.__getattribute__(self, name)
+
+    state = {container_name: [HostileStateValue()]}
+
+    assert _trusted_database_state_token(state) is None
+    assert HostileStateValue.hook_calls == 0

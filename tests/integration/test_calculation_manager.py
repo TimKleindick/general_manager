@@ -10,7 +10,11 @@ from django.db.models import CASCADE, CharField, ForeignKey, IntegerField
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils.crypto import get_random_string
-from general_manager.bucket.calculation_bucket import CalculationBucket
+from general_manager.bucket.calculation_bucket import (
+    CalculationBucket,
+    _DatabaseEnumerationEvidence,
+    _database_enumeration_evidence,
+)
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.manager.general_manager import GeneralManager
@@ -308,6 +312,57 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                         ),
                         dependencies,
                     )
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_hostile_database_state_is_ineligible_without_attribute_hooks(self):
+        employee = self.Employee.create(
+            name="Alice",
+            salary=Measurement(3000, "EUR"),
+            creator_id=self.user.id,
+        )
+
+        hostile_error = AssertionError("hostile __class__ hook ran")
+
+        class HostileStateValue:
+            hook_calls = 0
+
+            def __getattribute__(own, name):
+                if name == "__class__":
+                    type(own).hook_calls += 1
+                    raise hostile_error
+                return object.__getattribute__(own, name)
+
+        source = self.Employee.all()
+
+        class HostileStateCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=source)
+
+        bucket = CalculationBucket(HostileStateCalculation)
+        combinations = bucket._materialize_combinations(expose=False)
+        input_field = HostileStateCalculation.Interface.input_fields["employee"]
+        evidence = bucket._lookup_combination_evidence(combinations[0])["employee"]
+        self.assertIsInstance(evidence, _DatabaseEnumerationEvidence)
+        database_evidence = evidence
+        database_evidence.authorized_tokens = frozenset(
+            {database_evidence.primary_key_token}
+        )
+        source.filters["hostile"] = [HostileStateValue()]
+
+        self.assertFalse(database_evidence.authorizes(input_field, employee, {}))
+        self.assertEqual(HostileStateValue.hook_calls, 0)
+
+        creation_source = self.Employee.all()
+        creation_source.excludes["hostile"] = [HostileStateValue()]
+        creation_input = Input(self.Employee, possible_values=creation_source)
+        self.assertIsNone(
+            _database_enumeration_evidence(
+                creation_input,
+                creation_source,
+                employee,
+            )
+        )
+        self.assertEqual(HostileStateValue.hook_calls, 0)
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_static_filtered_database_source_keeps_two_query_batch_path(self):
