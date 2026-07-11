@@ -3646,6 +3646,25 @@ class TestSeededProvenanceGuards(TestCase):
                 {id(nested_function)},
             )
         )
+        self.assertFalse(
+            calculation_lifecycle_module._function_matches_snapshot(
+                nested_function,
+                replace(lifecycle_snapshot, closure=()),
+                set(),
+            )
+        )
+        empty_lifecycle_snapshot = calculation_lifecycle_module._function_snapshot(
+            empty_function,
+            set(),
+            include_attributes=False,
+        )
+        self.assertTrue(
+            calculation_lifecycle_module._function_matches_snapshot(
+                empty_function,
+                empty_lifecycle_snapshot,
+                set(),
+            )
+        )
 
     def test_additional_provenance_guard_edges_fail_closed(self):
         lifecycle = calculation_lifecycle_module
