@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import inspect
 import re
-from collections.abc import Hashable
+from collections.abc import Hashable, Mapping
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Type, cast
@@ -48,6 +49,39 @@ type OrmInterfaceClass = type["OrmInterfaceBase[models.Model]"]
 type OrmInterfaceInstance = "OrmInterfaceBase[models.Model]"
 type FilterKwargs = dict[str, object]
 _PayloadNormalizerType = PayloadNormalizer
+
+
+def _copy_query_plan_value(value: object) -> object:
+    """Copy built-in containers so a plan owns its normalized query values."""
+    if isinstance(value, Mapping):
+        return {
+            key: _copy_query_plan_value(item_value) for key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_copy_query_plan_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_copy_query_plan_value(item) for item in value)
+    if isinstance(value, set):
+        return {_copy_query_plan_value(item) for item in value}
+    if isinstance(value, frozenset):
+        return frozenset(_copy_query_plan_value(item) for item in value)
+    return value
+
+
+@dataclass(frozen=True)
+class _OrmQueryPlan:
+    """Immutable construction state for a trusted default ORM query bucket."""
+
+    queryset_base: models.QuerySet[models.Model]
+    normalized_items: tuple[tuple[str, object], ...]
+    include_inactive: bool
+    exclude: bool
+    search_date: datetime | None
+    trusted_signature: Hashable
+
+    def normalized_kwargs(self) -> FilterKwargs:
+        """Return a fresh mapping for the final queryset/bucket construction."""
+        return dict(self.normalized_items)
 
 
 class OrmPersistenceSupportCapability(BaseCapability):
@@ -896,6 +930,64 @@ class OrmQueryCapability(BaseCapability):
             normalized_kwargs=normalized_kwargs,
         )
 
+    def _build_query_plan(
+        self,
+        interface_cls: OrmInterfaceClass,
+        *,
+        include_inactive: bool,
+        normalized_kwargs: FilterKwargs,
+        exclude: bool,
+        search_date: datetime | None,
+    ) -> _OrmQueryPlan | None:
+        """Build one trusted default-ORM query plan, or request legacy fallback.
+
+        The plan is deliberately limited to the same exact support and recent
+        live-query admission used by the run-scoped queryset cache.  Historical
+        queries, custom support implementations, and unsafe signatures continue
+        through ``_build_bucket`` so their existing manager/history behavior is
+        preserved.
+        """
+        support = get_support_capability(interface_cls)
+        if type(support) is not OrmPersistenceSupportCapability:
+            return None
+        if search_date is not None and search_date <= timezone.now() - timedelta(
+            seconds=interface_cls.historical_lookup_buffer_seconds
+        ):
+            return None
+
+        queryset_base = (
+            support.get_manager(interface_cls, only_active=False).all()
+            if include_inactive
+            else support.get_queryset(interface_cls)
+        )
+        source_signature = self._trusted_query_source_signature(
+            interface_cls,
+            support,
+            include_inactive=include_inactive,
+            search_date=search_date,
+            historical=False,
+            history_handler=None,
+            database_alias=queryset_base.db,
+        )
+        trusted_signature = self._trusted_query_signature(
+            source_signature,
+            exclude=exclude,
+            normalized_kwargs=normalized_kwargs,
+        )
+        if trusted_signature is None:
+            return None
+        return _OrmQueryPlan(
+            queryset_base=queryset_base,
+            normalized_items=tuple(
+                (key, _copy_query_plan_value(value))
+                for key, value in normalized_kwargs.items()
+            ),
+            include_inactive=include_inactive,
+            exclude=exclude,
+            search_date=search_date,
+            trusted_signature=trusted_signature,
+        )
+
     def _build_or_reuse_bucket(
         self,
         interface_cls: OrmInterfaceClass,
@@ -906,30 +998,58 @@ class OrmQueryCapability(BaseCapability):
         search_date: datetime | None = None,
     ) -> DatabaseBucket["GeneralManager"]:
         context = current_calculation_run_context()
-        cache_signature: Hashable | None = None
         if context is not None:
-            cache_signature = self._run_scoped_query_bucket_signature(
+            plan = self._build_query_plan(
                 interface_cls,
                 include_inactive=include_inactive,
                 normalized_kwargs=normalized_kwargs,
                 exclude=exclude,
                 search_date=search_date,
             )
-        if context is not None and cache_signature is not None:
-            cached = context.get_orm_query_bucket(cache_signature)
-            if isinstance(cached, DatabaseBucket):
-                return cached._copy_for_run_context_reuse()
+            if plan is not None:
+                cached = context.get_orm_query_bucket(plan.trusted_signature)
+                if isinstance(cached, DatabaseBucket):
+                    return cached._copy_for_run_context_reuse()
 
-        bucket = self._build_bucket(
+                bucket = self._build_bucket(
+                    interface_cls,
+                    include_inactive=include_inactive,
+                    normalized_kwargs=normalized_kwargs,
+                    exclude=exclude,
+                    search_date=search_date,
+                    _query_plan=plan,
+                )
+                context.set_orm_query_bucket(plan.trusted_signature, bucket)
+                return bucket._copy_for_run_context_reuse()
+
+        return self._build_bucket(
             interface_cls,
             include_inactive=include_inactive,
             normalized_kwargs=normalized_kwargs,
             exclude=exclude,
             search_date=search_date,
         )
-        if context is not None and cache_signature is not None:
-            context.set_orm_query_bucket(cache_signature, bucket)
-            return bucket._copy_for_run_context_reuse()
+
+    def _build_bucket_from_plan(
+        self,
+        interface_cls: OrmInterfaceClass,
+        plan: _OrmQueryPlan,
+    ) -> DatabaseBucket["GeneralManager"]:
+        """Construct a bucket from an already-selected trusted query plan."""
+        normalized_kwargs = plan.normalized_kwargs()
+        queryset = (
+            plan.queryset_base.exclude(**normalized_kwargs)
+            if plan.exclude
+            else plan.queryset_base.filter(**normalized_kwargs)
+        )
+        bucket = DatabaseBucket(
+            queryset,
+            interface_cls._parent_class,
+            {} if plan.exclude else cast("dict[str, list[object]]", normalized_kwargs),
+            cast("dict[str, list[object]]", normalized_kwargs) if plan.exclude else {},
+            search_date=plan.search_date,
+        )
+        bucket._set_trusted_query_signature(plan.trusted_signature)
         return bucket
 
     def _build_bucket(
@@ -940,6 +1060,7 @@ class OrmQueryCapability(BaseCapability):
         normalized_kwargs: FilterKwargs,
         exclude: bool = False,
         search_date: datetime | None = None,
+        _query_plan: _OrmQueryPlan | None = None,
     ) -> DatabaseBucket["GeneralManager"]:
         """
         Builds a DatabaseBucket containing a queryset for the given interface class filtered or excluded by the provided normalized query kwargs.
@@ -953,6 +1074,9 @@ class OrmQueryCapability(BaseCapability):
         Returns:
             DatabaseBucket: Contains the resulting Django queryset for the interface's model, the interface's parent class, and a copy of the normalized kwargs.
         """
+        if _query_plan is not None:
+            return self._build_bucket_from_plan(interface_cls, _query_plan)
+
         support = get_support_capability(interface_cls)
         queryset_base = support.get_queryset(interface_cls)
         historical = False

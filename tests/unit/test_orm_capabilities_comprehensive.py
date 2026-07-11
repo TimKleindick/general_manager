@@ -13,6 +13,7 @@ from django.apps import apps
 from django.db import models
 from django.utils import timezone
 
+from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.capabilities.orm import (
     HistoryNotSupportedError,
@@ -1312,6 +1313,293 @@ class TestOrmQueryCapability:
             exclude=False,
             search_date=None,
         )
+
+    def test_build_or_reuse_bucket_builds_one_default_plan_per_run_cache_call(self):
+        """The default ORM path must not rebuild its base queryset for cache lookup."""
+        capability = OrmQueryCapability()
+        support = OrmPersistenceSupportCapability()
+
+        class Interface:
+            _model = models.Model
+            _parent_class = object
+            database = None
+            historical_lookup_buffer_seconds = 60
+
+        queryset = Mock()
+        queryset.db = "default"
+        queryset.model = Interface._model
+        queryset.filter.return_value = queryset
+        support.get_queryset = Mock(return_value=queryset)
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            CalculationRunContext(),
+        ):
+            first = capability._build_or_reuse_bucket(
+                Interface,
+                include_inactive=False,
+                normalized_kwargs={"name": "same"},
+            )
+            second = capability._build_or_reuse_bucket(
+                Interface,
+                include_inactive=False,
+                normalized_kwargs={"name": "same"},
+            )
+
+        assert first is not second
+        assert support.get_queryset.call_count == 2
+
+    def test_build_or_reuse_bucket_keeps_custom_support_on_legacy_path(self):
+        """Custom support implementations bypass the private plan admission."""
+        capability = OrmQueryCapability()
+        support = Mock()
+        built = Mock()
+
+        class Interface:
+            pass
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch.object(capability, "_build_bucket", return_value=built) as build,
+            CalculationRunContext(),
+        ):
+            result = capability._build_or_reuse_bucket(
+                Interface,
+                include_inactive=False,
+                normalized_kwargs={"name": "custom"},
+            )
+
+        assert result is built
+        build.assert_called_once_with(
+            Interface,
+            include_inactive=False,
+            normalized_kwargs={"name": "custom"},
+            exclude=False,
+            search_date=None,
+        )
+
+    def test_default_plan_instruments_filter_and_exclude_miss_and_hit(self):
+        capability = OrmQueryCapability()
+        support = OrmPersistenceSupportCapability()
+
+        class Interface:
+            _model = models.Model
+            _parent_class = object
+            database = None
+            historical_lookup_buffer_seconds = 60
+
+        queryset = Mock()
+        queryset.db = "default"
+        queryset.model = Interface._model
+        queryset.filter.return_value = queryset
+        queryset.exclude.return_value = queryset
+        support.get_queryset = Mock(return_value=queryset)
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            patch.object(
+                capability,
+                "_trusted_query_signature",
+                wraps=capability._trusted_query_signature,
+            ) as freeze_signature,
+            patch.object(
+                capability,
+                "_build_bucket",
+                wraps=capability._build_bucket,
+            ) as build_bucket,
+            CalculationRunContext(),
+        ):
+            capability._build_or_reuse_bucket(
+                Interface,
+                include_inactive=False,
+                normalized_kwargs={"name": "same"},
+            )
+            capability._build_or_reuse_bucket(
+                Interface,
+                include_inactive=False,
+                normalized_kwargs={"name": "same"},
+            )
+            capability._build_or_reuse_bucket(
+                Interface,
+                include_inactive=False,
+                normalized_kwargs={"name": "other"},
+                exclude=True,
+            )
+
+        assert support.get_queryset.call_count == 3
+        assert freeze_signature.call_count == 3
+        assert build_bucket.call_count == 2
+
+    def test_query_plan_owns_nested_normalized_values(self):
+        capability = OrmQueryCapability()
+        support = OrmPersistenceSupportCapability()
+
+        class Interface:
+            _model = models.Model
+            _parent_class = object
+            database = None
+            historical_lookup_buffer_seconds = 60
+
+        queryset = Mock()
+        queryset.db = "default"
+        support.get_queryset = Mock(return_value=queryset)
+        normalized = {"payload": {"values": [1]}}
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+        ):
+            plan = capability._build_query_plan(
+                Interface,
+                include_inactive=False,
+                normalized_kwargs=normalized,
+                exclude=False,
+                search_date=None,
+            )
+
+        assert plan is not None
+        normalized["payload"]["values"].append(2)
+        assert plan.normalized_kwargs() == {"payload": {"values": [1]}}
+
+    def test_include_inactive_plan_selects_only_all_manager(self):
+        capability = OrmQueryCapability()
+        support = OrmPersistenceSupportCapability()
+
+        class Interface:
+            _model = models.Model
+            _parent_class = object
+            database = None
+            historical_lookup_buffer_seconds = 60
+
+        queryset = Mock()
+        queryset.db = "default"
+        queryset.model = Interface._model
+        queryset.filter.return_value = queryset
+        all_manager = Mock()
+        all_manager.all.return_value = queryset
+        support.get_manager = Mock(return_value=all_manager)
+        support.get_queryset = Mock()
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=True,
+            ),
+            CalculationRunContext(),
+        ):
+            capability._build_or_reuse_bucket(
+                Interface,
+                include_inactive=True,
+                normalized_kwargs={"name": "same"},
+            )
+
+        support.get_queryset.assert_not_called()
+        support.get_manager.assert_called_once_with(Interface, only_active=False)
+        all_manager.all.assert_called_once_with()
+
+    def test_old_search_date_bypasses_default_query_plan(self):
+        capability = OrmQueryCapability()
+        support = OrmPersistenceSupportCapability()
+
+        class Interface:
+            _model = models.Model
+            _parent_class = object
+            database = None
+            historical_lookup_buffer_seconds = 60
+
+        built = Mock()
+        support.get_queryset = Mock()
+        old_date = timezone.now() - timedelta(days=1)
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch.object(capability, "_build_bucket", return_value=built) as build,
+            CalculationRunContext(),
+        ):
+            result = capability._build_or_reuse_bucket(
+                Interface,
+                include_inactive=False,
+                normalized_kwargs={"name": "historical"},
+                search_date=old_date,
+            )
+
+        assert result is built
+        support.get_queryset.assert_not_called()
+        build.assert_called_once_with(
+            Interface,
+            include_inactive=False,
+            normalized_kwargs={"name": "historical"},
+            exclude=False,
+            search_date=old_date,
+        )
+
+    def test_recent_search_date_uses_default_query_plan(self):
+        capability = OrmQueryCapability()
+        support = OrmPersistenceSupportCapability()
+
+        class Interface:
+            _model = models.Model
+            _parent_class = object
+            database = None
+            historical_lookup_buffer_seconds = 60
+
+        queryset = Mock()
+        queryset.db = "default"
+        queryset.model = Interface._model
+        queryset.filter.return_value = queryset
+        support.get_queryset = Mock(return_value=queryset)
+        recent_date = timezone.now() - timedelta(seconds=1)
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            CalculationRunContext(),
+        ):
+            result = capability._build_or_reuse_bucket(
+                Interface,
+                include_inactive=False,
+                normalized_kwargs={"name": "recent"},
+                search_date=recent_date,
+            )
+
+        assert isinstance(result, DatabaseBucket)
+        support.get_queryset.assert_called_once_with(Interface)
 
     def test_exclude_returns_database_bucket(self):
         """Test that exclude returns a DatabaseBucket with exclusion."""

@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pickle
 from types import MethodType
 from typing import Any, Literal, Protocol, Self, cast
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from django.contrib.auth.models import User
@@ -54,6 +54,10 @@ from general_manager.interface.base_interface import (
 )
 from general_manager.interface.capabilities.orm.history import OrmHistoryCapability
 from general_manager.interface.capabilities.orm.mutations import OrmMutationCapability
+from general_manager.interface.capabilities.orm.support import (
+    OrmPersistenceSupportCapability,
+    OrmQueryCapability,
+)
 from general_manager.interface.orm_interface import OrmInterfaceBase
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
@@ -215,6 +219,244 @@ def test_database_performance_manager_is_registry_isolated() -> None:
         GeneralManagerMeta.pending_graphql_interfaces,
     ):
         assert PerfUserManager not in registry
+
+
+def test_orm_query_plan_reduces_repeated_selection_and_freezing(
+    perf_budgets: PerfBudgets,
+) -> None:
+    """Record default filter/exclude plan work against the pre-plan path."""
+
+    class QueryPlanInterface:
+        _model = models.Model
+        _parent_class = object
+        database = None
+        historical_lookup_buffer_seconds = 60
+
+    class QuerySet:
+        db = "default"
+        model = models.Model
+
+        def filter(self, **_kwargs: object) -> "QuerySet":
+            return self
+
+        def exclude(self, **_kwargs: object) -> "QuerySet":
+            return self
+
+    queryset = QuerySet()
+    support = OrmPersistenceSupportCapability()
+    support.get_queryset = Mock(return_value=queryset)
+    capability = OrmQueryCapability()
+
+    def legacy_call(
+        context: CalculationRunContext,
+        *,
+        exclude: bool,
+        normalized_kwargs: dict[str, object],
+    ) -> None:
+        signature = capability._run_scoped_query_bucket_signature(
+            QueryPlanInterface,
+            include_inactive=False,
+            normalized_kwargs=normalized_kwargs,
+            exclude=exclude,
+            search_date=None,
+        )
+        assert signature is not None
+        cached = context.get_orm_query_bucket(signature)
+        if isinstance(cached, DatabaseBucket):
+            cached._copy_for_run_context_reuse()
+            return
+        bucket = capability._build_bucket(
+            QueryPlanInterface,
+            include_inactive=False,
+            normalized_kwargs=normalized_kwargs,
+            exclude=exclude,
+            search_date=None,
+        )
+        context.set_orm_query_bucket(signature, bucket)
+        bucket._copy_for_run_context_reuse()
+
+    constructor_calls = Counter()
+    original_init = DatabaseBucket.__init__
+
+    def counted_init(
+        bucket: DatabaseBucket[GeneralManager],
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        constructor_calls.increment()
+        original_init(bucket, *args, **kwargs)
+
+    with (
+        patch(
+            "general_manager.interface.capabilities.orm.support.get_support_capability",
+            return_value=support,
+        ),
+        patch(
+            "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+            return_value=False,
+        ),
+        patch.object(DatabaseBucket, "__init__", counted_init),
+        patch.object(
+            capability,
+            "_trusted_query_signature",
+            wraps=capability._trusted_query_signature,
+        ) as new_signature,
+        patch.object(
+            capability,
+            "_build_bucket",
+            wraps=capability._build_bucket,
+        ) as new_build,
+        CalculationRunContext(),
+    ):
+        capability._build_or_reuse_bucket(
+            QueryPlanInterface,
+            include_inactive=False,
+            normalized_kwargs={"name": "same"},
+        )
+        capability._build_or_reuse_bucket(
+            QueryPlanInterface,
+            include_inactive=False,
+            normalized_kwargs={"name": "same"},
+        )
+        capability._build_or_reuse_bucket(
+            QueryPlanInterface,
+            include_inactive=False,
+            normalized_kwargs={"name": "other"},
+            exclude=True,
+        )
+        capability._build_or_reuse_bucket(
+            QueryPlanInterface,
+            include_inactive=False,
+            normalized_kwargs={"name": "other"},
+            exclude=True,
+        )
+
+    new_base_selections = support.get_queryset.call_count
+    new_signature_freezes = new_signature.call_count
+    new_bucket_builds = new_build.call_count
+    new_constructors = constructor_calls.value
+
+    support.get_queryset.reset_mock()
+    constructor_calls.reset()
+    with (
+        patch(
+            "general_manager.interface.capabilities.orm.support.get_support_capability",
+            return_value=support,
+        ),
+        patch(
+            "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+            return_value=False,
+        ),
+        patch.object(DatabaseBucket, "__init__", counted_init),
+        patch.object(
+            capability,
+            "_trusted_query_signature",
+            wraps=capability._trusted_query_signature,
+        ) as legacy_signature,
+        patch.object(
+            capability,
+            "_build_bucket",
+            wraps=capability._build_bucket,
+        ) as legacy_build,
+        CalculationRunContext() as context,
+    ):
+        for exclude, name in (
+            (False, "same"),
+            (False, "same"),
+            (True, "other"),
+            (True, "other"),
+        ):
+            legacy_call(
+                context,
+                exclude=exclude,
+                normalized_kwargs={"name": name},
+            )
+
+    legacy_base_selections = support.get_queryset.call_count
+    legacy_signature_freezes = legacy_signature.call_count
+    legacy_bucket_builds = legacy_build.call_count
+    legacy_constructors = constructor_calls.value
+
+    assert new_base_selections < legacy_base_selections
+    assert new_signature_freezes < legacy_signature_freezes
+    assert new_bucket_builds == legacy_bucket_builds == 2
+    assert new_constructors == legacy_constructors == 6
+    perf_budgets.assert_observation(
+        "ORM_QUERY_PLAN_NEW_BASE_SELECTIONS", new_base_selections
+    )
+    perf_budgets.assert_observation(
+        "ORM_QUERY_PLAN_LEGACY_BASE_SELECTIONS", legacy_base_selections
+    )
+    perf_budgets.assert_observation(
+        "ORM_QUERY_PLAN_NEW_TRUSTED_SIGNATURES", new_signature_freezes
+    )
+    perf_budgets.assert_observation(
+        "ORM_QUERY_PLAN_LEGACY_TRUSTED_SIGNATURES", legacy_signature_freezes
+    )
+    perf_budgets.assert_observation(
+        "ORM_QUERY_PLAN_NEW_BUCKET_BUILDERS", new_bucket_builds
+    )
+    perf_budgets.assert_observation(
+        "ORM_QUERY_PLAN_LEGACY_BUCKET_BUILDERS", legacy_bucket_builds
+    )
+    perf_budgets.assert_observation(
+        "ORM_QUERY_PLAN_NEW_BUCKET_CONSTRUCTORS", new_constructors
+    )
+    perf_budgets.assert_observation(
+        "ORM_QUERY_PLAN_LEGACY_BUCKET_CONSTRUCTORS", legacy_constructors
+    )
+
+
+def test_orm_query_plan_preserves_custom_and_history_fallbacks(
+    perf_budgets: PerfBudgets,
+) -> None:
+    capability = OrmQueryCapability()
+
+    class QueryPlanInterface:
+        historical_lookup_buffer_seconds = 60
+
+    built = Mock()
+    old_date = datetime.now(UTC) - timedelta(days=1)
+    with (
+        patch.object(capability, "_build_bucket", return_value=built) as history_build,
+        patch(
+            "general_manager.interface.capabilities.orm.support.get_support_capability",
+            return_value=OrmPersistenceSupportCapability(),
+        ),
+        CalculationRunContext(),
+    ):
+        assert (
+            capability._build_or_reuse_bucket(
+                QueryPlanInterface,
+                include_inactive=False,
+                normalized_kwargs={"name": "history"},
+                search_date=old_date,
+            )
+            is built
+        )
+
+    custom_support = Mock()
+    with (
+        patch.object(capability, "_build_bucket", return_value=built) as custom_build,
+        patch(
+            "general_manager.interface.capabilities.orm.support.get_support_capability",
+            return_value=custom_support,
+        ),
+        CalculationRunContext(),
+    ):
+        assert (
+            capability._build_or_reuse_bucket(
+                QueryPlanInterface,
+                include_inactive=False,
+                normalized_kwargs={"name": "custom"},
+            )
+            is built
+        )
+
+    history_build.assert_called_once()
+    custom_build.assert_called_once()
+    perf_budgets.assert_observation("ORM_QUERY_PLAN_HISTORY_FALLBACK_BUILDS", 1)
+    perf_budgets.assert_observation("ORM_QUERY_PLAN_CUSTOM_FALLBACK_BUILDS", 1)
 
 
 def _expected_repeated_fk_parent_ids(
