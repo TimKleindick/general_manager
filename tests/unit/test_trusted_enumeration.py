@@ -33,6 +33,7 @@ from general_manager.interface.base_interface import (
 )
 from general_manager.manager.input import DateRangeDomain, Input, NumericRangeDomain
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 
 
 def _calculation_bucket_with_inputs(
@@ -53,6 +54,52 @@ def _calculation_bucket_with_inputs(
     manager_class = cast(type[GeneralManager], EnumerationManager)
     EnumerationInterface._parent_class = manager_class
     return CalculationBucket(manager_class)
+
+
+def _real_calculation_bucket(
+    input_field: Input[type[object]],
+    *,
+    interface_attributes: dict[str, object] | None = None,
+    manager_attributes: dict[str, object] | None = None,
+) -> CalculationBucket[GeneralManager]:
+    """Build a real default manager without retaining metaclass registry entries."""
+    interface = cast(
+        type[CalculationInterface],
+        type(
+            "TrustedWiringInterface",
+            (CalculationInterface,),
+            {
+                "__module__": __name__,
+                "code": input_field,
+                **(interface_attributes or {}),
+            },
+        ),
+    )
+    registries = (
+        GeneralManagerMeta.all_classes,
+        GeneralManagerMeta.read_only_classes,
+        GeneralManagerMeta.pending_attribute_initialization,
+        GeneralManagerMeta.pending_graphql_interfaces,
+    )
+    snapshots = tuple(tuple(registry) for registry in registries)
+    manager = cast(
+        type[GeneralManager],
+        type(
+            "TrustedWiringManager",
+            (GeneralManager,),
+            {
+                "__module__": __name__,
+                "Interface": interface,
+                **(manager_attributes or {}),
+            },
+        ),
+    )
+    for registry in registries:
+        while manager in registry:
+            registry.remove(manager)
+    manager.Interface._parent_class = manager
+    assert tuple(tuple(registry) for registry in registries) == snapshots
+    return CalculationBucket(manager)
 
 
 class EvidenceDouble:
@@ -1302,3 +1349,426 @@ def test_early_generator_termination_revokes_only_new_evidence(
         for combination in existing
     )
     assert bucket._lookup_combination_evidence(escaped) is None
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_default_manager_plan_uses_trusted_scalar_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_field = cast(Input[type[object]], Input(int, possible_values=[1, 2]))
+    bucket = _real_calculation_bucket(input_field)
+    resolutions = 0
+    original = Input.resolve_possible_values
+
+    def counted_resolve(
+        self: Input[type[object]],
+        identification: dict[str, object] | None = None,
+        *,
+        cache_context: tuple[type[object], str] | None = None,
+    ) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original(self, identification, cache_context=cache_context)
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+
+    assert bucket._uses_standard_trusted_construction()
+    assert [manager.identification for manager in bucket] == [
+        {"code": 1},
+        {"code": 2},
+    ]
+    assert resolutions == 1
+    assert bucket._combination_evidence == {}
+
+
+@pytest.mark.parametrize(
+    "override_name",
+    [
+        "__init__",
+        "parse_input_fields_to_identification",
+        "_process_input_field",
+        "format_identification",
+    ],
+)
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_interface_hook_overrides_fall_back_to_membership_validation(
+    override_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_field = cast(Input[type[object]], Input(int, possible_values=[1]))
+    bucket = _real_calculation_bucket(input_field)
+    interface = bucket._manager_class.Interface
+    original = getattr(InterfaceBase, override_name)
+
+    if override_name == "format_identification":
+        monkeypatch.setattr(
+            interface,
+            override_name,
+            staticmethod(lambda identification: original(identification)),
+        )
+    else:
+
+        def wrapper(self: InterfaceBase, *args: object, **kwargs: object) -> object:
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(interface, override_name, wrapper)
+
+    resolutions = 0
+    resolve = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return resolve(*args, **kwargs)
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+
+    assert not bucket._uses_standard_trusted_construction()
+    assert next(iter(bucket)).identification == {"code": 1}
+    assert resolutions == 2
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_custom_manager_constructor_falls_back_to_membership_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+
+    def manager_init(self: GeneralManager, **kwargs: object) -> None:
+        calls.append(1)
+        GeneralManager.__init__(self, **kwargs)
+
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1])),
+        manager_attributes={"__init__": manager_init},
+    )
+    resolutions = 0
+    original = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+
+    assert not bucket._uses_standard_trusted_construction()
+    assert next(iter(bucket)).identification == {"code": 1}
+    assert calls == [1]
+    assert resolutions == 2
+
+
+@pytest.mark.parametrize(
+    "shadow_name",
+    [
+        "cast",
+        "normalize",
+        "validate_bounds",
+        "validate_with_callable",
+        "resolve_possible_values",
+    ],
+)
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_input_instance_behavior_shadows_disable_trusted_construction(
+    shadow_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_field = cast(Input[type[object]], Input(int, possible_values=[1]))
+    resolutions = 0
+    original_resolve = input_field.resolve_possible_values
+    if shadow_name == "resolve_possible_values":
+
+        def shadowed_resolve(*args: object, **kwargs: object) -> object:
+            nonlocal resolutions
+            resolutions += 1
+            return original_resolve(*args, **kwargs)
+
+        setattr(input_field, shadow_name, shadowed_resolve)
+    else:
+        setattr(input_field, shadow_name, getattr(input_field, shadow_name))
+        class_resolve = Input.resolve_possible_values
+
+        def counted_resolve(*args: object, **kwargs: object) -> object:
+            nonlocal resolutions
+            resolutions += 1
+            return class_resolve(*args, **kwargs)
+
+        monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+    bucket = _real_calculation_bucket(input_field)
+
+    assert not bucket._uses_standard_trusted_construction()
+    assert next(iter(bucket)).identification == {"code": 1}
+    assert resolutions == 2
+    with pytest.raises(
+        InvalidInputValueError,
+        match=r"^Invalid value for code: 2, allowed: \[1\]\.$",
+    ):
+        bucket._manager_class(code=2)
+
+
+def test_input_subclass_disables_trusted_construction() -> None:
+    class CustomInput(Input[type[int]]):
+        pass
+
+    input_field = cast(Input[type[object]], CustomInput(int, possible_values=[1]))
+    bucket = _real_calculation_bucket(input_field)
+
+    assert not bucket._uses_standard_trusted_construction()
+
+
+def test_added_input_instance_state_disables_trusted_construction() -> None:
+    input_field = cast(Input[type[object]], Input(int, possible_values=[1]))
+    bucket = _real_calculation_bucket(input_field)
+    assert bucket._uses_standard_trusted_construction()
+
+    bucket.input_fields["code"].audit_marker = True  # type: ignore[attr-defined]
+
+    assert not bucket._uses_standard_trusted_construction()
+
+
+def test_non_boolean_default_tracking_marker_disables_trusted_construction() -> None:
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1]))
+    )
+    type.__setattr__(
+        bucket._manager_class,
+        "_gm_uses_default_identification_dependency_active",
+        1,
+    )
+
+    assert not bucket._uses_standard_trusted_construction()
+
+
+def test_non_manager_aliasing_base_constructor_fails_closed() -> None:
+    class AliasedInterface(CalculationInterface):
+        input_fields: ClassVar[dict[str, Input[type[object]]]] = {
+            "code": cast(Input[type[object]], Input(int, possible_values=[1]))
+        }
+
+    class AliasedManager:
+        Interface = AliasedInterface
+        __init__ = GeneralManager.__init__
+
+    AliasedInterface._parent_class = cast(type[GeneralManager], AliasedManager)
+    bucket = CalculationBucket(cast(type[GeneralManager], AliasedManager))
+
+    assert not bucket._uses_standard_trusted_construction()
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_custom_identification_dependency_tracking_falls_back_and_runs() -> None:
+    calls: list[dict[str, object]] = []
+
+    @classmethod
+    def track(cls: type[GeneralManager], identification: dict[str, object]) -> None:
+        calls.append(identification.copy())
+
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1])),
+        manager_attributes={"_track_identification_dependency_active": track},
+    )
+
+    assert not bucket._uses_standard_trusted_construction()
+    assert next(iter(bucket)).identification == {"code": 1}
+    assert calls == []  # No active dependency tracker, but the custom path is retained.
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_trusted_iteration_preserves_normalization_bounds_and_validator() -> None:
+    validator_calls: list[int] = []
+    input_field = cast(
+        Input[type[object]],
+        Input(
+            int,
+            possible_values=[1, 2],
+            min_value=1,
+            max_value=2,
+            validator=lambda value: validator_calls.append(value) is None,
+            normalizer=lambda value: value,
+        ),
+    )
+    bucket = _real_calculation_bucket(input_field)
+
+    assert [manager.identification["code"] for manager in bucket] == [1, 2]
+    assert validator_calls == [1, 2]
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_changed_normalized_value_revokes_trust_and_raises_public_error() -> None:
+    input_field = cast(
+        Input[type[object]],
+        Input(int, possible_values=[1], normalizer=lambda value: value + 1),
+    )
+    bucket = _real_calculation_bucket(input_field)
+
+    with pytest.raises(
+        InvalidInputValueError,
+        match=r"^Invalid value for code: 2, allowed: \[1\]\.$",
+    ):
+        next(iter(bucket))
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_iterator_close_and_second_iteration_revoke_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_field = cast(Input[type[object]], Input(int, possible_values=[1, 2]))
+    bucket = _real_calculation_bucket(input_field)
+    iterator = iter(bucket)
+
+    assert next(iterator).identification == {"code": 1}
+    iterator.close()
+    assert bucket._combination_evidence == {}
+
+    resolutions = 0
+    original = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+    assert [manager.identification["code"] for manager in bucket] == [1, 2]
+    assert resolutions == 2
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_public_invalid_construction_never_uses_bucket_evidence() -> None:
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1]))
+    )
+    bucket._materialize_combinations(expose=False)
+
+    with pytest.raises(
+        InvalidInputValueError,
+        match=r"^Invalid value for code: 2, allowed: \[1\]\.$",
+    ):
+        bucket._manager_class(code=2)
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_trust_scope_is_absent_after_each_yield() -> None:
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1, 2]))
+    )
+    iterator = iter(bucket)
+
+    assert next(iterator).identification == {"code": 1}
+    with pytest.raises(InvalidInputValueError):
+        bucket._manager_class(code=3)
+    assert next(iterator).identification == {"code": 2}
+    with pytest.raises(StopIteration):
+        next(iterator)
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_late_validator_failure_keeps_lazy_timing_and_clears_evidence() -> None:
+    input_field = cast(
+        Input[type[object]],
+        Input(
+            int,
+            possible_values=[1, 2],
+            validator=lambda value: value == 1,
+        ),
+    )
+    bucket = _real_calculation_bucket(input_field)
+    iterator = iter(bucket)
+
+    assert next(iterator).identification == {"code": 1}
+    with pytest.raises(InvalidInputConstraintError):
+        next(iterator)
+    assert bucket._combination_evidence == {}
+
+
+@pytest.mark.parametrize("operation", ["first", "index", "contains", "preview"])
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_short_circuit_operations_clear_trusted_evidence(operation: str) -> None:
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1, 2]))
+    )
+
+    if operation == "first":
+        assert bucket.first() is not None
+    elif operation == "index":
+        assert bucket[0].identification == {"code": 1}
+    elif operation == "contains":
+        assert bucket._manager_class(code=1) in bucket
+    else:
+        assert str(bucket).startswith("CalculationBucket (2)[")
+
+    assert bucket._combination_evidence == {}
+
+
+def test_trusted_preparation_error_clears_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1]))
+    )
+    bucket._materialize_combinations(expose=False)
+
+    expected = RuntimeError("preparation failed")
+
+    def fail_preparation() -> bool:
+        raise expected
+
+    monkeypatch.setattr(bucket, "_uses_standard_trusted_construction", fail_preparation)
+    with pytest.raises(RuntimeError, match="preparation failed"):
+        next(iter(bucket))
+
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_eager_property_filter_clears_evidence_after_trusted_construction() -> None:
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1, 2])),
+        manager_attributes={
+            "doubled": property(lambda manager: manager.identification["code"] * 2)
+        },
+    )
+    bucket._filters = {
+        "doubled": {"filter_funcs": [lambda value: value >= 4]},
+    }
+
+    assert bucket._materialize_combinations(expose=False) == [{"code": 2}]
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_property_error_clears_evidence() -> None:
+    expected = RuntimeError("property failed")
+
+    def fail_property(_manager: GeneralManager) -> object:
+        raise expected
+
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1])),
+        manager_attributes={"broken": property(fail_property)},
+    )
+    bucket._filters = {
+        "broken": {"filter_funcs": [lambda _value: True]},
+    }
+
+    with pytest.raises(RuntimeError, match="property failed"):
+        bucket._materialize_combinations(expose=False)
+    assert bucket._combination_evidence == {}
+
+
+def test_constructor_error_clears_evidence() -> None:
+    expected = RuntimeError("constructor failed")
+
+    def fail_constructor(_self: GeneralManager, **_kwargs: object) -> None:
+        raise expected
+
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1])),
+        manager_attributes={"__init__": fail_constructor},
+    )
+
+    with pytest.raises(RuntimeError, match="constructor failed"):
+        next(iter(bucket))
+    assert bucket._combination_evidence == {}

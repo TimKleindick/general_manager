@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from collections.abc import Hashable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 import struct
@@ -24,8 +25,10 @@ from uuid import UUID
 from operator import attrgetter
 from copy import deepcopy
 from general_manager.interface.base_interface import (
+    InterfaceBase,
     generalManagerClassName,
     GeneralManagerType,
+    _trusted_enumeration_scope,
 )
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.indexing import freeze_bucket_index_value
@@ -50,7 +53,22 @@ _INPUT_BEHAVIOR_OVERRIDE_NAMES = frozenset(
         "resolve_possible_values",
         "normalize",
         "cast",
+        "validate_bounds",
+        "validate_with_callable",
         "_build_dependency_values",
+    }
+)
+_INPUT_STATE_NAMES = frozenset(
+    {
+        "type",
+        "possible_values",
+        "required",
+        "min_value",
+        "max_value",
+        "validator",
+        "normalizer",
+        "is_manager",
+        "depends_on",
     }
 )
 _NUMERIC_RANGE_STATE_NAMES = frozenset({"kind", "min_value", "max_value", "step"})
@@ -271,6 +289,21 @@ def _input_has_behavior_override(input_field: Input[type[object]]) -> bool:
         ):
             return True
     return False
+
+
+def _input_has_exact_standard_state(input_field: Input[type[object]]) -> bool:
+    """Reject added, missing, or hostile Input instance state without hooks."""
+    instance_state = input_field.__dict__
+    if type(instance_state) is not dict or len(instance_state) != len(
+        _INPUT_STATE_NAMES
+    ):
+        return False
+    for state_name in instance_state:
+        if type(state_name) is not str:
+            return False
+        if not any(state_name == expected for expected in _INPUT_STATE_NAMES):
+            return False
+    return True
 
 
 def _trusted_dependency_names_match(
@@ -709,6 +742,79 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if exposed:
             self._evidence_exposed = True
 
+    def _uses_standard_trusted_construction(self) -> bool:
+        """Return whether manager construction follows the audited base path."""
+        from general_manager.manager.general_manager import GeneralManager
+
+        manager_class = self._manager_class
+        interface_class = manager_class.Interface
+        if not issubclass(manager_class, GeneralManager):
+            return False
+        if manager_class.__init__ is not GeneralManager.__init__:
+            return False
+        if (
+            type.__getattribute__(
+                manager_class,
+                "_gm_uses_default_identification_dependency_active",
+            )
+            is not True
+        ):
+            return False
+        if interface_class.__init__ is not InterfaceBase.__init__:
+            return False
+        if (
+            interface_class.parse_input_fields_to_identification
+            is not InterfaceBase.parse_input_fields_to_identification
+            or interface_class._process_input_field
+            is not InterfaceBase._process_input_field
+            or interface_class.format_identification
+            is not InterfaceBase.format_identification
+        ):
+            return False
+        if getattr(interface_class, "_parent_class", None) is not manager_class:
+            return False
+        if type(self.input_fields) is not dict:
+            return False
+        if interface_class.input_fields is not self.input_fields:
+            return False
+        return all(
+            type(input_field) is Input
+            and _input_has_exact_standard_state(input_field)
+            and not _input_has_behavior_override(input_field)
+            for input_field in self.input_fields.values()
+        )
+
+    def _manager_from_combination(
+        self,
+        combination: Combination,
+        *,
+        allow_trust: bool,
+    ) -> GeneralManagerType:
+        """Construct one manager inside a synchronous, single-use trust scope."""
+        evidence = (
+            self._lookup_combination_evidence(combination) if allow_trust else None
+        )
+        if evidence is None:
+            return self._manager_class(**combination)
+        with _trusted_enumeration_scope(self._manager_class.Interface, evidence):
+            return self._manager_class(**combination)
+
+    @contextmanager
+    def _trusted_construction_pass(
+        self,
+        combinations: Iterable[Combination],
+    ) -> Iterator[bool]:
+        """Own provenance for one construction pass and revoke it on every exit."""
+        del combinations  # Reserved for database-backed evidence preparation.
+        try:
+            allow_trust = (
+                not self._evidence_exposed
+                and self._uses_standard_trusted_construction()
+            )
+            yield allow_trust
+        finally:
+            self._invalidate_combination_evidence()
+
     def __eq__(self, other: object) -> bool:
         """
         Compare two calculation buckets for structural equality.
@@ -1091,8 +1197,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             GeneralManagerType: Manager constructed from each valid set of inputs.
         """
         combinations = self._materialize_combinations(expose=False)
-        for combo in combinations:
-            yield self._manager_class(**combo)
+        with self._trusted_construction_pass(combinations) as allow_trust:
+            for combo in combinations:
+                yield self._manager_from_combination(
+                    combo,
+                    allow_trust=allow_trust,
+                )
 
     def _sort_filters(self, sorted_inputs: List[str]) -> SortedFilters:
         """
@@ -1176,7 +1286,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         combinations: list[Combination],
     ) -> list[GeneralManagerType]:
         """Instantiate managers for each raw input-combination dictionary."""
-        return [self._manager_class(**combo) for combo in combinations]
+        with self._trusted_construction_pass(combinations) as allow_trust:
+            return [
+                self._manager_from_combination(combo, allow_trust=allow_trust)
+                for combo in combinations
+            ]
 
     @staticmethod
     def _manager_identifications(
@@ -1560,10 +1674,16 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         :meth:`generate_combinations`, but lets ``__str__`` stop after enough
         matching combinations have been found.
         """
-        for combo in combinations:
-            manager = self._manager_class(**combo)
-            if self._filter_prop_combinations([manager], prop_filters, prop_excludes):
-                yield manager.identification
+        with self._trusted_construction_pass(combinations) as allow_trust:
+            for combo in combinations:
+                manager = self._manager_from_combination(
+                    combo,
+                    allow_trust=allow_trust,
+                )
+                if self._filter_prop_combinations(
+                    [manager], prop_filters, prop_excludes
+                ):
+                    yield manager.identification
 
     def _filter_prop_combinations(
         self,
@@ -1621,10 +1741,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             GeneralManagerType | None: First instance or None when no combinations exist.
         """
+        iterator = iter(self)
         try:
-            return next(iter(self))
+            return next(iterator)
         except StopIteration:
             return None
+        finally:
+            iterator.close()
 
     def last(self) -> GeneralManagerType | None:
         """
@@ -1683,7 +1806,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             new_bucket._data = result
             new_bucket._evidence_exposed = True
             return new_bucket
-        return self._manager_class(**result)
+        with self._trusted_construction_pass((result,)) as allow_trust:
+            return self._manager_from_combination(
+                result,
+                allow_trust=allow_trust,
+            )
 
     def __contains__(self, item: GeneralManagerType) -> bool:
         """
@@ -1695,7 +1822,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             bool: True when the instance matches one of the generated combinations.
         """
-        return any(item == mgr for mgr in self)
+        iterator = iter(self)
+        try:
+            return any(item == manager for manager in iterator)
+        finally:
+            iterator.close()
 
     def get(self, **kwargs: object) -> GeneralManagerType:
         """
