@@ -125,6 +125,129 @@ class _nonExistent:
     pass
 
 
+_MANAGER_ATTRIBUTE_DESCRIPTOR_STATE = frozenset(
+    {
+        "_attr_name",
+        "_class",
+        "_dependency_tracking_value_class",
+        "_non_tracking_value_class",
+        "_dependency_tracking_manager_class",
+    }
+)
+
+
+class _ManagerAttributeDescriptor:
+    def __init__(
+        self,
+        descriptor_attr_name: str,
+        descriptor_class: type[GeneralManager],
+    ) -> None:
+        self._attr_name = descriptor_attr_name
+        self._class = descriptor_class
+        self._dependency_tracking_value_class: type | object = (
+            _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN
+        )
+        self._non_tracking_value_class: type | object = (
+            _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN
+        )
+        self._dependency_tracking_manager_class: type[GeneralManager] | None = None
+
+    def __get__(
+        self,
+        instance: GeneralManager | None,
+        owner: type[GeneralManager] | None = None,
+    ) -> object:
+        if instance is None:
+            return self._class.Interface.get_field_type(self._attr_name)
+        try:
+            manager_state_valid = instance._manager_state_valid
+        except AttributeError:
+            manager_state_valid = True
+        if not manager_state_valid:
+            reason = getattr(
+                instance,
+                "_manager_state_reason",
+                "manager state is invalid",
+            )
+            raise InvalidManagerStateError(
+                instance.__class__.__name__,
+                reason,
+                self._attr_name,
+            )
+        try:
+            cache = instance._attribute_value_cache
+        except AttributeError:
+            cache = None
+        if cache is not None:
+            try:
+                cached_attribute = cache[self._attr_name]
+            except (KeyError, TypeError):
+                pass
+            else:
+                cached_attribute_class = cached_attribute.__class__
+                if cached_attribute_class is self._non_tracking_value_class:
+                    return cached_attribute
+                if cached_attribute_class is self._dependency_tracking_value_class:
+                    manager_class = self._dependency_tracking_manager_class
+                else:
+                    manager_class = _manager_dependency_tracking_class(
+                        cached_attribute_class
+                    )
+                    self._dependency_tracking_value_class = cached_attribute_class
+                    self._dependency_tracking_manager_class = manager_class
+                    if manager_class is None:
+                        self._non_tracking_value_class = cached_attribute_class
+                if manager_class is not None and DependencyTracker.is_active():
+                    manager_attribute = cast("GeneralManager", cached_attribute)
+                    manager_attribute._track_own_identification_dependency_active()
+                return cached_attribute
+        attribute = instance._attributes.get(self._attr_name, _nonExistent)
+        if attribute is _nonExistent:
+            logger.warning(
+                "missing attribute on manager instance",
+                context={
+                    "attribute": self._attr_name,
+                    "manager": instance.__class__.__name__,
+                },
+            )
+            raise MissingAttributeError(self._attr_name, instance.__class__.__name__)
+        if callable(attribute):
+            try:
+                attribute = attribute(instance._interface)
+            except Exception as e:
+                logger.exception(
+                    "attribute evaluation failed",
+                    context={
+                        "attribute": self._attr_name,
+                        "manager": instance.__class__.__name__,
+                        "error": type(e).__name__,
+                    },
+                )
+                raise AttributeEvaluationError(self._attr_name, e) from e
+        if cache is not None:
+            try:
+                cache[self._attr_name] = attribute
+            except TypeError:
+                pass
+        return attribute
+
+
+def _is_canonical_manager_attribute_descriptor(
+    descriptor: object,
+    manager_class: type[GeneralManager],
+    field_name: str,
+) -> bool:
+    """Return whether ``descriptor`` is the exact installed manager field."""
+    if type(descriptor) is not _ManagerAttributeDescriptor:
+        return False
+    state = descriptor.__dict__
+    return (
+        state.keys() == _MANAGER_ATTRIBUTE_DESCRIPTOR_STATE
+        and state["_class"] is manager_class
+        and state["_attr_name"] is field_name
+    )
+
+
 class GeneralManagerMeta(type):
     """
     Metaclass responsible for wiring GeneralManager interfaces and registries.
@@ -491,153 +614,8 @@ class GeneralManagerMeta(type):
             attr_name: str,
             new_class: type[GeneralManager],
         ) -> object:
-            """
-            Create a descriptor that provides attribute access backed by an instance's interface attributes.
-
-            When accessed on the class, the descriptor returns the field type by delegating to the class's `Interface.get_field_type` for the configured attribute name. When accessed on an instance, it returns the value stored in `instance._attributes[attr_name]`. If the stored value is callable, it is invoked with `instance._interface` and the resulting value is returned. If the attribute is not present on the instance, a `MissingAttributeError` is raised. If invoking a callable attribute raises an exception, that error is wrapped in `AttributeEvaluationError`.
-
-            Parameters:
-                attr_name (str): The name of the attribute the descriptor resolves.
-                new_class (type[GeneralManager]): The class that will receive the descriptor; used to access its `Interface`.
-
-            Returns:
-                descriptor (object): A descriptor object suitable for assigning as a class attribute.
-            """
-
-            class Descriptor:
-                def __init__(
-                    self,
-                    descriptor_attr_name: str,
-                    descriptor_class: type[GeneralManager],
-                ) -> None:
-                    self._attr_name = descriptor_attr_name
-                    self._class = descriptor_class
-                    self._dependency_tracking_value_class: type | object = (
-                        _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN
-                    )
-                    self._non_tracking_value_class: type | object = (
-                        _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN
-                    )
-                    self._dependency_tracking_manager_class: (
-                        type[GeneralManager] | None
-                    ) = None
-
-                def __get__(
-                    self,
-                    instance: GeneralManager | None,
-                    owner: type[GeneralManager] | None = None,
-                ) -> object:
-                    """
-                    Provide the class field type when accessed on the class, or resolve and return the stored attribute value for an instance.
-
-                    When accessed on a class, returns the field type from the class's Interface via Interface.get_field_type.
-                    When accessed on an instance, retrieves the value stored in instance._attributes for this descriptor's attribute name;
-                    if the stored value is callable, it is invoked with instance._interface and the result is returned.
-
-                    Returns:
-                        The field type (when accessed on the class) or the resolved attribute value from the instance.
-
-                    Raises:
-                        KeyError: If class-level field type resolution cannot
-                            find the field in the interface metadata.
-                        InvalidManagerStateError: If the instance was
-                            invalidated before access.
-                        MissingAttributeError: If the attribute is not present in instance._attributes.
-                        AttributeEvaluationError: If calling a callable
-                            attribute raises an exception; the original
-                            exception is chained as ``__cause__`` and the
-                            message starts with
-                            ``"Error calling attribute {name}:"``.
-                    """
-                    if instance is None:
-                        return self._class.Interface.get_field_type(self._attr_name)
-                    try:
-                        manager_state_valid = instance._manager_state_valid
-                    except AttributeError:
-                        manager_state_valid = True
-                    if not manager_state_valid:
-                        reason = getattr(
-                            instance,
-                            "_manager_state_reason",
-                            "manager state is invalid",
-                        )
-                        raise InvalidManagerStateError(
-                            instance.__class__.__name__,
-                            reason,
-                            self._attr_name,
-                        )
-                    try:
-                        cache = instance._attribute_value_cache
-                    except AttributeError:
-                        cache = None
-                    if cache is not None:
-                        try:
-                            cached_attribute = cache[self._attr_name]
-                        except (KeyError, TypeError):
-                            pass
-                        else:
-                            cached_attribute_class = cached_attribute.__class__
-                            if cached_attribute_class is self._non_tracking_value_class:
-                                return cached_attribute
-                            if (
-                                cached_attribute_class
-                                is self._dependency_tracking_value_class
-                            ):
-                                manager_class = self._dependency_tracking_manager_class
-                            else:
-                                manager_class = _manager_dependency_tracking_class(
-                                    cached_attribute_class
-                                )
-                                self._dependency_tracking_value_class = (
-                                    cached_attribute_class
-                                )
-                                self._dependency_tracking_manager_class = manager_class
-                                if manager_class is None:
-                                    self._non_tracking_value_class = (
-                                        cached_attribute_class
-                                    )
-                            if (
-                                manager_class is not None
-                                and DependencyTracker.is_active()
-                            ):
-                                manager_attribute = cast(
-                                    "GeneralManager", cached_attribute
-                                )
-                                manager_attribute._track_own_identification_dependency_active()
-                            return cached_attribute
-                    attribute = instance._attributes.get(self._attr_name, _nonExistent)
-                    if attribute is _nonExistent:
-                        logger.warning(
-                            "missing attribute on manager instance",
-                            context={
-                                "attribute": self._attr_name,
-                                "manager": instance.__class__.__name__,
-                            },
-                        )
-                        raise MissingAttributeError(
-                            self._attr_name, instance.__class__.__name__
-                        )
-                    if callable(attribute):
-                        try:
-                            attribute = attribute(instance._interface)
-                        except Exception as e:
-                            logger.exception(
-                                "attribute evaluation failed",
-                                context={
-                                    "attribute": self._attr_name,
-                                    "manager": instance.__class__.__name__,
-                                    "error": type(e).__name__,
-                                },
-                            )
-                            raise AttributeEvaluationError(self._attr_name, e) from e
-                    if cache is not None:
-                        try:
-                            cache[self._attr_name] = attribute
-                        except TypeError:
-                            pass
-                    return attribute
-
-            return Descriptor(attr_name, new_class)
+            """Create the stable private descriptor for one manager attribute."""
+            return _ManagerAttributeDescriptor(attr_name, new_class)
 
         for attr_name in attributes:
             setattr(new_class, attr_name, descriptor_method(attr_name, new_class))

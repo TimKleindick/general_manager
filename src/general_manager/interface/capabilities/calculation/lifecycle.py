@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import FunctionType
 from typing import TYPE_CHECKING, ClassVar
 
 from general_manager.bucket.calculation_bucket import CalculationBucket
@@ -16,6 +17,34 @@ from ._compat import call_with_observability
 if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.interfaces.calculation import (
         CalculationInterface,
+    )
+
+
+_CALCULATION_INPUT_ACCESSOR_TOKEN = object()
+_CALCULATION_INPUT_ACCESSOR_STATE = frozenset(
+    {
+        "_gm_calculation_input_accessor_token",
+        "_gm_calculation_interface_cls",
+        "_gm_calculation_field_name",
+    }
+)
+
+
+def _is_canonical_calculation_input_accessor(
+    accessor: object,
+    interface_cls: type["CalculationInterface"],
+    field_name: str,
+) -> bool:
+    """Return whether ``accessor`` is the exact callable created for a field."""
+    if type(accessor) is not FunctionType:
+        return False
+    state = accessor.__dict__
+    return (
+        state.keys() == _CALCULATION_INPUT_ACCESSOR_STATE
+        and state["_gm_calculation_input_accessor_token"]
+        is _CALCULATION_INPUT_ACCESSOR_TOKEN
+        and state["_gm_calculation_interface_cls"] is interface_cls
+        and state["_gm_calculation_field_name"] is field_name
     )
 
 
@@ -133,6 +162,15 @@ class CalculationReadCapability(BaseCapability):
             def _access(interface_instance: "CalculationInterface") -> object:
                 return _resolve_input_value(interface_instance, field_name)
 
+            _access.__dict__.update(
+                {
+                    "_gm_calculation_input_accessor_token": (
+                        _CALCULATION_INPUT_ACCESSOR_TOKEN
+                    ),
+                    "_gm_calculation_interface_cls": interface_cls,
+                    "_gm_calculation_field_name": field_name,
+                }
+            )
             return _access
 
         return {

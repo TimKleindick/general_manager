@@ -8,6 +8,9 @@ from general_manager.interface.capabilities.calculation import (
     CalculationLifecycleCapability,
     CalculationQueryCapability,
 )
+from general_manager.interface.capabilities.calculation.lifecycle import (
+    _is_canonical_calculation_input_accessor,
+)
 from general_manager.interface.capabilities.configuration import (
     InterfaceCapabilityConfig,
 )
@@ -90,6 +93,43 @@ class TestCalculationInterface(TestCase):
         for _name, attr in attributes.items():
             self.assertTrue(callable(attr))
             self.assertIn(attr(self.interface), ("test", 1))
+
+    def test_calculation_input_accessors_carry_exact_private_provenance(self):
+        attributes = DummyCalculationInterface.get_attributes()
+
+        self.assertTrue(
+            _is_canonical_calculation_input_accessor(
+                attributes["field1"], DummyCalculationInterface, "field1"
+            )
+        )
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                attributes["field1"], DummyCalculationInterface, "field2"
+            )
+        )
+
+    def test_calculation_input_accessor_provenance_rejects_substitution(self):
+        class DerivedCalculationInterface(DummyCalculationInterface):
+            pass
+
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                lambda interface: interface, DummyCalculationInterface, "field1"
+            )
+        )
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                accessor, DerivedCalculationInterface, "field1"
+            )
+        )
+        accessor.__dict__["substituted"] = True
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                accessor, DummyCalculationInterface, "field1"
+            )
+        )
 
     def test_get_attributes_passes_identification_to_dependent_inputs(self):
         class DependentCalculationInterface(CalculationInterface):

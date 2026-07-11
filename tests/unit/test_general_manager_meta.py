@@ -2,7 +2,14 @@ from typing import ClassVar
 
 from django.test import SimpleTestCase, override_settings
 
-from general_manager.manager.meta import GeneralManagerMeta
+from general_manager.manager.meta import (
+    AttributeEvaluationError,
+    GeneralManagerMeta,
+    InvalidManagerStateError,
+    MissingAttributeError,
+    _is_canonical_manager_attribute_descriptor,
+)
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.interfaces.calculation import (
     CalculationInterface,
@@ -77,6 +84,71 @@ class TestPropertyInitialization(SimpleTestCase):
         self.assertTrue(hasattr(self.dummy_manager1, "test_field"))  # type: ignore
         self.assertEqual(self.dummy_manager1.test_field, "value")  # type: ignore
         self.assertIsInstance(self.dummy_manager1.test_field, str)  # type: ignore
+
+    def test_installed_descriptor_carries_exact_private_provenance(self):
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+        descriptor = vars(DummyManager1)["test_field"]
+
+        self.assertTrue(
+            _is_canonical_manager_attribute_descriptor(
+                descriptor, DummyManager1, descriptor._attr_name
+            )
+        )
+        self.assertFalse(
+            _is_canonical_manager_attribute_descriptor(
+                descriptor, DummyManager2, descriptor._attr_name
+            )
+        )
+        self.assertFalse(
+            _is_canonical_manager_attribute_descriptor(
+                descriptor, DummyManager1, "other_field"
+            )
+        )
+
+    def test_descriptor_provenance_allows_only_dependency_cache_state(self):
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+        descriptor = vars(DummyManager1)["test_field"]
+        descriptor._dependency_tracking_value_class = DummyManager2
+        descriptor._non_tracking_value_class = str
+        descriptor._dependency_tracking_manager_class = DummyManager2
+
+        self.assertTrue(
+            _is_canonical_manager_attribute_descriptor(
+                descriptor, DummyManager1, descriptor._attr_name
+            )
+        )
+        descriptor.__dict__["substituted"] = True
+        self.assertFalse(
+            _is_canonical_manager_attribute_descriptor(
+                descriptor, DummyManager1, descriptor._attr_name
+            )
+        )
+
+    def test_descriptor_provenance_rejects_subclasses(self):
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+        descriptor = vars(DummyManager1)["test_field"]
+        descriptor_subclass = type("DescriptorSubclass", (type(descriptor),), {})
+        substituted = descriptor_subclass(descriptor._attr_name, DummyManager1)
+
+        self.assertFalse(
+            _is_canonical_manager_attribute_descriptor(
+                object(), DummyManager1, descriptor._attr_name
+            )
+        )
+        self.assertFalse(
+            _is_canonical_manager_attribute_descriptor(
+                substituted, DummyManager1, substituted._attr_name
+            )
+        )
 
     def test_nested_manager_property(self):
         self.dummy_manager1._attributes = {
@@ -179,6 +251,87 @@ class TestPropertyInitialization(SimpleTestCase):
         self.assertTrue(hasattr(self.dummy_manager1, "test_field"))
         self.assertEqual(self.dummy_manager1.test_field, "callable_value")  # type: ignore
         self.assertIsInstance(self.dummy_manager1.test_field, str)  # type: ignore
+
+    def test_callable_property_uses_the_instance_outer_attribute_cache(self):
+        calls = []
+
+        def test_callable(interface):
+            calls.append(interface)
+            return "callable_value"
+
+        self.dummy_manager1._attributes = {"test_field": test_callable}
+        self.dummy_manager1._attribute_value_cache = {}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(self.dummy_manager1.test_field, "callable_value")
+        self.assertEqual(self.dummy_manager1.test_field, "callable_value")
+        self.assertEqual(calls, [self.dummy_manager1._interface])
+
+    def test_cached_manager_property_replays_dependency_tracking(self):
+        track_calls = []
+
+        class DependencyValue:
+            @classmethod
+            def _track_identification_dependency(cls, identification):
+                return None
+
+            def _track_own_identification_dependency_active(self):
+                track_calls.append(self)
+
+        value = DependencyValue()
+        self.dummy_manager1._attributes = {"test_field": value}
+        self.dummy_manager1._attribute_value_cache = {"test_field": value}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+
+        with DependencyTracker():
+            self.assertIs(self.dummy_manager1.test_field, value)
+
+        self.assertEqual(track_calls, [value])
+
+    def test_property_rejects_invalid_manager_state(self):
+        self.dummy_manager1._attributes = {"test_field": "value"}
+        self.dummy_manager1._manager_state_valid = False
+        self.dummy_manager1._manager_state_reason = "deleted"
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+
+        with self.assertRaisesRegex(InvalidManagerStateError, "deleted"):
+            _ = self.dummy_manager1.test_field
+
+    def test_missing_property_raises_specific_error(self):
+        self.dummy_manager1._attributes = {}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+
+        with self.assertRaises(MissingAttributeError):
+            _ = self.dummy_manager1.test_field
+
+    def test_callable_property_preserves_error_as_cause(self):
+        error = ValueError("broken")
+
+        def test_callable(interface):
+            raise error
+
+        self.dummy_manager1._attributes = {"test_field": test_callable}
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+
+        with self.assertRaises(AttributeEvaluationError) as caught:
+            _ = self.dummy_manager1.test_field
+
+        self.assertIs(caught.exception.__cause__, error)
 
     def test_property_with_complex_callable(self):
         """
@@ -525,6 +678,26 @@ class GeneralManagerMetaTests(SimpleTestCase):
             LateImportedCalculation,
             GeneralManagerMeta.pending_attribute_initialization,
         )
+
+    def test_uninitialized_manager_has_no_canonical_descriptor_without_initializing(
+        self,
+    ):
+        class LateImportedCalculation(GeneralManager):
+            user: int
+
+            class Interface(CalculationInterface):
+                user = GMInput(int, possible_values=[1, 2, 3])
+
+        self.assertNotIn("user", vars(LateImportedCalculation))
+
+        self.assertFalse(
+            _is_canonical_manager_attribute_descriptor(
+                vars(LateImportedCalculation).get("user"),
+                LateImportedCalculation,
+                "user",
+            )
+        )
+        self.assertNotIn("user", vars(LateImportedCalculation))
 
     def test_late_imported_manager_still_raises_for_unknown_attribute(self):
         class LateImportedCalculation(GeneralManager):
