@@ -15,6 +15,7 @@ from general_manager.bucket.database_bucket import (
     DuplicateDatabaseBucketSnapshotError,
     MAX_RUN_SCOPED_BUCKET_RESULT_ROWS,
     QuerysetFilteringError,
+    _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE,
     _restore_database_bucket_from_primary_keys,
 )
 from general_manager.cache.dependency_index import serialize_dependency_identifier
@@ -933,6 +934,41 @@ class DatabaseBucketTestCase(TestCase):
             self.assertIsNone(bucket._peek_run_scoped_rows())
             with patch.object(bucket, "_query_signature", return_value=None):
                 self.assertIsNone(bucket._peek_run_scoped_rows())
+
+    def test_run_scoped_over_limit_sentinels_skip_repeated_orm_work(self):
+        bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+
+        with CalculationRunContext() as context:
+            signature = bucket._query_signature()
+            context.set_orm_bucket_result(
+                signature, _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE
+            )
+
+            with self.assertNumQueries(0):
+                self.assertIsNone(bucket._get_run_scoped_primary_keys())
+                self.assertIsNone(bucket._get_run_scoped_rows())
+                self.assertIsNone(bucket._peek_run_scoped_primary_keys())
+                self.assertIsNone(bucket._peek_run_scoped_rows())
+
+            context.set_orm_bucket_rows(signature, _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE)
+            with self.assertNumQueries(0):
+                self.assertIsNone(bucket._peek_run_scoped_rows())
+
+    def test_primary_key_snapshot_records_over_limit_sentinel(self):
+        bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+
+        with (
+            patch(
+                "general_manager.bucket.database_bucket.MAX_RUN_SCOPED_BUCKET_RESULT_ROWS",
+                1,
+            ),
+            CalculationRunContext() as context,
+        ):
+            self.assertIsNone(bucket._get_run_scoped_primary_keys())
+            self.assertIs(
+                context.get_orm_bucket_result(bucket._query_signature()),
+                _RUN_SCOPED_BUCKET_RESULT_TOO_LARGE,
+            )
 
     def test_contains_does_not_materialize_uncached_bucket(self):
         bucket = DatabaseBucket(User.objects.all(), UserManager)
