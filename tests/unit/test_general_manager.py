@@ -124,6 +124,8 @@ def record_manager_constructions(manager_class):
     previous_profile = sys.getprofile()
 
     def profile(frame, event, arg):
+        if previous_profile is not None:
+            previous_profile(frame, event, arg)
         if (
             event == "call"
             and frame.f_code is GeneralManager.__init__.__code__
@@ -714,6 +716,34 @@ class GeneralManagerTestCase(TestCase):
         del original
         gc.collect()
         self.assertIsNone(original_ref())
+
+    def test_construction_profiler_forwards_and_restores_after_error(self):
+        forwarded = []
+        original_profile = sys.getprofile()
+
+        def existing_profile(frame, event, arg):
+            if (
+                event == "call"
+                and frame.f_code is GeneralManager.__init__.__code__
+                and type(frame.f_locals.get("self")) is HydratedLifecycleRelatedManager
+            ):
+                forwarded.append(frame.f_locals["self"])
+
+        sys.setprofile(existing_profile)
+        try:
+            with self.assertRaises(RuntimeError):
+                with record_manager_constructions(
+                    HydratedLifecycleRelatedManager
+                ) as constructions:
+                    related = HydratedLifecycleRelatedManager("profile-id")
+                    error = RuntimeError("stop profiling")
+                    raise error
+            self.assertIs(sys.getprofile(), existing_profile)
+        finally:
+            sys.setprofile(original_profile)
+
+        self.assertEqual(constructions, [related])
+        self.assertEqual(forwarded, [related])
 
     def test_or_operator(self):
         # Test the __or__ operator

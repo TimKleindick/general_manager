@@ -470,29 +470,40 @@ class TestGenerateCombinations(TestCase):
                 ids,
             )
             for manager in transformed_managers:
+                emitted_wrapper = vars(manager._interface)[
+                    "_gm_seeded_input_values_cache"
+                ]["related"]
                 first_access = manager.related
+                self.assertIs(first_access, emitted_wrapper)
                 self.assertIs(manager.related, first_access)
 
-        filtered_sorted = CalculationBucket(
-            StaticManagerCalculation,
-            sort_key="numeric_id",
-        )
-        filtered_sorted._excludes = {}
-        filtered_sorted._filters = {
-            "numeric_id": {"filter_funcs": [lambda value: value >= 2]}
-        }
-        filtered_combinations = filtered_sorted.generate_combinations()
+        def filtered_sorted_bucket():
+            current_bucket = CalculationBucket(
+                StaticManagerCalculation,
+                sort_key="numeric_id",
+            )
+            current_bucket._excludes = {}
+            current_bucket._filters = {
+                "numeric_id": {"filter_funcs": [lambda value: value >= 2]}
+            }
+            return current_bucket
+
+        filtered_combinations = filtered_sorted_bucket().generate_combinations()
         self.assertEqual(
             [combination["related"]["id"] for combination in filtered_combinations],
             ["2", "3"],
         )
-        filtered_managers = list(filtered_sorted)
+        filtered_managers = list(filtered_sorted_bucket())
         self.assertEqual(
             [manager.identification["related"]["id"] for manager in filtered_managers],
             ["2", "3"],
         )
         for manager in filtered_managers:
+            emitted_wrapper = vars(manager._interface)["_gm_seeded_input_values_cache"][
+                "related"
+            ]
             first_access = manager.related
+            self.assertIs(first_access, emitted_wrapper)
             self.assertIs(manager.related, first_access)
 
         provider_calls = []
@@ -520,7 +531,11 @@ class TestGenerateCombinations(TestCase):
             related_values,
             strict=True,
         ):
-            self.assertIs(manager.related, expected_related)
+            emitted_wrapper = vars(manager._interface)["_gm_seeded_input_values_cache"][
+                "related"
+            ]
+            self.assertIs(emitted_wrapper, expected_related)
+            self.assertIs(manager.related, emitted_wrapper)
 
     def test_property_filter_still_instantiates_managers_for_property_access(
         self, _mock_parse

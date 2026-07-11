@@ -6,6 +6,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import datetime
 import inspect
 from threading import Condition, RLock
 from types import CellType, CodeType, FunctionType, MappingProxyType
@@ -126,6 +127,10 @@ type _StaticDispatchSnapshot = tuple[tuple[str, _StaticDescriptorSnapshot], ...]
 _INTERFACE_BASE_PROVENANCE: tuple[type[object], _StaticDispatchSnapshot] | None = None
 _INPUT_PROVENANCE: tuple[type[object], _StaticDispatchSnapshot] | None = None
 _CALCULATION_INTERFACE_PROVENANCE: (
+    tuple[type[object], type[object], _StaticDispatchSnapshot, _StaticDispatchSnapshot]
+    | None
+) = None
+_ORM_INTERFACE_PROVENANCE: (
     tuple[type[object], type[object], _StaticDispatchSnapshot, _StaticDispatchSnapshot]
     | None
 ) = None
@@ -480,6 +485,40 @@ def _register_calculation_interface_seed_provenance(
         )
 
 
+def _register_orm_interface_seed_provenance(
+    interface_class: type[object],
+) -> None:
+    """Register canonical ORM-interface dispatch once at module startup."""
+    global _ORM_INTERFACE_PROVENANCE
+    if _ORM_INTERFACE_PROVENANCE is None:
+        interface_metaclass = type(interface_class)
+        _ORM_INTERFACE_PROVENANCE = (
+            interface_class,
+            interface_metaclass,
+            _capture_static_dispatch(
+                interface_class,
+                (
+                    "__init__",
+                    "__getattribute__",
+                    "__getattr__",
+                    "__setattr__",
+                    "_from_trusted_orm_instance",
+                    "normalize_search_date",
+                    "parse_input_fields_to_identification",
+                    "_process_input_field",
+                    "format_identification",
+                    "get_data",
+                    "require_capability",
+                    "handle_interface",
+                ),
+            ),
+            _capture_static_dispatch(
+                interface_metaclass,
+                ("__call__", "__getattribute__", "__getattr__", "__setattr__"),
+            ),
+        )
+
+
 def _calculation_interface_seed_provenance() -> (
     tuple[type[object], type[object], _StaticDispatchSnapshot, _StaticDispatchSnapshot]
     | None
@@ -706,6 +745,77 @@ def _canonical_manager_class_state(manager_class: type[object]) -> bool:
     )
 
 
+def _canonical_database_nested_interface_state(
+    manager_class: type[object],
+    interface: object,
+    identification: dict[str, object],
+) -> bool:
+    """Validate one exact canonical ORM wrapper without invoking hooks."""
+    provenance = _ORM_INTERFACE_PROVENANCE
+    if provenance is None:
+        return False
+    (
+        canonical_interface,
+        canonical_metaclass,
+        interface_dispatch,
+        metaclass_dispatch,
+    ) = provenance
+    interface_class = type(interface)
+    if type(interface_class) is not canonical_metaclass:
+        return False
+    mro = type.__getattribute__(interface_class, "__mro__")
+    if type(mro) is not tuple or not any(
+        candidate is canonical_interface for candidate in mro
+    ):
+        return False
+    if not (
+        _matches_static_dispatch(canonical_interface, interface_dispatch)
+        and _matches_static_dispatch(interface_class, interface_dispatch)
+        and _matches_static_dispatch(canonical_metaclass, metaclass_dispatch)
+        and _matches_static_dispatch(type(interface_class), metaclass_dispatch)
+    ):
+        return False
+    if not _mro_state_access_is_canonical(
+        interface_class,
+        canonical_interface,
+        (
+            _INSTANCE_DICT_NAME,
+            "identification",
+            "pk",
+            "_search_date",
+            "_instance",
+        ),
+    ):
+        return False
+    state = object.__getattribute__(interface, _INSTANCE_DICT_NAME)
+    expected_keys = ("identification", "pk", "_search_date", "_instance")
+    if not _dict_has_identity_keys(state, expected_keys):
+        return False
+    if dict.__getitem__(state, "identification") is not identification:
+        return False
+    if not _dict_has_identity_keys(identification, ("id",)):
+        return False
+    primary_key = dict.__getitem__(identification, "id")
+    if dict.__getitem__(state, "pk") is not primary_key:
+        return False
+    search_date = dict.__getitem__(state, "_search_date")
+    if search_date is not None and type(search_date) is not datetime:
+        return False
+    model_class = _static_descriptor(interface_class, "_model")
+    if not isinstance(model_class, type):
+        return False
+    model_mro = type.__getattribute__(model_class, "__mro__")
+    if type(model_mro) is not tuple or not any(
+        candidate is Model for candidate in model_mro
+    ):
+        return False
+    instance = dict.__getitem__(state, "_instance")
+    return (
+        type(instance) is model_class
+        and type.__getattribute__(manager_class, "Interface") is interface_class
+    )
+
+
 def _canonical_nested_manager(
     value: object,
     manager_class: type[object],
@@ -770,9 +880,15 @@ def _canonical_nested_manager(
     ):
         return False
     interface_state = object.__getattribute__(interface, _INSTANCE_DICT_NAME)
-    return (
+    if (
         _dict_has_identity_keys(interface_state, ("identification",))
         and interface_state["identification"] is identification
+    ):
+        return True
+    return _canonical_database_nested_interface_state(
+        manager_class,
+        interface,
+        identification,
     )
 
 

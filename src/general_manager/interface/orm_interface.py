@@ -8,7 +8,10 @@ from typing import ClassVar, Generic, Type, TypeVar, cast
 from django.db import models
 from django.utils import timezone
 
-from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.base_interface import (
+    InterfaceBase,
+    _register_orm_interface_seed_provenance,
+)
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.configuration import CapabilityConfigEntry
 from general_manager.interface.capabilities.orm import (
@@ -185,3 +188,6 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
             ),
         )
         return lifecycle.describe_custom_fields(model)
+
+
+_register_orm_interface_seed_provenance(OrmInterfaceBase)

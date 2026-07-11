@@ -24,6 +24,7 @@ from general_manager.interface.base_interface import (
     _STATIC_ATTRIBUTE_MISSING,
     _GENERAL_MANAGER_PROVENANCE,
     _canonical_manager_class_state,
+    _canonical_database_nested_interface_state,
     _calculation_interface_seed_provenance,
     _calculation_manager_input_seed_plan,
     _dict_has_identity_keys,
@@ -405,6 +406,12 @@ def _post_seeded_manager_state_is_safe(
     nested_interface_class = type(nested_interface)
     if _static_class_value(manager_type, "Interface") is not nested_interface_class:
         return False
+    if _canonical_database_nested_interface_state(
+        manager_type,
+        nested_interface,
+        identification,
+    ):
+        return True
     if not _mro_state_access_is_canonical(
         nested_interface_class,
         interface_provenance[0],

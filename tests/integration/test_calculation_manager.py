@@ -185,25 +185,25 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                 second_employee.identification["id"],
             },
         )
-        self.assertTrue(all(group._data.count() == 1 for group in grouped))
-        self.assertEqual(
-            grouped,
-            self.TaxCalculation.all().group_by("employee"),
-        )
         for group in grouped:
             entries = list(group._data)
             self.assertEqual(len(entries), 1)
             entry = entries[0]
-            first_access = entry.employee
-            parsed_wrapper = vars(entry._interface)["_resolved_input_values"][
+            parsed_wrapper = vars(entry._interface)["_gm_seeded_input_values_cache"][
                 "employee"
             ]
+            first_access = entry.employee
             self.assertIs(first_access, parsed_wrapper)
             self.assertIs(entry.employee, parsed_wrapper)
             self.assertEqual(
                 entry.employee.identification,
                 group.employee.identification,
             )
+        self.assertTrue(all(group._data.count() == 1 for group in grouped))
+        self.assertEqual(
+            grouped,
+            self.TaxCalculation.all().group_by("employee"),
+        )
 
     def test_database_and_callable_manager_sources_reuse_hydrated_wrappers(self):
         employees = [
@@ -232,37 +232,34 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             class Interface(CalculationInterface):
                 employee = Input(self.Employee, possible_values=employee_provider)
 
+        GeneralManagerMeta.ensure_attributes_initialized(StaticEmployeeCalculation)
+        GeneralManagerMeta.ensure_attributes_initialized(CallableEmployeeCalculation)
         for manager_class in (
             StaticEmployeeCalculation,
             CallableEmployeeCalculation,
         ):
             with self.subTest(manager_class=manager_class.__name__):
-                bucket = CalculationBucket(manager_class)
-                combinations = bucket.generate_combinations()
-                self.assertEqual(
-                    [
-                        combination["employee"].identification["id"]
-                        for combination in combinations
-                    ],
-                    expected_ids,
-                )
-                first_iteration = list(bucket)
-                second_iteration = list(bucket)
-                for managers in (first_iteration, second_iteration):
-                    self.assertEqual(
-                        [
-                            manager.identification["employee"]["id"]
-                            for manager in managers
-                        ],
-                        expected_ids,
-                    )
-                    for manager in managers:
-                        first_access = manager.employee
-                        parsed_wrapper = vars(manager._interface)[
-                            "_resolved_input_values"
-                        ]["employee"]
-                        self.assertIs(first_access, parsed_wrapper)
-                        self.assertIs(manager.employee, parsed_wrapper)
+                first_iteration = list(CalculationBucket(manager_class))
+                second_iteration = list(CalculationBucket(manager_class))
+                for iteration_name, managers in (
+                    ("first", first_iteration),
+                    ("second", second_iteration),
+                ):
+                    with self.subTest(iteration=iteration_name):
+                        self.assertEqual(
+                            [
+                                manager.identification["employee"]["id"]
+                                for manager in managers
+                            ],
+                            expected_ids,
+                        )
+                        for manager in managers:
+                            parsed_wrapper = vars(manager._interface)[
+                                "_gm_seeded_input_values_cache"
+                            ]["employee"]
+                            first_access = manager.employee
+                            self.assertIs(first_access, parsed_wrapper)
+                            self.assertIs(manager.employee, parsed_wrapper)
                 self.assertTrue(
                     all(
                         first is not second
@@ -273,8 +270,70 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                         )
                     )
                 )
+                exposed_bucket = CalculationBucket(manager_class)
+                combinations = exposed_bucket.generate_combinations()
+                self.assertEqual(
+                    [
+                        combination["employee"].identification["id"]
+                        for combination in combinations
+                    ],
+                    expected_ids,
+                )
 
         self.assertTrue(provider_calls)
+
+    def test_database_manager_seed_fails_closed_for_mutated_wrapper_state(self):
+        employee = self.Employee.create(
+            name="Alice",
+            salary=Measurement(3000, "EUR"),
+            creator_id=self.user.id,
+        )
+
+        class EmployeeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee)
+
+        GeneralManagerMeta.ensure_attributes_initialized(EmployeeCalculation)
+
+        state_mutated = next(iter(self.Employee.filter(id=employee.id)))
+        vars(state_mutated._interface)["custom_state"] = object()
+        state_outer = EmployeeCalculation(state_mutated)
+        self.assertNotIn(
+            "_gm_seeded_input_values_cache",
+            vars(state_outer._interface),
+        )
+        state_resolved = state_outer.employee
+        self.assertIsNot(state_resolved, state_mutated)
+        self.assertEqual(state_resolved.identification, employee.identification)
+        self.assertIs(state_outer.employee, state_resolved)
+
+        hook_calls = []
+        dispatch_mutated = next(iter(self.Employee.filter(id=employee.id)))
+        database_interface_class = type(dispatch_mutated._interface)
+
+        def custom_getattribute(interface, name):
+            hook_calls.append(name)
+            return object.__getattribute__(interface, name)
+
+        type.__setattr__(
+            database_interface_class,
+            "__getattribute__",
+            custom_getattribute,
+        )
+        try:
+            dispatch_outer = EmployeeCalculation(dispatch_mutated)
+        finally:
+            type.__delattr__(database_interface_class, "__getattribute__")
+
+        self.assertEqual(hook_calls, [])
+        self.assertNotIn(
+            "_gm_seeded_input_values_cache",
+            vars(dispatch_outer._interface),
+        )
+        dispatch_resolved = dispatch_outer.employee
+        self.assertIsNot(dispatch_resolved, dispatch_mutated)
+        self.assertEqual(dispatch_resolved.identification, employee.identification)
+        self.assertIs(dispatch_outer.employee, dispatch_resolved)
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_static_database_input_batches_membership_with_exact_dependencies(self):
