@@ -441,6 +441,37 @@ def _make_database_enumeration_manager_for_input(
     return manager
 
 
+def _make_canonical_database_input_manager(
+    name: str,
+) -> type[GeneralManager]:
+    """Build an ORM-backed input manager with untouched canonical dispatch."""
+    interface = cast(
+        type[OrmInterfaceBase[models.Model]],
+        type(
+            f"{name}Interface",
+            (OrmInterfaceBase,),
+            {"__module__": __name__, "_model": User},
+        ),
+    )
+    registries_before = _manager_registry_snapshot()
+    manager = cast(
+        type[GeneralManager],
+        type(name, (GeneralManager,), {"__module__": __name__}),
+    )
+    for registry in (
+        GeneralManagerMeta.all_classes,
+        GeneralManagerMeta.read_only_classes,
+        GeneralManagerMeta.pending_attribute_initialization,
+        GeneralManagerMeta.pending_graphql_interfaces,
+    ):
+        while manager in registry:
+            registry.remove(manager)
+    type.__setattr__(manager, "Interface", interface)
+    interface._parent_class = manager
+    assert _manager_registry_snapshot() == registries_before
+    return manager
+
+
 @pytest.mark.parametrize("size", [400, 800])
 def test_database_manager_input_enumeration_work(
     size: int,
@@ -534,6 +565,134 @@ def test_database_manager_input_enumeration_work(
     perf_budgets.assert_observation(
         f"{hydration_prefix}_SECOND_NESTED_CONSTRUCTORS",
         second_nested_constructor_calls.value,
+    )
+
+
+@pytest.mark.parametrize("size", [400, 800])
+def test_database_hydrated_manager_input_performance_gate(
+    size: int,
+    perf_user_primary_keys: tuple[int, ...],
+    perf_budgets: PerfBudgets,
+) -> None:
+    """Gate ORM hydration with exact result, identity, query, and constructor counts."""
+    included_primary_keys = perf_user_primary_keys[:size]
+    nested_manager = _make_canonical_database_input_manager(
+        f"DatabaseHydratedGateInput{size}Manager"
+    )
+    queryset = User.objects.filter(pk__in=included_primary_keys).order_by("pk")
+    queryset.query.where.children[0].rhs = tuple(included_primary_keys)
+    source = DatabaseBucket(
+        cast(models.QuerySet[models.Model], queryset),
+        nested_manager,
+    )
+    manager = _make_database_enumeration_manager_for_input(
+        f"DatabaseHydratedGate{size}Manager",
+        cast(
+            Input[type[object]],
+            Input(nested_manager, possible_values=source),
+        ),
+    )
+    assert GeneralManagerMeta.ensure_attributes_initialized(manager)
+    source_snapshots: list[tuple[GeneralManager, ...]] = []
+    original_database_managers = DatabaseBucket._get_run_scoped_managers
+
+    def capture_source_managers(
+        bucket: DatabaseBucket[GeneralManager],
+    ) -> tuple[GeneralManager, ...] | None:
+        managers = original_database_managers(bucket)
+        if managers is not None and bucket._manager_class is nested_manager:
+            source_snapshots.append(managers)
+        return managers
+
+    constructor_code = GeneralManager.__dict__["__init__"].__code__
+    with (
+        CalculationRunContext(),
+        patch.object(
+            DatabaseBucket,
+            "_get_run_scoped_managers",
+            capture_source_managers,
+        ),
+        CaptureQueriesContext(connection) as enumeration_queries,
+        count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is manager,
+        ) as outer_constructor_calls,
+    ):
+        outer_managers = list(CalculationBucket(manager))
+        with (
+            CaptureQueriesContext(connection) as first_access_queries,
+            count_profiled_calls(
+                constructor_code,
+                lambda self: self.__class__ is nested_manager,
+            ) as first_rehydration_calls,
+        ):
+            first_wrappers = [
+                cast(GeneralManager, item.value) for item in outer_managers
+            ]
+
+        with (
+            CaptureQueriesContext(connection) as second_access_queries,
+            count_profiled_calls(
+                constructor_code,
+                lambda self: self.__class__ is nested_manager,
+            ) as second_rehydration_calls,
+        ):
+            second_wrappers = [
+                cast(GeneralManager, item.value) for item in outer_managers
+            ]
+
+    assert len(outer_managers) == size
+    assert outer_constructor_calls.value == size
+    assert len(first_access_queries) == 0
+    assert first_rehydration_calls.value == 0
+    assert len(second_access_queries) == 0
+    assert second_rehydration_calls.value == 0
+    outer_value_identifications = [
+        outer_manager.identification["value"] for outer_manager in outer_managers
+    ]
+    assert all(
+        type(value_identification) is dict
+        for value_identification in outer_value_identifications
+    )
+    assert outer_value_identifications == [
+        {"id": primary_key} for primary_key in included_primary_keys
+    ]
+    assert source_snapshots
+    source_wrappers = source_snapshots[-1]
+    assert len(source_wrappers) == size
+    assert all(
+        hydrated is source
+        for hydrated, source in zip(first_wrappers, source_wrappers, strict=True)
+    )
+    assert all(
+        second is first
+        for second, first in zip(second_wrappers, first_wrappers, strict=True)
+    )
+    assert [wrapper.identification["id"] for wrapper in first_wrappers] == list(
+        included_primary_keys
+    )
+
+    prefix = f"CALC_HYDRATED_GATE_DATABASE_{size}"
+    perf_budgets.assert_observation(
+        f"{prefix}_ENUMERATION_QUERIES", len(enumeration_queries)
+    )
+    perf_budgets.assert_observation(f"{prefix}_OUTER_RESULTS", len(outer_managers))
+    perf_budgets.assert_observation(
+        f"{prefix}_OUTER_CONSTRUCTORS", outer_constructor_calls.value
+    )
+    perf_budgets.assert_observation(
+        f"{prefix}_FIRST_QUERIES", len(first_access_queries)
+    )
+    perf_budgets.assert_observation(
+        f"{prefix}_FIRST_REHYDRATION_CONSTRUCTORS",
+        first_rehydration_calls.value,
+    )
+    perf_budgets.assert_observation(
+        f"{prefix}_SECOND_QUERIES", len(second_access_queries)
+    )
+    perf_budgets.assert_observation(
+        f"{prefix}_SECOND_REHYDRATION_CONSTRUCTORS",
+        second_rehydration_calls.value,
     )
 
 

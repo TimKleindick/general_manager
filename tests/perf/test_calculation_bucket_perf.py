@@ -721,3 +721,91 @@ def test_manager_valued_input_preserves_wrappers_between_attribute_reads(
         f"{prefix}_SECOND_NESTED_CONSTRUCTORS",
         second_nested_constructor_calls.value,
     )
+
+
+@pytest.mark.parametrize("size", [400, 800])
+def test_hydrated_manager_input_performance_gate(
+    perf_budgets: PerfBudgets,
+    size: int,
+) -> None:
+    """Gate the initialized production path at zero manager rehydrations."""
+    source_wrappers = [ValueManager(id=index % 50) for index in range(size)]
+    manager, _input_field = _make_default_calculation_manager(
+        f"HydratedManagerGate{size}Manager",
+        "value",
+        cast(
+            Input[type[object]],
+            Input(ValueManager, possible_values=source_wrappers),
+        ),
+    )
+    # Late-created test managers need the same descriptor initialization that
+    # application startup performs before calculation combinations are built.
+    assert GeneralManagerMeta.ensure_attributes_initialized(manager)
+    constructor_code = GeneralManager.__dict__["__init__"].__code__
+
+    with (
+        CalculationRunContext(),
+        count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is manager,
+        ) as outer_constructor_calls,
+    ):
+        outer_managers = list(CalculationBucket(manager))
+
+        with count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is ValueManager,
+        ) as first_rehydration_calls:
+            first_wrappers = [
+                cast(ValueManager, outer_manager.value)
+                for outer_manager in outer_managers
+            ]
+
+        with count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is ValueManager,
+        ) as second_rehydration_calls:
+            second_wrappers = [
+                cast(ValueManager, outer_manager.value)
+                for outer_manager in outer_managers
+            ]
+
+    assert len(outer_managers) == size
+    assert outer_constructor_calls.value == size
+    assert first_rehydration_calls.value == 0
+    assert second_rehydration_calls.value == 0
+    outer_value_identifications = [
+        outer_manager.identification["value"] for outer_manager in outer_managers
+    ]
+    assert all(
+        type(value_identification) is dict
+        for value_identification in outer_value_identifications
+    )
+    assert outer_value_identifications == [
+        {"id": source.identification["id"]} for source in source_wrappers
+    ]
+    assert all(
+        hydrated is source
+        for hydrated, source in zip(first_wrappers, source_wrappers, strict=True)
+    )
+    assert all(
+        second is first
+        for second, first in zip(second_wrappers, first_wrappers, strict=True)
+    )
+    assert [wrapper.identification["id"] for wrapper in first_wrappers] == [
+        wrapper.identification["id"] for wrapper in source_wrappers
+    ]
+
+    prefix = f"CALC_HYDRATED_GATE_LIST_{size}"
+    perf_budgets.assert_observation(f"{prefix}_OUTER_RESULTS", len(outer_managers))
+    perf_budgets.assert_observation(
+        f"{prefix}_OUTER_CONSTRUCTORS", outer_constructor_calls.value
+    )
+    perf_budgets.assert_observation(
+        f"{prefix}_FIRST_REHYDRATION_CONSTRUCTORS",
+        first_rehydration_calls.value,
+    )
+    perf_budgets.assert_observation(
+        f"{prefix}_SECOND_REHYDRATION_CONSTRUCTORS",
+        second_rehydration_calls.value,
+    )
