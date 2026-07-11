@@ -35,6 +35,7 @@ from general_manager.cache.run_context import (
     ORM_BUCKET_LAST_ROW_PREFIX,
     ORM_BUCKET_RESULT_PREFIX,
     ORM_BUCKET_ROW_RESULT_PREFIX,
+    ORM_DIRECT_RELATION_PREFETCH_PREFIX,
     ORM_MODEL_RELATION_PREFETCH_PREFIX,
     ORM_MODEL_ROW_INDEX_PREFIX,
     ORM_QUERY_BUCKET_PREFIX,
@@ -83,6 +84,7 @@ RUN_CACHE_PREFIXES = (
     ORM_BUCKET_GET_PREFIX,
     ORM_BUCKET_INDEX_PREFIX,
     ORM_BUCKET_MEMBERSHIP_PREFIX,
+    ORM_DIRECT_RELATION_PREFETCH_PREFIX,
     ORM_MODEL_ROW_INDEX_PREFIX,
     ORM_MODEL_RELATION_PREFETCH_PREFIX,
     ORM_RELATION_MANAGER_PREFIX,
@@ -1246,8 +1248,8 @@ def test_data_change_mixed_run_cache_invalidation_work(
             for key in context._values
             if isinstance(key, tuple) and key and key[0] in RUN_CACHE_PREFIXES
         )
-        assert initial_targeted_count == 8_000
-        assert len(context._values) == 8_500
+        assert initial_targeted_count == 8_500
+        assert len(context._values) == 9_000
 
         phase_snapshots: list[dict[Hashable, object]] = []
         original_discard_prefix = context.discard_prefix

@@ -298,6 +298,7 @@ class _FieldDescriptorBuilder:
                     field.name,
                     general_manager_class,
                     raw_id_name=raw_id_name,
+                    related_model=related_model,
                 )
                 relation_type = cast(type[object], general_manager_class)
             else:
@@ -347,7 +348,9 @@ class _FieldDescriptorBuilder:
             )
             if general_manager_class:
                 accessor = _general_manager_accessor(
-                    accessor_name, general_manager_class
+                    accessor_name,
+                    general_manager_class,
+                    related_model=related_model,
                 )
                 relation_type = cast(type[object], general_manager_class)
             else:
@@ -795,11 +798,188 @@ _MISSING_RELATED = object()
 _MANY_RELATION_PREFETCH_CHUNK_SIZE = 1000
 
 
+def _direct_relation_prefetch_source_rows(
+    context: object,
+    source_instance: models.Model,
+    database_alias: Hashable | None,
+) -> (
+    tuple[
+        tuple[Hashable, Hashable | None],
+        type[models.Model],
+        list[models.Model],
+    ]
+    | None
+):
+    """Return the indexed source rows eligible for one direct relation batch."""
+    source_identity = _orm_row_identity(source_instance)
+    if source_identity is None:
+        return None
+    get_items = getattr(context, "get_orm_model_row_items", None)
+    if not callable(get_items):
+        return None
+    row_items = get_items(source_instance.__class__)
+    if not row_items:
+        return None
+    rows: list[models.Model] = []
+    for row_key, row in row_items:
+        if row_key[1] != database_alias or not isinstance(
+            row, source_instance.__class__
+        ):
+            continue
+        if getattr(row, "get_deferred_fields", lambda: set())():
+            return None
+        rows.append(row)
+    if not rows:
+        return None
+    return source_identity, source_instance.__class__, rows
+
+
+def _can_prefetch_direct_relation(
+    interface_instance: OrmInterfaceInstance,
+    manager_type: type["GeneralManager"],
+    related_model: type[models.Model] | None,
+    database_alias: Hashable | None,
+) -> bool:
+    """Return whether direct relation hydration can safely use trusted rows."""
+    if (
+        related_model is None
+        or getattr(interface_instance, "_search_date", None) is not None
+    ):
+        return False
+    from general_manager.manager.general_manager import GeneralManager
+    from general_manager.interface.orm_interface import OrmInterfaceBase
+
+    interface_cls = getattr(manager_type, "Interface", None)
+    interface_model = getattr(interface_cls, "_model", None)
+    if interface_model is not related_model:
+        return False
+    configured_database = getattr(interface_cls, "database", None)
+    if configured_database is not None and configured_database != database_alias:
+        return False
+    if bool(getattr(getattr(interface_model, "_meta", None), "use_soft_delete", False)):
+        return False
+    if bool(getattr(interface_cls, "_soft_delete_default", False)):
+        return False
+    if manager_type.__init__ is not GeneralManager.__init__:
+        return False
+    if getattr(interface_cls, "__init__", None) is not OrmInterfaceBase.__init__:
+        return False
+    return callable(getattr(manager_type, "_from_trusted_orm_instance", None))
+
+
+def _prefetch_direct_relation_managers(
+    interface_instance: OrmInterfaceInstance,
+    *,
+    accessor_name: str,
+    manager_type: type["GeneralManager"],
+    related_model: type[models.Model] | None,
+    raw_id_name: str | None,
+) -> bool:
+    """Bulk-hydrate safe direct relations for all indexed source rows."""
+    from general_manager.cache.run_context import current_calculation_run_context
+
+    context = current_calculation_run_context()
+    source_instance = getattr(interface_instance, "_instance", None)
+    if context is None or not isinstance(source_instance, models.Model):
+        return False
+    state = getattr(source_instance, "_state", None)
+    database_alias = getattr(state, "db", None)
+    if not _can_prefetch_direct_relation(
+        interface_instance,
+        manager_type,
+        related_model,
+        database_alias,
+    ):
+        return False
+    if related_model is None:
+        return False
+    source_data = _direct_relation_prefetch_source_rows(
+        context,
+        source_instance,
+        database_alias,
+    )
+    if source_data is None:
+        return False
+    source_identity, source_model, rows = source_data
+    prefetched = context.get_orm_direct_relation_prefetched_keys(
+        source_model,
+        database_alias,
+        accessor_name,
+    )
+    if source_identity in prefetched:
+        return True
+    rows_to_process = [
+        row for row in rows if (_orm_row_identity(row) not in prefetched)
+    ]
+    if not rows_to_process:
+        return True
+    trusted_hydrate = cast(
+        Callable[..., object],
+        manager_type._from_trusted_orm_instance,
+    )
+    relation_cache_keys = []
+    if raw_id_name is not None:
+        related_ids = {
+            getattr(row, raw_id_name, None)
+            for row in rows_to_process
+            if getattr(row, raw_id_name, None) is not None
+        }
+        if related_ids:
+            related_manager = related_model._default_manager
+            if database_alias is not None:
+                related_manager = related_manager.using(database_alias)
+            related_rows = related_manager.in_bulk(related_ids)
+            for related_row in related_rows.values():
+                manager = trusted_hydrate(related_row)
+                related_identity = _orm_row_identity(related_row)
+                if related_identity is None:
+                    continue
+                relation_cache_keys.append(
+                    (manager_type, related_identity[0], related_identity[1])
+                )
+                context.set_orm_relation_manager(
+                    relation_cache_keys[-1],
+                    manager,
+                )
+    else:
+        _prefetch_relation_in_chunks(rows_to_process, accessor_name)
+        for row in rows_to_process:
+            try:
+                related_row = getattr(row, accessor_name)
+            except ObjectDoesNotExist:
+                continue
+            if related_row is None:
+                continue
+            manager = trusted_hydrate(related_row)
+            related_identity = _orm_row_identity(related_row)
+            if related_identity is None:
+                continue
+            relation_cache_keys.append(
+                (manager_type, related_identity[0], related_identity[1])
+            )
+            context.set_orm_relation_manager(
+                relation_cache_keys[-1],
+                manager,
+            )
+    context.add_orm_direct_relation_prefetched_keys(
+        source_model,
+        database_alias,
+        accessor_name,
+        [
+            identity
+            for identity in (_orm_row_identity(row) for row in rows_to_process)
+            if identity is not None
+        ],
+    )
+    return True
+
+
 def _general_manager_accessor(
     field_name: str,
     manager_class: type[object],
     *,
     raw_id_name: str | None = None,
+    related_model: type[models.Model] | None = None,
 ) -> DescriptorAccessor:
     """
     Create an accessor that resolves a related object's manager from an interface.
@@ -814,18 +994,61 @@ def _general_manager_accessor(
         field_name (str): Name of the attribute on the underlying model that holds the related object.
         manager_class (type): Class used to hydrate or construct the related manager.
         raw_id_name (str | None): Optional raw foreign-key attribute name used to avoid loading the relation.
+        related_model (type[models.Model] | None): Related ORM model used for
+            conservative run-scoped bulk hydration.
 
     Returns:
         DescriptorAccessor: A callable that, given a OrmInterfaceBase, returns the manager instance for the related object, or `None` if the related attribute is `None`.
     """
     manager_type = cast("type[GeneralManager]", manager_class)
 
-    def raw_id_manager(raw_id: object, database_alias: object) -> object:
+    def related_manager_from_instance(related: models.Model) -> object:
+        from general_manager.cache.run_context import current_calculation_run_context
+
+        context = current_calculation_run_context()
+        identity = _orm_row_identity(related)
+        if context is not None and identity is not None:
+            cache_key = (manager_type, identity[0], identity[1])
+            cached = context.get_orm_relation_manager(cast(Hashable, cache_key))
+            if isinstance(cached, manager_type):
+                track_own = getattr(
+                    cached,
+                    "_track_own_identification_dependency_active",
+                    None,
+                )
+                if callable(track_own) and DependencyTracker.is_active():
+                    track_own()
+                return cached
+        trusted_hydrate = getattr(manager_type, "_from_trusted_orm_instance", None)
+        if callable(trusted_hydrate):
+            manager = trusted_hydrate(related)
+        else:
+            manager = manager_type(related.pk)
+        if context is not None and identity is not None:
+            context.set_orm_relation_manager(
+                cast(Hashable, (manager_type, identity[0], identity[1])),
+                manager,
+            )
+        return manager
+
+    def raw_id_manager(
+        raw_id: object,
+        database_alias: object,
+        interface_instance: OrmInterfaceInstance,
+    ) -> object:
         from general_manager.cache.run_context import current_calculation_run_context
 
         context = current_calculation_run_context()
         if context is None:
             return manager_type(raw_id)
+
+        _prefetch_direct_relation_managers(
+            interface_instance,
+            accessor_name=field_name,
+            manager_type=manager_type,
+            related_model=related_model,
+            raw_id_name=raw_id_name,
+        )
 
         cache_key = (manager_type, raw_id, database_alias)
         try:
@@ -868,24 +1091,25 @@ def _general_manager_accessor(
             fields_cache = getattr(state, "fields_cache", {})
             related = fields_cache.get(field_name, _MISSING_RELATED)
             if related is _MISSING_RELATED:
-                return raw_id_manager(raw_id, database_alias)
+                return raw_id_manager(raw_id, database_alias, self)
             if related is None:
                 return None
-            trusted_hydrate = getattr(manager_type, "_from_trusted_orm_instance", None)
-            if callable(trusted_hydrate):
-                return trusted_hydrate(related)
-            return manager_type(raw_id)
+            return related_manager_from_instance(related)
 
+        _prefetch_direct_relation_managers(
+            self,
+            accessor_name=field_name,
+            manager_type=manager_type,
+            related_model=related_model,
+            raw_id_name=None,
+        )
         try:
             related = getattr(self._instance, field_name)
         except ObjectDoesNotExist:
             return None
         if related is None:
             return None
-        trusted_hydrate = getattr(manager_type, "_from_trusted_orm_instance", None)
-        if callable(trusted_hydrate):
-            return trusted_hydrate(related)
-        return manager_type(related.pk)
+        return related_manager_from_instance(related)
 
     return getter
 

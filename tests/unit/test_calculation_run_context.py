@@ -494,6 +494,41 @@ def test_orm_bucket_scalar_terminal_helpers_preserve_false_and_clear_entries() -
         )
 
 
+def test_direct_relation_prefetch_keys_are_stored_and_cleared() -> None:
+    with CalculationRunContext() as ctx:
+        assert (
+            ctx.get_orm_direct_relation_prefetched_keys(
+                object,
+                "default",
+                "owner",
+            )
+            == frozenset()
+        )
+        ctx.add_orm_direct_relation_prefetched_keys(
+            object,
+            "default",
+            "owner",
+            [(1, "default")],
+        )
+
+        assert ctx.get_orm_direct_relation_prefetched_keys(
+            object,
+            "default",
+            "owner",
+        ) == frozenset({(1, "default")})
+
+        ctx.clear_orm_bucket_results()
+
+        assert (
+            ctx.get_orm_direct_relation_prefetched_keys(
+                object,
+                "default",
+                "owner",
+            )
+            == frozenset()
+        )
+
+
 def test_orm_bucket_row_results_are_stored_and_cleared() -> None:
     rows = (object(), object())
 

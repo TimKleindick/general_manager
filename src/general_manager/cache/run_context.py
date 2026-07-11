@@ -36,6 +36,7 @@ ORM_BUCKET_INDEX_PREFIX = "orm_bucket_index"
 ORM_BUCKET_MEMBERSHIP_PREFIX = "orm_bucket_membership"
 ORM_MODEL_ROW_INDEX_PREFIX = "orm_model_row_index"
 ORM_MODEL_RELATION_PREFETCH_PREFIX = "orm_model_relation_prefetch"
+ORM_DIRECT_RELATION_PREFETCH_PREFIX = "orm_direct_relation_prefetch"
 ORM_RELATION_MANAGER_PREFIX = "orm_relation_manager"
 ORM_QUERY_BUCKET_PREFIX = "orm_query_bucket"
 ORM_BUCKET_EXISTS_PREFIX = "orm_bucket_exists"
@@ -442,6 +443,44 @@ class CalculationRunContext:
         )
         self.set(cache_key, prefetched | frozenset(row_keys))
 
+    def get_orm_direct_relation_prefetched_keys(
+        self,
+        model: type[object],
+        database_alias: Hashable | None,
+        accessor_name: str,
+    ) -> frozenset[OrmModelRowKey]:
+        """Return source rows already processed for direct relation hydration."""
+        prefetched = self.get(
+            (
+                ORM_DIRECT_RELATION_PREFETCH_PREFIX,
+                model,
+                database_alias,
+                accessor_name,
+            )
+        )
+        if isinstance(prefetched, frozenset):
+            return cast(frozenset[OrmModelRowKey], prefetched)
+        return frozenset()
+
+    def add_orm_direct_relation_prefetched_keys(
+        self,
+        model: type[object],
+        database_alias: Hashable | None,
+        accessor_name: str,
+        row_keys: Iterable[OrmModelRowKey],
+    ) -> None:
+        """Mark source rows processed for direct relation hydration."""
+        cache_key = (
+            ORM_DIRECT_RELATION_PREFETCH_PREFIX,
+            model,
+            database_alias,
+            accessor_name,
+        )
+        prefetched = self.get(cache_key)
+        if not isinstance(prefetched, frozenset):
+            prefetched = frozenset()
+        self.set(cache_key, prefetched | frozenset(row_keys))
+
     def get_orm_relation_manager(self, key: Hashable) -> object:
         """Return a cached relation manager for key, or `None` when absent."""
         return self.get((ORM_RELATION_MANAGER_PREFIX, key))
@@ -570,6 +609,7 @@ class CalculationRunContext:
         self.discard_prefix((ORM_BUCKET_MEMBERSHIP_PREFIX,))
         self.discard_prefix((ORM_MODEL_ROW_INDEX_PREFIX,))
         self.discard_prefix((ORM_MODEL_RELATION_PREFETCH_PREFIX,))
+        self.discard_prefix((ORM_DIRECT_RELATION_PREFETCH_PREFIX,))
         self.discard_prefix((ORM_RELATION_MANAGER_PREFIX,))
         self.discard_prefix((ORM_QUERY_BUCKET_PREFIX,))
         self.discard_prefix((ORM_BUCKET_EXISTS_PREFIX,))

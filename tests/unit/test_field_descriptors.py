@@ -18,6 +18,7 @@ from general_manager.interface.capabilities.orm_utils.field_descriptors import (
 )
 from general_manager.bootstrap import initialize_general_manager_classes
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.interface.orm_interface import OrmInterfaceBase
 
 
 def test_general_manager_many_accessor_uses_explicit_relation_field_name() -> None:
@@ -319,6 +320,145 @@ def test_general_manager_fk_accessor_reuses_raw_id_manager_in_run_context() -> N
 
     assert first is second
     assert calls == [7]
+
+
+def test_general_manager_fk_accessor_batches_indexed_related_rows() -> None:
+    class DirectSourceModel(models.Model):
+        owner_id = models.IntegerField(null=True)
+
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class DirectRelatedModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class DirectRelatedInterface:
+        __init__ = OrmInterfaceBase.__init__
+        _model = DirectRelatedModel
+        database = None
+        _soft_delete_default = False
+
+    class DirectRelatedManager:
+        __init__ = GeneralManager.__init__
+        Interface = DirectRelatedInterface
+
+    trusted_managers: list[object] = []
+
+    def trusted_hydrate(
+        cls: type[DirectRelatedManager],
+        instance: DirectRelatedModel,
+        *,
+        search_date: object | None = None,
+    ) -> object:
+        del search_date
+        manager = cls.__new__(cls)
+        trusted_managers.append((instance.pk, manager))
+        return manager
+
+    DirectRelatedManager._from_trusted_orm_instance = classmethod(trusted_hydrate)  # type: ignore[method-assign]
+    source_rows = (
+        DirectSourceModel(id=1, owner_id=7),
+        DirectSourceModel(id=2, owner_id=7),
+    )
+    related_row = DirectRelatedModel(id=7)
+
+    class RelatedObjects:
+        def __init__(self) -> None:
+            self.calls: list[set[object]] = []
+
+        def in_bulk(self, ids: set[object]) -> dict[object, DirectRelatedModel]:
+            self.calls.append(ids)
+            return {7: related_row}
+
+    related_objects = RelatedObjects()
+
+    class RunContext:
+        def __init__(self) -> None:
+            self.relation_managers: dict[object, object] = {}
+            self.prefetched: frozenset[tuple[object, object | None]] = frozenset()
+
+        def get_orm_model_row_items(
+            self,
+            model: type[object],
+        ) -> tuple[tuple[tuple[object, object | None], object], ...]:
+            assert model is DirectSourceModel
+            return tuple(((row.pk, None), row) for row in source_rows)
+
+        def get_orm_direct_relation_prefetched_keys(
+            self,
+            _model: type[object],
+            _database_alias: object | None,
+            _accessor_name: str,
+        ) -> frozenset[tuple[object, object | None]]:
+            return self.prefetched
+
+        def add_orm_direct_relation_prefetched_keys(
+            self,
+            _model: type[object],
+            _database_alias: object | None,
+            _accessor_name: str,
+            row_keys: list[tuple[object, object | None]],
+        ) -> None:
+            self.prefetched = frozenset(row_keys)
+
+        def get_orm_relation_manager(self, key: object) -> object:
+            return self.relation_managers.get(key)
+
+        def set_orm_relation_manager(self, key: object, value: object) -> None:
+            self.relation_managers[key] = value
+
+    run_context = RunContext()
+    accessor = _general_manager_accessor(
+        "owner",
+        DirectRelatedManager,
+        raw_id_name="owner_id",
+        related_model=DirectRelatedModel,
+    )
+
+    with (
+        patch(
+            "general_manager.cache.run_context.current_calculation_run_context",
+            return_value=run_context,
+        ),
+        patch.object(DirectRelatedModel._meta, "default_manager", related_objects),
+    ):
+        first = accessor(SimpleNamespace(_instance=source_rows[0]))
+        second = accessor(SimpleNamespace(_instance=source_rows[1]))
+
+    assert first is second
+    assert related_objects.calls == [{7}]
+    assert len(trusted_managers) == 1
+
+    for row in source_rows:
+        row.profile = related_row
+    run_context.prefetched = frozenset()
+
+    reverse_accessor = _general_manager_accessor(
+        "profile",
+        DirectRelatedManager,
+        related_model=DirectRelatedModel,
+    )
+
+    def fake_prefetch(rows: list[models.Model], _accessor_name: str) -> None:
+        for row in rows:
+            row.profile = related_row
+
+    with (
+        patch(
+            "general_manager.cache.run_context.current_calculation_run_context",
+            return_value=run_context,
+        ),
+        patch(
+            "general_manager.interface.capabilities.orm_utils.field_descriptors._prefetch_relation_in_chunks",
+            side_effect=fake_prefetch,
+        ) as prefetch,
+    ):
+        reverse_first = reverse_accessor(SimpleNamespace(_instance=source_rows[0]))
+        reverse_second = reverse_accessor(SimpleNamespace(_instance=source_rows[1]))
+
+    assert reverse_first is reverse_second
+    prefetch.assert_called_once()
 
 
 def test_general_manager_fk_accessor_clears_raw_id_cache_on_data_change() -> None:
