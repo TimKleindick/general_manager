@@ -806,6 +806,105 @@ class TestGenerateCombinations(TestCase):
             self.assertIs(emitted_wrapper, expected_related)
             self.assertIs(manager.related, emitted_wrapper)
 
+    def test_custom_manager_bucket_transforms_keep_compatibility_and_order(
+        self, _mock_parse
+    ):
+        class RelatedManager:
+            def __init__(self, identifier):
+                self.identifier = identifier
+
+        calls = []
+
+        class CountingBucket(SimpleBucket):
+            def filter(self, **kwargs):
+                calls.append(("filter", dict(kwargs)))
+                return self
+
+            def exclude(self, **kwargs):
+                calls.append(("exclude", dict(kwargs)))
+                return self
+
+        values = [RelatedManager(1), RelatedManager(2)]
+        source = CountingBucket(RelatedManager, values)
+
+        class CalculationManager:
+            class Interface(CalculationInterface):
+                input_fields: ClassVar[dict] = {
+                    "related": Input(RelatedManager, possible_values=source),
+                }
+
+        CalculationManager.Interface._parent_class = CalculationManager
+        bucket = CalculationBucket(CalculationManager)
+        bucket._filters = {}
+        bucket._excludes = {}
+
+        combinations = bucket._generate_input_combinations(["related"], {}, {})
+
+        self.assertEqual(combinations, [{"related": value} for value in values])
+        self.assertEqual(calls, [("filter", {}), ("exclude", {})])
+
+        calls.clear()
+        filters = {"related": {"filter_kwargs": {"id__in": [1]}}}
+        excludes = {"related": {"filter_kwargs": {"id__in": [2]}}}
+        bucket._generate_input_combinations(["related"], filters, excludes)
+
+        self.assertEqual(
+            calls,
+            [
+                ("filter", {"id__in": [1]}),
+                ("exclude", {"id__in": [2]}),
+            ],
+        )
+
+        calls.clear()
+        bucket._generate_input_combinations(["related"], filters, {})
+        self.assertEqual(
+            calls,
+            [("filter", {"id__in": [1]}), ("exclude", {})],
+        )
+
+        calls.clear()
+        bucket._generate_input_combinations(["related"], {}, excludes)
+        self.assertEqual(
+            calls,
+            [("filter", {}), ("exclude", {"id__in": [2]})],
+        )
+
+    def test_standard_manager_bucket_transforms_skip_empty_criteria(self, _mock_parse):
+        class RelatedManager:
+            class Interface(CalculationInterface):
+                input_fields: ClassVar[dict] = {
+                    "id": Input(int, possible_values=[1, 2]),
+                }
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        RelatedManager.Interface._parent_class = RelatedManager
+        source = CalculationBucket(RelatedManager)
+
+        class CalculationManager:
+            class Interface(CalculationInterface):
+                input_fields: ClassVar[dict] = {
+                    "related": Input(RelatedManager, possible_values=source),
+                }
+
+        CalculationManager.Interface._parent_class = CalculationManager
+        bucket = CalculationBucket(CalculationManager)
+        bucket._filters = {}
+        bucket._excludes = {}
+
+        with (
+            patch.object(CalculationBucket, "filter", side_effect=AssertionError),
+            patch.object(CalculationBucket, "exclude", side_effect=AssertionError),
+        ):
+            combinations = bucket._generate_input_combinations(["related"], {}, {})
+
+        self.assertEqual(
+            [combination["related"].identification for combination in combinations],
+            [{"id": 1}, {"id": 2}],
+        )
+
     def test_property_filter_still_instantiates_managers_for_property_access(
         self, _mock_parse
     ):

@@ -820,6 +820,93 @@ def test_manager_valued_input_cold_and_warm_generation(
             perf_budgets.assert_observation(f"{prefix}_{phase}_{suffix}", observed)
 
 
+@pytest.mark.parametrize("size", [100, 1_000, 10_000])
+def test_empty_manager_bucket_transforms_are_skipped_per_dependency_prefix(
+    perf_budgets: PerfBudgets,
+    size: int,
+) -> None:
+    provider_calls = Counter()
+    source_yields = Counter()
+    filter_calls = Counter()
+    exclude_calls = Counter()
+    source_manager, _source_input = _make_default_calculation_manager(
+        f"EmptyManagerBucketSource{size}Manager",
+        "id",
+        Input(int, possible_values=(1, 2)),
+    )
+    source = CalculationBucket(source_manager)
+    original_filter = CalculationBucket.filter
+    original_exclude = CalculationBucket.exclude
+    original_iter = CalculationBucket.__iter__
+
+    def counted_filter(self, **kwargs: object) -> CalculationBucket:
+        filter_calls.increment()
+        return original_filter(self, **kwargs)
+
+    def counted_exclude(self, **kwargs: object) -> CalculationBucket:
+        exclude_calls.increment()
+        return original_exclude(self, **kwargs)
+
+    def counted_iter(self):
+        for value in original_iter(self):
+            if self is source:
+                source_yields.increment()
+            yield value
+
+    def provider(_outer: int) -> CalculationBucket:
+        provider_calls.increment()
+        return source
+
+    manager = _make_calculation_manager(
+        f"EmptyManagerBucketTransforms{size}Manager",
+        {
+            "outer": Input(int, possible_values=range(size)),
+            "value": Input(
+                source_manager,
+                possible_values=provider,
+                depends_on=["outer"],
+            ),
+        },
+        Counter(),
+    )
+
+    with (
+        patch.object(
+            CalculationBucket,
+            "filter",
+            autospec=True,
+            side_effect=counted_filter,
+        ),
+        patch.object(
+            CalculationBucket,
+            "exclude",
+            autospec=True,
+            side_effect=counted_exclude,
+        ),
+        patch.object(
+            CalculationBucket, "__iter__", autospec=True, side_effect=counted_iter
+        ),
+    ):
+        with count_profiled_calls(
+            GeneralManager.__dict__["__init__"].__code__,
+            lambda value: value.__class__ is source_manager,
+        ) as constructor_calls:
+            combinations = CalculationBucket(manager).generate_combinations()
+
+    assert len(combinations) == size * 2
+    assert provider_calls.value == size
+    assert source_yields.value == size * 2
+    assert constructor_calls.value == size * 2
+    assert filter_calls.value == 0
+    assert exclude_calls.value == 0
+    prefix = f"CALC_EMPTY_MANAGER_BUCKET_{size}"
+    perf_budgets.assert_observation(f"{prefix}_PROVIDER_CALLS", provider_calls.value)
+    perf_budgets.assert_observation(f"{prefix}_SOURCE_YIELDS", source_yields.value)
+    perf_budgets.assert_observation(f"{prefix}_CONSTRUCTORS", constructor_calls.value)
+    perf_budgets.assert_observation(f"{prefix}_FILTER_CALLS", filter_calls.value)
+    perf_budgets.assert_observation(f"{prefix}_EXCLUDE_CALLS", exclude_calls.value)
+
+
 @pytest.mark.parametrize("size", [400, 800])
 def test_manager_valued_input_preserves_wrappers_between_attribute_reads(
     perf_budgets: PerfBudgets,

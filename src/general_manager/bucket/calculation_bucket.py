@@ -43,6 +43,7 @@ from general_manager.interface.base_interface import (
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.bucket.indexing import freeze_bucket_index_value
+from general_manager.bucket.request_bucket import RequestBucket
 from general_manager.manager.input import (
     DateRangeDomain,
     Input,
@@ -3318,9 +3319,19 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 )
                 filter_kwargs = field_filters.get("filter_kwargs", {})
                 exclude_kwargs = field_excludes.get("filter_kwargs", {})
-                possible_values = possible_values.filter(**filter_kwargs).exclude(
-                    **exclude_kwargs
-                )
+                if type(possible_values) in (
+                    CalculationBucket,
+                    DatabaseBucket,
+                    RequestBucket,
+                ):
+                    if filter_kwargs:
+                        possible_values = possible_values.filter(**filter_kwargs)
+                    if exclude_kwargs:
+                        possible_values = possible_values.exclude(**exclude_kwargs)
+                else:
+                    possible_values = possible_values.filter(**filter_kwargs).exclude(
+                        **exclude_kwargs
+                    )
                 indexed_values: Iterable[tuple[int, object]] = enumerate(
                     possible_values
                 )

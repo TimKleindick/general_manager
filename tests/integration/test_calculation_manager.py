@@ -584,6 +584,59 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(len(queries), 2)
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_unfiltered_database_source_skips_identity_transforms_and_keeps_evidence(
+        self,
+    ):
+        employee = self.Employee.create(
+            name="Alice",
+            salary=Measurement(3000, "EUR"),
+            creator_id=self.user.id,
+        )
+        source = self.Employee.all()
+        filter_calls = 0
+        exclude_calls = 0
+        original_filter = DatabaseBucket.filter
+        original_exclude = DatabaseBucket.exclude
+
+        def counted_filter(self, **kwargs):
+            nonlocal filter_calls
+            filter_calls += 1
+            return original_filter(self, **kwargs)
+
+        def counted_exclude(self, **kwargs):
+            nonlocal exclude_calls
+            exclude_calls += 1
+            return original_exclude(self, **kwargs)
+
+        class UnfilteredDatabaseSourceCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=source)
+
+        bucket = CalculationBucket(UnfilteredDatabaseSourceCalculation)
+        with (
+            patch.object(
+                DatabaseBucket,
+                "filter",
+                autospec=True,
+                side_effect=counted_filter,
+            ),
+            patch.object(
+                DatabaseBucket,
+                "exclude",
+                autospec=True,
+                side_effect=counted_exclude,
+            ),
+        ):
+            combinations = bucket._materialize_combinations(expose=False)
+
+        self.assertEqual(combinations, [{"employee": employee}])
+        evidence = bucket._lookup_combination_evidence(combinations[0])["employee"]
+        self.assertIsInstance(evidence, _DatabaseEnumerationEvidence)
+        self.assertIs(evidence.provider, source)
+        self.assertEqual(filter_calls, 0)
+        self.assertEqual(exclude_calls, 0)
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_database_batch_dependency_replay_is_exact_per_next_and_nested(self):
         for name in ("Alice", "Bob"):
             self.Employee.create(
