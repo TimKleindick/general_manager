@@ -18,6 +18,7 @@ from general_manager.interface.base_interface import (
     _LAZY_INPUT_VALUES_CACHE_NAME,
     _MANAGER_INPUT_SEED_PLAN_NAME,
     _SEEDED_INPUT_VALUES_CACHE_NAME,
+    _SeededFieldOrigin,
     _STATIC_ATTRIBUTE_MISSING,
     _GENERAL_MANAGER_PROVENANCE,
     _canonical_manager_class_state,
@@ -27,6 +28,7 @@ from general_manager.interface.base_interface import (
     _mapping_value_by_identity,
     _matches_static_dispatch,
     _register_calculation_capability_seed_provenance,
+    _seeded_interface_origin,
     _static_descriptor,
 )
 from general_manager.manager.general_manager import GeneralManager
@@ -54,16 +56,6 @@ _EMPTY_CLOSURE_CELL = object()
 _MISSING_INTERFACE_STATE = object()
 
 
-@dataclass(frozen=True, slots=True)
-class _SeededInstanceState:
-    instance_state: dict[str, object]
-    resolved_values: object
-    identification: object
-    seeded_values: object
-    lazy_fields: object
-    surrounding_state_safe: bool
-
-
 def _static_class_value(
     cls: type[object],
     name: str,
@@ -84,68 +76,116 @@ def _static_class_value(
     return _MISSING_INTERFACE_STATE
 
 
-def _seeded_calculation_instance_state(
+def _exact_string_dict(value: object) -> bool:
+    return type(value) is dict and all(type(key) is str for key in value)
+
+
+def _exact_string_set(value: object) -> bool:
+    return type(value) is set and all(type(item) is str for item in value)
+
+
+def _seeded_interface_surrounding_state_safe(
     interface_instance: "CalculationInterface",
-) -> _SeededInstanceState | None:
-    """Return exact constructor-seeded state without virtual access."""
+) -> bool:
+    """Validate the live interface shell without consulting marker mirrors."""
     interface_provenance = _INTERFACE_BASE_PROVENANCE
     if interface_provenance is None:
-        return None
+        return False
     interface_class = type(interface_instance)
     if not _mro_state_access_is_canonical(
         interface_class,
         interface_provenance[0],
-        (_INSTANCE_DICT_NAME, "_resolved_input_values", "identification"),
+        (
+            _INSTANCE_DICT_NAME,
+            "_resolved_input_values",
+            _SEEDED_INPUT_VALUES_CACHE_NAME,
+            _LAZY_INPUT_VALUES_CACHE_NAME,
+            "identification",
+        ),
     ):
-        return None
+        return False
     state = object.__getattribute__(interface_instance, _INSTANCE_DICT_NAME)
-    if type(state) is not dict:
-        return None
-    if any(type(key) is not str for key in state):
-        return None
-    identification = dict.get(state, "identification", _MISSING_INTERFACE_STATE)
-    resolved_values = dict.get(
-        state,
-        "_resolved_input_values",
-        _MISSING_INTERFACE_STATE,
-    )
-    seeded_values = dict.get(
-        state,
-        _SEEDED_INPUT_VALUES_CACHE_NAME,
-        _MISSING_INTERFACE_STATE,
-    )
-    lazy_fields = dict.get(
-        state,
-        _LAZY_INPUT_VALUES_CACHE_NAME,
-        _MISSING_INTERFACE_STATE,
-    )
-    if (
-        seeded_values is _MISSING_INTERFACE_STATE
-        and lazy_fields is _MISSING_INTERFACE_STATE
-    ):
-        return None
+    if not _exact_string_dict(state):
+        return False
     expected_names = (
         "_resolved_input_values",
         _SEEDED_INPUT_VALUES_CACHE_NAME,
         _LAZY_INPUT_VALUES_CACHE_NAME,
         "identification",
     )
-    surrounding_state_safe = (
-        type(identification) is dict
-        and type(resolved_values) is dict
-        and type(seeded_values) is dict
-        and type(lazy_fields) is set
-        and len(state) in {3, 4}
-        and all(any(key == expected for expected in expected_names) for key in state)
+    return len(state) in {2, 3, 4} and all(
+        any(key == expected for expected in expected_names) for key in state
     )
-    return _SeededInstanceState(
-        instance_state=state,
-        resolved_values=resolved_values,
-        identification=identification,
-        seeded_values=seeded_values,
-        lazy_fields=lazy_fields,
-        surrounding_state_safe=surrounding_state_safe,
+
+
+def _replace_live_resolved_cache_if_safe(
+    interface_instance: "CalculationInterface",
+    resolved_values: dict[str, object],
+) -> None:
+    """Mirror a reconciled external cache only when direct state access is safe."""
+    interface_provenance = _INTERFACE_BASE_PROVENANCE
+    if interface_provenance is None:
+        return
+    interface_class = type(interface_instance)
+    if not _mro_state_access_is_canonical(
+        interface_class,
+        interface_provenance[0],
+        (_INSTANCE_DICT_NAME, "_resolved_input_values"),
+    ):
+        return
+    state = object.__getattribute__(interface_instance, _INSTANCE_DICT_NAME)
+    if type(state) is dict:
+        dict.__setitem__(state, "_resolved_input_values", resolved_values)
+
+
+def _transition_mirror_field_to_lazy_if_safe(
+    interface_instance: "CalculationInterface",
+    field_name: str,
+) -> None:
+    """Release mirror references without trusting mirror keys or descriptors."""
+    interface_provenance = _INTERFACE_BASE_PROVENANCE
+    if interface_provenance is None:
+        return
+    interface_class = type(interface_instance)
+    if not _mro_state_access_is_canonical(
+        interface_class,
+        interface_provenance[0],
+        (
+            _INSTANCE_DICT_NAME,
+            _SEEDED_INPUT_VALUES_CACHE_NAME,
+            _LAZY_INPUT_VALUES_CACHE_NAME,
+        ),
+    ):
+        return
+    state = object.__getattribute__(interface_instance, _INSTANCE_DICT_NAME)
+    if not _exact_string_dict(state):
+        return
+    seeded_values = dict.get(
+        state,
+        _SEEDED_INPUT_VALUES_CACHE_NAME,
+        _MISSING_INTERFACE_STATE,
     )
+    if type(seeded_values) is dict:
+        if _exact_string_dict(seeded_values):
+            dict.pop(seeded_values, field_name, None)
+        else:
+            seeded_values = {}
+            dict.__setitem__(
+                state,
+                _SEEDED_INPUT_VALUES_CACHE_NAME,
+                seeded_values,
+            )
+        if not seeded_values:
+            dict.pop(state, _SEEDED_INPUT_VALUES_CACHE_NAME, None)
+    lazy_fields = dict.get(
+        state,
+        _LAZY_INPUT_VALUES_CACHE_NAME,
+        _MISSING_INTERFACE_STATE,
+    )
+    if not _exact_string_set(lazy_fields):
+        lazy_fields = set()
+        dict.__setitem__(state, _LAZY_INPUT_VALUES_CACHE_NAME, lazy_fields)
+    set.add(lazy_fields, field_name)
 
 
 def _post_seeded_manager_state_is_safe(
@@ -268,7 +308,7 @@ def _cached_manager_matches_formatted_identification(
     field_name: str,
     input_field: Input[type[object]],
     cached_value: object,
-    identification: dict[str, object],
+    formatted_identification: dict[str, object],
 ) -> bool:
     """Validate one seeded manager without invoking instance/class hooks."""
     input_provenance = _INPUT_PROVENANCE
@@ -320,10 +360,7 @@ def _cached_manager_matches_formatted_identification(
     )
     if dict.__getitem__(manager_state, "_manager_state_valid") is not True:
         return False
-    return (
-        dict.get(identification, field_name, _MISSING_INTERFACE_STATE)
-        is private_identification
-    )
+    return formatted_identification is private_identification
 
 
 @dataclass(frozen=True, slots=True)
@@ -593,60 +630,39 @@ class CalculationReadCapability(BaseCapability):
             interface_instance: "CalculationInterface",
             field_name: str,
         ) -> object:
-            seeded_state = _seeded_calculation_instance_state(interface_instance)
-            identification: dict[str, object] | None
-            seeded_values: dict[str, object] | None
-            lazy_fields: set[str] | None
-            seeded_state_safe = False
-            instance_state: dict[str, object] | None = None
-            if seeded_state is not None:
-                instance_state = seeded_state.instance_state
-                resolved_values = (
-                    seeded_state.resolved_values
-                    if type(seeded_state.resolved_values) is dict
-                    else {}
-                )
-                identification = (
-                    seeded_state.identification
-                    if type(seeded_state.identification) is dict
-                    else {}
-                )
-                seeded_values = (
-                    seeded_state.seeded_values
-                    if type(seeded_state.seeded_values) is dict
-                    else {}
-                )
-                lazy_fields = (
-                    seeded_state.lazy_fields
-                    if type(seeded_state.lazy_fields) is set
-                    else set()
-                )
-                dict.__setitem__(
-                    instance_state,
-                    "_resolved_input_values",
-                    resolved_values,
-                )
-                if seeded_state.seeded_values is not _MISSING_INTERFACE_STATE:
-                    dict.__setitem__(
-                        instance_state,
-                        _SEEDED_INPUT_VALUES_CACHE_NAME,
-                        seeded_values,
-                    )
-                dict.__setitem__(
-                    instance_state,
-                    _LAZY_INPUT_VALUES_CACHE_NAME,
-                    lazy_fields,
-                )
-                seeded_state_safe = seeded_state.surrounding_state_safe
-            else:
-                identification = None
-                seeded_values = None
-                lazy_fields = None
+            origin = _seeded_interface_origin(interface_instance)
+            field_origin: _SeededFieldOrigin | None = None
+            identification: dict[str, object] | None = None
+            surrounding_state_safe = False
+            if origin is None:
                 try:
                     resolved_values = interface_instance._resolved_input_values
                 except AttributeError:
                     resolved_values = {}
                     interface_instance._resolved_input_values = resolved_values
+            else:
+                if _exact_string_dict(origin.fields):
+                    field_origin_value = _mapping_value_by_identity(
+                        origin.fields,
+                        field_name,
+                        _MISSING_INTERFACE_STATE,
+                    )
+                    if type(field_origin_value) is _SeededFieldOrigin:
+                        field_origin = field_origin_value
+                        identification = field_origin.formatted_identification
+                if _exact_string_dict(origin.resolved_values):
+                    resolved_values = origin.resolved_values
+                else:
+                    resolved_values = {}
+                    origin.resolved_values = resolved_values
+                    _replace_live_resolved_cache_if_safe(
+                        interface_instance,
+                        resolved_values,
+                    )
+                surrounding_state_safe = (
+                    field_origin is not None
+                    and _seeded_interface_surrounding_state_safe(interface_instance)
+                )
 
             input_field = interface_cls.input_fields[field_name]
             cached_value = dict.get(
@@ -655,52 +671,43 @@ class CalculationReadCapability(BaseCapability):
                 _MISSING_INTERFACE_STATE,
             )
             if cached_value is not _MISSING_INTERFACE_STATE:
-                if seeded_values is None or lazy_fields is None:
+                if origin is None:
                     _track_cached_manager(cached_value)
                     return cached_value
-                seeded_value = dict.get(
-                    seeded_values,
-                    field_name,
-                    _MISSING_INTERFACE_STATE,
-                )
-                lazy_transition = set.__contains__(lazy_fields, field_name)
-                if lazy_transition and seeded_value is _MISSING_INTERFACE_STATE:
+                if field_origin is not None and field_origin.lazy:
                     _track_cached_manager(cached_value)
                     return cached_value
                 parent_class = _static_class_value(interface_cls, "_parent_class")
                 if (
-                    not lazy_transition
-                    and seeded_value is cached_value
-                    and seeded_state_safe
+                    field_origin is not None
+                    and field_origin.manager_ref is not None
+                    and field_origin.manager_ref() is cached_value
+                    and surrounding_state_safe
                     and _cached_manager_matches_formatted_identification(
                         parent_class,
                         field_name,
                         input_field,
                         cached_value,
-                        cast(dict[str, object], identification),
+                        field_origin.formatted_identification,
                     )
                 ):
                     _track_cached_manager(cached_value)
                     return cached_value
-                dict.pop(seeded_values, field_name, None)
-                if not seeded_values:
-                    dict.pop(
-                        cast(dict[str, object], instance_state),
-                        _SEEDED_INPUT_VALUES_CACHE_NAME,
-                        None,
-                    )
-                set.add(lazy_fields, field_name)
                 dict.pop(resolved_values, field_name, None)
-            elif seeded_values is not None and lazy_fields is not None:
-                if not set.__contains__(lazy_fields, field_name):
-                    dict.pop(seeded_values, field_name, None)
-                    if not seeded_values:
-                        dict.pop(
-                            cast(dict[str, object], instance_state),
-                            _SEEDED_INPUT_VALUES_CACHE_NAME,
-                            None,
-                        )
-                    set.add(lazy_fields, field_name)
+                if field_origin is not None:
+                    field_origin.manager_ref = None
+                    field_origin.lazy = True
+                    _transition_mirror_field_to_lazy_if_safe(
+                        interface_instance,
+                        field_name,
+                    )
+            elif field_origin is not None and not field_origin.lazy:
+                field_origin.manager_ref = None
+                field_origin.lazy = True
+                _transition_mirror_field_to_lazy_if_safe(
+                    interface_instance,
+                    field_name,
+                )
 
             dependency_values = {
                 dependency_name: _resolve_input_value(
@@ -710,12 +717,16 @@ class CalculationReadCapability(BaseCapability):
                 for dependency_name in input_field.depends_on
             }
             cache_context: tuple[type[object], str] | None
+            raw_value: object
             if identification is None:
                 identification = interface_instance.identification
                 raw_value = identification.get(field_name)
                 cache_context = (interface_cls._parent_class, field_name)
             else:
-                raw_value = dict.get(identification, field_name)
+                if field_origin is not None:
+                    raw_value = field_origin.formatted_identification
+                else:
+                    raw_value = identification.get(field_name)
                 parent_class = _static_class_value(interface_cls, "_parent_class")
                 cache_context = (
                     (cast(type[object], parent_class), field_name)

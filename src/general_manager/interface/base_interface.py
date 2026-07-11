@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 import inspect
+from threading import RLock
 from types import CellType, CodeType, FunctionType, MappingProxyType
 from typing import (
     Type,
@@ -21,6 +22,7 @@ from typing import (
     Protocol,
     cast,
 )
+from weakref import ReferenceType, ref
 from django.conf import settings
 from django.core.signals import setting_changed
 from django.db.models import Model
@@ -139,6 +141,98 @@ _GENERAL_MANAGER_PROVENANCE: tuple[type[object], _StaticDispatchSnapshot] | None
 _GENERAL_MANAGER_META_PROVENANCE: (
     tuple[type[object], _StaticDispatchSnapshot] | None
 ) = None
+
+
+@dataclass(slots=True)
+class _SeededFieldOrigin:
+    manager_ref: ReferenceType[object] | None
+    formatted_identification: dict[str, object]
+    lazy: bool = False
+
+
+@dataclass(slots=True)
+class _SeededInterfaceOrigin:
+    interface_ref: ReferenceType[object]
+    resolved_values: dict[str, object]
+    fields: dict[str, _SeededFieldOrigin]
+
+
+_SEEDED_INTERFACE_ORIGINS: dict[int, _SeededInterfaceOrigin] = {}
+_SEEDED_INTERFACE_ORIGINS_LOCK = RLock()
+
+
+def _register_seeded_interface_origin(
+    interface: object,
+    resolved_values: dict[str, object],
+) -> bool:
+    """Register constructor-seeded values without hashing interface objects."""
+    interface_id = id(interface)
+    fields: dict[str, _SeededFieldOrigin] = {}
+    for field_name, manager in resolved_values.items():
+        if type(field_name) is not str:
+            return False
+        manager_state = object.__getattribute__(manager, _INSTANCE_DICT_NAME)
+        if type(manager_state) is not dict:
+            return False
+        formatted_identification = dict.get(
+            manager_state,
+            "_GeneralManager__id",
+            _STATIC_ATTRIBUTE_MISSING,
+        )
+        if type(formatted_identification) is not dict:
+            return False
+        try:
+            manager_ref = ref(manager)
+        except TypeError:
+            manager_ref = None
+        fields[field_name] = _SeededFieldOrigin(
+            manager_ref=manager_ref,
+            formatted_identification=formatted_identification,
+        )
+
+    def remove_origin(interface_ref: ReferenceType[object]) -> None:
+        with _SEEDED_INTERFACE_ORIGINS_LOCK:
+            current = _SEEDED_INTERFACE_ORIGINS.get(interface_id)
+            if current is not None and current.interface_ref is interface_ref:
+                _SEEDED_INTERFACE_ORIGINS.pop(interface_id, None)
+
+    try:
+        interface_ref = ref(interface, remove_origin)
+    except TypeError:
+        return False
+    origin = _SeededInterfaceOrigin(
+        interface_ref=interface_ref,
+        resolved_values=resolved_values,
+        fields=fields,
+    )
+    with _SEEDED_INTERFACE_ORIGINS_LOCK:
+        _SEEDED_INTERFACE_ORIGINS[interface_id] = origin
+    return True
+
+
+def _seeded_interface_origin(interface: object) -> _SeededInterfaceOrigin | None:
+    """Return an exact weakref-matched origin entry, safe against id reuse."""
+    with _SEEDED_INTERFACE_ORIGINS_LOCK:
+        origin = _SEEDED_INTERFACE_ORIGINS.get(id(interface))
+        if origin is None or origin.interface_ref() is not interface:
+            return None
+        return origin
+
+
+def _seeded_interface_origin_by_id(
+    interface_id: int,
+) -> _SeededInterfaceOrigin | None:
+    """Test-support read that never treats an id alone as authoritative."""
+    with _SEEDED_INTERFACE_ORIGINS_LOCK:
+        origin = _SEEDED_INTERFACE_ORIGINS.get(interface_id)
+        if origin is None or origin.interface_ref() is None:
+            return None
+        return origin
+
+
+def _seeded_interface_registry_size() -> int:
+    with _SEEDED_INTERFACE_ORIGINS_LOCK:
+        return len(_SEEDED_INTERFACE_ORIGINS)
 
 
 def _static_descriptor(cls: type[object], attribute_name: str) -> object:
@@ -851,6 +945,13 @@ def _seed_calculation_resolved_manager_values(
                 _LAZY_INPUT_VALUES_CACHE_NAME,
                 set(),
             )
+            if not _register_seeded_interface_origin(
+                interface,
+                resolved_manager_values,
+            ):
+                dict.pop(interface_state, "_resolved_input_values", None)
+                dict.pop(interface_state, _SEEDED_INPUT_VALUES_CACHE_NAME, None)
+                dict.pop(interface_state, _LAZY_INPUT_VALUES_CACHE_NAME, None)
     except (AttributeError, KeyError, TypeError):
         return
 

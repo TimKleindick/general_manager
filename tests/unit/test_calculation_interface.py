@@ -688,6 +688,148 @@ class TestCalculationInterface(TestCase):
                 self.assertEqual(resolved.identification, {"id": "related-id"})
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_deleting_all_instance_markers_cannot_demote_invalid_seed(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        original._invalidate_manager_state("stale")
+        interface_state = vars(manager._interface)
+        interface_state.pop("_gm_seeded_input_values_cache")
+        interface_state.pop("_gm_lazy_input_values_cache")
+
+        resolved = manager.related
+
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_post_seed_resolved_descriptor_mutation_invokes_zero_hooks(self):
+        hook_calls = []
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        original._invalidate_manager_state("stale")
+        interface_class = HydratedCalculation.Interface
+        hostile_descriptor = property(
+            lambda _self: hook_calls.append("get") or original,
+            lambda _self, _value: hook_calls.append("set"),
+        )
+        type.__setattr__(
+            interface_class,
+            "_resolved_input_values",
+            hostile_descriptor,
+        )
+        try:
+            resolved = manager.related
+        finally:
+            type.__delattr__(interface_class, "_resolved_input_values")
+
+        self.assertEqual(hook_calls, [])
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_hostile_seed_container_keys_invoke_zero_hooks(self):
+        hook_calls = []
+
+        class HostileFieldName(str):
+            def __hash__(self):
+                hook_calls.append("hash")
+                return str.__hash__(self)
+
+            def __eq__(self, other):
+                hook_calls.append("eq")
+                return str.__eq__(self, other)
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+
+        def mutate_seed_map(interface):
+            seed_map = vars(interface)["_gm_seeded_input_values_cache"]
+            original_value = seed_map.pop("related")
+            seed_map[HostileFieldName("related")] = original_value
+
+        def mutate_lazy_set(interface):
+            lazy_fields = vars(interface)["_gm_lazy_input_values_cache"]
+            lazy_fields.add(HostileFieldName("related"))
+
+        def mutate_resolved_map(interface):
+            resolved_values = vars(interface)["_resolved_input_values"]
+            original_value = resolved_values.pop("related")
+            resolved_values[HostileFieldName("related")] = original_value
+
+        for mutation in (mutate_seed_map, mutate_lazy_set, mutate_resolved_map):
+            original = RelatedManager("related-id")
+            manager = HydratedCalculation(original)
+            mutation(manager._interface)
+            hook_calls.clear()
+
+            with self.subTest(mutation=mutation):
+                resolved = manager.related
+                self.assertEqual(hook_calls, [])
+                self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_external_seed_origin_registry_does_not_retain_interface(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        registry_size_before = base_interface_module._seeded_interface_registry_size()
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        interface = manager._interface
+        interface_id = id(interface)
+        interface_ref = ref(interface)
+        self.assertEqual(
+            base_interface_module._seeded_interface_registry_size(),
+            registry_size_before + 1,
+        )
+
+        del interface
+        del manager
+        del original
+        gc.collect()
+
+        self.assertIsNone(interface_ref())
+        self.assertIsNone(
+            base_interface_module._seeded_interface_origin_by_id(interface_id)
+        )
+        self.assertLessEqual(
+            base_interface_module._seeded_interface_registry_size(),
+            registry_size_before,
+        )
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_replaced_seeded_manager_identification_is_evicted(self):
         class RelatedManager(GeneralManager):
             class Interface(CalculationInterface):
