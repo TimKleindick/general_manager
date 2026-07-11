@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import sys
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
@@ -14,6 +15,9 @@ from general_manager.bucket import calculation_bucket as calculation_bucket_modu
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.interfaces.calculation import CalculationInterface
+from general_manager.interface.capabilities.calculation import (
+    CalculationQueryCapability,
+)
 from general_manager.api.property import graph_ql_property
 from general_manager.interface import base_interface as base_interface_module
 from general_manager.manager.general_manager import GeneralManager
@@ -589,6 +593,68 @@ def test_static_domain_snapshot_scaling(
             f"CALC_STATIC_SNAPSHOT_{size}_{name}",
             observed,
         )
+
+
+def test_calculation_query_capability_constructs_final_buckets_directly(
+    perf_budgets: PerfBudgets,
+) -> None:
+    capability = CalculationQueryCapability()
+    constructor_calls = Counter()
+    parse_calls = Counter()
+    original_init = CalculationBucket.__init__
+    original_parse_filters = calculation_bucket_module.parse_filters
+
+    def counted_init(self, *args: object, **kwargs: object) -> None:
+        constructor_calls.increment()
+        original_init(self, *args, **kwargs)
+
+    def counted_parse_filters(*args: object, **kwargs: object):
+        parse_calls.increment()
+        return original_parse_filters(*args, **kwargs)
+
+    with (
+        patch.object(CalculationBucket, "__init__", new=counted_init),
+        patch.object(
+            calculation_bucket_module,
+            "parse_filters",
+            side_effect=counted_parse_filters,
+        ),
+        patch.object(
+            calculation_bucket_module,
+            "deepcopy",
+            wraps=copy.deepcopy,
+        ) as deepcopies,
+    ):
+        filtered = capability.filter(
+            _make_default_calculation_manager(
+                "DirectQueryPerfManager",
+                "value",
+                Input(int, possible_values=(1, 2)),
+            )[0].Interface,
+            value=1,
+        )
+        excluded = capability.exclude(
+            filtered._manager_class.Interface,
+            value=2,
+        )
+        all_bucket = capability.all(filtered._manager_class.Interface)
+
+    assert filtered.filter_definitions == {"value": 1}
+    assert filtered.exclude_definitions == {}
+    assert excluded.filter_definitions == {}
+    assert excluded.exclude_definitions == {"value": 2}
+    assert all_bucket.filter_definitions == {}
+    assert all_bucket.exclude_definitions == {}
+    assert constructor_calls.value == 3
+    assert parse_calls.value == 6
+    assert deepcopies.call_count == 0
+    perf_budgets.assert_observation(
+        "CALC_QUERY_DIRECT_CONSTRUCTORS", constructor_calls.value
+    )
+    perf_budgets.assert_observation(
+        "CALC_QUERY_DIRECT_DEEPCOPIES", deepcopies.call_count
+    )
+    perf_budgets.assert_observation("CALC_QUERY_DIRECT_PARSE_CALLS", parse_calls.value)
 
 
 def test_dependent_5x10_cold_and_warm_generation(

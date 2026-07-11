@@ -7,6 +7,7 @@ from unittest.mock import patch
 from weakref import ref
 
 from django.test import TestCase, override_settings
+from general_manager.bucket import calculation_bucket as calculation_bucket_module
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.interface import CalculationInterface
 from general_manager.interface.capabilities.calculation import (
@@ -31,6 +32,7 @@ from general_manager.manager.meta import AttributeEvaluationError, GeneralManage
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
+from general_manager.utils.filter_parser import UnknownInputFieldError
 from tests.perf.support import count_profiled_calls
 
 
@@ -3298,6 +3300,52 @@ class TestCalculationInterface(TestCase):
         self.assertIsInstance(bucket, CalculationBucket)
         self.assertEqual(bucket._manager_class, DummyGeneralManager)
 
+    def test_filter_constructs_final_bucket_once(self):
+        capability = CalculationQueryCapability()
+        constructor_calls = 0
+        original_constructor = CalculationBucket
+
+        def counted_constructor(*args, **kwargs):
+            nonlocal constructor_calls
+            constructor_calls += 1
+            return original_constructor(*args, **kwargs)
+
+        with (
+            patch.object(
+                calculation_lifecycle_module,
+                "CalculationBucket",
+                side_effect=counted_constructor,
+            ),
+            patch(
+                "general_manager.bucket.calculation_bucket.CalculationBucket",
+                side_effect=counted_constructor,
+            ),
+        ):
+            bucket = capability.filter(DummyCalculationInterface, field1="test")
+
+        self.assertEqual(constructor_calls, 1)
+        self.assertEqual(bucket.filter_definitions, {"field1": "test"})
+        self.assertEqual(bucket.exclude_definitions, {})
+
+    def test_filter_parses_definitions_once(self):
+        capability = CalculationQueryCapability()
+        original_parse_filters = calculation_bucket_module.parse_filters
+
+        with patch.object(
+            calculation_bucket_module,
+            "parse_filters",
+            wraps=original_parse_filters,
+        ) as parse_calls:
+            capability.filter(DummyCalculationInterface, field1="test")
+
+        self.assertEqual(parse_calls.call_count, 2)
+
+    def test_filter_preserves_invalid_definition_errors(self):
+        capability = CalculationQueryCapability()
+
+        with self.assertRaises(UnknownInputFieldError):
+            capability.filter(DummyCalculationInterface, unknown_field="test")
+
     def test_exclude(self):
         """
         Tests that the exclude method returns a CalculationBucket linked to DummyGeneralManager.
@@ -3306,6 +3354,33 @@ class TestCalculationInterface(TestCase):
         self.assertIsInstance(bucket, CalculationBucket)
         self.assertEqual(bucket._manager_class, DummyGeneralManager)
 
+    def test_exclude_constructs_final_bucket_once(self):
+        capability = CalculationQueryCapability()
+        constructor_calls = 0
+        original_constructor = CalculationBucket
+
+        def counted_constructor(*args, **kwargs):
+            nonlocal constructor_calls
+            constructor_calls += 1
+            return original_constructor(*args, **kwargs)
+
+        with (
+            patch.object(
+                calculation_lifecycle_module,
+                "CalculationBucket",
+                side_effect=counted_constructor,
+            ),
+            patch(
+                "general_manager.bucket.calculation_bucket.CalculationBucket",
+                side_effect=counted_constructor,
+            ),
+        ):
+            bucket = capability.exclude(DummyCalculationInterface, field1="test")
+
+        self.assertEqual(constructor_calls, 1)
+        self.assertEqual(bucket.filter_definitions, {})
+        self.assertEqual(bucket.exclude_definitions, {"field1": "test"})
+
     def test_all(self):
         """
         Tests that the all() method returns a CalculationBucket linked to DummyGeneralManager.
@@ -3313,6 +3388,63 @@ class TestCalculationInterface(TestCase):
         bucket = DummyCalculationInterface.all()
         self.assertIsInstance(bucket, CalculationBucket)
         self.assertEqual(bucket._manager_class, DummyGeneralManager)
+
+    def test_all_does_not_deepcopy_an_empty_bucket(self):
+        capability = CalculationQueryCapability()
+        with patch(
+            "general_manager.bucket.calculation_bucket.deepcopy",
+            wraps=__import__("copy").deepcopy,
+        ) as deepcopies:
+            bucket = capability.all(DummyCalculationInterface)
+
+        self.assertIsInstance(bucket, CalculationBucket)
+        self.assertEqual(bucket.filter_definitions, {})
+        self.assertEqual(bucket.exclude_definitions, {})
+        self.assertEqual(deepcopies.call_count, 0)
+
+    def test_direct_query_buckets_keep_independent_definition_mappings(self):
+        capability = CalculationQueryCapability()
+        first = capability.filter(DummyCalculationInterface, field1="first")
+        second = capability.filter(DummyCalculationInterface, field1="second")
+
+        first.filter_definitions["field1"] = "changed"
+
+        self.assertEqual(second.filter_definitions, {"field1": "second"})
+
+    def test_direct_query_buckets_support_chaining_without_sharing_state(self):
+        capability = CalculationQueryCapability()
+        first = capability.filter(DummyCalculationInterface, field1="first")
+        chained = first.filter(field2=2)
+        repeated = capability.filter(DummyCalculationInterface, field1="repeated")
+
+        self.assertEqual(
+            chained.filter_definitions,
+            {"field1": "first", "field2": 2},
+        )
+        self.assertEqual(first.filter_definitions, {"field1": "first"})
+        self.assertEqual(repeated.filter_definitions, {"field1": "repeated"})
+
+    def test_direct_query_observability_payload_is_isolated_from_bucket(self):
+        capability = CalculationQueryCapability()
+        observed_payload: dict[str, dict[str, object]] = {}
+
+        def observe(_target, *, operation, payload, func):
+            observed_payload[operation] = dict(payload)
+            return func()
+
+        with patch.object(
+            calculation_lifecycle_module,
+            "call_with_observability",
+            side_effect=observe,
+        ):
+            bucket = capability.filter(DummyCalculationInterface, field1="test")
+
+        payload = observed_payload["calculation.query.filter"]
+        self.assertEqual(payload, {"kwargs": {"field1": "test"}})
+        payload_kwargs = payload["kwargs"]
+        assert isinstance(payload_kwargs, dict)
+        payload_kwargs["field1"] = "mutated"
+        self.assertEqual(bucket.filter_definitions, {"field1": "test"})
 
     def test_pre_create(self):
         """

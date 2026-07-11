@@ -1173,7 +1173,10 @@ class CalculationQueryCapability(BaseCapability):
         payload_snapshot: dict[str, object] = {"kwargs": dict(kwargs)}
 
         def _perform() -> CalculationBucket[GeneralManager]:
-            return CalculationBucket(interface_cls._parent_class).filter(**kwargs)
+            return CalculationBucket(
+                interface_cls._parent_class,
+                filter_definitions=dict(kwargs),
+            )
 
         return call_with_observability(
             interface_cls,
@@ -1211,7 +1214,10 @@ class CalculationQueryCapability(BaseCapability):
         payload_snapshot: dict[str, object] = {"kwargs": dict(kwargs)}
 
         def _perform() -> CalculationBucket[GeneralManager]:
-            return CalculationBucket(interface_cls._parent_class).exclude(**kwargs)
+            return CalculationBucket(
+                interface_cls._parent_class,
+                exclude_definitions=dict(kwargs),
+            )
 
         return call_with_observability(
             interface_cls,
@@ -1244,7 +1250,7 @@ class CalculationQueryCapability(BaseCapability):
         payload_snapshot: dict[str, object] = {}
 
         def _perform() -> CalculationBucket[GeneralManager]:
-            return CalculationBucket(interface_cls._parent_class).all()
+            return CalculationBucket(interface_cls._parent_class)
 
         return call_with_observability(
             interface_cls,
