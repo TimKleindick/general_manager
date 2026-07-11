@@ -15,6 +15,7 @@ from general_manager.bucket.calculation_bucket import (
     _calculation_cache_clone,
     _calculation_cache_filter_token,
     _calculation_cache_freeze,
+    _calculation_cache_freeze_inner,
     _calculation_cache_identity_token,
     _terminal_scalar_source_supported,
     _trusted_enumeration_evidence,
@@ -2474,6 +2475,55 @@ class TestCalculationTerminalStreams(TestCase):
                 {"value": 1},
             ],
         )
+
+        deeply_nested = None
+        for _ in range(2000):
+            deeply_nested = [deeply_nested]
+        self.assertIs(
+            _calculation_cache_freeze(deeply_nested),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+        tuple_cycle = (1,)
+        self.assertIs(
+            _calculation_cache_freeze_inner(tuple_cycle, {id(tuple_cycle)}),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+        self.assertIs(
+            _calculation_cache_freeze((object(),)),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+
+        malformed_filters = self._make_scalar_bucket(range(2))
+        malformed_filters.filter_definitions = []
+        self.assertIsNone(malformed_filters._calculation_result_cache_signature())
+
+        malformed_reverse = self._make_scalar_bucket(range(2))
+        malformed_reverse.reverse = 1
+        self.assertIsNone(malformed_reverse._calculation_result_cache_signature())
+
+        malformed_sort = self._make_scalar_bucket(range(2))
+        malformed_sort.sort_key = ("value", 1)
+        self.assertIsNone(malformed_sort._calculation_result_cache_signature())
+
+        malformed_field = self._make_scalar_bucket(range(2))
+        malformed_field.input_fields["value"].__dict__["extra"] = True
+        self.assertIsNone(malformed_field._calculation_result_cache_signature())
+
+        malformed_dependencies = self._make_scalar_bucket(range(2))
+        malformed_dependencies.input_fields["value"].__dict__["depends_on"] = ()
+        self.assertIsNone(malformed_dependencies._calculation_result_cache_signature())
+
+        class InvalidPropertyCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
+            @graph_ql_property(cache="none")
+            def invalid_property(self) -> bool:
+                return True
+
+        GeneralManagerMeta.ensure_attributes_initialized(InvalidPropertyCalculation)
+        invalid_property_bucket = CalculationBucket(InvalidPropertyCalculation)
+        self.assertIsNone(invalid_property_bucket._calculation_result_cache_signature())
 
     def test_terminal_stream_owns_one_run_context_and_cleans_evidence(self) -> None:
         bucket = self._make_scalar_bucket(range(2))
