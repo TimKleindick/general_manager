@@ -316,6 +316,22 @@ class TestPropertyInitialization(SimpleTestCase):
         self.assertEqual(self.dummy_manager1.test_field, "callable_value")
         self.assertEqual(calls, [self.dummy_manager1._interface])
 
+    def test_callable_property_ignores_type_error_from_attribute_cache(self):
+        class TypeErrorCache(dict):
+            def __setitem__(self, key, value):
+                raise TypeError
+
+        self.dummy_manager1._attributes = {
+            "test_field": lambda _interface: "uncached_value",
+        }
+        self.dummy_manager1._attribute_value_cache = TypeErrorCache()
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            ["test_field"],
+            DummyManager1,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(self.dummy_manager1.test_field, "uncached_value")
+
     def test_cached_manager_property_replays_dependency_tracking(self):
         track_calls = []
 
