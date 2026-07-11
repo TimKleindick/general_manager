@@ -595,6 +595,150 @@ class TestCalculationInterface(TestCase):
 
         self.assertNotIn("_resolved_input_values", vars(manager._interface))
 
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seed_fails_closed_for_custom_interface_instance_dispatch(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class CustomGetattributeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+                def __getattribute__(self, name):
+                    return super().__getattribute__(name)
+
+        class CustomGetattrCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+                def __getattr__(self, name):
+                    raise AttributeError(name)
+
+        class CustomSetattrCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+                def __setattr__(self, name, value):
+                    super().__setattr__(name, value)
+
+        for manager_class in (
+            CustomGetattributeCalculation,
+            CustomGetattrCalculation,
+            CustomSetattrCalculation,
+        ):
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+            with self.subTest(manager_class=manager_class):
+                manager = manager_class("related-id")
+                self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seed_fails_closed_for_custom_nested_manager_instance_dispatch(self):
+        class CustomGetattributeManager(GeneralManager):
+            def __getattribute__(self, name):
+                return super().__getattribute__(name)
+
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class CustomGetattrManager(GeneralManager):
+            def __getattr__(self, name):
+                return super().__getattr__(name)
+
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class CustomSetattrManager(GeneralManager):
+            def __setattr__(self, name, value):
+                super().__setattr__(name, value)
+
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        related_classes = (
+            CustomGetattributeManager,
+            CustomGetattrManager,
+            CustomSetattrManager,
+        )
+        for related_class in related_classes:
+            interface_class = type(
+                f"{related_class.__name__}InputInterface",
+                (CalculationInterface,),
+                {"related": Input(related_class)},
+            )
+            manager_class = GeneralManagerMeta(
+                f"{related_class.__name__}InputCalculation",
+                (GeneralManager,),
+                {
+                    "__module__": __name__,
+                    "Interface": interface_class,
+                },
+            )
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+            with self.subTest(related_class=related_class):
+                manager = manager_class("related-id")
+                self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_custom_interface_metaclass_equality_is_not_invoked_by_seed(self):
+        equality_calls = []
+
+        class RecordingMeta(type(CalculationInterface)):
+            def __eq__(cls, other):
+                equality_calls.append(other)
+                return cls is other
+
+            __hash__ = type.__hash__
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class MetaclassInterface(CalculationInterface, metaclass=RecordingMeta):
+            related = Input(RelatedManager)
+
+        class MetaclassCalculation(GeneralManager):
+            Interface = MetaclassInterface
+
+        GeneralManagerMeta.ensure_attributes_initialized(MetaclassCalculation)
+        equality_calls.clear()
+
+        manager = MetaclassCalculation("related-id")
+
+        self.assertEqual(equality_calls, [])
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seed_fails_closed_for_custom_interface_metaclass_dispatch(self):
+        class CustomCallMeta(type(CalculationInterface)):
+            def __call__(cls, *args, **kwargs):
+                return super().__call__(*args, **kwargs)
+
+            def __getattribute__(cls, name):
+                return super().__getattribute__(name)
+
+            def __getattr__(cls, name):
+                raise AttributeError(name)
+
+            def __setattr__(cls, name, value):
+                super().__setattr__(name, value)
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class MetaclassInterface(CalculationInterface, metaclass=CustomCallMeta):
+            related = Input(RelatedManager)
+
+        class MetaclassCalculation(GeneralManager):
+            Interface = MetaclassInterface
+
+        GeneralManagerMeta.ensure_attributes_initialized(MetaclassCalculation)
+
+        manager = MetaclassCalculation("related-id")
+
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
     def test_filter(self):
         """
         Tests that the filter method returns a CalculationBucket linked to DummyGeneralManager.

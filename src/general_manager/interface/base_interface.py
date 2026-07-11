@@ -81,6 +81,15 @@ _SINGLE_INPUT_VALUE_CACHE_MISS = object()
 _OBSERVABILITY_HOOK_MISSING = object()
 _RUN_SCOPED_SCALAR_INPUT_TYPES = (str, int, bool)
 _FORMATLESS_IDENTIFICATION_VALUE_TYPES = {str, int, float, bool, type(None)}
+_STATIC_ATTRIBUTE_MISSING = object()
+
+
+def _static_descriptor(cls: type[object], attribute_name: str) -> object:
+    """Read one descriptor without invoking dynamic class lookup hooks."""
+    try:
+        return inspect.getattr_static(cls, attribute_name)
+    except AttributeError:
+        return _STATIC_ATTRIBUTE_MISSING
 
 
 def _has_static_dispatch(
@@ -88,8 +97,8 @@ def _has_static_dispatch(
     owner: type[object],
     attribute_name: str,
 ) -> bool:
-    """Return whether ``cls`` resolves an attribute to the owner's descriptor."""
-    return inspect.getattr_static(cls, attribute_name) is inspect.getattr_static(
+    """Match a static descriptor, including canonical attribute absence."""
+    return _static_descriptor(cls, attribute_name) is _static_descriptor(
         owner, attribute_name
     )
 
@@ -121,7 +130,9 @@ def _canonical_manager_class_state(manager_class: type[object]) -> bool:
         for name in (
             "__new__",
             "__init__",
+            "__getattribute__",
             "__getattr__",
+            "__setattr__",
             "identification",
             "_track_identification_dependency",
             "_track_identification_dependency_active",
@@ -135,9 +146,14 @@ def _canonical_manager_class_state(manager_class: type[object]) -> bool:
         return False
     manager_metaclass = type(manager_class)
     return all(
-        inspect.getattr_static(manager_metaclass, name)
-        is inspect.getattr_static(GeneralManagerMeta, name)
-        for name in ("__getattribute__", "__getattr__", "__new__")
+        _has_static_dispatch(manager_metaclass, GeneralManagerMeta, name)
+        for name in (
+            "__call__",
+            "__getattribute__",
+            "__getattr__",
+            "__setattr__",
+            "__new__",
+        )
     )
 
 
@@ -204,15 +220,29 @@ def _seed_calculation_resolved_manager_values(
         from general_manager.interface.interfaces.calculation import (
             CalculationInterface,
         )
-        from general_manager.manager.general_manager import GeneralManager
         from general_manager.manager.input import Input
         from general_manager.manager.meta import (
             _is_canonical_manager_attribute_descriptor,
         )
 
         interface_class = object.__getattribute__(interface, "__class__")
+        canonical_interface_metaclass = type(CalculationInterface)
+        interface_metaclass = type(interface_class)
+        if interface_metaclass is not canonical_interface_metaclass:
+            return
+        if not all(
+            _has_static_dispatch(
+                interface_metaclass,
+                canonical_interface_metaclass,
+                name,
+            )
+            for name in ("__call__", "__getattribute__", "__getattr__", "__setattr__")
+        ):
+            return
         interface_mro = type.__getattribute__(interface_class, "__mro__")
-        if CalculationInterface not in interface_mro:
+        if type(interface_mro) is not tuple or not any(
+            candidate is CalculationInterface for candidate in interface_mro
+        ):
             return
         if type(identification) is not dict:
             return
@@ -222,6 +252,9 @@ def _seed_calculation_resolved_manager_values(
             _has_static_dispatch(interface_class, InterfaceBase, name)
             for name in (
                 "__init__",
+                "__getattribute__",
+                "__getattr__",
+                "__setattr__",
                 "parse_input_fields_to_identification",
                 "_process_input_field",
                 "format_identification",
@@ -330,9 +363,7 @@ def _seed_calculation_resolved_manager_values(
             if input_state["is_manager"] is not True:
                 continue
             manager_type = input_state["type"]
-            if not isinstance(manager_type, type) or not _has_static_dispatch(
-                manager_type, GeneralManager, "__init__"
-            ):
+            if not _canonical_manager_class_state(manager_type):
                 return
             value = identification.get(field_name)
             if value is None:
