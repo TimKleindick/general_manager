@@ -538,12 +538,27 @@ def _register_calculation_capability_seed_provenance(
             lifecycle_class,
             _capture_static_dispatch(
                 lifecycle_class,
-                ("pre_create", "post_create"),
+                (
+                    "__init__",
+                    "__getattribute__",
+                    "__getattr__",
+                    "__setattr__",
+                    "pre_create",
+                    "post_create",
+                ),
             ),
             read_class,
             _capture_static_dispatch(
                 read_class,
-                ("get_data", "get_attributes", "get_field_type"),
+                (
+                    "__init__",
+                    "__getattribute__",
+                    "__getattr__",
+                    "__setattr__",
+                    "get_data",
+                    "get_attributes",
+                    "get_field_type",
+                ),
             ),
         )
 

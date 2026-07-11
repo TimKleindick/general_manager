@@ -31,6 +31,7 @@ from general_manager.manager.meta import AttributeEvaluationError, GeneralManage
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
+from tests.perf.support import count_profiled_calls
 
 
 class DummyCalculationInterface(CalculationInterface):
@@ -2504,6 +2505,376 @@ class TestCalculationInterface(TestCase):
         ):
             manager = HydratedCalculation("related-id")
             self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seed_fails_closed_for_hostile_calculation_capability_dispatch(self):
+        """Capability instance dispatch changes must never run during seeding."""
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(RelatedManager)
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        constructor_code = GeneralManager.__dict__["__init__"].__code__
+
+        for capability_class in (
+            CalculationReadCapability,
+            CalculationLifecycleCapability,
+        ):
+            hook_calls = []
+
+            def hostile_getattribute(_self, name, calls=hook_calls):
+                calls.append(name)
+                raise AssertionError
+
+            original = capability_class.__dict__.get("__getattribute__")
+            type.__setattr__(
+                capability_class,
+                "__getattribute__",
+                hostile_getattribute,
+            )
+            try:
+                with self.subTest(capability=capability_class.__name__):
+                    manager = HydratedCalculation("related-id")
+            finally:
+                if original is None:
+                    type.__delattr__(capability_class, "__getattribute__")
+                else:
+                    type.__setattr__(capability_class, "__getattribute__", original)
+
+            self.assertEqual(hook_calls, [])
+            self.assertNotIn("_resolved_input_values", vars(manager._interface))
+            with count_profiled_calls(
+                constructor_code,
+                lambda value: value.__class__ is RelatedManager,
+            ) as nested_constructors:
+                resolved = manager.related
+            self.assertEqual(nested_constructors.value, 1)
+            self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seed_fails_closed_for_custom_interface_plan_dispatch(self):
+        """Every virtual interface plan override keeps the baseline cast path."""
+
+        def make_manager():
+            class RelatedManager(GeneralManager):
+                class Interface(CalculationInterface):
+                    id = Input(str)
+
+            class HydratedCalculation(GeneralManager):
+                class Interface(CalculationInterface):
+                    related = Input(RelatedManager)
+
+            GeneralManagerMeta.ensure_attributes_initialized(RelatedManager)
+            GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+            return RelatedManager, HydratedCalculation
+
+        def custom_init(self, *args, **kwargs):
+            return InterfaceBase.__init__(self, *args, **kwargs)
+
+        def custom_parser(self, *args, **kwargs):
+            return InterfaceBase.parse_input_fields_to_identification(
+                self,
+                *args,
+                **kwargs,
+            )
+
+        def custom_processor(
+            self,
+            name,
+            input_field,
+            value,
+            identification,
+            *,
+            cache_context,
+        ):
+            return InterfaceBase._process_input_field(
+                self,
+                name,
+                input_field,
+                value,
+                identification,
+                cache_context=cache_context,
+            )
+
+        def custom_formatter(identification):
+            return InterfaceBase.format_identification(identification)
+
+        def custom_getattribute(self, name):
+            return object.__getattribute__(self, name)
+
+        def custom_getattr(self, name):
+            raise AttributeError(name)
+
+        def custom_setattr(self, name, value):
+            object.__setattr__(self, name, value)
+
+        mutations = (
+            ("__init__", custom_init),
+            ("parse_input_fields_to_identification", custom_parser),
+            ("_process_input_field", custom_processor),
+            ("format_identification", staticmethod(custom_formatter)),
+            ("__getattribute__", custom_getattribute),
+            ("__getattr__", custom_getattr),
+            ("__setattr__", custom_setattr),
+        )
+        constructor_code = GeneralManager.__dict__["__init__"].__code__
+
+        for name, replacement in mutations:
+            RelatedManager, HydratedCalculation = make_manager()
+            interface_class = HydratedCalculation.Interface
+            class_state = type.__getattribute__(interface_class, "__dict__")
+            missing = object()
+            original = class_state.get(name, missing)
+            type.__setattr__(interface_class, name, replacement)
+            try:
+                with self.subTest(dispatch=name):
+                    manager = HydratedCalculation("related-id")
+            finally:
+                if original is missing:
+                    type.__delattr__(interface_class, name)
+                else:
+                    type.__setattr__(interface_class, name, original)
+
+            self.assertNotIn("_resolved_input_values", vars(manager._interface))
+            with count_profiled_calls(
+                constructor_code,
+                lambda value, related=RelatedManager: value.__class__ is related,
+            ) as nested_constructors:
+                resolved = manager.related
+            self.assertEqual(nested_constructors.value, 1)
+            self.assertEqual(manager.identification, {"related": {"id": "related-id"}})
+            self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seed_fails_closed_for_custom_interface_handle_and_metaclass(self):
+        """Custom lifecycle and metaclass dispatch never opt into seeding."""
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class CustomHandleInterface(CalculationInterface):
+            related = Input(RelatedManager)
+
+            @classmethod
+            def handle_interface(cls):
+                return super().handle_interface()
+
+        class HandleCalculation(GeneralManager):
+            Interface = CustomHandleInterface
+
+        GeneralManagerMeta.ensure_attributes_initialized(RelatedManager)
+        GeneralManagerMeta.ensure_attributes_initialized(HandleCalculation)
+        manager = HandleCalculation("related-id")
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+        class CustomInterfaceMeta(type(CalculationInterface)):
+            def __call__(cls, *args, **kwargs):
+                return super().__call__(*args, **kwargs)
+
+        class MetaclassInterface(CalculationInterface, metaclass=CustomInterfaceMeta):
+            related = Input(RelatedManager)
+
+        class MetaclassCalculation(GeneralManager):
+            Interface = MetaclassInterface
+
+        GeneralManagerMeta.ensure_attributes_initialized(MetaclassCalculation)
+        manager = MetaclassCalculation("related-id")
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+        constructor_code = GeneralManager.__dict__["__init__"].__code__
+        with count_profiled_calls(
+            constructor_code,
+            lambda value: value.__class__ is RelatedManager,
+        ) as nested_constructors:
+            self.assertEqual(manager.related.identification, {"id": "related-id"})
+        self.assertEqual(nested_constructors.value, 1)
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seed_fails_closed_for_custom_calculation_handlers_and_state(self):
+        """Custom capability classes, methods, and instance state stay virtual."""
+
+        def make_manager(case):
+            class RelatedManager(GeneralManager):
+                class Interface(CalculationInterface):
+                    id = Input(str)
+
+            if case == "class":
+
+                class CustomRead(CalculationReadCapability):
+                    pass
+
+                class CustomLifecycle(CalculationLifecycleCapability):
+                    pass
+
+            elif case == "method":
+
+                class CustomRead(CalculationReadCapability):
+                    def get_attributes(self, interface_cls):
+                        return super().get_attributes(interface_cls)
+
+                class CustomLifecycle(CalculationLifecycleCapability):
+                    def post_create(self, **kwargs):
+                        return super().post_create(**kwargs)
+
+            else:
+                CustomRead = CalculationReadCapability
+                CustomLifecycle = CalculationLifecycleCapability
+
+            class CustomInterface(CalculationInterface):
+                related = Input(RelatedManager)
+
+            class HydratedCalculation(GeneralManager):
+                Interface = CustomInterface
+
+            GeneralManagerMeta.ensure_attributes_initialized(RelatedManager)
+            GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+            handlers = HydratedCalculation.Interface._capability_handlers
+            if case in {"class", "method"}:
+                handlers["read"] = CustomRead()
+                handlers["calculation_lifecycle"] = CustomLifecycle()
+            else:
+                vars(handlers["read"])["unexpected_state"] = object()
+            return RelatedManager, HydratedCalculation
+
+        constructor_code = GeneralManager.__dict__["__init__"].__code__
+        for case in ("class", "method", "state"):
+            RelatedManager, HydratedCalculation = make_manager(case)
+            manager = HydratedCalculation("related-id")
+
+            with self.subTest(case=case):
+                self.assertNotIn("_resolved_input_values", vars(manager._interface))
+                with count_profiled_calls(
+                    constructor_code,
+                    lambda value, related=RelatedManager: value.__class__ is related,
+                ) as nested_constructors:
+                    resolved = manager.related
+                self.assertEqual(nested_constructors.value, 1)
+                self.assertEqual(
+                    manager.identification,
+                    {"related": {"id": "related-id"}},
+                )
+                self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seed_fallbacks_keep_baseline_cast_for_accessor_descriptor_and_input(self):
+        """Plan substitutions and uninitialized state never change public casts."""
+
+        def make_manager(input_factory=None):
+            class RelatedManager(GeneralManager):
+                class Interface(CalculationInterface):
+                    id = Input(str)
+
+            input_field = (
+                Input(RelatedManager)
+                if input_factory is None
+                else input_factory(RelatedManager)
+            )
+
+            class HydratedCalculation(GeneralManager):
+                class Interface(CalculationInterface):
+                    related = input_field or Input(RelatedManager)
+
+            GeneralManagerMeta.ensure_attributes_initialized(RelatedManager)
+            GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+            return RelatedManager, HydratedCalculation
+
+        constructor_code = GeneralManager.__dict__["__init__"].__code__
+
+        # Replacing the accessor with a behavior-preserving wrapper invalidates
+        # provenance but must leave the normal Input.cast path intact.
+        RelatedManager, HydratedCalculation = make_manager()
+        original_accessor = HydratedCalculation._attributes["related"]
+
+        def replacement_accessor(interface):
+            return original_accessor(interface)
+
+        HydratedCalculation._attributes["related"] = replacement_accessor
+        try:
+            manager = HydratedCalculation("related-id")
+        finally:
+            HydratedCalculation._attributes["related"] = original_accessor
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+        with count_profiled_calls(
+            constructor_code,
+            lambda value: value.__class__ is RelatedManager,
+        ) as nested_constructors:
+            resolved = manager.related
+        self.assertEqual(nested_constructors.value, 1)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+        # Mutating the installed descriptor marker has the same fail-closed
+        # result, while restoring it preserves ordinary descriptor behavior.
+        RelatedManager, HydratedCalculation = make_manager()
+        descriptor = inspect.getattr_static(HydratedCalculation, "related")
+        installation = descriptor._gm_manager_attribute_descriptor_installation
+        descriptor._gm_manager_attribute_descriptor_installation = None
+        try:
+            manager = HydratedCalculation("related-id")
+        finally:
+            descriptor._gm_manager_attribute_descriptor_installation = installation
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+        with count_profiled_calls(
+            constructor_code,
+            lambda value: value.__class__ is RelatedManager,
+        ) as nested_constructors:
+            resolved = manager.related
+        self.assertEqual(nested_constructors.value, 1)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+        # An Input subclass is valid public behavior but is deliberately outside
+        # the canonical seed plan.
+        class CustomInput(Input):
+            pass
+
+        RelatedManager, HydratedCalculation = make_manager(CustomInput)
+        manager = HydratedCalculation("related-id")
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+        with count_profiled_calls(
+            constructor_code,
+            lambda value: value.__class__ is RelatedManager,
+        ) as nested_constructors:
+            resolved = manager.related
+        self.assertEqual(nested_constructors.value, 1)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+        # Additional per-instance Input state is also outside the exact plan.
+        RelatedManager, HydratedCalculation = make_manager()
+        input_state = vars(HydratedCalculation.Interface.input_fields["related"])
+        input_state["unexpected_state"] = object()
+        try:
+            manager = HydratedCalculation("related-id")
+        finally:
+            input_state.pop("unexpected_state", None)
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+        with count_profiled_calls(
+            constructor_code,
+            lambda value: value.__class__ is RelatedManager,
+        ) as nested_constructors:
+            resolved = manager.related
+        self.assertEqual(nested_constructors.value, 1)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+        # Missing class attributes remain a lazy initialization case and do not
+        # permit construction-time seeding.
+        RelatedManager, HydratedCalculation = make_manager()
+        type.__delattr__(HydratedCalculation, "_attributes")
+        type.__delattr__(HydratedCalculation, "_gm_attributes_initialized")
+        manager = HydratedCalculation("related-id")
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+        with count_profiled_calls(
+            constructor_code,
+            lambda value: value.__class__ is RelatedManager,
+        ) as nested_constructors:
+            resolved = manager.related
+        self.assertEqual(nested_constructors.value, 1)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
 
     def test_filter(self):
         """
