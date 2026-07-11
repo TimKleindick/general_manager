@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import calendar
 import builtins
+import functools
 import inspect
+import threading
+import weakref
 from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
+from itertools import islice
+from types import FunctionType, MappingProxyType, MethodType
 from decimal import Decimal
 from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast
 
@@ -73,6 +78,172 @@ class InvalidDateRangeError(ValueError):
         super().__init__(messages[reason])
 
 
+@dataclass(frozen=True)
+class _CallableInvocationPlan:
+    """Immutable argument-routing metadata for one callback signature."""
+
+    parameters: tuple[tuple[int, str], ...]
+
+
+@dataclass(frozen=True)
+class _CompiledCallableInvocation:
+    """One reflection result, retained only for the current invocation."""
+
+    plan: _CallableInvocationPlan | None
+    parameters: tuple[inspect.Parameter, ...]
+
+
+_CALLABLE_INVOCATION_PLAN_MISSING = object()
+_callable_invocation_plan_cache: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[Callable[..., object]],
+        _CallableInvocationPlan,
+    ],
+] = {}
+_callable_invocation_plan_cache_lock = threading.Lock()
+
+
+def _remove_stale_callable_invocation_plans_locked() -> None:
+    """Drop a bounded number of dead weak-reference entries."""
+
+    for callback_id, entry in tuple(islice(_callable_invocation_plan_cache.items(), 8)):
+        if (
+            entry[0]() is None
+            and _callable_invocation_plan_cache.get(callback_id) is entry
+        ):
+            del _callable_invocation_plan_cache[callback_id]
+
+
+def _callable_invocation_requires_uncached_plan(func: Callable[..., object]) -> bool:
+    """Reject explicit or mutable decorator metadata from the cache."""
+
+    candidates: list[object] = [func]
+    seen_ids: set[int] = set()
+    for candidate in candidates:
+        if id(candidate) in seen_ids:
+            continue
+        seen_ids.add(id(candidate))
+        try:
+            signature = inspect.getattr_static(
+                candidate,
+                "__signature__",
+                _CALLABLE_INVOCATION_PLAN_MISSING,
+            )
+        except (AttributeError, TypeError, RuntimeError):
+            return True
+        if signature is not _CALLABLE_INVOCATION_PLAN_MISSING:
+            return True
+        try:
+            wrapped = inspect.getattr_static(
+                candidate,
+                "__wrapped__",
+                _CALLABLE_INVOCATION_PLAN_MISSING,
+            )
+        except (AttributeError, TypeError, RuntimeError):
+            return True
+        # ``__wrapped__`` is mutable and may be a descriptor.  Treating every
+        # wrapper as uncached preserves inspect.signature's live semantics.
+        if wrapped is not _CALLABLE_INVOCATION_PLAN_MISSING:
+            return True
+        if type(candidate) is MethodType:
+            candidates.append(candidate.__func__)
+        elif type(candidate) is functools.partial:
+            candidates.append(candidate.func)
+        elif type(candidate) not in (FunctionType, MethodType, functools.partial):
+            try:
+                call_method = inspect.getattr_static(
+                    type(candidate),
+                    "__call__",
+                    _CALLABLE_INVOCATION_PLAN_MISSING,
+                )
+            except (AttributeError, TypeError, RuntimeError):
+                return True
+            if call_method is not _CALLABLE_INVOCATION_PLAN_MISSING:
+                if type(call_method) not in (
+                    FunctionType,
+                    MethodType,
+                    functools.partial,
+                ):
+                    return True
+                candidates.append(call_method)
+    return False
+
+
+def _compile_callable_invocation_plan(
+    func: Callable[..., object],
+) -> _CompiledCallableInvocation:
+    """Compile immutable routing metadata, retaining safe fallback metadata."""
+
+    signature = inspect.signature(func)
+    raw_parameters = tuple(signature.parameters.values())
+    if type(signature) is not inspect.Signature:
+        return _CompiledCallableInvocation(None, raw_parameters)
+    if type(signature.parameters) is not MappingProxyType:
+        return _CompiledCallableInvocation(None, raw_parameters)
+
+    parameter_kind_type = type(inspect.Parameter.POSITIONAL_ONLY)
+    routing_parameters: list[tuple[int, str]] = []
+    for parameter in raw_parameters:
+        if (
+            type(parameter) is not inspect.Parameter
+            or type(parameter.name) is not str
+            or type(parameter.kind) is not parameter_kind_type
+        ):
+            return _CompiledCallableInvocation(None, raw_parameters)
+        routing_parameters.append((int(parameter.kind), parameter.name))
+    return _CompiledCallableInvocation(
+        _CallableInvocationPlan(tuple(routing_parameters)),
+        raw_parameters,
+    )
+
+
+def _get_callable_invocation_plan(
+    func: Callable[..., object],
+) -> _CallableInvocationPlan | _CompiledCallableInvocation:
+    """Return a cached plan when callback identity and metadata are safe."""
+
+    callback_id = id(func)
+    requires_uncached_signature = _callable_invocation_requires_uncached_plan(func)
+
+    with _callable_invocation_plan_cache_lock:
+        _remove_stale_callable_invocation_plans_locked()
+        current_entry = _callable_invocation_plan_cache.get(callback_id)
+        if current_entry is not None:
+            current_callback = current_entry[0]()
+            if current_callback is func and not requires_uncached_signature:
+                return current_entry[1]
+            if _callable_invocation_plan_cache.get(callback_id) is current_entry:
+                del _callable_invocation_plan_cache[callback_id]
+
+    try:
+        weakref.ref(func)
+    except TypeError:
+        return _compile_callable_invocation_plan(func)
+
+    compiled = _compile_callable_invocation_plan(func)
+    if compiled.plan is None or requires_uncached_signature:
+        return compiled
+
+    def remove_dead_entry(
+        reference: weakref.ReferenceType[Callable[..., object]],
+        *,
+        callback_id: int = callback_id,
+    ) -> None:
+        with _callable_invocation_plan_cache_lock:
+            current_entry = _callable_invocation_plan_cache.get(callback_id)
+            if current_entry is not None and current_entry[0] is reference:
+                del _callable_invocation_plan_cache[callback_id]
+
+    reference = weakref.ref(func, remove_dead_entry)
+    with _callable_invocation_plan_cache_lock:
+        current_entry = _callable_invocation_plan_cache.get(callback_id)
+        if current_entry is not None and current_entry[0]() is func:
+            return current_entry[1]
+        _callable_invocation_plan_cache[callback_id] = (reference, compiled.plan)
+    return compiled.plan
+
+
 def _invoke_callable(
     func: Callable[..., object],
     /,
@@ -81,8 +252,61 @@ def _invoke_callable(
 ) -> object:
     """Invoke a callback with only the arguments its signature accepts."""
 
-    signature = inspect.signature(func)
-    parameters = list(signature.parameters.values())
+    compiled = _get_callable_invocation_plan(func)
+    if isinstance(compiled, _CompiledCallableInvocation):
+        if compiled.plan is None:
+            return _invoke_callable_with_parameters(
+                func,
+                compiled.parameters,
+                *args,
+                **kwargs,
+            )
+        plan = compiled.plan
+    else:
+        plan = compiled
+
+    positional_args = list(args)
+    bound_args: list[object] = []
+    bound_kwargs: dict[str, object] = {}
+    remaining_kwargs = dict(kwargs)
+
+    for parameter_kind, parameter_name in plan.parameters:
+        if parameter_kind == inspect.Parameter.POSITIONAL_ONLY:
+            if positional_args:
+                bound_args.append(positional_args.pop(0))
+            continue
+        if parameter_kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
+            if positional_args:
+                bound_args.append(positional_args.pop(0))
+                remaining_kwargs.pop(parameter_name, None)
+                continue
+            if parameter_name in remaining_kwargs:
+                bound_kwargs[parameter_name] = remaining_kwargs.pop(parameter_name)
+            continue
+        if parameter_kind == inspect.Parameter.KEYWORD_ONLY:
+            if parameter_name in remaining_kwargs:
+                bound_kwargs[parameter_name] = remaining_kwargs.pop(parameter_name)
+            continue
+        if parameter_kind == inspect.Parameter.VAR_POSITIONAL:
+            bound_args.extend(positional_args)
+            positional_args.clear()
+            continue
+        if parameter_kind == inspect.Parameter.VAR_KEYWORD:
+            bound_kwargs.update(remaining_kwargs)
+            remaining_kwargs.clear()
+
+    return func(*bound_args, **bound_kwargs)
+
+
+def _invoke_callable_with_parameters(
+    func: Callable[..., object],
+    parameters: tuple[inspect.Parameter, ...],
+    /,
+    *args: object,
+    **kwargs: object,
+) -> object:
+    """Invoke a callback using reflection metadata that cannot be cached."""
+
     positional_args = list(args)
     bound_args: list[object] = []
     bound_kwargs: dict[str, object] = {}

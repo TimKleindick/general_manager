@@ -1,8 +1,15 @@
 from django.test import TestCase
 from decimal import Decimal
 from datetime import timedelta
+import functools
+import gc
+import inspect
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 from types import MappingProxyType
 from unittest.mock import patch
+
+from general_manager.manager import input as input_module
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.input import (
     DateRangeDomain,
@@ -641,6 +648,325 @@ class TestInput(TestCase):
         result_arg, result_kwargs = _invoke_callable(capture, 1, a=1, b=2)
         self.assertEqual(result_arg, 1)
         self.assertEqual(result_kwargs, {"b": 2})
+
+    def test_invoke_callable_routes_every_parameter_kind_and_defaults(self):
+        def capture(
+            positional_only,
+            positional_or_keyword=2,
+            /,
+            *values,
+            keyword_only,
+            optional=7,
+            **keywords,
+        ):
+            return (
+                positional_only,
+                positional_or_keyword,
+                values,
+                keyword_only,
+                optional,
+                keywords,
+            )
+
+        self.assertEqual(
+            _invoke_callable(
+                capture,
+                1,
+                3,
+                4,
+                5,
+                keyword_only=6,
+                optional=8,
+                extra=9,
+            ),
+            (1, 3, (4, 5), 6, 8, {"extra": 9}),
+        )
+        self.assertEqual(
+            _invoke_callable(capture, 1, keyword_only=6),
+            (1, 2, (), 6, 7, {}),
+        )
+
+    def test_invoke_callable_preserves_missing_argument_and_exception_behavior(self):
+        def requires_value(value):
+            return value
+
+        with self.assertRaises(TypeError):
+            _invoke_callable(requires_value)
+
+        def raises(value):
+            raise ValueError(value)
+
+        with self.assertRaisesRegex(ValueError, "boom"):
+            _invoke_callable(raises, "boom")
+
+    def test_invoke_callable_does_not_cache_mutable_wrapped_callbacks(self):
+        def first_target(value):
+            return value
+
+        target = first_target
+
+        def wrapper(*args, **kwargs):
+            return target(*args, **kwargs)
+
+        wrapper.__wrapped__ = target
+        self.assertEqual(_invoke_callable(wrapper, 1), 1)
+
+        def second_target(value, extra):
+            return value + extra
+
+        target = second_target
+        wrapper.__wrapped__ = target
+        self.assertEqual(_invoke_callable(wrapper, 1, 2), 3)
+
+    def test_invoke_callable_descriptor_wrapped_metadata_is_uncached(self):
+        def first_target(value):
+            return value
+
+        def second_target(value, extra):
+            return value + extra
+
+        class Callback:
+            target = staticmethod(first_target)
+
+            @property
+            def __wrapped__(self):
+                return self.target
+
+            def __call__(self, *args, **kwargs):
+                return self.target(*args, **kwargs)
+
+        callback = Callback()
+        self.assertEqual(_invoke_callable(callback, 1), 1)
+        callback.target = second_target
+        self.assertEqual(_invoke_callable(callback, 1, 2), 3)
+
+    def test_invoke_callable_reuses_compiled_signature_plan(self):
+        def capture(value, *, suffix="!"):
+            return f"{value}{suffix}"
+
+        with patch(
+            "general_manager.manager.input.inspect.signature",
+            wraps=__import__("inspect").signature,
+        ) as signature:
+            self.assertEqual(_invoke_callable(capture, "ok"), "ok!")
+            self.assertEqual(_invoke_callable(capture, "ready", suffix="?"), "ready?")
+
+        self.assertEqual(signature.call_count, 1)
+
+    def test_invoke_callable_caches_callable_instances_without_hashing(self):
+        class Callback:
+            __hash__ = None
+
+            def __eq__(self, other):
+                raise AssertionError
+
+            def __call__(self, value):
+                return value + 1
+
+        callback = Callback()
+        original_signature = inspect.signature
+        with patch(
+            "general_manager.manager.input.inspect.signature",
+            wraps=original_signature,
+        ) as signature:
+            self.assertEqual(_invoke_callable(callback, 1), 2)
+            self.assertEqual(_invoke_callable(callback, 2), 3)
+
+        self.assertEqual(signature.call_count, 1)
+
+    def test_invoke_callable_caches_partial_and_bound_method_callbacks(self):
+        def add(left, right):
+            return left + right
+
+        partial = functools.partial(add, 2)
+
+        class Callback:
+            def add(self, left, right):
+                return left + right
+
+        bound_method = Callback().add
+        original_signature = inspect.signature
+        with patch(
+            "general_manager.manager.input.inspect.signature",
+            wraps=original_signature,
+        ) as signature:
+            self.assertEqual(_invoke_callable(partial, 3), 5)
+            self.assertEqual(_invoke_callable(partial, 4), 6)
+            self.assertEqual(_invoke_callable(bound_method, 3, right=4), 7)
+            self.assertEqual(_invoke_callable(bound_method, 4, right=5), 9)
+
+        self.assertEqual(signature.call_count, 2)
+
+    def test_invoke_callable_explicit_signature_is_always_reflected(self):
+        def capture(value):
+            return value
+
+        capture.__signature__ = inspect.signature(capture)
+        original_signature = inspect.signature
+        with patch(
+            "general_manager.manager.input.inspect.signature",
+            wraps=original_signature,
+        ) as signature:
+            self.assertEqual(_invoke_callable(capture, "first"), "first")
+            self.assertEqual(_invoke_callable(capture, "second"), "second")
+
+        self.assertEqual(signature.call_count, 2)
+
+    def test_invoke_callable_decorator_with_explicit_wrapped_signature_is_uncached(
+        self,
+    ):
+        def original(value):
+            return value
+
+        original.__signature__ = inspect.signature(original)
+
+        @functools.wraps(original)
+        def decorated(value):
+            return original(value)
+
+        original_signature = inspect.signature
+        with patch(
+            "general_manager.manager.input.inspect.signature",
+            wraps=original_signature,
+        ) as signature:
+            self.assertEqual(_invoke_callable(decorated, "first"), "first")
+            self.assertEqual(_invoke_callable(decorated, "second"), "second")
+
+        self.assertEqual(signature.call_count, 2)
+
+    def test_invoke_callable_bound_method_underlying_signature_is_uncached(self):
+        class Callback:
+            def capture(self, value):
+                return value
+
+        Callback.capture.__signature__ = inspect.signature(Callback.capture)
+        callback = Callback().capture
+        original_signature = inspect.signature
+        with patch(
+            "general_manager.manager.input.inspect.signature",
+            wraps=original_signature,
+        ) as signature:
+            self.assertEqual(_invoke_callable(callback, "first"), "first")
+            self.assertEqual(_invoke_callable(callback, "second"), "second")
+
+        self.assertEqual(signature.call_count, 2)
+
+    def test_invoke_callable_partial_underlying_signature_is_uncached(self):
+        def capture(prefix, value):
+            return f"{prefix}{value}"
+
+        capture.__signature__ = inspect.signature(capture)
+        callback = functools.partial(capture, "item:")
+        original_signature = inspect.signature
+        with patch(
+            "general_manager.manager.input.inspect.signature",
+            wraps=original_signature,
+        ) as signature:
+            self.assertEqual(_invoke_callable(callback, 1), "item:1")
+            self.assertEqual(_invoke_callable(callback, 2), "item:2")
+
+        self.assertEqual(signature.call_count, 2)
+
+    def test_invoke_callable_custom_signature_metadata_is_uncached(self):
+        def callback(value):
+            return value
+
+        class CustomSignature(inspect.Signature):
+            pass
+
+        standard_signature = inspect.signature(callback)
+        custom_signature = CustomSignature(
+            parameters=tuple(standard_signature.parameters.values())
+        )
+        with patch(
+            "general_manager.manager.input.inspect.signature",
+            return_value=custom_signature,
+        ) as signature:
+            self.assertEqual(_invoke_callable(callback, "first"), "first")
+            self.assertEqual(_invoke_callable(callback, "second"), "second")
+
+        self.assertEqual(signature.call_count, 2)
+
+    def test_invoke_callable_non_weak_callback_is_not_cached(self):
+        class Callback:
+            __slots__ = ()
+
+            def __call__(self, value):
+                return value * 2
+
+        callback = Callback()
+        original_signature = inspect.signature
+        with patch(
+            "general_manager.manager.input.inspect.signature",
+            wraps=original_signature,
+        ) as signature:
+            self.assertEqual(_invoke_callable(callback, 2), 4)
+            self.assertEqual(_invoke_callable(callback, 3), 6)
+
+        self.assertEqual(signature.call_count, 2)
+
+    def test_invoke_callable_signature_failure_is_not_cached(self):
+        def callback(value):
+            return value
+
+        with patch(
+            "general_manager.manager.input.inspect.signature",
+            side_effect=RuntimeError("signature unavailable"),
+        ) as signature:
+            with self.assertRaisesRegex(RuntimeError, "signature unavailable"):
+                _invoke_callable(callback, 1)
+            with self.assertRaisesRegex(RuntimeError, "signature unavailable"):
+                _invoke_callable(callback, 2)
+
+        self.assertEqual(signature.call_count, 2)
+
+    def test_invoke_callable_concurrent_cache_access_keeps_results_correct(self):
+        def callback(value):
+            return value * 2
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            results = list(
+                executor.map(lambda value: _invoke_callable(callback, value), range(20))
+            )
+
+        self.assertEqual(results, [value * 2 for value in range(20)])
+
+    def test_dead_callable_plan_entry_is_removed_after_collection(self):
+        def callback(value):
+            return value
+
+        callback_id = id(callback)
+        _invoke_callable(callback, 1)
+        self.assertIn(callback_id, input_module._callable_invocation_plan_cache)
+        del callback
+        gc.collect()
+        self.assertNotIn(callback_id, input_module._callable_invocation_plan_cache)
+
+    def test_dead_callable_cleanup_does_not_remove_replacement_entry(self):
+        class Callback:
+            def __call__(self, value):
+                return value
+
+        first = Callback()
+        _invoke_callable(first, 1)
+        first_id = id(first)
+        first_entry = input_module._callable_invocation_plan_cache[first_id]
+
+        second = Callback()
+        second_reference = weakref.ref(second)
+        input_module._callable_invocation_plan_cache[first_id] = (
+            second_reference,
+            first_entry[1],
+        )
+        del first
+        gc.collect()
+
+        self.assertIs(
+            input_module._callable_invocation_plan_cache[first_id][0],
+            second_reference,
+        )
+        del second
+        gc.collect()
 
     def test_input_from_manager_query_with_filter_dict(self):
         class MockManager:

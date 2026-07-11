@@ -15,6 +15,7 @@ REQUIRED_BUDGET_WORKLOAD_MODULES = frozenset(
         "test_calculation_bucket_perf.py",
         "test_database_bucket_perf.py",
         "test_group_bucket_perf.py",
+        "test_input_perf.py",
     }
 )
 

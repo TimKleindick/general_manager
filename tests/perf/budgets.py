@@ -267,4 +267,29 @@ PERF_CEILINGS: dict[str, int] = {
     "CALC_RESULT_CACHE_10000_SECOND_RUN_PROPERTY_CALLS": 10_000,
     "CALC_RESULT_CACHE_10000_FALLBACK_SOURCE_YIELDS": 20_000,
     "CALC_RESULT_CACHE_10000_FALLBACK_CONSTRUCTORS": 0,
+    # Callback invocation-plan reflection workloads.
+    **{
+        f"INPUT_PLAN_{size}_{form}_{metric}": limit
+        for size, invocation_limit in (
+            (100, 100),
+            (1_000, 1_000),
+            (10_000, 10_000),
+        )
+        for form in (
+            "FUNCTION",
+            "INSTANCE",
+            "PARTIAL",
+            "BOUND_METHOD",
+            "DECORATED",
+            "LAMBDA",
+            "NONWEAK",
+        )
+        for metric, limit in (
+            (
+                "INSPECTIONS",
+                1 if form not in {"DECORATED", "NONWEAK"} else invocation_limit,
+            ),
+            ("INVOCATIONS", invocation_limit),
+        )
+    },
 }
