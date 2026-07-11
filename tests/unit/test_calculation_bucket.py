@@ -914,6 +914,45 @@ class TestGenerateCombinations(TestCase):
             [{"id": 1}, {"id": 2}],
         )
 
+    def test_standard_manager_bucket_exclude_transform_removes_matching_values(
+        self, _mock_parse
+    ):
+        from general_manager.utils.filter_parser import (
+            parse_filters as real_parse_filters,
+        )
+
+        _mock_parse.side_effect = real_parse_filters
+
+        class RelatedManager:
+            class Interface(CalculationInterface):
+                input_fields: ClassVar[dict] = {
+                    "id": Input(int, possible_values=[1, 2]),
+                }
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        RelatedManager.Interface._parent_class = RelatedManager
+        source = CalculationBucket(RelatedManager)
+
+        class CalculationManager:
+            class Interface(CalculationInterface):
+                input_fields: ClassVar[dict] = {
+                    "related": Input(RelatedManager, possible_values=source),
+                }
+
+        CalculationManager.Interface._parent_class = CalculationManager
+        bucket = CalculationBucket(CalculationManager)
+
+        combinations = bucket._generate_input_combinations(
+            ["related"], {}, {"related": {"filter_kwargs": {"id__in": [2]}}}
+        )
+
+        self.assertEqual(
+            [combination["related"].identification for combination in combinations],
+            [{"id": 1}],
+        )
+
     def test_property_filter_still_instantiates_managers_for_property_access(
         self, _mock_parse
     ):
