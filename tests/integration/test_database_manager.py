@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 from datetime import datetime, timedelta
-from django.db import models
+from django.db import connection, models
 from django.core.exceptions import ValidationError, FieldError
 from django.contrib.auth.models import User
 from django.utils.crypto import get_random_string
 from django.utils import timezone
 from typing import ClassVar
 from unittest.mock import patch
+from django.test.utils import CaptureQueriesContext
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface, ReadOnlyInterface
 from general_manager.api.property import graph_ql_property
@@ -25,6 +26,13 @@ from general_manager.manager.meta import (
     GeneralManagerMeta,
     InvalidManagerStateError,
 )
+
+
+HISTORICAL_READ_QUERY_BUDGETS = {
+    "history_hit": 1,
+    "history_miss": 2,
+    "recent_live": 1,
+}
 
 
 class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
@@ -952,9 +960,37 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         with patch(
             "django.utils.timezone.now", return_value=snapshot + timedelta(seconds=10)
         ):
-            historical_view = self.TestHuman(id=human_id, search_date=snapshot)
+            with CaptureQueriesContext(connection) as queries:
+                historical_view = self.TestHuman(id=human_id, search_date=snapshot)
 
         self.assertEqual(historical_view.name, "Historian")
+        self.assertEqual(len(queries), HISTORICAL_READ_QUERY_BUDGETS["history_hit"])
+
+    def test_get_historical_record_for_soft_deleted_manager(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            historical_family = self.TestFamily.create(
+                creator_id=None,
+                name="Historical Family",
+                ignore_permission=True,
+            )
+
+        family_id = historical_family.identification["id"]
+        search_date = base_time + timedelta(hours=1)
+        historical_family.delete(ignore_permission=True)
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=search_date + timedelta(seconds=10),
+        ):
+            with CaptureQueriesContext(connection) as queries:
+                historical_view = self.TestFamily(
+                    id=family_id,
+                    search_date=search_date,
+                )
+
+        self.assertEqual(historical_view.name, "Historical Family")
+        self.assertEqual(len(queries), HISTORICAL_READ_QUERY_BUDGETS["history_hit"])
 
     def test_get_historical_record_after_delete_with_manager_lookup(self):
         historical_human = self.TestHuman.create(
@@ -1016,10 +1052,15 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             "django.utils.timezone.now",
             return_value=search_date + timedelta(seconds=10),
         ):
-            historical_view = self.TestHuman(id=human_a_id, search_date=search_date)
+            with CaptureQueriesContext(connection) as queries:
+                historical_view = self.TestHuman(
+                    id=human_a_id,
+                    search_date=search_date,
+                )
 
         self.assertEqual(historical_view.name, "Alice Updated")
         self.assertEqual(historical_view.identification["id"], human_a_id)
+        self.assertEqual(len(queries), HISTORICAL_READ_QUERY_BUDGETS["history_hit"])
 
     def test_get_data_raises_when_historical_missing_for_active_instance(self):
         base_time = timezone.now() - timedelta(days=10)
@@ -1037,11 +1078,168 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             "django.utils.timezone.now",
             return_value=base_time + timedelta(seconds=10),
         ):
-            with self.assertRaises(self.TestHuman.Interface._model.DoesNotExist):  # type: ignore[attr-defined]
-                self.TestHuman(
+            with CaptureQueriesContext(connection) as queries:
+                with self.assertRaises(self.TestHuman.Interface._model.DoesNotExist):  # type: ignore[attr-defined]
+                    self.TestHuman(
+                        id=human.identification["id"],
+                        search_date=search_date,
+                    )
+        self.assertEqual(len(queries), HISTORICAL_READ_QUERY_BUDGETS["history_miss"])
+
+    def test_get_data_history_miss_for_missing_live_row_keeps_two_queries(self):
+        search_date = timezone.now() - timedelta(days=10)
+        missing_pk = 987654321
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=search_date + timedelta(seconds=10),
+        ):
+            with CaptureQueriesContext(connection) as queries:
+                with self.assertRaises(self.TestHuman.Interface._model.DoesNotExist):  # type: ignore[attr-defined]
+                    self.TestHuman(id=missing_pk, search_date=search_date)
+
+        self.assertEqual(len(queries), HISTORICAL_READ_QUERY_BUDGETS["history_miss"])
+
+    def test_recent_search_date_keeps_one_live_query(self):
+        human = self.TestHuman.create(
+            creator_id=None,
+            name="Recent",
+            ignore_permission=True,
+        )
+        search_date = timezone.now()
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=search_date + timedelta(seconds=1),
+        ):
+            with CaptureQueriesContext(connection) as queries:
+                manager = self.TestHuman(
                     id=human.identification["id"],
                     search_date=search_date,
                 )
+
+        self.assertEqual(manager.name, "Recent")
+        self.assertEqual(len(queries), HISTORICAL_READ_QUERY_BUDGETS["recent_live"])
+
+    def test_custom_interface_dispatch_keeps_live_first_fallback(self):
+        base_time = timezone.now() - timedelta(days=1)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="Custom History",
+                ignore_permission=True,
+            )
+        search_date = base_time + timedelta(hours=1)
+        interface_cls = self.TestHuman.Interface
+        original_get_capability_handler = interface_cls.get_capability_handler
+
+        def custom_get_capability_handler(_cls, name):
+            return original_get_capability_handler(name)
+
+        with patch.object(
+            interface_cls,
+            "get_capability_handler",
+            classmethod(custom_get_capability_handler),
+        ):
+            with patch(
+                "django.utils.timezone.now",
+                return_value=search_date + timedelta(seconds=10),
+            ):
+                with CaptureQueriesContext(connection) as queries:
+                    manager = self.TestHuman(
+                        id=human.identification["id"],
+                        search_date=search_date,
+                    )
+
+        self.assertEqual(manager.name, "Custom History")
+        self.assertEqual(len(queries), 2)
+
+    def test_old_history_hit_honors_configured_database_alias(self):
+        human = self.TestHuman.create(
+            creator_id=None,
+            name="Aliased History",
+            ignore_permission=True,
+        )
+        search_date = timezone.now()
+        human.delete(ignore_permission=True)
+        interface_cls = self.TestHuman.Interface
+        original_database = interface_cls.database
+        interface_cls.database = "default"
+        try:
+            with patch(
+                "django.utils.timezone.now",
+                return_value=search_date + timedelta(seconds=10),
+            ):
+                with CaptureQueriesContext(connection) as queries:
+                    manager = self.TestHuman(
+                        id=human.identification["id"],
+                        search_date=search_date,
+                    )
+        finally:
+            interface_cls.database = original_database
+
+        self.assertEqual(manager.name, "Aliased History")
+        self.assertEqual(len(queries), 1)
+
+    def test_old_history_read_reuses_run_context_cache(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="Cached History",
+                ignore_permission=True,
+            )
+        search_date = base_time + timedelta(hours=1)
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=search_date + timedelta(seconds=10),
+        ):
+            with CalculationRunContext(), CaptureQueriesContext(connection) as queries:
+                first = self.TestHuman(
+                    id=human.identification["id"],
+                    search_date=search_date,
+                )
+                second = self.TestHuman(
+                    id=human.identification["id"],
+                    search_date=search_date,
+                )
+
+        self.assertEqual(first.name, "Cached History")
+        self.assertEqual(second.name, "Cached History")
+        self.assertEqual(len(queries), 1)
+
+    def test_history_read_cache_clears_after_mutation(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="Before Mutation",
+                ignore_permission=True,
+            )
+        search_date = base_time + timedelta(hours=1)
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=search_date + timedelta(seconds=10),
+            ),
+            CalculationRunContext(),
+            CaptureQueriesContext(connection) as queries,
+        ):
+            first = self.TestHuman(
+                id=human.identification["id"],
+                search_date=search_date,
+            )
+            human.update(name="After Mutation", ignore_permission=True)
+            second = self.TestHuman(
+                id=human.identification["id"],
+                search_date=search_date,
+            )
+
+        self.assertEqual(first.name, "Before Mutation")
+        self.assertEqual(second.name, "Before Mutation")
+        self.assertGreaterEqual(len(queries), 2)
 
     def test_bucket_operations(self):
         """

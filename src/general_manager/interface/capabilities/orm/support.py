@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from collections.abc import Hashable
 from datetime import date, datetime, time, timedelta
@@ -11,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Type, cast
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models import Subquery
+from django.db.models.manager import ManagerDescriptor
 from django.utils import timezone
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.cache.run_context import current_calculation_run_context
@@ -28,7 +30,9 @@ from general_manager.interface.capabilities.orm_utils.field_descriptors import (
 from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
     PayloadNormalizer,
 )
+from general_manager.interface.utils.models import ActiveManager
 from simple_history.models import HistoricalChanges
+from simple_history.manager import HistoryDescriptor
 
 from ._compat import call_with_observability
 
@@ -241,6 +245,57 @@ class OrmReadCapability(BaseCapability):
 
     name: ClassVar[CapabilityName] = "read"
 
+    @staticmethod
+    def _supports_history_first(
+        interface_cls: OrmInterfaceClass,
+        model_cls: type[models.Model],
+    ) -> bool:
+        """Admit only the default, static-safe historical read integration."""
+        from .history import OrmHistoryCapability
+
+        if inspect.getattr_static(
+            interface_cls, "get_capability_handler", None
+        ) is not inspect.getattr_static(InterfaceBase, "get_capability_handler"):
+            return False
+        try:
+            history_handler = interface_cls.get_capability_handler("history")
+            support_handler = interface_cls.get_capability_handler("orm_support")
+            soft_delete_handler = interface_cls.get_capability_handler("soft_delete")
+            marker = vars(model_cls._meta).get("simple_history_manager_attribute")
+            if type(marker) is not str:
+                return False
+            descriptor = inspect.getattr_static(model_cls, marker)
+            database_alias = inspect.getattr_static(interface_cls, "database", None)
+        except (AttributeError, TypeError):
+            return False
+        if (
+            type(history_handler) is not OrmHistoryCapability
+            or type(support_handler) is not OrmPersistenceSupportCapability
+            or type(soft_delete_handler) is not SoftDeleteCapability
+            or type(descriptor) is not HistoryDescriptor
+            or not isinstance(descriptor.model, type)
+            or not issubclass(descriptor.model, HistoricalChanges)
+            or (database_alias is not None and type(database_alias) is not str)
+        ):
+            return False
+        try:
+            soft_delete = soft_delete_handler.is_enabled()
+            default_manager = model_cls._meta.default_manager
+            all_objects = inspect.getattr_static(model_cls, "all_objects", None)
+        except (AttributeError, TypeError):
+            return False
+        if soft_delete and all_objects is not None:
+            all_manager = (
+                all_objects.manager
+                if type(all_objects) is ManagerDescriptor
+                else all_objects
+            )
+            return (
+                type(default_manager) is ActiveManager
+                and type(all_manager) is models.Manager
+            )
+        return type(default_manager) is models.Manager
+
     def get_data(self, interface_instance: OrmInterfaceInstance) -> models.Model:
         """
         Retrieve the current model instance or a historical snapshot for the given ORM interface instance.
@@ -265,6 +320,29 @@ class OrmReadCapability(BaseCapability):
             )
             model_cls = interface_cls._model
             pk = interface_instance.pk
+            search_date = interface_instance._search_date
+            now = timezone.now() if search_date is not None else None
+            historical_cutoff = (
+                now - timedelta(seconds=interface_cls.historical_lookup_buffer_seconds)
+                if now is not None
+                else None
+            )
+            if (
+                search_date is not None
+                and historical_cutoff is not None
+                and search_date <= historical_cutoff
+                and self._supports_history_first(interface_cls, model_cls)
+            ):
+                history_handler = _history_capability_for(interface_cls)
+                historical_first = history_handler.get_historical_record_by_pk(
+                    interface_cls,
+                    pk,
+                    search_date,
+                )
+                if historical_first is not None:
+                    return historical_first
+                manager.get(pk=pk)
+                raise model_cls.DoesNotExist
             instance: models.Model | None
             missing_error: Exception | None = None
             try:
@@ -272,11 +350,8 @@ class OrmReadCapability(BaseCapability):
             except model_cls.DoesNotExist as error:
                 instance = None
                 missing_error = error
-            search_date = interface_instance._search_date
             if search_date is not None:
-                if search_date <= timezone.now() - timedelta(
-                    seconds=interface_cls.historical_lookup_buffer_seconds
-                ):
+                if historical_cutoff is not None and search_date <= historical_cutoff:
                     historical: models.Model | None
                     history_handler = _history_capability_for(interface_cls)
                     if instance is not None:
