@@ -10,6 +10,7 @@ import pytest
 from django.test import override_settings
 
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket import calculation_bucket as calculation_bucket_module
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.interfaces.calculation import CalculationInterface
@@ -924,3 +925,38 @@ def test_scalar_terminal_stream_scaling_and_same_test_fallback(
     )
     assert last_source.value == size
     assert last_constructor_calls.value == size
+
+
+@pytest.mark.parametrize("size", [100, 1_000, 100_000])
+def test_scalar_terminal_tuple_admission_validation_is_measured(
+    perf_budgets: PerfBudgets,
+    monkeypatch: pytest.MonkeyPatch,
+    size: int,
+) -> None:
+    """Measure the immutable tuple proof that precedes the bounded stream."""
+    manager, _input_field = _make_default_calculation_manager(
+        f"ScalarTerminalTuple{size}Manager",
+        "value",
+        Input(int, possible_values=tuple(range(size))),
+    )
+    inspected_values = Counter()
+    original_support_check = calculation_bucket_module._terminal_scalar_source_supported
+
+    def counted_support_check(source: object) -> bool:
+        if type(source) is tuple:
+            inspected_values.increment(len(source))
+        return original_support_check(source)
+
+    monkeypatch.setattr(
+        calculation_bucket_module,
+        "_terminal_scalar_source_supported",
+        counted_support_check,
+    )
+
+    bucket = CalculationBucket(manager)
+    assert bucket.first() is not None
+    perf_budgets.assert_observation(
+        f"CALC_TERM_SCALAR_{size}_TUPLE_ADMISSION_VALUES",
+        inspected_values.value,
+    )
+    assert inspected_values.value == size
