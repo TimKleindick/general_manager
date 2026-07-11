@@ -27,6 +27,13 @@ from uuid import UUID
 from operator import attrgetter
 from copy import deepcopy
 from django.core.exceptions import EmptyResultSet, FieldError
+from django.db.models import Value
+from django.db.models.expressions import Col
+from django.db.models.lookups import Exact, In
+from django.db.models.query import QuerySet
+from django.db.models.sql.datastructures import BaseTable
+from django.db.models.sql.query import Query
+from django.db.models.sql.where import WhereNode
 from general_manager.interface.base_interface import (
     InterfaceBase,
     generalManagerClassName,
@@ -282,6 +289,295 @@ def _trusted_database_state_token(value: object) -> object | None:
     return None
 
 
+def _database_expression_token(value: object) -> object | None:
+    """Tokenize only exact Django expression nodes audited for membership."""
+    if type(value) is Col:
+        state = object.__getattribute__(value, "__dict__")
+        allowed_names = {
+            "_constructor_args",
+            "output_field",
+            "alias",
+            "target",
+            "contains_aggregate",
+            "contains_over_clause",
+            "identity",
+        }
+        if type(state) is not dict or not set(state).issubset(allowed_names):
+            return None
+        alias = state.get("alias")
+        target = state.get("target")
+        output_field = state.get("output_field")
+        if type(alias) is not str or target is None or output_field is None:
+            return None
+        identity_token = _trusted_database_state_token(state.get("identity"))
+        if "identity" in state and identity_token is None:
+            return None
+        return (
+            "col",
+            alias,
+            id(target),
+            type(target),
+            id(output_field),
+            state.get("contains_aggregate") is True,
+            state.get("contains_over_clause") is True,
+            identity_token,
+        )
+    if type(value) is Value:
+        state = object.__getattribute__(value, "__dict__")
+        allowed_names = {
+            "_constructor_args",
+            "value",
+            "is_summary",
+            "for_save",
+            "contains_aggregate",
+            "contains_over_clause",
+            "output_field",
+        }
+        if type(state) is not dict or not set(state).issubset(allowed_names):
+            return None
+        value_token = _trusted_database_state_token(state.get("value"))
+        if value_token is None:
+            return None
+        return (
+            "value",
+            value_token,
+            state.get("is_summary") is True,
+            state.get("for_save") is True,
+            state.get("contains_aggregate") is True,
+            state.get("contains_over_clause") is True,
+            id(state.get("output_field")),
+        )
+    return None
+
+
+def _database_where_token(where: object) -> object | None:
+    """Tokenize an exact, flat WhereNode containing audited built-in lookups."""
+    if type(where) is not WhereNode:
+        return None
+    state = object.__getattribute__(where, "__dict__")
+    allowed_names = {
+        "children",
+        "connector",
+        "negated",
+        "contains_aggregate",
+        "contains_over_clause",
+    }
+    if type(state) is not dict or not set(state).issubset(allowed_names):
+        return None
+    children = state["children"]
+    connector = state["connector"]
+    negated = state["negated"]
+    if (
+        type(children) is not list
+        or type(connector) is not str
+        or type(negated) is not bool
+    ):
+        return None
+    child_tokens: list[object] = []
+    for child in children:
+        if type(child) is not Exact and type(child) is not In:
+            return None
+        child_state = object.__getattribute__(child, "__dict__")
+        allowed_names = {
+            "_constructor_args",
+            "lhs",
+            "rhs",
+            "bilateral_transforms",
+            "contains_aggregate",
+            "contains_over_clause",
+        }
+        if type(child_state) is not dict or not set(child_state).issubset(
+            allowed_names
+        ):
+            return None
+        lhs_token = _database_expression_token(child_state.get("lhs"))
+        rhs_token = _trusted_database_state_token(child_state.get("rhs"))
+        transforms = child_state.get("bilateral_transforms")
+        if (
+            lhs_token is None
+            or rhs_token is None
+            or type(transforms) is not list
+            or transforms
+        ):
+            return None
+        child_tokens.append(
+            (
+                type(child),
+                lhs_token,
+                rhs_token,
+                child_state.get("contains_aggregate") is True,
+                child_state.get("contains_over_clause") is True,
+            )
+        )
+    return (
+        connector,
+        negated,
+        state.get("contains_aggregate") is True,
+        state.get("contains_over_clause") is True,
+        tuple(child_tokens),
+    )
+
+
+def _database_query_semantic_token(data: object) -> object | None:
+    """Fingerprint one exact canonical QuerySet/Query graph without hooks."""
+    if type(data) is not QuerySet:
+        return None
+    data_state = object.__getattribute__(data, "__dict__")
+    if type(data_state) is not dict:
+        return None
+    query = data_state.get("_query")
+    if type(query) is not Query:
+        return None
+    query_state = object.__getattribute__(query, "__dict__")
+    if type(query_state) is not dict:
+        return None
+    model = query_state.get("model")
+    model_token = _trusted_database_state_token(model)
+    database_alias = data_state.get("_db")
+    hints_token = _trusted_database_state_token(data_state.get("_hints"))
+    if (
+        type(model_token) is not tuple
+        or not model_token
+        or model_token[0] != "class"
+        or (database_alias is not None and type(database_alias) is not str)
+        or hints_token is None
+    ):
+        return None
+    where_token = _database_where_token(query_state.get("where"))
+    if where_token is None:
+        return None
+
+    annotations = query_state.get("annotations")
+    if type(annotations) is not dict:
+        return None
+    annotation_tokens: list[tuple[str, object]] = []
+    for name, expression in annotations.items():
+        if type(name) is not str:
+            return None
+        expression_token = _database_expression_token(expression)
+        if expression_token is None:
+            return None
+        annotation_tokens.append((name, expression_token))
+    annotation_select_cache = query_state.get("_annotation_select_cache")
+    if annotation_select_cache is None:
+        annotation_select_cache_token: object = ("none",)
+    elif type(annotation_select_cache) is dict:
+        cached_annotations: list[tuple[str, object]] = []
+        for name, expression in annotation_select_cache.items():
+            if type(name) is not str:
+                return None
+            expression_token = _database_expression_token(expression)
+            if expression_token is None:
+                return None
+            cached_annotations.append((name, expression_token))
+        annotation_select_cache_token = tuple(cached_annotations)
+    else:
+        return None
+
+    alias_map = query_state.get("alias_map")
+    if type(alias_map) is not dict:
+        return None
+    alias_tokens: list[tuple[str, str, str]] = []
+    for alias, table in alias_map.items():
+        if type(alias) is not str or type(table) is not BaseTable:
+            return None
+        table_state = object.__getattribute__(table, "__dict__")
+        if type(table_state) is not dict or set(table_state) != {
+            "table_name",
+            "table_alias",
+        }:
+            return None
+        table_name = table_state["table_name"]
+        table_alias = table_state["table_alias"]
+        if type(table_name) is not str or type(table_alias) is not str:
+            return None
+        alias_tokens.append((alias, table_name, table_alias))
+
+    low_mark = object.__getattribute__(query, "low_mark")
+    high_mark = object.__getattribute__(query, "high_mark")
+    distinct = object.__getattribute__(query, "distinct")
+    distinct_fields = object.__getattribute__(query, "distinct_fields")
+    order_by = query_state.get("order_by", ())
+    group_by = object.__getattribute__(query, "group_by")
+    values_select = object.__getattribute__(query, "values_select")
+    select = object.__getattribute__(query, "select")
+    annotation_select_mask = object.__getattribute__(query, "annotation_select_mask")
+    extra_order_by = object.__getattribute__(query, "extra_order_by")
+    default_ordering = object.__getattribute__(query, "default_ordering")
+    standard_ordering = object.__getattribute__(query, "standard_ordering")
+    alias_cols = object.__getattribute__(query, "alias_cols")
+    combinator = object.__getattribute__(query, "combinator")
+    select_for_update = object.__getattribute__(query, "select_for_update")
+    deferred_loading = object.__getattribute__(query, "deferred_loading")
+    extra = query_state.get("extra")
+    filtered_relations = query_state.get("_filtered_relations")
+    if (
+        type(low_mark) is not int
+        or (high_mark is not None and type(high_mark) is not int)
+        or type(distinct) is not bool
+        or type(distinct_fields) is not tuple
+        or not all(type(field) is str for field in distinct_fields)
+        or type(order_by) is not tuple
+        or not all(type(field) is str for field in order_by)
+        or (group_by is not None and type(group_by) is not tuple)
+        or type(values_select) is not tuple
+        or not all(type(field) is str for field in values_select)
+        or type(select) is not tuple
+        or annotation_select_mask is not None
+        or type(extra_order_by) is not tuple
+        or not all(type(field) is str for field in extra_order_by)
+        or type(default_ordering) is not bool
+        or type(standard_ordering) is not bool
+        or type(alias_cols) is not bool
+        or combinator is not None
+        or type(select_for_update) is not bool
+        or select_for_update
+        or type(deferred_loading) is not tuple
+        or len(deferred_loading) != 2
+        or type(deferred_loading[0]) is not frozenset
+        or deferred_loading[0]
+        or deferred_loading[1] is not True
+        or type(extra) is not dict
+        or extra
+        or type(filtered_relations) is not dict
+        or filtered_relations
+    ):
+        return None
+    select_tokens = tuple(_database_expression_token(item) for item in select)
+    group_tokens = (
+        ()
+        if group_by is None
+        else tuple(_database_expression_token(item) for item in group_by)
+    )
+    if any(token is None for token in select_tokens) or any(
+        token is None for token in group_tokens
+    ):
+        return None
+    return (
+        id(data),
+        id(query),
+        model_token,
+        database_alias,
+        hints_token,
+        where_token,
+        low_mark,
+        high_mark,
+        distinct,
+        distinct_fields,
+        tuple(annotation_tokens),
+        annotation_select_cache_token,
+        order_by,
+        extra_order_by,
+        default_ordering,
+        standard_ordering,
+        alias_cols,
+        group_tokens,
+        values_select,
+        select_tokens,
+        tuple(alias_tokens),
+    )
+
+
 def _database_source_live_state(
     source: DatabaseBucket[GeneralManager],
 ) -> object | None:
@@ -294,7 +590,7 @@ def _database_source_live_state(
         type(source) is not DatabaseBucket
         or type(source_state) is not dict
         or set(source_state) != _DATABASE_BUCKET_STATE_NAMES
-        or source._search_date is not None
+        or source_state["_search_date"] is not None
         or any(
             inspect.getattr_static(DatabaseBucket, name) is not expected
             for name, expected in zip(
@@ -305,55 +601,45 @@ def _database_source_live_state(
         )
     ):
         return None
-    filters_token = _trusted_database_state_token(source.filters)
-    excludes_token = _trusted_database_state_token(source.excludes)
-    sort_keys_token = _trusted_database_state_token(source._sort_keys)
-    trusted_signature_token = _trusted_database_state_token(
-        source._trusted_query_signature
-    )
-    query_signature_cache_token = _trusted_database_state_token(
-        source._query_signature_cache
-    )
+    data = source_state["_data"]
+    query_shape = _database_query_semantic_token(data)
+    filters = source_state["filters"]
+    excludes = source_state["excludes"]
+    search_date = source_state["_search_date"]
+    sort_keys = source_state["_sort_keys"]
+    sort_reverse = source_state["_sort_reverse"]
+    run_scoped_cacheable = source_state["_run_scoped_cacheable"]
+    query_signature_cache = source_state["_query_signature_cache"]
+    trusted_query_signature = source_state["_trusted_query_signature"]
+    manager_class = source_state["_manager_class"]
+    filters_token = _trusted_database_state_token(filters)
+    excludes_token = _trusted_database_state_token(excludes)
+    sort_keys_token = _trusted_database_state_token(sort_keys)
+    trusted_signature_token = _trusted_database_state_token(trusted_query_signature)
+    query_signature_cache_token = _trusted_database_state_token(query_signature_cache)
     if (
-        filters_token is None
+        query_shape is None
+        or filters_token is None
         or excludes_token is None
         or sort_keys_token is None
         or trusted_signature_token is None
         or query_signature_cache_token is None
-        or type(source._sort_reverse) is not bool
-        or type(source._run_scoped_cacheable) is not bool
+        or type(sort_reverse) is not bool
+        or type(run_scoped_cacheable) is not bool
     ):
         return None
-    query = source._data.query
-    where = getattr(query, "where", None)
-    children = getattr(where, "children", None)
-    order_by = getattr(query, "order_by", None)
-    if type(children) is not list or type(order_by) is not tuple:
-        return None
-    query_shape = (
-        id(query),
-        id(where),
-        id(children),
-        len(children),
-        tuple(id(child) for child in children),
-        id(order_by),
-        len(order_by),
-    )
     return (
-        id(source._data),
         query_shape,
-        source._data.db,
-        source._data.model,
-        source._manager_class,
-        source._search_date,
+        manager_class,
+        search_date,
         filters_token,
         excludes_token,
         sort_keys_token,
-        source._sort_reverse,
-        source._run_scoped_cacheable,
-        id(source._query_signature_cache),
+        sort_reverse,
+        run_scoped_cacheable,
+        id(query_signature_cache),
         query_signature_cache_token,
-        id(source._trusted_query_signature),
+        id(trusted_query_signature),
         trusted_signature_token,
     )
 
@@ -371,15 +657,29 @@ def _database_source_signature(
     source: DatabaseBucket[GeneralManager],
 ) -> _DatabaseSourceSignature | None:
     """Compile one conservative signature for an exact live database source."""
+    try:
+        source_state = object.__getattribute__(source, "__dict__")
+    except AttributeError:
+        return None
+    if (
+        type(source_state) is not dict
+        or set(source_state) != _DATABASE_BUCKET_STATE_NAMES
+    ):
+        return None
+    data = source_state["_data"]
+    if _database_query_semantic_token(data) is None:
+        return None
     query_signature = source._query_signature()
     if query_signature is None:
         return None
+    data_state = object.__getattribute__(data, "__dict__")
+    query = data_state["_query"]
+    try:
+        sql, params = Query.sql_with_params(query)
+    except (AttributeError, EmptyResultSet, FieldError, TypeError, ValueError):
+        return None
     live_state = _database_source_live_state(source)
     if live_state is None:
-        return None
-    try:
-        sql, params = source._data.query.sql_with_params()
-    except (AttributeError, EmptyResultSet, FieldError, TypeError, ValueError):
         return None
     parameter_tokens = tuple(_trusted_candidate_token(param) for param in params)
     if any(token is None for token in parameter_tokens):

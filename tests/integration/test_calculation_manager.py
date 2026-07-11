@@ -6,7 +6,10 @@ from datetime import date
 
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.db.models import CASCADE, CharField, ForeignKey, IntegerField
+from django.db.models import CASCADE, CharField, ForeignKey, IntegerField, Value
+from django.db.models.query import QuerySet
+from django.db.models.sql.query import Query
+from django.db.models.sql.where import WhereNode
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils.crypto import get_random_string
@@ -14,6 +17,7 @@ from general_manager.bucket.calculation_bucket import (
     CalculationBucket,
     _DatabaseEnumerationEvidence,
     _database_enumeration_evidence,
+    _database_source_signature,
 )
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
@@ -486,6 +490,120 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                         for dependency in source_dependencies
                     )
                 )
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_in_place_database_query_mutation_between_yields_falls_back(self):
+        employees = [
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+            for name in ("Alice", "Bob")
+        ]
+
+        def mutate_rhs(source):
+            source._data.query.where.children[0].rhs = [
+                employees[-1].identification["id"]
+            ]
+
+        def mutate_limit(source):
+            source._data.query.set_limits(high=1)
+
+        def mutate_distinct(source):
+            source._data.query.distinct = True
+
+        def mutate_annotations(source):
+            source._data.query.annotations["marker"] = Value(1)
+
+        mutations = {
+            "rhs": (mutate_rhs, None, 1),
+            "limits": (mutate_limit, TypeError, 0),
+            "distinct": (mutate_distinct, None, 1),
+            "annotations": (mutate_annotations, None, 1),
+        }
+        employee_ids = [employee.identification["id"] for employee in employees]
+
+        for mutation_name, (
+            mutate,
+            expected_error,
+            expected_queries,
+        ) in mutations.items():
+            with self.subTest(mutation_name=mutation_name):
+                source = self.Employee.filter(id__in=employee_ids).sort("name")
+
+                class InPlaceQueryMutationCalculation(GeneralManager):
+                    class Interface(CalculationInterface):
+                        employee = Input(self.Employee, possible_values=source)
+
+                bucket = CalculationBucket(InPlaceQueryMutationCalculation)
+                bucket._materialize_combinations(expose=False)
+                iterator = iter(bucket)
+                next(iterator)
+                mutate(source)
+
+                with CaptureQueriesContext(connection) as queries:
+                    if expected_error is not None:
+                        with self.assertRaises(expected_error):
+                            next(iterator)
+                    else:
+                        second = next(iterator)
+                        self.assertEqual(
+                            second.identification["employee"]["id"],
+                            employees[-1].identification["id"],
+                        )
+                iterator.close()
+                self.assertEqual(len(queries), expected_queries)
+
+    def test_custom_queryset_query_and_where_are_rejected_without_hooks(self):
+        source = self.Employee.all()
+        canonical_queryset = source._data
+        canonical_query = canonical_queryset.query
+
+        hostile_error = AssertionError("hostile Django state hook ran")
+
+        class HostileMixin:
+            hook_calls = 0
+            active = False
+
+            def __getattribute__(own, name):
+                if type(own).active and name not in {"active", "hook_calls"}:
+                    type(own).hook_calls += 1
+                    raise hostile_error
+                return object.__getattribute__(own, name)
+
+        class HostileQuerySet(HostileMixin, QuerySet):
+            pass
+
+        class HostileQuery(HostileMixin, Query):
+            pass
+
+        class HostileWhere(HostileMixin, WhereNode):
+            pass
+
+        hostile_queryset = HostileQuerySet(
+            model=canonical_queryset.model,
+            query=canonical_query.clone(),
+            using=canonical_queryset.db,
+            hints={},
+        )
+        hostile_query = HostileQuery(canonical_query.model)
+        hostile_where = HostileWhere()
+
+        cases = (
+            ("queryset", hostile_queryset, HostileQuerySet),
+            ("query", canonical_queryset._clone(), HostileQuery),
+            ("where", canonical_queryset._clone(), HostileWhere),
+        )
+        cases[1][1]._query = hostile_query
+        cases[2][1]._query.where = hostile_where
+        for case_name, queryset, hostile_type in cases:
+            with self.subTest(case_name=case_name):
+                hostile_type.active = True
+                source._data = queryset
+                self.assertIsNone(_database_source_signature(source))
+                self.assertEqual(hostile_type.hook_calls, 0)
+                hostile_type.active = False
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_database_row_authorization_is_a_whole_pass_key_snapshot(self):
