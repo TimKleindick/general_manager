@@ -282,8 +282,10 @@ def _trusted_database_state_token(value: object) -> object | None:
     return None
 
 
-def _database_source_signature(source: DatabaseBucket[GeneralManager]) -> object | None:
-    """Return a fresh conservative signature for one exact live database source."""
+def _database_source_live_state(
+    source: DatabaseBucket[GeneralManager],
+) -> object | None:
+    """Return hook-free state that is cheap to recheck for every candidate."""
     try:
         source_state = object.__getattribute__(source, "__dict__")
     except AttributeError:
@@ -302,9 +304,6 @@ def _database_source_signature(source: DatabaseBucket[GeneralManager]) -> object
             )
         )
     ):
-        return None
-    query_signature = source._query_signature()
-    if query_signature is None:
         return None
     filters_token = _trusted_database_state_token(source.filters)
     excludes_token = _trusted_database_state_token(source.excludes)
@@ -325,18 +324,24 @@ def _database_source_signature(source: DatabaseBucket[GeneralManager]) -> object
         or type(source._run_scoped_cacheable) is not bool
     ):
         return None
-    try:
-        sql, params = source._data.query.sql_with_params()
-    except (AttributeError, EmptyResultSet, FieldError, TypeError, ValueError):
+    query = source._data.query
+    where = getattr(query, "where", None)
+    children = getattr(where, "children", None)
+    order_by = getattr(query, "order_by", None)
+    if type(children) is not list or type(order_by) is not tuple:
         return None
-    parameter_tokens = tuple(_trusted_candidate_token(param) for param in params)
-    if any(token is None for token in parameter_tokens):
-        return None
+    query_shape = (
+        id(query),
+        id(where),
+        id(children),
+        len(children),
+        tuple(id(child) for child in children),
+        id(order_by),
+        len(order_by),
+    )
     return (
         id(source._data),
-        id(source._data.query),
-        sql,
-        parameter_tokens,
+        query_shape,
         source._data.db,
         source._data.model,
         source._manager_class,
@@ -350,6 +355,39 @@ def _database_source_signature(source: DatabaseBucket[GeneralManager]) -> object
         query_signature_cache_token,
         id(source._trusted_query_signature),
         trusted_signature_token,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _DatabaseSourceSignature:
+    """One compiled source witness shared by every candidate in a pass."""
+
+    live_state: object
+    sql: str
+    parameter_tokens: tuple[_TrustedToken, ...]
+
+
+def _database_source_signature(
+    source: DatabaseBucket[GeneralManager],
+) -> _DatabaseSourceSignature | None:
+    """Compile one conservative signature for an exact live database source."""
+    query_signature = source._query_signature()
+    if query_signature is None:
+        return None
+    live_state = _database_source_live_state(source)
+    if live_state is None:
+        return None
+    try:
+        sql, params = source._data.query.sql_with_params()
+    except (AttributeError, EmptyResultSet, FieldError, TypeError, ValueError):
+        return None
+    parameter_tokens = tuple(_trusted_candidate_token(param) for param in params)
+    if any(token is None for token in parameter_tokens):
+        return None
+    return _DatabaseSourceSignature(
+        live_state=live_state,
+        sql=sql,
+        parameter_tokens=cast(tuple[_TrustedToken, ...], parameter_tokens),
     )
 
 
@@ -388,7 +426,7 @@ class _DatabaseEnumerationEvidence:
 
     input_field: Input[type[object]]
     provider: DatabaseBucket[GeneralManager]
-    provider_signature: object
+    provider_signature: _DatabaseSourceSignature
     manager: GeneralManager
     identification: dict[str, object]
     primary_key_token: _TrustedToken
@@ -398,7 +436,7 @@ class _DatabaseEnumerationEvidence:
     def primary_key(self) -> object:
         return self.identification["id"]
 
-    def is_current(self, *, check_source_signature: bool = True) -> bool:
+    def is_current(self, *, check_source_signature: bool = False) -> bool:
         if (
             type(self.input_field) is not Input
             or not _input_has_exact_standard_state(self.input_field)
@@ -413,10 +451,17 @@ class _DatabaseEnumerationEvidence:
             or self.manager.__class__ is not self.provider._manager_class
         ):
             return False
-        if (
-            check_source_signature
-            and _database_source_signature(self.provider) != self.provider_signature
-        ):
+        current_source_state = (
+            _database_source_signature(self.provider)
+            if check_source_signature
+            else _database_source_live_state(self.provider)
+        )
+        expected_source_state: object = (
+            self.provider_signature
+            if check_source_signature
+            else self.provider_signature.live_state
+        )
+        if current_source_state != expected_source_state:
             return False
         try:
             current_identification = object.__getattribute__(
@@ -445,7 +490,7 @@ class _DatabaseEnumerationEvidence:
             and value is self.manager
             and self.authorized_tokens is not None
             and self.primary_key_token in self.authorized_tokens
-            and self.is_current(check_source_signature=False)
+            and self.is_current()
         )
 
     def track_membership_dependency(self) -> None:
@@ -988,6 +1033,10 @@ def _database_enumeration_evidence(
     input_field: Input[type[object]],
     provider: object,
     candidate: object,
+    *,
+    provider_signature: _DatabaseSourceSignature
+    | None
+    | object = _STATIC_ATTRIBUTE_MISSING,
 ) -> _DatabaseEnumerationEvidence | None:
     """Build unprepared evidence for an exact static database bucket value."""
     if type(provider) is not DatabaseBucket or type(input_field) is not Input:
@@ -1017,8 +1066,11 @@ def _database_enumeration_evidence(
     ):
         return None
     primary_key_token = _trusted_candidate_token(identification["id"])
-    provider_signature = _database_source_signature(database_provider)
+    if provider_signature is _STATIC_ATTRIBUTE_MISSING:
+        provider_signature = _database_source_signature(database_provider)
     if primary_key_token is None or provider_signature is None:
+        return None
+    if not isinstance(provider_signature, _DatabaseSourceSignature):
         return None
     return _DatabaseEnumerationEvidence(
         input_field=input_field,
@@ -2214,6 +2266,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 database_provider: object | None = (
                     possible_values if type(possible_values) is DatabaseBucket else None
                 )
+                database_provider_signature = (
+                    _database_source_signature(
+                        cast(DatabaseBucket[GeneralManager], database_provider)
+                    )
+                    if retain_evidence and database_provider is not None
+                    else None
+                )
                 filter_kwargs = field_filters.get("filter_kwargs", {})
                 exclude_kwargs = field_excludes.get("filter_kwargs", {})
                 possible_values = possible_values.filter(**filter_kwargs).exclude(
@@ -2225,6 +2284,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 resolved_source: object | None = None
             else:
                 database_provider = None
+                database_provider_signature = None
                 resolved_source = possible_values
                 filter_funcs = field_filters.get("filter_funcs", [])
                 exclude_funcs = field_excludes.get("filter_funcs", [])
@@ -2261,6 +2321,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                         input_field,
                         database_provider,
                         value,
+                        provider_signature=database_provider_signature,
                     )
                 current_combo[input_name] = value
                 if evidence is not None:

@@ -19,6 +19,7 @@ from pytest_django.plugin import DjangoDbBlocker
 
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.bucket.calculation_bucket import CalculationBucket
+from general_manager.bucket.calculation_bucket import _database_source_signature
 from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import (
@@ -422,6 +423,10 @@ def test_database_manager_input_enumeration_work(
     )
 
     with (
+        patch(
+            "general_manager.bucket.calculation_bucket._database_source_signature",
+            wraps=_database_source_signature,
+        ) as compiled_signatures,
         override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
         CaptureQueriesContext(connection) as captured_queries,
     ):
@@ -432,6 +437,7 @@ def test_database_manager_input_enumeration_work(
         cast(dict[str, object], item.identification["value"])["id"] for item in managers
     ] == list(included_primary_keys)
     assert len(captured_queries) == 2
+    assert compiled_signatures.call_count == 2
     prefix = f"CALC_ENUM_MANAGER_{size}"
     perf_budgets.assert_observation(f"{prefix}_QUERIES", len(captured_queries))
     perf_budgets.assert_observation(f"{prefix}_MANAGERS", len(managers))

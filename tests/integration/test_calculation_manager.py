@@ -422,6 +422,107 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             self.assertEqual(source_dependencies, expected_source_dependencies)
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_database_source_mutation_between_yields_rechecks_live_signature(self):
+        employees = [
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+            for name in ("Alice", "Bob")
+        ]
+        mutations = {
+            "filters": lambda source: source.filters.__setitem__(
+                "name", ["changed-between-yields"]
+            ),
+            "excludes": lambda source: source.excludes.__setitem__(
+                "name", ["changed-between-yields"]
+            ),
+            "query": lambda source: setattr(
+                source,
+                "_data",
+                source._data.filter(pk=employees[-1].identification["id"]),
+            ),
+            "search_date": lambda source: setattr(
+                source, "_search_date", date(2024, 1, 1)
+            ),
+        }
+
+        for mutation_name, mutate in mutations.items():
+            with self.subTest(mutation_name=mutation_name):
+                source = self.Employee.all().sort("name")
+
+                class BetweenYieldMutationCalculation(GeneralManager):
+                    class Interface(CalculationInterface):
+                        employee = Input(self.Employee, possible_values=source)
+
+                bucket = CalculationBucket(BetweenYieldMutationCalculation)
+                bucket._materialize_combinations(expose=False)
+                iterator = iter(bucket)
+                next(iterator)
+                mutate(source)
+
+                with (
+                    DependencyTracker() as dependencies,
+                    CaptureQueriesContext(connection) as queries,
+                ):
+                    second = next(iterator)
+                iterator.close()
+
+                self.assertEqual(
+                    second.identification["employee"]["id"],
+                    employees[-1].identification["id"],
+                )
+                self.assertEqual(len(queries), 1)
+                source_dependencies = {
+                    dependency
+                    for dependency in dependencies
+                    if dependency[0] == self.Employee.__name__
+                }
+                self.assertTrue(source_dependencies)
+                self.assertFalse(
+                    any(
+                        dependency[1] == "identification"
+                        for dependency in source_dependencies
+                    )
+                )
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_database_row_authorization_is_a_whole_pass_key_snapshot(self):
+        """Rows proven at pass start stay authorized without per-yield existence SQL."""
+        employees = [
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+            for name in ("Alice", "Bob")
+        ]
+        source = self.Employee.all().sort("name")
+
+        class WholePassSnapshotCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=source)
+
+        bucket = CalculationBucket(WholePassSnapshotCalculation)
+        bucket._materialize_combinations(expose=False)
+        iterator = iter(bucket)
+        next(iterator)
+        self.Employee.Interface._model.objects.filter(
+            pk=employees[-1].identification["id"]
+        ).delete()
+
+        with CaptureQueriesContext(connection) as queries:
+            second = next(iterator)
+        iterator.close()
+
+        self.assertEqual(
+            second.identification["employee"]["id"],
+            employees[-1].identification["id"],
+        )
+        self.assertEqual(len(queries), 0)
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_custom_calculation_construction_paths_do_not_use_database_trust(self):
         for name in ("Alice", "Bob"):
             self.Employee.create(
