@@ -1219,3 +1219,86 @@ def test_materialization_error_clears_partially_registered_evidence() -> None:
 
     assert bucket._data is None
     assert bucket._combination_evidence == {}
+
+
+def test_copy_and_deepcopy_preserve_subclass_state_without_constructor() -> None:
+    base = _calculation_bucket_with_inputs(
+        {"code": cast(Input[type[object]], Input(int, possible_values=[1]))}
+    )
+
+    class KeywordOnlyBucket(CalculationBucket[GeneralManager]):
+        __slots__ = ("slot_state",)
+        cycle: KeywordOnlyBucket
+
+        def __init__(
+            self,
+            manager_class: type[GeneralManager],
+            *,
+            label: str,
+        ) -> None:
+            super().__init__(manager_class)
+            self.label = label
+            self.mapping_state: dict[str, list[int]] = {"values": [1]}
+            self.slot_state: list[int] = [2]
+
+    bucket = KeywordOnlyBucket(base._manager_class, label="required")
+    combinations = bucket._materialize_combinations(expose=False)
+    bucket.cycle = bucket
+
+    shallow = copy(bucket)
+    deep = bucket.all()
+
+    assert type(shallow) is KeywordOnlyBucket
+    assert shallow.label == "required"
+    assert shallow.mapping_state is bucket.mapping_state
+    assert shallow.slot_state is bucket.slot_state
+    assert shallow._data is not None
+    assert shallow._data[0] is not combinations[0]
+    assert shallow._combination_evidence == {}
+    assert shallow._evidence_exposed
+
+    assert type(deep) is KeywordOnlyBucket
+    assert deep.label == "required"
+    assert deep.mapping_state == bucket.mapping_state
+    assert deep.mapping_state is not bucket.mapping_state
+    assert deep.slot_state == bucket.slot_state
+    assert deep.slot_state is not bucket.slot_state
+    assert deep.cycle is deep
+    assert deep._data is not None
+    assert deep._data[0] is not combinations[0]
+    assert deep._combination_evidence == {}
+    assert deep._evidence_exposed
+
+
+@pytest.mark.parametrize("termination", ["close", "throw"])
+def test_early_generator_termination_revokes_only_new_evidence(
+    termination: str,
+) -> None:
+    source = [1, 2]
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+    bucket = _calculation_bucket_with_inputs({"code": input_field})
+    existing = bucket._materialize_combinations(expose=False)
+    existing_ids = set(bucket._combination_evidence)
+
+    generated = bucket._iter_input_combinations(
+        ["code"],
+        {},
+        {},
+        snapshot_iterables=True,
+        retain_evidence=True,
+    )
+    escaped = next(generated)
+    assert bucket._lookup_combination_evidence(escaped) is not None
+
+    if termination == "close":
+        generated.close()
+    else:
+        with pytest.raises(RuntimeError, match="stop iteration"):
+            generated.throw(RuntimeError("stop iteration"))
+
+    assert set(bucket._combination_evidence) == existing_ids
+    assert all(
+        bucket._lookup_combination_evidence(combination) is not None
+        for combination in existing
+    )
+    assert bucket._lookup_combination_evidence(escaped) is None

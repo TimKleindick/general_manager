@@ -763,16 +763,15 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __copy__(self) -> CalculationBucket[GeneralManagerType]:
         """Return an untrusted shallow copy of this bucket."""
-        copied = self.__class__(
-            self._manager_class,
-            self.filter_definitions.copy(),
-            self.exclude_definitions.copy(),
-            self.sort_key,
-            self.reverse,
-        )
+        copied = object.__new__(type(self))
+        copied.__dict__.update(self.__dict__)
+        for slot_name in self._copyable_slot_names():
+            if hasattr(self, slot_name):
+                setattr(copied, slot_name, getattr(self, slot_name))
         copied._data = (
             None if self._data is None else [combo.copy() for combo in self._data]
         )
+        copied._combination_evidence = {}
         copied._evidence_exposed = True
         return copied
 
@@ -780,17 +779,35 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self, memo: dict[int, object]
     ) -> CalculationBucket[GeneralManagerType]:
         """Return an untrusted deep copy without copying private provenance."""
-        copied = self.__class__(
-            self._manager_class,
-            deepcopy(self.filter_definitions, memo),
-            deepcopy(self.exclude_definitions, memo),
-            deepcopy(self.sort_key, memo),
-            self.reverse,
-        )
+        copied = object.__new__(type(self))
         memo[id(self)] = copied
-        copied._data = deepcopy(self._data, memo)
+        instance_state = {
+            name: value
+            for name, value in self.__dict__.items()
+            if name != "_combination_evidence"
+        }
+        copied.__dict__.update(deepcopy(instance_state, memo))
+        for slot_name in self._copyable_slot_names():
+            if hasattr(self, slot_name):
+                setattr(copied, slot_name, deepcopy(getattr(self, slot_name), memo))
+        copied._combination_evidence = {}
         copied._evidence_exposed = True
         return copied
+
+    @classmethod
+    def _copyable_slot_names(cls) -> Iterator[str]:
+        """Yield concrete slot attribute names across the subclass hierarchy."""
+        for base_class in cls.__mro__:
+            slots = base_class.__dict__.get("__slots__", ())
+            if isinstance(slots, str):
+                slots = (slots,)
+            for slot_name in slots:
+                if slot_name in {"__dict__", "__weakref__"}:
+                    continue
+                if slot_name.startswith("__") and not slot_name.endswith("__"):
+                    owner_name = base_class.__name__.lstrip("_")
+                    slot_name = f"_{owner_name}{slot_name}"
+                yield slot_name
 
     def __or__(
         self,
@@ -1376,6 +1393,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 filters and excludes.
         """
 
+        registered_combinations: list[Combination] = []
+
         def input_passes_filters(
             input_name: str,
             current_combo: Combination,
@@ -1416,6 +1435,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                         combination,
                         current_evidence,
                     )
+                    if self._lookup_combination_evidence(combination) is not None:
+                        registered_combinations.append(combination)
                 yield combination
                 return
             input_name: str = sorted_inputs[index]
@@ -1485,7 +1506,16 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                     if evidence is not None:
                         current_evidence.pop(input_name, None)
 
-        yield from helper(0, {}, {})
+        completed = False
+        try:
+            yield from helper(0, {}, {})
+            completed = True
+        finally:
+            if retain_evidence and not completed:
+                for combination in registered_combinations:
+                    entry = self._combination_evidence.get(id(combination))
+                    if entry is not None and entry[0] is combination:
+                        del self._combination_evidence[id(combination)]
 
     def _generate_input_combinations(
         self,
