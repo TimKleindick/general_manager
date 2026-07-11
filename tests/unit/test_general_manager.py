@@ -1,4 +1,9 @@
+from contextlib import contextmanager
 from datetime import date, datetime
+import gc
+import pickle
+import sys
+from weakref import ref
 
 from django.test import TestCase, override_settings
 from general_manager.bootstrap import (
@@ -20,7 +25,13 @@ from general_manager.permission.manager_based_permission import (
 from unittest.mock import Mock, patch
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
-from general_manager.cache.run_context import CalculationRunContext
+from general_manager.cache.run_context import (
+    CalculationRunContext,
+    current_calculation_run_context,
+)
+from general_manager.interface import CalculationInterface
+from general_manager.interface import base_interface as base_interface_module
+from general_manager.manager.input import Input
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.contrib.auth import get_user_model
 from django.utils.crypto import get_random_string
@@ -83,6 +94,48 @@ class DummyInterface:
         Returns a fixed identification dictionary with a dummy ID.
         """
         return {"id": "dummy_id"}
+
+
+class HydratedLifecycleRelatedManager(GeneralManager):
+    class Interface(CalculationInterface):
+        id = Input(str)
+
+
+class HydratedLifecycleOuterManager(GeneralManager):
+    class Interface(CalculationInterface):
+        related = Input(HydratedLifecycleRelatedManager)
+
+
+class HydratedCompositeRelatedManager(GeneralManager):
+    class Interface(CalculationInterface):
+        region = Input(str)
+        number = Input(int)
+
+
+class HydratedCompositeOuterManager(GeneralManager):
+    class Interface(CalculationInterface):
+        related = Input(HydratedCompositeRelatedManager)
+
+
+@contextmanager
+def record_manager_constructions(manager_class):
+    """Observe base-constructor calls without mutating class provenance."""
+    calls = []
+    previous_profile = sys.getprofile()
+
+    def profile(frame, event, arg):
+        if (
+            event == "call"
+            and frame.f_code is GeneralManager.__init__.__code__
+            and type(frame.f_locals.get("self")) is manager_class
+        ):
+            calls.append(frame.f_locals["self"])
+
+    sys.setprofile(profile)
+    try:
+        yield calls
+    finally:
+        sys.setprofile(previous_profile)
 
 
 class GeneralManagerTestCase(TestCase):
@@ -526,6 +579,141 @@ class GeneralManagerTestCase(TestCase):
         manager = self.manager()
         reduced = manager.__reduce__()
         self.assertEqual(reduced, (self.manager, ("dummy_id",)))
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_hydrated_manager_input_public_shapes_reuse_parsed_wrapper(self):
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedLifecycleOuterManager)
+        original = HydratedLifecycleRelatedManager("existing-id")
+        cases = (
+            (original, {"id": "existing-id"}, 0),
+            ("scalar-id", {"id": "scalar-id"}, 1),
+            ({"id": "mapping-id"}, {"id": "mapping-id"}, 1),
+        )
+
+        for supplied_value, expected_id, expected_constructions in cases:
+            with (
+                self.subTest(supplied_value=supplied_value),
+                record_manager_constructions(
+                    HydratedLifecycleRelatedManager
+                ) as constructions,
+            ):
+                outer = HydratedLifecycleOuterManager(supplied_value)
+                parsed_wrapper = vars(outer._interface)[
+                    "_gm_seeded_input_values_cache"
+                ]["related"]
+
+                self.assertEqual(
+                    outer.identification,
+                    {"related": expected_id},
+                )
+                self.assertEqual(len(constructions), expected_constructions)
+                if expected_constructions:
+                    self.assertEqual(constructions, [parsed_wrapper])
+                else:
+                    self.assertIs(parsed_wrapper, original)
+                self.assertIs(outer.related, parsed_wrapper)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCompositeOuterManager)
+        composite_id = {"region": "eu", "number": 7}
+        with record_manager_constructions(
+            HydratedCompositeRelatedManager
+        ) as composite_constructions:
+            composite_outer = HydratedCompositeOuterManager(composite_id)
+        composite_wrapper = vars(composite_outer._interface)[
+            "_gm_seeded_input_values_cache"
+        ]["related"]
+
+        self.assertEqual(
+            composite_outer.identification,
+            {"related": composite_id},
+        )
+        self.assertEqual(composite_constructions, [composite_wrapper])
+        self.assertIs(composite_outer.related, composite_wrapper)
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_hydrated_origins_are_interface_scoped_across_run_contexts(self):
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedLifecycleOuterManager)
+        registry_size_before = base_interface_module._seeded_interface_registry_size()
+        first = HydratedLifecycleOuterManager("shared-id")
+        second = HydratedLifecycleOuterManager("shared-id")
+        first_wrapper = vars(first._interface)["_gm_seeded_input_values_cache"][
+            "related"
+        ]
+        second_wrapper = vars(second._interface)["_gm_seeded_input_values_cache"][
+            "related"
+        ]
+        self.assertIsNot(first_wrapper, second_wrapper)
+        self.assertIs(first.related, first_wrapper)
+        self.assertIs(second.related, second_wrapper)
+        self.assertIsNone(current_calculation_run_context())
+
+        with CalculationRunContext():
+            contextual_first = HydratedLifecycleOuterManager("context-id")
+            contextual_second = HydratedLifecycleOuterManager("context-id")
+            contextual_first_wrapper = vars(contextual_first._interface)[
+                "_gm_seeded_input_values_cache"
+            ]["related"]
+            contextual_second_wrapper = vars(contextual_second._interface)[
+                "_gm_seeded_input_values_cache"
+            ]["related"]
+            self.assertIsNot(contextual_first_wrapper, contextual_second_wrapper)
+            self.assertIs(contextual_first.related, contextual_first_wrapper)
+            self.assertIs(contextual_second.related, contextual_second_wrapper)
+        self.assertIsNone(current_calculation_run_context())
+
+        interfaces = (
+            first._interface,
+            second._interface,
+            contextual_first._interface,
+            contextual_second._interface,
+        )
+        interface_refs = [ref(interface) for interface in interfaces]
+        origin_ids = {
+            id(base_interface_module._seeded_interface_origin_by_id(id(interface)))
+            for interface in interfaces
+        }
+        self.assertEqual(len(origin_ids), 4)
+
+        del interfaces
+        del first
+        del second
+        del contextual_first
+        del contextual_second
+        gc.collect()
+        self.assertTrue(
+            all(interface_ref() is None for interface_ref in interface_refs)
+        )
+        self.assertLessEqual(
+            base_interface_module._seeded_interface_registry_size(),
+            registry_size_before,
+        )
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_hydrated_outer_pickle_reconstructs_one_new_nested_wrapper(self):
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedLifecycleOuterManager)
+        original = HydratedLifecycleRelatedManager("pickle-id")
+        original_ref = ref(original)
+        outer = HydratedLifecycleOuterManager(original)
+        self.assertIs(outer.related, original)
+        payload = pickle.dumps(outer)
+
+        with record_manager_constructions(
+            HydratedLifecycleRelatedManager
+        ) as constructions:
+            restored = pickle.loads(payload)  # noqa: S301 - trusted local payload
+
+        reconstructed_wrapper = vars(restored._interface)[
+            "_gm_seeded_input_values_cache"
+        ]["related"]
+        self.assertEqual(restored.identification, outer.identification)
+        self.assertEqual(constructions, [reconstructed_wrapper])
+        self.assertIsNot(reconstructed_wrapper, original)
+        self.assertIs(restored.related, reconstructed_wrapper)
+
+        del outer
+        del original
+        gc.collect()
+        self.assertIsNone(original_ref())
 
     def test_or_operator(self):
         # Test the __or__ operator

@@ -1,4 +1,5 @@
 # type: ignore
+from copy import copy, deepcopy
 from django.test import TestCase
 from datetime import date
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.interface import CalculationInterface
 from general_manager.manager.input import DateRangeDomain, Input
 from general_manager.manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 from tests.utils.simple_manager_interface import SimpleBucket
 from typing import ClassVar
 
@@ -362,6 +364,163 @@ class TestGenerateCombinations(TestCase):
             calls,
             [{"num": 1}, {"num": 2}, {"num": 3}],
         )
+
+    def test_manager_input_lifecycle_across_bucket_transformations(self, _mock_parse):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class StaticManagerBucket(SimpleBucket):
+            def filter(self, **kwargs):
+                return self
+
+            def exclude(self, **kwargs):
+                return self
+
+        related_values = [RelatedManager(str(value)) for value in (1, 2, 3)]
+        static_source = StaticManagerBucket(RelatedManager, related_values)
+
+        class StaticManagerCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager, possible_values=static_source)
+
+            @property
+            def numeric_id(self):
+                return int(self.related.identification["id"])
+
+        GeneralManagerMeta.ensure_attributes_initialized(StaticManagerCalculation)
+        bucket = CalculationBucket(StaticManagerCalculation)
+        bucket._filters = {}
+        bucket._excludes = {}
+        combinations = bucket.generate_combinations()
+
+        self.assertEqual(
+            [
+                combination["related"].identification["id"]
+                for combination in combinations
+            ],
+            ["1", "2", "3"],
+        )
+        self.assertEqual(
+            [combination["related"] for combination in combinations],
+            related_values,
+        )
+
+        first_iteration = list(bucket)
+        second_iteration = list(bucket)
+        for managers in (first_iteration, second_iteration):
+            self.assertEqual(
+                [manager.identification["related"]["id"] for manager in managers],
+                ["1", "2", "3"],
+            )
+            for manager, expected_related in zip(
+                managers,
+                related_values,
+                strict=True,
+            ):
+                parsed_wrapper = vars(manager._interface)[
+                    "_gm_seeded_input_values_cache"
+                ]["related"]
+                self.assertIs(parsed_wrapper, expected_related)
+                self.assertIs(manager.related, parsed_wrapper)
+        self.assertTrue(
+            all(
+                first is not second
+                for first, second in zip(
+                    first_iteration,
+                    second_iteration,
+                    strict=True,
+                )
+            )
+        )
+
+        copied = copy(bucket)
+        sliced = bucket[1:]
+        united = bucket[:1] | bucket[1:]
+        united._filters = {}
+        united._excludes = {}
+
+        class ListManagerCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager, possible_values=related_values)
+
+        GeneralManagerMeta.ensure_attributes_initialized(ListManagerCalculation)
+        list_bucket = CalculationBucket(ListManagerCalculation)
+        list_bucket._filters = {}
+        list_bucket._excludes = {}
+        deep_copied = deepcopy(list_bucket)
+        transformed = (copied, sliced, deep_copied, united)
+        expected_ids = (
+            ["1", "2", "3"],
+            ["2", "3"],
+            ["1", "2", "3"],
+            ["1", "2", "3"],
+        )
+        for transformed_bucket, ids in zip(
+            transformed,
+            expected_ids,
+            strict=True,
+        ):
+            transformed_managers = list(transformed_bucket)
+            self.assertEqual(
+                [
+                    manager.identification["related"]["id"]
+                    for manager in transformed_managers
+                ],
+                ids,
+            )
+            for manager in transformed_managers:
+                first_access = manager.related
+                self.assertIs(manager.related, first_access)
+
+        filtered_sorted = CalculationBucket(
+            StaticManagerCalculation,
+            sort_key="numeric_id",
+        )
+        filtered_sorted._excludes = {}
+        filtered_sorted._filters = {
+            "numeric_id": {"filter_funcs": [lambda value: value >= 2]}
+        }
+        filtered_combinations = filtered_sorted.generate_combinations()
+        self.assertEqual(
+            [combination["related"]["id"] for combination in filtered_combinations],
+            ["2", "3"],
+        )
+        filtered_managers = list(filtered_sorted)
+        self.assertEqual(
+            [manager.identification["related"]["id"] for manager in filtered_managers],
+            ["2", "3"],
+        )
+        for manager in filtered_managers:
+            first_access = manager.related
+            self.assertIs(manager.related, first_access)
+
+        provider_calls = []
+
+        def manager_provider():
+            provider_calls.append(None)
+            return static_source
+
+        class CallableManagerCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager, possible_values=manager_provider)
+
+        GeneralManagerMeta.ensure_attributes_initialized(CallableManagerCalculation)
+        callable_bucket = CalculationBucket(CallableManagerCalculation)
+        callable_bucket._filters = {}
+        callable_bucket._excludes = {}
+        callable_managers = list(callable_bucket)
+        self.assertEqual(
+            [manager.identification["related"]["id"] for manager in callable_managers],
+            ["1", "2", "3"],
+        )
+        self.assertTrue(provider_calls)
+        for manager, expected_related in zip(
+            callable_managers,
+            related_values,
+            strict=True,
+        ):
+            self.assertIs(manager.related, expected_related)
 
     def test_property_filter_still_instantiates_managers_for_property_access(
         self, _mock_parse

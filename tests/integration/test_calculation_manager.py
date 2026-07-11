@@ -19,6 +19,7 @@ from general_manager.bucket.calculation_bucket import (
     _database_enumeration_evidence,
     _database_source_signature,
 )
+from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.manager.general_manager import GeneralManager
@@ -189,6 +190,91 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             grouped,
             self.TaxCalculation.all().group_by("employee"),
         )
+        for group in grouped:
+            entries = list(group._data)
+            self.assertEqual(len(entries), 1)
+            entry = entries[0]
+            first_access = entry.employee
+            parsed_wrapper = vars(entry._interface)["_resolved_input_values"][
+                "employee"
+            ]
+            self.assertIs(first_access, parsed_wrapper)
+            self.assertIs(entry.employee, parsed_wrapper)
+            self.assertEqual(
+                entry.employee.identification,
+                group.employee.identification,
+            )
+
+    def test_database_and_callable_manager_sources_reuse_hydrated_wrappers(self):
+        employees = [
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+            for name in ("Alice", "Bob", "Carol")
+        ]
+        expected_ids = [employee.identification["id"] for employee in employees]
+        source = self.Employee.all().sort("name")
+        self.assertIs(type(source), DatabaseBucket)
+
+        class StaticEmployeeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=source)
+
+        provider_calls = []
+
+        def employee_provider():
+            provider_calls.append(None)
+            return source
+
+        class CallableEmployeeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=employee_provider)
+
+        for manager_class in (
+            StaticEmployeeCalculation,
+            CallableEmployeeCalculation,
+        ):
+            with self.subTest(manager_class=manager_class.__name__):
+                bucket = CalculationBucket(manager_class)
+                combinations = bucket.generate_combinations()
+                self.assertEqual(
+                    [
+                        combination["employee"].identification["id"]
+                        for combination in combinations
+                    ],
+                    expected_ids,
+                )
+                first_iteration = list(bucket)
+                second_iteration = list(bucket)
+                for managers in (first_iteration, second_iteration):
+                    self.assertEqual(
+                        [
+                            manager.identification["employee"]["id"]
+                            for manager in managers
+                        ],
+                        expected_ids,
+                    )
+                    for manager in managers:
+                        first_access = manager.employee
+                        parsed_wrapper = vars(manager._interface)[
+                            "_resolved_input_values"
+                        ]["employee"]
+                        self.assertIs(first_access, parsed_wrapper)
+                        self.assertIs(manager.employee, parsed_wrapper)
+                self.assertTrue(
+                    all(
+                        first is not second
+                        for first, second in zip(
+                            first_iteration,
+                            second_iteration,
+                            strict=True,
+                        )
+                    )
+                )
+
+        self.assertTrue(provider_calls)
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_static_database_input_batches_membership_with_exact_dependencies(self):
