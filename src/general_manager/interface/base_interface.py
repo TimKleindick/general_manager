@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 import inspect
-from types import MappingProxyType
+from types import CellType, CodeType, FunctionType, MappingProxyType
 from typing import (
     Type,
     TYPE_CHECKING,
@@ -84,7 +84,39 @@ _RUN_SCOPED_SCALAR_INPUT_TYPES = (str, int, bool)
 _FORMATLESS_IDENTIFICATION_VALUE_TYPES = {str, int, float, bool, type(None)}
 _STATIC_ATTRIBUTE_MISSING = object()
 _INSTANCE_DICT_NAME = "__dict__"
-type _StaticDispatchSnapshot = tuple[tuple[str, object], ...]
+_EMPTY_CLOSURE_CELL = object()
+_MANAGER_INPUT_SEED_PLAN_NAME = "_gm_manager_input_seed_plan"
+_MANAGER_INPUT_SEED_PLAN_TOKEN = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _FunctionClosureSnapshot:
+    cell: CellType
+    content: object
+    function: _FunctionSnapshot | None
+
+
+@dataclass(frozen=True, slots=True)
+class _FunctionSnapshot:
+    function: FunctionType
+    code: CodeType
+    closure: tuple[_FunctionClosureSnapshot, ...]
+    defaults: tuple[object, ...] | None
+    kwdefaults: dict[str, object] | None
+    kwdefault_items: tuple[tuple[object, object], ...]
+    annotations: dict[str, object]
+    annotation_items: tuple[tuple[object, object], ...]
+    attributes: dict[str, object]
+    attribute_items: tuple[tuple[object, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _StaticDescriptorSnapshot:
+    descriptor: object
+    functions: tuple[_FunctionSnapshot, ...]
+
+
+type _StaticDispatchSnapshot = tuple[tuple[str, _StaticDescriptorSnapshot], ...]
 
 _INTERFACE_BASE_PROVENANCE: tuple[type[object], _StaticDispatchSnapshot] | None = None
 _INPUT_PROVENANCE: tuple[type[object], _StaticDispatchSnapshot] | None = None
@@ -115,12 +147,155 @@ def _static_descriptor(cls: type[object], attribute_name: str) -> object:
         return _STATIC_ATTRIBUTE_MISSING
 
 
+def _function_snapshot(
+    function: FunctionType,
+    seen: set[int],
+) -> _FunctionSnapshot:
+    seen.add(id(function))
+    closure_snapshot: list[_FunctionClosureSnapshot] = []
+    for cell in function.__closure__ or ():
+        try:
+            content = cell.cell_contents
+        except ValueError:
+            content = _EMPTY_CLOSURE_CELL
+        nested = None
+        if type(content) is FunctionType and id(content) not in seen:
+            nested = _function_snapshot(content, seen)
+        closure_snapshot.append(
+            _FunctionClosureSnapshot(cell=cell, content=content, function=nested)
+        )
+    kwdefaults = function.__kwdefaults__
+    annotations = function.__annotations__
+    attributes = function.__dict__
+    return _FunctionSnapshot(
+        function=function,
+        code=function.__code__,
+        closure=tuple(closure_snapshot),
+        defaults=function.__defaults__,
+        kwdefaults=kwdefaults,
+        kwdefault_items=() if kwdefaults is None else tuple(kwdefaults.items()),
+        annotations=annotations,
+        annotation_items=tuple(annotations.items()),
+        attributes=attributes,
+        attribute_items=tuple(attributes.items()),
+    )
+
+
+def _function_mapping_matches(
+    current: dict[str, object] | None,
+    expected: dict[str, object] | None,
+    expected_items: tuple[tuple[object, object], ...],
+) -> bool:
+    if current is not expected:
+        return False
+    if current is None:
+        return not expected_items
+    if type(current) is not dict or len(current) != len(expected_items):
+        return False
+    return all(
+        current_key is expected_key and current_value is expected_value
+        for (current_key, current_value), (expected_key, expected_value) in zip(
+            current.items(), expected_items, strict=True
+        )
+    )
+
+
+def _function_matches_snapshot(
+    function: FunctionType,
+    expected: _FunctionSnapshot,
+    seen: set[int],
+) -> bool:
+    function_id = id(function)
+    if function_id in seen:
+        return True
+    seen.add(function_id)
+    if (
+        function is not expected.function
+        or function.__code__ is not expected.code
+        or function.__defaults__ is not expected.defaults
+        or not _function_mapping_matches(
+            function.__kwdefaults__, expected.kwdefaults, expected.kwdefault_items
+        )
+        or not _function_mapping_matches(
+            function.__annotations__,
+            expected.annotations,
+            expected.annotation_items,
+        )
+        or not _function_mapping_matches(
+            function.__dict__, expected.attributes, expected.attribute_items
+        )
+    ):
+        return False
+    closure = function.__closure__
+    if closure is None:
+        return not expected.closure
+    if len(closure) != len(expected.closure):
+        return False
+    for current_cell, expected_cell in zip(closure, expected.closure, strict=True):
+        if current_cell is not expected_cell.cell:
+            return False
+        try:
+            current_content = current_cell.cell_contents
+        except ValueError:
+            current_content = _EMPTY_CLOSURE_CELL
+        if current_content is not expected_cell.content:
+            return False
+        if expected_cell.function is not None and not _function_matches_snapshot(
+            current_content, expected_cell.function, seen
+        ):
+            return False
+    return True
+
+
+def _descriptor_functions(descriptor: object) -> tuple[FunctionType, ...]:
+    if type(descriptor) is FunctionType:
+        return (descriptor,)
+    if type(descriptor) in {classmethod, staticmethod}:
+        function = object.__getattribute__(descriptor, "__func__")
+        return (function,) if type(function) is FunctionType else ()
+    if type(descriptor) is property:
+        return tuple(
+            function
+            for function in (descriptor.fget, descriptor.fset, descriptor.fdel)
+            if type(function) is FunctionType
+        )
+    return ()
+
+
+def _capture_static_descriptor(descriptor: object) -> _StaticDescriptorSnapshot:
+    return _StaticDescriptorSnapshot(
+        descriptor=descriptor,
+        functions=tuple(
+            _function_snapshot(function, set())
+            for function in _descriptor_functions(descriptor)
+        ),
+    )
+
+
+def _static_descriptor_matches(
+    descriptor: object,
+    expected: _StaticDescriptorSnapshot,
+) -> bool:
+    if descriptor is not expected.descriptor:
+        return False
+    functions = _descriptor_functions(descriptor)
+    return len(functions) == len(expected.functions) and all(
+        _function_matches_snapshot(function, function_snapshot, set())
+        for function, function_snapshot in zip(
+            functions, expected.functions, strict=True
+        )
+    )
+
+
 def _capture_static_dispatch(
     cls: type[object],
     names: tuple[str, ...],
 ) -> _StaticDispatchSnapshot:
     """Capture immutable descriptor identities while a framework class loads."""
-    return tuple((name, _static_descriptor(cls, name)) for name in names)
+    return tuple(
+        (name, _capture_static_descriptor(_static_descriptor(cls, name)))
+        for name in names
+    )
 
 
 def _matches_static_dispatch(
@@ -128,7 +303,10 @@ def _matches_static_dispatch(
     snapshot: _StaticDispatchSnapshot,
 ) -> bool:
     """Compare live descriptors with identities captured at module load."""
-    return all(_static_descriptor(cls, name) is expected for name, expected in snapshot)
+    return all(
+        _static_descriptor_matches(_static_descriptor(cls, name), expected)
+        for name, expected in snapshot
+    )
 
 
 def _register_input_seed_provenance(input_class: type[object]) -> None:
@@ -306,7 +484,7 @@ def _mro_state_access_is_canonical(
         for key in class_state:
             if type(key) is not str:
                 return False
-            if any(key is protected_name for protected_name in protected_names):
+            if any(key == protected_name for protected_name in protected_names):
                 return False
     return False
 
@@ -320,12 +498,12 @@ def _manager_candidate_present(
     if type(identification) is not dict or input_provenance is None:
         return False
     input_class, input_dispatch = input_provenance
-    expected_dict_descriptor = next(
+    expected_dict_snapshot = next(
         expected for name, expected in input_dispatch if name is _INSTANCE_DICT_NAME
     )
-    if (
-        _static_descriptor(input_class, _INSTANCE_DICT_NAME)
-        is not expected_dict_descriptor
+    if not _static_descriptor_matches(
+        _static_descriptor(input_class, _INSTANCE_DICT_NAME),
+        expected_dict_snapshot,
     ):
         return False
     interface_class = type(interface)
@@ -353,6 +531,35 @@ def _manager_candidate_present(
         if is_manager and dict.__getitem__(identification, field_name) is not None:
             return True
     return False
+
+
+def _calculation_manager_input_seed_plan(
+    input_fields: Mapping[str, object],
+) -> object:
+    """Return the private seed token when canonical manager inputs exist."""
+    input_provenance = _INPUT_PROVENANCE
+    if input_provenance is None:
+        return False
+    input_class = input_provenance[0]
+    for field_name, input_field in input_fields.items():
+        if type(field_name) is not str or type(input_field) is not input_class:
+            continue
+        input_state = object.__getattribute__(input_field, _INSTANCE_DICT_NAME)
+        if type(input_state) is not dict:
+            continue
+        if _mapping_value_by_identity(input_state, "is_manager") is True:
+            return _MANAGER_INPUT_SEED_PLAN_TOKEN
+    return False
+
+
+def _interface_uses_manager_input_seed_plan(interface: object) -> bool:
+    """Read the lifecycle-owned plan marker without instance dispatch."""
+    interface_state = type.__getattribute__(type(interface), _INSTANCE_DICT_NAME)
+    return (
+        type(interface_state) is MappingProxyType
+        and interface_state.get(_MANAGER_INPUT_SEED_PLAN_NAME)
+        is _MANAGER_INPUT_SEED_PLAN_TOKEN
+    )
 
 
 def _canonical_manager_class_state(manager_class: type[object]) -> bool:
@@ -928,7 +1135,8 @@ class InterfaceBase(ABC):
             **kwargs: Named identification values matching the interface's input field names.
         """
         identification = self.parse_input_fields_to_identification(*args, **kwargs)
-        _seed_calculation_resolved_manager_values(self, identification)
+        if _interface_uses_manager_input_seed_plan(self):
+            _seed_calculation_resolved_manager_values(self, identification)
         if len(identification) == 1:
             value = next(iter(identification.values()))
             if value.__class__ in _FORMATLESS_IDENTIFICATION_VALUE_TYPES:

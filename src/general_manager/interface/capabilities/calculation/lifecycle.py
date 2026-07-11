@@ -11,6 +11,8 @@ from weakref import WeakKeyDictionary
 
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.interface.base_interface import (
+    _MANAGER_INPUT_SEED_PLAN_NAME,
+    _calculation_manager_input_seed_plan,
     _register_calculation_capability_seed_provenance,
 )
 from general_manager.manager.general_manager import GeneralManager
@@ -538,7 +540,12 @@ class CalculationLifecycleCapability(BaseCapability):
             interface_cls = type(
                 interface.__name__,
                 (interface,),
-                {"input_fields": input_fields},
+                {
+                    "input_fields": input_fields,
+                    _MANAGER_INPUT_SEED_PLAN_NAME: (
+                        _calculation_manager_input_seed_plan(input_fields)
+                    ),
+                },
             )
             attrs["Interface"] = interface_cls
             return attrs, interface_cls, None

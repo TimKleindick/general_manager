@@ -15,6 +15,7 @@ from general_manager.interface.capabilities.calculation.lifecycle import (
     CalculationReadCapability,
 )
 from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface import base_interface as base_interface_module
 from general_manager.interface.capabilities.calculation.lifecycle import (
     _is_canonical_calculation_input_accessor,
 )
@@ -819,6 +820,135 @@ class TestCalculationInterface(TestCase):
         self.assertEqual(manager.identification, {"related": {"id": "related-id"}})
         self.assertEqual(hook_calls, [])
         self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_dynamic_hostile_state_names_are_rejected_without_hooks(self):
+        hook_calls = []
+        dynamic_dict_name = "".join(("__", "dict", "__"))
+        dynamic_resolved_name = "".join(("_resolved", "_input", "_values"))
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        hostile_interface = type(
+            "DynamicHostileInterface",
+            (CalculationInterface,),
+            {
+                "related": Input(RelatedManager),
+                dynamic_dict_name: property(lambda _self: hook_calls.append("dict")),
+                dynamic_resolved_name: property(
+                    lambda _self: None,
+                    lambda _self, _value: hook_calls.append("resolved"),
+                ),
+            },
+        )
+
+        class HostileCalculation(GeneralManager):
+            Interface = hostile_interface
+
+        GeneralManagerMeta.ensure_attributes_initialized(HostileCalculation)
+
+        manager = HostileCalculation("related-id")
+
+        self.assertEqual(manager.identification, {"related": {"id": "related-id"}})
+        self.assertEqual(hook_calls, [])
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_in_place_canonical_function_mutations_revoke_seed(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        interface_class = HydratedCalculation.Interface
+        original_code = Input.cast.__code__
+        original_defaults = Input.cast.__defaults__
+        original_kwdefaults = Input.cast.__kwdefaults__
+        original_annotations = Input.cast.__annotations__
+        original_annotation_items = tuple(original_annotations.items())
+        related = RelatedManager("related-id")
+
+        def replacement(_self, _value):
+            return None
+
+        def run_seed() -> object:
+            interface = interface_class.__new__(interface_class)
+            identification = {
+                "related": related,
+            }
+            base_interface_module._seed_calculation_resolved_manager_values(
+                interface, identification
+            )
+            return interface
+
+        mutations = (
+            lambda: setattr(Input.cast, "__code__", replacement.__code__),
+            lambda: setattr(Input.cast, "__defaults__", (object(),)),
+            lambda: setattr(Input.cast, "__kwdefaults__", {"changed": object()}),
+            lambda: Input.cast.__annotations__.__setitem__("changed", object()),
+        )
+        try:
+            for mutation in mutations:
+                with self.subTest(mutation=mutation):
+                    mutation()
+                    interface = run_seed()
+                    self.assertNotIn("_resolved_input_values", vars(interface))
+                    Input.cast.__code__ = original_code
+                    Input.cast.__defaults__ = original_defaults
+                    Input.cast.__kwdefaults__ = original_kwdefaults
+                    original_annotations.clear()
+                    original_annotations.update(original_annotation_items)
+                    Input.cast.__annotations__ = original_annotations
+        finally:
+            Input.cast.__code__ = original_code
+            Input.cast.__defaults__ = original_defaults
+            Input.cast.__kwdefaults__ = original_kwdefaults
+            original_annotations.clear()
+            original_annotations.update(original_annotation_items)
+            Input.cast.__annotations__ = original_annotations
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_in_place_code_mutations_across_canonical_owners_revoke_seed(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        interface_class = HydratedCalculation.Interface
+        related = RelatedManager("related-id")
+
+        def replacement(*_args, **_kwargs):
+            return None
+
+        functions = (
+            CalculationReadCapability.get_attributes,
+            CalculationLifecycleCapability.post_create,
+            InterfaceBase._process_input_field,
+            GeneralManager._ensure_manager_state_valid,
+            GeneralManagerMeta.__getattribute__,
+        )
+        for function in functions:
+            original_code = function.__code__
+            try:
+                with self.subTest(function=function):
+                    function.__code__ = replacement.__code__
+                    interface = interface_class.__new__(interface_class)
+                    base_interface_module._seed_calculation_resolved_manager_values(
+                        interface,
+                        {"related": related},
+                    )
+                    self.assertNotIn("_resolved_input_values", vars(interface))
+            finally:
+                function.__code__ = original_code
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_seed_rejects_monkeypatched_canonical_implementations(self):

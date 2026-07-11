@@ -234,7 +234,7 @@ class InterfaceBaseTests(SimpleTestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_formatless_initialization_keeps_parse_seed_return_order(self):
+    def test_formatless_initialization_bypasses_seed_before_return(self):
         events = []
 
         class FormatlessInterface(InterfaceBase):
@@ -263,8 +263,8 @@ class InterfaceBaseTests(SimpleTestCase):
             interface = FormatlessInterface("value")
 
         self.assertEqual(interface.identification, {"id": "value"})
-        self.assertEqual(events, ["parse", "seed"])
-        seed.assert_called_once()
+        self.assertEqual(events, ["parse"])
+        seed.assert_not_called()
 
     def test_non_calculation_interface_does_not_gain_resolved_values(self):
         gm = DummyGM({"id": 1})

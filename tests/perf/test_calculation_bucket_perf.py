@@ -37,6 +37,7 @@ def test_scalar_calculation_construction_skips_full_seed_audit(size: int) -> Non
 
     GeneralManagerMeta.ensure_attributes_initialized(ScalarCalculation)
     original_audit = base_interface_module._canonical_manager_class_state
+    original_seed = base_interface_module._seed_calculation_resolved_manager_values
     constructor_code = GeneralManager.__dict__["__init__"].__code__
 
     with (
@@ -45,6 +46,11 @@ def test_scalar_calculation_construction_skips_full_seed_audit(size: int) -> Non
             "_canonical_manager_class_state",
             wraps=original_audit,
         ) as full_audits,
+        patch.object(
+            base_interface_module,
+            "_seed_calculation_resolved_manager_values",
+            wraps=original_seed,
+        ) as seed_calls,
         count_profiled_calls(
             constructor_code,
             lambda self: self.__class__ is ScalarCalculation,
@@ -57,6 +63,7 @@ def test_scalar_calculation_construction_skips_full_seed_audit(size: int) -> Non
         range(size)
     )
     assert outer_constructors.value == size
+    assert seed_calls.call_count == 0
     assert full_audits.call_count == 0
 
 
