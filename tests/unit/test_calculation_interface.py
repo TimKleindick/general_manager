@@ -1,5 +1,8 @@
+import gc
+from types import FunctionType
 from typing import ClassVar
 from unittest.mock import patch
+from weakref import ref
 
 from django.test import TestCase, override_settings
 from general_manager.bucket.calculation_bucket import CalculationBucket
@@ -154,6 +157,105 @@ class TestCalculationInterface(TestCase):
                 partial, DummyCalculationInterface, "field1"
             )
         )
+
+    def test_calculation_input_accessor_rejects_self_rebound_copied_provenance(self):
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+
+        def copied(interface):
+            return interface
+
+        copied.__dict__.update(accessor.__dict__)
+        copied.__dict__["_gm_calculation_input_accessor_self"] = copied
+
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                copied, DummyCalculationInterface, "field1"
+            )
+        )
+
+    def test_calculation_input_accessor_rejects_unregistered_same_implementation(self):
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+        copied = FunctionType(
+            accessor.__code__,
+            accessor.__globals__,
+            accessor.__name__,
+            accessor.__defaults__,
+            accessor.__closure__,
+        )
+        copied.__dict__.update(accessor.__dict__)
+        copied.__dict__["_gm_calculation_input_accessor_self"] = copied
+
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                copied, DummyCalculationInterface, "field1"
+            )
+        )
+
+    def test_calculation_input_accessor_rejects_code_or_closure_mutation(self):
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+
+        def make_replacement():
+            first = None
+            second = None
+
+            def replacement(interface):
+                if first is second:
+                    return interface
+                return interface
+
+            return replacement
+
+        accessor.__code__ = make_replacement().__code__
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                accessor, DummyCalculationInterface, "field1"
+            )
+        )
+
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+        stored_field_name = accessor.__dict__["_gm_calculation_field_name"]
+        field_cell = next(
+            cell
+            for cell in accessor.__closure__
+            if cell.cell_contents is stored_field_name
+        )
+        field_cell.cell_contents = "field2"
+        self.assertFalse(
+            _is_canonical_calculation_input_accessor(
+                accessor, DummyCalculationInterface, "field1"
+            )
+        )
+
+    def test_calculation_input_accessor_rejects_function_state_mutation(self):
+        mutations = (
+            lambda accessor: setattr(accessor, "__defaults__", (None,)),
+            lambda accessor: setattr(accessor, "__kwdefaults__", {"value": None}),
+            lambda accessor: accessor.__annotations__.__setitem__("extra", object),
+        )
+
+        for mutation in mutations:
+            accessor = DummyCalculationInterface.get_attributes()["field1"]
+            mutation(accessor)
+            with self.subTest(mutation=mutation):
+                self.assertFalse(
+                    _is_canonical_calculation_input_accessor(
+                        accessor, DummyCalculationInterface, "field1"
+                    )
+                )
+
+    def test_calculation_input_accessor_registry_does_not_retain_accessor(self):
+        accessor = DummyCalculationInterface.get_attributes()["field1"]
+        accessor_ref = ref(accessor)
+        self.assertTrue(
+            _is_canonical_calculation_input_accessor(
+                accessor, DummyCalculationInterface, "field1"
+            )
+        )
+
+        del accessor
+        gc.collect()
+
+        self.assertIsNone(accessor_ref())
 
     def test_calculation_input_accessor_rejects_mutated_owner_and_field(self):
         accessor = DummyCalculationInterface.get_attributes()["field1"]

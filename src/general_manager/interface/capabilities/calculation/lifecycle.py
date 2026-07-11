@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from types import FunctionType
-from typing import TYPE_CHECKING, ClassVar
+from dataclasses import dataclass
+from threading import RLock
+from types import CellType, CodeType, FunctionType
+from typing import TYPE_CHECKING, ClassVar, cast
+from weakref import WeakKeyDictionary
 
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.manager.general_manager import GeneralManager
@@ -21,14 +24,112 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 _CALCULATION_INPUT_ACCESSOR_TOKEN = object()
-_CALCULATION_INPUT_ACCESSOR_STATE = frozenset(
-    {
-        "_gm_calculation_input_accessor_token",
-        "_gm_calculation_input_accessor_self",
-        "_gm_calculation_interface_cls",
-        "_gm_calculation_field_name",
-    }
+_CALCULATION_INPUT_ACCESSOR_STATE = (
+    "_gm_calculation_input_accessor_token",
+    "_gm_calculation_input_accessor_self",
+    "_gm_calculation_interface_cls",
+    "_gm_calculation_field_name",
 )
+_EMPTY_CLOSURE_CELL = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _AccessorProvenance:
+    interface_cls: type["CalculationInterface"]
+    field_name: str
+    code: CodeType
+    closure: tuple[tuple[CellType, object], ...]
+    defaults: tuple[object, ...] | None
+    kwdefaults: dict[str, object] | None
+    kwdefault_items: tuple[tuple[object, object], ...]
+    annotations: dict[str, object]
+    annotation_items: tuple[tuple[object, object], ...]
+
+
+_CALCULATION_INPUT_ACCESSOR_PROVENANCE: WeakKeyDictionary[
+    FunctionType, _AccessorProvenance
+] = WeakKeyDictionary()
+_CALCULATION_INPUT_ACCESSOR_PROVENANCE_LOCK = RLock()
+
+
+def _closure_snapshot(
+    accessor: FunctionType,
+) -> tuple[tuple[CellType, object], ...]:
+    closure = accessor.__closure__
+    if closure is None:
+        return ()
+    snapshot: list[tuple[CellType, object]] = []
+    for cell in closure:
+        try:
+            content = cell.cell_contents
+        except ValueError:
+            content = _EMPTY_CLOSURE_CELL
+        snapshot.append((cell, content))
+    return tuple(snapshot)
+
+
+def _register_calculation_input_accessor(
+    accessor: FunctionType,
+    interface_cls: type["CalculationInterface"],
+    field_name: str,
+) -> None:
+    kwdefaults = accessor.__kwdefaults__
+    annotations = accessor.__annotations__
+    provenance = _AccessorProvenance(
+        interface_cls=interface_cls,
+        field_name=field_name,
+        code=accessor.__code__,
+        closure=_closure_snapshot(accessor),
+        defaults=accessor.__defaults__,
+        kwdefaults=kwdefaults,
+        kwdefault_items=() if kwdefaults is None else tuple(kwdefaults.items()),
+        annotations=annotations,
+        annotation_items=tuple(annotations.items()),
+    )
+    with _CALCULATION_INPUT_ACCESSOR_PROVENANCE_LOCK:
+        _CALCULATION_INPUT_ACCESSOR_PROVENANCE[accessor] = provenance
+
+
+def _mapping_matches_snapshot(
+    current: dict[str, object] | None,
+    expected: dict[str, object] | None,
+    expected_items: tuple[tuple[object, object], ...],
+) -> bool:
+    if current is not expected:
+        return False
+    if current is None:
+        return not expected_items
+    if type(current) is not dict or len(current) != len(expected_items):
+        return False
+    return all(
+        current_key is expected_key and current_value is expected_value
+        for (current_key, current_value), (expected_key, expected_value) in zip(
+            current.items(), expected_items, strict=True
+        )
+    )
+
+
+def _closure_matches_snapshot(
+    accessor: FunctionType,
+    expected: tuple[tuple[CellType, object], ...],
+) -> bool:
+    closure = accessor.__closure__
+    if closure is None:
+        return not expected
+    if len(closure) != len(expected):
+        return False
+    for current_cell, (expected_cell, expected_content) in zip(
+        closure, expected, strict=True
+    ):
+        if current_cell is not expected_cell:
+            return False
+        try:
+            current_content = current_cell.cell_contents
+        except ValueError:
+            current_content = _EMPTY_CLOSURE_CELL
+        if current_content is not expected_content:
+            return False
+    return True
 
 
 def _is_canonical_calculation_input_accessor(
@@ -39,9 +140,34 @@ def _is_canonical_calculation_input_accessor(
     """Return whether ``accessor`` is the exact callable created for a field."""
     if type(accessor) is not FunctionType:
         return False
+    with _CALCULATION_INPUT_ACCESSOR_PROVENANCE_LOCK:
+        provenance = _CALCULATION_INPUT_ACCESSOR_PROVENANCE.get(accessor)
+    if provenance is None:
+        return False
     state = accessor.__dict__
     return (
-        state.keys() == _CALCULATION_INPUT_ACCESSOR_STATE
+        provenance.interface_cls is interface_cls
+        and provenance.field_name is field_name
+        and accessor.__code__ is provenance.code
+        and accessor.__defaults__ is provenance.defaults
+        and _mapping_matches_snapshot(
+            accessor.__kwdefaults__,
+            provenance.kwdefaults,
+            provenance.kwdefault_items,
+        )
+        and _mapping_matches_snapshot(
+            accessor.__annotations__,
+            provenance.annotations,
+            provenance.annotation_items,
+        )
+        and _closure_matches_snapshot(accessor, provenance.closure)
+        and len(state) == len(_CALCULATION_INPUT_ACCESSOR_STATE)
+        and all(
+            current_key is expected_key
+            for current_key, expected_key in zip(
+                state, _CALCULATION_INPUT_ACCESSOR_STATE, strict=True
+            )
+        )
         and state["_gm_calculation_input_accessor_token"]
         is _CALCULATION_INPUT_ACCESSOR_TOKEN
         and state["_gm_calculation_input_accessor_self"] is accessor
@@ -173,6 +299,9 @@ class CalculationReadCapability(BaseCapability):
                     "_gm_calculation_interface_cls": interface_cls,
                     "_gm_calculation_field_name": field_name,
                 }
+            )
+            _register_calculation_input_accessor(
+                cast(FunctionType, _access), interface_cls, field_name
             )
             return _access
 
