@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from typing import cast
@@ -19,6 +20,7 @@ from tests.perf.support import (
     CountingIterable,
     PerfBudgets,
     capture_diagnostics,
+    count_profiled_calls,
 )
 
 pytestmark = pytest.mark.perf
@@ -277,6 +279,57 @@ def test_manager_valued_workload_is_registry_isolated() -> None:
     ):
         assert ValueManager not in registry
     assert ValueInterface._parent_class is ValueManager
+
+
+def test_profiled_call_counter_preserves_constructor_descriptors_and_profiler() -> None:
+    manager_constructor = GeneralManager.__dict__["__init__"]
+    value_manager_constructor = ValueManager.__dict__.get("__init__")
+    previous_profiler = sys.getprofile()
+    observed_events: list[str] = []
+
+    def sentinel_profiler(_frame: object, event: str, _arg: object) -> None:
+        observed_events.append(event)
+
+    try:
+        sys.setprofile(sentinel_profiler)
+        with count_profiled_calls(
+            manager_constructor.__code__,
+            lambda self: self.__class__ is ValueManager,
+        ) as calls:
+            ValueManager(id=1)
+
+        assert calls.value == 1
+        assert sys.getprofile() is sentinel_profiler
+        assert observed_events
+        assert GeneralManager.__dict__["__init__"] is manager_constructor
+        assert ValueManager.__dict__.get("__init__") is value_manager_constructor
+    finally:
+        sys.setprofile(previous_profiler)
+
+
+def test_profiled_call_counter_restores_profiler_after_an_error() -> None:
+    class ProfiledFailure(RuntimeError):
+        pass
+
+    previous_profiler = sys.getprofile()
+
+    def sentinel_profiler(_frame: object, _event: str, _arg: object) -> None:
+        return None
+
+    try:
+        sys.setprofile(sentinel_profiler)
+        with (
+            pytest.raises(ProfiledFailure),
+            count_profiled_calls(
+                GeneralManager.__dict__["__init__"].__code__,
+                lambda self: self.__class__ is ValueManager,
+            ),
+        ):
+            raise ProfiledFailure
+
+        assert sys.getprofile() is sentinel_profiler
+    finally:
+        sys.setprofile(previous_profiler)
 
 
 class CountingManagerBucket(Bucket[ValueManager]):
@@ -554,3 +607,76 @@ def test_manager_valued_input_cold_and_warm_generation(
             ("YIELDS", "CONSTRUCTORS"), observations, strict=True
         ):
             perf_budgets.assert_observation(f"{prefix}_{phase}_{suffix}", observed)
+
+
+@pytest.mark.parametrize("size", [400, 800])
+def test_manager_valued_input_preserves_wrappers_between_attribute_reads(
+    perf_budgets: PerfBudgets,
+    size: int,
+) -> None:
+    source_wrappers = [ValueManager(id=index % 50) for index in range(size)]
+    manager, _input_field = _make_default_calculation_manager(
+        f"HydratedManagerValues{size}Manager",
+        "value",
+        cast(
+            Input[type[object]],
+            Input(ValueManager, possible_values=source_wrappers),
+        ),
+    )
+    constructor_code = GeneralManager.__dict__["__init__"].__code__
+
+    with (
+        CalculationRunContext(),
+        count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is manager,
+        ) as outer_constructor_calls,
+    ):
+        outer_managers = list(CalculationBucket(manager))
+
+        with count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is ValueManager,
+        ) as first_nested_constructor_calls:
+            first_wrappers = [
+                cast(ValueManager, outer_manager.value)
+                for outer_manager in outer_managers
+            ]
+
+        with count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is ValueManager,
+        ) as second_nested_constructor_calls:
+            second_wrappers = [
+                cast(ValueManager, outer_manager.value)
+                for outer_manager in outer_managers
+            ]
+
+    source_ids = [wrapper.identification["id"] for wrapper in source_wrappers]
+    first_ids = [wrapper.identification["id"] for wrapper in first_wrappers]
+    second_ids = [wrapper.identification["id"] for wrapper in second_wrappers]
+    assert len(outer_managers) == size
+    assert first_ids == source_ids
+    assert second_ids == source_ids
+    assert all(
+        hydrated is not source
+        for hydrated, source in zip(first_wrappers, source_wrappers, strict=True)
+    )
+    assert all(
+        second is first
+        for second, first in zip(second_wrappers, first_wrappers, strict=True)
+    )
+
+    prefix = f"CALC_HYDRATED_LIST_{size}"
+    perf_budgets.assert_observation(f"{prefix}_OUTER_RESULTS", len(outer_managers))
+    perf_budgets.assert_observation(
+        f"{prefix}_OUTER_CONSTRUCTORS", outer_constructor_calls.value
+    )
+    perf_budgets.assert_observation(
+        f"{prefix}_FIRST_NESTED_CONSTRUCTORS",
+        first_nested_constructor_calls.value,
+    )
+    perf_budgets.assert_observation(
+        f"{prefix}_SECOND_NESTED_CONSTRUCTORS",
+        second_nested_constructor_calls.value,
+    )

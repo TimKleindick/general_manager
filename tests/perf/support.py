@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import sys
 import tracemalloc
 from collections.abc import Callable, Iterable, Iterator, Mapping, Set as AbstractSet
+from contextlib import contextmanager
 from dataclasses import dataclass
 from time import perf_counter
+from types import CodeType, FrameType
 from typing import Generic, TypeVar
 
 T = TypeVar("T")
@@ -29,6 +32,33 @@ class CountingIterable(Generic[T]):
         for value in self._values:
             self.counter.increment()
             yield value
+
+
+@contextmanager
+def count_profiled_calls(
+    target_code: CodeType,
+    self_predicate: Callable[[object], bool],
+) -> Iterator[Counter]:
+    """Count matching Python calls without replacing the callable descriptor."""
+    counter = Counter()
+    previous_profiler = sys.getprofile()
+
+    def profiler(frame: FrameType, event: str, arg: object) -> None:
+        if (
+            event == "call"
+            and frame.f_code is target_code
+            and "self" in frame.f_locals
+            and self_predicate(frame.f_locals["self"])
+        ):
+            counter.increment()
+        if previous_profiler is not None:
+            previous_profiler(frame, event, arg)
+
+    sys.setprofile(profiler)
+    try:
+        yield counter
+    finally:
+        sys.setprofile(previous_profiler)
 
 
 @dataclass(frozen=True)

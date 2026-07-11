@@ -57,6 +57,7 @@ from tests.perf.support import (
     DiagnosticObservation,
     PerfBudgets,
     capture_diagnostics,
+    count_profiled_calls,
 )
 
 pytestmark = [pytest.mark.perf, pytest.mark.django_db]
@@ -140,8 +141,14 @@ class PerfUserInterface(InterfaceBase):
     _instance: models.Model
     _search_date: object | None
 
-    def __init__(self, pk: object, **_kwargs: object) -> None:
-        self.identification = {"id": pk}
+    def __init__(
+        self,
+        pk: object = None,
+        *,
+        id: object = None,
+        **_kwargs: object,
+    ) -> None:
+        self.identification = {"id": id if id is not None else pk}
 
     @classmethod
     def _from_trusted_orm_instance(
@@ -451,6 +458,7 @@ def test_database_manager_input_enumeration_work(
         f"DatabaseEnumeration{size}Manager",
         source,
     )
+    constructor_code = GeneralManager.__dict__["__init__"].__code__
 
     with (
         patch(
@@ -463,8 +471,30 @@ def test_database_manager_input_enumeration_work(
         ) as semantic_token_work,
         override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
         CaptureQueriesContext(connection) as captured_queries,
+        count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is manager,
+        ) as outer_constructor_calls,
     ):
         managers = list(CalculationBucket(manager))
+
+    with (
+        CaptureQueriesContext(connection) as first_access_queries,
+        count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is PerfUserManager,
+        ) as first_nested_constructor_calls,
+    ):
+        first_wrappers = [cast(PerfUserManager, item.value) for item in managers]
+
+    with (
+        CaptureQueriesContext(connection) as second_access_queries,
+        count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is PerfUserManager,
+        ) as second_nested_constructor_calls,
+    ):
+        second_wrappers = [cast(PerfUserManager, item.value) for item in managers]
 
     assert len(managers) == size
     assert [
@@ -473,9 +503,38 @@ def test_database_manager_input_enumeration_work(
     assert len(captured_queries) == 2
     assert compiled_signatures.call_count == 2
     assert semantic_token_work.call_count <= 65 * size + 100
+    assert [wrapper.identification["id"] for wrapper in first_wrappers] == list(
+        included_primary_keys
+    )
+    assert [wrapper.identification["id"] for wrapper in second_wrappers] == list(
+        included_primary_keys
+    )
+    assert all(
+        second is first
+        for second, first in zip(second_wrappers, first_wrappers, strict=True)
+    )
     prefix = f"CALC_ENUM_MANAGER_{size}"
     perf_budgets.assert_observation(f"{prefix}_QUERIES", len(captured_queries))
     perf_budgets.assert_observation(f"{prefix}_MANAGERS", len(managers))
+    hydration_prefix = f"CALC_HYDRATED_DATABASE_{size}"
+    perf_budgets.assert_observation(f"{hydration_prefix}_OUTER_RESULTS", len(managers))
+    perf_budgets.assert_observation(
+        f"{hydration_prefix}_OUTER_CONSTRUCTORS", outer_constructor_calls.value
+    )
+    perf_budgets.assert_observation(
+        f"{hydration_prefix}_FIRST_QUERIES", len(first_access_queries)
+    )
+    perf_budgets.assert_observation(
+        f"{hydration_prefix}_FIRST_NESTED_CONSTRUCTORS",
+        first_nested_constructor_calls.value,
+    )
+    perf_budgets.assert_observation(
+        f"{hydration_prefix}_SECOND_QUERIES", len(second_access_queries)
+    )
+    perf_budgets.assert_observation(
+        f"{hydration_prefix}_SECOND_NESTED_CONSTRUCTORS",
+        second_nested_constructor_calls.value,
+    )
 
 
 def test_database_enumeration_mutation_falls_back_to_live_membership() -> None:
