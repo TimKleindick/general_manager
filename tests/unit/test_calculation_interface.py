@@ -1,6 +1,7 @@
 import gc
 import inspect
 import threading
+from dataclasses import replace
 from types import FunctionType
 from typing import ClassVar
 from unittest.mock import patch
@@ -3368,6 +3369,196 @@ class TestCalculationInterface(TestCase):
         self.assertIsNotNone(handler)
         self.assertIsInstance(handler, CustomQueryCapability)
         self.assertEqual(handler.label, "custom")
+
+
+class TestSeededProvenanceGuards(TestCase):
+    """Exercise fail-closed seeded-input provenance guards directly."""
+
+    def test_base_guards_reject_malformed_state_without_dispatch(self):
+        class Plain:
+            pass
+
+        class NonWeakManager:
+            __slots__ = ("__dict__",)
+
+        class NonWeakInterface:
+            __slots__ = ()
+
+        class Unrelated:
+            pass
+
+        self.assertFalse(
+            base_interface_module._register_seeded_interface_origin(
+                Plain(),
+                {1: Plain()},
+            )
+        )
+        self.assertFalse(
+            base_interface_module._register_seeded_interface_origin(
+                Plain(),
+                {"field": Plain()},
+            )
+        )
+
+        manager = NonWeakManager()
+        manager.__dict__["_GeneralManager__id"] = {}
+        self.assertFalse(
+            base_interface_module._register_seeded_interface_origin(
+                NonWeakInterface(),
+                {"field": manager},
+            )
+        )
+
+        self.assertFalse(
+            base_interface_module._mro_state_access_is_canonical(
+                Plain,
+                Unrelated,
+                (),
+            )
+        )
+        with patch.object(base_interface_module, "_INPUT_PROVENANCE", None):
+            self.assertFalse(
+                base_interface_module._manager_candidate_present(Plain(), {})
+            )
+            self.assertFalse(
+                base_interface_module._calculation_manager_input_seed_plan({})
+            )
+        with patch.multiple(
+            base_interface_module,
+            _GENERAL_MANAGER_PROVENANCE=None,
+            _GENERAL_MANAGER_META_PROVENANCE=None,
+        ):
+            self.assertFalse(
+                base_interface_module._canonical_manager_class_state(Plain)
+            )
+        with patch.object(base_interface_module, "_ORM_INTERFACE_PROVENANCE", None):
+            self.assertFalse(
+                base_interface_module._canonical_database_nested_interface_state(
+                    Plain,
+                    Plain(),
+                    {},
+                )
+            )
+        with patch.multiple(
+            base_interface_module,
+            _GENERAL_MANAGER_PROVENANCE=None,
+            _INTERFACE_BASE_PROVENANCE=None,
+        ):
+            self.assertFalse(
+                base_interface_module._canonical_nested_manager(Plain(), Plain)
+            )
+        with patch.object(
+            base_interface_module,
+            "_manager_candidate_present",
+            return_value=False,
+        ):
+            base_interface_module._seed_calculation_resolved_manager_values(
+                Plain(),
+                {},
+            )
+
+    def test_lifecycle_guards_reject_malformed_state_without_dispatch(self):
+        interface = DummyCalculationInterface("value", 1)
+        lifecycle = calculation_lifecycle_module
+
+        self.assertIs(
+            lifecycle._static_class_value(type(interface), "missing"),
+            lifecycle._MISSING_INTERFACE_STATE,
+        )
+        with patch.object(lifecycle, "_INTERFACE_BASE_PROVENANCE", None):
+            self.assertFalse(
+                lifecycle._seeded_interface_surrounding_state_safe(interface)
+            )
+            self.assertFalse(
+                lifecycle._seeded_interface_dispatch_is_canonical(interface)
+            )
+            self.assertEqual(
+                lifecycle._live_seeded_raw_value(interface, "field1"),
+                (False, lifecycle._MISSING_INTERFACE_STATE),
+            )
+            lifecycle._replace_live_resolved_cache_if_safe(interface, {})
+            lifecycle._transition_mirror_field_to_lazy_if_safe(interface, "field1")
+            lifecycle._clear_seed_mirrors_if_safe(interface)
+            self.assertFalse(
+                lifecycle._post_seeded_manager_state_is_safe(object(), object)
+            )
+        with patch.object(lifecycle, "_INPUT_PROVENANCE", None):
+            self.assertFalse(
+                lifecycle._cached_manager_matches_formatted_identification(
+                    object(),
+                    "field1",
+                    Input(str),
+                    object(),
+                    {},
+                )
+            )
+
+        origin = base_interface_module._SeededInterfaceOrigin(
+            interface_ref=ref(interface),
+            resolved_values={},
+            fields={},
+            transition_condition=threading.Condition(threading.RLock()),
+        )
+        origin.waiting_fields_by_thread = []  # type: ignore[assignment]
+        self.assertTrue(lifecycle._seeded_wait_chain_has_cycle(origin, 1))
+        origin.waiting_fields_by_thread = {1: "missing"}
+        self.assertTrue(lifecycle._seeded_wait_chain_has_cycle(origin, 1))
+        origin.waiting_fields_by_thread = {1: "field1"}
+        field_origin = base_interface_module._SeededFieldOrigin(
+            manager_ref=None,
+            formatted_identification={},
+            condition=threading.Condition(threading.RLock()),
+        )
+        origin.fields = {"field1": field_origin}
+        self.assertFalse(lifecycle._seeded_wait_chain_has_cycle(origin, 1))
+        field_origin.resolving_thread_id = 1
+        self.assertTrue(lifecycle._seeded_wait_chain_has_cycle(origin, 1))
+
+    def test_function_snapshot_guards_cover_nested_and_empty_cells(self):
+        def make_empty_cell_function():
+            value = object()
+
+            def function():
+                return value
+
+            def clear_cell():
+                nonlocal value
+                del value
+
+            clear_cell()
+            return function
+
+        def make_nested_function():
+            def child():
+                return "child"
+
+            def parent():
+                return child
+
+            return parent
+
+        empty_function = make_empty_cell_function()
+        nested_function = make_nested_function()
+        empty_snapshot = base_interface_module._function_snapshot(empty_function, set())
+        nested_snapshot = base_interface_module._function_snapshot(
+            nested_function, set()
+        )
+
+        self.assertFalse(
+            base_interface_module._function_matches_snapshot(
+                nested_function,
+                replace(nested_snapshot, closure=()),
+                set(),
+            )
+        )
+        self.assertTrue(
+            base_interface_module._function_matches_snapshot(
+                nested_function,
+                nested_snapshot,
+                {id(nested_function)},
+            )
+        )
+        self.assertEqual(len(empty_snapshot.closure), 1)
 
 
 class LifecycleInterface(CalculationInterface):
