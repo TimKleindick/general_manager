@@ -15,6 +15,7 @@ from general_manager.interface.base_interface import (
     _INSTANCE_DICT_NAME,
     _INPUT_PROVENANCE,
     _INTERFACE_BASE_PROVENANCE,
+    _LAZY_INPUT_VALUES_CACHE_NAME,
     _MANAGER_INPUT_SEED_PLAN_NAME,
     _SEEDED_INPUT_VALUES_CACHE_NAME,
     _STATIC_ATTRIBUTE_MISSING,
@@ -53,6 +54,16 @@ _EMPTY_CLOSURE_CELL = object()
 _MISSING_INTERFACE_STATE = object()
 
 
+@dataclass(frozen=True, slots=True)
+class _SeededInstanceState:
+    instance_state: dict[str, object]
+    resolved_values: object
+    identification: object
+    seeded_values: object
+    lazy_fields: object
+    surrounding_state_safe: bool
+
+
 def _static_class_value(
     cls: type[object],
     name: str,
@@ -75,7 +86,7 @@ def _static_class_value(
 
 def _seeded_calculation_instance_state(
     interface_instance: "CalculationInterface",
-) -> tuple[dict[str, object], dict[str, object], dict[str, object]] | None:
+) -> _SeededInstanceState | None:
     """Return exact constructor-seeded state without virtual access."""
     interface_provenance = _INTERFACE_BASE_PROVENANCE
     if interface_provenance is None:
@@ -88,7 +99,7 @@ def _seeded_calculation_instance_state(
     ):
         return None
     state = object.__getattribute__(interface_instance, _INSTANCE_DICT_NAME)
-    if type(state) is not dict or len(state) != 3:
+    if type(state) is not dict:
         return None
     if any(type(key) is not str for key in state):
         return None
@@ -103,20 +114,38 @@ def _seeded_calculation_instance_state(
         _SEEDED_INPUT_VALUES_CACHE_NAME,
         _MISSING_INTERFACE_STATE,
     )
+    lazy_fields = dict.get(
+        state,
+        _LAZY_INPUT_VALUES_CACHE_NAME,
+        _MISSING_INTERFACE_STATE,
+    )
     if (
-        type(identification) is not dict
-        or type(resolved_values) is not dict
-        or type(seeded_values) is not dict
+        seeded_values is _MISSING_INTERFACE_STATE
+        and lazy_fields is _MISSING_INTERFACE_STATE
     ):
         return None
     expected_names = (
         "_resolved_input_values",
         _SEEDED_INPUT_VALUES_CACHE_NAME,
+        _LAZY_INPUT_VALUES_CACHE_NAME,
         "identification",
     )
-    if any(not any(key == expected for expected in expected_names) for key in state):
-        return None
-    return resolved_values, identification, seeded_values
+    surrounding_state_safe = (
+        type(identification) is dict
+        and type(resolved_values) is dict
+        and type(seeded_values) is dict
+        and type(lazy_fields) is set
+        and len(state) in {3, 4}
+        and all(any(key == expected for expected in expected_names) for key in state)
+    )
+    return _SeededInstanceState(
+        instance_state=state,
+        resolved_values=resolved_values,
+        identification=identification,
+        seeded_values=seeded_values,
+        lazy_fields=lazy_fields,
+        surrounding_state_safe=surrounding_state_safe,
+    )
 
 
 def _post_seeded_manager_state_is_safe(
@@ -181,14 +210,26 @@ def _post_seeded_manager_state_is_safe(
             _INSTANCE_DICT_NAME,
             "_resolved_input_values",
             _SEEDED_INPUT_VALUES_CACHE_NAME,
+            _LAZY_INPUT_VALUES_CACHE_NAME,
             "identification",
         ),
     ):
         return False
     nested_state = object.__getattribute__(nested_interface, _INSTANCE_DICT_NAME)
-    if type(nested_state) is not dict or not 1 <= len(nested_state) <= 3:
+    if type(nested_state) is not dict or not 1 <= len(nested_state) <= 4:
         return False
     if any(type(key) is not str for key in nested_state):
+        return False
+    allowed_nested_names = (
+        "identification",
+        "_resolved_input_values",
+        _SEEDED_INPUT_VALUES_CACHE_NAME,
+        _LAZY_INPUT_VALUES_CACHE_NAME,
+    )
+    if any(
+        not any(key == allowed for allowed in allowed_nested_names)
+        for key in nested_state
+    ):
         return False
     nested_identification = dict.get(
         nested_state,
@@ -212,7 +253,14 @@ def _post_seeded_manager_state_is_safe(
         _SEEDED_INPUT_VALUES_CACHE_NAME,
         _MISSING_INTERFACE_STATE,
     )
-    return nested_seeded is _MISSING_INTERFACE_STATE or type(nested_seeded) is dict
+    nested_lazy = dict.get(
+        nested_state,
+        _LAZY_INPUT_VALUES_CACHE_NAME,
+        _MISSING_INTERFACE_STATE,
+    )
+    return (
+        nested_seeded is _MISSING_INTERFACE_STATE or type(nested_seeded) is dict
+    ) and (nested_lazy is _MISSING_INTERFACE_STATE or type(nested_lazy) is set)
 
 
 def _cached_manager_matches_formatted_identification(
@@ -548,11 +596,52 @@ class CalculationReadCapability(BaseCapability):
             seeded_state = _seeded_calculation_instance_state(interface_instance)
             identification: dict[str, object] | None
             seeded_values: dict[str, object] | None
+            lazy_fields: set[str] | None
+            seeded_state_safe = False
+            instance_state: dict[str, object] | None = None
             if seeded_state is not None:
-                resolved_values, identification, seeded_values = seeded_state
+                instance_state = seeded_state.instance_state
+                resolved_values = (
+                    seeded_state.resolved_values
+                    if type(seeded_state.resolved_values) is dict
+                    else {}
+                )
+                identification = (
+                    seeded_state.identification
+                    if type(seeded_state.identification) is dict
+                    else {}
+                )
+                seeded_values = (
+                    seeded_state.seeded_values
+                    if type(seeded_state.seeded_values) is dict
+                    else {}
+                )
+                lazy_fields = (
+                    seeded_state.lazy_fields
+                    if type(seeded_state.lazy_fields) is set
+                    else set()
+                )
+                dict.__setitem__(
+                    instance_state,
+                    "_resolved_input_values",
+                    resolved_values,
+                )
+                if seeded_state.seeded_values is not _MISSING_INTERFACE_STATE:
+                    dict.__setitem__(
+                        instance_state,
+                        _SEEDED_INPUT_VALUES_CACHE_NAME,
+                        seeded_values,
+                    )
+                dict.__setitem__(
+                    instance_state,
+                    _LAZY_INPUT_VALUES_CACHE_NAME,
+                    lazy_fields,
+                )
+                seeded_state_safe = seeded_state.surrounding_state_safe
             else:
                 identification = None
                 seeded_values = None
+                lazy_fields = None
                 try:
                     resolved_values = interface_instance._resolved_input_values
                 except AttributeError:
@@ -566,30 +655,52 @@ class CalculationReadCapability(BaseCapability):
                 _MISSING_INTERFACE_STATE,
             )
             if cached_value is not _MISSING_INTERFACE_STATE:
-                seeded_value = (
-                    _MISSING_INTERFACE_STATE
-                    if seeded_values is None
-                    else dict.get(
-                        seeded_values,
-                        field_name,
-                        _MISSING_INTERFACE_STATE,
-                    )
+                if seeded_values is None or lazy_fields is None:
+                    _track_cached_manager(cached_value)
+                    return cached_value
+                seeded_value = dict.get(
+                    seeded_values,
+                    field_name,
+                    _MISSING_INTERFACE_STATE,
                 )
-                if seeded_value is not cached_value:
+                lazy_transition = set.__contains__(lazy_fields, field_name)
+                if lazy_transition and seeded_value is _MISSING_INTERFACE_STATE:
                     _track_cached_manager(cached_value)
                     return cached_value
                 parent_class = _static_class_value(interface_cls, "_parent_class")
-                if _cached_manager_matches_formatted_identification(
-                    parent_class,
-                    field_name,
-                    input_field,
-                    cached_value,
-                    cast(dict[str, object], identification),
+                if (
+                    not lazy_transition
+                    and seeded_value is cached_value
+                    and seeded_state_safe
+                    and _cached_manager_matches_formatted_identification(
+                        parent_class,
+                        field_name,
+                        input_field,
+                        cached_value,
+                        cast(dict[str, object], identification),
+                    )
                 ):
                     _track_cached_manager(cached_value)
                     return cached_value
-                dict.pop(cast(dict[str, object], seeded_values), field_name, None)
+                dict.pop(seeded_values, field_name, None)
+                if not seeded_values:
+                    dict.pop(
+                        cast(dict[str, object], instance_state),
+                        _SEEDED_INPUT_VALUES_CACHE_NAME,
+                        None,
+                    )
+                set.add(lazy_fields, field_name)
                 dict.pop(resolved_values, field_name, None)
+            elif seeded_values is not None and lazy_fields is not None:
+                if not set.__contains__(lazy_fields, field_name):
+                    dict.pop(seeded_values, field_name, None)
+                    if not seeded_values:
+                        dict.pop(
+                            cast(dict[str, object], instance_state),
+                            _SEEDED_INPUT_VALUES_CACHE_NAME,
+                            None,
+                        )
+                    set.add(lazy_fields, field_name)
 
             dependency_values = {
                 dependency_name: _resolve_input_value(

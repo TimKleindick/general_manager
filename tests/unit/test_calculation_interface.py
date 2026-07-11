@@ -564,6 +564,130 @@ class TestCalculationInterface(TestCase):
         self.assertEqual(resolved.identification, {"id": "related-id"})
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_marked_invalid_seed_with_unexpected_outer_state_still_evicts(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        original._invalidate_manager_state("stale")
+        object.__setattr__(manager._interface, "unexpected_state", object())
+
+        resolved = manager.related
+
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seeded_manager_with_unexpected_nested_state_is_evicted(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        object.__setattr__(original._interface, "unexpected_state", object())
+
+        resolved = manager.related
+
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_substituted_marked_cache_value_is_evicted_and_recast(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("good-id")
+        substitute = RelatedManager("evil-id")
+        manager = HydratedCalculation(original)
+        manager._interface._resolved_input_values["related"] = substitute
+
+        resolved = manager.related
+
+        self.assertIsNot(resolved, original)
+        self.assertIsNot(resolved, substitute)
+        self.assertEqual(resolved.identification, {"id": "good-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_missing_seeded_cache_entry_releases_marker_and_recaches_lazily(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        original_ref = ref(original)
+        manager = HydratedCalculation(original)
+        manager._interface._resolved_input_values.pop("related")
+        del original
+        gc.collect()
+        self.assertIsNotNone(original_ref())
+
+        resolved = manager.related
+        gc.collect()
+
+        self.assertIsNone(original_ref())
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+        self.assertNotIn(
+            "_gm_seeded_input_values_cache",
+            vars(manager._interface),
+        )
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_mutated_seed_marker_state_never_demotes_stale_value_to_lazy(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+
+        def clear_marker(interface):
+            vars(interface)["_gm_seeded_input_values_cache"].clear()
+
+        def replace_marker(interface):
+            vars(interface)["_gm_seeded_input_values_cache"] = {}
+
+        def delete_field_marker(interface):
+            vars(interface)["_gm_seeded_input_values_cache"].pop("related")
+
+        for mutation in (clear_marker, replace_marker, delete_field_marker):
+            original = RelatedManager("related-id")
+            manager = HydratedCalculation(original)
+            original._invalidate_manager_state("stale")
+            mutation(manager._interface)
+
+            with self.subTest(mutation=mutation):
+                resolved = manager.related
+                self.assertIsNot(resolved, original)
+                self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_replaced_seeded_manager_identification_is_evicted(self):
         class RelatedManager(GeneralManager):
             class Interface(CalculationInterface):
