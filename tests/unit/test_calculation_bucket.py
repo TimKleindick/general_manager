@@ -8,6 +8,15 @@ from general_manager.bucket.calculation_bucket import (
     CalculationBucket,
     MissingCalculationMatchError,
     MultipleCalculationMatchError,
+    _CALCULATION_RESULT_UNSUPPORTED,
+    _BuiltinRangeEnumerationWitness,
+    _CalculationCacheIdentityToken,
+    _calculation_cache_callable_token,
+    _calculation_cache_clone,
+    _calculation_cache_filter_token,
+    _calculation_cache_freeze,
+    _calculation_cache_identity_token,
+    _trusted_enumeration_evidence,
 )
 from general_manager.bucket import calculation_bucket as calculation_bucket_module
 from general_manager.cache.run_context import (
@@ -903,6 +912,45 @@ class TestGenerateCombinations(TestCase):
         self.assertEqual(
             [combination["related"].identification for combination in combinations],
             [{"id": 1}, {"id": 2}],
+        )
+
+    def test_standard_manager_bucket_exclude_transform_removes_matching_values(
+        self, _mock_parse
+    ):
+        from general_manager.utils.filter_parser import (
+            parse_filters as real_parse_filters,
+        )
+
+        _mock_parse.side_effect = real_parse_filters
+
+        class RelatedManager:
+            class Interface(CalculationInterface):
+                input_fields: ClassVar[dict] = {
+                    "id": Input(int, possible_values=[1, 2]),
+                }
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        RelatedManager.Interface._parent_class = RelatedManager
+        source = CalculationBucket(RelatedManager)
+
+        class CalculationManager:
+            class Interface(CalculationInterface):
+                input_fields: ClassVar[dict] = {
+                    "related": Input(RelatedManager, possible_values=source),
+                }
+
+        CalculationManager.Interface._parent_class = CalculationManager
+        bucket = CalculationBucket(CalculationManager)
+
+        combinations = bucket._generate_input_combinations(
+            ["related"], {}, {"related": {"filter_kwargs": {"id__in": [2]}}}
+        )
+
+        self.assertEqual(
+            [combination["related"].identification for combination in combinations],
+            [{"id": 1}],
         )
 
     def test_property_filter_still_instantiates_managers_for_property_access(
@@ -2705,6 +2753,84 @@ class TestCalculationTerminalStreams(TestCase):
         self.assertEqual(property_calls, first_property_calls)
         self.assertEqual(replayed, tracked)
 
+    def test_result_cache_freeze_clone_and_filter_tokens_cover_safe_builtins(
+        self,
+    ) -> None:
+        def callback(value):
+            return value
+
+        nested = {
+            "tuple": (1, 1.5, b"bytes"),
+            "list": [True, None],
+            "set": frozenset({1, 2}),
+        }
+        snapshot = _calculation_cache_freeze(nested)
+        self.assertIsNot(snapshot, _CALCULATION_RESULT_UNSUPPORTED)
+        cloned = _calculation_cache_clone(snapshot)
+        self.assertEqual(cloned, nested)
+        self.assertIsNot(cloned, nested)
+        self.assertIsNot(cloned["list"], nested["list"])
+
+        cycle = []
+        cycle.append(cycle)
+        self.assertIs(_calculation_cache_freeze(cycle), _CALCULATION_RESULT_UNSUPPORTED)
+        self.assertIs(
+            _calculation_cache_freeze([object()]),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+        self.assertIs(
+            _calculation_cache_freeze(frozenset({object()})),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+        self.assertIs(
+            _calculation_cache_freeze({object(): 1}),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+
+        identity = _calculation_cache_identity_token(nested)
+        self.assertIsInstance(identity, _CalculationCacheIdentityToken)
+        self.assertEqual(identity, _calculation_cache_identity_token(nested))
+        self.assertIsNot(identity, _calculation_cache_identity_token({}))
+        self.assertIs(
+            _calculation_cache_callable_token(object()),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+        self.assertEqual(_calculation_cache_callable_token(callback)[0], "callable")
+
+        valid_filter = _calculation_cache_filter_token(
+            {"value": {"filter_kwargs": {"minimum": 1}}},
+            {
+                "value": {
+                    "filter_kwargs": {"minimum": 1},
+                    "filter_funcs": [callback],
+                }
+            },
+        )
+        self.assertIsNot(valid_filter, _CALCULATION_RESULT_UNSUPPORTED)
+        unsupported_filters = (
+            ({"value": object()}, {}),
+            ({"value": {}}, {1: {}}),
+            ({"value": {}}, {"value": {1: 1}}),
+            ({"value": {}}, {"value": {"filter_funcs": callback}}),
+            ({"value": {}}, {"value": {"unknown": 1}}),
+            ({"value": {}}, {"value": {"filter_funcs": [object()]}}),
+            ({"value": {}}, {"value": {"filter_kwargs": object()}}),
+        )
+        for raw, parsed in unsupported_filters:
+            self.assertIs(
+                _calculation_cache_filter_token(raw, parsed),
+                _CALCULATION_RESULT_UNSUPPORTED,
+            )
+
+        for invalid_snapshot in (
+            None,
+            (),
+            ("unknown", 1),
+            ("tuple", None),
+        ):
+            with self.assertRaises(TypeError):
+                _calculation_cache_clone(invalid_snapshot)
+
     def test_terminal_stream_owns_one_run_context_and_cleans_evidence(self) -> None:
         bucket = self._make_scalar_bucket(range(2))
         contexts = []
@@ -2750,4 +2876,44 @@ class TestCalculationTerminalStreams(TestCase):
         self.assertEqual(
             sorted_bucket._data,
             [{"value": 2}, {"value": 1}, {"value": 0}],
+        )
+
+    def test_terminal_stream_rejects_public_filter_maps_and_invalid_inputs(
+        self,
+    ) -> None:
+        for mutate in (
+            lambda current: current.filter_definitions.update({"value": {}}),
+            lambda current: current.exclude_definitions.update({"value": {}}),
+            lambda current: current.input_fields["value"].__dict__.update(
+                {"unexpected": object()}
+            ),
+            lambda current: current.input_fields.__setitem__("value", object()),
+        ):
+            current = self._make_scalar_bucket(range(3))
+            mutate(current)
+            self.assertFalse(current._terminal_stream_supported())
+
+        class CustomInitCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
+            def __init__(self, **identification):
+                super().__init__(**identification)
+
+        GeneralManagerMeta.ensure_attributes_initialized(CustomInitCalculation)
+        custom_bucket = CalculationBucket(CustomInitCalculation)
+        self.assertFalse(custom_bucket._terminal_stream_supported())
+        self.assertEqual(list(custom_bucket._iter_terminal_managers()), [])
+
+    def test_range_evidence_rejects_non_integer_candidates(self) -> None:
+        witness = _BuiltinRangeEnumerationWitness(range(3), "not-an-int", object())
+        self.assertFalse(witness.authorizes("not-an-int"))
+        input_field = Input(int, possible_values=range(3))
+        self.assertIsNone(
+            _trusted_enumeration_evidence(
+                input_field,
+                range(3),
+                "not-an-int",
+                {},
+            )
         )

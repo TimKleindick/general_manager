@@ -6,7 +6,7 @@ import gc
 import inspect
 import weakref
 from concurrent.futures import ThreadPoolExecutor
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from unittest.mock import patch
 
 from general_manager.manager import input as input_module
@@ -967,6 +967,57 @@ class TestInput(TestCase):
         )
         del second
         gc.collect()
+
+    def test_invocation_plan_guards_cover_dynamic_metadata_and_stale_entries(self):
+        def callback(value):
+            return value
+
+        with patch.object(
+            input_module.inspect,
+            "getattr_static",
+            side_effect=RuntimeError("metadata unavailable"),
+        ):
+            self.assertTrue(
+                input_module._callable_invocation_requires_uncached_plan(callback)
+            )
+
+        class NonWeakCallback:
+            __slots__ = ()
+
+            def __call__(self, value):
+                return value
+
+        non_weak = NonWeakCallback()
+        self.assertFalse(
+            input_module._callable_invocation_requires_uncached_plan(non_weak)
+        )
+        self.assertEqual(input_module._invoke_callable(non_weak, 3), 3)
+
+        fake_signature = SimpleNamespace(parameters=MappingProxyType({}))
+        with patch.object(
+            input_module.inspect,
+            "signature",
+            return_value=fake_signature,
+        ):
+            compiled = input_module._compile_callable_invocation_plan(callback)
+        self.assertIsNone(compiled.plan)
+        self.assertEqual(compiled.parameters, ())
+
+        def first(value):
+            return value
+
+        def second(value):
+            return value + 1
+
+        stale_plan = input_module._CallableInvocationPlan(())
+        input_module._callable_invocation_plan_cache[id(first)] = (
+            weakref.ref(second),
+            stale_plan,
+        )
+        plan = input_module._get_callable_invocation_plan(first)
+        self.assertIsInstance(plan, input_module._CallableInvocationPlan)
+        self.assertIsNot(plan, stale_plan)
+        input_module._callable_invocation_plan_cache.pop(id(first), None)
 
     def test_input_from_manager_query_with_filter_dict(self):
         class MockManager:
