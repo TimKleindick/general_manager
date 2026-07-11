@@ -12,6 +12,7 @@ from general_manager.interface import CalculationInterface
 from general_manager.interface.capabilities.calculation import (
     CalculationLifecycleCapability,
     CalculationQueryCapability,
+    lifecycle as calculation_lifecycle_module,
 )
 from general_manager.interface.capabilities.calculation.lifecycle import (
     CalculationReadCapability,
@@ -29,6 +30,7 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import AttributeEvaluationError, GeneralManagerMeta
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import serialize_dependency_identifier
 
 
 class DummyCalculationInterface(CalculationInterface):
@@ -474,6 +476,154 @@ class TestCalculationInterface(TestCase):
             (RelatedManager.__name__, "identification", '{"id": "related-id"}'),
             dependencies,
         )
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_first_hydrated_public_access_tracks_nested_dependency_once(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        track_calls = []
+        original_track = calculation_lifecycle_module._track_cached_manager
+
+        def track_cached_manager(value):
+            track_calls.append(value)
+            original_track(value)
+
+        with (
+            patch.object(
+                calculation_lifecycle_module,
+                "_track_cached_manager",
+                side_effect=track_cached_manager,
+            ),
+            DependencyTracker() as dependencies,
+        ):
+            resolved = manager.related
+
+        expected_dependency = (
+            RelatedManager.__name__,
+            "identification",
+            '{"id": "related-id"}',
+        )
+        self.assertIs(resolved, original)
+        self.assertEqual(track_calls, [original])
+        self.assertEqual(dependencies, {expected_dependency})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_hydrated_descriptor_cache_replays_dependency_per_access(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+
+        self.assertIs(manager.related, original)
+        self.assertEqual(manager._attribute_value_cache, {"related": original})
+
+        replay_calls = []
+        original_replay = RelatedManager._track_own_identification_dependency_active
+
+        def replay_dependency(current_manager):
+            replay_calls.append(current_manager)
+            original_replay(current_manager)
+
+        expected_dependency = (
+            RelatedManager.__name__,
+            "identification",
+            '{"id": "related-id"}',
+        )
+        with (
+            patch.object(
+                calculation_lifecycle_module,
+                "_track_cached_manager",
+                side_effect=AssertionError(
+                    "descriptor cache must bypass the lifecycle accessor"
+                ),
+            ),
+            patch.object(
+                RelatedManager,
+                "_track_own_identification_dependency_active",
+                replay_dependency,
+            ),
+        ):
+            with DependencyTracker() as separate_dependencies:
+                self.assertIs(manager.related, original)
+            with DependencyTracker() as outer_dependencies:
+                with DependencyTracker() as nested_dependencies:
+                    self.assertIs(manager.related, original)
+
+        self.assertEqual(replay_calls, [original, original])
+        self.assertEqual(separate_dependencies, {expected_dependency})
+        self.assertEqual(outer_dependencies, {expected_dependency})
+        self.assertEqual(nested_dependencies, {expected_dependency})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_hydrated_dependency_uses_only_one_first_access_cache_path(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        with DependencyTracker() as construction_dependencies:
+            manager = HydratedCalculation(original)
+
+        outer_dependency = (
+            HydratedCalculation.__name__,
+            "identification",
+            serialize_dependency_identifier(manager.identification),
+        )
+        nested_dependency = (
+            RelatedManager.__name__,
+            "identification",
+            '{"id": "related-id"}',
+        )
+        self.assertEqual(construction_dependencies, {outer_dependency})
+        self.assertEqual(manager._attribute_value_cache, {})
+
+        lifecycle_calls = []
+        original_track = calculation_lifecycle_module._track_cached_manager
+
+        def track_cached_manager(value):
+            lifecycle_calls.append(value)
+            original_track(value)
+
+        with (
+            patch.object(
+                calculation_lifecycle_module,
+                "_track_cached_manager",
+                side_effect=track_cached_manager,
+            ),
+            patch(
+                "general_manager.manager.meta._manager_dependency_tracking_class",
+                side_effect=AssertionError(
+                    "empty descriptor cache must not replay manager tracking"
+                ),
+            ),
+            DependencyTracker() as access_dependencies,
+        ):
+            self.assertIs(manager.related, original)
+
+        self.assertEqual(lifecycle_calls, [original])
+        self.assertEqual(access_dependencies, {nested_dependency})
+        self.assertEqual(manager._attribute_value_cache, {"related": original})
 
     def test_nonseeded_custom_interface_keeps_virtual_lazy_cache_dispatch(self):
         dispatch_calls = []
