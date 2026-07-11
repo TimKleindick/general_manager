@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABCMeta
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
@@ -2332,6 +2332,27 @@ def test_hostile_custom_iterable_keeps_normal_equality_hooks_and_error() -> None
 
 
 @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_unsupported_hashable_candidate_keeps_normal_hash_membership() -> None:
+    class HashValue:
+        hash_calls = 0
+
+        def __hash__(self) -> int:
+            type(self).hash_calls += 1
+            return 17
+
+    candidate = HashValue()
+    source = {candidate}
+    HashValue.hash_calls = 0
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(HashValue, possible_values=source))
+    )
+
+    assert next(iter(bucket)).identification == {"code": candidate}
+    assert HashValue.hash_calls == 1
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
 def test_custom_domain_uses_normal_membership_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2382,16 +2403,49 @@ def test_manager_candidates_from_non_database_bucket_keep_normal_membership() ->
     assert outer._combination_evidence == {}
 
 
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_manager_candidates_from_custom_bucket_subclass_keep_fallback() -> None:
+    base = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1]))
+    )
+
+    class CustomCalculationBucket(CalculationBucket[GeneralManager]):
+        iteration_calls = 0
+
+        def __iter__(self) -> Generator[GeneralManager, None, None]:
+            type(self).iteration_calls += 1
+            yield from super().__iter__()
+
+    source = CustomCalculationBucket(base._manager_class)
+    outer = _real_calculation_bucket(
+        cast(
+            Input[type[object]],
+            Input(source._manager_class, possible_values=source),
+        )
+    )
+
+    combinations = outer._materialize_combinations(expose=False)
+
+    assert len(combinations) == 1
+    assert outer._combination_evidence == {}
+    assert next(iter(outer)).identification["code"] == {"code": 1}
+    assert CustomCalculationBucket.iteration_calls == 1
+    assert outer._combination_evidence == {}
+
+
 @pytest.mark.parametrize("container_type", [list, tuple])
 @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
 def test_dependent_callable_scalar_provider_always_runs_full_validation(
     container_type: type[list[object]] | type[tuple[object, ...]],
 ) -> None:
     calls: list[int] = []
+    returned_containers: list[list[object] | tuple[object, ...]] = []
 
     def possible_detail(code: int) -> list[object] | tuple[object, ...]:
         calls.append(code)
-        return container_type([code * 10])
+        returned = container_type([code * 10])
+        returned_containers.append(returned)
+        return returned
 
     bucket = _real_calculation_bucket(
         cast(Input[type[object]], Input(int, possible_values=[1, 2])),
@@ -2409,6 +2463,73 @@ def test_dependent_callable_scalar_provider_always_runs_full_validation(
         {"code": 2, "detail": 20},
     ]
     assert calls == [1, 2, 1, 2]
+    assert len({id(returned) for returned in returned_containers}) == 4
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_dependent_callable_same_list_preserves_stable_dependency_calls() -> None:
+    calls: list[int] = []
+    returned_containers: list[list[int]] = []
+    shared = [10]
+
+    def possible_detail(code: int) -> list[int]:
+        calls.append(code)
+        returned_containers.append(shared)
+        return shared
+
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1])),
+        interface_attributes={
+            "segment": Input(str, possible_values=["retail", "enterprise"]),
+            "detail": Input(
+                int,
+                possible_values=possible_detail,
+                depends_on=["code"],
+            ),
+        },
+    )
+
+    assert [manager.identification for manager in bucket] == [
+        {"code": 1, "segment": "retail", "detail": 10},
+        {"code": 1, "segment": "enterprise", "detail": 10},
+    ]
+    assert calls == [1, 1, 1]
+    assert all(returned is shared for returned in returned_containers)
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_dependent_callable_raise_with_stable_dependency_is_lazy() -> None:
+    calls: list[int] = []
+    provider_error = RuntimeError("stable dependent provider failed")
+
+    def possible_detail(code: int) -> list[int]:
+        calls.append(code)
+        if len(calls) == 2:
+            raise provider_error
+        return [code * 10]
+
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1])),
+        interface_attributes={
+            "segment": Input(str, possible_values=["retail", "enterprise"]),
+            "detail": Input(
+                int,
+                possible_values=possible_detail,
+                depends_on=["code"],
+            ),
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="stable dependent provider failed"):
+        list(bucket)
+
+    assert calls == [1, 1]
+    assert bucket._data == [
+        {"code": 1, "segment": "retail", "detail": 10},
+        {"code": 1, "segment": "enterprise", "detail": 10},
+    ]
     assert bucket._combination_evidence == {}
 
 
@@ -2468,6 +2589,8 @@ def test_dependent_callable_fallback_preserves_mutation_and_exception_timing(
         ("index", [1], 1),
         ("slice", [1], 2),
         ("get", [1], 1),
+        ("input_filter", [2], 1),
+        ("input_exclude", [1], 1),
         ("input_sort", [2, 1], 1),
         ("property_sort", [2, 1], 3),
         ("property_filter", [2], 2),
@@ -2523,6 +2646,10 @@ def test_bucket_operation_trust_and_fallback_matrix(
         managers = list(cast(CalculationBucket[GeneralManager], bucket[:1]))
     elif operation == "get":
         managers = [bucket.get(code=1)]
+    elif operation == "input_filter":
+        managers = list(bucket.filter(code__gte=2))
+    elif operation == "input_exclude":
+        managers = list(bucket.exclude(code__gte=2))
     elif operation == "input_sort":
         managers = list(bucket.sort("code", reverse=True))
     elif operation == "property_sort":
@@ -2540,7 +2667,11 @@ def test_bucket_operation_trust_and_fallback_matrix(
         assert candidate in bucket
         managers = [candidate]
     elif operation == "str":
-        assert str(bucket).startswith("CalculationBucket (2)[")
+        assert str(bucket) == (
+            "CalculationBucket (2)["
+            "TrustedWiringManager(**{'code': 1}),"
+            "TrustedWiringManager(**{'code': 2})]"
+        )
         managers = []
     elif operation == "repeated":
         managers = [*bucket, *bucket]

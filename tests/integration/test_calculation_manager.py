@@ -818,11 +818,26 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                 creator_id=self.user.id,
             )
 
-        for provider_kind in ("same", "fresh", "mutating", "raising"):
+        for provider_kind in (
+            "same",
+            "same_stable",
+            "fresh",
+            "mutating",
+            "raising",
+        ):
             with self.subTest(provider_kind=provider_kind):
                 source = self.Employee.all()
                 calls = []
+                returned_sources = []
                 provider_error = RuntimeError("database provider failed")
+                region_values = (
+                    ["EU"] if provider_kind == "same_stable" else ["EU", "US"]
+                )
+                segment_values = (
+                    ["retail", "enterprise"]
+                    if provider_kind == "same_stable"
+                    else ["all"]
+                )
 
                 def possible_employees(
                     region,
@@ -831,19 +846,24 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                     _provider_kind=provider_kind,
                     _source=source,
                     _provider_error=provider_error,
+                    _returned_sources=returned_sources,
                 ):
                     _calls.append(region)
                     if _provider_kind == "raising" and len(_calls) == 2:
                         raise _provider_error
                     if _provider_kind == "mutating" and len(_calls) > 2:
-                        return _source.none()
-                    if _provider_kind == "fresh":
-                        return self.Employee.all()
-                    return _source
+                        result = _source.none()
+                    elif _provider_kind == "fresh":
+                        result = self.Employee.all()
+                    else:
+                        result = _source
+                    _returned_sources.append(result)
+                    return result
 
                 class DependentDatabaseCalculation(GeneralManager):
                     class Interface(CalculationInterface):
-                        region = Input(str, possible_values=["EU", "US"])
+                        region = Input(str, possible_values=region_values)
+                        segment = Input(str, possible_values=segment_values)
                         employee = Input(
                             self.Employee,
                             possible_values=possible_employees,
@@ -863,7 +883,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                     self.assertTrue(bucket._combination_evidence)
                     self.assertTrue(
                         all(
-                            set(evidence) == {"region"}
+                            "employee" not in evidence
                             for _combination, evidence in bucket._combination_evidence.values()
                         )
                     )
@@ -871,12 +891,49 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                         with self.assertRaises(InvalidInputValueError):
                             list(bucket)
                         self.assertEqual(calls, ["EU", "US", "EU"])
+                        self.assertIs(returned_sources[0], source)
+                        self.assertIs(returned_sources[1], source)
+                        self.assertIsNot(returned_sources[2], source)
                     else:
-                        self.assertEqual(len(list(bucket)), 4)
-                        self.assertEqual(
-                            calls,
-                            ["EU", "US", "EU", "EU", "US", "US"],
-                        )
+                        managers = list(bucket)
+                        self.assertEqual(len(managers), 4)
+                        if provider_kind == "same_stable":
+                            self.assertEqual(calls, ["EU"] * 5)
+                            self.assertEqual(
+                                [
+                                    manager.identification["region"]
+                                    for manager in managers
+                                ],
+                                ["EU"] * 4,
+                            )
+                            self.assertEqual(
+                                [
+                                    manager.identification["segment"]
+                                    for manager in managers
+                                ],
+                                ["retail", "retail", "enterprise", "enterprise"],
+                            )
+                        else:
+                            self.assertEqual(
+                                calls,
+                                ["EU", "US", "EU", "EU", "US", "US"],
+                            )
+                            self.assertEqual(
+                                [
+                                    manager.identification["region"]
+                                    for manager in managers
+                                ],
+                                ["EU", "EU", "US", "US"],
+                            )
+                        if provider_kind == "fresh":
+                            self.assertEqual(
+                                len({id(result) for result in returned_sources}),
+                                6,
+                            )
+                        else:
+                            self.assertTrue(
+                                all(result is source for result in returned_sources)
+                            )
                 self.assertEqual(bucket._combination_evidence, {})
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
