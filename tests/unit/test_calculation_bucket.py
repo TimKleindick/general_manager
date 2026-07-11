@@ -2206,6 +2206,26 @@ class TestCalculationTerminalStreams(TestCase):
             )._calculation_result_cache_signature()
         )
 
+    def test_manager_valued_provider_bypasses_result_cache_admission(self) -> None:
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(int, possible_values=(1,))
+
+        class ManagerValueCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(
+                    RelatedManager,
+                    possible_values=lambda: (RelatedManager(id=1),),
+                )
+
+        GeneralManagerMeta.ensure_attributes_initialized(RelatedManager)
+        GeneralManagerMeta.ensure_attributes_initialized(ManagerValueCalculation)
+        self.assertIsNone(
+            CalculationBucket(
+                ManagerValueCalculation
+            )._calculation_result_cache_signature()
+        )
+
     def test_callable_provider_reuses_result_without_reinvoking_provider(self) -> None:
         calls = 0
 

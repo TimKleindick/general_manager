@@ -2633,6 +2633,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 return None
             if input_field.validator is not None or input_field.normalizer is not None:
                 return None
+            if type(input_field.is_manager) is not bool or input_field.is_manager:
+                return None
             dependencies = input_field.depends_on
             if type(dependencies) is not list or not all(
                 type(name) is str for name in dependencies
