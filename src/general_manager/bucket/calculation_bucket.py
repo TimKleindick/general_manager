@@ -5,6 +5,7 @@ from collections.abc import Hashable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
+import inspect
 import struct
 from types import UnionType
 from itertools import islice
@@ -751,6 +752,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if not issubclass(manager_class, GeneralManager):
             return False
         if manager_class.__init__ is not GeneralManager.__init__:
+            return False
+        if inspect.getattr_static(
+            manager_class,
+            "_track_identification_dependency",
+        ) is not inspect.getattr_static(
+            GeneralManager,
+            "_track_identification_dependency",
+        ):
             return False
         if (
             type.__getattribute__(

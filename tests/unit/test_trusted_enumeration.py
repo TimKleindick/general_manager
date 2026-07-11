@@ -1573,6 +1573,54 @@ def test_custom_identification_dependency_tracking_falls_back_and_runs() -> None
     assert calls == []  # No active dependency tracker, but the custom path is retained.
 
 
+@pytest.mark.parametrize("descriptor_kind", ["classmethod", "staticmethod"])
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_custom_identification_dependency_wrapper_falls_back_to_membership(
+    descriptor_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tracking_calls: list[dict[str, object]] = []
+
+    def class_tracking(
+        _cls: type[GeneralManager], identification: dict[str, object]
+    ) -> None:
+        tracking_calls.append(identification.copy())
+
+    def static_tracking(identification: dict[str, object]) -> None:
+        tracking_calls.append(identification.copy())
+
+    tracking_override: object
+    if descriptor_kind == "classmethod":
+        tracking_override = classmethod(class_tracking)
+    else:
+        tracking_override = staticmethod(static_tracking)
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1])),
+        manager_attributes={
+            "_track_identification_dependency": tracking_override,
+        },
+    )
+    resolutions = 0
+    original_resolve = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+
+    assert not bucket._uses_standard_trusted_construction()
+    assert next(iter(bucket)).identification == {"code": 1}
+    assert resolutions == 2
+    assert tracking_calls == [{"code": 1}]
+    with pytest.raises(
+        InvalidInputValueError,
+        match=r"^Invalid value for code: 2, allowed: \[1\]\.$",
+    ):
+        bucket._manager_class(code=2)
+
+
 @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
 def test_trusted_iteration_preserves_normalization_bounds_and_validator() -> None:
     validator_calls: list[int] = []
