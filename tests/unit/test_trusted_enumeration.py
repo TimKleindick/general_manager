@@ -17,6 +17,7 @@ from uuid import UUID
 
 import pytest
 from django.test import override_settings
+import general_manager.bucket.calculation_bucket as calculation_bucket_module
 
 from general_manager.bucket.calculation_bucket import (
     CalculationBucket,
@@ -593,14 +594,48 @@ def test_sequence_evidence_denies_distinct_same_bits_nan_after_normalization(
     assert not evidence.authorizes(input_field, normalized_nan, {})
 
 
-def test_set_evidence_requires_current_membership_in_same_source() -> None:
-    source = {1, 2}
-    input_field = cast(Input[type[object]], Input(int, possible_values=source))
-    evidence = _static_evidence(input_field, source, 2)
+@pytest.mark.parametrize("size", [400, 800, 1600])
+@pytest.mark.parametrize("source_type", [set, frozenset])
+def test_set_sources_conservatively_fall_back_without_per_candidate_scans(
+    monkeypatch: pytest.MonkeyPatch,
+    source_type: type[set[object]] | type[frozenset[object]],
+    size: int,
+) -> None:
+    token_work = 0
+    original_token = _trusted_candidate_token
 
-    assert evidence.authorizes(input_field, 2, {})
-    source.remove(2)
-    assert not evidence.authorizes(input_field, 2, {})
+    def counted_token(candidate: object) -> _TrustedToken | None:
+        nonlocal token_work
+        token_work += 1
+        return original_token(candidate)
+
+    monkeypatch.setattr(
+        calculation_bucket_module,
+        "_trusted_candidate_token",
+        counted_token,
+    )
+    source = source_type(range(size))
+    input_field = cast(Input[type[object]], Input(int, possible_values=source))
+
+    assert all(
+        _trusted_enumeration_evidence(input_field, source, candidate, {}) is None
+        for candidate in source
+    )
+    assert token_work <= 2 * size
+
+
+@pytest.mark.parametrize("source_type", [set, frozenset])
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_set_source_fallback_preserves_public_membership_results(
+    source_type: type[set[object]] | type[frozenset[object]],
+) -> None:
+    source = source_type((1, 2))
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=source))
+    )
+
+    assert {manager.identification["code"] for manager in bucket} == {1, 2}
+    assert bucket._combination_evidence == {}
 
 
 class _CollidingUnsafeSetMember:
@@ -631,20 +666,6 @@ def test_set_evidence_creation_rejects_unsafe_members_without_running_hooks(
     assert unsafe_member.callbacks == []
 
 
-def test_set_evidence_authorization_rejects_new_unsafe_member_without_hooks() -> None:
-    candidate = 2
-    source: set[object] = {candidate, 3}
-    input_field = cast(Input[type[object]], Input(int, possible_values=source))
-    evidence = _static_evidence(input_field, source, candidate)
-    unsafe_member = _CollidingUnsafeSetMember(hash(candidate))
-    source.remove(candidate)
-    source.add(unsafe_member)
-    unsafe_member.callbacks.clear()
-
-    assert not evidence.authorizes(input_field, candidate, {})
-    assert unsafe_member.callbacks == []
-
-
 def _same_bits_float(value: float) -> float:
     replacement = cast(float, struct.unpack("!d", struct.pack("!d", value))[0])
     assert replacement is not value
@@ -669,31 +690,6 @@ def test_set_evidence_creation_requires_exact_emitted_nan_identity(
         )
         is None
     )
-
-
-def test_mutable_set_evidence_revokes_replaced_same_bits_nan() -> None:
-    emitted_nan = float("nan")
-    replacement_nan = _same_bits_float(emitted_nan)
-    source: set[object] = {emitted_nan}
-    input_field = cast(Input[type[object]], Input(float, possible_values=source))
-    evidence = _static_evidence(input_field, source, emitted_nan)
-
-    source.remove(emitted_nan)
-    source.add(replacement_nan)
-
-    assert not evidence.authorizes(input_field, emitted_nan, {})
-    assert not evidence.authorizes(input_field, replacement_nan, {})
-
-
-def test_frozenset_evidence_authorizes_only_exact_emitted_nan() -> None:
-    emitted_nan = float("nan")
-    separate_same_bits_nan = _same_bits_float(emitted_nan)
-    source: frozenset[object] = frozenset((emitted_nan,))
-    input_field = cast(Input[type[object]], Input(float, possible_values=source))
-    evidence = _static_evidence(input_field, source, emitted_nan)
-
-    assert evidence.authorizes(input_field, emitted_nan, {})
-    assert not evidence.authorizes(input_field, separate_same_bits_nan, {})
 
 
 @pytest.mark.parametrize(

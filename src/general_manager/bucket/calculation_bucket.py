@@ -4,7 +4,7 @@ from __future__ import annotations
 from abc import ABCMeta
 from collections.abc import Hashable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 import inspect
 import struct
@@ -30,7 +30,7 @@ from django.core.exceptions import EmptyResultSet, FieldError
 from django.db.models import Value
 from django.db.models.expressions import Col
 from django.db.models.lookups import Exact, In
-from django.db.models.query import QuerySet
+from django.db.models.query import ModelIterable, QuerySet
 from django.db.models.sql.datastructures import BaseTable
 from django.db.models.sql.query import Query
 from django.db.models.sql.where import WhereNode
@@ -99,6 +99,45 @@ _DATABASE_BUCKET_STATE_NAMES = frozenset(
         "_trusted_query_signature",
     }
 )
+_QUERYSET_STATE_NAMES = frozenset(
+    {
+        "model",
+        "_db",
+        "_hints",
+        "_query",
+        "_result_cache",
+        "_sticky_filter",
+        "_for_write",
+        "_prefetch_related_lookups",
+        "_prefetch_done",
+        "_known_related_objects",
+        "_iterable_class",
+        "_fields",
+        "_defer_next_filter",
+        "_deferred_filter",
+    }
+)
+_QUERY_STATE_NAMES = frozenset(
+    {
+        "model",
+        "alias_refcount",
+        "alias_map",
+        "alias_cols",
+        "external_aliases",
+        "table_map",
+        "used_aliases",
+        "where",
+        "annotations",
+        "extra",
+        "_filtered_relations",
+        "_annotation_select_cache",
+        "filter_is_sticky",
+        "_lookup_joins",
+        "order_by",
+        "extra_order_by",
+        "base_table",
+    }
+)
 _DATABASE_BUCKET_HOOK_NAMES = (
     "__contains__",
     "_contains_all_primary_keys",
@@ -116,6 +155,51 @@ class _TrustedToken:
 
     kind: str
     payload: object
+
+
+@dataclass(frozen=True, slots=True)
+class _ImmutableCollectionIdentity:
+    """Hold an immutable SQL parameter collection while comparing it in O(1)."""
+
+    collection: tuple[object, ...] | frozenset[object] = field(compare=False)
+    identity: int
+    length: int
+    kind: type[tuple[object, ...]] | type[frozenset[object]]
+
+
+def _trusted_immutable_state(value: object) -> bool:
+    """Screen a deeply immutable built-in tuple without retaining a deep token."""
+    leaf_token = _trusted_database_state_token(value)
+    if (
+        type(leaf_token) is tuple
+        and leaf_token
+        and leaf_token[0] in {"class", "scalar", "none"}
+    ):
+        return True
+    return type(value) is tuple and all(
+        _trusted_immutable_state(item) for item in cast(tuple[object, ...], value)
+    )
+
+
+def _immutable_state_identity(
+    value: object,
+    *,
+    screen: bool,
+) -> object | None:
+    """Return an O(1)-comparable strong witness for immutable source metadata."""
+    if value is None:
+        return ("none",)
+    if type(value) is not tuple:
+        return None
+    immutable_value = cast(tuple[object, ...], value)
+    if screen and not _trusted_immutable_state(immutable_value):
+        return None
+    return _ImmutableCollectionIdentity(
+        immutable_value,
+        id(immutable_value),
+        len(immutable_value),
+        tuple,
+    )
 
 
 class _EnumerationWitness(Protocol):
@@ -154,25 +238,6 @@ class _SequenceEnumerationWitness(_StaticEnumerationWitness):
         return (
             current is self.candidate
             and _trusted_candidate_token(current) == self.candidate_token
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class _SetEnumerationWitness(_StaticEnumerationWitness):
-    """Prove that an emitted safe scalar remains in the exact set source."""
-
-    source: set[object] | frozenset[object]
-    candidate: object
-    candidate_token: _TrustedToken
-
-    def authorizes(self, value: object) -> bool:
-        if value is not self.candidate:
-            return False
-        if type(self.source) is frozenset:
-            return True
-        return _trusted_set_contains_identity(
-            self.source,
-            self.candidate,
         )
 
 
@@ -350,7 +415,11 @@ def _database_expression_token(value: object) -> object | None:
     return None
 
 
-def _database_where_token(where: object) -> object | None:
+def _database_where_token(
+    where: object,
+    *,
+    screen_candidate_collections: bool,
+) -> object | None:
     """Tokenize an exact, flat WhereNode containing audited built-in lookups."""
     if type(where) is not WhereNode:
         return None
@@ -391,7 +460,23 @@ def _database_where_token(where: object) -> object | None:
         ):
             return None
         lhs_token = _database_expression_token(child_state.get("lhs"))
-        rhs_token = _trusted_database_state_token(child_state.get("rhs"))
+        rhs = child_state.get("rhs")
+        if type(child) is In:
+            if type(rhs) is not tuple and type(rhs) is not frozenset:
+                return None
+            immutable_rhs = cast(tuple[object, ...] | frozenset[object], rhs)
+            if screen_candidate_collections and any(
+                _trusted_candidate_token(item) is None for item in immutable_rhs
+            ):
+                return None
+            rhs_token: object | None = _ImmutableCollectionIdentity(
+                immutable_rhs,
+                id(immutable_rhs),
+                len(immutable_rhs),
+                type(immutable_rhs),
+            )
+        else:
+            rhs_token = _trusted_database_state_token(rhs)
         transforms = child_state.get("bilateral_transforms")
         if (
             lhs_token is None
@@ -418,18 +503,24 @@ def _database_where_token(where: object) -> object | None:
     )
 
 
-def _database_query_semantic_token(data: object) -> object | None:
+def _database_query_semantic_token(
+    data: object,
+    *,
+    screen_candidate_collections: bool = True,
+) -> object | None:
     """Fingerprint one exact canonical QuerySet/Query graph without hooks."""
     if type(data) is not QuerySet:
         return None
     data_state = object.__getattribute__(data, "__dict__")
-    if type(data_state) is not dict:
+    if type(data_state) is not dict or set(data_state) != _QUERYSET_STATE_NAMES:
         return None
     query = data_state.get("_query")
     if type(query) is not Query:
         return None
     query_state = object.__getattribute__(query, "__dict__")
-    if type(query_state) is not dict:
+    if type(query_state) is not dict or not set(query_state).issubset(
+        _QUERY_STATE_NAMES
+    ):
         return None
     model = query_state.get("model")
     model_token = _trusted_database_state_token(model)
@@ -439,11 +530,27 @@ def _database_query_semantic_token(data: object) -> object | None:
         type(model_token) is not tuple
         or not model_token
         or model_token[0] != "class"
+        or data_state["model"] is not model
         or (database_alias is not None and type(database_alias) is not str)
         or hints_token is None
+        or data_state["_result_cache"] is not None
+        or data_state["_sticky_filter"] is not False
+        or data_state["_for_write"] is not False
+        or type(data_state["_prefetch_related_lookups"]) is not tuple
+        or data_state["_prefetch_related_lookups"]
+        or data_state["_prefetch_done"] is not False
+        or type(data_state["_known_related_objects"]) is not dict
+        or data_state["_known_related_objects"]
+        or data_state["_iterable_class"] is not ModelIterable
+        or data_state["_fields"] is not None
+        or data_state["_defer_next_filter"] is not False
+        or data_state["_deferred_filter"] is not None
     ):
         return None
-    where_token = _database_where_token(query_state.get("where"))
+    where_token = _database_where_token(
+        query_state.get("where"),
+        screen_candidate_collections=screen_candidate_collections,
+    )
     if where_token is None:
         return None
 
@@ -492,6 +599,29 @@ def _database_query_semantic_token(data: object) -> object | None:
         if type(table_name) is not str or type(table_alias) is not str:
             return None
         alias_tokens.append((alias, table_name, table_alias))
+
+    alias_refcount_token = _trusted_database_state_token(
+        query_state.get("alias_refcount")
+    )
+    external_aliases_token = _trusted_database_state_token(
+        query_state.get("external_aliases")
+    )
+    table_map_token = _trusted_database_state_token(query_state.get("table_map"))
+    lookup_joins_token = _trusted_database_state_token(query_state.get("_lookup_joins"))
+    used_aliases = query_state.get("used_aliases")
+    filter_is_sticky = query_state.get("filter_is_sticky")
+    base_table = query_state.get("base_table")
+    if (
+        alias_refcount_token is None
+        or external_aliases_token is None
+        or table_map_token is None
+        or lookup_joins_token is None
+        or type(used_aliases) is not set
+        or used_aliases
+        or filter_is_sticky is not False
+        or (base_table is not None and type(base_table) is not str)
+    ):
+        return None
 
     low_mark = object.__getattribute__(query, "low_mark")
     high_mark = object.__getattribute__(query, "high_mark")
@@ -575,11 +705,18 @@ def _database_query_semantic_token(data: object) -> object | None:
         values_select,
         select_tokens,
         tuple(alias_tokens),
+        alias_refcount_token,
+        external_aliases_token,
+        table_map_token,
+        lookup_joins_token,
+        base_table,
     )
 
 
 def _database_source_live_state(
     source: DatabaseBucket[GeneralManager],
+    *,
+    screen_candidate_collections: bool = True,
 ) -> object | None:
     """Return hook-free state that is cheap to recheck for every candidate."""
     try:
@@ -602,7 +739,10 @@ def _database_source_live_state(
     ):
         return None
     data = source_state["_data"]
-    query_shape = _database_query_semantic_token(data)
+    query_shape = _database_query_semantic_token(
+        data,
+        screen_candidate_collections=screen_candidate_collections,
+    )
     filters = source_state["filters"]
     excludes = source_state["excludes"]
     search_date = source_state["_search_date"]
@@ -615,8 +755,14 @@ def _database_source_live_state(
     filters_token = _trusted_database_state_token(filters)
     excludes_token = _trusted_database_state_token(excludes)
     sort_keys_token = _trusted_database_state_token(sort_keys)
-    trusted_signature_token = _trusted_database_state_token(trusted_query_signature)
-    query_signature_cache_token = _trusted_database_state_token(query_signature_cache)
+    trusted_signature_token = _immutable_state_identity(
+        trusted_query_signature,
+        screen=screen_candidate_collections,
+    )
+    query_signature_cache_token = _immutable_state_identity(
+        query_signature_cache,
+        screen=screen_candidate_collections,
+    )
     if (
         query_shape is None
         or filters_token is None
@@ -754,7 +900,10 @@ class _DatabaseEnumerationEvidence:
         current_source_state = (
             _database_source_signature(self.provider)
             if check_source_signature
-            else _database_source_live_state(self.provider)
+            else _database_source_live_state(
+                self.provider,
+                screen_candidate_collections=False,
+            )
         )
         expected_source_state: object = (
             self.provider_signature
@@ -1196,31 +1345,6 @@ def _sequence_enumeration_witness(
     )
 
 
-def _set_enumeration_witness(
-    source: set[object] | frozenset[object],
-    candidate: object,
-    candidate_token: _TrustedToken,
-) -> _SetEnumerationWitness | None:
-    """Screen a set before building a hook-free scalar membership witness."""
-    if not _trusted_set_contains_identity(source, candidate):
-        return None
-    return _SetEnumerationWitness(source, candidate, candidate_token)
-
-
-def _trusted_set_contains_identity(
-    source: set[object] | frozenset[object],
-    candidate: object,
-) -> bool:
-    """Find one identical member while screening every source value as safe."""
-    contains_candidate = False
-    for member in source:
-        if _trusted_candidate_token(member) is None:
-            return False
-        if member is candidate:
-            contains_candidate = True
-    return contains_candidate
-
-
 def _numeric_range_enumeration_witness(
     source: NumericRangeDomain,
     candidate: object,
@@ -1298,12 +1422,6 @@ def _trusted_enumeration_evidence(
             candidate,
             candidate_token,
             source_index,
-        )
-    elif source_type is set or source_type is frozenset:
-        witness = _set_enumeration_witness(
-            cast(set[object] | frozenset[object], resolved_source),
-            candidate,
-            candidate_token,
         )
     elif source_type is NumericRangeDomain:
         witness = _numeric_range_enumeration_witness(

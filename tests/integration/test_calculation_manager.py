@@ -556,6 +556,38 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                 iterator.close()
                 self.assertEqual(len(queries), expected_queries)
 
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_deferred_database_filter_between_yields_falls_back(self):
+        employees = [
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+            for name in ("Alice", "Bob")
+        ]
+        source = self.Employee.all().sort("name")
+
+        class DeferredFilterMutationCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=source)
+
+        bucket = CalculationBucket(DeferredFilterMutationCalculation)
+        bucket._materialize_combinations(expose=False)
+        iterator = iter(bucket)
+        next(iterator)
+        source._data._deferred_filter = (
+            False,
+            (),
+            {"pk": employees[0].identification["id"]},
+        )
+
+        with CaptureQueriesContext(connection) as queries:
+            with self.assertRaises(InvalidInputValueError):
+                next(iterator)
+        iterator.close()
+        self.assertGreater(len(queries), 0)
+
     def test_custom_queryset_query_and_where_are_rejected_without_hooks(self):
         source = self.Employee.all()
         canonical_queryset = source._data

@@ -20,6 +20,7 @@ from pytest_django.plugin import DjangoDbBlocker
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.bucket.calculation_bucket import _database_source_signature
+from general_manager.bucket.calculation_bucket import _trusted_candidate_token
 from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import (
@@ -441,6 +442,7 @@ def test_database_manager_input_enumeration_work(
 ) -> None:
     included_primary_keys = perf_user_primary_keys[:size]
     queryset = User.objects.filter(pk__in=included_primary_keys).order_by("pk")
+    queryset.query.where.children[0].rhs = tuple(included_primary_keys)
     source = DatabaseBucket(
         cast(models.QuerySet[models.Model], queryset),
         PerfUserManager,
@@ -455,6 +457,10 @@ def test_database_manager_input_enumeration_work(
             "general_manager.bucket.calculation_bucket._database_source_signature",
             wraps=_database_source_signature,
         ) as compiled_signatures,
+        patch(
+            "general_manager.bucket.calculation_bucket._trusted_candidate_token",
+            wraps=_trusted_candidate_token,
+        ) as semantic_token_work,
         override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
         CaptureQueriesContext(connection) as captured_queries,
     ):
@@ -466,6 +472,7 @@ def test_database_manager_input_enumeration_work(
     ] == list(included_primary_keys)
     assert len(captured_queries) == 2
     assert compiled_signatures.call_count == 2
+    assert semantic_token_work.call_count <= 65 * size + 100
     prefix = f"CALC_ENUM_MANAGER_{size}"
     perf_budgets.assert_observation(f"{prefix}_QUERIES", len(captured_queries))
     perf_budgets.assert_observation(f"{prefix}_MANAGERS", len(managers))
