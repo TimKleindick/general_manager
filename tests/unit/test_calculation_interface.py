@@ -1,5 +1,6 @@
 import gc
 import inspect
+import threading
 from types import FunctionType
 from typing import ClassVar
 from unittest.mock import patch
@@ -240,13 +241,19 @@ class TestCalculationInterface(TestCase):
             for cell in accessor.__closure__
             if type(cell.cell_contents) is FunctionType
         )
+        resolver = next(
+            cell.cell_contents
+            for cell in resolver.__closure__
+            if type(cell.cell_contents) is FunctionType
+        )
 
         def make_replacement():
             first = None
             second = None
+            third = None
 
             def replacement(interface, field_name):
-                if first is second:
+                if first is second is third:
                     return interface
                 return field_name
 
@@ -270,6 +277,11 @@ class TestCalculationInterface(TestCase):
             for cell in accessor.__closure__
             if type(cell.cell_contents) is FunctionType
         )
+        resolver = next(
+            cell.cell_contents
+            for cell in resolver.__closure__
+            if type(cell.cell_contents) is FunctionType
+        )
         interface_cell = next(
             cell
             for cell in resolver.__closure__
@@ -290,8 +302,13 @@ class TestCalculationInterface(TestCase):
             for cell in accessor.__closure__
             if type(cell.cell_contents) is FunctionType
         )
+        core_resolver = next(
+            cell.cell_contents
+            for cell in resolver.__closure__
+            if type(cell.cell_contents) is FunctionType
+        )
         recursive_cell = next(
-            cell for cell in resolver.__closure__ if cell.cell_contents is resolver
+            cell for cell in core_resolver.__closure__ if cell.cell_contents is resolver
         )
         recursive_cell.cell_contents = lambda interface, field_name: (
             interface,
@@ -852,6 +869,139 @@ class TestCalculationInterface(TestCase):
 
         self.assertIsNot(resolved, original)
         self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_replaced_live_outer_identification_recasts_current_value(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("old-id")
+        manager = HydratedCalculation(original)
+        manager.identification["related"] = {"id": "new-id"}
+
+        resolved = manager.related
+
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "new-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_live_interface_dispatch_change_uses_virtual_fallback(self):
+        dispatch_calls = []
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("old-id")
+        manager = HydratedCalculation(original)
+        interface_class = type(manager._interface)
+
+        def custom_getattribute(interface, name):
+            if name in {"_resolved_input_values", "identification"}:
+                dispatch_calls.append(name)
+            if name == "identification":
+                return {"related": {"id": "alternate-id"}}
+            return object.__getattribute__(interface, name)
+
+        type.__setattr__(interface_class, "__getattribute__", custom_getattribute)
+        try:
+            resolved = manager.related
+        finally:
+            type.__delattr__(interface_class, "__getattribute__")
+
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "alternate-id"})
+        self.assertEqual(
+            dispatch_calls,
+            ["_resolved_input_values", "identification"],
+        )
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_concurrent_stale_seed_recast_publishes_one_wrapper(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        original._invalidate_manager_state("stale")
+        accessor = HydratedCalculation._attributes["related"]
+        outer_input = HydratedCalculation.Interface.input_fields["related"]
+        original_cast = Input.cast
+        cast_count = 0
+        count_lock = threading.Lock()
+        first_cast_started = threading.Event()
+        second_cast_started = threading.Event()
+        release_cast = threading.Event()
+        second_worker_entered = threading.Event()
+        results = []
+
+        def blocking_cast(
+            input_field,
+            value,
+            identification=None,
+            *,
+            cache_context=None,
+        ):
+            nonlocal cast_count
+            if input_field is outer_input:
+                with count_lock:
+                    cast_count += 1
+                    current_count = cast_count
+                first_cast_started.set()
+                if current_count > 1:
+                    second_cast_started.set()
+                self.assertTrue(release_cast.wait(5))
+            return original_cast(
+                input_field,
+                value,
+                identification,
+                cache_context=cache_context,
+            )
+
+        def resolve(*, second=False):
+            if second:
+                second_worker_entered.set()
+            results.append(accessor(manager._interface))
+
+        with patch.object(Input, "cast", blocking_cast):
+            first_thread = threading.Thread(target=resolve)
+            second_thread = threading.Thread(
+                target=resolve,
+                kwargs={"second": True},
+            )
+            first_thread.start()
+            self.assertTrue(first_cast_started.wait(5))
+            second_thread.start()
+            self.assertTrue(second_worker_entered.wait(5))
+            second_started_before_release = second_cast_started.wait(0.2)
+            release_cast.set()
+            first_thread.join(5)
+            second_thread.join(5)
+
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        self.assertFalse(second_started_before_release)
+        self.assertEqual(cast_count, 1)
+        self.assertEqual(len(results), 2)
+        self.assertIs(results[0], results[1])
+        self.assertIsNot(results[0], original)
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_in_place_seeded_identification_mutation_reuses_aligned_manager(self):

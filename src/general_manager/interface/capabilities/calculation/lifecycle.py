@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from threading import RLock
 from types import CellType, CodeType, FunctionType, MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, ContextManager, cast
 from weakref import WeakKeyDictionary
 
 from general_manager.bucket.calculation_bucket import CalculationBucket
@@ -19,11 +19,14 @@ from general_manager.interface.base_interface import (
     _MANAGER_INPUT_SEED_PLAN_NAME,
     _SEEDED_INPUT_VALUES_CACHE_NAME,
     _SeededFieldOrigin,
+    _SeededInterfaceOrigin,
     _STATIC_ATTRIBUTE_MISSING,
     _GENERAL_MANAGER_PROVENANCE,
     _canonical_manager_class_state,
+    _calculation_interface_seed_provenance,
     _calculation_manager_input_seed_plan,
     _dict_has_identity_keys,
+    _discard_seeded_interface_origin,
     _mro_state_access_is_canonical,
     _mapping_value_by_identity,
     _matches_static_dispatch,
@@ -118,6 +121,60 @@ def _seeded_interface_surrounding_state_safe(
     )
 
 
+def _seeded_interface_dispatch_is_canonical(
+    interface_instance: "CalculationInterface",
+) -> bool:
+    """Revalidate every interface dispatch owner captured before seeding."""
+    base_provenance = _INTERFACE_BASE_PROVENANCE
+    calculation_provenance = _calculation_interface_seed_provenance()
+    if base_provenance is None or calculation_provenance is None:
+        return False
+    canonical_base, base_dispatch = base_provenance
+    (
+        calculation_interface,
+        canonical_metaclass,
+        calculation_dispatch,
+        metaclass_dispatch,
+    ) = calculation_provenance
+    interface_class = type(interface_instance)
+    if type(interface_class) is not canonical_metaclass:
+        return False
+    mro = type.__getattribute__(interface_class, "__mro__")
+    return (
+        type(mro) is tuple
+        and any(candidate is calculation_interface for candidate in mro)
+        and _matches_static_dispatch(canonical_base, base_dispatch)
+        and _matches_static_dispatch(
+            calculation_interface,
+            calculation_dispatch,
+        )
+        and _matches_static_dispatch(canonical_metaclass, metaclass_dispatch)
+        and _matches_static_dispatch(interface_class, calculation_dispatch)
+    )
+
+
+def _live_seeded_raw_value(
+    interface_instance: "CalculationInterface",
+    field_name: str,
+) -> tuple[bool, object]:
+    """Read current canonical identification state without virtual dispatch."""
+    if not _seeded_interface_surrounding_state_safe(interface_instance):
+        return False, _MISSING_INTERFACE_STATE
+    state = object.__getattribute__(interface_instance, _INSTANCE_DICT_NAME)
+    identification = _mapping_value_by_identity(
+        state,
+        "identification",
+        _MISSING_INTERFACE_STATE,
+    )
+    if not _exact_string_dict(identification):
+        return False, _MISSING_INTERFACE_STATE
+    return True, _mapping_value_by_identity(
+        cast(dict[str, object], identification),
+        field_name,
+        _MISSING_INTERFACE_STATE,
+    )
+
+
 def _replace_live_resolved_cache_if_safe(
     interface_instance: "CalculationInterface",
     resolved_values: dict[str, object],
@@ -186,6 +243,17 @@ def _transition_mirror_field_to_lazy_if_safe(
         lazy_fields = set()
         dict.__setitem__(state, _LAZY_INPUT_VALUES_CACHE_NAME, lazy_fields)
     set.add(lazy_fields, field_name)
+
+
+def _transition_origin_to_virtual_fallback(
+    interface_instance: "CalculationInterface",
+    origin: _SeededInterfaceOrigin,
+) -> None:
+    """Release all external seeds before honoring changed virtual dispatch."""
+    resolved_values: dict[str, object] = {}
+    origin.resolved_values = resolved_values
+    _replace_live_resolved_cache_if_safe(interface_instance, resolved_values)
+    _discard_seeded_interface_origin(interface_instance, origin)
 
 
 def _post_seeded_manager_state_is_safe(
@@ -631,8 +699,33 @@ class CalculationReadCapability(BaseCapability):
             field_name: str,
         ) -> object:
             origin = _seeded_interface_origin(interface_instance)
+            if origin is None:
+                return _resolve_input_value_locked(
+                    interface_instance,
+                    field_name,
+                    None,
+                )
+            with cast(ContextManager[None], origin.lock):
+                if _seeded_interface_origin(interface_instance) is not origin:
+                    return _resolve_input_value_locked(
+                        interface_instance,
+                        field_name,
+                        None,
+                    )
+                return _resolve_input_value_locked(
+                    interface_instance,
+                    field_name,
+                    origin,
+                )
+
+        def _resolve_input_value_locked(
+            interface_instance: "CalculationInterface",
+            field_name: str,
+            origin: _SeededInterfaceOrigin | None,
+        ) -> object:
             field_origin: _SeededFieldOrigin | None = None
-            identification: dict[str, object] | None = None
+            live_raw_available = False
+            live_raw_value: object = _MISSING_INTERFACE_STATE
             surrounding_state_safe = False
             if origin is None:
                 try:
@@ -641,6 +734,16 @@ class CalculationReadCapability(BaseCapability):
                     resolved_values = {}
                     interface_instance._resolved_input_values = resolved_values
             else:
+                if not _seeded_interface_dispatch_is_canonical(interface_instance):
+                    _transition_origin_to_virtual_fallback(
+                        interface_instance,
+                        origin,
+                    )
+                    return _resolve_input_value_locked(
+                        interface_instance,
+                        field_name,
+                        None,
+                    )
                 if _exact_string_dict(origin.fields):
                     field_origin_value = _mapping_value_by_identity(
                         origin.fields,
@@ -649,7 +752,6 @@ class CalculationReadCapability(BaseCapability):
                     )
                     if type(field_origin_value) is _SeededFieldOrigin:
                         field_origin = field_origin_value
-                        identification = field_origin.formatted_identification
                 if _exact_string_dict(origin.resolved_values):
                     resolved_values = origin.resolved_values
                 else:
@@ -663,6 +765,11 @@ class CalculationReadCapability(BaseCapability):
                     field_origin is not None
                     and _seeded_interface_surrounding_state_safe(interface_instance)
                 )
+                if field_origin is not None:
+                    live_raw_available, live_raw_value = _live_seeded_raw_value(
+                        interface_instance,
+                        field_name,
+                    )
 
             input_field = interface_cls.input_fields[field_name]
             cached_value = dict.get(
@@ -683,6 +790,8 @@ class CalculationReadCapability(BaseCapability):
                     and field_origin.manager_ref is not None
                     and field_origin.manager_ref() is cached_value
                     and surrounding_state_safe
+                    and live_raw_available
+                    and live_raw_value is field_origin.formatted_identification
                     and _cached_manager_matches_formatted_identification(
                         parent_class,
                         field_name,
@@ -718,15 +827,19 @@ class CalculationReadCapability(BaseCapability):
             }
             cache_context: tuple[type[object], str] | None
             raw_value: object
-            if identification is None:
+            if origin is None or field_origin is None:
                 identification = interface_instance.identification
                 raw_value = identification.get(field_name)
                 cache_context = (interface_cls._parent_class, field_name)
             else:
-                if field_origin is not None:
-                    raw_value = field_origin.formatted_identification
+                if live_raw_available:
+                    raw_value = (
+                        None
+                        if live_raw_value is _MISSING_INTERFACE_STATE
+                        else live_raw_value
+                    )
                 else:
-                    raw_value = identification.get(field_name)
+                    raw_value = field_origin.formatted_identification
                 parent_class = _static_class_value(interface_cls, "_parent_class")
                 cache_context = (
                     (cast(type[object], parent_class), field_name)

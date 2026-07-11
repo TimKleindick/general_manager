@@ -5,7 +5,7 @@ from abc import ABC
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import inspect
 from threading import RLock
 from types import CellType, CodeType, FunctionType, MappingProxyType
@@ -155,6 +155,7 @@ class _SeededInterfaceOrigin:
     interface_ref: ReferenceType[object]
     resolved_values: dict[str, object]
     fields: dict[str, _SeededFieldOrigin]
+    lock: object = field(default_factory=RLock)
 
 
 _SEEDED_INTERFACE_ORIGINS: dict[int, _SeededInterfaceOrigin] = {}
@@ -217,6 +218,17 @@ def _seeded_interface_origin(interface: object) -> _SeededInterfaceOrigin | None
         if origin is None or origin.interface_ref() is not interface:
             return None
         return origin
+
+
+def _discard_seeded_interface_origin(
+    interface: object,
+    origin: _SeededInterfaceOrigin,
+) -> None:
+    """Discard an exact origin without allowing an id-reused replacement."""
+    with _SEEDED_INTERFACE_ORIGINS_LOCK:
+        current = _SEEDED_INTERFACE_ORIGINS.get(id(interface))
+        if current is origin and current.interface_ref() is interface:
+            _SEEDED_INTERFACE_ORIGINS.pop(id(interface), None)
 
 
 def _seeded_interface_origin_by_id(
@@ -459,6 +471,14 @@ def _register_calculation_interface_seed_provenance(
                 ("__call__", "__getattribute__", "__getattr__", "__setattr__"),
             ),
         )
+
+
+def _calculation_interface_seed_provenance() -> (
+    tuple[type[object], type[object], _StaticDispatchSnapshot, _StaticDispatchSnapshot]
+    | None
+):
+    """Return live provenance after calculation-interface module startup."""
+    return _CALCULATION_INTERFACE_PROVENANCE
 
 
 def _register_calculation_capability_seed_provenance(
