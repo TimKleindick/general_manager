@@ -11,6 +11,7 @@ from general_manager.cache.dependency_publish import (
     PendingDependencyCachePublication,
 )
 from general_manager.cache.run_context import (
+    CALCULATION_BUCKET_RESULT_MISSING,
     CalculationRunContext,
     current_calculation_run_context,
     ensure_calculation_run_context,
@@ -143,6 +144,50 @@ def test_get_or_set_hit_uses_single_mapping_lookup() -> None:
         assert ctx.get_or_set(key, lambda: 99) == 42
 
     assert key.hash_calls == 1
+
+
+def test_calculation_result_cache_distinguishes_empty_entry_from_missing() -> None:
+    signature = ("calculation", "empty")
+    dependencies = {("Project", "identification", "42")}
+
+    with CalculationRunContext() as context:
+        assert context.get_calculation_bucket_result(signature) is (
+            CALCULATION_BUCKET_RESULT_MISSING
+        )
+        context.set_calculation_bucket_result(signature, (), dependencies)
+
+        entry = context.get_calculation_bucket_result(signature)
+        assert entry is not CALCULATION_BUCKET_RESULT_MISSING
+        assert entry.snapshots == ()
+        assert entry.dependencies == frozenset(dependencies)
+
+
+def test_calculation_result_cache_hit_replays_dependencies() -> None:
+    signature = ("calculation", "dependency")
+    dependency = ("Project", "identification", "42")
+
+    with CalculationRunContext() as context:
+        context.set_calculation_bucket_result(signature, (("snapshot",),), {dependency})
+        with DependencyTracker() as tracked:
+            entry = context.get_calculation_bucket_result(signature)
+        assert entry.snapshots == (("snapshot",),)
+        assert tracked == {dependency}
+
+
+def test_clear_calculation_result_cache_preserves_other_namespaces() -> None:
+    with CalculationRunContext() as context:
+        context.set_calculation_bucket_result(("one",), (), ())
+        context.set_orm_bucket_result(("orm",), "keep")
+        context.set(("unrelated",), "keep")
+
+        context.clear_calculation_bucket_results()
+
+        assert (
+            context.get_calculation_bucket_result(("one",))
+            is CALCULATION_BUCKET_RESULT_MISSING
+        )
+        assert context.get_orm_bucket_result(("orm",)) == "keep"
+        assert context.get(("unrelated",)) == "keep"
 
 
 def test_get_or_set_does_not_cache_failed_loader() -> None:

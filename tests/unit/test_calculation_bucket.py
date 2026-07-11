@@ -9,7 +9,13 @@ from general_manager.bucket.calculation_bucket import (
     MissingCalculationMatchError,
     MultipleCalculationMatchError,
 )
-from general_manager.cache.run_context import current_calculation_run_context
+from general_manager.cache.run_context import (
+    CALCULATION_BUCKET_RESULT_MISSING,
+    CalculationRunContext,
+    current_calculation_run_context,
+)
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.api.property import graph_ql_property
 from general_manager.interface import CalculationInterface
 from general_manager.manager.input import DateRangeDomain, Input
 from general_manager.manager import GeneralManager
@@ -2071,6 +2077,159 @@ class TestCalculationTerminalStreams(TestCase):
         self.assertIsNotNone(last)
         self.assertEqual(last.identification, {"value": 2})
         self.assertEqual(bucket._data, [{"value": 0}, {"value": 1}, {"value": 2}])
+
+    def test_equivalent_buckets_reuse_run_result_with_fresh_data(self) -> None:
+        first = self._make_scalar_bucket((0, 1, 2))
+        second = CalculationBucket(first._manager_class)
+        signature = first._calculation_result_cache_signature()
+        self.assertIsNotNone(signature)
+        with CalculationRunContext() as context:
+            first_result = first.generate_combinations()
+            self.assertIsNot(
+                context.get_calculation_bucket_result(signature),
+                CALCULATION_BUCKET_RESULT_MISSING,
+            )
+            second_result = second.generate_combinations()
+
+        self.assertEqual(second_result, first_result)
+        self.assertIsNot(second_result, first_result)
+        second_result[0]["value"] = 99
+        self.assertEqual(first_result[0]["value"], 0)
+
+    def test_calculation_result_cache_is_scoped_to_one_run(self) -> None:
+        first = self._make_scalar_bucket((0, 1))
+        second = CalculationBucket(first._manager_class)
+        original = CalculationBucket._generate_input_combinations
+        calls = 0
+
+        def wrapped(
+            bucket: CalculationBucket,
+            *args: object,
+            **kwargs: object,
+        ) -> list[dict[str, object]]:
+            nonlocal calls
+            calls += 1
+            return original(bucket, *args, **kwargs)
+
+        with patch.object(CalculationBucket, "_generate_input_combinations", wrapped):
+            with CalculationRunContext():
+                first.generate_combinations()
+                second.generate_combinations()
+            self.assertEqual(calls, 1)
+            third = CalculationBucket(first._manager_class)
+            with CalculationRunContext():
+                third.generate_combinations()
+            self.assertEqual(calls, 2)
+
+    def test_unsafe_mutable_source_bypasses_result_cache(self) -> None:
+        values = [0, 1]
+
+        class MutableCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=values)
+
+        GeneralManagerMeta.ensure_attributes_initialized(MutableCalculation)
+        first = CalculationBucket(MutableCalculation)
+        second = CalculationBucket(MutableCalculation)
+        self.assertIsNone(first._calculation_result_cache_signature())
+        with CalculationRunContext():
+            first.generate_combinations()
+            second.generate_combinations()
+        self.assertEqual(first.generate_combinations(), second.generate_combinations())
+
+    def test_cache_hits_clone_nested_result_containers(self) -> None:
+        class NestedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(dict, possible_values=({"nested": [1]},))
+
+        GeneralManagerMeta.ensure_attributes_initialized(NestedCalculation)
+        first = CalculationBucket(NestedCalculation)
+        second = CalculationBucket(NestedCalculation)
+        with CalculationRunContext():
+            first.generate_combinations()
+            second.generate_combinations()
+
+        second._data[0]["value"]["nested"].append(2)
+        self.assertEqual(first._data, [{"value": {"nested": [1]}}])
+
+    def test_validator_and_normalizer_inputs_bypass_result_cache(self) -> None:
+        class ValidatedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(
+                    int,
+                    possible_values=(0, 1),
+                    validator=lambda value: value >= 0,
+                )
+
+        class NormalizedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(
+                    int,
+                    possible_values=(0, 1),
+                    normalizer=lambda value: value,
+                )
+
+        GeneralManagerMeta.ensure_attributes_initialized(ValidatedCalculation)
+        GeneralManagerMeta.ensure_attributes_initialized(NormalizedCalculation)
+        self.assertIsNone(
+            CalculationBucket(
+                ValidatedCalculation
+            )._calculation_result_cache_signature()
+        )
+        self.assertIsNone(
+            CalculationBucket(
+                NormalizedCalculation
+            )._calculation_result_cache_signature()
+        )
+
+    def test_callable_provider_reuses_result_without_reinvoking_provider(self) -> None:
+        calls = 0
+
+        def provider() -> tuple[int, ...]:
+            nonlocal calls
+            calls += 1
+            return (0, 1)
+
+        class ProviderCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=provider)
+
+        GeneralManagerMeta.ensure_attributes_initialized(ProviderCalculation)
+        first = CalculationBucket(ProviderCalculation)
+        second = CalculationBucket(ProviderCalculation)
+        self.assertIsNotNone(first._calculation_result_cache_signature())
+        with CalculationRunContext():
+            first.generate_combinations()
+            second.generate_combinations()
+        self.assertEqual(calls, 1)
+
+    def test_property_filtered_cache_hit_replays_dependencies(self) -> None:
+        property_calls = 0
+
+        class PropertyCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
+            @graph_ql_property(filterable=True)
+            def selected(self) -> bool:
+                nonlocal property_calls
+                property_calls += 1
+                return self.value == 1
+
+        GeneralManagerMeta.ensure_attributes_initialized(PropertyCalculation)
+        first = CalculationBucket(PropertyCalculation, {"selected": True})
+        second = CalculationBucket(PropertyCalculation, {"selected": True})
+        with CalculationRunContext():
+            with DependencyTracker() as tracked:
+                first.generate_combinations()
+            first_property_calls = property_calls
+            with DependencyTracker() as replayed:
+                second.generate_combinations()
+
+        self.assertEqual(first._data, [{"value": 1}])
+        self.assertEqual(second._data, [{"value": 1}])
+        self.assertEqual(property_calls, first_property_calls)
+        self.assertEqual(replayed, tracked)
 
     def test_terminal_stream_owns_one_run_context_and_cleans_evidence(self) -> None:
         bucket = self._make_scalar_bucket(range(2))

@@ -14,6 +14,7 @@ from general_manager.bucket import calculation_bucket as calculation_bucket_modu
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.interfaces.calculation import CalculationInterface
+from general_manager.api.property import graph_ql_property
 from general_manager.interface import base_interface as base_interface_module
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
@@ -960,3 +961,138 @@ def test_scalar_terminal_tuple_admission_validation_is_measured(
         inspected_values.value,
     )
     assert inspected_values.value == size
+
+
+@pytest.mark.parametrize("size", [100, 1_000, 10_000])
+def test_calculation_result_cache_scaling_and_fallback(
+    perf_budgets: PerfBudgets,
+    size: int,
+) -> None:
+    """Measure admitted equivalent plans and unchanged custom-source fallback."""
+    provider_calls = Counter()
+    property_calls = Counter()
+
+    def provider() -> tuple[int, ...]:
+        provider_calls.increment()
+        return tuple(range(size))
+
+    class CachedCalculation(GeneralManager):
+        class Interface(CalculationInterface):
+            value = Input(int, possible_values=provider)
+
+        @graph_ql_property(sortable=True)
+        def score(self) -> int:
+            property_calls.increment()
+            return self.value
+
+    GeneralManagerMeta.ensure_attributes_initialized(CachedCalculation)
+    constructor_code = GeneralManager.__dict__["__init__"].__code__
+    first_bucket = CalculationBucket(CachedCalculation, sort_key="score")
+    second_bucket = CalculationBucket(CachedCalculation, sort_key="score")
+    with (
+        CalculationRunContext(),
+        count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is CachedCalculation,
+        ) as constructors,
+    ):
+        first = first_bucket.generate_combinations()
+        first_observations = (
+            provider_calls.value,
+            constructors.value,
+            property_calls.value,
+        )
+        provider_calls.reset()
+        constructors.reset()
+        property_calls.reset()
+        second = second_bucket.generate_combinations()
+        second_observations = (
+            provider_calls.value,
+            constructors.value,
+            property_calls.value,
+        )
+
+    third_bucket = CalculationBucket(CachedCalculation, sort_key="score")
+    provider_calls.reset()
+    constructors.reset()
+    property_calls.reset()
+    with (
+        CalculationRunContext(),
+        count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is CachedCalculation,
+        ) as second_run_constructors,
+    ):
+        third = third_bucket.generate_combinations()
+    second_run_observations = (
+        provider_calls.value,
+        second_run_constructors.value,
+        property_calls.value,
+    )
+
+    fallback_source = Counter()
+
+    class CustomValues:
+        def __iter__(self):
+            for value in range(size):
+                fallback_source.increment()
+                yield value
+
+    fallback_manager, _input_field = _make_default_calculation_manager(
+        f"CalculationResultFallback{size}Manager",
+        "value",
+        Input(int, possible_values=CustomValues()),
+    )
+    fallback_first = CalculationBucket(fallback_manager, sort_key="value")
+    fallback_second = CalculationBucket(fallback_manager, sort_key="value")
+    with count_profiled_calls(
+        constructor_code,
+        lambda self: self.__class__ is fallback_manager,
+    ) as fallback_constructors:
+        fallback_first.generate_combinations()
+        fallback_second.generate_combinations()
+
+    assert first == second == third
+    assert len(first) == size
+    assert first_observations == (1, size, size)
+    assert second_observations == (0, 0, 0)
+    assert second_run_observations == (1, size, size)
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_FIRST_PROVIDER_CALLS", first_observations[0]
+    )
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_FIRST_CONSTRUCTORS", first_observations[1]
+    )
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_FIRST_PROPERTY_CALLS", first_observations[2]
+    )
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_HIT_PROVIDER_CALLS", second_observations[0]
+    )
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_HIT_CONSTRUCTORS", second_observations[1]
+    )
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_HIT_PROPERTY_CALLS", second_observations[2]
+    )
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_SECOND_RUN_PROVIDER_CALLS",
+        second_run_observations[0],
+    )
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_SECOND_RUN_CONSTRUCTORS", second_run_observations[1]
+    )
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_SECOND_RUN_PROPERTY_CALLS",
+        second_run_observations[2],
+    )
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_FALLBACK_SOURCE_YIELDS",
+        fallback_source.value,
+    )
+    perf_budgets.assert_observation(
+        f"CALC_RESULT_CACHE_{size}_FALLBACK_CONSTRUCTORS",
+        fallback_constructors.value,
+    )
+    assert fallback_source.value == size * 2
+    assert fallback_constructors.value == 0

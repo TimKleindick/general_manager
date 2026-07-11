@@ -34,11 +34,13 @@ ORM_MODEL_RELATION_PREFETCH_PREFIX = "orm_model_relation_prefetch"
 ORM_RELATION_MANAGER_PREFIX = "orm_relation_manager"
 ORM_QUERY_BUCKET_PREFIX = "orm_query_bucket"
 ORM_BUCKET_EXISTS_PREFIX = "orm_bucket_exists"
+CALCULATION_BUCKET_RESULT_PREFIX = "calculation_bucket_result"
 BUCKET_INDEX_PREFIX = "bucket_index"
 TRUSTED_ORM_MANAGER_PREFIX = "trusted_orm_manager"
 DEFAULT_DEPENDENCY_CACHE_PUBLISH_BATCH_SIZE = 1000
 logger = get_logger("cache.run_context")
 OrmModelRowKey = tuple[Hashable, Hashable | None]
+CALCULATION_BUCKET_RESULT_MISSING = object()
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,14 @@ class OrmBucketManagersRunCacheEntry:
     """Run-cache payload for cached ORM managers plus dependencies to replay."""
 
     value: object
+    dependencies: frozenset["Dependency"]
+
+
+@dataclass(frozen=True)
+class CalculationBucketResultRunCacheEntry:
+    """Immutable run-cache payload for one calculation bucket result."""
+
+    snapshots: tuple[object, ...]
     dependencies: frozenset["Dependency"]
 
 
@@ -509,6 +519,46 @@ class CalculationRunContext:
         self.discard_prefix((ORM_RELATION_MANAGER_PREFIX,))
         self.discard_prefix((ORM_QUERY_BUCKET_PREFIX,))
         self.discard_prefix((ORM_BUCKET_EXISTS_PREFIX,))
+
+    def get_calculation_bucket_result(
+        self,
+        signature: Hashable,
+    ) -> CalculationBucketResultRunCacheEntry | object:
+        """Return a calculation result entry and replay its dependencies.
+
+        ``CALCULATION_BUCKET_RESULT_MISSING`` is returned for an absent entry;
+        an entry with an empty ``snapshots`` tuple is therefore an ordinary hit.
+        """
+        entry = self.get(
+            (CALCULATION_BUCKET_RESULT_PREFIX, signature),
+            CALCULATION_BUCKET_RESULT_MISSING,
+        )
+        if not isinstance(entry, CalculationBucketResultRunCacheEntry):
+            return CALCULATION_BUCKET_RESULT_MISSING
+
+        from general_manager.cache.cache_tracker import DependencyTracker
+
+        DependencyTracker._track_many_validated(entry.dependencies)
+        return entry
+
+    def set_calculation_bucket_result(
+        self,
+        signature: Hashable,
+        snapshots: Iterable[object],
+        dependencies: Iterable["Dependency"],
+    ) -> None:
+        """Store an immutable result snapshot and captured dependencies."""
+        self.set(
+            (CALCULATION_BUCKET_RESULT_PREFIX, signature),
+            CalculationBucketResultRunCacheEntry(
+                snapshots=tuple(snapshots),
+                dependencies=frozenset(dependencies),
+            ),
+        )
+
+    def clear_calculation_bucket_results(self) -> None:
+        """Discard all run-scoped calculation bucket result entries."""
+        self.discard_prefix((CALCULATION_BUCKET_RESULT_PREFIX,))
 
     def _bucket_index_cache_key(
         self,

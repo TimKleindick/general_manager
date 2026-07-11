@@ -84,6 +84,7 @@ _INPUT_STATE_NAMES = frozenset(
     }
 )
 _TERMINAL_SCALAR_TYPES = (type(None), bool, int, float, str)
+_CALCULATION_RESULT_UNSUPPORTED = object()
 _TERMINAL_MANAGER_STATE_NAMES = (
     "_interface",
     "_GeneralManager__id",
@@ -1230,6 +1231,151 @@ def _terminal_scalar_source_supported(source: object) -> bool:
 def _terminal_scalar_type_supported(value_type: object) -> bool:
     """Compare admitted input types by identity without invoking custom equality."""
     return any(value_type is scalar_type for scalar_type in _TERMINAL_SCALAR_TYPES)
+
+
+def _calculation_cache_freeze(value: object) -> object:
+    """Return a conservative immutable token for cache-plan metadata.
+
+    Only exact built-in containers and scalar values are traversed.  This is
+    deliberately stricter than :func:`freeze_bucket_index_value`: framework
+    objects and user-defined equality/hash implementations must never
+    participate in a calculation-result cache key.
+    """
+    value_type = type(value)
+    if value is None:
+        return ("none",)
+    if value_type is bool:
+        return ("bool", value)
+    if value_type is int:
+        return ("int", value)
+    if value_type is float:
+        return ("float", struct.pack("!d", value))
+    if value_type is str:
+        return ("str", value)
+    if value_type is bytes:
+        return ("bytes", value)
+    if value_type is tuple:
+        frozen_items: list[object] = []
+        for item in cast(tuple[object, ...], value):
+            frozen_item = _calculation_cache_freeze(item)
+            if frozen_item is _CALCULATION_RESULT_UNSUPPORTED:
+                return _CALCULATION_RESULT_UNSUPPORTED
+            frozen_items.append(frozen_item)
+        return ("tuple", tuple(frozen_items))
+    if value_type is list:
+        frozen_items = []
+        for item in cast(list[object], value):
+            frozen_item = _calculation_cache_freeze(item)
+            if frozen_item is _CALCULATION_RESULT_UNSUPPORTED:
+                return _CALCULATION_RESULT_UNSUPPORTED
+            frozen_items.append(frozen_item)
+        return ("list", tuple(frozen_items))
+    if value_type is frozenset:
+        frozen_items = []
+        for item in cast(frozenset[object], value):
+            frozen_item = _calculation_cache_freeze(item)
+            if frozen_item is _CALCULATION_RESULT_UNSUPPORTED:
+                return _CALCULATION_RESULT_UNSUPPORTED
+            frozen_items.append(frozen_item)
+        try:
+            return ("frozenset", frozenset(frozen_items))
+        except TypeError:
+            return _CALCULATION_RESULT_UNSUPPORTED
+    if value_type is dict:
+        dict_items: list[tuple[object, object]] = []
+        for key, item in cast(dict[object, object], value).items():
+            frozen_key = _calculation_cache_freeze(key)
+            frozen_item = _calculation_cache_freeze(item)
+            if (
+                frozen_key is _CALCULATION_RESULT_UNSUPPORTED
+                or frozen_item is _CALCULATION_RESULT_UNSUPPORTED
+            ):
+                return _CALCULATION_RESULT_UNSUPPORTED
+            dict_items.append((frozen_key, frozen_item))
+        return ("dict", tuple(dict_items))
+    return _CALCULATION_RESULT_UNSUPPORTED
+
+
+def _calculation_cache_snapshot(value: object) -> object:
+    """Return an immutable, cloneable snapshot of a result value."""
+    return _calculation_cache_freeze(value)
+
+
+def _calculation_cache_clone(snapshot: object) -> object:
+    """Rebuild mutable result containers from a cache snapshot."""
+    if not isinstance(snapshot, tuple) or not snapshot:
+        raise TypeError
+    kind = snapshot[0]
+    if kind == "none":
+        return None
+    if kind in {"bool", "int", "str", "bytes"}:
+        return snapshot[1]
+    if kind == "float":
+        return struct.unpack("!d", cast(bytes, snapshot[1]))[0]
+    if kind == "tuple":
+        return tuple(_calculation_cache_clone(item) for item in snapshot[1])
+    if kind == "list":
+        return [_calculation_cache_clone(item) for item in snapshot[1]]
+    if kind == "frozenset":
+        return frozenset(_calculation_cache_clone(item) for item in snapshot[1])
+    if kind == "dict":
+        return {
+            _calculation_cache_clone(key): _calculation_cache_clone(item)
+            for key, item in snapshot[1]
+        }
+    raise TypeError
+
+
+def _calculation_cache_callable_token(value: object) -> object:
+    """Return identity-only token for a provider/predicate, or unsupported."""
+    if inspect.isfunction(value) or inspect.ismethod(value):
+        return ("callable", id(value))
+    return _CALCULATION_RESULT_UNSUPPORTED
+
+
+def _calculation_cache_filter_token(
+    definitions: object,
+    parsed: object,
+) -> object:
+    """Freeze raw and parsed filter state without invoking predicates."""
+    raw_token = _calculation_cache_freeze(definitions)
+    if raw_token is _CALCULATION_RESULT_UNSUPPORTED:
+        return _CALCULATION_RESULT_UNSUPPORTED
+    if type(parsed) is not dict:
+        return _CALCULATION_RESULT_UNSUPPORTED
+    parsed_tokens: list[tuple[object, object]] = []
+    for name, criteria in cast(dict[object, object], parsed).items():
+        if type(name) is not str or type(criteria) is not dict:
+            return _CALCULATION_RESULT_UNSUPPORTED
+        criteria_tokens: list[tuple[str, object]] = []
+        for criterion_name, criterion_value in criteria.items():
+            if criterion_name == "filter_kwargs":
+                frozen = _calculation_cache_freeze(criterion_value)
+            elif criterion_name == "filter_funcs":
+                if type(criterion_value) is not list:
+                    return _CALCULATION_RESULT_UNSUPPORTED
+                callback_tokens: list[object] = []
+                for callback in criterion_value:
+                    # Built-in parser callbacks are represented by the raw
+                    # definition; user callbacks are identity keyed.
+                    if (
+                        inspect.isfunction(callback)
+                        and callback.__module__ == "general_manager.utils.filter_parser"
+                    ):
+                        callback_tokens.append(("parsed", "generated"))
+                    else:
+                        callback_token = _calculation_cache_callable_token(callback)
+                        if callback_token is _CALCULATION_RESULT_UNSUPPORTED:
+                            return _CALCULATION_RESULT_UNSUPPORTED
+                        callback_tokens.append(callback_token)
+                frozen = ("callbacks", tuple(callback_tokens))
+            else:
+                return _CALCULATION_RESULT_UNSUPPORTED
+            if frozen is _CALCULATION_RESULT_UNSUPPORTED:
+                return _CALCULATION_RESULT_UNSUPPORTED
+            criteria_tokens.append((criterion_name, frozen))
+        parsed_tokens.append((name, tuple(criteria_tokens)))
+    return (raw_token, tuple(parsed_tokens))
 
 
 def _trusted_dependency_snapshot(
@@ -2417,6 +2563,153 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             self.reverse,
         )
 
+    def _calculation_result_cache_signature(self) -> Hashable | None:
+        """Return a conservative run-scoped result-cache signature.
+
+        Signature construction only inspects immutable metadata.  In
+        particular it never resolves a provider, evaluates a property, or
+        iterates a mutable source; unsupported state simply opts out of reuse.
+        """
+        if self._data is not None or type(self) is not CalculationBucket:
+            return None
+        if (
+            type(self.filter_definitions) is not dict
+            or type(self.exclude_definitions) is not dict
+        ):
+            return None
+        if type(self.reverse) is not bool:
+            return None
+        sort_key = self._normalized_sort_key()
+        if sort_key is not None and (
+            type(sort_key) is not tuple or not all(type(key) is str for key in sort_key)
+        ):
+            return None
+
+        construction_plan = self._trusted_construction_plan()
+        if construction_plan is None:
+            return None
+        field_tokens: list[tuple[object, ...]] = []
+        for field_name, input_field in self.input_fields.items():
+            if type(field_name) is not str or type(input_field) is not Input:
+                return None
+            if not _input_has_exact_standard_state(input_field):
+                return None
+            if _input_has_behavior_override(input_field):
+                return None
+            if input_field.validator is not None or input_field.normalizer is not None:
+                return None
+            dependencies = input_field.depends_on
+            if type(dependencies) is not list or not all(
+                type(name) is str for name in dependencies
+            ):
+                return None
+            type_token = (id(input_field.type), type(input_field.type).__name__)
+            min_token = _calculation_cache_freeze(input_field.min_value)
+            max_token = _calculation_cache_freeze(input_field.max_value)
+            if (
+                min_token is _CALCULATION_RESULT_UNSUPPORTED
+                or max_token is _CALCULATION_RESULT_UNSUPPORTED
+            ):
+                return None
+            source = input_field.possible_values
+            if source is None:
+                source_token: object = ("none",)
+            elif type(source) is tuple:
+                source_values: list[object] = []
+                for value in cast(tuple[object, ...], source):
+                    value_token = _calculation_cache_freeze(value)
+                    if value_token is _CALCULATION_RESULT_UNSUPPORTED:
+                        return None
+                    source_values.append(value_token)
+                source_token = ("tuple", tuple(source_values))
+            elif type(source) is range:
+                source_token = ("range", source.start, source.stop, source.step)
+            elif callable(source):
+                callable_token = _calculation_cache_callable_token(source)
+                if callable_token is _CALCULATION_RESULT_UNSUPPORTED:
+                    return None
+                # This mirrors the identity and dependency components used by
+                # Input._possible_values_run_cache_key without invoking it.
+                source_token = (
+                    "provider",
+                    callable_token,
+                    id(self._manager_class),
+                    field_name,
+                    tuple(dependencies),
+                )
+            else:
+                return None
+            field_tokens.append(
+                (
+                    field_name,
+                    id(input_field),
+                    type_token,
+                    tuple(dependencies),
+                    type(input_field.required),
+                    input_field.required,
+                    min_token,
+                    max_token,
+                    input_field.validator is None,
+                    input_field.normalizer is None,
+                    type(input_field.is_manager),
+                    input_field.is_manager,
+                    source_token,
+                )
+            )
+
+        filter_token = _calculation_cache_filter_token(
+            self.filter_definitions,
+            self._filters,
+        )
+        exclude_token = _calculation_cache_filter_token(
+            self.exclude_definitions,
+            self._excludes,
+        )
+        if (
+            filter_token is _CALCULATION_RESULT_UNSUPPORTED
+            or exclude_token is _CALCULATION_RESULT_UNSUPPORTED
+        ):
+            return None
+        return (
+            "calculation_result",
+            id(construction_plan.manager_class),
+            id(construction_plan.interface_class),
+            tuple(field_tokens),
+            filter_token,
+            exclude_token,
+            sort_key,
+            self.reverse,
+        )
+
+    # Keep the shorter private spelling convenient for diagnostics and tests.
+    _calculation_cache_signature = _calculation_result_cache_signature
+
+    @staticmethod
+    def _calculation_result_snapshots(
+        identifications: Iterable[Combination],
+    ) -> tuple[object, ...] | None:
+        """Snapshot a complete result, or decline caching unsafe values."""
+        snapshots: list[object] = []
+        for identification in identifications:
+            snapshot = _calculation_cache_snapshot(identification)
+            if snapshot is _CALCULATION_RESULT_UNSUPPORTED:
+                return None
+            snapshots.append(snapshot)
+        return tuple(snapshots)
+
+    @staticmethod
+    def _calculation_result_clone_snapshots(
+        snapshots: Iterable[object],
+    ) -> list[Combination]:
+        """Clone cached snapshots into fresh identification dictionaries."""
+        cloned: list[Combination] = []
+        for snapshot in snapshots:
+            value = _calculation_cache_clone(snapshot)
+            if type(value) is not dict:
+                raise TypeError
+            cloned.append(cast(Combination, value))
+        return cloned
+
     def _sort_uses_only_inputs(self, sort_key: tuple[str, ...] | None) -> bool:
         """Return whether a sort can be applied to raw input dictionaries."""
         if sort_key is None:
@@ -2490,57 +2783,91 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
 
         if self._data is None:
-            from general_manager.cache.run_context import ensure_calculation_run_context
+            from general_manager.cache.run_context import (
+                CalculationBucketResultRunCacheEntry,
+                ensure_calculation_run_context,
+            )
 
             self._invalidate_combination_evidence()
             try:
-                with ensure_calculation_run_context():
-                    sorted_inputs = self.topological_sort_inputs()
-                    sorted_filters = self._sort_filters(sorted_inputs)
-                    current_combinations = self._generate_input_combinations(
-                        sorted_inputs,
-                        sorted_filters["input_filters"],
-                        sorted_filters["input_excludes"],
-                        retain_evidence=True,
-                    )
-                    sort_key = self._normalized_sort_key()
-                    needs_manager_access = (
-                        bool(sorted_filters["prop_filters"])
-                        or bool(sorted_filters["prop_excludes"])
-                        or not self._sort_uses_only_inputs(sort_key)
-                    )
+                with ensure_calculation_run_context() as context:
+                    signature = self._calculation_result_cache_signature()
+                    if signature is not None:
+                        cached = context.get_calculation_bucket_result(signature)
+                        if isinstance(cached, CalculationBucketResultRunCacheEntry):
+                            self._data = self._calculation_result_clone_snapshots(
+                                cached.snapshots
+                            )
+                            if expose:
+                                self._invalidate_combination_evidence(exposed=True)
+                            return self._data
 
-                    if needs_manager_access:
-                        manager_combinations = self._manager_combinations(
-                            current_combinations
+                    def compute_materialization() -> list[Combination]:
+                        """Run the historical materialization path once."""
+                        sorted_inputs = self.topological_sort_inputs()
+                        sorted_filters = self._sort_filters(sorted_inputs)
+                        current_combinations = self._generate_input_combinations(
+                            sorted_inputs,
+                            sorted_filters["input_filters"],
+                            sorted_filters["input_excludes"],
+                            retain_evidence=True,
                         )
-                        manager_combinations = self._filter_prop_combinations(
-                            manager_combinations,
-                            sorted_filters["prop_filters"],
-                            sorted_filters["prop_excludes"],
+                        sort_key = self._normalized_sort_key()
+                        needs_manager_access = (
+                            bool(sorted_filters["prop_filters"])
+                            or bool(sorted_filters["prop_excludes"])
+                            or not self._sort_uses_only_inputs(sort_key)
                         )
-                        if sort_key is not None:
-                            getters = [attrgetter(key) for key in sort_key]
-                            manager_combinations = sorted(
+
+                        if needs_manager_access:
+                            manager_combinations = self._manager_combinations(
+                                current_combinations
+                            )
+                            manager_combinations = self._filter_prop_combinations(
                                 manager_combinations,
-                                key=lambda manager_obj: tuple(
-                                    getter(manager_obj) for getter in getters
-                                ),
+                                sorted_filters["prop_filters"],
+                                sorted_filters["prop_excludes"],
                             )
-                        identifications = self._manager_identifications(
-                            manager_combinations
-                        )
-                        self._invalidate_combination_evidence()
-                    else:
-                        identifications = current_combinations
-                        if sort_key is not None:
-                            identifications = self._sort_dict_combinations(
-                                identifications,
-                                sort_key,
+                            if sort_key is not None:
+                                getters = [attrgetter(key) for key in sort_key]
+                                manager_combinations = sorted(
+                                    manager_combinations,
+                                    key=lambda manager_obj: tuple(
+                                        getter(manager_obj) for getter in getters
+                                    ),
+                                )
+                            identifications = self._manager_identifications(
+                                manager_combinations
                             )
+                            self._invalidate_combination_evidence()
+                        else:
+                            identifications = current_combinations
+                            if sort_key is not None:
+                                identifications = self._sort_dict_combinations(
+                                    identifications,
+                                    sort_key,
+                                )
 
-                    if self.reverse:
-                        identifications.reverse()
+                        if self.reverse:
+                            identifications.reverse()
+                        return identifications
+
+                    if signature is not None:
+                        from general_manager.cache.cache_tracker import (
+                            DependencyTracker,
+                        )
+
+                        with DependencyTracker() as dependencies:
+                            identifications = compute_materialization()
+                        snapshots = self._calculation_result_snapshots(identifications)
+                        if snapshots is not None:
+                            context.set_calculation_bucket_result(
+                                signature,
+                                snapshots,
+                                dependencies,
+                            )
+                    else:
+                        identifications = compute_materialization()
                     self._data = identifications
             except BaseException:
                 self._invalidate_combination_evidence()
