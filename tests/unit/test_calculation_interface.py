@@ -456,6 +456,63 @@ class TestCalculationInterface(TestCase):
             dependencies,
         )
 
+    def test_nonseeded_custom_interface_keeps_virtual_lazy_cache_dispatch(self):
+        dispatch_calls = []
+
+        class RelatedInterface:
+            def __init__(self, manager_id=None, *, id=None):
+                self.identification = {
+                    "id": manager_id if id is None else id,
+                }
+
+        with override_settings(AUTOCREATE_GRAPHQL=False):
+
+            class RelatedManager(GeneralManager):
+                pass
+
+        RelatedManager.Interface = RelatedInterface  # type: ignore[assignment]
+        RelatedManager.Permission = ManagerBasedPermission  # type: ignore[assignment]
+        RelatedManager._attributes = {}
+
+        class CustomCalculationInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "manager": Input(RelatedManager),
+            }
+
+            def __getattribute__(self, name):
+                if name in {"_resolved_input_values", "identification"}:
+                    dispatch_calls.append(("get", name))
+                return super().__getattribute__(name)
+
+            def __setattr__(self, name, value):
+                if name == "_resolved_input_values":
+                    dispatch_calls.append(("set", name))
+                super().__setattr__(name, value)
+
+        class CustomCalculation:
+            Interface = CustomCalculationInterface
+
+        CustomCalculationInterface._parent_class = CustomCalculation
+        interface = CustomCalculationInterface("related-id")
+        attributes = CustomCalculationInterface.get_attributes()
+        dispatch_calls.clear()
+
+        first = attributes["manager"](interface)
+        first_calls = list(dispatch_calls)
+        dispatch_calls.clear()
+        second = attributes["manager"](interface)
+
+        self.assertIs(second, first)
+        self.assertEqual(
+            first_calls,
+            [
+                ("get", "_resolved_input_values"),
+                ("set", "_resolved_input_values"),
+                ("get", "identification"),
+            ],
+        )
+        self.assertEqual(dispatch_calls, [("get", "_resolved_input_values")])
+
     @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_initialized_manager_input_is_seeded_from_parsed_wrapper(self):
         class RelatedManager(GeneralManager):
@@ -552,6 +609,75 @@ class TestCalculationInterface(TestCase):
         self.assertEqual(resolved.identification, {"id": "updated-id"})
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seeded_manager_reuses_after_benign_nested_attribute_cache_fill(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(RelatedManager)
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+
+        self.assertEqual(original.id, "related-id")
+        resolved = manager.related
+
+        self.assertIs(resolved, original)
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seeded_manager_reuses_after_dependency_cache_fill(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        first_outer = HydratedCalculation(original)
+        second_outer = HydratedCalculation(original)
+
+        with DependencyTracker():
+            self.assertIs(first_outer.related, original)
+            self.assertIs(first_outer.related, original)
+        self.assertIsNotNone(original._identification_dependency_cache)
+
+        self.assertIs(second_outer.related, original)
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_stale_seed_recast_transitions_to_lazy_dependency_reuse(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+                first = Input(str, depends_on=["related"])
+                second = Input(str, depends_on=["related"])
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original, "first", "second")
+        original._invalidate_manager_state("stale")
+
+        self.assertEqual(manager.first, "first")
+        replacement = manager._interface._resolved_input_values["related"]
+        self.assertIsNot(replacement, original)
+        self.assertEqual(manager.second, "second")
+
+        self.assertIs(
+            manager._interface._resolved_input_values["related"],
+            replacement,
+        )
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_seeded_manager_provenance_mutation_evicts_cached_wrapper(self):
         class RelatedManager(GeneralManager):
             class Interface(CalculationInterface):
@@ -628,6 +754,42 @@ class TestCalculationInterface(TestCase):
         finally:
             descriptor._gm_manager_attribute_descriptor_installation = installation
 
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_hostile_parent_class_descriptor_is_not_invoked_during_eviction(self):
+        hook_calls = []
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        class HostileParentDescriptor:
+            def __get__(self, _instance, _owner=None):
+                hook_calls.append("parent")
+                raise AssertionError
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        interface_class = HydratedCalculation.Interface
+        parent_class = interface_class.__dict__["_parent_class"]
+        type.__setattr__(
+            interface_class,
+            "_parent_class",
+            HostileParentDescriptor(),
+        )
+        try:
+            resolved = manager.related
+        finally:
+            type.__setattr__(interface_class, "_parent_class", parent_class)
+
+        self.assertEqual(hook_calls, [])
         self.assertIsNot(resolved, original)
         self.assertEqual(resolved.identification, {"id": "related-id"})
 

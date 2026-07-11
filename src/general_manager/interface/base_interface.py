@@ -87,6 +87,7 @@ _INSTANCE_DICT_NAME = "__dict__"
 _EMPTY_CLOSURE_CELL = object()
 _MANAGER_INPUT_SEED_PLAN_NAME = "_gm_manager_input_seed_plan"
 _MANAGER_INPUT_SEED_PLAN_TOKEN = object()
+_SEEDED_INPUT_VALUES_CACHE_NAME = "_gm_seeded_input_values_cache"
 
 
 @dataclass(frozen=True, slots=True)
@@ -838,6 +839,11 @@ def _seed_calculation_resolved_manager_values(
                 interface_state,
                 "_resolved_input_values",
                 resolved_manager_values,
+            )
+            dict.__setitem__(
+                interface_state,
+                _SEEDED_INPUT_VALUES_CACHE_NAME,
+                dict(resolved_manager_values),
             )
     except (AttributeError, KeyError, TypeError):
         return

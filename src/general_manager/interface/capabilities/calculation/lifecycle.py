@@ -6,7 +6,7 @@ import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from threading import RLock
-from types import CellType, CodeType, FunctionType
+from types import CellType, CodeType, FunctionType, MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, cast
 from weakref import WeakKeyDictionary
 
@@ -16,10 +16,12 @@ from general_manager.interface.base_interface import (
     _INPUT_PROVENANCE,
     _INTERFACE_BASE_PROVENANCE,
     _MANAGER_INPUT_SEED_PLAN_NAME,
+    _SEEDED_INPUT_VALUES_CACHE_NAME,
     _STATIC_ATTRIBUTE_MISSING,
+    _GENERAL_MANAGER_PROVENANCE,
     _canonical_manager_class_state,
-    _canonical_nested_manager,
     _calculation_manager_input_seed_plan,
+    _dict_has_identity_keys,
     _mro_state_access_is_canonical,
     _mapping_value_by_identity,
     _matches_static_dispatch,
@@ -51,10 +53,30 @@ _EMPTY_CLOSURE_CELL = object()
 _MISSING_INTERFACE_STATE = object()
 
 
-def _exact_calculation_instance_state(
+def _static_class_value(
+    cls: type[object],
+    name: str,
+) -> object:
+    """Read a class mapping entry without descriptor dispatch or key hooks."""
+    mro = type.__getattribute__(cls, "__mro__")
+    if type(mro) is not tuple:
+        return _MISSING_INTERFACE_STATE
+    for candidate in mro:
+        class_state = type.__getattribute__(candidate, "__dict__")
+        if type(class_state) is not MappingProxyType:
+            return _MISSING_INTERFACE_STATE
+        for key, value in class_state.items():
+            if type(key) is not str:
+                return _MISSING_INTERFACE_STATE
+            if key == name:
+                return value
+    return _MISSING_INTERFACE_STATE
+
+
+def _seeded_calculation_instance_state(
     interface_instance: "CalculationInterface",
-) -> tuple[dict[str, object] | None, dict[str, object], bool] | None:
-    """Return exact cache/identification dictionaries without virtual access."""
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]] | None:
+    """Return exact constructor-seeded state without virtual access."""
     interface_provenance = _INTERFACE_BASE_PROVENANCE
     if interface_provenance is None:
         return None
@@ -66,7 +88,7 @@ def _exact_calculation_instance_state(
     ):
         return None
     state = object.__getattribute__(interface_instance, _INSTANCE_DICT_NAME)
-    if type(state) is not dict or len(state) not in {1, 2}:
+    if type(state) is not dict or len(state) != 3:
         return None
     if any(type(key) is not str for key in state):
         return None
@@ -76,26 +98,125 @@ def _exact_calculation_instance_state(
         "_resolved_input_values",
         _MISSING_INTERFACE_STATE,
     )
-    if type(identification) is not dict:
+    seeded_values = dict.get(
+        state,
+        _SEEDED_INPUT_VALUES_CACHE_NAME,
+        _MISSING_INTERFACE_STATE,
+    )
+    if (
+        type(identification) is not dict
+        or type(resolved_values) is not dict
+        or type(seeded_values) is not dict
+    ):
         return None
-    if resolved_values is _MISSING_INTERFACE_STATE:
-        if len(state) != 1:
-            return None
-        return None, identification, False
-    if type(resolved_values) is not dict or len(state) != 2:
+    expected_names = (
+        "_resolved_input_values",
+        _SEEDED_INPUT_VALUES_CACHE_NAME,
+        "identification",
+    )
+    if any(not any(key == expected for expected in expected_names) for key in state):
         return None
-    state_names = tuple(state)
-    if state_names == ("_resolved_input_values", "identification"):
-        seeded_cache = True
-    elif state_names == ("identification", "_resolved_input_values"):
-        seeded_cache = False
-    else:
-        return None
-    return resolved_values, identification, seeded_cache
+    return resolved_values, identification, seeded_values
+
+
+def _post_seeded_manager_state_is_safe(
+    cached_value: object,
+    manager_type: type[object],
+) -> bool:
+    """Allow canonical cache evolution while rejecting unsafe manager state."""
+    manager_provenance = _GENERAL_MANAGER_PROVENANCE
+    interface_provenance = _INTERFACE_BASE_PROVENANCE
+    if manager_provenance is None or interface_provenance is None:
+        return False
+    if type(cached_value) is not manager_type:
+        return False
+    if not _mro_state_access_is_canonical(
+        manager_type,
+        manager_provenance[0],
+        (
+            _INSTANCE_DICT_NAME,
+            "_interface",
+            "_GeneralManager__id",
+            "_attribute_value_cache",
+            "_identification_dependency_cache",
+            "_manager_state_valid",
+            "_manager_state_reason",
+        ),
+    ):
+        return False
+    manager_state = object.__getattribute__(cached_value, _INSTANCE_DICT_NAME)
+    expected_manager_keys = (
+        "_interface",
+        "_GeneralManager__id",
+        "_attribute_value_cache",
+        "_identification_dependency_cache",
+        "_manager_state_valid",
+        "_manager_state_reason",
+    )
+    if not _dict_has_identity_keys(manager_state, expected_manager_keys):
+        return False
+    identification = dict.__getitem__(manager_state, "_GeneralManager__id")
+    attribute_cache = dict.__getitem__(manager_state, "_attribute_value_cache")
+    dependency_cache = dict.__getitem__(
+        manager_state,
+        "_identification_dependency_cache",
+    )
+    if (
+        type(identification) is not dict
+        or type(attribute_cache) is not dict
+        or (dependency_cache is not None and type(dependency_cache) is not tuple)
+        or dict.__getitem__(manager_state, "_manager_state_valid") is not True
+        or dict.__getitem__(manager_state, "_manager_state_reason") is not None
+    ):
+        return False
+
+    nested_interface = dict.__getitem__(manager_state, "_interface")
+    nested_interface_class = type(nested_interface)
+    if _static_class_value(manager_type, "Interface") is not nested_interface_class:
+        return False
+    if not _mro_state_access_is_canonical(
+        nested_interface_class,
+        interface_provenance[0],
+        (
+            _INSTANCE_DICT_NAME,
+            "_resolved_input_values",
+            _SEEDED_INPUT_VALUES_CACHE_NAME,
+            "identification",
+        ),
+    ):
+        return False
+    nested_state = object.__getattribute__(nested_interface, _INSTANCE_DICT_NAME)
+    if type(nested_state) is not dict or not 1 <= len(nested_state) <= 3:
+        return False
+    if any(type(key) is not str for key in nested_state):
+        return False
+    nested_identification = dict.get(
+        nested_state,
+        "identification",
+        _MISSING_INTERFACE_STATE,
+    )
+    if nested_identification is not identification:
+        return False
+    nested_resolved = dict.get(
+        nested_state,
+        "_resolved_input_values",
+        _MISSING_INTERFACE_STATE,
+    )
+    if (
+        nested_resolved is not _MISSING_INTERFACE_STATE
+        and type(nested_resolved) is not dict
+    ):
+        return False
+    nested_seeded = dict.get(
+        nested_state,
+        _SEEDED_INPUT_VALUES_CACHE_NAME,
+        _MISSING_INTERFACE_STATE,
+    )
+    return nested_seeded is _MISSING_INTERFACE_STATE or type(nested_seeded) is dict
 
 
 def _cached_manager_matches_formatted_identification(
-    interface_cls: type["CalculationInterface"],
+    parent_class: object,
     field_name: str,
     input_field: Input[type[object]],
     cached_value: object,
@@ -132,15 +253,17 @@ def _cached_manager_matches_formatted_identification(
         return False
     if type(cached_value) is not manager_type:
         return False
-    parent_class = type.__getattribute__(interface_cls, "_parent_class")
-    descriptor = inspect.getattr_static(parent_class, field_name)
+    if not _canonical_manager_class_state(cast(type[object], parent_class)):
+        return False
+    canonical_parent = cast(type[GeneralManager], parent_class)
+    descriptor = inspect.getattr_static(canonical_parent, field_name)
     if not _is_canonical_manager_attribute_descriptor(
         descriptor,
-        parent_class,
+        canonical_parent,
         field_name,
     ):
         return False
-    if not _canonical_nested_manager(cached_value, manager_type):
+    if not _post_seeded_manager_state_is_safe(cached_value, manager_type):
         return False
     manager_state = object.__getattribute__(cached_value, _INSTANCE_DICT_NAME)
     private_identification = dict.__getitem__(
@@ -422,32 +545,19 @@ class CalculationReadCapability(BaseCapability):
             interface_instance: "CalculationInterface",
             field_name: str,
         ) -> object:
-            exact_state = _exact_calculation_instance_state(interface_instance)
-            identification: dict[str, object]
-            if exact_state is not None:
-                resolved_values, identification, seeded_cache = exact_state
+            seeded_state = _seeded_calculation_instance_state(interface_instance)
+            identification: dict[str, object] | None
+            seeded_values: dict[str, object] | None
+            if seeded_state is not None:
+                resolved_values, identification, seeded_values = seeded_state
             else:
-                resolved_values = None
-                seeded_cache = False
-                identification_value = object.__getattribute__(
-                    interface_instance,
-                    "identification",
-                )
-                identification = (
-                    identification_value if type(identification_value) is dict else {}
-                )
-            if resolved_values is None:
-                resolved_values = {}
-                if exact_state is not None:
-                    instance_state = object.__getattribute__(
-                        interface_instance,
-                        _INSTANCE_DICT_NAME,
-                    )
-                    dict.__setitem__(
-                        instance_state,
-                        "_resolved_input_values",
-                        resolved_values,
-                    )
+                identification = None
+                seeded_values = None
+                try:
+                    resolved_values = interface_instance._resolved_input_values
+                except AttributeError:
+                    resolved_values = {}
+                    interface_instance._resolved_input_values = resolved_values
 
             input_field = interface_cls.input_fields[field_name]
             cached_value = dict.get(
@@ -456,15 +566,29 @@ class CalculationReadCapability(BaseCapability):
                 _MISSING_INTERFACE_STATE,
             )
             if cached_value is not _MISSING_INTERFACE_STATE:
-                if not seeded_cache or _cached_manager_matches_formatted_identification(
-                    interface_cls,
+                seeded_value = (
+                    _MISSING_INTERFACE_STATE
+                    if seeded_values is None
+                    else dict.get(
+                        seeded_values,
+                        field_name,
+                        _MISSING_INTERFACE_STATE,
+                    )
+                )
+                if seeded_value is not cached_value:
+                    _track_cached_manager(cached_value)
+                    return cached_value
+                parent_class = _static_class_value(interface_cls, "_parent_class")
+                if _cached_manager_matches_formatted_identification(
+                    parent_class,
                     field_name,
                     input_field,
                     cached_value,
-                    identification,
+                    cast(dict[str, object], identification),
                 ):
                     _track_cached_manager(cached_value)
                     return cached_value
+                dict.pop(cast(dict[str, object], seeded_values), field_name, None)
                 dict.pop(resolved_values, field_name, None)
 
             dependency_values = {
@@ -474,10 +598,23 @@ class CalculationReadCapability(BaseCapability):
                 )
                 for dependency_name in input_field.depends_on
             }
+            cache_context: tuple[type[object], str] | None
+            if identification is None:
+                identification = interface_instance.identification
+                raw_value = identification.get(field_name)
+                cache_context = (interface_cls._parent_class, field_name)
+            else:
+                raw_value = dict.get(identification, field_name)
+                parent_class = _static_class_value(interface_cls, "_parent_class")
+                cache_context = (
+                    (cast(type[object], parent_class), field_name)
+                    if _canonical_manager_class_state(cast(type[object], parent_class))
+                    else None
+                )
             value = input_field.cast(
-                dict.get(identification, field_name),
+                raw_value,
                 dependency_values,
-                cache_context=(interface_cls._parent_class, field_name),
+                cache_context=cache_context,
             )
             dict.__setitem__(resolved_values, field_name, value)
             return value
