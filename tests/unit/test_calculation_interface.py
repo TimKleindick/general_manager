@@ -3582,6 +3582,17 @@ class TestSeededProvenanceGuards(TestCase):
                 set(),
             )
         )
+        mismatched_cell_snapshot = replace(
+            first_snapshot,
+            closure=(replace(first_snapshot.closure[0], cell=object()),),
+        )
+        self.assertFalse(
+            base_interface_module._function_matches_snapshot(
+                first_function,
+                mismatched_cell_snapshot,
+                set(),
+            )
+        )
 
         empty_snapshot_match = base_interface_module._function_matches_snapshot(
             empty_function,
@@ -3609,6 +3620,30 @@ class TestSeededProvenanceGuards(TestCase):
                 nested_function,
                 nested_child_snapshot,
                 set(),
+            )
+        )
+
+        lifecycle_snapshot = calculation_lifecycle_module._function_snapshot(
+            nested_function,
+            set(),
+            include_attributes=False,
+        )
+        lifecycle_cell_mismatch = replace(
+            lifecycle_snapshot,
+            closure=(replace(lifecycle_snapshot.closure[0], cell=object()),),
+        )
+        self.assertFalse(
+            calculation_lifecycle_module._function_matches_snapshot(
+                nested_function,
+                lifecycle_cell_mismatch,
+                set(),
+            )
+        )
+        self.assertTrue(
+            calculation_lifecycle_module._function_matches_snapshot(
+                nested_function,
+                lifecycle_snapshot,
+                {id(nested_function)},
             )
         )
 
