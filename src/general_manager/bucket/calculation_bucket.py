@@ -1382,6 +1382,8 @@ def _calculation_cache_filter_token(
             return _CALCULATION_RESULT_UNSUPPORTED
         criteria_tokens: list[tuple[str, object]] = []
         for criterion_name, criterion_value in criteria.items():
+            if type(criterion_name) is not str:
+                return _CALCULATION_RESULT_UNSUPPORTED
             if criterion_name == "filter_kwargs":
                 frozen = _calculation_cache_freeze(criterion_value)
             elif criterion_name == "filter_funcs":

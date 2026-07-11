@@ -2148,6 +2148,19 @@ class TestCalculationTerminalStreams(TestCase):
             CalculationBucket._calculation_result_snapshots([{"value": cyclic}])
         )
 
+    def test_hostile_parsed_filter_key_bypasses_result_cache(self) -> None:
+        class HostileKey:
+            def __hash__(self) -> int:
+                return 1
+
+            def __eq__(self, _other: object) -> bool:
+                raise AssertionError
+
+        bucket = self._make_scalar_bucket((0, 1))
+        bucket._filters["value"] = {HostileKey(): []}
+
+        self.assertIsNone(bucket._calculation_result_cache_signature())
+
     def test_cache_hits_clone_nested_result_containers(self) -> None:
         class NestedCalculation(GeneralManager):
             class Interface(CalculationInterface):
