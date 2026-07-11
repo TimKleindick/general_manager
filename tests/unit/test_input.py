@@ -1019,6 +1019,57 @@ class TestInput(TestCase):
         self.assertIsNot(plan, stale_plan)
         input_module._callable_invocation_plan_cache.pop(id(first), None)
 
+        signature = inspect.signature(callback)
+        with patch.object(input_module, "MappingProxyType", dict):
+            mutable_metadata = input_module._compile_callable_invocation_plan(callback)
+        self.assertIsNone(mutable_metadata.plan)
+
+        signature._parameters = MappingProxyType({"value": object()})
+        with patch.object(input_module.inspect, "signature", return_value=signature):
+            malformed_parameter = input_module._compile_callable_invocation_plan(
+                callback
+            )
+        self.assertIsNone(malformed_parameter.plan)
+
+        class DeadCallback:
+            def __call__(self, value):
+                return value
+
+        dead = DeadCallback()
+        dead_id = id(dead)
+        dead_reference = weakref.ref(dead)
+        del dead
+        gc.collect()
+        input_module._callable_invocation_plan_cache[dead_id] = (
+            dead_reference,
+            stale_plan,
+        )
+        input_module._get_callable_invocation_plan(callback)
+        self.assertNotIn(dead_id, input_module._callable_invocation_plan_cache)
+
+        winning_plan = input_module._CallableInvocationPlan(())
+        input_module._callable_invocation_plan_cache.pop(id(callback), None)
+        original_compile = input_module._compile_callable_invocation_plan
+
+        def compile_and_publish(func):
+            compiled = original_compile(func)
+            input_module._callable_invocation_plan_cache[id(func)] = (
+                weakref.ref(func),
+                winning_plan,
+            )
+            return compiled
+
+        with patch.object(
+            input_module,
+            "_compile_callable_invocation_plan",
+            side_effect=compile_and_publish,
+        ):
+            self.assertIs(
+                input_module._get_callable_invocation_plan(callback),
+                winning_plan,
+            )
+        input_module._callable_invocation_plan_cache.pop(id(callback), None)
+
     def test_input_from_manager_query_with_filter_dict(self):
         class MockManager:
             @classmethod
