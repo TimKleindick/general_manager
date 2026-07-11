@@ -22,6 +22,7 @@ from general_manager.bucket.calculation_bucket import (
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.measurement import MeasurementField, Measurement
@@ -811,6 +812,23 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_dependent_callable_database_providers_disable_whole_pass_trust(self):
+        registries = (
+            GeneralManagerMeta.all_classes,
+            GeneralManagerMeta.read_only_classes,
+            GeneralManagerMeta.pending_attribute_initialization,
+            GeneralManagerMeta.pending_graphql_interfaces,
+        )
+        registry_snapshots = tuple(tuple(registry) for registry in registries)
+
+        def restore_registries():
+            for registry, snapshot in zip(
+                registries,
+                registry_snapshots,
+                strict=True,
+            ):
+                registry[:] = snapshot
+
+        self.addCleanup(restore_registries)
         employees = [
             self.Employee.create(
                 name=name,
@@ -972,6 +990,11 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                                 all(result is source for result in returned_sources)
                             )
                 self.assertEqual(bucket._combination_evidence, {})
+        restore_registries()
+        self.assertEqual(
+            tuple(tuple(registry) for registry in registries),
+            registry_snapshots,
+        )
 
     @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
     def test_database_preview_falls_back_and_preparation_errors_clear_evidence(self):

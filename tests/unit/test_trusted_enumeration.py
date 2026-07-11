@@ -2482,6 +2482,13 @@ def test_dependent_callable_scalar_provider_cross_product(
     provider_kind: str,
     dependency_mode: str,
 ) -> None:
+    registries = (
+        GeneralManagerMeta.all_classes,
+        GeneralManagerMeta.read_only_classes,
+        GeneralManagerMeta.pending_attribute_initialization,
+        GeneralManagerMeta.pending_graphql_interfaces,
+    )
+    registry_snapshots = tuple(tuple(registry) for registry in registries)
     calls: list[int] = []
     returned_containers: list[list[int]] = []
     mutation_snapshots: list[tuple[int, tuple[int, ...]]] = []
@@ -2581,6 +2588,7 @@ def test_dependent_callable_scalar_provider_cross_product(
                 {"code": 1, "segment": "enterprise", "detail": 10},
             ]
     assert bucket._combination_evidence == {}
+    assert tuple(tuple(registry) for registry in registries) == registry_snapshots
 
 
 @pytest.mark.parametrize(
