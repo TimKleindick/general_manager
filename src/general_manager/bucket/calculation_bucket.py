@@ -1,6 +1,7 @@
 """Bucket implementation that enumerates calculation interface combinations."""
 
 from __future__ import annotations
+from abc import ABCMeta
 from collections.abc import Hashable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -311,6 +312,10 @@ _CANONICAL_MANAGER_META_DISPATCH = _dispatch_snapshot(
     GeneralManagerMeta,
     _METACLASS_DISPATCH_NAMES,
 )
+_CANONICAL_INTERFACE_META_DISPATCH = _dispatch_snapshot(
+    ABCMeta,
+    _METACLASS_DISPATCH_NAMES,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,6 +332,7 @@ class _TrustedConstructionPlan:
     interface_dispatch: tuple[object, ...]
     input_dispatch: tuple[object, ...]
     metaclass_dispatch: tuple[object, ...]
+    interface_metaclass_dispatch: tuple[object, ...]
 
     def is_current(self) -> bool:
         """Fail closed when any construction hook changed after preparation."""
@@ -364,6 +370,7 @@ class _TrustedConstructionPlan:
                 self.input_hooks,
             )
             and type(self.manager_class) is GeneralManagerMeta
+            and type(self.interface_class) is ABCMeta
             and _dispatch_matches(
                 self.manager_class,
                 _INSTANCE_DISPATCH_NAMES,
@@ -383,6 +390,11 @@ class _TrustedConstructionPlan:
                 GeneralManagerMeta,
                 _METACLASS_DISPATCH_NAMES,
                 self.metaclass_dispatch,
+            )
+            and _dispatch_matches(
+                ABCMeta,
+                _METACLASS_DISPATCH_NAMES,
+                self.interface_metaclass_dispatch,
             )
         )
 
@@ -949,6 +961,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             return None
         if type(manager_class) is not GeneralManagerMeta:
             return None
+        if type(interface_class) is not ABCMeta:
+            return None
         if not _dispatch_matches(
             manager_class,
             _INSTANCE_DISPATCH_NAMES,
@@ -971,6 +985,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             GeneralManagerMeta,
             _METACLASS_DISPATCH_NAMES,
             _CANONICAL_MANAGER_META_DISPATCH,
+        ):
+            return None
+        if not _dispatch_matches(
+            ABCMeta,
+            _METACLASS_DISPATCH_NAMES,
+            _CANONICAL_INTERFACE_META_DISPATCH,
         ):
             return None
         if manager_class.__init__ is not GeneralManager.__init__:
@@ -1044,6 +1064,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             input_dispatch=_dispatch_snapshot(Input, _INSTANCE_DISPATCH_NAMES),
             metaclass_dispatch=_dispatch_snapshot(
                 GeneralManagerMeta,
+                _METACLASS_DISPATCH_NAMES,
+            ),
+            interface_metaclass_dispatch=_dispatch_snapshot(
+                ABCMeta,
                 _METACLASS_DISPATCH_NAMES,
             ),
         )

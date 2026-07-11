@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from abc import ABCMeta
 from collections.abc import Callable, Iterator, Mapping
 from copy import copy
 from dataclasses import dataclass
@@ -1877,6 +1878,66 @@ def test_custom_manager_metaclass_dispatch_falls_back_to_membership(
     assert not bucket._uses_standard_trusted_construction()
     assert next(iter(bucket)).identification == {"code": 1}
     assert resolutions == 2
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_custom_interface_metaclass_dispatch_falls_back_to_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CustomInterfaceMeta(ABCMeta):
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            return super().__call__(*args, **kwargs)
+
+    interface = cast(
+        type[CalculationInterface],
+        CustomInterfaceMeta(
+            "CustomMetaInterface",
+            (CalculationInterface,),
+            {
+                "__module__": __name__,
+                "code": Input(int, possible_values=[1]),
+            },
+        ),
+    )
+    registries = (
+        GeneralManagerMeta.all_classes,
+        GeneralManagerMeta.read_only_classes,
+        GeneralManagerMeta.pending_attribute_initialization,
+        GeneralManagerMeta.pending_graphql_interfaces,
+    )
+    snapshots = tuple(tuple(registry) for registry in registries)
+    manager = cast(
+        type[GeneralManager],
+        type(
+            "CustomMetaInterfaceManager",
+            (GeneralManager,),
+            {"__module__": __name__, "Interface": interface},
+        ),
+    )
+    for registry in registries:
+        while manager in registry:
+            registry.remove(manager)
+    manager.Interface._parent_class = manager
+    assert tuple(tuple(registry) for registry in registries) == snapshots
+    bucket = CalculationBucket(manager)
+    resolutions = 0
+    original_resolve = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+
+    assert not bucket._uses_standard_trusted_construction()
+    assert next(iter(bucket)).identification == {"code": 1}
+    assert resolutions == 2
+    with pytest.raises(
+        InvalidInputValueError,
+        match=r"^Invalid value for code: 2, allowed: \[1\]\.$",
+    ):
+        bucket._manager_class(code=2)
 
 
 @pytest.mark.parametrize(
