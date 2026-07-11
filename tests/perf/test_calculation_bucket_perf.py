@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from typing import cast
 from unittest.mock import patch
@@ -17,7 +17,7 @@ from general_manager.interface.interfaces.calculation import CalculationInterfac
 from general_manager.api.property import graph_ql_property
 from general_manager.interface import base_interface as base_interface_module
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.manager.input import Input
+from general_manager.manager.input import Input, NumericRangeDomain
 from general_manager.manager.meta import GeneralManagerMeta
 from tests.perf.support import (
     Counter,
@@ -487,6 +487,108 @@ def test_static_5x10_cold_and_warm_generation(
     _assert_combination_observations(
         perf_budgets, "CALC_STATIC_5X10_WARM", warm_observations
     )
+
+
+def _measure_static_domain_snapshot(size: int) -> dict[str, int]:
+    snapshot_calls = Counter()
+    range_snapshot_calls = Counter()
+    fallback_yields = Counter()
+    provider_calls = Counter()
+
+    class CustomValues:
+        def __iter__(self) -> Iterator[int]:
+            for value in (0, 1):
+                fallback_yields.increment()
+                yield value
+
+    def provider(outer: int) -> tuple[int, int]:
+        provider_calls.increment()
+        return outer, outer + 1
+
+    counters = CombinationCounters.create()
+    safe_manager = _make_calculation_manager(
+        f"StaticSnapshotSafe{size}Manager",
+        {
+            "inner": Input(
+                int,
+                possible_values=NumericRangeDomain(0, 1),
+            ),
+            "outer": Input(int, possible_values=range(size)),
+        },
+        counters.constructors,
+    )
+    original_snapshot = calculation_bucket_module._static_domain_snapshot
+
+    def counted_snapshot(
+        input_field: Input[type[object]],
+        resolved_source: object,
+    ) -> object:
+        if type(resolved_source) is NumericRangeDomain:
+            range_snapshot_calls.increment()
+        snapshot_calls.increment()
+        return original_snapshot(input_field, resolved_source)
+
+    with patch.object(
+        calculation_bucket_module,
+        "_static_domain_snapshot",
+        side_effect=counted_snapshot,
+    ):
+        safe_result = CalculationBucket(safe_manager).generate_combinations()
+
+    fallback_manager = _make_calculation_manager(
+        f"StaticSnapshotFallback{size}Manager",
+        {
+            "inner": Input(int, possible_values=CustomValues()),
+            "outer": Input(int, possible_values=range(size)),
+        },
+        counters.constructors,
+    )
+    CalculationBucket(fallback_manager).generate_combinations()
+
+    provider_manager = _make_calculation_manager(
+        f"StaticSnapshotProvider{size}Manager",
+        {
+            "outer": Input(int, possible_values=range(size)),
+            "inner": Input(
+                int,
+                possible_values=provider,
+                depends_on=["outer"],
+            ),
+        },
+        counters.constructors,
+    )
+    provider_result = CalculationBucket(provider_manager).generate_combinations()
+
+    return {
+        "SAFE_CLASSIFIER_CALLS": snapshot_calls.value,
+        "RANGE_SNAPSHOT_CALLS": range_snapshot_calls.value,
+        "SAFE_RESULTS": len(safe_result),
+        "FALLBACK_SOURCE_YIELDS": fallback_yields.value,
+        "PROVIDER_CALLS": provider_calls.value,
+        "PROVIDER_RESULTS": len(provider_result),
+    }
+
+
+@pytest.mark.parametrize("size", [100, 1_000, 10_000])
+def test_static_domain_snapshot_scaling(
+    size: int,
+    perf_budgets: PerfBudgets,
+) -> None:
+    observations = [_measure_static_domain_snapshot(size) for _ in range(3)]
+    assert observations[0] == observations[1] == observations[2]
+    assert observations[0] == {
+        "SAFE_CLASSIFIER_CALLS": 2,
+        "RANGE_SNAPSHOT_CALLS": 1,
+        "SAFE_RESULTS": size * 2,
+        "FALLBACK_SOURCE_YIELDS": size * 2,
+        "PROVIDER_CALLS": size,
+        "PROVIDER_RESULTS": size * 2,
+    }
+    for name, observed in observations[0].items():
+        perf_budgets.assert_observation(
+            f"CALC_STATIC_SNAPSHOT_{size}_{name}",
+            observed,
+        )
 
 
 def test_dependent_5x10_cold_and_warm_generation(

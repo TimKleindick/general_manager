@@ -85,6 +85,7 @@ _INPUT_STATE_NAMES = frozenset(
 )
 _TERMINAL_SCALAR_TYPES = (type(None), bool, int, float, str)
 _CALCULATION_RESULT_UNSUPPORTED = object()
+_STATIC_DOMAIN_UNSUPPORTED = object()
 _TERMINAL_MANAGER_STATE_NAMES = (
     "_interface",
     "_GeneralManager__id",
@@ -115,6 +116,15 @@ class _CalculationCacheIdentityToken:
 def _calculation_cache_identity_token(value: object) -> _CalculationCacheIdentityToken:
     """Retain an object while keying only by identity."""
     return _CalculationCacheIdentityToken(value)
+
+
+@dataclass(frozen=True, slots=True)
+class _StaticDomainSnapshotEntry:
+    """Source identity/state paired with one immutable domain snapshot."""
+
+    source: object
+    state: object
+    snapshot: object
 
 
 _NUMERIC_RANGE_STATE_NAMES = frozenset({"kind", "min_value", "max_value", "step"})
@@ -1567,6 +1577,81 @@ def _domain_has_exact_state(
         if not any(state_name == expected_name for expected_name in expected_names):
             return False
     return True
+
+
+def _static_domain_snapshot(
+    input_field: Input[type[object]],
+    resolved_source: object,
+) -> object:
+    """Return a safe immutable source snapshot or the fallback sentinel."""
+
+    if (
+        type(input_field) is not Input
+        or not _input_has_exact_standard_state(input_field)
+        or _input_has_behavior_override(input_field)
+        or type(input_field.depends_on) is not list
+        or input_field.depends_on
+        or callable(input_field.possible_values)
+        or input_field.possible_values is not resolved_source
+    ):
+        return _STATIC_DOMAIN_UNSUPPORTED
+    source = input_field.possible_values
+    if type(source) in (tuple, range, frozenset, str, bytes):
+        return source
+    if (
+        type(source) is NumericRangeDomain
+        and _numeric_range_configuration(source) is not None
+        and source.step > 0
+        and source.min_value <= source.max_value
+    ):
+        return tuple(source)
+    if (
+        type(source) is DateRangeDomain
+        and _date_range_configuration(source) is not None
+        and source.step > 0
+        and source.start <= source.end
+        and source.frequency
+        in {
+            "day",
+            "week_end",
+            "month_start",
+            "month_end",
+            "quarter_end",
+            "year_start",
+            "year_end",
+        }
+    ):
+        return tuple(source)
+    return _STATIC_DOMAIN_UNSUPPORTED
+
+
+def _static_domain_source_state(
+    input_field: Input[type[object]],
+    resolved_source: object,
+) -> object:
+    """Return immutable state needed to detect source mutation between branches."""
+
+    source = input_field.possible_values
+    if type(source) in (tuple, range, frozenset, str, bytes):
+        return ("immutable", id(source))
+    if type(source) is NumericRangeDomain and _numeric_range_configuration(source):
+        return (
+            "numeric_range",
+            source.kind,
+            source.min_value,
+            source.max_value,
+            source.step,
+        )
+    if type(source) is DateRangeDomain and _date_range_configuration(source):
+        return (
+            "date_range",
+            source.kind,
+            source.start,
+            source.end,
+            source.frequency,
+            source.step,
+        )
+    return ("fallback", id(resolved_source))
 
 
 def _sequence_enumeration_witness(
@@ -3143,6 +3228,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         excludes: ParsedFilters,
         *,
         snapshot_iterables: bool,
+        static_snapshots: dict[str, _StaticDomainSnapshotEntry] | None = None,
         retain_evidence: bool = False,
     ) -> Generator[Combination, None, None]:
         """
@@ -3243,8 +3329,40 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 database_provider = None
                 database_provider_signature = None
                 resolved_source = possible_values
+                static_snapshot_used = False
                 filter_funcs = field_filters.get("filter_funcs", [])
                 exclude_funcs = field_excludes.get("filter_funcs", [])
+
+                if (
+                    static_snapshots is not None
+                    and not filter_funcs
+                    and not exclude_funcs
+                    and type(input_field) is Input
+                    and type(input_field.depends_on) is list
+                    and not input_field.depends_on
+                    and not callable(input_field.possible_values)
+                    and input_field.possible_values is resolved_source
+                ):
+                    source_state = _static_domain_source_state(
+                        input_field,
+                        resolved_source,
+                    )
+                    current_entry = static_snapshots.get(input_name)
+                    if (
+                        current_entry is None
+                        or current_entry.source is not resolved_source
+                        or current_entry.state != source_state
+                    ):
+                        current_entry = _StaticDomainSnapshotEntry(
+                            resolved_source,
+                            source_state,
+                            _static_domain_snapshot(input_field, resolved_source),
+                        )
+                        static_snapshots[input_name] = current_entry
+                    static_snapshot = current_entry.snapshot
+                    if static_snapshot is not _STATIC_DOMAIN_UNSUPPORTED:
+                        possible_values = cast(Iterable[object], static_snapshot)
+                        static_snapshot_used = True
 
                 def filtered_indexed_values() -> Generator[
                     tuple[int, object], None, None
@@ -3258,7 +3376,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                         yield source_index, value
 
                 indexed_values = filtered_indexed_values()
-                if snapshot_iterables:
+                if snapshot_iterables and not static_snapshot_used:
                     indexed_values = list(indexed_values)
 
             for source_index, value in indexed_values:
@@ -3327,6 +3445,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 filters,
                 excludes,
                 snapshot_iterables=True,
+                static_snapshots={},
                 retain_evidence=retain_evidence,
             )
         )

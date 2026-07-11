@@ -9,6 +9,7 @@ from general_manager.bucket.calculation_bucket import (
     MissingCalculationMatchError,
     MultipleCalculationMatchError,
 )
+from general_manager.bucket import calculation_bucket as calculation_bucket_module
 from general_manager.cache.run_context import (
     CALCULATION_BUCKET_RESULT_MISSING,
     CalculationRunContext,
@@ -17,7 +18,7 @@ from general_manager.cache.run_context import (
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.api.property import graph_ql_property
 from general_manager.interface import CalculationInterface
-from general_manager.manager.input import DateRangeDomain, Input
+from general_manager.manager.input import DateRangeDomain, NumericRangeDomain, Input
 from general_manager.manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from tests.utils.simple_manager_interface import SimpleBucket
@@ -319,6 +320,264 @@ class TestGenerateCombinations(TestCase):
         ]
         # Compare as multisets since insertion order of fields may vary
         self.assertCountEqual(combos, expected)
+
+    def test_safe_static_domains_are_classified_once_per_generation_plan(
+        self,
+        _mock_parse,
+    ):
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "outer": Input(int, possible_values=range(3)),
+                "inner": Input(int, possible_values=(10, 20)),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+
+        with patch.object(
+            calculation_bucket_module,
+            "_static_domain_snapshot",
+            wraps=calculation_bucket_module._static_domain_snapshot,
+        ) as snapshots:
+            combinations = bucket.generate_combinations()
+
+        self.assertEqual(
+            combinations,
+            [
+                {"outer": outer, "inner": inner}
+                for inner in (10, 20)
+                for outer in range(3)
+            ],
+        )
+        self.assertEqual(snapshots.call_count, 2)
+
+    def test_provider_returning_tuple_is_not_classified_as_static(self, _mock_parse):
+        calls: list[int] = []
+
+        def provider(outer):
+            calls.append(outer)
+            return (outer, outer + 10)
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "outer": Input(int, possible_values=(1, 2)),
+                "inner": Input(
+                    int,
+                    possible_values=provider,
+                    depends_on=["outer"],
+                ),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        combinations = CalculationBucket(DynManager).generate_combinations()
+
+        self.assertCountEqual(
+            combinations,
+            [
+                {"outer": outer, "inner": inner}
+                for outer in (1, 2)
+                for inner in (outer, outer + 10)
+            ],
+        )
+        self.assertEqual(calls, [1, 2])
+
+    def test_range_snapshot_preserves_trusted_evidence_source(self, _mock_parse):
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "value": Input(
+                    int,
+                    possible_values=NumericRangeDomain(1, 2),
+                ),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+        combinations = bucket._generate_input_combinations(
+            ["value"],
+            {},
+            {},
+            retain_evidence=True,
+        )
+
+        self.assertEqual(combinations, [{"value": 1}, {"value": 2}])
+        self.assertTrue(
+            all(
+                bucket._lookup_combination_evidence(combination) is not None
+                for combination in combinations
+            )
+        )
+
+    def test_mutated_range_state_is_rejected_before_snapshot(self, _mock_parse):
+        domain = NumericRangeDomain(1, 2)
+        object.__setattr__(domain, "step", 0)
+
+        self.assertIs(
+            calculation_bucket_module._static_domain_snapshot(
+                Input(int, possible_values=domain),
+                domain,
+            ),
+            calculation_bucket_module._STATIC_DOMAIN_UNSUPPORTED,
+        )
+
+    def test_mutated_date_range_state_is_rejected_before_snapshot(self, _mock_parse):
+        invalid_states = (
+            {"step": 0},
+            {"start": date(2025, 1, 3)},
+            {"frequency": "invalid"},
+        )
+        for state in invalid_states:
+            domain = DateRangeDomain(date(2025, 1, 1), date(2025, 1, 2))
+            for name, value in state.items():
+                object.__setattr__(domain, name, value)
+            self.assertIs(
+                calculation_bucket_module._static_domain_snapshot(
+                    Input(date, possible_values=domain),
+                    domain,
+                ),
+                calculation_bucket_module._STATIC_DOMAIN_UNSUPPORTED,
+            )
+
+    def test_range_snapshot_iteration_error_does_not_publish_partial_entry(
+        self,
+        _mock_parse,
+    ):
+        class RaisingValues:
+            def __iter__(self):
+                yield 1
+                raise RuntimeError
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "value": Input(int, possible_values=RaisingValues()),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+        snapshots: dict[str, object] = {}
+        with self.assertRaises(RuntimeError):
+            list(
+                bucket._iter_input_combinations(
+                    ["value"],
+                    {},
+                    {},
+                    snapshot_iterables=True,
+                    static_snapshots=snapshots,
+                )
+            )
+        entry = snapshots["value"]
+        self.assertIs(
+            entry.snapshot,
+            calculation_bucket_module._STATIC_DOMAIN_UNSUPPORTED,
+        )
+
+    def test_filter_callbacks_keep_static_source_materialization_timing(
+        self,
+        _mock_parse,
+    ):
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "outer": Input(int, possible_values=(1, 2, 3)),
+                "inner": Input(int, possible_values=(10, 20)),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+        events: list[int] = []
+
+        def record_inner(value):
+            events.append(value)
+            return True
+
+        snapshots: dict[str, object] = {}
+        list(
+            bucket._iter_input_combinations(
+                ["outer", "inner"],
+                {"inner": {"filter_funcs": [record_inner]}},
+                {},
+                snapshot_iterables=True,
+                static_snapshots=snapshots,
+            )
+        )
+
+        self.assertEqual(events, [10, 20, 10, 20, 10, 20])
+        self.assertNotIn("inner", snapshots)
+
+    def test_static_source_mutation_refreshes_snapshot_between_branches(
+        self,
+        _mock_parse,
+    ):
+        inner_field = Input(int, possible_values=(10, 20))
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "outer": Input(int, possible_values=(1, 2)),
+                "inner": inner_field,
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+        snapshots: dict[str, object] = {}
+
+        def mutate_inner(value):
+            if value == 2:
+                inner_field.possible_values = (30, 40)
+            return True
+
+        combinations = list(
+            bucket._iter_input_combinations(
+                ["outer", "inner"],
+                {"outer": {"filter_funcs": [mutate_inner]}},
+                {},
+                snapshot_iterables=False,
+                static_snapshots=snapshots,
+            )
+        )
+
+        self.assertEqual(
+            combinations,
+            [
+                {"outer": 1, "inner": 10},
+                {"outer": 1, "inner": 20},
+                {"outer": 2, "inner": 30},
+                {"outer": 2, "inner": 40},
+            ],
+        )
 
     def test_generate_combinations_does_not_instantiate_managers_without_property_work(
         self, _mock_parse
