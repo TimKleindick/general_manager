@@ -3730,12 +3730,32 @@ class TestSeededProvenanceGuards(TestCase):
         )
         candidate_field = CandidateInterface.input_fields[field_name]
         candidate_field.__dict__["is_manager"] = "invalid"
-        self.assertFalse(
-            base_interface_module._manager_candidate_present(
-                candidate_interface,
-                candidate_identification,
+        with patch.object(
+            base_interface_module, "_static_descriptor_matches", return_value=True
+        ):
+            self.assertFalse(
+                base_interface_module._manager_candidate_present(
+                    candidate_interface,
+                    candidate_identification,
+                )
             )
-        )
+        candidate_field.__dict__["is_manager"] = False
+        with patch.object(
+            base_interface_module, "_static_descriptor_matches", return_value=True
+        ):
+            self.assertFalse(
+                base_interface_module._manager_candidate_present(
+                    candidate_interface,
+                    candidate_identification,
+                )
+            )
+            candidate_field.__dict__["is_manager"] = True
+            self.assertTrue(
+                base_interface_module._manager_candidate_present(
+                    candidate_interface,
+                    candidate_identification,
+                )
+            )
         candidate_field.__dict__["is_manager"] = False
         state_backed_interface = CandidateInterface(field="value")
 
@@ -3752,6 +3772,114 @@ class TestSeededProvenanceGuards(TestCase):
                     {field_name: StateBackedManager()},
                 )
             )
+
+        self.assertFalse(
+            base_interface_module._canonical_nested_manager(object(), GeneralManager)
+        )
+
+        class FakeManager(GeneralManager):
+            pass
+
+        fake_manager = object.__new__(FakeManager)
+        self.assertFalse(
+            base_interface_module._canonical_nested_manager(fake_manager, FakeManager)
+        )
+
+        class CandidateORMInterface(InterfaceBase):
+            pass
+
+        class CandidateORMManager:
+            Interface = CandidateORMInterface
+
+        orm_interface = object.__new__(CandidateORMInterface)
+
+        with patch.object(
+            base_interface_module,
+            "_ORM_INTERFACE_PROVENANCE",
+            (CandidateORMInterface, object, (), ()),
+        ):
+            self.assertFalse(
+                base_interface_module._canonical_database_nested_interface_state(
+                    CandidateORMManager,
+                    orm_interface,
+                    {},
+                )
+            )
+
+        provenance = (CandidateORMInterface, type, (), ())
+        with patch.multiple(
+            base_interface_module,
+            _ORM_INTERFACE_PROVENANCE=provenance,
+            _matches_static_dispatch=lambda *_args: True,
+            _mro_state_access_is_canonical=lambda *_args: False,
+        ):
+            self.assertFalse(
+                base_interface_module._canonical_database_nested_interface_state(
+                    CandidateORMManager,
+                    orm_interface,
+                    {},
+                )
+            )
+
+        def assert_orm_rejected(state, *, static_model=None):
+            orm_interface.__dict__.clear()
+            orm_interface.__dict__.update(state)
+            with patch.multiple(
+                base_interface_module,
+                _ORM_INTERFACE_PROVENANCE=provenance,
+                _matches_static_dispatch=lambda *_args: True,
+                _mro_state_access_is_canonical=lambda *_args: True,
+            ):
+                static_patch = patch.object(
+                    base_interface_module,
+                    "_static_descriptor",
+                    return_value=object() if static_model is None else static_model,
+                )
+                with static_patch:
+                    self.assertFalse(
+                        base_interface_module._canonical_database_nested_interface_state(
+                            CandidateORMManager,
+                            orm_interface,
+                            state["identification"],
+                        )
+                    )
+
+        identification = {}
+        assert_orm_rejected(
+            {
+                "identification": identification,
+                "pk": object(),
+                "_search_date": None,
+                "_instance": object(),
+            }
+        )
+        primary_key = object()
+        assert_orm_rejected(
+            {
+                "identification": {"id": primary_key},
+                "pk": object(),
+                "_search_date": None,
+                "_instance": object(),
+            },
+            static_model=object,
+        )
+        assert_orm_rejected(
+            {
+                "identification": {"id": primary_key},
+                "pk": primary_key,
+                "_search_date": 1,
+                "_instance": object(),
+            },
+            static_model=object,
+        )
+        assert_orm_rejected(
+            {
+                "identification": {"id": primary_key},
+                "pk": primary_key,
+                "_search_date": None,
+                "_instance": object(),
+            },
+        )
 
 
 class LifecycleInterface(CalculationInterface):
