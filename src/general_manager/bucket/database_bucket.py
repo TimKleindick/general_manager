@@ -5,7 +5,7 @@ from collections.abc import Callable, Collection, Hashable, Mapping
 from contextvars import ContextVar
 from datetime import date, datetime
 from dataclasses import dataclass
-from typing import Generator, TypeVar, cast
+from typing import Generic, Generator, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, FieldError
 from django.db import models
@@ -54,6 +54,15 @@ class _CachedGetException:
 
     exception_type: type[Exception]
     args: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class _PythonBucketSnapshot(Generic[GeneralManagerType]):
+    """Transient rows/managers captured by a safe Python-property operation."""
+
+    rows: tuple[models.Model, ...]
+    managers: tuple[GeneralManagerType, ...] | None
+    dependencies: frozenset[Dependency]
 
 
 class DatabaseBucketTypeMismatchError(TypeError):
@@ -282,6 +291,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             _QUERY_SIGNATURE_NOT_COMPUTED
         )
         self._trusted_query_signature: Hashable | None = None
+        self._python_snapshot_key: Hashable | None = None
+        self._python_snapshot_context: object | None = None
 
     def _set_trusted_query_signature(self, signature: Hashable | None) -> None:
         """Set an internal non-SQL signature for framework-built querysets."""
@@ -368,6 +379,88 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             operation,
             self._freeze_trusted_signature_payload(value),
         )
+
+    def _python_snapshot_cache_key(
+        self,
+        operation: str,
+        orm_kwargs: Mapping[str, object],
+        python_specs: object,
+        metadata: object = (),
+    ) -> Hashable | None:
+        """Build a bounded-operation key, or bypass snapshots when unsafe."""
+        if current_calculation_run_context() is None:
+            return None
+        source_signature = self._query_signature()
+        if source_signature is None:
+            return None
+        try:
+            key = (
+                "python",
+                operation,
+                source_signature,
+                self._freeze_trusted_signature_payload(orm_kwargs),
+                self._freeze_trusted_signature_payload(python_specs),
+                self._freeze_trusted_signature_payload(metadata),
+            )
+            hash(key)
+        except (TypeError, ValueError):
+            return None
+        return key
+
+    def _get_python_snapshot(
+        self,
+    ) -> _PythonBucketSnapshot[GeneralManagerType] | None:
+        """Return this bucket's transient snapshot only in its owning run."""
+        context = current_calculation_run_context()
+        if context is None or self._python_snapshot_context is not context:
+            return None
+        if self._python_snapshot_key is None:
+            return None
+        payload = context.get_orm_bucket_result(("python", self._python_snapshot_key))
+        if not isinstance(payload, _PythonBucketSnapshot):
+            return None
+        DependencyTracker._track_many_validated(payload.dependencies)
+        return payload
+
+    def _set_python_snapshot(
+        self,
+        key: Hashable | None,
+        rows: tuple[models.Model, ...],
+        managers: tuple[GeneralManagerType, ...] | None,
+        dependencies: frozenset[Dependency],
+        *,
+        source_row_count: int | None = None,
+    ) -> None:
+        """Store a bounded Python-operation snapshot in the active run."""
+        context = current_calculation_run_context()
+        if (
+            context is None
+            or key is None
+            or len(rows) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS
+            or (
+                source_row_count is not None
+                and source_row_count > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS
+            )
+        ):
+            return
+        payload = _PythonBucketSnapshot(rows, managers, frozenset(dependencies))
+        context.set_orm_bucket_result(("python", key), payload)
+        self._python_snapshot_key = key
+        self._python_snapshot_context = context
+
+    def _python_snapshot_rows_are_safe(self, rows: tuple[models.Model, ...]) -> bool:
+        """Require one row per primary key before bypassing queryset reloads."""
+        if not callable(
+            getattr(self._manager_class.Interface, "_from_trusted_orm_instance", None)
+        ):
+            return False
+        primary_keys = tuple(row.pk for row in rows)
+        try:
+            return len(primary_keys) == len(set(primary_keys)) and all(
+                self._can_trust_orm_instance(row) for row in rows
+            )
+        except TypeError:
+            return False
 
     def __reduce__(self) -> str | tuple[object, ...]:
         """
@@ -562,6 +655,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         context = current_calculation_run_context()
         if context is None:
             return None
+        python_snapshot = self._get_python_snapshot()
+        if python_snapshot is not None:
+            return tuple(row.pk for row in python_snapshot.rows)
         signature = self._query_signature()
         if signature is None:
             return None
@@ -598,6 +694,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         context = current_calculation_run_context()
         if context is None:
             return None
+        python_snapshot = self._get_python_snapshot()
+        if python_snapshot is not None:
+            return python_snapshot.rows
         signature = self._query_signature()
         if signature is None:
             return None
@@ -644,6 +743,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         context = current_calculation_run_context()
         if context is None:
             return None
+        python_snapshot = self._get_python_snapshot()
+        if python_snapshot is not None:
+            return tuple(row.pk for row in python_snapshot.rows)
         signature = self._query_signature()
         if signature is None:
             return None
@@ -659,6 +761,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         context = current_calculation_run_context()
         if context is None:
             return None
+        python_snapshot = self._get_python_snapshot()
+        if python_snapshot is not None:
+            return python_snapshot.rows
         signature = self._query_signature()
         if signature is None:
             return None
@@ -702,6 +807,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def _get_run_scoped_managers(self) -> tuple[GeneralManagerType, ...] | None:
         """Load or reuse manager wrappers for a trusted row snapshot."""
+        python_snapshot = self._get_python_snapshot()
+        if python_snapshot is not None and python_snapshot.managers is not None:
+            return python_snapshot.managers
         if not self._can_cache_run_scoped_managers():
             return None
         context = current_calculation_run_context()
@@ -957,7 +1065,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self,
         query_set: models.QuerySet[models.Model],
         python_filters: list[PythonFilterDefinition],
-    ) -> list[object]:
+    ) -> tuple[
+        list[object],
+        tuple[models.Model, ...],
+        tuple[GeneralManagerType, ...],
+        tuple[models.Model, ...],
+        tuple[GeneralManagerType, ...],
+        frozenset[Dependency],
+    ]:
         """
         Evaluate Python-only filters and return the primary keys that satisfy them.
 
@@ -966,21 +1081,43 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             python_filters (list[tuple[str, object, str]]): Filters requiring Python evaluation, each containing the lookup, value, and property root.
 
         Returns:
-            list[object]: Primary keys of rows that meet all Python-evaluated filters.
+            tuple: Matching primary keys/rows/managers, candidate rows/managers,
+                and captured dependencies.
         """
         ids: list[object] = []
-        for obj in query_set:
-            inst = self._build_manager_from_instance(obj)
-            keep = True
-            for k, val, root in python_filters:
-                lookup = k.split("__", 1)[1] if "__" in k else ""
-                func = create_filter_function(lookup, val)
-                if not func(getattr(inst, root)):
-                    keep = False
-                    break
-            if keep:
-                ids.append(cast(object, obj.pk))
-        return ids
+        rows: list[models.Model] = []
+        managers: list[GeneralManagerType] = []
+        candidate_rows: list[models.Model] = []
+        candidate_managers: list[GeneralManagerType] = []
+        compiled_filters = [
+            (
+                root,
+                create_filter_function(k.split("__", 1)[1] if "__" in k else "", val),
+            )
+            for k, val, root in python_filters
+        ]
+        with DependencyTracker() as captured_dependencies:
+            for obj in query_set:
+                inst = self._build_manager_from_instance(obj)
+                candidate_rows.append(obj)
+                candidate_managers.append(inst)
+                keep = True
+                for root, func in compiled_filters:
+                    if not func(getattr(inst, root)):
+                        keep = False
+                        break
+                if keep:
+                    ids.append(cast(object, obj.pk))
+                    rows.append(obj)
+                    managers.append(inst)
+        return (
+            ids,
+            tuple(rows),
+            tuple(managers),
+            tuple(candidate_rows),
+            tuple(candidate_managers),
+            frozenset(captured_dependencies),
+        )
 
     def filter(self, **kwargs: LookupValue) -> DatabaseBucket[GeneralManagerType]:
         """
@@ -1030,8 +1167,23 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             raise QuerysetFilteringError(error) from error
 
         if python_filters:
-            ids = self.__parse_python_filters(qs, python_filters)
+            (
+                ids,
+                matching_rows,
+                matching_managers,
+                candidate_rows,
+                _candidate_managers,
+                dependencies,
+            ) = self.__parse_python_filters(qs, python_filters)
             qs = qs.filter(pk__in=ids)
+
+        run_scoped_cacheable = self._run_scoped_cacheable
+        if python_filters and (
+            len(candidate_rows) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS
+            or len(matching_rows) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS
+            or not self._python_snapshot_rows_are_safe(tuple(candidate_rows))
+        ):
+            run_scoped_cacheable = False
 
         merged_filter = self.__merge_filter_definitions(self.filters, **kwargs)
         bucket = self.__class__(
@@ -1042,12 +1194,26 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             search_date=search_date,
             sort_keys=self._sort_keys,
             sort_reverse=self._sort_reverse,
-            run_scoped_cacheable=self._run_scoped_cacheable,
+            run_scoped_cacheable=run_scoped_cacheable,
         )
         if not annotations and not python_filters:
             bucket._set_trusted_query_signature(
                 self._trusted_query_signature_with("filter", orm_kwargs)
             )
+        if python_filters and not annotations and search_date == self._search_date:
+            snapshot_key = self._python_snapshot_cache_key(
+                "filter", orm_kwargs, python_filters
+            )
+            if self._python_snapshot_rows_are_safe(candidate_rows):
+                bucket._set_python_snapshot(
+                    snapshot_key,
+                    matching_rows,
+                    matching_managers
+                    if self._can_cache_run_scoped_managers()
+                    else None,
+                    dependencies,
+                    source_row_count=len(candidate_rows),
+                )
         return bucket
 
     def exclude(self, **kwargs: LookupValue) -> DatabaseBucket[GeneralManagerType]:
@@ -1096,8 +1262,23 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             raise QuerysetFilteringError(error) from error
 
         if python_filters:
-            ids = self.__parse_python_filters(qs, python_filters)
+            (
+                ids,
+                _matching_rows,
+                _matching_managers,
+                candidate_rows,
+                candidate_managers,
+                dependencies,
+            ) = self.__parse_python_filters(qs, python_filters)
             qs = qs.exclude(pk__in=ids)
+
+        run_scoped_cacheable = self._run_scoped_cacheable
+        if python_filters and (
+            len(candidate_rows) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS
+            or len(candidate_rows) - len(ids) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS
+            or not self._python_snapshot_rows_are_safe(tuple(candidate_rows))
+        ):
+            run_scoped_cacheable = False
 
         merged_exclude = self.__merge_filter_definitions(self.excludes, **kwargs)
         bucket = self.__class__(
@@ -1108,12 +1289,35 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             search_date=search_date,
             sort_keys=self._sort_keys,
             sort_reverse=self._sort_reverse,
-            run_scoped_cacheable=self._run_scoped_cacheable,
+            run_scoped_cacheable=run_scoped_cacheable,
         )
         if not annotations and not python_filters:
             bucket._set_trusted_query_signature(
                 self._trusted_query_signature_with("exclude", orm_kwargs)
             )
+        if python_filters and not annotations and search_date == self._search_date:
+            excluded_ids = set(ids)
+            remaining_rows = tuple(
+                row for row in candidate_rows if row.pk not in excluded_ids
+            )
+            remaining_managers = tuple(
+                manager
+                for row, manager in zip(candidate_rows, candidate_managers, strict=True)
+                if row.pk not in excluded_ids
+            )
+            if self._python_snapshot_rows_are_safe(candidate_rows):
+                snapshot_key = self._python_snapshot_cache_key(
+                    "exclude", orm_kwargs, python_filters
+                )
+                bucket._set_python_snapshot(
+                    snapshot_key,
+                    remaining_rows,
+                    remaining_managers
+                    if self._can_cache_run_scoped_managers()
+                    else None,
+                    dependencies,
+                    source_row_count=len(candidate_rows),
+                )
         return bucket
 
     def first(self) -> GeneralManagerType | None:
@@ -1535,6 +1739,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         properties = self._manager_class.Interface.get_graph_ql_properties()
         annotations: dict[str, QueryAnnotation] = {}
         python_keys: list[str] = []
+        has_callable_annotations = False
         qs = self._data
         for k in key:
             if k in properties:
@@ -1543,6 +1748,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                     raise NonSortablePropertyError(k, self._manager_class.__name__)
                 if prop.query_annotation is not None:
                     if callable(prop.query_annotation):
+                        has_callable_annotations = True
                         query_annotation = cast(
                             QueryAnnotationCallable,
                             prop.query_annotation,
@@ -1557,11 +1763,18 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if annotations:
             qs = qs.annotate(**annotations)
 
+        python_snapshot_key = (
+            self._python_snapshot_cache_key("sort", {}, (), (key, reverse))
+            if python_keys and not annotations and not has_callable_annotations
+            else None
+        )
+        python_sort_snapshot_safe = False
         if python_keys:
-            objs = list(qs)
+            captured_managers: dict[int, GeneralManagerType] = {}
 
             def key_func(obj: models.Model) -> tuple[object, ...]:
                 inst = self._build_manager_from_instance(obj)
+                captured_managers[id(obj)] = inst
                 values = []
                 for k in key:
                     if k in properties:
@@ -1573,7 +1786,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                         values.append(getattr(obj, k))
                 return tuple(values)
 
-            objs.sort(key=key_func, reverse=reverse)
+            with DependencyTracker() as dependencies:
+                objs = list(qs)
+                objs.sort(key=key_func, reverse=reverse)
+            python_sort_snapshot_safe = (
+                len(objs) <= MAX_RUN_SCOPED_BUCKET_RESULT_ROWS
+                and self._python_snapshot_rows_are_safe(tuple(objs))
+            )
             ordered_ids = [obj.pk for obj in objs]
             case = models.Case(
                 *[models.When(pk=pk, then=pos) for pos, pk in enumerate(ordered_ids)],
@@ -1587,6 +1806,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             except (FieldError, TypeError, ValueError) as error:
                 raise QuerysetOrderingError(error) from error
 
+        run_scoped_cacheable = self._run_scoped_cacheable
+        if python_keys and (not python_sort_snapshot_safe or has_callable_annotations):
+            run_scoped_cacheable = False
         bucket = self.__class__(
             qs,
             self._manager_class,
@@ -1595,10 +1817,21 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             search_date=self._search_date,
             sort_keys=key,
             sort_reverse=reverse,
-            run_scoped_cacheable=self._run_scoped_cacheable,
+            run_scoped_cacheable=run_scoped_cacheable,
         )
         if not annotations and not python_keys:
             bucket._set_trusted_query_signature(self._trusted_query_signature)
+        if python_keys and not annotations and not has_callable_annotations:
+            ordered_rows = tuple(objs)
+            if python_sort_snapshot_safe:
+                ordered_managers = tuple(captured_managers[id(obj)] for obj in objs)
+                bucket._set_python_snapshot(
+                    python_snapshot_key,
+                    ordered_rows,
+                    ordered_managers if self._can_cache_run_scoped_managers() else None,
+                    frozenset(dependencies),
+                    source_row_count=len(ordered_rows),
+                )
         return bucket
 
     def none(self) -> DatabaseBucket[GeneralManagerType]:

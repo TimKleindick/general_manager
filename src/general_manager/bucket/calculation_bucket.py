@@ -142,6 +142,8 @@ _DATABASE_BUCKET_STATE_NAMES = frozenset(
         "_run_scoped_cacheable",
         "_query_signature_cache",
         "_trusted_query_signature",
+        "_python_snapshot_key",
+        "_python_snapshot_context",
     }
 )
 _QUERYSET_STATE_NAMES = frozenset(

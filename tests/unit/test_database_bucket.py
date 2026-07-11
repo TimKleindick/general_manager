@@ -164,6 +164,10 @@ class TrustedDummyInterface(DummyInterface):
         return interface
 
 
+class PythonPropertyInterface(TrustedDummyInterface):
+    pass
+
+
 class UserManager(GeneralManager):
     """
     Simple GeneralManager subclass for wrapping User PKs.
@@ -212,6 +216,13 @@ class TrustedUserManager(GeneralManager):
     pass
 
 
+class PythonPropertyManager(GeneralManager):
+    @graph_ql_property(filterable=True, sortable=True)
+    def python_username_length(self) -> int:
+        DependencyTracker.track(self.__class__.__name__, "all", "python-property")
+        return len(self._interface._instance.username)
+
+
 class GroupBackedTrustedInterface(TrustedDummyInterface):
     _model = Group
 
@@ -247,12 +258,14 @@ class DatabaseBucketTestCase(TestCase):
         AnotherManager.Interface = DummyInterface
         SearchDateManager.Interface = DummyInterface
         TrustedUserManager.Interface = TrustedDummyInterface
+        PythonPropertyManager.Interface = PythonPropertyInterface
         GroupBackedTrustedUserManager.Interface = GroupBackedTrustedInterface
         InitTrackingTrustedManager.Interface = TrustedDummyInterface
         CustomTrackingTrustedManager.Interface = TrustedDummyInterface
         CustomTrackingTrustedManager.tracking_calls = []
         DummyInterface._parent_class = UserManager
         TrustedDummyInterface._parent_class = TrustedUserManager
+        PythonPropertyInterface._parent_class = PythonPropertyManager
         # Create some test users
         self.u1 = User.objects.create(username="alice")
         self.u2 = User.objects.create(username="bob")
@@ -1588,6 +1601,103 @@ class DatabaseBucketTestCase(TestCase):
         lte_three = self.bucket.filter(username_length__lte=3)
         self.assertEqual(len(lte_three), 1)
         self.assertEqual(lte_three.first().identification["id"], self.u2.id)
+
+    def test_python_property_filter_compiles_predicates_once(self):
+        with patch(
+            "general_manager.bucket.database_bucket.create_filter_function",
+            wraps=__import__(
+                "general_manager.bucket.database_bucket",
+                fromlist=["create_filter_function"],
+            ).create_filter_function,
+        ) as create_filter:
+            filtered = self.bucket.filter(
+                negative_length__gte=-5,
+                negative_length__lte=-3,
+            )
+
+        self.assertEqual(len(filtered), 3)
+        self.assertEqual(create_filter.call_count, 2)
+
+    def test_run_scoped_python_filter_reuses_matching_rows(self):
+        bucket = DatabaseBucket(
+            User.objects.order_by("id"),
+            PythonPropertyManager,
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            filtered = bucket.filter(python_username_length__gte=3)
+            ids = [manager.identification["id"] for manager in filtered]
+
+        self.assertEqual(ids, [self.u1.id, self.u2.id, self.u3.id])
+
+    def test_run_scoped_python_exclude_reuses_remaining_rows(self):
+        bucket = DatabaseBucket(
+            User.objects.order_by("id"),
+            PythonPropertyManager,
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            excluded = bucket.exclude(python_username_length__gte=5)
+            ids = [manager.identification["id"] for manager in excluded]
+
+        self.assertEqual(ids, [self.u2.id])
+
+    def test_run_scoped_python_sort_reuses_ordered_rows(self):
+        bucket = DatabaseBucket(
+            User.objects.order_by("id"),
+            PythonPropertyManager,
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            sorted_bucket = bucket.sort("python_username_length")
+            ids = [manager.identification["id"] for manager in sorted_bucket]
+
+        self.assertEqual(ids, [self.u2.id, self.u1.id, self.u3.id])
+
+    def test_python_snapshot_dependencies_replay_on_terminal_cache_hit(self):
+        bucket = DatabaseBucket(User.objects.order_by("id"), PythonPropertyManager)
+
+        with CalculationRunContext(), DependencyTracker() as first:
+            filtered = bucket.filter(python_username_length__gte=3)
+            list(filtered)
+            with DependencyTracker() as hit:
+                list(filtered)
+
+        dependency = ("PythonPropertyManager", "all", "python-property")
+        self.assertIn(dependency, first)
+        self.assertIn(dependency, hit)
+
+    def test_python_snapshot_is_not_reused_after_context_exit(self):
+        bucket = DatabaseBucket(User.objects.order_by("id"), PythonPropertyManager)
+        with CalculationRunContext():
+            filtered = bucket.filter(python_username_length__gte=3)
+            list(filtered)
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            list(filtered)
+
+    def test_python_sorted_bucket_chaining_uses_new_query_semantics(self):
+        bucket = DatabaseBucket(User.objects.order_by("id"), PythonPropertyManager)
+
+        with CalculationRunContext():
+            sorted_bucket = bucket.sort("python_username_length")
+            chained = sorted_bucket.filter(username="alice")
+            with self.assertNumQueries(1):
+                ids = [manager.identification["id"] for manager in chained]
+
+        self.assertEqual(ids, [self.u1.id])
+
+    def test_mutation_clears_python_snapshot_payload(self):
+        bucket = DatabaseBucket(User.objects.order_by("id"), PythonPropertyManager)
+
+        with CalculationRunContext() as context:
+            filtered = bucket.filter(python_username_length__gte=3)
+            list(filtered)
+            self.u1.username = "x"
+            self.u1.save(update_fields=["username"])
+            context.clear_orm_bucket_results()
+            with self.assertNumQueries(1):
+                list(filtered)
 
     def test_property_sort_desc_then_asc_stability(self):
         """

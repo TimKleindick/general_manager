@@ -11,6 +11,7 @@ from typing import ClassVar
 from unittest.mock import patch
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface, ReadOnlyInterface
+from general_manager.api.property import graph_ql_property
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.run_context import CalculationRunContext
@@ -52,6 +53,10 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             name: str
             country: TestCountry | None
             families_list: Bucket[TestFamily]
+
+            @graph_ql_property(filterable=True, sortable=True)
+            def name_length_python(self) -> int:
+                return len(self.name)
 
             class Interface(DatabaseInterface):
                 name = models.CharField(max_length=50)
@@ -1366,6 +1371,16 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             counts = [group._data.count() for group in grouped]
 
         self.assertEqual(sorted(counts), [1, 1])
+
+    def test_python_property_snapshot_clears_on_manager_mutation(self):
+        with CalculationRunContext():
+            bucket = self.TestHuman.all().filter(name_length_python__gte=5)
+            self.assertEqual([human.name for human in bucket], ["Alice"])
+            self.test_human1.update(name="Alicia", ignore_permission=True)
+            with self.assertNumQueries(1):
+                refreshed_names = [human.name for human in bucket]
+
+        self.assertEqual(refreshed_names, ["Alicia"])
 
     def test_group_by_one_to_one_relation(self):
         first_request = self.ChangeRequest.create(
