@@ -83,6 +83,7 @@ _INPUT_STATE_NAMES = frozenset(
         "depends_on",
     }
 )
+_TERMINAL_SCALAR_TYPES = (type(None), bool, int, float, str)
 _NUMERIC_RANGE_STATE_NAMES = frozenset({"kind", "min_value", "max_value", "step"})
 _DATE_RANGE_STATE_NAMES = frozenset({"kind", "start", "end", "frequency", "step"})
 _DATABASE_BUCKET_STATE_NAMES = frozenset(
@@ -252,6 +253,23 @@ class _NumericRangeEnumerationWitness(_StaticEnumerationWitness):
     def authorizes(self, _value: object) -> bool:
         configuration = _numeric_range_configuration(self.source)
         return configuration == self.configuration
+
+
+@dataclass(frozen=True, slots=True)
+class _BuiltinRangeEnumerationWitness(_StaticEnumerationWitness):
+    """Prove that an exact built-in range yielded an integer candidate."""
+
+    source: range
+    candidate: int
+    candidate_token: _TrustedToken
+
+    def authorizes(self, value: object) -> bool:
+        return (
+            value is self.candidate
+            and type(value) is int
+            and value in self.source
+            and _trusted_candidate_token(value) == self.candidate_token
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1189,6 +1207,23 @@ def _trusted_candidate_token(value: object) -> _TrustedToken | None:
     return None
 
 
+def _terminal_scalar_source_supported(source: object) -> bool:
+    """Return whether a source is an immutable built-in scalar domain."""
+    if type(source) is range:
+        return True
+    if type(source) is not tuple:
+        return False
+    return all(
+        any(type(value) is scalar_type for scalar_type in _TERMINAL_SCALAR_TYPES)
+        for value in source
+    )
+
+
+def _terminal_scalar_type_supported(value_type: object) -> bool:
+    """Compare admitted input types by identity without invoking custom equality."""
+    return any(value_type is scalar_type for scalar_type in _TERMINAL_SCALAR_TYPES)
+
+
 def _trusted_dependency_snapshot(
     dependency_names: tuple[str, ...],
     identification: Mapping[str, object],
@@ -1423,6 +1458,15 @@ def _trusted_enumeration_evidence(
             candidate_token,
             source_index,
         )
+    elif source_type is range:
+        if type(candidate) is int:
+            witness = _BuiltinRangeEnumerationWitness(
+                cast(range, resolved_source),
+                candidate,
+                candidate_token,
+            )
+        else:
+            witness = None
     elif source_type is NumericRangeDomain:
         witness = _numeric_range_enumeration_witness(
             cast(NumericRangeDomain, resolved_source),
@@ -2865,6 +2909,97 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 filtered_combos.append(manager)
         return filtered_combos
 
+    def _terminal_stream_supported(self) -> bool:
+        """Return whether scalar terminal streaming can safely replace materialization."""
+        if self._data is not None:
+            return False
+        if self.sort_key is not None or self.reverse is not False:
+            return False
+        if type(self.filter_definitions) is not dict or self.filter_definitions:
+            return False
+        if type(self.exclude_definitions) is not dict or self.exclude_definitions:
+            return False
+        if type(self._filters) is not dict or self._filters:
+            return False
+        if type(self._excludes) is not dict or self._excludes:
+            return False
+
+        construction_plan = self._trusted_construction_plan()
+        if construction_plan is None:
+            return False
+        for input_field in construction_plan.input_fields.values():
+            if type(input_field) is not Input:
+                return False
+            if not _input_has_exact_standard_state(input_field):
+                return False
+            if _input_has_behavior_override(input_field):
+                return False
+            if (
+                type(input_field.type) is not type
+                or not _terminal_scalar_type_supported(input_field.type)
+                or type(input_field.depends_on) is not list
+                or input_field.depends_on
+                or type(input_field.required) is not bool
+                or input_field.required is not True
+                or input_field.is_manager is not False
+                or input_field.validator is not None
+                or input_field.normalizer is not None
+                or input_field.min_value is not None
+                or input_field.max_value is not None
+                or not _terminal_scalar_source_supported(input_field.possible_values)
+            ):
+                return False
+        return True
+
+    def _iter_terminal_combinations(self) -> Generator[Combination, None, None]:
+        """Yield admitted scalar combinations in one run context."""
+        from general_manager.cache.run_context import ensure_calculation_run_context
+
+        with ensure_calculation_run_context():
+            sorted_inputs = self.topological_sort_inputs()
+            sorted_filters = self._sort_filters(sorted_inputs)
+            yield from self._iter_input_combinations(
+                sorted_inputs,
+                sorted_filters["input_filters"],
+                sorted_filters["input_excludes"],
+                snapshot_iterables=False,
+                retain_evidence=True,
+            )
+
+    def _iter_terminal_managers(self) -> Generator[GeneralManagerType, None, None]:
+        """Construct admitted scalar managers lazily under one trusted lease."""
+        construction_plan = self._trusted_construction_plan()
+        if construction_plan is None:
+            return
+        combinations = self._iter_terminal_combinations()
+        self._invalidate_combination_evidence()
+        try:
+            for combination in combinations:
+                yield self._manager_from_combination(
+                    combination,
+                    construction_plan=construction_plan,
+                )
+        finally:
+            combinations.close()
+            self._invalidate_combination_evidence()
+
+    def _finish_terminal_stream(
+        self,
+        managers: Generator[GeneralManagerType, None, None],
+    ) -> Generator[GeneralManagerType, None, None]:
+        """Publish complete identifications only after normal stream exhaustion."""
+        identifications: list[Combination] = []
+        exhausted = False
+        try:
+            for manager in managers:
+                identifications.append(manager.identification)
+                yield manager
+            exhausted = True
+        finally:
+            if exhausted:
+                self._data = identifications
+            managers.close()
+
     def first(self) -> GeneralManagerType | None:
         """
         Return the first generated manager instance.
@@ -2872,7 +3007,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             GeneralManagerType | None: First instance or None when no combinations exist.
         """
-        iterator = iter(self)
+        iterator = (
+            self._finish_terminal_stream(self._iter_terminal_managers())
+            if self._terminal_stream_supported()
+            else iter(self)
+        )
         try:
             return next(iterator)
         except StopIteration:
@@ -2953,7 +3092,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             bool: True when the instance matches one of the generated combinations.
         """
-        iterator = iter(self)
+        iterator = (
+            self._finish_terminal_stream(self._iter_terminal_managers())
+            if self._terminal_stream_supported()
+            else iter(self)
+        )
         try:
             return any(item == manager for manager in iterator)
         finally:
@@ -2973,6 +3116,21 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             MissingCalculationMatchError: If no matching manager exists.
             MultipleCalculationMatchError: If more than one matching manager exists.
         """
+        if not kwargs and self._terminal_stream_supported():
+            iterator = self._finish_terminal_stream(self._iter_terminal_managers())
+            try:
+                try:
+                    first_match = next(iterator)
+                except StopIteration as error:
+                    raise MissingCalculationMatchError() from error
+                try:
+                    next(iterator)
+                except StopIteration:
+                    return first_match
+                raise MultipleCalculationMatchError()
+            finally:
+                iterator.close()
+
         filtered_bucket = self.filter(**kwargs)
         items = list(filtered_bucket)
         if len(items) == 1:

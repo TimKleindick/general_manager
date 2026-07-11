@@ -809,3 +809,118 @@ def test_hydrated_manager_input_performance_gate(
         f"{prefix}_SECOND_REHYDRATION_CONSTRUCTORS",
         second_rehydration_calls.value,
     )
+
+
+@pytest.mark.parametrize("size", [100, 1_000, 100_000])
+def test_scalar_terminal_stream_scaling_and_same_test_fallback(
+    perf_budgets: PerfBudgets,
+    monkeypatch: pytest.MonkeyPatch,
+    size: int,
+) -> None:
+    """Bound admitted terminals and characterize the unchanged fallback path."""
+
+    manager, _input_field = _make_default_calculation_manager(
+        f"ScalarTerminalStream{size}Manager",
+        "value",
+        Input(int, possible_values=range(size)),
+    )
+    constructor_code = GeneralManager.__dict__["__init__"].__code__
+
+    def run_streamed(
+        terminal: Callable[[CalculationBucket], object],
+        expected_source_yields: int,
+        observation: str,
+    ) -> None:
+        bucket = CalculationBucket(manager)
+        source_yields = Counter()
+        original_iter = bucket._iter_terminal_combinations
+
+        def counted_iter() -> Generator[dict[str, object], None, None]:
+            for combination in original_iter():
+                source_yields.increment()
+                yield combination
+
+        monkeypatch.setattr(bucket, "_iter_terminal_combinations", counted_iter)
+        with count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is manager,
+        ) as constructor_calls:
+            terminal(bucket)
+        perf_budgets.assert_observation(
+            f"CALC_TERM_SCALAR_{size}_{observation}_SOURCE_YIELDS",
+            source_yields.value,
+        )
+        perf_budgets.assert_observation(
+            f"CALC_TERM_SCALAR_{size}_{observation}_CONSTRUCTORS",
+            constructor_calls.value,
+        )
+        assert source_yields.value == expected_source_yields
+        assert constructor_calls.value == expected_source_yields
+
+    run_streamed(
+        lambda bucket: bucket.first(),
+        1,
+        "FIRST",
+    )
+
+    def multiple_match(bucket: CalculationBucket) -> object:
+        with pytest.raises(ValueError):
+            return bucket.get()
+        return None
+
+    run_streamed(multiple_match, 2, "GET_MULTIPLE")
+
+    candidate = manager(value=0)
+
+    def contains_first(bucket: CalculationBucket) -> object:
+        return candidate in bucket
+
+    run_streamed(contains_first, 1, "CONTAINS")
+
+    fallback_source = Counter()
+    fallback_values = CountingIterable(range(size), fallback_source)
+    fallback_manager, _input_field = _make_default_calculation_manager(
+        f"ScalarTerminalFallback{size}Manager",
+        "value",
+        Input(int, possible_values=fallback_values),
+    )
+    fallback_bucket = CalculationBucket(fallback_manager)
+    with count_profiled_calls(
+        constructor_code,
+        lambda self: self.__class__ is fallback_manager,
+    ) as fallback_constructor_calls:
+        fallback_bucket.first()
+    perf_budgets.assert_observation(
+        f"CALC_TERM_SCALAR_{size}_FALLBACK_SOURCE_YIELDS",
+        fallback_source.value,
+    )
+    perf_budgets.assert_observation(
+        f"CALC_TERM_SCALAR_{size}_FALLBACK_CONSTRUCTORS",
+        fallback_constructor_calls.value,
+    )
+    assert fallback_source.value == size
+    assert fallback_constructor_calls.value == 1
+
+    last_source = Counter()
+    last_values = CountingIterable(range(size), last_source)
+    last_manager, _input_field = _make_default_calculation_manager(
+        f"ScalarTerminalLast{size}Manager",
+        "value",
+        Input(int, possible_values=last_values),
+    )
+    last_bucket = CalculationBucket(last_manager)
+    with count_profiled_calls(
+        constructor_code,
+        lambda self: self.__class__ is last_manager,
+    ) as last_constructor_calls:
+        last_bucket.last()
+    perf_budgets.assert_observation(
+        f"CALC_TERM_SCALAR_{size}_LAST_SOURCE_YIELDS",
+        last_source.value,
+    )
+    perf_budgets.assert_observation(
+        f"CALC_TERM_SCALAR_{size}_LAST_CONSTRUCTORS",
+        last_constructor_calls.value,
+    )
+    assert last_source.value == size
+    assert last_constructor_calls.value == size

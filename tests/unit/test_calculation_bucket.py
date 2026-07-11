@@ -4,7 +4,11 @@ from django.test import TestCase
 from datetime import date
 from types import SimpleNamespace
 from unittest.mock import patch
-from general_manager.bucket.calculation_bucket import CalculationBucket
+from general_manager.bucket.calculation_bucket import (
+    CalculationBucket,
+    MissingCalculationMatchError,
+    MultipleCalculationMatchError,
+)
 from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.interface import CalculationInterface
 from general_manager.manager.input import DateRangeDomain, Input
@@ -1878,3 +1882,164 @@ class TestCalculationBucketCoverageEdges(TestCase):
         self.assertEqual(empty.generate_combinations(), [])
         self.assertEqual(empty.filter_definitions, {})
         self.assertEqual(empty.exclude_definitions, {})
+
+
+class TestCalculationTerminalStreams(TestCase):
+    """Characterize the scalar-only terminal stream admission boundary."""
+
+    @staticmethod
+    def _make_scalar_bucket(values: tuple[int, ...] | range) -> CalculationBucket:
+        class ScalarCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=values)
+
+        GeneralManagerMeta.ensure_attributes_initialized(ScalarCalculation)
+        return CalculationBucket(ScalarCalculation)
+
+    def test_admitted_scalar_bucket_has_stream_plan_and_first_is_bounded(self) -> None:
+        bucket = self._make_scalar_bucket(tuple(range(1000)))
+
+        self.assertTrue(bucket._terminal_stream_supported())
+        first = bucket.first()
+
+        self.assertIsNotNone(first)
+        assert first is not None
+        self.assertEqual(first.identification, {"value": 0})
+        self.assertIsNone(bucket._data)
+        self.assertEqual(bucket._combination_evidence, {})
+
+    def test_admitted_scalar_get_and_membership_consume_only_deciding_prefix(
+        self,
+    ) -> None:
+        bucket = self._make_scalar_bucket(range(1000))
+        with self.assertRaises(MultipleCalculationMatchError):
+            bucket.get()
+        self.assertIsNone(bucket._data)
+        self.assertEqual(bucket._combination_evidence, {})
+
+        bucket = self._make_scalar_bucket(range(1000))
+        expected = bucket._manager_class(value=1)
+        self.assertTrue(expected in bucket)
+        self.assertIsNone(bucket._data)
+        self.assertEqual(bucket._combination_evidence, {})
+
+    def test_admitted_scalar_empty_and_no_match_exhaust_and_cache(self) -> None:
+        empty = self._make_scalar_bucket(tuple())
+        self.assertIsNone(empty.first())
+        self.assertEqual(empty._data, [])
+
+        no_match = self._make_scalar_bucket(tuple())
+        with self.assertRaises(MissingCalculationMatchError):
+            no_match.get()
+        self.assertEqual(no_match._data, [])
+        self.assertEqual(no_match._combination_evidence, {})
+
+    def test_scalar_stream_fallbacks_are_not_admitted(self) -> None:
+        class ListCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=[0, 1])
+
+        GeneralManagerMeta.ensure_attributes_initialized(ListCalculation)
+        bucket = CalculationBucket(ListCalculation)
+
+        self.assertFalse(bucket._terminal_stream_supported())
+
+    def test_scalar_admission_rejects_filters_order_and_custom_sources(self) -> None:
+        bucket = self._make_scalar_bucket(range(3))
+
+        for mutate in (
+            lambda current: setattr(current, "sort_key", "value"),
+            lambda current: setattr(current, "reverse", True),
+            lambda current: current._filters.update(
+                {"value": {"filter_funcs": [lambda value: value == 0]}}
+            ),
+            lambda current: current._excludes.update(
+                {"value": {"filter_funcs": [lambda value: value == 0]}}
+            ),
+        ):
+            current = self._make_scalar_bucket(range(3))
+            mutate(current)
+            self.assertFalse(current._terminal_stream_supported())
+
+        class CustomValues:
+            def __iter__(self):
+                yield from (0, 1, 2)
+
+        class CustomCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=CustomValues())
+
+        GeneralManagerMeta.ensure_attributes_initialized(CustomCalculation)
+        self.assertFalse(
+            CalculationBucket(CustomCalculation)._terminal_stream_supported()
+        )
+
+        bucket._data = [{"value": 0}]
+        self.assertFalse(bucket._terminal_stream_supported())
+
+    def test_scalar_admission_rejects_mutated_input_state(self) -> None:
+        for mutate in (
+            lambda field: setattr(field, "required", False),
+            lambda field: setattr(field, "is_manager", True),
+            lambda field: setattr(field, "depends_on", ["other"]),
+            lambda field: setattr(field, "normalizer", lambda value: value),
+        ):
+            bucket = self._make_scalar_bucket(range(2))
+            mutate(bucket.input_fields["value"])
+            self.assertFalse(bucket._terminal_stream_supported())
+
+    def test_last_remains_full_path(self) -> None:
+        bucket = self._make_scalar_bucket(range(3))
+
+        last = bucket.last()
+
+        self.assertIsNotNone(last)
+        self.assertEqual(last.identification, {"value": 2})
+        self.assertEqual(bucket._data, [{"value": 0}, {"value": 1}, {"value": 2}])
+
+    def test_terminal_stream_owns_one_run_context_and_cleans_evidence(self) -> None:
+        bucket = self._make_scalar_bucket(range(2))
+        contexts = []
+        original_iter = bucket._iter_terminal_combinations
+
+        def observed_iter():
+            for combination in original_iter():
+                contexts.append(current_calculation_run_context())
+                yield combination
+
+        bucket._iter_terminal_combinations = observed_iter
+        with self.assertRaises(MultipleCalculationMatchError):
+            bucket.get()
+
+        self.assertEqual(len(contexts), 2)
+        self.assertTrue(all(context is contexts[0] for context in contexts))
+        self.assertIsNotNone(contexts[0])
+        self.assertIsNone(current_calculation_run_context())
+        self.assertEqual(bucket._combination_evidence, {})
+
+    def test_early_terminal_then_generate_combinations_rebuilds_complete_cache(
+        self,
+    ) -> None:
+        bucket = self._make_scalar_bucket(range(3))
+
+        first = bucket.first()
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(bucket._data)
+        self.assertEqual(
+            bucket.generate_combinations(),
+            [{"value": 0}, {"value": 1}, {"value": 2}],
+        )
+
+    def test_filtered_get_and_sorted_terminals_use_materialization_path(self) -> None:
+        bucket = self._make_scalar_bucket(range(3))
+
+        self.assertEqual(bucket.get(value=1).identification, {"value": 1})
+        self.assertIsNone(bucket._data)
+
+        sorted_bucket = self._make_scalar_bucket(range(3)).sort("value", reverse=True)
+        self.assertEqual(sorted_bucket.first().identification, {"value": 2})
+        self.assertEqual(
+            sorted_bucket._data,
+            [{"value": 2}, {"value": 1}, {"value": 0}],
+        )
