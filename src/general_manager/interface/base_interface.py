@@ -557,7 +557,10 @@ def _interface_uses_manager_input_seed_plan(interface: object) -> bool:
     interface_state = type.__getattribute__(type(interface), _INSTANCE_DICT_NAME)
     return (
         type(interface_state) is MappingProxyType
-        and interface_state.get(_MANAGER_INPUT_SEED_PLAN_NAME)
+        and _mapping_value_by_identity(
+            interface_state,
+            _MANAGER_INPUT_SEED_PLAN_NAME,
+        )
         is _MANAGER_INPUT_SEED_PLAN_TOKEN
     )
 

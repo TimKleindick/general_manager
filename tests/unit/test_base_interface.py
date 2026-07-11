@@ -201,6 +201,36 @@ class DummyInterface(InterfaceBase):
 
 
 class InterfaceBaseTests(SimpleTestCase):
+    def test_seed_plan_lookup_does_not_invoke_hostile_string_key_hooks(self):
+        hook_calls = []
+
+        class HostileMarkerKey(str):
+            def __hash__(self):
+                hook_calls.append("hash")
+                return str.__hash__(self)
+
+            def __eq__(self, other):
+                hook_calls.append("eq")
+                return str.__eq__(self, other)
+
+        class ScalarInterface(InterfaceBase):
+            input_fields: ClassVar[dict[str, DummyInput]] = {"id": DummyInput(str)}
+
+        hostile_marker = HostileMarkerKey(
+            "".join(("_gm_manager", "_input_seed", "_plan"))
+        )
+        hostile_interface = type(
+            "HostileMarkerInterface",
+            (ScalarInterface,),
+            {hostile_marker: object()},
+        )
+        hook_calls.clear()
+
+        interface = hostile_interface("value")
+
+        self.assertEqual(interface.identification, {"id": "value"})
+        self.assertEqual(hook_calls, [])
+
     def test_calculation_seed_runtime_imports_are_cycle_safe(self):
         root = Path(__file__).resolve().parents[2]
         environment = os.environ.copy()
