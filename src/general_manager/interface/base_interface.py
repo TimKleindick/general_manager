@@ -147,8 +147,8 @@ _GENERAL_MANAGER_META_PROVENANCE: (
 class _SeededFieldOrigin:
     manager_ref: ReferenceType[object] | None
     formatted_identification: dict[str, object]
+    condition: Condition
     lazy: bool = False
-    condition: Condition = field(default_factory=Condition)
     resolving_thread_id: int | None = None
 
 
@@ -157,7 +157,8 @@ class _SeededInterfaceOrigin:
     interface_ref: ReferenceType[object]
     resolved_values: dict[str, object]
     fields: dict[str, _SeededFieldOrigin]
-    transition_condition: Condition = field(default_factory=Condition)
+    transition_condition: Condition
+    waiting_fields_by_thread: dict[int, str] = field(default_factory=dict)
 
 
 _SEEDED_INTERFACE_ORIGINS: dict[int, _SeededInterfaceOrigin] = {}
@@ -170,6 +171,7 @@ def _register_seeded_interface_origin(
 ) -> bool:
     """Register constructor-seeded values without hashing interface objects."""
     interface_id = id(interface)
+    coordination_lock = RLock()
     fields: dict[str, _SeededFieldOrigin] = {}
     for field_name, manager in resolved_values.items():
         if type(field_name) is not str:
@@ -191,6 +193,7 @@ def _register_seeded_interface_origin(
         fields[field_name] = _SeededFieldOrigin(
             manager_ref=manager_ref,
             formatted_identification=formatted_identification,
+            condition=Condition(coordination_lock),
         )
 
     def remove_origin(interface_ref: ReferenceType[object]) -> None:
@@ -207,6 +210,7 @@ def _register_seeded_interface_origin(
         interface_ref=interface_ref,
         resolved_values=resolved_values,
         fields=fields,
+        transition_condition=Condition(coordination_lock),
     )
     with _SEEDED_INTERFACE_ORIGINS_LOCK:
         _SEEDED_INTERFACE_ORIGINS[interface_id] = origin

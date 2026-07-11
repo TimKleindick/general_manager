@@ -270,6 +270,11 @@ def _transition_origin_to_virtual_fallback(
         _replace_live_resolved_cache_if_safe(interface_instance, resolved_values)
         _clear_seed_mirrors_if_safe(interface_instance)
         _discard_seeded_interface_origin(interface_instance, origin)
+        if type(origin.fields) is dict:
+            for field_origin in dict.values(origin.fields):
+                if type(field_origin) is _SeededFieldOrigin:
+                    field_origin.condition.notify_all()
+        origin.waiting_fields_by_thread = {}
 
 
 def _clear_seed_mirrors_if_safe(
@@ -287,24 +292,67 @@ def _clear_seed_mirrors_if_safe(
     ):
         return
     state = object.__getattribute__(interface_instance, _INSTANCE_DICT_NAME)
-    if not _exact_string_dict(state):
+    if type(state) is not dict:
         return
-    seeded_cache = _mapping_value_by_identity(
-        state,
-        _SEEDED_INPUT_VALUES_CACHE_NAME,
-        _MISSING_INTERFACE_STATE,
+    seeded_entry = next(
+        (
+            (key, value)
+            for key, value in dict.items(state)
+            if key is _SEEDED_INPUT_VALUES_CACHE_NAME
+        ),
+        None,
     )
-    if type(seeded_cache) is dict:
-        dict.clear(seeded_cache)
-        dict.pop(state, _SEEDED_INPUT_VALUES_CACHE_NAME, None)
-    lazy_cache = _mapping_value_by_identity(
-        state,
-        _LAZY_INPUT_VALUES_CACHE_NAME,
-        _MISSING_INTERFACE_STATE,
+    if seeded_entry is not None:
+        seeded_key, seeded_cache = seeded_entry
+        if type(seeded_cache) is dict:
+            dict.clear(seeded_cache)
+        dict.pop(state, seeded_key, None)
+    lazy_entry = next(
+        (
+            (key, value)
+            for key, value in dict.items(state)
+            if key is _LAZY_INPUT_VALUES_CACHE_NAME
+        ),
+        None,
     )
-    if type(lazy_cache) is set:
-        set.clear(lazy_cache)
-        dict.pop(state, _LAZY_INPUT_VALUES_CACHE_NAME, None)
+    if lazy_entry is not None:
+        lazy_key, lazy_cache = lazy_entry
+        if type(lazy_cache) is set:
+            set.clear(lazy_cache)
+        dict.pop(state, lazy_key, None)
+
+
+def _seeded_wait_chain_has_cycle(
+    origin: _SeededInterfaceOrigin,
+    starting_thread_id: int,
+) -> bool:
+    """Detect a field-owner wait cycle while the origin lock is held."""
+    if type(origin.waiting_fields_by_thread) is not dict:
+        return True
+    current_thread_id = starting_thread_id
+    visited_threads: set[int] = set()
+    while True:
+        if current_thread_id in visited_threads:
+            return True
+        visited_threads.add(current_thread_id)
+        waiting_field = dict.get(
+            origin.waiting_fields_by_thread,
+            current_thread_id,
+            _MISSING_INTERFACE_STATE,
+        )
+        if type(waiting_field) is not str:
+            return False
+        field_origin = _mapping_value_by_identity(
+            origin.fields,
+            waiting_field,
+            _MISSING_INTERFACE_STATE,
+        )
+        if type(field_origin) is not _SeededFieldOrigin:
+            return True
+        owner_thread_id = field_origin.resolving_thread_id
+        if owner_thread_id is None:
+            return False
+        current_thread_id = owner_thread_id
 
 
 def _post_seeded_manager_state_is_safe(
@@ -887,10 +935,12 @@ class CalculationReadCapability(BaseCapability):
                 field_origin = field_origin_value
                 input_field = input_field_value
                 with field_origin.condition:
-                    if _seeded_interface_origin(
-                        interface_instance
-                    ) is not origin or not _seeded_interface_dispatch_is_canonical(
-                        interface_instance
+                    if (
+                        _seeded_interface_origin(interface_instance) is not origin
+                        or not _seeded_interface_dispatch_is_canonical(
+                            interface_instance
+                        )
+                        or type(origin.waiting_fields_by_thread) is not dict
                     ):
                         if _seeded_interface_origin(interface_instance) is origin:
                             _transition_origin_to_virtual_fallback(
@@ -938,9 +988,29 @@ class CalculationReadCapability(BaseCapability):
                         ):
                             return None, cached_value
                     if field_origin.resolving_thread_id is not None:
-                        if field_origin.resolving_thread_id == get_ident():
+                        thread_id = get_ident()
+                        if field_origin.resolving_thread_id == thread_id:
                             raise RuntimeError(field_name)
-                        field_origin.condition.wait()
+                        dict.__setitem__(
+                            origin.waiting_fields_by_thread,
+                            thread_id,
+                            field_name,
+                        )
+                        if _seeded_wait_chain_has_cycle(origin, thread_id):
+                            dict.pop(
+                                origin.waiting_fields_by_thread,
+                                thread_id,
+                                None,
+                            )
+                            raise RuntimeError(field_name)
+                        try:
+                            field_origin.condition.wait()
+                        finally:
+                            dict.pop(
+                                origin.waiting_fields_by_thread,
+                                thread_id,
+                                None,
+                            )
                         continue
                     if cached_value is not _MISSING_INTERFACE_STATE:
                         dict.pop(resolved_values, field_name, None)
@@ -1009,6 +1079,11 @@ class CalculationReadCapability(BaseCapability):
                         )
                         published = True
                     claim.field_origin.resolving_thread_id = None
+                    dict.pop(
+                        claim.origin.waiting_fields_by_thread,
+                        claim.thread_id,
+                        None,
+                    )
                     claim.field_origin.condition.notify_all()
             return published
 

@@ -26,7 +26,7 @@ from general_manager.interface.capabilities.configuration import (
 )
 from general_manager.manager.input import Input
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.manager.meta import GeneralManagerMeta
+from general_manager.manager.meta import AttributeEvaluationError, GeneralManagerMeta
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.cache.cache_tracker import DependencyTracker
 
@@ -971,6 +971,75 @@ class TestCalculationInterface(TestCase):
         self.assertIsNone(original_ref())
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_dispatch_fallback_clears_mirrors_with_hostile_state_key(self):
+        key_hook_calls = []
+        mirror_dispatch_calls = []
+
+        class HostileStateKey(str):
+            def __hash__(self):
+                return str.__hash__(self)
+
+            def __eq__(self, other):
+                key_hook_calls.append(other)
+                raise AssertionError
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        original_ref = ref(original)
+        manager = HydratedCalculation(original)
+        interface = manager._interface
+        interface_state = vars(interface)
+        interface_state[HostileStateKey("unrelated-hostile-key")] = object()
+        for key in tuple(interface_state):
+            if type(key) is not str:
+                continue
+            if key == "_gm_seeded_input_values_cache":
+                interface_state[key] = [original]
+            elif key == "_gm_lazy_input_values_cache":
+                interface_state[key] = {"related": original}
+        interface_class = type(interface)
+
+        def custom_getattribute(current_interface, name):
+            if name in {
+                "_gm_seeded_input_values_cache",
+                "_gm_lazy_input_values_cache",
+            }:
+                mirror_dispatch_calls.append(name)
+            return object.__getattribute__(current_interface, name)
+
+        type.__setattr__(interface_class, "__getattribute__", custom_getattribute)
+        try:
+            resolved = manager.related
+        finally:
+            type.__delattr__(interface_class, "__getattribute__")
+
+        marker_names = {
+            key
+            for key in vars(interface)
+            if type(key) is str
+            and key
+            in {
+                "_gm_seeded_input_values_cache",
+                "_gm_lazy_input_values_cache",
+            }
+        }
+        self.assertEqual(marker_names, set())
+        self.assertEqual(key_hook_calls, [])
+        self.assertEqual(mirror_dispatch_calls, [])
+        self.assertIsNot(resolved, original)
+        del original
+        gc.collect()
+        self.assertIsNone(original_ref())
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_cross_field_normalizer_can_resolve_seeded_field_concurrently(self):
         worker_results = []
         worker_finished = threading.Event()
@@ -1055,6 +1124,76 @@ class TestCalculationInterface(TestCase):
         resolved = accessor(manager._interface)
         self.assertIsNot(resolved, original)
         self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_concurrent_cross_field_dependency_cycle_does_not_deadlock(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                first = Input(RelatedManager)
+                second = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+
+        for repeat in range(3):
+            with self.subTest(repeat=repeat):
+                barrier = threading.Barrier(2)
+
+                class BarrierDependencies(list):
+                    def __init__(self, values):
+                        super().__init__(values)
+                        self._barrier_pending = True
+                        self._barrier_lock = threading.Lock()
+
+                    def __iter__(self, current_barrier=barrier):
+                        with self._barrier_lock:
+                            wait_at_barrier = self._barrier_pending
+                            self._barrier_pending = False
+                        if wait_at_barrier:
+                            current_barrier.wait(5)
+                        return super().__iter__()
+
+                first_input = HydratedCalculation.Interface.input_fields["first"]
+                second_input = HydratedCalculation.Interface.input_fields["second"]
+                first_input.depends_on = []
+                second_input.depends_on = []
+                first = RelatedManager(f"first-{repeat}")
+                second = RelatedManager(f"second-{repeat}")
+                manager = HydratedCalculation(first, second)
+                first_input.depends_on = BarrierDependencies(["second"])
+                second_input.depends_on = BarrierDependencies(["first"])
+                first._invalidate_manager_state("stale")
+                second._invalidate_manager_state("stale")
+                errors = []
+
+                def resolve(
+                    field_name,
+                    current_manager=manager,
+                    current_errors=errors,
+                ):
+                    try:
+                        getattr(current_manager, field_name)
+                    except AttributeEvaluationError as error:
+                        current_errors.append(error)
+
+                threads = [
+                    threading.Thread(
+                        target=resolve,
+                        args=(field_name,),
+                        daemon=True,
+                    )
+                    for field_name in ("first", "second")
+                ]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(1)
+
+                self.assertTrue(all(not thread.is_alive() for thread in threads))
+                self.assertEqual(len(errors), 2)
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_concurrent_stale_seed_recast_publishes_one_wrapper(self):
