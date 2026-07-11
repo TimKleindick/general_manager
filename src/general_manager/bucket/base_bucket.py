@@ -13,8 +13,8 @@ from typing import (
 
 from general_manager.bucket.indexing import (
     BucketIndexKeySpec,
-    build_multi_bucket_index,
-    build_unique_bucket_index,
+    _build_multi_bucket_index_normalized,
+    _build_unique_bucket_index_normalized,
     normalize_bucket_index_key_spec,
     validate_bucket_index_max_rows,
 )
@@ -331,9 +331,9 @@ class Bucket(ABC, Generic[GeneralManagerType]):
                 return cast(dict[Hashable, GeneralManagerType], cached)
 
             with DependencyTracker() as dependencies:
-                index = build_unique_bucket_index(
+                index = _build_unique_bucket_index_normalized(
                     self,
-                    key_spec,
+                    normalized_key_spec,
                     max_rows=max_rows,
                 )
             context.set_bucket_index_result(
@@ -408,9 +408,9 @@ class Bucket(ABC, Generic[GeneralManagerType]):
                 return cast(dict[Hashable, tuple[GeneralManagerType, ...]], cached)
 
             with DependencyTracker() as dependencies:
-                index = build_multi_bucket_index(
+                index = _build_multi_bucket_index_normalized(
                     self,
-                    key_spec,
+                    normalized_key_spec,
                     max_rows=max_rows,
                 )
             context.set_bucket_index_result(

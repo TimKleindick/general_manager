@@ -258,6 +258,14 @@ def _resolve_normalized_bucket_index_key(
     composite: bool,
 ) -> Hashable:
     """Resolve a row key after the caller has normalized the key spec."""
+    if not composite:
+        field_name = field_names[0]
+        try:
+            value = getattr(row, field_name)
+        except AttributeError as error:
+            raise MissingBucketIndexKeyError(field_name, row) from error
+        return freeze_bucket_index_value(value)
+
     values: list[Hashable] = []
     for field_name in field_names:
         try:
@@ -280,6 +288,23 @@ def _iter_guarded_rows(
         if max_rows is not None and index >= max_rows:
             raise BucketIndexTooLargeError(max_rows)
         yield row
+
+
+def _build_unique_bucket_index_normalized(
+    rows: Iterable[T],
+    normalized_key_spec: NormalizedBucketIndexKeySpec,
+    *,
+    max_rows: int | None,
+) -> dict[Hashable, T]:
+    """Build a unique index from an already normalized key specification."""
+    _, field_names, composite = normalized_key_spec
+    indexed: dict[Hashable, T] = {}
+    for row in _iter_guarded_rows(rows, max_rows):
+        key = _resolve_normalized_bucket_index_key(row, field_names, composite)
+        if key in indexed:
+            raise DuplicateBucketIndexKeyError(key)
+        indexed[key] = row
+    return indexed
 
 
 def build_unique_bucket_index(
@@ -316,14 +341,27 @@ def build_unique_bucket_index(
             duplicate, missing-field, or unhashable-key errors on the first row
             past the limit.
     """
-    _, field_names, composite = normalize_bucket_index_key_spec(key_spec)
-    indexed: dict[Hashable, T] = {}
+    normalized_key_spec = normalize_bucket_index_key_spec(key_spec)
+    return _build_unique_bucket_index_normalized(
+        rows,
+        normalized_key_spec,
+        max_rows=max_rows,
+    )
+
+
+def _build_multi_bucket_index_normalized(
+    rows: Iterable[T],
+    normalized_key_spec: NormalizedBucketIndexKeySpec,
+    *,
+    max_rows: int | None,
+) -> dict[Hashable, tuple[T, ...]]:
+    """Build a grouped index from an already normalized key specification."""
+    _, field_names, composite = normalized_key_spec
+    grouped: defaultdict[Hashable, list[T]] = defaultdict(list)
     for row in _iter_guarded_rows(rows, max_rows):
         key = _resolve_normalized_bucket_index_key(row, field_names, composite)
-        if key in indexed:
-            raise DuplicateBucketIndexKeyError(key)
-        indexed[key] = row
-    return indexed
+        grouped[key].append(row)
+    return {key: tuple(values) for key, values in grouped.items()}
 
 
 def build_multi_bucket_index(
@@ -359,9 +397,9 @@ def build_multi_bucket_index(
             missing-field or unhashable-key errors on the first row past the
             limit.
     """
-    _, field_names, composite = normalize_bucket_index_key_spec(key_spec)
-    grouped: defaultdict[Hashable, list[T]] = defaultdict(list)
-    for row in _iter_guarded_rows(rows, max_rows):
-        key = _resolve_normalized_bucket_index_key(row, field_names, composite)
-        grouped[key].append(row)
-    return {key: tuple(values) for key, values in grouped.items()}
+    normalized_key_spec = normalize_bucket_index_key_spec(key_spec)
+    return _build_multi_bucket_index_normalized(
+        rows,
+        normalized_key_spec,
+        max_rows=max_rows,
+    )

@@ -1,4 +1,6 @@
 # type: ignore
+from unittest.mock import patch
+
 from django.test import SimpleTestCase
 
 from general_manager.bucket.base_bucket import Bucket
@@ -8,6 +10,7 @@ from general_manager.bucket.indexing import (
     DuplicateBucketIndexKeyError,
     MissingBucketIndexKeyError,
     UnsupportedBucketIndexKeySpecError,
+    normalize_bucket_index_key_spec,
 )
 from general_manager.cache.run_context import CalculationRunContext
 
@@ -416,6 +419,42 @@ class BucketTests(SimpleTestCase):
 
         self.assertEqual(index["A"].value, 1)
         self.assertEqual(index["B"].value, 2)
+
+    def test_index_by_normalizes_key_spec_once(self):
+        bucket = DummyBucket(self.manager_class, [DummyRow("A", "x", 1)])
+
+        with (
+            patch(
+                "general_manager.bucket.base_bucket.normalize_bucket_index_key_spec",
+                wraps=normalize_bucket_index_key_spec,
+            ) as base_normalize,
+            patch(
+                "general_manager.bucket.indexing.normalize_bucket_index_key_spec",
+                wraps=normalize_bucket_index_key_spec,
+            ) as builder_normalize,
+        ):
+            self.assertEqual(bucket.index_by("code")["A"].value, 1)
+
+        self.assertEqual(base_normalize.call_count, 1)
+        self.assertEqual(builder_normalize.call_count, 0)
+
+    def test_index_many_normalizes_key_spec_once(self):
+        bucket = DummyBucket(self.manager_class, [DummyRow("A", "x", 1)])
+
+        with (
+            patch(
+                "general_manager.bucket.base_bucket.normalize_bucket_index_key_spec",
+                wraps=normalize_bucket_index_key_spec,
+            ) as base_normalize,
+            patch(
+                "general_manager.bucket.indexing.normalize_bucket_index_key_spec",
+                wraps=normalize_bucket_index_key_spec,
+            ) as builder_normalize,
+        ):
+            self.assertEqual(bucket.index_many("code")["A"][0].value, 1)
+
+        self.assertEqual(base_normalize.call_count, 1)
+        self.assertEqual(builder_normalize.call_count, 0)
 
     def test_index_many_preserves_duplicate_key_order(self):
         """Group duplicate keys while preserving each row's source order."""
