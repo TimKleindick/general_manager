@@ -2981,7 +2981,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 retain_evidence=True,
             )
 
-    def _iter_terminal_managers(self) -> Generator[GeneralManagerType, None, None]:
+    def _iter_terminal_managers(
+        self,
+    ) -> Generator[tuple[GeneralManagerType, Combination], None, None]:
         """Construct admitted scalar managers lazily under one trusted lease."""
         construction_plan = self._trusted_construction_plan()
         if construction_plan is None:
@@ -2990,9 +2992,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self._invalidate_combination_evidence()
         try:
             for combination in combinations:
-                yield self._manager_from_combination(
+                yield (
+                    self._manager_from_combination(
+                        combination,
+                        construction_plan=construction_plan,
+                    ),
                     combination,
-                    construction_plan=construction_plan,
                 )
         finally:
             combinations.close()
@@ -3000,14 +3005,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def _finish_terminal_stream(
         self,
-        managers: Generator[GeneralManagerType, None, None],
+        managers: Generator[tuple[GeneralManagerType, Combination], None, None],
     ) -> Generator[GeneralManagerType, None, None]:
         """Publish complete identifications only after normal stream exhaustion."""
         identifications: list[Combination] = []
         exhausted = False
         try:
-            for manager in managers:
-                identifications.append(manager.identification)
+            for manager, combination in managers:
+                identifications.append(combination)
                 yield manager
             exhausted = True
         finally:

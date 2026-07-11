@@ -1934,6 +1934,24 @@ class TestCalculationTerminalStreams(TestCase):
         self.assertEqual(no_match._data, [])
         self.assertEqual(no_match._combination_evidence, {})
 
+    def test_exhausted_stream_preserves_topological_combination_shape(self) -> None:
+        class PairCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                a = Input(int, possible_values=(1,))
+                b = Input(str, possible_values=("x",))
+
+        GeneralManagerMeta.ensure_attributes_initialized(PairCalculation)
+        expected_bucket = CalculationBucket(PairCalculation)
+        expected = expected_bucket.generate_combinations()
+
+        bucket = CalculationBucket(PairCalculation)
+        self.assertEqual(bucket.get().identification, {"a": 1, "b": "x"})
+        self.assertEqual(bucket._data, expected)
+        self.assertEqual(
+            [list(combo) for combo in bucket._data],
+            [list(combo) for combo in expected],
+        )
+
     def test_scalar_stream_fallbacks_are_not_admitted(self) -> None:
         class ListCalculation(GeneralManager):
             class Interface(CalculationInterface):
