@@ -1741,10 +1741,149 @@ def test_input_hook_mutation_between_yields_revokes_stale_trust(
     assert bucket._combination_evidence == {}
 
 
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_stateful_input_getattribute_dispatch_is_never_trusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    narrowed = False
+
+    def stateful_getattribute(self: Input[type[object]], name: str) -> object:
+        if name == "possible_values" and narrowed:
+            return [1]
+        return object.__getattribute__(self, name)
+
+    monkeypatch.setattr(Input, "__getattribute__", stateful_getattribute)
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1, 2]))
+    )
+    assert not bucket._uses_standard_trusted_construction()
+    iterator = iter(bucket)
+    assert next(iterator).identification == {"code": 1}
+
+    narrowed = True
+    with pytest.raises(
+        InvalidInputValueError,
+        match=r"^Invalid value for code: 2, allowed: \[1\]\.$",
+    ):
+        next(iterator)
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_input_dispatch_mutation_between_yields_revokes_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1, 2]))
+    )
+    iterator = iter(bucket)
+    assert next(iterator).identification == {"code": 1}
+
+    def narrowed_dispatch(self: Input[type[object]], name: str) -> object:
+        if name == "possible_values":
+            return [1]
+        return object.__getattribute__(self, name)
+
+    monkeypatch.setattr(Input, "__getattribute__", narrowed_dispatch)
+
+    with pytest.raises(
+        InvalidInputValueError,
+        match=r"^Invalid value for code: 2, allowed: \[1\]\.$",
+    ):
+        next(iterator)
+    assert bucket._combination_evidence == {}
+
+
+@pytest.mark.parametrize("dispatch_owner", ["interface", "manager"])
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_custom_instance_dispatch_falls_back_to_membership(
+    dispatch_owner: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def dispatch(self: object, name: str) -> object:
+        return object.__getattribute__(self, name)
+
+    attributes = {"__getattribute__": dispatch}
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1])),
+        interface_attributes=attributes if dispatch_owner == "interface" else None,
+        manager_attributes=attributes if dispatch_owner == "manager" else None,
+    )
+    resolutions = 0
+    original_resolve = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+
+    assert not bucket._uses_standard_trusted_construction()
+    assert next(iter(bucket)).identification == {"code": 1}
+    assert resolutions == 2
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_custom_manager_metaclass_dispatch_falls_back_to_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CustomDispatchMeta(GeneralManagerMeta):
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            return super().__call__(*args, **kwargs)
+
+    interface = cast(
+        type[CalculationInterface],
+        type(
+            "CustomDispatchInterface",
+            (CalculationInterface,),
+            {
+                "__module__": __name__,
+                "code": Input(int, possible_values=[1]),
+            },
+        ),
+    )
+    registries = (
+        GeneralManagerMeta.all_classes,
+        GeneralManagerMeta.read_only_classes,
+        GeneralManagerMeta.pending_attribute_initialization,
+        GeneralManagerMeta.pending_graphql_interfaces,
+    )
+    snapshots = tuple(tuple(registry) for registry in registries)
+    manager = cast(
+        type[GeneralManager],
+        CustomDispatchMeta(
+            "CustomDispatchManager",
+            (GeneralManager,),
+            {"__module__": __name__, "Interface": interface},
+        ),
+    )
+    for registry in registries:
+        while manager in registry:
+            registry.remove(manager)
+    manager.Interface._parent_class = manager
+    assert tuple(tuple(registry) for registry in registries) == snapshots
+    bucket = CalculationBucket(manager)
+    resolutions = 0
+    original_resolve = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+
+    assert not bucket._uses_standard_trusted_construction()
+    assert next(iter(bucket)).identification == {"code": 1}
+    assert resolutions == 2
+
+
 @pytest.mark.parametrize(
     ("mutation_target", "callback_kind"),
     [
         ("input_cast", "normalizer"),
+        ("input_dispatch", "normalizer"),
         ("input_state", "normalizer"),
         ("interface_process", "validator"),
         ("manager_init", "normalizer"),
@@ -1780,6 +1919,12 @@ def test_hook_mutation_inside_input_callback_forces_membership_fallback(
                 return original(self, value, identification)
 
             monkeypatch.setattr(Input, "cast", wrapped_cast)
+        elif mutation_target == "input_dispatch":
+
+            def wrapped_dispatch(self: Input[type[object]], name: str) -> object:
+                return object.__getattribute__(self, name)
+
+            monkeypatch.setattr(Input, "__getattribute__", wrapped_dispatch)
         elif mutation_target == "input_state":
             bucket.input_fields["code"].audit_marker = True  # type: ignore[attr-defined]
         elif mutation_target == "interface_process":

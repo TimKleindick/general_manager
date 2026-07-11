@@ -39,11 +39,12 @@ from general_manager.manager.input import (
     InputDomain,
     NumericRangeDomain,
 )
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.utils.filter_parser import ParsedFilters, parse_filters
 
 if TYPE_CHECKING:
     from general_manager.api.property import GraphQLProperty
-    from general_manager.manager.general_manager import GeneralManager
 
 
 type Combination = dict[str, object]
@@ -237,6 +238,14 @@ _INPUT_CONSTRUCTION_HOOK_NAMES = (
     "resolve_possible_values",
     "_build_dependency_values",
 )
+_INSTANCE_DISPATCH_NAMES = ("__getattribute__", "__getattr__", "__setattr__")
+_METACLASS_DISPATCH_NAMES = (
+    "__call__",
+    "__getattribute__",
+    "__getattr__",
+    "__setattr__",
+)
+_STATIC_ATTRIBUTE_MISSING = object()
 
 
 def _static_hook_snapshot(
@@ -265,6 +274,45 @@ def _static_hooks_match(
     )
 
 
+def _dispatch_snapshot(
+    owner: type[object],
+    dispatch_names: tuple[str, ...],
+) -> tuple[object, ...]:
+    """Read dispatch descriptors while preserving absent attributes."""
+    return tuple(
+        inspect.getattr_static(owner, name, _STATIC_ATTRIBUTE_MISSING)
+        for name in dispatch_names
+    )
+
+
+def _dispatch_matches(
+    owner: type[object],
+    dispatch_names: tuple[str, ...],
+    expected: tuple[object, ...],
+) -> bool:
+    """Compare dispatch descriptors by identity without invoking them."""
+    current = _dispatch_snapshot(owner, dispatch_names)
+    return all(
+        actual is expected_descriptor
+        for actual, expected_descriptor in zip(current, expected, strict=True)
+    )
+
+
+_CANONICAL_INPUT_DISPATCH = _dispatch_snapshot(object, _INSTANCE_DISPATCH_NAMES)
+_CANONICAL_INTERFACE_DISPATCH = _dispatch_snapshot(
+    InterfaceBase,
+    _INSTANCE_DISPATCH_NAMES,
+)
+_CANONICAL_MANAGER_DISPATCH = _dispatch_snapshot(
+    GeneralManager,
+    _INSTANCE_DISPATCH_NAMES,
+)
+_CANONICAL_MANAGER_META_DISPATCH = _dispatch_snapshot(
+    GeneralManagerMeta,
+    _METACLASS_DISPATCH_NAMES,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class _TrustedConstructionPlan:
     """Snapshot audited construction hooks for one private manager pass."""
@@ -275,6 +323,10 @@ class _TrustedConstructionPlan:
     manager_hooks: tuple[object, ...]
     interface_hooks: tuple[object, ...]
     input_hooks: tuple[object, ...]
+    manager_dispatch: tuple[object, ...]
+    interface_dispatch: tuple[object, ...]
+    input_dispatch: tuple[object, ...]
+    metaclass_dispatch: tuple[object, ...]
 
     def is_current(self) -> bool:
         """Fail closed when any construction hook changed after preparation."""
@@ -310,6 +362,27 @@ class _TrustedConstructionPlan:
                 Input,
                 _INPUT_CONSTRUCTION_HOOK_NAMES,
                 self.input_hooks,
+            )
+            and type(self.manager_class) is GeneralManagerMeta
+            and _dispatch_matches(
+                self.manager_class,
+                _INSTANCE_DISPATCH_NAMES,
+                self.manager_dispatch,
+            )
+            and _dispatch_matches(
+                self.interface_class,
+                _INSTANCE_DISPATCH_NAMES,
+                self.interface_dispatch,
+            )
+            and _dispatch_matches(
+                Input,
+                _INSTANCE_DISPATCH_NAMES,
+                self.input_dispatch,
+            )
+            and _dispatch_matches(
+                GeneralManagerMeta,
+                _METACLASS_DISPATCH_NAMES,
+                self.metaclass_dispatch,
             )
         )
 
@@ -870,11 +943,35 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def _trusted_construction_plan(self) -> _TrustedConstructionPlan | None:
         """Capture exact hook identities for one eligible construction pass."""
-        from general_manager.manager.general_manager import GeneralManager
-
         manager_class = self._manager_class
         interface_class = manager_class.Interface
         if not issubclass(manager_class, GeneralManager):
+            return None
+        if type(manager_class) is not GeneralManagerMeta:
+            return None
+        if not _dispatch_matches(
+            manager_class,
+            _INSTANCE_DISPATCH_NAMES,
+            _CANONICAL_MANAGER_DISPATCH,
+        ):
+            return None
+        if not _dispatch_matches(
+            interface_class,
+            _INSTANCE_DISPATCH_NAMES,
+            _CANONICAL_INTERFACE_DISPATCH,
+        ):
+            return None
+        if not _dispatch_matches(
+            Input,
+            _INSTANCE_DISPATCH_NAMES,
+            _CANONICAL_INPUT_DISPATCH,
+        ):
+            return None
+        if not _dispatch_matches(
+            GeneralManagerMeta,
+            _METACLASS_DISPATCH_NAMES,
+            _CANONICAL_MANAGER_META_DISPATCH,
+        ):
             return None
         if manager_class.__init__ is not GeneralManager.__init__:
             return None
@@ -936,6 +1033,19 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             manager_hooks=manager_hooks,
             interface_hooks=interface_hooks,
             input_hooks=input_hooks,
+            manager_dispatch=_dispatch_snapshot(
+                manager_class,
+                _INSTANCE_DISPATCH_NAMES,
+            ),
+            interface_dispatch=_dispatch_snapshot(
+                interface_class,
+                _INSTANCE_DISPATCH_NAMES,
+            ),
+            input_dispatch=_dispatch_snapshot(Input, _INSTANCE_DISPATCH_NAMES),
+            metaclass_dispatch=_dispatch_snapshot(
+                GeneralManagerMeta,
+                _METACLASS_DISPATCH_NAMES,
+            ),
         )
 
     def _manager_from_combination(
