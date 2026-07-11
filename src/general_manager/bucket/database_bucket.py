@@ -1,7 +1,7 @@
 """Database-backed bucket implementation for GeneralManager collections."""
 
 from __future__ import annotations
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Collection, Hashable, Mapping
 from datetime import date, datetime
 from typing import Generator, TypeVar, cast
 
@@ -1331,6 +1331,21 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if primary_keys is not None:
             return pk in primary_keys
         return bool(self._data.filter(pk=pk).exists())
+
+    def _contains_all_primary_keys(
+        self,
+        primary_keys: Collection[LookupValue],
+    ) -> bool:
+        """Check a private primary-key batch with one query at most."""
+        self._track_effective_dependencies()
+        if not primary_keys:
+            return True
+        requested = set(primary_keys)
+        cached = self._peek_run_scoped_primary_keys()
+        if cached is not None:
+            return requested.issubset(set(cached))
+        present = set(self._data.filter(pk__in=requested).values_list("pk", flat=True))
+        return requested.issubset(present)
 
     def sort(
         self,

@@ -1,10 +1,15 @@
 # type: ignore
 
 from typing import ClassVar
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.db.models import CASCADE, CharField, ForeignKey, IntegerField
+from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils.crypto import get_random_string
+from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.manager.general_manager import GeneralManager
@@ -12,6 +17,7 @@ from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.measurement import MeasurementField, Measurement
 from general_manager.manager.input import Input
+from general_manager.interface.base_interface import InvalidInputValueError
 from general_manager.api.property import graph_ql_property
 from general_manager.cache.run_context import CalculationRunContext
 
@@ -173,6 +179,153 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             grouped,
             self.TaxCalculation.all().group_by("employee"),
         )
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_static_database_input_batches_membership_with_exact_dependencies(self):
+        for name in ("Alice", "Bob", "Carol"):
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+        source = self.Employee.all()
+
+        class StaticEmployeeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=source)
+
+        with (
+            DependencyTracker() as dependencies,
+            CaptureQueriesContext(connection) as queries,
+        ):
+            managers = list(CalculationBucket(StaticEmployeeCalculation))
+
+        self.assertEqual(len(managers), 3)
+        self.assertEqual(len(queries), 2)
+        self.assertIn((self.Employee.__name__, "all", ""), dependencies)
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_static_database_input_mutation_substitution_and_exposure_fall_back(self):
+        employees = [
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+            for name in ("Alice", "Bob")
+        ]
+        source = self.Employee.all()
+
+        class GuardedEmployeeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=source)
+
+        mutated = CalculationBucket(GuardedEmployeeCalculation)
+        mutated_combinations = mutated._materialize_combinations(expose=False)
+        mutated_combinations[0]["employee"].identification["id"] = 987_654_321
+        with self.assertRaises(InvalidInputValueError):
+            list(mutated)
+
+        substituted = CalculationBucket(GuardedEmployeeCalculation)
+        substituted._materialize_combinations(expose=False)
+        GuardedEmployeeCalculation.Interface.input_fields[
+            "employee"
+        ].possible_values = self.Employee.filter(id=-1)
+        with self.assertRaises(InvalidInputValueError):
+            list(substituted)
+
+        GuardedEmployeeCalculation.Interface.input_fields[
+            "employee"
+        ].possible_values = source
+        exposed = CalculationBucket(GuardedEmployeeCalculation)
+        self.assertEqual(len(exposed.generate_combinations()), 2)
+        self.Employee.Interface._model.objects.filter(
+            pk=employees[-1].identification["id"]
+        ).delete()
+        with self.assertRaises(InvalidInputValueError):
+            list(exposed)
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_callable_and_validator_database_inputs_keep_live_fallbacks(self):
+        employees = [
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+            for name in ("Alice", "Bob")
+        ]
+        source = self.Employee.all()
+        callback_calls = 0
+
+        def possible_values():
+            nonlocal callback_calls
+            callback_calls += 1
+            return source
+
+        class CallbackEmployeeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=possible_values)
+
+        self.assertEqual(len(list(CalculationBucket(CallbackEmployeeCalculation))), 2)
+        self.assertEqual(callback_calls, 3)
+
+        validator_calls = 0
+
+        def validator(_value):
+            nonlocal validator_calls
+            validator_calls += 1
+            if validator_calls == 1:
+                self.Employee.Interface._model.objects.filter(
+                    pk=employees[-1].identification["id"]
+                ).delete()
+            return True
+
+        class ValidatedEmployeeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(
+                    self.Employee,
+                    possible_values=source,
+                    validator=validator,
+                )
+
+        with self.assertRaises(InvalidInputValueError):
+            list(CalculationBucket(ValidatedEmployeeCalculation))
+        self.assertEqual(validator_calls, 2)
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_database_preview_falls_back_and_preparation_errors_clear_evidence(self):
+        for name in ("Alice", "Bob"):
+            self.Employee.create(
+                name=name,
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+        source = self.Employee.all()
+
+        class PreviewEmployeeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                employee = Input(self.Employee, possible_values=source)
+
+        with patch.object(
+            source,
+            "_contains_all_primary_keys",
+            wraps=source._contains_all_primary_keys,
+        ) as batch_contains:
+            str(CalculationBucket(PreviewEmployeeCalculation))
+        batch_contains.assert_not_called()
+
+        bucket = CalculationBucket(PreviewEmployeeCalculation)
+        bucket._materialize_combinations(expose=False)
+        batch_error = RuntimeError("batch membership failed")
+
+        def fail_batch_query(_execute, _sql, _params, _many, _context):
+            raise batch_error
+
+        with connection.execute_wrapper(fail_batch_query):
+            with self.assertRaisesRegex(RuntimeError, "batch membership failed"):
+                next(iter(bucket))
+        self.assertEqual(bucket._combination_evidence, {})
 
     def test_manager_inputs_are_cached_only_within_the_calculation_instance(self):
         employee = self.Employee.create(

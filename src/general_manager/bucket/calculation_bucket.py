@@ -26,6 +26,7 @@ from typing import (
 from uuid import UUID
 from operator import attrgetter
 from copy import deepcopy
+from django.core.exceptions import EmptyResultSet, FieldError
 from general_manager.interface.base_interface import (
     InterfaceBase,
     generalManagerClassName,
@@ -33,6 +34,7 @@ from general_manager.interface.base_interface import (
     _trusted_enumeration_scope,
 )
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.bucket.indexing import freeze_bucket_index_value
 from general_manager.manager.input import (
     DateRangeDomain,
@@ -76,6 +78,29 @@ _INPUT_STATE_NAMES = frozenset(
 )
 _NUMERIC_RANGE_STATE_NAMES = frozenset({"kind", "min_value", "max_value", "step"})
 _DATE_RANGE_STATE_NAMES = frozenset({"kind", "start", "end", "frequency", "step"})
+_DATABASE_BUCKET_STATE_NAMES = frozenset(
+    {
+        "_data",
+        "_manager_class",
+        "filters",
+        "excludes",
+        "_search_date",
+        "_sort_keys",
+        "_sort_reverse",
+        "_run_scoped_cacheable",
+        "_query_signature_cache",
+        "_trusted_query_signature",
+    }
+)
+_DATABASE_BUCKET_HOOK_NAMES = (
+    "__contains__",
+    "_contains_all_primary_keys",
+    "_track_effective_dependencies",
+    "_query_signature",
+)
+_CANONICAL_DATABASE_BUCKET_HOOKS = tuple(
+    inspect.getattr_static(DatabaseBucket, name) for name in _DATABASE_BUCKET_HOOK_NAMES
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +243,138 @@ class _EnumerationEvidence:
 
     def track_membership_dependency(self) -> None:
         self.witness.track_membership_dependency()
+
+
+def _database_source_signature(source: DatabaseBucket[GeneralManager]) -> object | None:
+    """Return a fresh conservative signature for one exact live database source."""
+    try:
+        source_state = object.__getattribute__(source, "__dict__")
+    except AttributeError:
+        return None
+    if (
+        type(source) is not DatabaseBucket
+        or type(source_state) is not dict
+        or set(source_state) != _DATABASE_BUCKET_STATE_NAMES
+        or source._search_date is not None
+        or any(
+            inspect.getattr_static(DatabaseBucket, name) is not expected
+            for name, expected in zip(
+                _DATABASE_BUCKET_HOOK_NAMES,
+                _CANONICAL_DATABASE_BUCKET_HOOKS,
+                strict=True,
+            )
+        )
+    ):
+        return None
+    query_signature = source._query_signature()
+    if query_signature is None:
+        return None
+    try:
+        sql, params = source._data.query.sql_with_params()
+    except (AttributeError, EmptyResultSet, FieldError, TypeError, ValueError):
+        return None
+    parameter_tokens = tuple(_trusted_candidate_token(param) for param in params)
+    if any(token is None for token in parameter_tokens):
+        return None
+    return (
+        id(source._data),
+        id(source._data.query),
+        sql,
+        parameter_tokens,
+        source._data.db,
+        source._data.model,
+        source._manager_class,
+        source._search_date,
+    )
+
+
+def _standard_database_manager_class(manager_class: type[object]) -> bool:
+    """Reject manager classes whose dispatch or identification access is custom."""
+    return (
+        issubclass(manager_class, GeneralManager)
+        and type(manager_class) is GeneralManagerMeta
+        and manager_class.__init__ is GeneralManager.__init__
+        and _dispatch_matches(
+            manager_class,
+            _INSTANCE_DISPATCH_NAMES,
+            _CANONICAL_MANAGER_DISPATCH,
+        )
+        and inspect.getattr_static(manager_class, "identification")
+        is inspect.getattr_static(GeneralManager, "identification")
+    )
+
+
+@dataclass(slots=True)
+class _DatabaseEnumerationEvidence:
+    """Proof for one exact manager emitted from one exact database bucket."""
+
+    input_field: Input[type[object]]
+    provider: DatabaseBucket[GeneralManager]
+    provider_signature: object
+    manager: GeneralManager
+    identification: dict[str, object]
+    primary_key_token: _TrustedToken
+    authorized_tokens: frozenset[_TrustedToken] | None = None
+
+    @property
+    def primary_key(self) -> object:
+        return self.identification["id"]
+
+    def is_current(self, *, check_source_signature: bool = True) -> bool:
+        if (
+            type(self.input_field) is not Input
+            or not _input_has_exact_standard_state(self.input_field)
+            or _input_has_behavior_override(self.input_field)
+            or self.input_field.possible_values is not self.provider
+            or self.input_field.type is not self.provider._manager_class
+            or self.input_field.validator is not None
+            or self.input_field.normalizer is not None
+            or type(self.input_field.depends_on) is not list
+            or self.input_field.depends_on
+            or not _standard_database_manager_class(self.provider._manager_class)
+            or self.manager.__class__ is not self.provider._manager_class
+        ):
+            return False
+        if (
+            check_source_signature
+            and _database_source_signature(self.provider) != self.provider_signature
+        ):
+            return False
+        try:
+            current_identification = object.__getattribute__(
+                self.manager,
+                "_GeneralManager__id",
+            )
+        except AttributeError:
+            return False
+        return (
+            current_identification is self.identification
+            and type(current_identification) is dict
+            and len(current_identification) == 1
+            and "id" in current_identification
+            and _trusted_candidate_token(current_identification["id"])
+            == self.primary_key_token
+        )
+
+    def authorizes(
+        self,
+        input_field: Input[type[object]],
+        value: object,
+        _identification: Mapping[str, object],
+    ) -> bool:
+        return (
+            input_field is self.input_field
+            and value is self.manager
+            and self.authorized_tokens is not None
+            and self.primary_key_token in self.authorized_tokens
+            and self.is_current(check_source_signature=False)
+        )
+
+    def track_membership_dependency(self) -> None:
+        self.provider._track_effective_dependencies()
+
+
+type _TrustedEvidence = _EnumerationEvidence | _DatabaseEnumerationEvidence
 
 
 _MANAGER_CONSTRUCTION_HOOK_NAMES = (
@@ -403,7 +560,7 @@ class _TrustedConstructionPlan:
 class _PlanBoundEnumerationEvidence:
     """Require an unchanged construction plan at the membership gate."""
 
-    evidence: _EnumerationEvidence
+    evidence: _TrustedEvidence
     plan: _TrustedConstructionPlan
 
     def authorizes(
@@ -749,6 +906,52 @@ def _trusted_enumeration_evidence(
     )
 
 
+def _database_enumeration_evidence(
+    input_field: Input[type[object]],
+    provider: object,
+    candidate: object,
+) -> _DatabaseEnumerationEvidence | None:
+    """Build unprepared evidence for an exact static database bucket value."""
+    if type(provider) is not DatabaseBucket or type(input_field) is not Input:
+        return None
+    database_provider = cast(DatabaseBucket[GeneralManager], provider)
+    if (
+        input_field.possible_values is not database_provider
+        or input_field.type is not database_provider._manager_class
+        or input_field.validator is not None
+        or input_field.normalizer is not None
+        or type(input_field.depends_on) is not list
+        or input_field.depends_on
+        or not _input_has_exact_standard_state(input_field)
+        or _input_has_behavior_override(input_field)
+        or not _standard_database_manager_class(database_provider._manager_class)
+        or candidate.__class__ is not database_provider._manager_class
+    ):
+        return None
+    try:
+        identification = object.__getattribute__(candidate, "_GeneralManager__id")
+    except AttributeError:
+        return None
+    if (
+        type(identification) is not dict
+        or len(identification) != 1
+        or "id" not in identification
+    ):
+        return None
+    primary_key_token = _trusted_candidate_token(identification["id"])
+    provider_signature = _database_source_signature(database_provider)
+    if primary_key_token is None or provider_signature is None:
+        return None
+    return _DatabaseEnumerationEvidence(
+        input_field=input_field,
+        provider=database_provider,
+        provider_signature=provider_signature,
+        manager=cast(GeneralManager, candidate),
+        identification=identification,
+        primary_key_token=primary_key_token,
+    )
+
+
 class SortedFilters(TypedDict):
     """Internal parsed-filter partition used while generating combinations."""
 
@@ -913,7 +1116,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         self._data: list[Combination] | None = None
         self._combination_evidence: dict[
-            int, tuple[Combination, dict[str, _EnumerationEvidence]]
+            int, tuple[Combination, dict[str, _TrustedEvidence]]
         ] = {}
         self._evidence_exposed = False
         self.sort_key = sort_key
@@ -922,7 +1125,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
     def _register_combination_evidence(
         self,
         combination: Combination,
-        evidence_by_name: dict[str, _EnumerationEvidence],
+        evidence_by_name: dict[str, _TrustedEvidence],
     ) -> None:
         """Retain private provenance for one exact combination dictionary."""
         if self._evidence_exposed or not evidence_by_name:
@@ -934,7 +1137,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def _lookup_combination_evidence(
         self, combination: Combination
-    ) -> dict[str, _EnumerationEvidence] | None:
+    ) -> dict[str, _TrustedEvidence] | None:
         """Return provenance only when the identity-keyed entry still matches."""
         if self._evidence_exposed:
             return None
@@ -1096,17 +1299,79 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         ):
             return self._manager_class(**combination)
 
+    def _prepare_database_enumeration_evidence(
+        self,
+        combinations: Iterable[Combination],
+    ) -> None:
+        """Authorize exact database candidates with one membership query per source."""
+        if type(combinations) is not list and type(combinations) is not tuple:
+            return
+        grouped: dict[
+            int,
+            tuple[
+                DatabaseBucket[GeneralManager],
+                list[_DatabaseEnumerationEvidence],
+            ],
+        ] = {}
+        found_database_evidence = False
+        for combination in combinations:
+            evidence_by_name = self._lookup_combination_evidence(combination)
+            if evidence_by_name is None or set(evidence_by_name) != set(
+                self.input_fields
+            ):
+                return
+            for evidence in evidence_by_name.values():
+                if not isinstance(evidence, _DatabaseEnumerationEvidence):
+                    continue
+                found_database_evidence = True
+                if not evidence.is_current(check_source_signature=False):
+                    return
+                source_id = id(evidence.provider)
+                entry = grouped.get(source_id)
+                if entry is None:
+                    grouped[source_id] = (evidence.provider, [evidence])
+                elif entry[0] is evidence.provider:
+                    entry[1].append(evidence)
+                else:
+                    return
+        if not found_database_evidence:
+            return
+
+        if any(
+            _database_source_signature(source) != evidences[0].provider_signature
+            for source, evidences in grouped.values()
+        ):
+            return
+
+        authorized_by_source: list[
+            tuple[list[_DatabaseEnumerationEvidence], frozenset[_TrustedToken]]
+        ] = []
+        for source, evidences in grouped.values():
+            primary_keys = [evidence.primary_key for evidence in evidences]
+            if not source._contains_all_primary_keys(primary_keys):
+                continue
+            authorized_by_source.append(
+                (
+                    evidences,
+                    frozenset(evidence.primary_key_token for evidence in evidences),
+                )
+            )
+        for evidences, authorized_tokens in authorized_by_source:
+            for evidence in evidences:
+                evidence.authorized_tokens = authorized_tokens
+
     @contextmanager
     def _trusted_construction_pass(
         self,
         combinations: Iterable[Combination],
     ) -> Iterator[_TrustedConstructionPlan | None]:
         """Own provenance for one construction pass and revoke it on every exit."""
-        del combinations  # Reserved for database-backed evidence preparation.
         try:
             construction_plan = (
                 None if self._evidence_exposed else self._trusted_construction_plan()
             )
+            if construction_plan is not None:
+                self._prepare_database_enumeration_evidence(combinations)
             yield construction_plan
         finally:
             self._invalidate_combination_evidence()
@@ -1829,7 +2094,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         def helper(
             index: int,
             current_combo: Combination,
-            current_evidence: dict[str, _EnumerationEvidence],
+            current_evidence: dict[str, _TrustedEvidence],
         ) -> Generator[Combination, None, None]:
             """
             Recursively emit input combinations that satisfy filters and excludes.
@@ -1868,6 +2133,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
             # use filter_funcs and exclude_funcs to filter possible values
             if isinstance(possible_values, Bucket):
+                database_provider: object | None = (
+                    possible_values if type(possible_values) is DatabaseBucket else None
+                )
                 filter_kwargs = field_filters.get("filter_kwargs", {})
                 exclude_kwargs = field_excludes.get("filter_kwargs", {})
                 possible_values = possible_values.filter(**filter_kwargs).exclude(
@@ -1878,6 +2146,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 )
                 resolved_source: object | None = None
             else:
+                database_provider = None
                 resolved_source = possible_values
                 filter_funcs = field_filters.get("filter_funcs", [])
                 exclude_funcs = field_excludes.get("filter_funcs", [])
@@ -1900,7 +2169,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             for source_index, value in indexed_values:
                 if not isinstance(value, input_field.type):
                     continue
-                evidence = None
+                evidence: _TrustedEvidence | None = None
                 if retain_evidence and resolved_source is not None:
                     evidence = _trusted_enumeration_evidence(
                         input_field,
@@ -1908,6 +2177,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                         value,
                         current_combo,
                         source_index=source_index,
+                    )
+                elif retain_evidence and database_provider is not None:
+                    evidence = _database_enumeration_evidence(
+                        input_field,
+                        database_provider,
+                        value,
                     )
                 current_combo[input_name] = value
                 if evidence is not None:

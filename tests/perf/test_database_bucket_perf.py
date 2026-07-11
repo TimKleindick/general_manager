@@ -18,6 +18,7 @@ from pytest_django.plugin import DjangoDbBlocker
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.cache.dependency_cache import DependencyCacheHit
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import (
     BUCKET_INDEX_PREFIX,
     ORM_BUCKET_EXISTS_PREFIX,
@@ -36,7 +37,10 @@ from general_manager.cache.run_context import (
 from general_manager.cache.signals import data_change, post_data_change, pre_data_change
 from general_manager.interface import DatabaseInterface
 from general_manager.interface.interfaces.calculation import CalculationInterface
-from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.base_interface import (
+    InterfaceBase,
+    InvalidInputValueError,
+)
 from general_manager.interface.capabilities.orm.history import OrmHistoryCapability
 from general_manager.interface.capabilities.orm.mutations import OrmMutationCapability
 from general_manager.interface.orm_interface import OrmInterfaceBase
@@ -280,6 +284,22 @@ def _managed_perf_users(
             _delete_perf_users(prefix)
 
 
+@contextmanager
+def _managed_isolated_perf_users(
+    prefix: str,
+    total: int,
+) -> Iterator[tuple[int, ...]]:
+    """Create a small positive-ID fixture that cannot overlap the module fixture."""
+    try:
+        _delete_perf_users(prefix)
+        created = User.objects.bulk_create(
+            User(username=f"{prefix}{index:05d}") for index in range(total)
+        )
+        yield tuple(int(user.pk) for user in created)
+    finally:
+        _delete_perf_users(prefix)
+
+
 def test_managed_perf_users_replaces_stale_rows_and_cleans_up_after_failure() -> None:
     prefix = "perf-db-lifecycle-"
     shared_prefix = f"{USERNAME_PREFIX}shared-sentinel-"
@@ -337,6 +357,17 @@ def _make_database_enumeration_manager(
     source: DatabaseBucket[PerfUserManager],
 ) -> type[GeneralManager]:
     """Build a default calculation manager and isolate all metaclass registries."""
+    return _make_database_enumeration_manager_for_input(
+        name,
+        cast(Input[type[object]], Input(PerfUserManager, possible_values=source)),
+    )
+
+
+def _make_database_enumeration_manager_for_input(
+    name: str,
+    input_field: Input[type[object]],
+) -> type[GeneralManager]:
+    """Build a default calculation manager for one explicitly configured input."""
     interface = cast(
         type[CalculationInterface],
         type(
@@ -344,7 +375,7 @@ def _make_database_enumeration_manager(
             (CalculationInterface,),
             {
                 "__module__": __name__,
-                "value": Input(PerfUserManager, possible_values=source),
+                "value": input_field,
             },
         ),
     )
@@ -398,9 +429,235 @@ def test_database_manager_input_enumeration_work(
     assert [
         cast(dict[str, object], item.identification["value"])["id"] for item in managers
     ] == list(included_primary_keys)
+    assert len(captured_queries) == 2
     prefix = f"CALC_ENUM_MANAGER_{size}"
     perf_budgets.assert_observation(f"{prefix}_QUERIES", len(captured_queries))
     perf_budgets.assert_observation(f"{prefix}_MANAGERS", len(managers))
+
+
+def test_database_enumeration_mutation_falls_back_to_live_membership() -> None:
+    prefix = "perf-db-enumeration-mutation-"
+    with _managed_isolated_perf_users(prefix, 2) as primary_keys:
+        source = DatabaseBucket(
+            cast(
+                models.QuerySet[models.Model],
+                User.objects.filter(pk__in=primary_keys).order_by("pk"),
+            ),
+            PerfUserManager,
+        )
+        manager = _make_database_enumeration_manager(
+            "DatabaseEnumerationMutationManager",
+            source,
+        )
+        bucket = CalculationBucket(manager)
+        combinations = bucket._materialize_combinations(expose=False)
+        candidate = cast(GeneralManager, combinations[0]["value"])
+        candidate.identification["id"] = 987_654_321
+
+        with (
+            override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+            pytest.raises(InvalidInputValueError),
+        ):
+            list(bucket)
+
+        assert bucket._combination_evidence == {}
+
+
+def test_public_database_combinations_use_live_membership_after_row_deletion() -> None:
+    prefix = "perf-db-enumeration-exposure-"
+    with _managed_isolated_perf_users(prefix, 2) as primary_keys:
+        source = DatabaseBucket(
+            cast(
+                models.QuerySet[models.Model],
+                User.objects.filter(pk__in=primary_keys).order_by("pk"),
+            ),
+            PerfUserManager,
+        )
+        manager = _make_database_enumeration_manager(
+            "DatabaseEnumerationExposureManager",
+            source,
+        )
+        bucket = CalculationBucket(manager)
+        assert len(bucket.generate_combinations()) == 2
+        User.objects.filter(pk=primary_keys[-1]).delete()
+
+        with (
+            override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+            pytest.raises(InvalidInputValueError),
+        ):
+            list(bucket)
+
+
+def test_database_source_query_mutation_falls_back_and_rejects() -> None:
+    prefix = "perf-db-enumeration-source-mutation-"
+    with _managed_isolated_perf_users(prefix, 2) as primary_keys:
+        source = DatabaseBucket(
+            cast(
+                models.QuerySet[models.Model],
+                User.objects.filter(pk__in=primary_keys).order_by("pk"),
+            ),
+            PerfUserManager,
+        )
+        manager = _make_database_enumeration_manager(
+            "DatabaseEnumerationSourceMutationManager",
+            source,
+        )
+        bucket = CalculationBucket(manager)
+        assert len(bucket._materialize_combinations(expose=False)) == 2
+        source._data = source._data.none()
+
+        with (
+            override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+            pytest.raises(InvalidInputValueError),
+        ):
+            list(bucket)
+
+
+def test_database_validator_deleting_later_row_uses_live_fallback() -> None:
+    prefix = "perf-db-enumeration-validator-"
+    with _managed_isolated_perf_users(prefix, 2) as primary_keys:
+        source = DatabaseBucket(
+            cast(
+                models.QuerySet[models.Model],
+                User.objects.filter(pk__in=primary_keys).order_by("pk"),
+            ),
+            PerfUserManager,
+        )
+        validator_calls = Counter()
+
+        def validator(_value: object) -> bool:
+            validator_calls.increment()
+            if validator_calls.value == 1:
+                queryset = cast(
+                    RawDeleteQuerySet,
+                    User.objects.filter(pk=primary_keys[-1]),
+                )
+                queryset._raw_delete(using=queryset.db)
+            return True
+
+        manager = _make_database_enumeration_manager_for_input(
+            "DatabaseEnumerationValidatorManager",
+            cast(
+                Input[type[object]],
+                Input(
+                    PerfUserManager,
+                    possible_values=source,
+                    validator=validator,
+                ),
+            ),
+        )
+
+        with (
+            override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+            pytest.raises(InvalidInputValueError),
+        ):
+            list(CalculationBucket(manager))
+
+        assert validator_calls.value == 2
+
+
+def test_callable_database_provider_remains_on_per_candidate_fallback() -> None:
+    prefix = "perf-db-enumeration-callback-"
+    with _managed_isolated_perf_users(prefix, 3) as primary_keys:
+        source = DatabaseBucket(
+            cast(
+                models.QuerySet[models.Model],
+                User.objects.filter(pk__in=primary_keys).order_by("pk"),
+            ),
+            PerfUserManager,
+        )
+        calls = Counter()
+
+        def possible_values() -> DatabaseBucket[PerfUserManager]:
+            calls.increment()
+            return source
+
+        manager = _make_database_enumeration_manager_for_input(
+            "DatabaseEnumerationCallbackManager",
+            cast(
+                Input[type[object]],
+                Input(PerfUserManager, possible_values=possible_values),
+            ),
+        )
+        with (
+            override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+            CaptureQueriesContext(connection) as captured_queries,
+        ):
+            managers = list(CalculationBucket(manager))
+
+        assert len(managers) == 3
+        assert calls.value == 4
+        assert len(captured_queries) == 4
+
+
+def test_streaming_database_preview_does_not_prepare_the_whole_source() -> None:
+    prefix = "perf-db-enumeration-preview-"
+    with _managed_isolated_perf_users(prefix, 40) as primary_keys:
+        source = DatabaseBucket(
+            cast(
+                models.QuerySet[models.Model],
+                User.objects.filter(pk__in=primary_keys).order_by("pk"),
+            ),
+            PerfUserManager,
+        )
+        manager = _make_database_enumeration_manager(
+            "DatabaseEnumerationPreviewManager",
+            source,
+        )
+        with (
+            override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+            CaptureQueriesContext(connection) as captured_queries,
+        ):
+            preview = str(CalculationBucket(manager))
+
+        assert "..." in preview
+        assert len(captured_queries) == 1
+
+
+def test_database_trust_tracks_the_same_source_dependency_as_fallback() -> None:
+    prefix = "perf-db-enumeration-dependency-"
+    with _managed_isolated_perf_users(prefix, 3) as primary_keys:
+        source = DatabaseBucket(
+            cast(
+                models.QuerySet[models.Model],
+                User.objects.filter(pk__in=primary_keys).order_by("pk"),
+            ),
+            PerfUserManager,
+        )
+        optimized_manager = _make_database_enumeration_manager(
+            "DatabaseEnumerationDependencyOptimizedManager",
+            source,
+        )
+        fallback_manager = _make_database_enumeration_manager(
+            "DatabaseEnumerationDependencyFallbackManager",
+            source,
+        )
+
+        with (
+            override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+            DependencyTracker() as optimized_dependencies,
+        ):
+            list(CalculationBucket(optimized_manager))
+        fallback_bucket = CalculationBucket(fallback_manager)
+        with (
+            override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
+            DependencyTracker() as fallback_dependencies,
+        ):
+            fallback_bucket.generate_combinations()
+            list(fallback_bucket)
+
+        optimized_source_dependencies = {
+            dependency
+            for dependency in optimized_dependencies
+            if dependency[0] == "PerfUserManager"
+        }
+        fallback_source_dependencies = {
+            dependency
+            for dependency in fallback_dependencies
+            if dependency[0] == "PerfUserManager"
+        }
+        assert optimized_source_dependencies == fallback_source_dependencies
+        assert ("PerfUserManager", "all", "") in optimized_source_dependencies
 
 
 @dataclass

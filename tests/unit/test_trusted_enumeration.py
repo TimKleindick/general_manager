@@ -24,6 +24,7 @@ from general_manager.bucket.calculation_bucket import (
     _trusted_candidate_token,
     _trusted_enumeration_evidence,
 )
+from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.interface import CalculationInterface
 from general_manager.interface.base_interface import (
     InterfaceBase,
@@ -2157,3 +2158,68 @@ def test_constructor_error_clears_evidence() -> None:
     with pytest.raises(RuntimeError, match="constructor failed"):
         next(iter(bucket))
     assert bucket._combination_evidence == {}
+
+
+class _PrimaryKeyQueryDouble:
+    """Record one lazy primary-key membership query without using Django."""
+
+    def __init__(self, present: set[int]) -> None:
+        self.present = present
+        self.filter_calls: list[tuple[int, ...]] = []
+        self.evaluations = 0
+        self._requested: tuple[int, ...] = ()
+
+    def filter(self, *, pk__in: object) -> _PrimaryKeyQueryDouble:
+        requested = tuple(cast(Iterator[int], iter(pk__in)))
+        self.filter_calls.append(requested)
+        self._requested = requested
+        return self
+
+    def values_list(self, _name: str, *, flat: bool) -> _PrimaryKeyQueryDouble:
+        assert flat
+        return self
+
+    def __iter__(self) -> Iterator[int]:
+        self.evaluations += 1
+        return iter(value for value in self._requested if value in self.present)
+
+
+def _database_bucket_double(
+    present: set[int],
+) -> tuple[DatabaseBucket[GeneralManager], _PrimaryKeyQueryDouble]:
+    query = _PrimaryKeyQueryDouble(present)
+    bucket = object.__new__(DatabaseBucket)
+    bucket._data = cast(Any, query)
+    bucket._track_effective_dependencies = lambda: None
+    bucket._peek_run_scoped_primary_keys = lambda: None
+    return cast(DatabaseBucket[GeneralManager], bucket), query
+
+
+@pytest.mark.parametrize(
+    ("requested", "present", "expected"),
+    [
+        ((), set(), True),
+        ((1, 1, 2), {1, 2}, True),
+        ((1, 2), {1}, False),
+        ((1, 2), {1, 2, 3}, True),
+    ],
+)
+def test_database_batch_membership_uses_at_most_one_filtered_query(
+    requested: tuple[int, ...],
+    present: set[int],
+    expected: bool,
+) -> None:
+    bucket, query = _database_bucket_double(present)
+
+    assert bucket._contains_all_primary_keys(requested) is expected
+    assert query.evaluations == (0 if not requested else 1)
+    assert len(query.filter_calls) == (0 if not requested else 1)
+
+
+def test_database_batch_membership_reuses_cached_primary_keys() -> None:
+    bucket, query = _database_bucket_double({1, 2})
+    bucket._peek_run_scoped_primary_keys = lambda: (1, 2, 3)
+
+    assert bucket._contains_all_primary_keys((1, 1, 3))
+    assert query.filter_calls == []
+    assert query.evaluations == 0
