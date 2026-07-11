@@ -251,9 +251,11 @@ class TestCalculationInterface(TestCase):
             first = None
             second = None
             third = None
+            fourth = None
+            fifth = None
 
             def replacement(interface, field_name):
-                if first is second is third:
+                if first is second is third is fourth is fifth:
                     return interface
                 return field_name
 
@@ -928,6 +930,133 @@ class TestCalculationInterface(TestCase):
         )
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_dispatch_fallback_releases_seed_mirror_manager_references(self):
+        mirror_dispatch_calls = []
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        original_ref = ref(original)
+        manager = HydratedCalculation(original)
+        interface_class = type(manager._interface)
+
+        def custom_getattribute(interface, name):
+            if name in {
+                "_gm_seeded_input_values_cache",
+                "_gm_lazy_input_values_cache",
+            }:
+                mirror_dispatch_calls.append(name)
+            return object.__getattribute__(interface, name)
+
+        type.__setattr__(interface_class, "__getattribute__", custom_getattribute)
+        try:
+            resolved = manager.related
+        finally:
+            type.__delattr__(interface_class, "__getattribute__")
+
+        interface_state = vars(manager._interface)
+        self.assertFalse(interface_state.get("_gm_seeded_input_values_cache"))
+        self.assertFalse(interface_state.get("_gm_lazy_input_values_cache"))
+        self.assertEqual(mirror_dispatch_calls, [])
+        self.assertIsNot(resolved, original)
+        del original
+        gc.collect()
+        self.assertIsNone(original_ref())
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_cross_field_normalizer_can_resolve_seeded_field_concurrently(self):
+        worker_results = []
+        worker_finished = threading.Event()
+        manager = None
+        second_accessor = None
+        exercise_concurrent_access = False
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        def resolve_second(value):
+            if not exercise_concurrent_access:
+                return value
+
+            def resolve():
+                worker_results.append(second_accessor(manager._interface))
+                worker_finished.set()
+
+            worker = threading.Thread(target=resolve)
+            worker.start()
+            self.assertTrue(worker_finished.wait(1))
+            worker.join(1)
+            self.assertFalse(worker.is_alive())
+            return value
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                first = Input(RelatedManager, normalizer=resolve_second)
+                second = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        first = RelatedManager("first-id")
+        second = RelatedManager("second-id")
+        manager = HydratedCalculation(first, second)
+        first._invalidate_manager_state("stale")
+        second._invalidate_manager_state("stale")
+        first_accessor = HydratedCalculation._attributes["first"]
+        second_accessor = HydratedCalculation._attributes["second"]
+        exercise_concurrent_access = True
+
+        resolved = first_accessor(manager._interface)
+
+        self.assertIsNot(resolved, first)
+        self.assertEqual(len(worker_results), 1)
+        self.assertIsNot(worker_results[0], second)
+        self.assertEqual(
+            worker_results[0].identification,
+            {"id": "second-id"},
+        )
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_same_thread_recursive_seed_resolution_resets_claim(self):
+        manager = None
+        accessor = None
+        recurse = False
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        def resolve_again(value):
+            if recurse:
+                return accessor(manager._interface)
+            return value
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager, normalizer=resolve_again)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        original._invalidate_manager_state("stale")
+        accessor = HydratedCalculation._attributes["related"]
+        recurse = True
+
+        with self.assertRaisesRegex(RuntimeError, "related"):
+            accessor(manager._interface)
+
+        recurse = False
+        resolved = accessor(manager._interface)
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_concurrent_stale_seed_recast_publishes_one_wrapper(self):
         class RelatedManager(GeneralManager):
             class Interface(CalculationInterface):
@@ -1001,6 +1130,92 @@ class TestCalculationInterface(TestCase):
         self.assertEqual(cast_count, 1)
         self.assertEqual(len(results), 2)
         self.assertIs(results[0], results[1])
+        self.assertIsNot(results[0], original)
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_failed_seed_recast_notifies_waiter_and_allows_retry(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        original._invalidate_manager_state("stale")
+        accessor = HydratedCalculation._attributes["related"]
+        outer_input = HydratedCalculation.Interface.input_fields["related"]
+        origin = base_interface_module._seeded_interface_origin_by_id(
+            id(manager._interface)
+        )
+        self.assertIsNotNone(origin)
+        field_origin = origin.fields["related"]
+        waiter_waiting = threading.Event()
+
+        class RecordingCondition(threading.Condition):
+            def wait(self, timeout=None):
+                waiter_waiting.set()
+                return super().wait(timeout)
+
+        field_origin.condition = RecordingCondition()
+        original_cast = Input.cast
+        first_cast_started = threading.Event()
+        release_first_cast = threading.Event()
+        cast_count = 0
+        count_lock = threading.Lock()
+        errors = []
+        results = []
+
+        def flaky_cast(
+            input_field,
+            value,
+            identification=None,
+            *,
+            cache_context=None,
+        ):
+            nonlocal cast_count
+            if input_field is outer_input:
+                with count_lock:
+                    cast_count += 1
+                    current_count = cast_count
+                if current_count == 1:
+                    first_cast_started.set()
+                    self.assertTrue(release_first_cast.wait(5))
+                    error = ValueError("first cast failed")
+                    raise error
+            return original_cast(
+                input_field,
+                value,
+                identification,
+                cache_context=cache_context,
+            )
+
+        def resolve():
+            try:
+                results.append(accessor(manager._interface))
+            except ValueError as error:
+                errors.append(error)
+
+        with patch.object(Input, "cast", flaky_cast):
+            first_thread = threading.Thread(target=resolve)
+            second_thread = threading.Thread(target=resolve)
+            first_thread.start()
+            self.assertTrue(first_cast_started.wait(5))
+            second_thread.start()
+            self.assertTrue(waiter_waiting.wait(5))
+            release_first_cast.set()
+            first_thread.join(5)
+            second_thread.join(5)
+
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(str(errors[0]), "first cast failed")
+        self.assertEqual(cast_count, 2)
+        self.assertEqual(len(results), 1)
         self.assertIsNot(results[0], original)
 
     @override_settings(AUTOCREATE_GRAPHQL=False)

@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 import inspect
-from threading import RLock
+from threading import Condition, RLock
 from types import CellType, CodeType, FunctionType, MappingProxyType
 from typing import (
     Type,
@@ -148,6 +148,8 @@ class _SeededFieldOrigin:
     manager_ref: ReferenceType[object] | None
     formatted_identification: dict[str, object]
     lazy: bool = False
+    condition: Condition = field(default_factory=Condition)
+    resolving_thread_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -155,7 +157,7 @@ class _SeededInterfaceOrigin:
     interface_ref: ReferenceType[object]
     resolved_values: dict[str, object]
     fields: dict[str, _SeededFieldOrigin]
-    lock: object = field(default_factory=RLock)
+    transition_condition: Condition = field(default_factory=Condition)
 
 
 _SEEDED_INTERFACE_ORIGINS: dict[int, _SeededInterfaceOrigin] = {}

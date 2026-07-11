@@ -5,9 +5,9 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
-from threading import RLock
+from threading import RLock, get_ident
 from types import CellType, CodeType, FunctionType, MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, ContextManager, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 from weakref import WeakKeyDictionary
 
 from general_manager.bucket.calculation_bucket import CalculationBucket
@@ -57,6 +57,18 @@ _CALCULATION_INPUT_ACCESSOR_STATE = (
 )
 _EMPTY_CLOSURE_CELL = object()
 _MISSING_INTERFACE_STATE = object()
+_USE_VIRTUAL_RESOLUTION = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _SeededResolutionClaim:
+    origin: _SeededInterfaceOrigin
+    field_origin: _SeededFieldOrigin
+    resolved_values: dict[str, object]
+    input_field: Input[type[object]]
+    raw_value: object
+    cache_context: tuple[type[object], str] | None
+    thread_id: int
 
 
 def _static_class_value(
@@ -250,10 +262,49 @@ def _transition_origin_to_virtual_fallback(
     origin: _SeededInterfaceOrigin,
 ) -> None:
     """Release all external seeds before honoring changed virtual dispatch."""
-    resolved_values: dict[str, object] = {}
-    origin.resolved_values = resolved_values
-    _replace_live_resolved_cache_if_safe(interface_instance, resolved_values)
-    _discard_seeded_interface_origin(interface_instance, origin)
+    with origin.transition_condition:
+        if _seeded_interface_origin(interface_instance) is not origin:
+            return
+        resolved_values: dict[str, object] = {}
+        origin.resolved_values = resolved_values
+        _replace_live_resolved_cache_if_safe(interface_instance, resolved_values)
+        _clear_seed_mirrors_if_safe(interface_instance)
+        _discard_seeded_interface_origin(interface_instance, origin)
+
+
+def _clear_seed_mirrors_if_safe(
+    interface_instance: "CalculationInterface",
+) -> None:
+    """Drop exact constructor mirrors without invoking changed dispatch."""
+    interface_provenance = _INTERFACE_BASE_PROVENANCE
+    if interface_provenance is None:
+        return
+    interface_class = type(interface_instance)
+    if not _mro_state_access_is_canonical(
+        interface_class,
+        interface_provenance[0],
+        (_INSTANCE_DICT_NAME,),
+    ):
+        return
+    state = object.__getattribute__(interface_instance, _INSTANCE_DICT_NAME)
+    if not _exact_string_dict(state):
+        return
+    seeded_cache = _mapping_value_by_identity(
+        state,
+        _SEEDED_INPUT_VALUES_CACHE_NAME,
+        _MISSING_INTERFACE_STATE,
+    )
+    if type(seeded_cache) is dict:
+        dict.clear(seeded_cache)
+        dict.pop(state, _SEEDED_INPUT_VALUES_CACHE_NAME, None)
+    lazy_cache = _mapping_value_by_identity(
+        state,
+        _LAZY_INPUT_VALUES_CACHE_NAME,
+        _MISSING_INTERFACE_STATE,
+    )
+    if type(lazy_cache) is set:
+        set.clear(lazy_cache)
+        dict.pop(state, _LAZY_INPUT_VALUES_CACHE_NAME, None)
 
 
 def _post_seeded_manager_state_is_safe(
@@ -699,160 +750,267 @@ class CalculationReadCapability(BaseCapability):
             field_name: str,
         ) -> object:
             origin = _seeded_interface_origin(interface_instance)
-            if origin is None:
-                return _resolve_input_value_locked(
-                    interface_instance,
-                    field_name,
-                    None,
-                )
-            with cast(ContextManager[None], origin.lock):
-                if _seeded_interface_origin(interface_instance) is not origin:
-                    return _resolve_input_value_locked(
-                        interface_instance,
-                        field_name,
-                        None,
-                    )
-                return _resolve_input_value_locked(
-                    interface_instance,
-                    field_name,
-                    origin,
-                )
+            return _resolve_input_value_from_origin(
+                interface_instance,
+                field_name,
+                origin,
+            )
 
-        def _resolve_input_value_locked(
+        def _resolve_input_value_from_origin(
             interface_instance: "CalculationInterface",
             field_name: str,
             origin: _SeededInterfaceOrigin | None,
         ) -> object:
-            field_origin: _SeededFieldOrigin | None = None
-            live_raw_available = False
-            live_raw_value: object = _MISSING_INTERFACE_STATE
-            surrounding_state_safe = False
             if origin is None:
                 try:
                     resolved_values = interface_instance._resolved_input_values
                 except AttributeError:
                     resolved_values = {}
                     interface_instance._resolved_input_values = resolved_values
-            else:
-                if not _seeded_interface_dispatch_is_canonical(interface_instance):
-                    _transition_origin_to_virtual_fallback(
+                input_field = interface_cls.input_fields[field_name]
+                cached_value = dict.get(
+                    resolved_values,
+                    field_name,
+                    _MISSING_INTERFACE_STATE,
+                )
+                if cached_value is not _MISSING_INTERFACE_STATE:
+                    _track_cached_manager(cached_value)
+                    return cached_value
+                dependency_values = {
+                    dependency_name: _resolve_input_value(
                         interface_instance,
-                        origin,
+                        dependency_name,
                     )
-                    return _resolve_input_value_locked(
+                    for dependency_name in input_field.depends_on
+                }
+                identification = interface_instance.identification
+                raw_value = identification.get(field_name)
+                cache_context = (interface_cls._parent_class, field_name)
+                value = input_field.cast(
+                    raw_value,
+                    dependency_values,
+                    cache_context=cache_context,
+                )
+                dict.__setitem__(resolved_values, field_name, value)
+                return value
+
+            claim, resolved_value = _claim_seeded_input_resolution(
+                interface_instance,
+                field_name,
+                origin,
+            )
+            if claim is None:
+                if resolved_value is _USE_VIRTUAL_RESOLUTION:
+                    return _resolve_input_value_from_origin(
                         interface_instance,
                         field_name,
                         None,
                     )
-                if _exact_string_dict(origin.fields):
-                    field_origin_value = _mapping_value_by_identity(
-                        origin.fields,
+                _track_cached_manager(resolved_value)
+                return resolved_value
+
+            try:
+                dependency_values = {
+                    dependency_name: _resolve_input_value(
+                        interface_instance,
+                        dependency_name,
+                    )
+                    for dependency_name in claim.input_field.depends_on
+                }
+                value = claim.input_field.cast(
+                    claim.raw_value,
+                    dependency_values,
+                    cache_context=claim.cache_context,
+                )
+            except BaseException:
+                _finish_seeded_input_resolution(
+                    interface_instance,
+                    field_name,
+                    claim,
+                    _MISSING_INTERFACE_STATE,
+                )
+                raise
+            if _finish_seeded_input_resolution(
+                interface_instance,
+                field_name,
+                claim,
+                value,
+            ):
+                return value
+            return _resolve_input_value_from_origin(
+                interface_instance,
+                field_name,
+                None,
+            )
+
+        def _claim_seeded_input_resolution(
+            interface_instance: "CalculationInterface",
+            field_name: str,
+            origin: _SeededInterfaceOrigin,
+        ) -> tuple[_SeededResolutionClaim | None, object]:
+            while True:
+                if (
+                    _seeded_interface_origin(interface_instance) is not origin
+                    or not _seeded_interface_dispatch_is_canonical(interface_instance)
+                    or not _exact_string_dict(origin.fields)
+                ):
+                    if _seeded_interface_origin(interface_instance) is origin:
+                        _transition_origin_to_virtual_fallback(
+                            interface_instance,
+                            origin,
+                        )
+                    return None, _USE_VIRTUAL_RESOLUTION
+                field_origin_value = _mapping_value_by_identity(
+                    origin.fields,
+                    field_name,
+                    _MISSING_INTERFACE_STATE,
+                )
+                input_fields = _static_class_value(interface_cls, "input_fields")
+                input_field_value = (
+                    _mapping_value_by_identity(
+                        cast(dict[str, object], input_fields),
                         field_name,
                         _MISSING_INTERFACE_STATE,
                     )
-                    if type(field_origin_value) is _SeededFieldOrigin:
-                        field_origin = field_origin_value
-                if _exact_string_dict(origin.resolved_values):
-                    resolved_values = origin.resolved_values
-                else:
-                    resolved_values = {}
-                    origin.resolved_values = resolved_values
-                    _replace_live_resolved_cache_if_safe(
-                        interface_instance,
-                        resolved_values,
-                    )
-                surrounding_state_safe = (
-                    field_origin is not None
-                    and _seeded_interface_surrounding_state_safe(interface_instance)
+                    if _exact_string_dict(input_fields)
+                    else _MISSING_INTERFACE_STATE
                 )
-                if field_origin is not None:
+                if (
+                    type(field_origin_value) is not _SeededFieldOrigin
+                    or type(input_field_value) is not Input
+                ):
+                    _transition_origin_to_virtual_fallback(
+                        interface_instance,
+                        origin,
+                    )
+                    return None, _USE_VIRTUAL_RESOLUTION
+                field_origin = field_origin_value
+                input_field = input_field_value
+                with field_origin.condition:
+                    if _seeded_interface_origin(
+                        interface_instance
+                    ) is not origin or not _seeded_interface_dispatch_is_canonical(
+                        interface_instance
+                    ):
+                        if _seeded_interface_origin(interface_instance) is origin:
+                            _transition_origin_to_virtual_fallback(
+                                interface_instance,
+                                origin,
+                            )
+                        return None, _USE_VIRTUAL_RESOLUTION
+                    if _exact_string_dict(origin.resolved_values):
+                        resolved_values = origin.resolved_values
+                    else:
+                        resolved_values = {}
+                        origin.resolved_values = resolved_values
+                        _replace_live_resolved_cache_if_safe(
+                            interface_instance,
+                            resolved_values,
+                        )
                     live_raw_available, live_raw_value = _live_seeded_raw_value(
                         interface_instance,
                         field_name,
                     )
-
-            input_field = interface_cls.input_fields[field_name]
-            cached_value = dict.get(
-                resolved_values,
-                field_name,
-                _MISSING_INTERFACE_STATE,
-            )
-            if cached_value is not _MISSING_INTERFACE_STATE:
-                if origin is None:
-                    _track_cached_manager(cached_value)
-                    return cached_value
-                if field_origin is not None and field_origin.lazy:
-                    _track_cached_manager(cached_value)
-                    return cached_value
-                parent_class = _static_class_value(interface_cls, "_parent_class")
-                if (
-                    field_origin is not None
-                    and field_origin.manager_ref is not None
-                    and field_origin.manager_ref() is cached_value
-                    and surrounding_state_safe
-                    and live_raw_available
-                    and live_raw_value is field_origin.formatted_identification
-                    and _cached_manager_matches_formatted_identification(
-                        parent_class,
+                    cached_value = dict.get(
+                        resolved_values,
                         field_name,
-                        input_field,
-                        cached_value,
-                        field_origin.formatted_identification,
+                        _MISSING_INTERFACE_STATE,
                     )
-                ):
-                    _track_cached_manager(cached_value)
-                    return cached_value
-                dict.pop(resolved_values, field_name, None)
-                if field_origin is not None:
-                    field_origin.manager_ref = None
-                    field_origin.lazy = True
-                    _transition_mirror_field_to_lazy_if_safe(
-                        interface_instance,
-                        field_name,
-                    )
-            elif field_origin is not None and not field_origin.lazy:
-                field_origin.manager_ref = None
-                field_origin.lazy = True
-                _transition_mirror_field_to_lazy_if_safe(
-                    interface_instance,
-                    field_name,
-                )
-
-            dependency_values = {
-                dependency_name: _resolve_input_value(
-                    interface_instance,
-                    dependency_name,
-                )
-                for dependency_name in input_field.depends_on
-            }
-            cache_context: tuple[type[object], str] | None
-            raw_value: object
-            if origin is None or field_origin is None:
-                identification = interface_instance.identification
-                raw_value = identification.get(field_name)
-                cache_context = (interface_cls._parent_class, field_name)
-            else:
-                if live_raw_available:
+                    if cached_value is not _MISSING_INTERFACE_STATE:
+                        if field_origin.lazy:
+                            return None, cached_value
+                        parent_class = _static_class_value(
+                            interface_cls,
+                            "_parent_class",
+                        )
+                        if (
+                            field_origin.manager_ref is not None
+                            and field_origin.manager_ref() is cached_value
+                            and live_raw_available
+                            and live_raw_value is field_origin.formatted_identification
+                            and _cached_manager_matches_formatted_identification(
+                                parent_class,
+                                field_name,
+                                input_field,
+                                cached_value,
+                                field_origin.formatted_identification,
+                            )
+                        ):
+                            return None, cached_value
+                    if field_origin.resolving_thread_id is not None:
+                        if field_origin.resolving_thread_id == get_ident():
+                            raise RuntimeError(field_name)
+                        field_origin.condition.wait()
+                        continue
+                    if cached_value is not _MISSING_INTERFACE_STATE:
+                        dict.pop(resolved_values, field_name, None)
+                    if not field_origin.lazy:
+                        field_origin.manager_ref = None
+                        field_origin.lazy = True
+                        _transition_mirror_field_to_lazy_if_safe(
+                            interface_instance,
+                            field_name,
+                        )
+                    thread_id = get_ident()
+                    field_origin.resolving_thread_id = thread_id
                     raw_value = (
-                        None
-                        if live_raw_value is _MISSING_INTERFACE_STATE
-                        else live_raw_value
+                        (
+                            None
+                            if live_raw_value is _MISSING_INTERFACE_STATE
+                            else live_raw_value
+                        )
+                        if live_raw_available
+                        else field_origin.formatted_identification
                     )
-                else:
-                    raw_value = field_origin.formatted_identification
-                parent_class = _static_class_value(interface_cls, "_parent_class")
-                cache_context = (
-                    (cast(type[object], parent_class), field_name)
-                    if _canonical_manager_class_state(cast(type[object], parent_class))
-                    else None
-                )
-            value = input_field.cast(
-                raw_value,
-                dependency_values,
-                cache_context=cache_context,
-            )
-            dict.__setitem__(resolved_values, field_name, value)
-            return value
+                    parent_class = _static_class_value(
+                        interface_cls,
+                        "_parent_class",
+                    )
+                    cache_context = (
+                        (cast(type[object], parent_class), field_name)
+                        if _canonical_manager_class_state(
+                            cast(type[object], parent_class)
+                        )
+                        else None
+                    )
+                    return (
+                        _SeededResolutionClaim(
+                            origin=origin,
+                            field_origin=field_origin,
+                            resolved_values=resolved_values,
+                            input_field=input_field,
+                            raw_value=raw_value,
+                            cache_context=cache_context,
+                            thread_id=thread_id,
+                        ),
+                        _MISSING_INTERFACE_STATE,
+                    )
+
+        def _finish_seeded_input_resolution(
+            interface_instance: "CalculationInterface",
+            field_name: str,
+            claim: _SeededResolutionClaim,
+            value: object,
+        ) -> bool:
+            published = False
+            with claim.field_origin.condition:
+                if claim.field_origin.resolving_thread_id == claim.thread_id:
+                    if (
+                        value is not _MISSING_INTERFACE_STATE
+                        and _seeded_interface_origin(interface_instance) is claim.origin
+                        and _seeded_interface_dispatch_is_canonical(interface_instance)
+                        and claim.origin.resolved_values is claim.resolved_values
+                        and _exact_string_dict(claim.resolved_values)
+                    ):
+                        dict.__setitem__(
+                            claim.resolved_values,
+                            field_name,
+                            value,
+                        )
+                        published = True
+                    claim.field_origin.resolving_thread_id = None
+                    claim.field_origin.condition.notify_all()
+            return published
 
         def _make_accessor(
             field_name: str,
