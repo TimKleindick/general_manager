@@ -8,7 +8,14 @@ from general_manager.bucket.calculation_bucket import (
     CalculationBucket,
     MissingCalculationMatchError,
     MultipleCalculationMatchError,
+    _CALCULATION_RESULT_UNSUPPORTED,
     _BuiltinRangeEnumerationWitness,
+    _CalculationCacheIdentityToken,
+    _calculation_cache_callable_token,
+    _calculation_cache_clone,
+    _calculation_cache_filter_token,
+    _calculation_cache_freeze,
+    _calculation_cache_identity_token,
     _trusted_enumeration_evidence,
 )
 from general_manager.cache.run_context import (
@@ -2348,6 +2355,84 @@ class TestCalculationTerminalStreams(TestCase):
         self.assertEqual(second._data, [{"value": 1}])
         self.assertEqual(property_calls, first_property_calls)
         self.assertEqual(replayed, tracked)
+
+    def test_result_cache_freeze_clone_and_filter_tokens_cover_safe_builtins(
+        self,
+    ) -> None:
+        def callback(value):
+            return value
+
+        nested = {
+            "tuple": (1, 1.5, b"bytes"),
+            "list": [True, None],
+            "set": frozenset({1, 2}),
+        }
+        snapshot = _calculation_cache_freeze(nested)
+        self.assertIsNot(snapshot, _CALCULATION_RESULT_UNSUPPORTED)
+        cloned = _calculation_cache_clone(snapshot)
+        self.assertEqual(cloned, nested)
+        self.assertIsNot(cloned, nested)
+        self.assertIsNot(cloned["list"], nested["list"])
+
+        cycle = []
+        cycle.append(cycle)
+        self.assertIs(_calculation_cache_freeze(cycle), _CALCULATION_RESULT_UNSUPPORTED)
+        self.assertIs(
+            _calculation_cache_freeze([object()]),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+        self.assertIs(
+            _calculation_cache_freeze(frozenset({object()})),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+        self.assertIs(
+            _calculation_cache_freeze({object(): 1}),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+
+        identity = _calculation_cache_identity_token(nested)
+        self.assertIsInstance(identity, _CalculationCacheIdentityToken)
+        self.assertEqual(identity, _calculation_cache_identity_token(nested))
+        self.assertIsNot(identity, _calculation_cache_identity_token({}))
+        self.assertIs(
+            _calculation_cache_callable_token(object()),
+            _CALCULATION_RESULT_UNSUPPORTED,
+        )
+        self.assertEqual(_calculation_cache_callable_token(callback)[0], "callable")
+
+        valid_filter = _calculation_cache_filter_token(
+            {"value": {"filter_kwargs": {"minimum": 1}}},
+            {
+                "value": {
+                    "filter_kwargs": {"minimum": 1},
+                    "filter_funcs": [callback],
+                }
+            },
+        )
+        self.assertIsNot(valid_filter, _CALCULATION_RESULT_UNSUPPORTED)
+        unsupported_filters = (
+            ({"value": object()}, {}),
+            ({"value": {}}, {1: {}}),
+            ({"value": {}}, {"value": {1: 1}}),
+            ({"value": {}}, {"value": {"filter_funcs": callback}}),
+            ({"value": {}}, {"value": {"unknown": 1}}),
+            ({"value": {}}, {"value": {"filter_funcs": [object()]}}),
+            ({"value": {}}, {"value": {"filter_kwargs": object()}}),
+        )
+        for raw, parsed in unsupported_filters:
+            self.assertIs(
+                _calculation_cache_filter_token(raw, parsed),
+                _CALCULATION_RESULT_UNSUPPORTED,
+            )
+
+        for invalid_snapshot in (
+            None,
+            (),
+            ("unknown", 1),
+            ("tuple", None),
+        ):
+            with self.assertRaises(TypeError):
+                _calculation_cache_clone(invalid_snapshot)
 
     def test_terminal_stream_owns_one_run_context_and_cleans_evidence(self) -> None:
         bucket = self._make_scalar_bucket(range(2))
