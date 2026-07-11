@@ -4,6 +4,7 @@ from general_manager.interface import base_interface as base_interface_module
 from general_manager.interface.base_interface import (
     InterfaceBase,
     InvalidInputTypeError,
+    InvalidInputValueError,
     MissingInputArgumentsError,
     UnexpectedInputArgumentsError,
 )
@@ -443,6 +444,23 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_possible_values_enforced_outside_debug_when_enabled(self):
         with self.assertRaises(ValueError):
             DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
+
+    @override_settings(DEBUG=False, GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_subclass_method_cannot_bypass_possible_values_validation(self):
+        class CollidingInterface(DummyInterface):
+            input_fields: ClassVar[dict] = {
+                "id": DummyInput(int, possible_values=[1]),
+            }
+            collision_called = False
+
+            def _skip_trusted_possible_values_membership(self, *_args):
+                type(self).collision_called = True
+                return True
+
+        with self.assertRaises(InvalidInputValueError):
+            CollidingInterface(id=2)
+
+        self.assertFalse(CollidingInterface.collision_called)
 
     @override_settings(DEBUG=False, GENERAL_MANAGER={"VALIDATE_INPUT_VALUES": "yes"})
     def test_possible_values_toggle_accepts_truthy_string(self):

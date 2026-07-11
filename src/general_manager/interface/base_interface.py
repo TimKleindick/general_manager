@@ -303,6 +303,32 @@ def _trusted_enumeration_scope(
         _TRUSTED_ENUMERATION_SCOPE.reset(token)
 
 
+def _trusted_possible_values_membership_authorized(
+    interface: object,
+    name: str,
+    input_field: "Input[type[object]]",
+    value: object,
+    identification: Mapping[str, object],
+) -> bool:
+    """Return whether exact scoped evidence authorizes skipping membership."""
+    scope = _TRUSTED_ENUMERATION_SCOPE.get()
+    if (
+        scope is None
+        or not scope.lease.active
+        or scope.interface_class is not type(interface)
+    ):
+        return False
+    evidence = scope.evidence_by_name.get(name)
+    if evidence is None or not evidence.authorizes(
+        input_field,
+        value,
+        identification,
+    ):
+        return False
+    evidence.track_membership_dependency()
+    return True
+
+
 class InterfaceBase(ABC):
     """Common base API for interfaces backing GeneralManager classes."""
 
@@ -1093,7 +1119,8 @@ class InterfaceBase(ABC):
             return
         if not _should_validate_possible_values():
             return
-        if self._skip_trusted_possible_values_membership(
+        if _trusted_possible_values_membership_authorized(
+            self,
             name,
             input_field,
             value,
@@ -1117,31 +1144,6 @@ class InterfaceBase(ABC):
 
         if value not in allowed_values:
             raise InvalidInputValueError(name, value, allowed_values)
-
-    def _skip_trusted_possible_values_membership(
-        self,
-        name: str,
-        input_field: "Input[type[object]]",
-        value: object,
-        identification: Mapping[str, object],
-    ) -> bool:
-        """Return whether exact scoped evidence authorizes skipping membership."""
-        scope = _TRUSTED_ENUMERATION_SCOPE.get()
-        if (
-            scope is None
-            or not scope.lease.active
-            or scope.interface_class is not type(self)
-        ):
-            return False
-        evidence = scope.evidence_by_name.get(name)
-        if evidence is None or not evidence.authorizes(
-            input_field,
-            value,
-            identification,
-        ):
-            return False
-        evidence.track_membership_dependency()
-        return True
 
     @classmethod
     def create(cls, *args: object, **kwargs: object) -> dict[str, object]:
