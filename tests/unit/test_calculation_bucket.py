@@ -2245,6 +2245,23 @@ class TestCalculationTerminalStreams(TestCase):
             )._calculation_result_cache_signature()
         )
 
+        class DiscoveryCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
+        GeneralManagerMeta.ensure_attributes_initialized(DiscoveryCalculation)
+        discovery_bucket = CalculationBucket(DiscoveryCalculation)
+
+        def hostile_discovery(_cls: type[object]) -> dict[str, object]:
+            raise AssertionError
+
+        with patch.object(
+            DiscoveryCalculation.Interface,
+            "get_graph_ql_properties",
+            classmethod(hostile_discovery),
+        ):
+            self.assertIsNotNone(discovery_bucket._calculation_result_cache_signature())
+
     def test_callable_provider_reuses_result_without_reinvoking_provider(self) -> None:
         calls = 0
 

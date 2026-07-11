@@ -2621,14 +2621,32 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             return None
 
         manager_class = self._manager_class
-        interface_class = manager_class.Interface
+        if type(manager_class) is not GeneralManagerMeta:
+            return None
+        interface_class = inspect.getattr_static(
+            manager_class,
+            "Interface",
+            _STATIC_ATTRIBUTE_MISSING,
+        )
+        if not isinstance(interface_class, type):
+            return None
         if (
-            inspect.getattr_static(manager_class, "__new__")
-            is not inspect.getattr_static(GeneralManager, "__new__")
-            or inspect.getattr_static(manager_class, "identification")
-            is not inspect.getattr_static(GeneralManager, "identification")
-            or inspect.getattr_static(interface_class, "__new__")
-            is not inspect.getattr_static(InterfaceBase, "__new__")
+            inspect.getattr_static(manager_class, "__new__", _STATIC_ATTRIBUTE_MISSING)
+            is not inspect.getattr_static(
+                GeneralManager, "__new__", _STATIC_ATTRIBUTE_MISSING
+            )
+            or inspect.getattr_static(
+                manager_class, "identification", _STATIC_ATTRIBUTE_MISSING
+            )
+            is not inspect.getattr_static(
+                GeneralManager, "identification", _STATIC_ATTRIBUTE_MISSING
+            )
+            or inspect.getattr_static(
+                interface_class, "__new__", _STATIC_ATTRIBUTE_MISSING
+            )
+            is not inspect.getattr_static(
+                InterfaceBase, "__new__", _STATIC_ATTRIBUTE_MISSING
+            )
             or inspect.getattr_static(
                 interface_class,
                 "identification",
@@ -2653,14 +2671,30 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             return None
         from general_manager.api.property import GraphQLProperty
 
-        for property_descriptor in interface_class.get_graph_ql_properties().values():
-            if type(
-                property_descriptor
-            ) is not GraphQLProperty or property_descriptor.cache not in {
+        property_tokens: list[tuple[str, int, str, int]] = []
+        for property_name, property_descriptor in vars(manager_class).items():
+            if type(property_descriptor) is not GraphQLProperty:
+                continue
+            property_cache = inspect.getattr_static(
+                property_descriptor,
+                "cache",
+                _STATIC_ATTRIBUTE_MISSING,
+            )
+            if type(property_cache) is not str or property_cache not in {
                 "run",
                 "dependency",
             }:
                 return None
+            raw_fget = inspect.getattr_static(
+                property_descriptor,
+                "_raw_fget",
+                _STATIC_ATTRIBUTE_MISSING,
+            )
+            if type(property_name) is not str or not callable(raw_fget):
+                return None
+            property_tokens.append(
+                (property_name, id(property_descriptor), property_cache, id(raw_fget))
+            )
 
         construction_plan = self._trusted_construction_plan()
         if construction_plan is None:
@@ -2756,6 +2790,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             tuple(field_tokens),
             filter_token,
             exclude_token,
+            tuple(property_tokens),
             sort_key,
             self.reverse,
         )
