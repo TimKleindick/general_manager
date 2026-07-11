@@ -1713,6 +1713,137 @@ def test_trust_scope_is_absent_after_each_yield() -> None:
 
 
 @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_input_hook_mutation_between_yields_revokes_stale_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bucket = _real_calculation_bucket(
+        cast(Input[type[object]], Input(int, possible_values=[1, 2]))
+    )
+    iterator = iter(bucket)
+    assert next(iterator).identification == {"code": 1}
+
+    def narrowed_values(
+        _input_field: Input[type[object]],
+        _identification: dict[str, object] | None = None,
+        *,
+        cache_context: tuple[type[object], str] | None = None,
+    ) -> list[int]:
+        del cache_context
+        return [1]
+
+    monkeypatch.setattr(Input, "resolve_possible_values", narrowed_values)
+
+    with pytest.raises(
+        InvalidInputValueError,
+        match=r"^Invalid value for code: 2, allowed: \[1\]\.$",
+    ):
+        next(iterator)
+    assert bucket._combination_evidence == {}
+
+
+@pytest.mark.parametrize(
+    ("mutation_target", "callback_kind"),
+    [
+        ("input_cast", "normalizer"),
+        ("input_state", "normalizer"),
+        ("interface_process", "validator"),
+        ("manager_init", "normalizer"),
+        ("manager_tracking", "validator"),
+    ],
+)
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+def test_hook_mutation_inside_input_callback_forces_membership_fallback(
+    mutation_target: str,
+    callback_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolutions = 0
+    original_resolve = Input.resolve_possible_values
+
+    def counted_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolutions
+        resolutions += 1
+        return original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(Input, "resolve_possible_values", counted_resolve)
+    bucket: CalculationBucket[GeneralManager]
+
+    def mutate_hook() -> None:
+        if mutation_target == "input_cast":
+            original = Input.cast
+
+            def wrapped_cast(
+                self: Input[type[object]],
+                value: object,
+                identification: dict[str, object] | None = None,
+            ) -> object:
+                return original(self, value, identification)
+
+            monkeypatch.setattr(Input, "cast", wrapped_cast)
+        elif mutation_target == "input_state":
+            bucket.input_fields["code"].audit_marker = True  # type: ignore[attr-defined]
+        elif mutation_target == "interface_process":
+            interface = bucket._manager_class.Interface
+            original = InterfaceBase._process_input_field
+
+            def wrapped_process(
+                self: InterfaceBase,
+                *args: object,
+                **kwargs: object,
+            ) -> object:
+                return original(self, *args, **kwargs)
+
+            monkeypatch.setattr(interface, "_process_input_field", wrapped_process)
+        elif mutation_target == "manager_init":
+            manager_class = bucket._manager_class
+
+            def wrapped_init(self: GeneralManager, **kwargs: object) -> None:
+                GeneralManager.__init__(self, **kwargs)
+
+            monkeypatch.setattr(manager_class, "__init__", wrapped_init)
+        else:
+            manager_class = bucket._manager_class
+
+            @classmethod
+            def wrapped_tracking(
+                cls: type[GeneralManager], identification: dict[str, object]
+            ) -> None:
+                GeneralManager._track_identification_dependency.__func__(
+                    cls, identification
+                )
+
+            monkeypatch.setattr(
+                manager_class,
+                "_track_identification_dependency",
+                wrapped_tracking,
+            )
+
+    def normalize(value: int) -> int:
+        mutate_hook()
+        return value
+
+    def validate(_value: int) -> bool:
+        mutate_hook()
+        return True
+
+    input_field = cast(
+        Input[type[object]],
+        Input(
+            int,
+            possible_values=[1],
+            normalizer=normalize if callback_kind == "normalizer" else None,
+            validator=validate if callback_kind == "validator" else None,
+        ),
+    )
+    bucket = _real_calculation_bucket(input_field)
+
+    assert next(iter(bucket)).identification == {"code": 1}
+    expected_resolutions = 3 if callback_kind == "normalizer" else 2
+    assert resolutions == expected_resolutions
+    assert bucket._combination_evidence == {}
+
+
+@override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
 def test_late_validator_failure_keeps_lazy_timing_and_clears_evidence() -> None:
     input_field = cast(
         Input[type[object]],
@@ -1760,10 +1891,10 @@ def test_trusted_preparation_error_clears_evidence(
 
     expected = RuntimeError("preparation failed")
 
-    def fail_preparation() -> bool:
+    def fail_preparation() -> object:
         raise expected
 
-    monkeypatch.setattr(bucket, "_uses_standard_trusted_construction", fail_preparation)
+    monkeypatch.setattr(bucket, "_trusted_construction_plan", fail_preparation)
     with pytest.raises(RuntimeError, match="preparation failed"):
         next(iter(bucket))
 

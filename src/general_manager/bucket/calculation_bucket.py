@@ -192,6 +192,8 @@ class _EnumerationEvidence:
     ) -> bool:
         if input_field is not self.input_field:
             return False
+        if not _input_has_exact_standard_state(input_field):
+            return False
         if _input_has_behavior_override(input_field):
             return False
         if input_field.possible_values is not self.provider:
@@ -214,6 +216,125 @@ class _EnumerationEvidence:
 
     def track_membership_dependency(self) -> None:
         self.witness.track_membership_dependency()
+
+
+_MANAGER_CONSTRUCTION_HOOK_NAMES = (
+    "__init__",
+    "_track_identification_dependency",
+    "_track_identification_dependency_active",
+)
+_INTERFACE_CONSTRUCTION_HOOK_NAMES = (
+    "__init__",
+    "parse_input_fields_to_identification",
+    "_process_input_field",
+    "format_identification",
+)
+_INPUT_CONSTRUCTION_HOOK_NAMES = (
+    "cast",
+    "normalize",
+    "validate_bounds",
+    "validate_with_callable",
+    "resolve_possible_values",
+    "_build_dependency_values",
+)
+
+
+def _static_hook_snapshot(
+    owner: type[object],
+    hook_names: tuple[str, ...],
+) -> tuple[object, ...] | None:
+    """Read raw class descriptors without invoking descriptor hooks."""
+    try:
+        return tuple(inspect.getattr_static(owner, name) for name in hook_names)
+    except AttributeError:
+        return None
+
+
+def _static_hooks_match(
+    owner: type[object],
+    hook_names: tuple[str, ...],
+    expected_hooks: tuple[object, ...],
+) -> bool:
+    """Compare raw descriptors by identity without invoking equality hooks."""
+    current_hooks = _static_hook_snapshot(owner, hook_names)
+    if current_hooks is None or len(current_hooks) != len(expected_hooks):
+        return False
+    return all(
+        current is expected
+        for current, expected in zip(current_hooks, expected_hooks, strict=True)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _TrustedConstructionPlan:
+    """Snapshot audited construction hooks for one private manager pass."""
+
+    manager_class: type[object]
+    interface_class: type[InterfaceBase]
+    input_fields: dict[str, Input[type[object]]]
+    manager_hooks: tuple[object, ...]
+    interface_hooks: tuple[object, ...]
+    input_hooks: tuple[object, ...]
+
+    def is_current(self) -> bool:
+        """Fail closed when any construction hook changed after preparation."""
+        try:
+            if (
+                type.__getattribute__(self.manager_class, "Interface")
+                is not self.interface_class
+                or type.__getattribute__(self.interface_class, "_parent_class")
+                is not self.manager_class
+                or type.__getattribute__(self.interface_class, "input_fields")
+                is not self.input_fields
+                or type.__getattribute__(
+                    self.manager_class,
+                    "_gm_uses_default_identification_dependency_active",
+                )
+                is not True
+            ):
+                return False
+        except AttributeError:
+            return False
+        return (
+            _static_hooks_match(
+                self.manager_class,
+                _MANAGER_CONSTRUCTION_HOOK_NAMES,
+                self.manager_hooks,
+            )
+            and _static_hooks_match(
+                self.interface_class,
+                _INTERFACE_CONSTRUCTION_HOOK_NAMES,
+                self.interface_hooks,
+            )
+            and _static_hooks_match(
+                Input,
+                _INPUT_CONSTRUCTION_HOOK_NAMES,
+                self.input_hooks,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _PlanBoundEnumerationEvidence:
+    """Require an unchanged construction plan at the membership gate."""
+
+    evidence: _EnumerationEvidence
+    plan: _TrustedConstructionPlan
+
+    def authorizes(
+        self,
+        input_field: Input[type[object]],
+        value: object,
+        identification: Mapping[str, object],
+    ) -> bool:
+        return self.plan.is_current() and self.evidence.authorizes(
+            input_field,
+            value,
+            identification,
+        )
+
+    def track_membership_dependency(self) -> None:
+        self.evidence.track_membership_dependency()
 
 
 def _trusted_candidate_token(value: object) -> _TrustedToken | None:
@@ -745,14 +866,18 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def _uses_standard_trusted_construction(self) -> bool:
         """Return whether manager construction follows the audited base path."""
+        return self._trusted_construction_plan() is not None
+
+    def _trusted_construction_plan(self) -> _TrustedConstructionPlan | None:
+        """Capture exact hook identities for one eligible construction pass."""
         from general_manager.manager.general_manager import GeneralManager
 
         manager_class = self._manager_class
         interface_class = manager_class.Interface
         if not issubclass(manager_class, GeneralManager):
-            return False
+            return None
         if manager_class.__init__ is not GeneralManager.__init__:
-            return False
+            return None
         if inspect.getattr_static(
             manager_class,
             "_track_identification_dependency",
@@ -760,7 +885,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             GeneralManager,
             "_track_identification_dependency",
         ):
-            return False
+            return None
         if (
             type.__getattribute__(
                 manager_class,
@@ -768,9 +893,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             )
             is not True
         ):
-            return False
+            return None
         if interface_class.__init__ is not InterfaceBase.__init__:
-            return False
+            return None
         if (
             interface_class.parse_input_fields_to_identification
             is not InterfaceBase.parse_input_fields_to_identification
@@ -779,48 +904,76 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             or interface_class.format_identification
             is not InterfaceBase.format_identification
         ):
-            return False
+            return None
         if getattr(interface_class, "_parent_class", None) is not manager_class:
-            return False
+            return None
         if type(self.input_fields) is not dict:
-            return False
+            return None
         if interface_class.input_fields is not self.input_fields:
-            return False
-        return all(
+            return None
+        if not all(
             type(input_field) is Input
             and _input_has_exact_standard_state(input_field)
             and not _input_has_behavior_override(input_field)
             for input_field in self.input_fields.values()
+        ):
+            return None
+        manager_hooks = _static_hook_snapshot(
+            manager_class,
+            _MANAGER_CONSTRUCTION_HOOK_NAMES,
+        )
+        interface_hooks = _static_hook_snapshot(
+            interface_class,
+            _INTERFACE_CONSTRUCTION_HOOK_NAMES,
+        )
+        input_hooks = _static_hook_snapshot(Input, _INPUT_CONSTRUCTION_HOOK_NAMES)
+        if manager_hooks is None or interface_hooks is None or input_hooks is None:
+            return None
+        return _TrustedConstructionPlan(
+            manager_class=manager_class,
+            interface_class=interface_class,
+            input_fields=self.input_fields,
+            manager_hooks=manager_hooks,
+            interface_hooks=interface_hooks,
+            input_hooks=input_hooks,
         )
 
     def _manager_from_combination(
         self,
         combination: Combination,
         *,
-        allow_trust: bool,
+        construction_plan: _TrustedConstructionPlan | None,
     ) -> GeneralManagerType:
         """Construct one manager inside a synchronous, single-use trust scope."""
         evidence = (
-            self._lookup_combination_evidence(combination) if allow_trust else None
+            self._lookup_combination_evidence(combination)
+            if construction_plan is not None
+            else None
         )
-        if evidence is None:
+        if evidence is None or construction_plan is None:
             return self._manager_class(**combination)
-        with _trusted_enumeration_scope(self._manager_class.Interface, evidence):
+        scoped_evidence = {
+            name: _PlanBoundEnumerationEvidence(field_evidence, construction_plan)
+            for name, field_evidence in evidence.items()
+        }
+        with _trusted_enumeration_scope(
+            self._manager_class.Interface,
+            scoped_evidence,
+        ):
             return self._manager_class(**combination)
 
     @contextmanager
     def _trusted_construction_pass(
         self,
         combinations: Iterable[Combination],
-    ) -> Iterator[bool]:
+    ) -> Iterator[_TrustedConstructionPlan | None]:
         """Own provenance for one construction pass and revoke it on every exit."""
         del combinations  # Reserved for database-backed evidence preparation.
         try:
-            allow_trust = (
-                not self._evidence_exposed
-                and self._uses_standard_trusted_construction()
+            construction_plan = (
+                None if self._evidence_exposed else self._trusted_construction_plan()
             )
-            yield allow_trust
+            yield construction_plan
         finally:
             self._invalidate_combination_evidence()
 
@@ -1206,11 +1359,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             GeneralManagerType: Manager constructed from each valid set of inputs.
         """
         combinations = self._materialize_combinations(expose=False)
-        with self._trusted_construction_pass(combinations) as allow_trust:
+        with self._trusted_construction_pass(combinations) as construction_plan:
             for combo in combinations:
                 yield self._manager_from_combination(
                     combo,
-                    allow_trust=allow_trust,
+                    construction_plan=construction_plan,
                 )
 
     def _sort_filters(self, sorted_inputs: List[str]) -> SortedFilters:
@@ -1295,9 +1448,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         combinations: list[Combination],
     ) -> list[GeneralManagerType]:
         """Instantiate managers for each raw input-combination dictionary."""
-        with self._trusted_construction_pass(combinations) as allow_trust:
+        with self._trusted_construction_pass(combinations) as construction_plan:
             return [
-                self._manager_from_combination(combo, allow_trust=allow_trust)
+                self._manager_from_combination(
+                    combo,
+                    construction_plan=construction_plan,
+                )
                 for combo in combinations
             ]
 
@@ -1683,11 +1839,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         :meth:`generate_combinations`, but lets ``__str__`` stop after enough
         matching combinations have been found.
         """
-        with self._trusted_construction_pass(combinations) as allow_trust:
+        with self._trusted_construction_pass(combinations) as construction_plan:
             for combo in combinations:
                 manager = self._manager_from_combination(
                     combo,
-                    allow_trust=allow_trust,
+                    construction_plan=construction_plan,
                 )
                 if self._filter_prop_combinations(
                     [manager], prop_filters, prop_excludes
@@ -1815,10 +1971,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             new_bucket._data = result
             new_bucket._evidence_exposed = True
             return new_bucket
-        with self._trusted_construction_pass((result,)) as allow_trust:
+        with self._trusted_construction_pass((result,)) as construction_plan:
             return self._manager_from_combination(
                 result,
-                allow_trust=allow_trust,
+                construction_plan=construction_plan,
             )
 
     def __contains__(self, item: GeneralManagerType) -> bool:
