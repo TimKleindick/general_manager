@@ -227,6 +227,21 @@ def _delete_perf_users(prefix: str) -> int:
     return queryset._raw_delete(using=queryset.db)
 
 
+def _delete_one_perf_user(prefix: str, primary_key: int) -> int:
+    """Delete one relation-free perf user without collected-model cascades."""
+    if not prefix.startswith(USERNAME_PREFIX):
+        message = f"performance user prefix must start with {USERNAME_PREFIX!r}"
+        raise ValueError(message)
+    queryset = cast(
+        RawDeleteQuerySet,
+        User.objects.filter(
+            pk=primary_key,
+            username__startswith=prefix,
+        ),
+    )
+    return queryset._raw_delete(using=queryset.db)
+
+
 @pytest.mark.parametrize("prefix", ["", "perf-db", "perf-", "users-"])
 def test_delete_perf_users_rejects_a_prefix_outside_its_namespace(
     prefix: str,
@@ -257,6 +272,19 @@ def test_delete_perf_users_removes_only_the_requested_prefix() -> None:
     finally:
         _delete_perf_users(prefix)
         _delete_perf_users(sentinel_prefix)
+
+
+def test_delete_one_perf_user_avoids_relation_collection() -> None:
+    prefix = "perf-db-delete-one-target-"
+    target = User.objects.create(username=f"{prefix}target")
+    sibling = User.objects.create(username=f"{prefix}sibling")
+    try:
+        assert _delete_one_perf_user(prefix, int(target.pk)) == 1
+
+        assert not User.objects.filter(pk=target.pk).exists()
+        assert User.objects.filter(pk=sibling.pk).exists()
+    finally:
+        _delete_perf_users(prefix)
 
 
 @contextmanager
@@ -487,7 +515,7 @@ def test_public_database_combinations_use_live_membership_after_row_deletion() -
         )
         bucket = CalculationBucket(manager)
         assert len(bucket.generate_combinations()) == 2
-        User.objects.filter(pk=primary_keys[-1]).delete()
+        assert _delete_one_perf_user(prefix, primary_keys[-1]) == 1
 
         with (
             override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True),
@@ -793,7 +821,7 @@ def test_database_copy_slice_and_pickle_use_live_membership_after_deletion() -> 
             restored = pickle.loads(pickle.dumps(bucket))  # noqa: S301
         finally:
             del globals()[manager_name]
-        User.objects.filter(pk=primary_keys[-1]).delete()
+        assert _delete_one_perf_user(prefix, primary_keys[-1]) == 1
 
         for candidate_bucket in (bucket, copied, sliced, restored):
             with (
