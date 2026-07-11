@@ -83,6 +83,274 @@ _RUN_SCOPED_SCALAR_INPUT_TYPES = (str, int, bool)
 _FORMATLESS_IDENTIFICATION_VALUE_TYPES = {str, int, float, bool, type(None)}
 
 
+def _has_static_dispatch(
+    cls: type[object],
+    owner: type[object],
+    attribute_name: str,
+) -> bool:
+    """Return whether ``cls`` resolves an attribute to the owner's descriptor."""
+    return inspect.getattr_static(cls, attribute_name) is inspect.getattr_static(
+        owner, attribute_name
+    )
+
+
+def _dict_has_identity_keys(
+    value: object,
+    expected_keys: tuple[str, ...],
+) -> bool:
+    """Compare exact-dict keys without invoking user-defined equality hooks."""
+    return (
+        type(value) is dict
+        and len(value) == len(expected_keys)
+        and all(
+            type(current_key) is str and current_key is expected_key
+            for current_key, expected_key in zip(value, expected_keys, strict=True)
+        )
+    )
+
+
+def _canonical_manager_class_state(manager_class: type[object]) -> bool:
+    """Validate the hook-free manager machinery required by hydration seeding."""
+    from general_manager.manager.general_manager import GeneralManager
+    from general_manager.manager.meta import GeneralManagerMeta
+
+    if type(manager_class) is not GeneralManagerMeta:
+        return False
+    if not all(
+        _has_static_dispatch(manager_class, GeneralManager, name)
+        for name in (
+            "__new__",
+            "__init__",
+            "__getattr__",
+            "identification",
+            "_track_identification_dependency",
+            "_track_identification_dependency_active",
+            "_track_own_identification_dependency_active",
+            "_reload_interface_state",
+            "_invalidate_manager_state",
+            "_ensure_manager_state_valid",
+            "_ensure_manager_not_invalidated",
+        )
+    ):
+        return False
+    manager_metaclass = type(manager_class)
+    return all(
+        inspect.getattr_static(manager_metaclass, name)
+        is inspect.getattr_static(GeneralManagerMeta, name)
+        for name in ("__getattribute__", "__getattr__", "__new__")
+    )
+
+
+def _canonical_nested_manager(
+    value: object,
+    manager_class: type[object],
+) -> bool:
+    """Return whether a parsed manager wrapper has untouched canonical state."""
+    if object.__getattribute__(value, "__class__") is not manager_class:
+        return False
+    if not _canonical_manager_class_state(manager_class):
+        return False
+
+    manager_state = object.__getattribute__(value, "__dict__")
+    expected_manager_keys = (
+        "_interface",
+        "_GeneralManager__id",
+        "_attribute_value_cache",
+        "_identification_dependency_cache",
+        "_manager_state_valid",
+        "_manager_state_reason",
+    )
+    if not _dict_has_identity_keys(manager_state, expected_manager_keys):
+        return False
+    identification = manager_state["_GeneralManager__id"]
+    attribute_cache = manager_state["_attribute_value_cache"]
+    if (
+        type(identification) is not dict
+        or type(attribute_cache) is not dict
+        or attribute_cache
+        or manager_state["_identification_dependency_cache"] is not None
+        or manager_state["_manager_state_valid"] is not True
+        or manager_state["_manager_state_reason"] is not None
+    ):
+        return False
+
+    interface = manager_state["_interface"]
+    interface_class = object.__getattribute__(interface, "__class__")
+    if type.__getattribute__(manager_class, "Interface") is not interface_class:
+        return False
+    interface_state = object.__getattribute__(interface, "__dict__")
+    return (
+        _dict_has_identity_keys(interface_state, ("identification",))
+        and interface_state["identification"] is identification
+    )
+
+
+def _seed_calculation_resolved_manager_values(
+    interface: InterfaceBase,
+    identification: dict[str, object],
+) -> None:
+    """Seed manager-valued calculation inputs after canonical parsing.
+
+    This private fast path is deliberately fail-closed. It writes only when the
+    complete interface, manager, capability, field, accessor, descriptor, and
+    parsed-wrapper graph still uses the framework's canonical implementations.
+    """
+    try:
+        from general_manager.interface.capabilities.calculation.lifecycle import (
+            CalculationLifecycleCapability,
+            CalculationReadCapability,
+            _is_canonical_calculation_input_accessor,
+        )
+        from general_manager.interface.interfaces.calculation import (
+            CalculationInterface,
+        )
+        from general_manager.manager.general_manager import GeneralManager
+        from general_manager.manager.input import Input
+        from general_manager.manager.meta import (
+            _is_canonical_manager_attribute_descriptor,
+        )
+
+        interface_class = object.__getattribute__(interface, "__class__")
+        interface_mro = type.__getattribute__(interface_class, "__mro__")
+        if CalculationInterface not in interface_mro:
+            return
+        if type(identification) is not dict:
+            return
+        if object.__getattribute__(interface, "__dict__"):
+            return
+        if not all(
+            _has_static_dispatch(interface_class, InterfaceBase, name)
+            for name in (
+                "__init__",
+                "parse_input_fields_to_identification",
+                "_process_input_field",
+                "format_identification",
+                "get_attributes",
+                "get_field_type",
+                "handle_interface",
+            )
+        ):
+            return
+
+        interface_class_state = type.__getattribute__(interface_class, "__dict__")
+        input_fields = interface_class_state.get("input_fields")
+        handlers = interface_class_state.get("_capability_handlers")
+        parent_class = interface_class_state.get("_parent_class")
+        if (
+            type(input_fields) is not dict
+            or type(handlers) is not dict
+            or any(type(handler_name) is not str for handler_name in handlers)
+            or not _canonical_manager_class_state(parent_class)
+            or type.__getattribute__(parent_class, "Interface") is not interface_class
+        ):
+            return
+
+        lifecycle_handler = handlers.get("calculation_lifecycle")
+        read_handler = handlers.get("read")
+        if (
+            type(lifecycle_handler) is not CalculationLifecycleCapability
+            or type(read_handler) is not CalculationReadCapability
+            or vars(lifecycle_handler)
+            or vars(read_handler)
+        ):
+            return
+        if not all(
+            inspect.getattr_static(type(handler), method_name)
+            is inspect.getattr_static(expected_class, method_name)
+            for handler, expected_class, method_names in (
+                (
+                    lifecycle_handler,
+                    CalculationLifecycleCapability,
+                    ("pre_create", "post_create"),
+                ),
+                (
+                    read_handler,
+                    CalculationReadCapability,
+                    ("get_data", "get_attributes", "get_field_type"),
+                ),
+            )
+            for method_name in method_names
+        ):
+            return
+
+        parent_state = type.__getattribute__(parent_class, "__dict__")
+        parent_attributes = parent_state.get("_attributes")
+        input_names = tuple(input_fields)
+        if (
+            type(parent_attributes) is not dict
+            or len(identification) != len(input_names)
+            or len(parent_attributes) != len(input_names)
+            or any(type(name) is not str for name in identification)
+            or any(type(name) is not str for name in parent_attributes)
+            or any(
+                current is not expected
+                for current, expected in zip(identification, input_names, strict=True)
+            )
+            or any(
+                current is not expected
+                for current, expected in zip(
+                    parent_attributes, input_names, strict=True
+                )
+            )
+        ):
+            return
+
+        expected_input_state = (
+            "type",
+            "possible_values",
+            "required",
+            "min_value",
+            "max_value",
+            "validator",
+            "normalizer",
+            "is_manager",
+            "depends_on",
+        )
+        resolved_manager_values: dict[str, object] = {}
+        for field_name, input_field in input_fields.items():
+            if type(field_name) is not str or type(input_field) is not Input:
+                return
+            input_state = object.__getattribute__(input_field, "__dict__")
+            if (
+                not _dict_has_identity_keys(input_state, expected_input_state)
+                or type(input_state["depends_on"]) is not list
+                or type(input_state["is_manager"]) is not bool
+            ):
+                return
+
+            accessor = parent_attributes.get(field_name)
+            descriptor = inspect.getattr_static(parent_class, field_name)
+            if not _is_canonical_calculation_input_accessor(
+                accessor, interface_class, field_name
+            ) or not _is_canonical_manager_attribute_descriptor(
+                descriptor, parent_class, field_name
+            ):
+                return
+
+            if input_state["is_manager"] is not True:
+                continue
+            manager_type = input_state["type"]
+            if not isinstance(manager_type, type) or not _has_static_dispatch(
+                manager_type, GeneralManager, "__init__"
+            ):
+                return
+            value = identification.get(field_name)
+            if value is None:
+                continue
+            if not _canonical_nested_manager(value, manager_type):
+                return
+            resolved_manager_values[field_name] = value
+
+        if resolved_manager_values:
+            object.__setattr__(
+                interface,
+                "_resolved_input_values",
+                resolved_manager_values,
+            )
+    except (AttributeError, KeyError, TypeError):
+        return
+
+
 class AttributeTypedDict(TypedDict):
     """Describe metadata captured for each interface attribute."""
 
@@ -378,6 +646,7 @@ class InterfaceBase(ABC):
             **kwargs: Named identification values matching the interface's input field names.
         """
         identification = self.parse_input_fields_to_identification(*args, **kwargs)
+        _seed_calculation_resolved_manager_values(self, identification)
         if len(identification) == 1:
             value = next(iter(identification.values()))
             if value.__class__ in _FORMATLESS_IDENTIFICATION_VALUE_TYPES:

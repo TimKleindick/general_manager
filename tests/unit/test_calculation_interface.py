@@ -19,6 +19,7 @@ from general_manager.interface.capabilities.configuration import (
 )
 from general_manager.manager.input import Input
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.cache.cache_tracker import DependencyTracker
 
@@ -448,6 +449,151 @@ class TestCalculationInterface(TestCase):
             (RelatedManager.__name__, "identification", '{"id": "related-id"}'),
             dependencies,
         )
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_initialized_manager_input_is_seeded_from_parsed_wrapper(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+                label = Input(str)
+
+        GeneralManagerMeta.ensure_attributes_initialized(RelatedManager)
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        related = RelatedManager("related-id")
+
+        manager = HydratedCalculation(related, "label")
+
+        self.assertEqual(
+            manager.identification,
+            {"related": {"id": "related-id"}, "label": "label"},
+        )
+        self.assertEqual(
+            manager._interface._resolved_input_values,
+            {"related": related},
+        )
+        self.assertIs(manager._interface._resolved_input_values["related"], related)
+        self.assertIs(manager.related, related)
+        self.assertNotIn("label", manager._interface._resolved_input_values)
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_manager_input_cast_from_id_and_dict_seeds_exact_wrapper(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class CompositeManager(GeneralManager):
+            class Interface(CalculationInterface):
+                code = Input(str)
+                version = Input(int)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+                composite = Input(CompositeManager)
+
+        for manager_class in (RelatedManager, CompositeManager, HydratedCalculation):
+            GeneralManagerMeta.ensure_attributes_initialized(manager_class)
+
+        manager = HydratedCalculation("related-id", {"code": "x", "version": 2})
+
+        related = manager._interface._resolved_input_values["related"]
+        composite = manager._interface._resolved_input_values["composite"]
+        self.assertIsInstance(related, RelatedManager)
+        self.assertIsInstance(composite, CompositeManager)
+        self.assertEqual(manager.identification["related"], {"id": "related-id"})
+        self.assertEqual(
+            manager.identification["composite"], {"code": "x", "version": 2}
+        )
+        self.assertIs(manager.related, related)
+        self.assertIs(manager.composite, composite)
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_failed_input_processing_does_not_seed_resolved_values(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class RejectedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+                accepted = Input(int, validator=lambda value: value > 0)
+
+        GeneralManagerMeta.ensure_attributes_initialized(RelatedManager)
+        GeneralManagerMeta.ensure_attributes_initialized(RejectedCalculation)
+        interface = RejectedCalculation.Interface.__new__(RejectedCalculation.Interface)
+
+        with self.assertRaises(ValueError):
+            RejectedCalculation.Interface.__init__(interface, "related-id", -1)
+
+        self.assertNotIn("_resolved_input_values", vars(interface))
+
+    @override_settings(
+        AUTOCREATE_GRAPHQL=False,
+        GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True,
+    )
+    def test_parse_cast_value_and_normalizer_failures_do_not_seed(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class MissingCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+                value = Input(int)
+
+        class TypeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+                value = Input(int)
+
+        class ValueCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+                value = Input(int, possible_values=[1])
+
+        def reject_normalization(_value):
+            raise RuntimeError
+
+        class NormalizerCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+                value = Input(int, normalizer=reject_normalization)
+
+        cases = (
+            (MissingCalculation, ("related-id",), TypeError),
+            (TypeCalculation, ("related-id", object()), TypeError),
+            (ValueCalculation, ("related-id", 2), ValueError),
+            (NormalizerCalculation, ("related-id", 1), RuntimeError),
+        )
+        for manager_class, args, error_type in cases:
+            interface_class = manager_class.Interface
+            interface = interface_class.__new__(interface_class)
+            with self.subTest(manager_class=manager_class):
+                with self.assertRaises(error_type):
+                    interface_class.__init__(interface, *args)
+                self.assertNotIn("_resolved_input_values", vars(interface))
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seed_fails_closed_when_calculation_accessor_is_substituted(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(RelatedManager)
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        HydratedCalculation._attributes["related"] = lambda _interface: object()
+
+        manager = HydratedCalculation("related-id")
+
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
 
     def test_filter(self):
         """

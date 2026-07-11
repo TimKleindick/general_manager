@@ -1,4 +1,9 @@
 # type: ignore
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 from django.test import SimpleTestCase, override_settings
 from general_manager.interface import base_interface as base_interface_module
 from general_manager.interface.base_interface import (
@@ -196,6 +201,78 @@ class DummyInterface(InterfaceBase):
 
 
 class InterfaceBaseTests(SimpleTestCase):
+    def test_calculation_seed_runtime_imports_are_cycle_safe(self):
+        root = Path(__file__).resolve().parents[2]
+        environment = os.environ.copy()
+        python_path = [str(root / "src"), str(root)]
+        if existing_python_path := environment.get("PYTHONPATH"):
+            python_path.append(existing_python_path)
+        environment.update(
+            {
+                "DJANGO_SETTINGS_MODULE": "tests.test_settings",
+                "PYTHONPATH": os.pathsep.join(python_path),
+            }
+        )
+
+        result = subprocess.run(  # noqa: S603 - trusted current interpreter
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import django; django.setup(); "
+                    "import general_manager.interface.base_interface; "
+                    "import general_manager.interface.interfaces.calculation; "
+                    "import general_manager.manager.general_manager"
+                ),
+            ],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_formatless_initialization_keeps_parse_seed_return_order(self):
+        events = []
+
+        class FormatlessInterface(InterfaceBase):
+            input_fields: ClassVar[dict[str, DummyInput]] = {"id": DummyInput(str)}
+
+            def parse_input_fields_to_identification(self, *args, **kwargs):
+                events.append("parse")
+                return {"id": "value"}
+
+            @staticmethod
+            def format_identification(identification):
+                events.append("format")
+                return identification
+
+        def record_seed(interface, identification):
+            self.assertIsInstance(interface, FormatlessInterface)
+            self.assertEqual(identification, {"id": "value"})
+            events.append("seed")
+
+        with patch.object(
+            base_interface_module,
+            "_seed_calculation_resolved_manager_values",
+            create=True,
+            side_effect=record_seed,
+        ) as seed:
+            interface = FormatlessInterface("value")
+
+        self.assertEqual(interface.identification, {"id": "value"})
+        self.assertEqual(events, ["parse", "seed"])
+        seed.assert_called_once()
+
+    def test_non_calculation_interface_does_not_gain_resolved_values(self):
+        gm = DummyGM({"id": 1})
+
+        interface = DummyInterface(a=1, b="x", gm=gm, vals=2, c=1)
+
+        self.assertNotIn("_resolved_input_values", vars(interface))
+
     def test_valid_input_kwargs(self):
         # Normal case: all inputs provided as kwargs
         """
