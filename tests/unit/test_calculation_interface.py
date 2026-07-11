@@ -1,4 +1,5 @@
 import gc
+import inspect
 from types import FunctionType
 from typing import ClassVar
 from unittest.mock import patch
@@ -483,6 +484,173 @@ class TestCalculationInterface(TestCase):
         self.assertIs(manager._interface._resolved_input_values["related"], related)
         self.assertIs(manager.related, related)
         self.assertNotIn("label", manager._interface._resolved_input_values)
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_invalid_seeded_manager_is_evicted_before_first_outer_access(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        original._invalidate_manager_state("stale")
+
+        resolved = manager.related
+
+        self.assertIsInstance(resolved, RelatedManager)
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_replaced_seeded_manager_identification_is_evicted(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        object.__setattr__(
+            original,
+            "_GeneralManager__id",
+            {"id": "replacement-id"},
+        )
+
+        resolved = manager.related
+
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_in_place_seeded_identification_mutation_reuses_aligned_manager(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        original.identification["id"] = "updated-id"
+
+        resolved = manager.related
+
+        self.assertIs(resolved, original)
+        self.assertIs(manager.identification["related"], original.identification)
+        self.assertEqual(resolved.identification, {"id": "updated-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seeded_manager_provenance_mutation_evicts_cached_wrapper(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original_init = RelatedManager.__init__
+
+        def delegated_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        with patch.object(RelatedManager, "__init__", delegated_init):
+            resolved = manager.related
+
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_input_state_descriptor_mutation_is_not_invoked_during_eviction(self):
+        hook_calls = []
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        outer_input = HydratedCalculation.Interface.input_fields["related"]
+
+        def invoke_hostile_is_manager(_self):
+            if _self is outer_input:
+                hook_calls.append("is_manager")
+                raise AssertionError
+            return object.__getattribute__(_self, "__dict__")["is_manager"]
+
+        hostile_is_manager = property(invoke_hostile_is_manager)
+
+        with patch.object(Input, "is_manager", hostile_is_manager, create=True):
+            resolved = manager.related
+
+        self.assertEqual(hook_calls, [])
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_installed_descriptor_provenance_mutation_evicts_seed(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        descriptor = inspect.getattr_static(HydratedCalculation, "related")
+        installation = descriptor._gm_manager_attribute_descriptor_installation
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        descriptor._gm_manager_attribute_descriptor_installation = None
+        try:
+            resolved = manager.related
+        finally:
+            descriptor._gm_manager_attribute_descriptor_installation = installation
+
+        self.assertIsNot(resolved, original)
+        self.assertEqual(resolved.identification, {"id": "related-id"})
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_invalidation_after_first_outer_access_keeps_existing_cache_boundary(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        manager = HydratedCalculation(original)
+        first = manager.related
+        first._invalidate_manager_state("later")
+
+        second = manager.related
+
+        self.assertIs(first, original)
+        self.assertIs(second, first)
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_manager_input_cast_from_id_and_dict_seeds_exact_wrapper(self):
