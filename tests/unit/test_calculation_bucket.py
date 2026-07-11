@@ -2226,6 +2226,25 @@ class TestCalculationTerminalStreams(TestCase):
             )._calculation_result_cache_signature()
         )
 
+    def test_custom_manager_and_uncached_property_bypass_result_admission(self) -> None:
+        class CustomCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
+            def __new__(cls, *args: object, **kwargs: object):
+                return super().__new__(cls)
+
+            @graph_ql_property(filterable=True, cache="none")
+            def selected(self) -> bool:
+                return self.value == 1
+
+        GeneralManagerMeta.ensure_attributes_initialized(CustomCalculation)
+        self.assertIsNone(
+            CalculationBucket(
+                CustomCalculation, {"selected": True}
+            )._calculation_result_cache_signature()
+        )
+
     def test_callable_provider_reuses_result_without_reinvoking_provider(self) -> None:
         calls = 0
 

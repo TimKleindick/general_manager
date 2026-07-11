@@ -2620,6 +2620,48 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         ):
             return None
 
+        manager_class = self._manager_class
+        interface_class = manager_class.Interface
+        if (
+            inspect.getattr_static(manager_class, "__new__")
+            is not inspect.getattr_static(GeneralManager, "__new__")
+            or inspect.getattr_static(manager_class, "identification")
+            is not inspect.getattr_static(GeneralManager, "identification")
+            or inspect.getattr_static(interface_class, "__new__")
+            is not inspect.getattr_static(InterfaceBase, "__new__")
+            or inspect.getattr_static(
+                interface_class,
+                "identification",
+                _STATIC_ATTRIBUTE_MISSING,
+            )
+            is not inspect.getattr_static(
+                InterfaceBase,
+                "identification",
+                _STATIC_ATTRIBUTE_MISSING,
+            )
+        ):
+            return None
+        if any(
+            inspect.getattr_static(
+                manager_class,
+                state_name,
+                _STATIC_ATTRIBUTE_MISSING,
+            )
+            is not _STATIC_ATTRIBUTE_MISSING
+            for state_name in _TERMINAL_MANAGER_STATE_NAMES
+        ):
+            return None
+        from general_manager.api.property import GraphQLProperty
+
+        for property_descriptor in interface_class.get_graph_ql_properties().values():
+            if type(
+                property_descriptor
+            ) is not GraphQLProperty or property_descriptor.cache not in {
+                "run",
+                "dependency",
+            }:
+                return None
+
         construction_plan = self._trusted_construction_plan()
         if construction_plan is None:
             return None
