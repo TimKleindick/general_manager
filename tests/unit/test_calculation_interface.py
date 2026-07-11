@@ -1040,6 +1040,81 @@ class TestCalculationInterface(TestCase):
         self.assertIsNone(original_ref())
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_dispatch_fallback_avoids_colliding_state_key_hooks(self):
+        equality_calls = []
+
+        class CollidingStateKey(str):
+            armed = False
+
+            def __new__(cls, value, target):
+                instance = super().__new__(cls, value)
+                instance.target = target
+                return instance
+
+            def __hash__(self):
+                return hash(self.target)
+
+            def __eq__(self, other):
+                if type(self).armed:
+                    equality_calls.append(other)
+                    raise AssertionError
+                return False
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+        original = RelatedManager("related-id")
+        original_ref = ref(original)
+        manager = HydratedCalculation(original)
+        interface = manager._interface
+        state = vars(interface)
+        resolved_name = "_resolved_input_values"
+        seeded_name = "_gm_seeded_input_values_cache"
+        lazy_name = "_gm_lazy_input_values_cache"
+        dict.pop(state, resolved_name)
+        seeded_cache = dict.pop(state, seeded_name)
+        lazy_cache = dict.pop(state, lazy_name)
+        for index, target in enumerate((resolved_name, seeded_name, lazy_name)):
+            hostile_key = CollidingStateKey(f"hostile-{index}", target)
+            dict.__setitem__(state, hostile_key, object())
+            if target == seeded_name:
+                dict.__setitem__(state, seeded_name, seeded_cache)
+            elif target == lazy_name:
+                dict.__setitem__(state, lazy_name, lazy_cache)
+        interface_class = type(interface)
+
+        def custom_getattribute(current_interface, name):
+            return object.__getattribute__(current_interface, name)
+
+        CollidingStateKey.armed = True
+        type.__setattr__(interface_class, "__getattribute__", custom_getattribute)
+        try:
+            resolved = manager.related
+        finally:
+            type.__delattr__(interface_class, "__getattribute__")
+            CollidingStateKey.armed = False
+
+        marker_names = {
+            key
+            for key in vars(interface)
+            if type(key) is str and key in {resolved_name, seeded_name, lazy_name}
+        }
+        self.assertEqual(marker_names, {resolved_name})
+        self.assertEqual(equality_calls, [])
+        self.assertIsNot(resolved, original)
+        del seeded_cache
+        del lazy_cache
+        del original
+        gc.collect()
+        self.assertIsNone(original_ref())
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_cross_field_normalizer_can_resolve_seeded_field_concurrently(self):
         worker_results = []
         worker_finished = threading.Event()

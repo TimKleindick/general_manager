@@ -89,6 +89,7 @@ _INSTANCE_DICT_NAME = "__dict__"
 _EMPTY_CLOSURE_CELL = object()
 _MANAGER_INPUT_SEED_PLAN_NAME = "_gm_manager_input_seed_plan"
 _MANAGER_INPUT_SEED_PLAN_TOKEN = object()
+_RESOLVED_INPUT_VALUES_CACHE_NAME = "_resolved_input_values"
 _SEEDED_INPUT_VALUES_CACHE_NAME = "_gm_seeded_input_values_cache"
 _LAZY_INPUT_VALUES_CACHE_NAME = "_gm_lazy_input_values_cache"
 
@@ -958,7 +959,7 @@ def _seed_calculation_resolved_manager_values(
         if resolved_manager_values:
             dict.__setitem__(
                 interface_state,
-                "_resolved_input_values",
+                _RESOLVED_INPUT_VALUES_CACHE_NAME,
                 resolved_manager_values,
             )
             dict.__setitem__(
@@ -975,7 +976,7 @@ def _seed_calculation_resolved_manager_values(
                 interface,
                 resolved_manager_values,
             ):
-                dict.pop(interface_state, "_resolved_input_values", None)
+                dict.pop(interface_state, _RESOLVED_INPUT_VALUES_CACHE_NAME, None)
                 dict.pop(interface_state, _SEEDED_INPUT_VALUES_CACHE_NAME, None)
                 dict.pop(interface_state, _LAZY_INPUT_VALUES_CACHE_NAME, None)
     except (AttributeError, KeyError, TypeError):

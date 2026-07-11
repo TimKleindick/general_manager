@@ -17,6 +17,7 @@ from general_manager.interface.base_interface import (
     _INTERFACE_BASE_PROVENANCE,
     _LAZY_INPUT_VALUES_CACHE_NAME,
     _MANAGER_INPUT_SEED_PLAN_NAME,
+    _RESOLVED_INPUT_VALUES_CACHE_NAME,
     _SEEDED_INPUT_VALUES_CACHE_NAME,
     _SeededFieldOrigin,
     _SeededInterfaceOrigin,
@@ -203,8 +204,12 @@ def _replace_live_resolved_cache_if_safe(
     ):
         return
     state = object.__getattribute__(interface_instance, _INSTANCE_DICT_NAME)
-    if type(state) is dict:
-        dict.__setitem__(state, "_resolved_input_values", resolved_values)
+    if _exact_string_dict(state):
+        dict.__setitem__(
+            state,
+            _RESOLVED_INPUT_VALUES_CACHE_NAME,
+            resolved_values,
+        )
 
 
 def _transition_mirror_field_to_lazy_if_safe(
@@ -265,9 +270,7 @@ def _transition_origin_to_virtual_fallback(
     with origin.transition_condition:
         if _seeded_interface_origin(interface_instance) is not origin:
             return
-        resolved_values: dict[str, object] = {}
-        origin.resolved_values = resolved_values
-        _replace_live_resolved_cache_if_safe(interface_instance, resolved_values)
+        origin.resolved_values = {}
         _clear_seed_mirrors_if_safe(interface_instance)
         _discard_seeded_interface_origin(interface_instance, origin)
         if type(origin.fields) is dict:
@@ -280,7 +283,7 @@ def _transition_origin_to_virtual_fallback(
 def _clear_seed_mirrors_if_safe(
     interface_instance: "CalculationInterface",
 ) -> None:
-    """Drop exact constructor mirrors without invoking changed dispatch."""
+    """Rebuild safe live state without invoking keys or changed dispatch."""
     interface_provenance = _INTERFACE_BASE_PROVENANCE
     if interface_provenance is None:
         return
@@ -294,32 +297,22 @@ def _clear_seed_mirrors_if_safe(
     state = object.__getattribute__(interface_instance, _INSTANCE_DICT_NAME)
     if type(state) is not dict:
         return
-    seeded_entry = next(
-        (
-            (key, value)
-            for key, value in dict.items(state)
-            if key is _SEEDED_INPUT_VALUES_CACHE_NAME
-        ),
-        None,
-    )
-    if seeded_entry is not None:
-        seeded_key, seeded_cache = seeded_entry
-        if type(seeded_cache) is dict:
-            dict.clear(seeded_cache)
-        dict.pop(state, seeded_key, None)
-    lazy_entry = next(
-        (
-            (key, value)
-            for key, value in dict.items(state)
-            if key is _LAZY_INPUT_VALUES_CACHE_NAME
-        ),
-        None,
-    )
-    if lazy_entry is not None:
-        lazy_key, lazy_cache = lazy_entry
-        if type(lazy_cache) is set:
-            set.clear(lazy_cache)
-        dict.pop(state, lazy_key, None)
+    retained_state: list[tuple[str, object]] = []
+    for key, value in dict.items(state):
+        if key is _SEEDED_INPUT_VALUES_CACHE_NAME:
+            if type(value) is dict:
+                dict.clear(value)
+        elif key is _LAZY_INPUT_VALUES_CACHE_NAME:
+            if type(value) is set:
+                set.clear(value)
+        elif key is _RESOLVED_INPUT_VALUES_CACHE_NAME:
+            if type(value) is dict:
+                dict.clear(value)
+        elif type(key) is str:
+            retained_state.append((key, value))
+    dict.clear(state)
+    for key, value in retained_state:
+        dict.__setitem__(state, key, value)
 
 
 def _seeded_wait_chain_has_cycle(
