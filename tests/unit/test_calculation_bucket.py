@@ -2029,15 +2029,39 @@ class TestCalculationTerminalStreams(TestCase):
                 def __new__(cls, *args, **kwargs):
                     return super().__new__(cls)
 
+        class InterfaceIdentificationOverrideCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
+                @property
+                def identification(self):
+                    return {"value": 0}
+
+        class ManagerStateOverrideCalculation(GeneralManager):
+            _interface = property(lambda _self: None)
+
+            class Interface(CalculationInterface):
+                value = Input(int, possible_values=(0, 1))
+
         for manager_class in (
             NewOverrideCalculation,
             IdentificationOverrideCalculation,
             InterfaceNewOverrideCalculation,
+            InterfaceIdentificationOverrideCalculation,
+            ManagerStateOverrideCalculation,
         ):
             GeneralManagerMeta.ensure_attributes_initialized(manager_class)
             self.assertFalse(
                 CalculationBucket(manager_class)._terminal_stream_supported()
             )
+
+        class CustomBucket(CalculationBucket):
+            pass
+
+        regular_bucket = self._make_scalar_bucket((0, 1))
+        self.assertFalse(
+            CustomBucket(regular_bucket._manager_class)._terminal_stream_supported()
+        )
 
     def test_last_remains_full_path(self) -> None:
         bucket = self._make_scalar_bucket(range(3))

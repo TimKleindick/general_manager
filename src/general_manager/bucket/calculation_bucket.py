@@ -84,6 +84,14 @@ _INPUT_STATE_NAMES = frozenset(
     }
 )
 _TERMINAL_SCALAR_TYPES = (type(None), bool, int, float, str)
+_TERMINAL_MANAGER_STATE_NAMES = (
+    "_interface",
+    "_GeneralManager__id",
+    "_attribute_value_cache",
+    "_identification_dependency_cache",
+    "_manager_state_valid",
+    "_manager_state_reason",
+)
 _NUMERIC_RANGE_STATE_NAMES = frozenset({"kind", "min_value", "max_value", "step"})
 _DATE_RANGE_STATE_NAMES = frozenset({"kind", "start", "end", "frequency", "step"})
 _DATABASE_BUCKET_STATE_NAMES = frozenset(
@@ -2913,6 +2921,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """Return whether scalar terminal streaming can safely replace materialization."""
         if self._data is not None:
             return False
+        if type(self) is not CalculationBucket:
+            return False
         if self.sort_key is not None or self.reverse is not False:
             return False
         if type(self.filter_definitions) is not dict or self.filter_definitions:
@@ -2936,6 +2946,26 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             is not inspect.getattr_static(GeneralManager, "identification")
             or inspect.getattr_static(self._manager_class.Interface, "__new__")
             is not inspect.getattr_static(InterfaceBase, "__new__")
+            or inspect.getattr_static(
+                self._manager_class.Interface,
+                "identification",
+                _STATIC_ATTRIBUTE_MISSING,
+            )
+            is not inspect.getattr_static(
+                InterfaceBase,
+                "identification",
+                _STATIC_ATTRIBUTE_MISSING,
+            )
+        ):
+            return False
+        if any(
+            inspect.getattr_static(
+                self._manager_class,
+                state_name,
+                _STATIC_ATTRIBUTE_MISSING,
+            )
+            is not _STATIC_ATTRIBUTE_MISSING
+            for state_name in _TERMINAL_MANAGER_STATE_NAMES
         ):
             return False
 
