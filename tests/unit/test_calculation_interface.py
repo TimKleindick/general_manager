@@ -3560,6 +3560,199 @@ class TestSeededProvenanceGuards(TestCase):
         )
         self.assertEqual(len(empty_snapshot.closure), 1)
 
+        def make_closure():
+            value = object()
+
+            def function():
+                return value
+
+            def replace_value():
+                nonlocal value
+                value = object()
+
+            return function, replace_value
+
+        first_function, replace_first_value = make_closure()
+        second_function, _ = make_closure()
+        first_snapshot = base_interface_module._function_snapshot(first_function, set())
+        self.assertFalse(
+            base_interface_module._function_matches_snapshot(
+                second_function,
+                first_snapshot,
+                set(),
+            )
+        )
+
+        empty_snapshot_match = base_interface_module._function_matches_snapshot(
+            empty_function,
+            empty_snapshot,
+            set(),
+        )
+        self.assertTrue(empty_snapshot_match)
+
+        replace_first_value()
+        self.assertFalse(
+            base_interface_module._function_matches_snapshot(
+                first_function,
+                first_snapshot,
+                set(),
+            )
+        )
+
+        nested_child_snapshot = base_interface_module._function_snapshot(
+            nested_function, set()
+        )
+        nested_child = nested_function.__closure__[0].cell_contents
+        nested_child.__dict__["changed"] = True
+        self.assertFalse(
+            base_interface_module._function_matches_snapshot(
+                nested_function,
+                nested_child_snapshot,
+                set(),
+            )
+        )
+
+    def test_additional_provenance_guard_edges_fail_closed(self):
+        lifecycle = calculation_lifecycle_module
+        interface = DummyCalculationInterface("value", 1)
+        state = vars(interface)
+        original_state = dict(state)
+
+        state[1] = object()
+        self.assertFalse(lifecycle._seeded_interface_surrounding_state_safe(interface))
+        state.clear()
+        state.update(original_state)
+
+        state["identification"] = []
+        self.assertEqual(
+            lifecycle._live_seeded_raw_value(interface, "field1"),
+            (False, lifecycle._MISSING_INTERFACE_STATE),
+        )
+        state.clear()
+        state.update(original_state)
+
+        with patch.object(
+            lifecycle, "_mro_state_access_is_canonical", return_value=False
+        ):
+            lifecycle._replace_live_resolved_cache_if_safe(interface, {})
+            lifecycle._transition_mirror_field_to_lazy_if_safe(interface, "field1")
+            lifecycle._clear_seed_mirrors_if_safe(interface)
+
+        state.clear()
+        state.update(
+            {
+                "_gm_seeded_input_values_cache": {1: object()},
+                "_gm_lazy_input_values_cache": [],
+                "identification": {},
+            }
+        )
+        with patch.object(
+            lifecycle, "_mro_state_access_is_canonical", return_value=True
+        ):
+            lifecycle._transition_mirror_field_to_lazy_if_safe(interface, "field1")
+        self.assertNotIn("_gm_seeded_input_values_cache", state)
+        self.assertEqual(state["_gm_lazy_input_values_cache"], {"field1"})
+
+        origin = base_interface_module._SeededInterfaceOrigin(
+            interface_ref=ref(interface),
+            resolved_values={},
+            fields={},
+            transition_condition=threading.Condition(threading.RLock()),
+        )
+        lifecycle._transition_origin_to_virtual_fallback(interface, origin)
+
+        with patch.multiple(
+            lifecycle,
+            _GENERAL_MANAGER_PROVENANCE=(GeneralManager, ()),
+            _INTERFACE_BASE_PROVENANCE=(InterfaceBase, ()),
+        ):
+            self.assertFalse(
+                lifecycle._post_seeded_manager_state_is_safe(object(), GeneralManager)
+            )
+            malformed = object.__new__(GeneralManager)
+            malformed.__dict__.clear()
+            self.assertFalse(
+                lifecycle._post_seeded_manager_state_is_safe(
+                    malformed,
+                    GeneralManager,
+                )
+            )
+
+        plain_input = Input(str)
+        self.assertTrue(
+            lifecycle._cached_manager_matches_formatted_identification(
+                object,
+                "field",
+                plain_input,
+                object(),
+                {},
+            )
+        )
+        plain_input.__dict__["is_manager"] = "invalid"
+        self.assertFalse(
+            lifecycle._cached_manager_matches_formatted_identification(
+                object,
+                "field",
+                plain_input,
+                object(),
+                {},
+            )
+        )
+
+        class CandidateInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "field": Input(str),
+            }
+
+        candidate_interface = CandidateInterface(field="value")
+        field_name = next(iter(CandidateInterface.input_fields))
+        candidate_identification = {field_name: "value"}
+        with patch.object(
+            base_interface_module, "_static_descriptor", return_value=object()
+        ):
+            self.assertFalse(
+                base_interface_module._manager_candidate_present(
+                    candidate_interface,
+                    candidate_identification,
+                )
+            )
+        self.assertFalse(
+            base_interface_module._manager_candidate_present(
+                candidate_interface,
+                {},
+            )
+        )
+        self.assertFalse(
+            base_interface_module._manager_candidate_present(
+                candidate_interface,
+                {"other": "value"},
+            )
+        )
+        candidate_field = CandidateInterface.input_fields[field_name]
+        candidate_field.__dict__["is_manager"] = "invalid"
+        self.assertFalse(
+            base_interface_module._manager_candidate_present(
+                candidate_interface,
+                candidate_identification,
+            )
+        )
+        candidate_field.__dict__["is_manager"] = False
+        state_backed_interface = CandidateInterface(field="value")
+
+        with patch.object(base_interface_module, "_INSTANCE_DICT_NAME", "state"):
+
+            class StateBackedManager:
+                @property
+                def state(self):
+                    return []
+
+            self.assertFalse(
+                base_interface_module._register_seeded_interface_origin(
+                    state_backed_interface,
+                    {field_name: StateBackedManager()},
+                )
+            )
+
 
 class LifecycleInterface(CalculationInterface):
     foo = Input(type=str)
