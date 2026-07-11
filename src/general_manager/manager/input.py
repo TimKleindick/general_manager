@@ -11,6 +11,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast
 
+from general_manager.interface.base_interface import _register_input_seed_provenance
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement import Measurement
 
@@ -1000,3 +1001,6 @@ class Input(Generic[INPUT_TYPE]):
             identification,
             cache_context=cache_context,
         )
+
+
+_register_input_seed_provenance(Input)

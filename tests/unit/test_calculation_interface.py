@@ -12,6 +12,10 @@ from general_manager.interface.capabilities.calculation import (
     CalculationQueryCapability,
 )
 from general_manager.interface.capabilities.calculation.lifecycle import (
+    CalculationReadCapability,
+)
+from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.capabilities.calculation.lifecycle import (
     _is_canonical_calculation_input_accessor,
 )
 from general_manager.interface.capabilities.configuration import (
@@ -738,6 +742,243 @@ class TestCalculationInterface(TestCase):
         manager = MetaclassCalculation("related-id")
 
         self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_hostile_interface_dict_descriptor_is_not_invoked_by_seed(self):
+        hook_calls = []
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HostileCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+                @property
+                def __dict__(self):
+                    hook_calls.append("interface-dict")
+                    raise AssertionError
+
+        GeneralManagerMeta.ensure_attributes_initialized(HostileCalculation)
+
+        manager = HostileCalculation("related-id")
+
+        self.assertEqual(manager.identification, {"related": {"id": "related-id"}})
+        self.assertEqual(hook_calls, [])
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_hostile_nested_manager_dict_descriptor_is_not_invoked_by_seed(self):
+        hook_calls = []
+
+        class HostileRelatedManager(GeneralManager):
+            @property
+            def __dict__(self):
+                hook_calls.append("manager-dict")
+                raise AssertionError
+
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HostileCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(HostileRelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HostileCalculation)
+
+        manager = HostileCalculation("related-id")
+
+        self.assertEqual(manager.identification, {"related": {"id": "related-id"}})
+        self.assertEqual(hook_calls, [])
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_hostile_resolved_values_setter_is_not_invoked_by_seed(self):
+        hook_calls = []
+
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HostileCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+                @property
+                def _resolved_input_values(self):
+                    return None
+
+                @_resolved_input_values.setter
+                def _resolved_input_values(self, value):
+                    hook_calls.append(value)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HostileCalculation)
+
+        manager = HostileCalculation("related-id")
+
+        self.assertEqual(manager.identification, {"related": {"id": "related-id"}})
+        self.assertEqual(hook_calls, [])
+        self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+    @override_settings(AUTOCREATE_GRAPHQL=False)
+    def test_seed_rejects_monkeypatched_canonical_implementations(self):
+        class RelatedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(str)
+
+        class HydratedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                related = Input(RelatedManager)
+
+        GeneralManagerMeta.ensure_attributes_initialized(HydratedCalculation)
+
+        original_read = CalculationReadCapability.get_attributes
+        original_lifecycle = CalculationLifecycleCapability.post_create
+        original_cast = Input.cast
+        original_normalize = Input.normalize
+        original_interface_init = InterfaceBase.__init__
+        original_interface_getattribute = InterfaceBase.__getattribute__
+        original_interface_setattr = InterfaceBase.__setattr__
+        original_parse = InterfaceBase.parse_input_fields_to_identification
+        original_process = InterfaceBase._process_input_field
+        original_format = InterfaceBase.format_identification
+        original_calculation_setattr = CalculationInterface.__setattr__
+        original_manager_init = GeneralManager.__init__
+        original_manager_getattribute = GeneralManager.__getattribute__
+        original_manager_setattr = GeneralManager.__setattr__
+        original_identification = GeneralManager.identification
+        original_meta_getattribute = GeneralManagerMeta.__getattribute__
+        original_meta_setattr = GeneralManagerMeta.__setattr__
+        mutations = (
+            (
+                CalculationReadCapability,
+                "get_attributes",
+                lambda self, interface_cls: original_read(self, interface_cls),
+            ),
+            (
+                CalculationLifecycleCapability,
+                "post_create",
+                lambda self, **kwargs: original_lifecycle(self, **kwargs),
+            ),
+            (
+                Input,
+                "cast",
+                lambda self, value, identification=None, *, cache_context=None: (
+                    original_cast(
+                        self,
+                        value,
+                        identification,
+                        cache_context=cache_context,
+                    )
+                ),
+            ),
+            (
+                Input,
+                "normalize",
+                lambda self, value, identification=None, *, cache_context=None: (
+                    original_normalize(
+                        self,
+                        value,
+                        identification,
+                        cache_context=cache_context,
+                    )
+                ),
+            ),
+            (
+                InterfaceBase,
+                "__init__",
+                lambda self, *args, **kwargs: original_interface_init(
+                    self, *args, **kwargs
+                ),
+            ),
+            (
+                InterfaceBase,
+                "__getattribute__",
+                lambda self, name: original_interface_getattribute(self, name),
+            ),
+            (
+                InterfaceBase,
+                "__setattr__",
+                lambda self, name, value: original_interface_setattr(self, name, value),
+            ),
+            (
+                InterfaceBase,
+                "parse_input_fields_to_identification",
+                lambda self, *args, **kwargs: original_parse(self, *args, **kwargs),
+            ),
+            (
+                InterfaceBase,
+                "_process_input_field",
+                lambda self, name, field, value, identification, *, cache_context: (
+                    original_process(
+                        self,
+                        name,
+                        field,
+                        value,
+                        identification,
+                        cache_context=cache_context,
+                    )
+                ),
+            ),
+            (
+                InterfaceBase,
+                "format_identification",
+                staticmethod(lambda identification: original_format(identification)),
+            ),
+            (
+                CalculationInterface,
+                "__setattr__",
+                lambda self, name, value: original_calculation_setattr(
+                    self, name, value
+                ),
+            ),
+            (
+                GeneralManager,
+                "__init__",
+                lambda self, *args, **kwargs: original_manager_init(
+                    self, *args, **kwargs
+                ),
+            ),
+            (
+                GeneralManager,
+                "__getattribute__",
+                lambda self, name: original_manager_getattribute(self, name),
+            ),
+            (
+                GeneralManager,
+                "__setattr__",
+                lambda self, name, value: original_manager_setattr(self, name, value),
+            ),
+            (
+                GeneralManager,
+                "identification",
+                property(lambda self: original_identification.__get__(self)),
+            ),
+            (
+                GeneralManagerMeta,
+                "__getattribute__",
+                lambda cls, name: original_meta_getattribute(cls, name),
+            ),
+            (
+                GeneralManagerMeta,
+                "__setattr__",
+                lambda cls, name, value: original_meta_setattr(cls, name, value),
+            ),
+        )
+        for owner, name, replacement in mutations:
+            with self.subTest(owner=owner, name=name):
+                with patch.object(owner, name, replacement):
+                    manager = HydratedCalculation("related-id")
+                    self.assertNotIn("_resolved_input_values", vars(manager._interface))
+
+        with patch.object(
+            InterfaceBase,
+            "__getattr__",
+            lambda _self, name: (_ for _ in ()).throw(AttributeError(name)),
+            create=True,
+        ):
+            manager = HydratedCalculation("related-id")
+            self.assertNotIn("_resolved_input_values", vars(manager._interface))
 
     def test_filter(self):
         """

@@ -4,6 +4,7 @@ import sys
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 from django.test import override_settings
@@ -12,6 +13,7 @@ from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.interfaces.calculation import CalculationInterface
+from general_manager.interface import base_interface as base_interface_module
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
@@ -24,6 +26,38 @@ from tests.perf.support import (
 )
 
 pytestmark = pytest.mark.perf
+
+
+@pytest.mark.parametrize("size", [400, 800])
+@override_settings(AUTOCREATE_GRAPHQL=False)
+def test_scalar_calculation_construction_skips_full_seed_audit(size: int) -> None:
+    class ScalarCalculation(GeneralManager):
+        class Interface(CalculationInterface):
+            value = Input(int)
+
+    GeneralManagerMeta.ensure_attributes_initialized(ScalarCalculation)
+    original_audit = base_interface_module._canonical_manager_class_state
+    constructor_code = GeneralManager.__dict__["__init__"].__code__
+
+    with (
+        patch.object(
+            base_interface_module,
+            "_canonical_manager_class_state",
+            wraps=original_audit,
+        ) as full_audits,
+        count_profiled_calls(
+            constructor_code,
+            lambda self: self.__class__ is ScalarCalculation,
+        ) as outer_constructors,
+    ):
+        managers = [ScalarCalculation(value=index) for index in range(size)]
+
+    assert len(managers) == size
+    assert [manager.identification["value"] for manager in managers] == list(
+        range(size)
+    )
+    assert outer_constructors.value == size
+    assert full_audits.call_count == 0
 
 
 @dataclass

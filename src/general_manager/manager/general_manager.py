@@ -12,6 +12,9 @@ from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.signals import data_change
 from general_manager.logging import get_logger
+from general_manager.interface.base_interface import (
+    _register_general_manager_seed_provenance,
+)
 from general_manager.manager.meta import GeneralManagerMeta, InvalidManagerStateError
 
 
@@ -711,3 +714,6 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         if set(identification) == {"id"}:
             return identification["id"]
         return dict(identification)
+
+
+_register_general_manager_seed_provenance(GeneralManager)

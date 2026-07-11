@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, ClassVar, Iterable, TypeVar, cast
 from weakref import WeakKeyDictionary
 
 from general_manager.cache.cache_tracker import DependencyTracker
-from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.base_interface import (
+    InterfaceBase,
+    _register_general_manager_meta_seed_provenance,
+)
 from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
@@ -660,3 +663,6 @@ def _capability_builder() -> "ManifestCapabilityBuilder":
 
         _CAPABILITY_BUILDER = ManifestCapabilityBuilder()
     return _CAPABILITY_BUILDER
+
+
+_register_general_manager_meta_seed_provenance(GeneralManagerMeta)

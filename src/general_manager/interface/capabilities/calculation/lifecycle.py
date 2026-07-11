@@ -10,6 +10,9 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from weakref import WeakKeyDictionary
 
 from general_manager.bucket.calculation_bucket import CalculationBucket
+from general_manager.interface.base_interface import (
+    _register_calculation_capability_seed_provenance,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 
@@ -573,3 +576,9 @@ class CalculationLifecycleCapability(BaseCapability):
             payload=payload_snapshot,
             func=_perform,
         )
+
+
+_register_calculation_capability_seed_provenance(
+    CalculationLifecycleCapability,
+    CalculationReadCapability,
+)

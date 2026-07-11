@@ -40,6 +40,7 @@ from general_manager.interface.infrastructure.startup_hooks import register_star
 from general_manager.interface.infrastructure.system_checks import register_system_check
 
 if TYPE_CHECKING:
+    from general_manager.interface.interfaces.calculation import CalculationInterface
     from general_manager.manager.input import Input
     from general_manager.manager.general_manager import GeneralManager
     from general_manager.bucket.base_bucket import Bucket
@@ -82,6 +83,28 @@ _OBSERVABILITY_HOOK_MISSING = object()
 _RUN_SCOPED_SCALAR_INPUT_TYPES = (str, int, bool)
 _FORMATLESS_IDENTIFICATION_VALUE_TYPES = {str, int, float, bool, type(None)}
 _STATIC_ATTRIBUTE_MISSING = object()
+_INSTANCE_DICT_NAME = "__dict__"
+type _StaticDispatchSnapshot = tuple[tuple[str, object], ...]
+
+_INTERFACE_BASE_PROVENANCE: tuple[type[object], _StaticDispatchSnapshot] | None = None
+_INPUT_PROVENANCE: tuple[type[object], _StaticDispatchSnapshot] | None = None
+_CALCULATION_INTERFACE_PROVENANCE: (
+    tuple[type[object], type[object], _StaticDispatchSnapshot, _StaticDispatchSnapshot]
+    | None
+) = None
+_CALCULATION_CAPABILITY_PROVENANCE: (
+    tuple[
+        type[object],
+        _StaticDispatchSnapshot,
+        type[object],
+        _StaticDispatchSnapshot,
+    ]
+    | None
+) = None
+_GENERAL_MANAGER_PROVENANCE: tuple[type[object], _StaticDispatchSnapshot] | None = None
+_GENERAL_MANAGER_META_PROVENANCE: (
+    tuple[type[object], _StaticDispatchSnapshot] | None
+) = None
 
 
 def _static_descriptor(cls: type[object], attribute_name: str) -> object:
@@ -92,15 +115,148 @@ def _static_descriptor(cls: type[object], attribute_name: str) -> object:
         return _STATIC_ATTRIBUTE_MISSING
 
 
-def _has_static_dispatch(
+def _capture_static_dispatch(
     cls: type[object],
-    owner: type[object],
-    attribute_name: str,
+    names: tuple[str, ...],
+) -> _StaticDispatchSnapshot:
+    """Capture immutable descriptor identities while a framework class loads."""
+    return tuple((name, _static_descriptor(cls, name)) for name in names)
+
+
+def _matches_static_dispatch(
+    cls: type[object],
+    snapshot: _StaticDispatchSnapshot,
 ) -> bool:
-    """Match a static descriptor, including canonical attribute absence."""
-    return _static_descriptor(cls, attribute_name) is _static_descriptor(
-        owner, attribute_name
-    )
+    """Compare live descriptors with identities captured at module load."""
+    return all(_static_descriptor(cls, name) is expected for name, expected in snapshot)
+
+
+def _register_input_seed_provenance(input_class: type[object]) -> None:
+    """Register canonical Input dispatch once, during the Input module import."""
+    global _INPUT_PROVENANCE
+    if _INPUT_PROVENANCE is None:
+        _INPUT_PROVENANCE = (
+            input_class,
+            _capture_static_dispatch(
+                input_class,
+                (
+                    "__init__",
+                    _INSTANCE_DICT_NAME,
+                    "__getattribute__",
+                    "__getattr__",
+                    "__setattr__",
+                    "cast",
+                    "normalize",
+                    "resolve_possible_values",
+                    "validate_bounds",
+                    "validate_with_callable",
+                ),
+            ),
+        )
+
+
+def _register_calculation_interface_seed_provenance(
+    interface_class: type[object],
+) -> None:
+    """Register canonical calculation interface and metaclass dispatch once."""
+    global _CALCULATION_INTERFACE_PROVENANCE
+    if _CALCULATION_INTERFACE_PROVENANCE is None:
+        interface_metaclass = type(interface_class)
+        _CALCULATION_INTERFACE_PROVENANCE = (
+            interface_class,
+            interface_metaclass,
+            _capture_static_dispatch(
+                interface_class,
+                (
+                    "__init__",
+                    "__getattribute__",
+                    "__getattr__",
+                    "__setattr__",
+                    "parse_input_fields_to_identification",
+                    "_process_input_field",
+                    "format_identification",
+                    "get_attributes",
+                    "get_field_type",
+                    "handle_interface",
+                ),
+            ),
+            _capture_static_dispatch(
+                interface_metaclass,
+                ("__call__", "__getattribute__", "__getattr__", "__setattr__"),
+            ),
+        )
+
+
+def _register_calculation_capability_seed_provenance(
+    lifecycle_class: type[object],
+    read_class: type[object],
+) -> None:
+    """Register calculation capability implementations at module load."""
+    global _CALCULATION_CAPABILITY_PROVENANCE
+    if _CALCULATION_CAPABILITY_PROVENANCE is None:
+        _CALCULATION_CAPABILITY_PROVENANCE = (
+            lifecycle_class,
+            _capture_static_dispatch(
+                lifecycle_class,
+                ("pre_create", "post_create"),
+            ),
+            read_class,
+            _capture_static_dispatch(
+                read_class,
+                ("get_data", "get_attributes", "get_field_type"),
+            ),
+        )
+
+
+def _register_general_manager_seed_provenance(
+    manager_class: type[object],
+) -> None:
+    """Register canonical GeneralManager dispatch at module load."""
+    global _GENERAL_MANAGER_PROVENANCE
+    if _GENERAL_MANAGER_PROVENANCE is None:
+        _GENERAL_MANAGER_PROVENANCE = (
+            manager_class,
+            _capture_static_dispatch(
+                manager_class,
+                (
+                    "__new__",
+                    "__init__",
+                    _INSTANCE_DICT_NAME,
+                    "__getattribute__",
+                    "__getattr__",
+                    "__setattr__",
+                    "identification",
+                    "_track_identification_dependency",
+                    "_track_identification_dependency_active",
+                    "_track_own_identification_dependency_active",
+                    "_reload_interface_state",
+                    "_invalidate_manager_state",
+                    "_ensure_manager_state_valid",
+                    "_ensure_manager_not_invalidated",
+                ),
+            ),
+        )
+
+
+def _register_general_manager_meta_seed_provenance(
+    manager_metaclass: type[object],
+) -> None:
+    """Register canonical GeneralManagerMeta dispatch at module load."""
+    global _GENERAL_MANAGER_META_PROVENANCE
+    if _GENERAL_MANAGER_META_PROVENANCE is None:
+        _GENERAL_MANAGER_META_PROVENANCE = (
+            manager_metaclass,
+            _capture_static_dispatch(
+                manager_metaclass,
+                (
+                    "__call__",
+                    "__getattribute__",
+                    "__getattr__",
+                    "__setattr__",
+                    "__new__",
+                ),
+            ),
+        )
 
 
 def _dict_has_identity_keys(
@@ -118,42 +274,102 @@ def _dict_has_identity_keys(
     )
 
 
-def _canonical_manager_class_state(manager_class: type[object]) -> bool:
-    """Validate the hook-free manager machinery required by hydration seeding."""
-    from general_manager.manager.general_manager import GeneralManager
-    from general_manager.manager.meta import GeneralManagerMeta
+def _mapping_value_by_identity(
+    mapping: Mapping[str, object],
+    expected_key: str,
+    default: object = None,
+) -> object:
+    """Read an exact-string mapping entry without equality or hashing."""
+    for key, value in mapping.items():
+        if type(key) is not str:
+            return default
+        if key is expected_key:
+            return value
+    return default
 
-    if type(manager_class) is not GeneralManagerMeta:
+
+def _mro_state_access_is_canonical(
+    cls: type[object],
+    canonical_owner: type[object],
+    protected_names: tuple[str, ...],
+) -> bool:
+    """Reject state descriptors introduced before a canonical MRO owner."""
+    mro = type.__getattribute__(cls, "__mro__")
+    if type(mro) is not tuple:
         return False
-    if not all(
-        _has_static_dispatch(manager_class, GeneralManager, name)
-        for name in (
-            "__new__",
-            "__init__",
-            "__getattribute__",
-            "__getattr__",
-            "__setattr__",
-            "identification",
-            "_track_identification_dependency",
-            "_track_identification_dependency_active",
-            "_track_own_identification_dependency_active",
-            "_reload_interface_state",
-            "_invalidate_manager_state",
-            "_ensure_manager_state_valid",
-            "_ensure_manager_not_invalidated",
-        )
+    for candidate in mro:
+        if candidate is canonical_owner:
+            return True
+        class_state = type.__getattribute__(candidate, "__dict__")
+        if type(class_state) is not MappingProxyType:
+            return False
+        for key in class_state:
+            if type(key) is not str:
+                return False
+            if any(key is protected_name for protected_name in protected_names):
+                return False
+    return False
+
+
+def _manager_candidate_present(
+    interface: object,
+    identification: object,
+) -> bool:
+    """Cheaply detect whether canonical Input state contains a manager value."""
+    input_provenance = _INPUT_PROVENANCE
+    if type(identification) is not dict or input_provenance is None:
+        return False
+    input_class, input_dispatch = input_provenance
+    expected_dict_descriptor = next(
+        expected for name, expected in input_dispatch if name is _INSTANCE_DICT_NAME
+    )
+    if (
+        _static_descriptor(input_class, _INSTANCE_DICT_NAME)
+        is not expected_dict_descriptor
     ):
         return False
-    manager_metaclass = type(manager_class)
-    return all(
-        _has_static_dispatch(manager_metaclass, GeneralManagerMeta, name)
-        for name in (
-            "__call__",
-            "__getattribute__",
-            "__getattr__",
-            "__setattr__",
-            "__new__",
-        )
+    interface_class = type(interface)
+    interface_class_state = type.__getattribute__(interface_class, "__dict__")
+    if type(interface_class_state) is not MappingProxyType:
+        return False
+    input_fields = _mapping_value_by_identity(interface_class_state, "input_fields")
+    if type(input_fields) is not dict or len(input_fields) != len(identification):
+        return False
+    for (field_name, input_field), identification_name in zip(
+        input_fields.items(), identification, strict=True
+    ):
+        if (
+            type(field_name) is not str
+            or field_name is not identification_name
+            or type(input_field) is not input_class
+        ):
+            return False
+        input_state = object.__getattribute__(input_field, "__dict__")
+        if type(input_state) is not dict:
+            return False
+        is_manager = _mapping_value_by_identity(input_state, "is_manager")
+        if type(is_manager) is not bool:
+            return False
+        if is_manager and dict.__getitem__(identification, field_name) is not None:
+            return True
+    return False
+
+
+def _canonical_manager_class_state(manager_class: type[object]) -> bool:
+    """Validate the hook-free manager machinery required by hydration seeding."""
+    manager_provenance = _GENERAL_MANAGER_PROVENANCE
+    metaclass_provenance = _GENERAL_MANAGER_META_PROVENANCE
+    if manager_provenance is None or metaclass_provenance is None:
+        return False
+    canonical_manager, manager_dispatch = manager_provenance
+    canonical_metaclass, metaclass_dispatch = metaclass_provenance
+    if type(manager_class) is not canonical_metaclass:
+        return False
+    return (
+        _matches_static_dispatch(canonical_manager, manager_dispatch)
+        and _matches_static_dispatch(manager_class, manager_dispatch)
+        and _matches_static_dispatch(canonical_metaclass, metaclass_dispatch)
+        and _matches_static_dispatch(type(manager_class), metaclass_dispatch)
     )
 
 
@@ -162,12 +378,32 @@ def _canonical_nested_manager(
     manager_class: type[object],
 ) -> bool:
     """Return whether a parsed manager wrapper has untouched canonical state."""
-    if object.__getattribute__(value, "__class__") is not manager_class:
+    manager_provenance = _GENERAL_MANAGER_PROVENANCE
+    interface_provenance = _INTERFACE_BASE_PROVENANCE
+    if manager_provenance is None or interface_provenance is None:
+        return False
+    canonical_manager = manager_provenance[0]
+    canonical_interface = interface_provenance[0]
+    if type(value) is not manager_class:
         return False
     if not _canonical_manager_class_state(manager_class):
         return False
+    if not _mro_state_access_is_canonical(
+        manager_class,
+        canonical_manager,
+        (
+            _INSTANCE_DICT_NAME,
+            "_interface",
+            "_GeneralManager__id",
+            "_attribute_value_cache",
+            "_identification_dependency_cache",
+            "_manager_state_valid",
+            "_manager_state_reason",
+        ),
+    ):
+        return False
 
-    manager_state = object.__getattribute__(value, "__dict__")
+    manager_state = object.__getattribute__(value, _INSTANCE_DICT_NAME)
     expected_manager_keys = (
         "_interface",
         "_GeneralManager__id",
@@ -191,10 +427,16 @@ def _canonical_nested_manager(
         return False
 
     interface = manager_state["_interface"]
-    interface_class = object.__getattribute__(interface, "__class__")
+    interface_class = type(interface)
     if type.__getattribute__(manager_class, "Interface") is not interface_class:
         return False
-    interface_state = object.__getattribute__(interface, "__dict__")
+    if not _mro_state_access_is_canonical(
+        interface_class,
+        canonical_interface,
+        (_INSTANCE_DICT_NAME, "_resolved_input_values", "identification"),
+    ):
+        return False
+    interface_state = object.__getattribute__(interface, _INSTANCE_DICT_NAME)
     return (
         _dict_has_identity_keys(interface_state, ("identification",))
         and interface_state["identification"] is identification
@@ -211,58 +453,78 @@ def _seed_calculation_resolved_manager_values(
     complete interface, manager, capability, field, accessor, descriptor, and
     parsed-wrapper graph still uses the framework's canonical implementations.
     """
+    if not _manager_candidate_present(interface, identification):
+        return
     try:
         from general_manager.interface.capabilities.calculation.lifecycle import (
-            CalculationLifecycleCapability,
-            CalculationReadCapability,
             _is_canonical_calculation_input_accessor,
         )
-        from general_manager.interface.interfaces.calculation import (
-            CalculationInterface,
-        )
-        from general_manager.manager.input import Input
         from general_manager.manager.meta import (
             _is_canonical_manager_attribute_descriptor,
         )
 
-        interface_class = object.__getattribute__(interface, "__class__")
-        canonical_interface_metaclass = type(CalculationInterface)
+        interface_provenance = _INTERFACE_BASE_PROVENANCE
+        input_provenance = _INPUT_PROVENANCE
+        calculation_provenance = _CALCULATION_INTERFACE_PROVENANCE
+        capability_provenance = _CALCULATION_CAPABILITY_PROVENANCE
+        if (
+            interface_provenance is None
+            or input_provenance is None
+            or calculation_provenance is None
+            or capability_provenance is None
+        ):
+            return
+        canonical_interface, interface_dispatch = interface_provenance
+        input_class, input_dispatch = input_provenance
+        (
+            calculation_interface,
+            canonical_interface_metaclass,
+            calculation_dispatch,
+            interface_metaclass_dispatch,
+        ) = calculation_provenance
+        (
+            lifecycle_class,
+            lifecycle_dispatch,
+            read_class,
+            read_dispatch,
+        ) = capability_provenance
+        if (
+            not _matches_static_dispatch(canonical_interface, interface_dispatch)
+            or not _matches_static_dispatch(input_class, input_dispatch)
+            or not _matches_static_dispatch(calculation_interface, calculation_dispatch)
+            or not _matches_static_dispatch(
+                canonical_interface_metaclass, interface_metaclass_dispatch
+            )
+            or not _matches_static_dispatch(lifecycle_class, lifecycle_dispatch)
+            or not _matches_static_dispatch(read_class, read_dispatch)
+        ):
+            return
+
+        interface_class = type(interface)
         interface_metaclass = type(interface_class)
         if interface_metaclass is not canonical_interface_metaclass:
             return
-        if not all(
-            _has_static_dispatch(
-                interface_metaclass,
-                canonical_interface_metaclass,
-                name,
-            )
-            for name in ("__call__", "__getattribute__", "__getattr__", "__setattr__")
+        if not _matches_static_dispatch(
+            interface_metaclass, interface_metaclass_dispatch
         ):
             return
         interface_mro = type.__getattribute__(interface_class, "__mro__")
         if type(interface_mro) is not tuple or not any(
-            candidate is CalculationInterface for candidate in interface_mro
+            candidate is calculation_interface for candidate in interface_mro
         ):
             return
         if type(identification) is not dict:
             return
-        if object.__getattribute__(interface, "__dict__"):
-            return
-        if not all(
-            _has_static_dispatch(interface_class, InterfaceBase, name)
-            for name in (
-                "__init__",
-                "__getattribute__",
-                "__getattr__",
-                "__setattr__",
-                "parse_input_fields_to_identification",
-                "_process_input_field",
-                "format_identification",
-                "get_attributes",
-                "get_field_type",
-                "handle_interface",
-            )
+        if not _mro_state_access_is_canonical(
+            interface_class,
+            canonical_interface,
+            (_INSTANCE_DICT_NAME, "_resolved_input_values", "identification"),
         ):
+            return
+        interface_state = object.__getattribute__(interface, _INSTANCE_DICT_NAME)
+        if type(interface_state) is not dict or interface_state:
+            return
+        if not _matches_static_dispatch(interface_class, calculation_dispatch):
             return
 
         interface_class_state = type.__getattribute__(interface_class, "__dict__")
@@ -281,28 +543,15 @@ def _seed_calculation_resolved_manager_values(
         lifecycle_handler = handlers.get("calculation_lifecycle")
         read_handler = handlers.get("read")
         if (
-            type(lifecycle_handler) is not CalculationLifecycleCapability
-            or type(read_handler) is not CalculationReadCapability
+            type(lifecycle_handler) is not lifecycle_class
+            or type(read_handler) is not read_class
             or vars(lifecycle_handler)
             or vars(read_handler)
         ):
             return
-        if not all(
-            inspect.getattr_static(type(handler), method_name)
-            is inspect.getattr_static(expected_class, method_name)
-            for handler, expected_class, method_names in (
-                (
-                    lifecycle_handler,
-                    CalculationLifecycleCapability,
-                    ("pre_create", "post_create"),
-                ),
-                (
-                    read_handler,
-                    CalculationReadCapability,
-                    ("get_data", "get_attributes", "get_field_type"),
-                ),
-            )
-            for method_name in method_names
+        if not (
+            _matches_static_dispatch(type(lifecycle_handler), lifecycle_dispatch)
+            and _matches_static_dispatch(type(read_handler), read_dispatch)
         ):
             return
 
@@ -341,7 +590,7 @@ def _seed_calculation_resolved_manager_values(
         )
         resolved_manager_values: dict[str, object] = {}
         for field_name, input_field in input_fields.items():
-            if type(field_name) is not str or type(input_field) is not Input:
+            if type(field_name) is not str or type(input_field) is not input_class:
                 return
             input_state = object.__getattribute__(input_field, "__dict__")
             if (
@@ -354,7 +603,9 @@ def _seed_calculation_resolved_manager_values(
             accessor = parent_attributes.get(field_name)
             descriptor = inspect.getattr_static(parent_class, field_name)
             if not _is_canonical_calculation_input_accessor(
-                accessor, interface_class, field_name
+                accessor,
+                cast("type[CalculationInterface]", interface_class),
+                field_name,
             ) or not _is_canonical_manager_attribute_descriptor(
                 descriptor, parent_class, field_name
             ):
@@ -373,8 +624,8 @@ def _seed_calculation_resolved_manager_values(
             resolved_manager_values[field_name] = value
 
         if resolved_manager_values:
-            object.__setattr__(
-                interface,
+            dict.__setitem__(
+                interface_state,
                 "_resolved_input_values",
                 resolved_manager_values,
             )
@@ -1972,3 +2223,24 @@ class InterfaceBase(ABC):
         if field is None:
             raise KeyError(field_name)
         return field.type
+
+
+_INTERFACE_BASE_PROVENANCE = (
+    InterfaceBase,
+    _capture_static_dispatch(
+        InterfaceBase,
+        (
+            "__init__",
+            _INSTANCE_DICT_NAME,
+            "__getattribute__",
+            "__getattr__",
+            "__setattr__",
+            "parse_input_fields_to_identification",
+            "_process_input_field",
+            "format_identification",
+            "get_attributes",
+            "get_field_type",
+            "handle_interface",
+        ),
+    ),
+)
