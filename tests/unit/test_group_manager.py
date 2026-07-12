@@ -1,14 +1,28 @@
 # type: ignore
 from datetime import date
 import pickle
+from types import MappingProxyType
 from typing import ClassVar
+from unittest.mock import patch
 from django.test import TestCase
 from general_manager.api.property import GraphQLProperty
 from general_manager.manager.group_manager import (
     GroupManager,
 )
-from general_manager.bucket.group_bucket import GroupBucket
-from general_manager.bucket.group_bucket import GroupBucketKeysMismatchError
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.bucket.group_bucket import (
+    EmptyGroupBucketSliceError,
+    GroupBucket,
+    GroupBucketKeysMismatchError,
+    GroupBucketManagerMismatchError,
+    GroupBucketTypeMismatchError,
+    InvalidGroupBucketIndexError,
+    _MaterializedGroupBucket,
+    _NoMaterializationBucket,
+    _freeze_group_value,
+    _group_filter_kwargs,
+    _supports_materialized_group_data,
+)
 from general_manager.measurement import Measurement
 from general_manager.cache.cache_tracker import DependencyTracker
 
@@ -304,6 +318,238 @@ class GroupBucketTests(TestCase):
             bucket.count()
 
         self.assertIn(("DummyManager", "all", "snapshot"), dependencies)
+
+    def test_private_group_bucket_views_cover_local_and_fallback_operations(self):
+        class FallbackBucket(ListBucket):
+            def __init__(self, items):
+                super().__init__(items)
+                self.calls = []
+
+            def filter(self, **kwargs):
+                self.calls.append(("filter", kwargs))
+                return self
+
+            def exclude(self, **kwargs):
+                self.calls.append(("exclude", kwargs))
+                return self
+
+            def get(self, **kwargs):
+                self.calls.append(("get", kwargs))
+                return self[0]
+
+        values = [DummyManager(a=2, b="b"), DummyManager(a=1, b="a")]
+        fallback = FallbackBucket(values)
+        view = _MaterializedGroupBucket(
+            DummyManager,
+            values,
+            fallback_factory=lambda: fallback,
+        )
+
+        self.assertEqual([item.a for item in view.filter(a=1)], [1])
+        self.assertEqual([item.a for item in view.exclude(a=1)], [2])
+        self.assertIs(view.filter(a__gt=1), fallback)
+        self.assertIs(view.exclude(a__gt=1), fallback)
+        self.assertIs(view.get(a__gt=1), values[0])
+        self.assertEqual(
+            fallback.calls,
+            [
+                ("filter", {"a__gt": 1}),
+                ("exclude", {"a__gt": 1}),
+                ("get", {"a__gt": 1}),
+            ],
+        )
+
+        self.assertIs(view.first(), values[0])
+        self.assertIs(view.last(), values[1])
+        self.assertEqual(view.count(), 2)
+        self.assertIs(view.all(), view)
+        self.assertEqual(view[0], values[0])
+        self.assertEqual(list(view[0:1]), [values[0]])
+        self.assertEqual(len(view), 2)
+        self.assertIn(values[1], view)
+        self.assertEqual([item.a for item in view.sort("a")], [1, 2])
+        self.assertEqual([item.a for item in view.sort(("a",), reverse=True)], [2, 1])
+        self.assertEqual(view.none().count(), 0)
+        self.assertEqual(list(view), values)
+
+        other = _MaterializedGroupBucket(DummyManager, [DummyManager(a=3, b="c")])
+        self.assertEqual((view | other).count(), 3)
+        self.assertEqual((view | values[0]).count(), 3)
+        with self.assertRaises(TypeError):
+            view | object()
+
+        nested = {
+            "mapping": MappingProxyType({"b": [2, 1], "a": {3, 4}}),
+            "tuple": (1, {"x": 2}),
+        }
+        frozen = _freeze_group_value(nested)
+        self.assertIsInstance(frozen, tuple)
+        mini = object.__new__(GeneralManager)
+        mini._GeneralManager__id = {"id": 9}
+        self.assertIsInstance(_freeze_group_value(mini), tuple)
+        self.assertEqual(
+            _group_filter_kwargs(
+                DummyManager,
+                (("owner", values[0]), ("a", 1)),
+                {"owner": {"filter_lookup": "owner_id"}},
+            ),
+            {"owner_id": values[0], "a": 1},
+        )
+
+        self.assertEqual(
+            _group_filter_kwargs(
+                GeneralManager,
+                (("owner", mini),),
+                {"owner": {"filter_lookup": "owner"}},
+            ),
+            {"owner__id": 9},
+        )
+        self.assertEqual(_group_filter_kwargs(DummyManager, (("a", 1),)), {"a": 1})
+        no_fallback = _MaterializedGroupBucket(DummyManager, values)
+        self.assertIsNone(no_fallback._fallback("filter", {}))
+        self.assertIs(view.exclude(), view)
+        self.assertIs(view.get(a=1), values[1])
+        with self.assertRaises(LookupError):
+            view.get(a=99)
+        restored = pickle.loads(pickle.dumps(no_fallback))  # noqa: S301 - local test data
+        self.assertEqual(restored.count(), 2)
+
+    def test_no_materialization_bucket_delegates_and_group_admission_is_conservative(
+        self,
+    ):
+        class DelegatingBucket(ListBucket):
+            def get(self, **kwargs):
+                matches = self.filter(**kwargs)
+                if len(matches) != 1:
+                    raise LookupError
+                return matches[0]
+
+            def first(self):
+                return self[0] if self else None
+
+            def last(self):
+                return self[-1] if self else None
+
+            def count(self):
+                return len(self)
+
+            def all(self):
+                return self
+
+            def sort(self, key, reverse=False):
+                keys = (key,) if isinstance(key, str) else key
+                return DelegatingBucket(
+                    sorted(
+                        self,
+                        key=lambda value: tuple(getattr(value, k) for k in keys),
+                        reverse=reverse,
+                    )
+                )
+
+        source = DelegatingBucket([DummyManager(a=1, b="x"), DummyManager(a=2, b="y")])
+        wrapped = _NoMaterializationBucket(source, DummyManager)
+        self.assertEqual(list(wrapped), list(source))
+        self.assertEqual(wrapped.filter(a=1), source.filter(a=1))
+        self.assertEqual(wrapped.exclude(a=1), source.exclude(a=1))
+        self.assertEqual(wrapped.first(), source.first())
+        self.assertEqual(wrapped.last(), source.last())
+        self.assertEqual(wrapped.count(), 2)
+        self.assertIsInstance(wrapped.all(), _NoMaterializationBucket)
+        self.assertEqual(wrapped.get(a=1), source.get(a=1))
+        self.assertEqual(wrapped[0], source[0])
+        self.assertEqual(wrapped[0:1], source[0:1])
+        self.assertEqual(len(wrapped), 2)
+        self.assertIn(source[0], wrapped)
+        self.assertEqual(list(wrapped.sort("a")), list(source.sort("a")))
+        self.assertIsInstance(wrapped | source[0:1], _NoMaterializationBucket)
+
+        self.assertFalse(_supports_materialized_group_data(wrapped))
+        self.assertFalse(
+            _supports_materialized_group_data(
+                type("Disabled", (), {"_allow_group_materialization": False})()
+            )
+        )
+        self.assertTrue(_supports_materialized_group_data([1, 2]))
+        self.assertTrue(_supports_materialized_group_data((1, 2)))
+        self.assertTrue(
+            _supports_materialized_group_data(
+                type("Safe", (), {"_group_materialization_safe": True})()
+            )
+        )
+
+        from general_manager.bucket.calculation_bucket import CalculationBucket
+        from general_manager.bucket.database_bucket import DatabaseBucket
+        from general_manager.bucket.request_bucket import RequestBucket
+
+        request_bucket = object.__new__(RequestBucket)
+        request_bucket._materialized = True
+        self.assertTrue(_supports_materialized_group_data(request_bucket))
+        request_bucket._materialized = False
+        self.assertFalse(_supports_materialized_group_data(request_bucket))
+        with patch(
+            "general_manager.bucket.group_bucket.current_calculation_run_context",
+            return_value=object(),
+        ):
+            self.assertTrue(
+                _supports_materialized_group_data(object.__new__(DatabaseBucket))
+            )
+            self.assertTrue(
+                _supports_materialized_group_data(object.__new__(CalculationBucket))
+            )
+        with patch(
+            "general_manager.bucket.group_bucket.current_calculation_run_context",
+            return_value=None,
+        ):
+            self.assertFalse(
+                _supports_materialized_group_data(object.__new__(DatabaseBucket))
+            )
+            self.assertFalse(
+                _supports_materialized_group_data(object.__new__(CalculationBucket))
+            )
+
+        grouped = GroupBucket(DummyManager, ("a",), wrapped)
+        self.assertFalse(grouped._materialized)
+        self.assertIsInstance(grouped[0:1], GroupBucket)
+        self.assertIsInstance(grouped[:], GroupBucket)
+        with self.assertRaises(EmptyGroupBucketSliceError):
+            grouped[99:100]
+        self.assertIsInstance(grouped.sort("a"), GroupBucket)
+        self.assertIsInstance(grouped.group_by("b"), GroupBucket)
+        with self.assertRaises(NotImplementedError):
+            grouped.none()
+        self.assertIsInstance(grouped.__reduce__(), tuple)
+        self.assertIsInstance(grouped | grouped, GroupBucket)
+
+        materialized_values = [DummyManager(a=1, b="x"), DummyManager(a=2, b="y")]
+        materialized = GroupBucket(
+            DummyManager, ("a",), ListBucket(materialized_values)
+        )
+        self.assertIsNone(GroupBucket(DummyManager, ("a",), ListBucket([])).last())
+        selected = materialized[0:1]
+        self.assertEqual(selected._basis_data.filter(a=1).count(), 1)
+        self.assertEqual(
+            selected._basis_data._fallback_factory(), [materialized_values[0]]
+        )
+        with self.assertRaises(EmptyGroupBucketSliceError):
+            materialized[99:100]
+        self.assertIsInstance(materialized.sort("a", reverse=True), GroupBucket)
+        self.assertIsInstance(materialized.sort(("a",)), GroupBucket)
+        self.assertIsInstance(materialized.none(), GroupBucket)
+        self.assertFalse(materialized == object())
+        self.assertIs(materialized.all(), materialized)
+
+    def test_group_bucket_mismatch_and_index_errors_are_explicit(self):
+        bucket = GroupBucket(DummyManager, ("a",), ListBucket([DummyManager(a=1)]))
+
+        class OtherManager(DummyManager):
+            pass
+
+        with self.assertRaises(GroupBucketTypeMismatchError):
+            bucket | object()
+        with self.assertRaises(GroupBucketManagerMismatchError):
+            bucket | GroupBucket(OtherManager, ("a",), ListBucket([OtherManager(a=1)]))
+        with self.assertRaises(InvalidGroupBucketIndexError):
+            bucket["bad"]
 
 
 class GroupManagerCombineValueTests(TestCase):
