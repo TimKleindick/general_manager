@@ -788,9 +788,9 @@ def test_domain_hostile_state_key_prevents_evidence_without_running_hooks(
     candidate: object,
 ) -> None:
     hostile_key = _HostileStateKey()
-    hostile_key.hash_value = hash("kind")
     source.__dict__.pop("kind")
     cast(dict[object, object], source.__dict__)[hostile_key] = None
+    hostile_key.hash_value = hash("kind")
     hostile_key.callbacks.clear()
     input_field = cast(
         Input[type[object]], Input(type(candidate), possible_values=source)
@@ -819,9 +819,9 @@ def test_domain_hostile_state_key_revokes_evidence_without_running_hooks(
     )
     evidence = _static_evidence(input_field, source, candidate)
     hostile_key = _HostileStateKey()
-    hostile_key.hash_value = hash("kind")
     source.__dict__.pop("kind")
     cast(dict[object, object], source.__dict__)[hostile_key] = None
+    hostile_key.hash_value = hash("kind")
     hostile_key.callbacks.clear()
 
     assert not evidence.authorizes(input_field, candidate, {})
