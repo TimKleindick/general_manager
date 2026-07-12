@@ -15,11 +15,15 @@ from general_manager.bucket.database_bucket import (
     DuplicateDatabaseBucketSnapshotError,
     MAX_RUN_SCOPED_BUCKET_RESULT_ROWS,
     QuerysetFilteringError,
+    QuerysetOrderingError,
     _restore_database_bucket_from_primary_keys,
 )
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.cache_tracker import DependencyTracker
-from general_manager.cache.run_context import CalculationRunContext
+from general_manager.cache.run_context import (
+    CalculationRunContext,
+    current_calculation_run_context,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.api.property import graph_ql_property
@@ -1675,6 +1679,75 @@ class DatabaseBucketTestCase(TestCase):
 
         with CalculationRunContext(), self.assertNumQueries(1):
             list(filtered)
+
+    def test_python_snapshot_private_guards_and_terminal_reads(self):
+        bucket = DatabaseBucket(User.objects.order_by("id"), PythonPropertyManager)
+        with CalculationRunContext():
+            bucket._set_python_snapshot(
+                ("manual",),
+                (self.u1,),
+                None,
+                frozenset(),
+            )
+            self.assertEqual(bucket._get_run_scoped_primary_keys(), (self.u1.pk,))
+            self.assertEqual(bucket._get_run_scoped_rows(), (self.u1,))
+            self.assertEqual(bucket._peek_run_scoped_primary_keys(), (self.u1.pk,))
+            self.assertEqual(bucket._peek_run_scoped_rows(), (self.u1,))
+            empty_key_bucket = DatabaseBucket(
+                User.objects.order_by("id"), PythonPropertyManager
+            )
+            self.assertIsNone(empty_key_bucket._get_python_snapshot())
+            empty_key_bucket._python_snapshot_context = (
+                current_calculation_run_context()
+            )
+            self.assertIsNone(empty_key_bucket._get_python_snapshot())
+            empty_key_bucket._set_python_snapshot(None, (self.u1,), None, frozenset())
+
+            with patch.object(bucket, "_query_signature", return_value=None):
+                self.assertIsNone(bucket._python_snapshot_cache_key("filter", {}, ()))
+            with patch.object(
+                bucket,
+                "_freeze_trusted_signature_payload",
+                return_value=[],
+            ):
+                self.assertIsNone(bucket._python_snapshot_cache_key("filter", {}, ()))
+            unsafe_row = User(pk=[])
+            self.assertFalse(bucket._python_snapshot_rows_are_safe((unsafe_row,)))
+
+        with CalculationRunContext():
+            unsafe_bucket = DatabaseBucket(
+                User.objects.order_by("id"), PythonPropertyManager
+            )
+            with patch.object(
+                unsafe_bucket,
+                "_python_snapshot_rows_are_safe",
+                return_value=False,
+            ):
+                result = unsafe_bucket.filter(python_username_length__gte=3)
+            self.assertFalse(result._run_scoped_cacheable)
+            with patch.object(
+                unsafe_bucket,
+                "_python_snapshot_rows_are_safe",
+                return_value=False,
+            ):
+                excluded = unsafe_bucket.exclude(python_username_length__gte=3)
+            self.assertFalse(excluded._run_scoped_cacheable)
+
+        callable_property = type(
+            "CallableProperty",
+            (),
+            {
+                "sortable": True,
+                "query_annotation": staticmethod(lambda queryset: queryset),
+            },
+        )()
+        with patch.object(
+            DummyInterface,
+            "get_graph_ql_properties",
+            return_value={"callable": callable_property},
+        ):
+            with self.assertRaises(QuerysetOrderingError):
+                bucket.sort("callable")
 
     def test_python_sorted_bucket_chaining_uses_new_query_semantics(self):
         bucket = DatabaseBucket(User.objects.order_by("id"), PythonPropertyManager)
