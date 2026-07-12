@@ -7,7 +7,9 @@ from unittest.mock import patch
 from django.test import TestCase
 from general_manager.api.property import GraphQLProperty
 from general_manager.manager.group_manager import (
+    _freeze_manager_value,
     GroupManager,
+    MissingGroupAttributeError,
 )
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.bucket.base_bucket import Bucket
@@ -601,6 +603,67 @@ class GroupManagerCombineValueTests(TestCase):
 
     def tearDown(self) -> None:
         DummyInterface.attr_types = self.original_attr_types
+
+    def test_group_manager_snapshots_none_values_and_nested_frozen_shapes(self):
+        self.assertEqual(
+            _freeze_manager_value([{"items": {1, 2}}, ("x", None)]),
+            ((("items", frozenset({1, 2})),), ("x", None)),
+        )
+        entries = [
+            DummyManager(
+                bucket=None,
+                field_list=None,
+                field_dict=None,
+                field_text=None,
+                field_bool=None,
+                field_number=None,
+                field_date=None,
+            ),
+            DummyManager(
+                bucket=ListBucket([DummyManager(a=1)]),
+                field_list=[1],
+                field_dict={"x": 1},
+                field_text="ready",
+                field_bool=True,
+                field_number=2,
+                field_date=date(2024, 1, 1),
+            ),
+        ]
+        DummyInterface.attr_types.update(
+            {
+                "bucket": {"type": Bucket},
+                "field_list": {"type": list},
+                "field_dict": {"type": dict},
+                "field_text": {"type": str},
+                "field_bool": {"type": bool},
+                "field_number": {"type": int},
+                "field_date": {"type": date},
+            }
+        )
+        manager = GroupManager(DummyManager, {}, ListBucket(entries))
+        self.assertEqual(manager.combine_value("field_list"), [1])
+        self.assertEqual(manager.combine_value("field_dict"), {"x": 1})
+        self.assertEqual(manager.combine_value("field_text"), "ready")
+        self.assertTrue(manager.combine_value("field_bool"))
+        self.assertEqual(manager.combine_value("field_number"), 2)
+        self.assertEqual(manager.combine_value("field_date"), date(2024, 1, 1))
+        self.assertEqual(len(manager.combine_value("bucket")), 1)
+        self.assertEqual(manager.field_number, 2)
+        self.assertIn("field_number", manager.__dict__["_grouped_data"])
+        self.assertIn("GroupManager", repr(manager))
+
+        stable = GroupManager(DummyManager, {}, tuple(entries))
+        self.assertEqual(hash(stable), hash(stable))
+        stable._replay_dependencies()
+
+        broken = object.__new__(GroupManager)
+        with self.assertRaises(AttributeError):
+            broken.__getattr__("missing")
+        broken._group_by_value = {}
+        with self.assertRaises(AttributeError):
+            broken.__getattr__("missing")
+        with self.assertRaises(MissingGroupAttributeError):
+            manager.combine_value("missing")
 
     # Parametrized tests for combine_value on various data types
     def helper_make_group_manager(self, values, value_type):
