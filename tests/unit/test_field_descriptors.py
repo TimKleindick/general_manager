@@ -5,6 +5,7 @@ from typing import Any, cast
 from unittest.mock import Mock, patch
 
 from django.apps import apps
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 
 from general_manager.cache.cache_tracker import DependencyTracker
@@ -12,8 +13,11 @@ from general_manager.cache.run_context import CalculationRunContext
 from general_manager.cache.signals import data_change
 from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     _FieldDescriptorBuilder,
+    _can_prefetch_direct_relation,
+    _direct_relation_prefetch_source_rows,
     _general_manager_accessor,
     _general_manager_many_accessor,
+    _prefetch_direct_relation_managers,
     build_field_descriptors,
 )
 from general_manager.bootstrap import initialize_general_manager_classes
@@ -459,6 +463,517 @@ def test_general_manager_fk_accessor_batches_indexed_related_rows() -> None:
 
     assert reverse_first is reverse_second
     prefetch.assert_called_once()
+
+
+def test_direct_relation_prefetch_helpers_fail_closed_for_unsafe_rows() -> None:
+    class SourceModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_guard_tests"
+
+    class RelatedModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_guard_tests"
+
+    source = SourceModel(id=1)
+
+    class NoRowIndex:
+        pass
+
+    assert _direct_relation_prefetch_source_rows(NoRowIndex(), source, None) is None
+
+    class NonCallableRowIndex:
+        get_orm_model_row_items = 1
+
+    assert (
+        _direct_relation_prefetch_source_rows(NonCallableRowIndex(), source, None)
+        is None
+    )
+
+    class EmptyRowIndex:
+        def get_orm_model_row_items(self, _model: type[object]) -> tuple[object, ...]:
+            return ()
+
+    assert _direct_relation_prefetch_source_rows(EmptyRowIndex(), source, None) is None
+
+    class MismatchedRowIndex:
+        def get_orm_model_row_items(
+            self, _model: type[object]
+        ) -> tuple[tuple[tuple[object, object], object], ...]:
+            return (((1, "replica"), source), ((2, None), object()))
+
+    assert (
+        _direct_relation_prefetch_source_rows(MismatchedRowIndex(), source, None)
+        is None
+    )
+
+    deferred = SourceModel(id=2)
+    deferred.get_deferred_fields = lambda: {"name"}  # type: ignore[method-assign]
+
+    class DeferredRowIndex:
+        def get_orm_model_row_items(
+            self, _model: type[object]
+        ) -> tuple[tuple[tuple[object, object], object], ...]:
+            return (((2, None), deferred),)
+
+    assert (
+        _direct_relation_prefetch_source_rows(DeferredRowIndex(), source, None) is None
+    )
+
+    class RelatedInterface:
+        __init__ = OrmInterfaceBase.__init__
+        _model = RelatedModel
+        database = None
+        _soft_delete_default = False
+
+    class RelatedManager:
+        __init__ = GeneralManager.__init__
+        Interface = RelatedInterface
+
+    RelatedManager._from_trusted_orm_instance = staticmethod(lambda row: row)  # type: ignore[attr-defined]
+    interface_instance = SimpleNamespace(_search_date=None)
+
+    assert not _can_prefetch_direct_relation(
+        interface_instance,
+        RelatedManager,
+        None,
+        None,
+    )
+    interface_instance._search_date = object()
+    assert not _can_prefetch_direct_relation(
+        interface_instance,
+        RelatedManager,
+        RelatedModel,
+        None,
+    )
+    interface_instance._search_date = None
+
+    RelatedManager.Interface._model = SourceModel
+    assert not _can_prefetch_direct_relation(
+        interface_instance,
+        RelatedManager,
+        RelatedModel,
+        None,
+    )
+    RelatedManager.Interface._model = RelatedModel
+    RelatedManager.Interface.database = "replica"
+    assert not _can_prefetch_direct_relation(
+        interface_instance,
+        RelatedManager,
+        RelatedModel,
+        "default",
+    )
+    RelatedManager.Interface.database = None
+
+    with patch.object(RelatedModel._meta, "use_soft_delete", True, create=True):
+        assert not _can_prefetch_direct_relation(
+            interface_instance,
+            RelatedManager,
+            RelatedModel,
+            None,
+        )
+    RelatedManager.Interface._soft_delete_default = True
+    assert not _can_prefetch_direct_relation(
+        interface_instance,
+        RelatedManager,
+        RelatedModel,
+        None,
+    )
+    RelatedManager.Interface._soft_delete_default = False
+
+    class CustomInitManager:
+        Interface = RelatedInterface
+
+        def __init__(self, _pk: object) -> None:
+            pass
+
+    CustomInitManager._from_trusted_orm_instance = staticmethod(lambda row: row)  # type: ignore[attr-defined]
+    assert not _can_prefetch_direct_relation(
+        interface_instance,
+        CustomInitManager,
+        RelatedModel,
+        None,
+    )
+
+    class CustomInterface:
+        def __init__(self) -> None:
+            pass
+
+        _model = RelatedModel
+        database = None
+        _soft_delete_default = False
+
+    class CustomInterfaceManager:
+        __init__ = GeneralManager.__init__
+        Interface = CustomInterface
+
+    CustomInterfaceManager._from_trusted_orm_instance = staticmethod(lambda row: row)  # type: ignore[attr-defined]
+    assert not _can_prefetch_direct_relation(
+        interface_instance,
+        CustomInterfaceManager,
+        RelatedModel,
+        None,
+    )
+
+    class NoTrustedManager:
+        __init__ = GeneralManager.__init__
+        Interface = RelatedInterface
+
+    assert not _can_prefetch_direct_relation(
+        interface_instance,
+        NoTrustedManager,
+        RelatedModel,
+        None,
+    )
+
+    assert _can_prefetch_direct_relation(
+        interface_instance,
+        RelatedManager,
+        RelatedModel,
+        None,
+    )
+
+
+def test_direct_relation_prefetch_handles_cached_and_missing_related_rows() -> None:
+    class SourceModel(models.Model):
+        target_id = models.IntegerField(null=True)
+
+        class Meta:
+            app_label = "field_descriptor_branch_tests"
+
+    class RelatedModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_branch_tests"
+
+    class RelatedInterface:
+        __init__ = OrmInterfaceBase.__init__
+        _model = RelatedModel
+        database = None
+        _soft_delete_default = False
+
+    class RelatedManager:
+        __init__ = GeneralManager.__init__
+        Interface = RelatedInterface
+
+    hydrated: list[object] = []
+
+    def trusted_hydrate(row: RelatedModel) -> object:
+        hydrated.append(row)
+        return object()
+
+    RelatedManager._from_trusted_orm_instance = staticmethod(trusted_hydrate)  # type: ignore[attr-defined]
+    source_rows = (
+        SourceModel(id=1, target_id=7),
+        SourceModel(id=2, target_id=None),
+        SourceModel(id=3, target_id=8),
+    )
+    for row in source_rows:
+        row._state.db = "replica"
+    good_related = RelatedModel(id=7)
+    invalid_related = RelatedModel(id=8)
+    invalid_related.pk = []
+
+    class RelatedObjects:
+        def __init__(self) -> None:
+            self.aliases: list[str] = []
+            self.ids: list[set[object]] = []
+
+        def using(self, alias: str) -> "RelatedObjects":
+            self.aliases.append(alias)
+            return self
+
+        def in_bulk(self, ids: set[object]) -> dict[object, RelatedModel]:
+            self.ids.append(ids)
+            return {7: good_related, 8: invalid_related}
+
+    related_objects = RelatedObjects()
+
+    class RunContext:
+        def __init__(self) -> None:
+            self.prefetched: frozenset[tuple[object, object | None]] = frozenset()
+            self.relation_managers: dict[object, object] = {}
+
+        def get_orm_model_row_items(
+            self, _model: type[object]
+        ) -> tuple[tuple[tuple[object, object | None], SourceModel], ...]:
+            return tuple(((row.pk, row._state.db), row) for row in source_rows)
+
+        def get_orm_direct_relation_prefetched_keys(
+            self,
+            _model: type[object],
+            _database_alias: object | None,
+            _accessor_name: str,
+        ) -> frozenset[tuple[object, object | None]]:
+            return self.prefetched
+
+        def add_orm_direct_relation_prefetched_keys(
+            self,
+            _model: type[object],
+            _database_alias: object | None,
+            _accessor_name: str,
+            row_keys: list[tuple[object, object | None]],
+        ) -> None:
+            self.prefetched = frozenset(row_keys)
+
+        def get_orm_relation_manager(self, key: object) -> object:
+            return self.relation_managers.get(key)
+
+        def set_orm_relation_manager(self, key: object, value: object) -> None:
+            self.relation_managers[key] = value
+
+    context = RunContext()
+    source_interface = SimpleNamespace(_instance=source_rows[0])
+    with (
+        patch(
+            "general_manager.cache.run_context.current_calculation_run_context",
+            return_value=context,
+        ),
+        patch.object(RelatedModel._meta, "default_manager", related_objects),
+    ):
+        assert _prefetch_direct_relation_managers(
+            source_interface,
+            accessor_name="target",
+            manager_type=RelatedManager,
+            related_model=RelatedModel,
+            raw_id_name="target_id",
+        )
+        assert _prefetch_direct_relation_managers(
+            source_interface,
+            accessor_name="target",
+            manager_type=RelatedManager,
+            related_model=RelatedModel,
+            raw_id_name="target_id",
+        )
+
+    assert related_objects.aliases == ["replica"]
+    assert related_objects.ids == [{7, 8}]
+    assert hydrated == [good_related, invalid_related]
+
+    class ReverseSourceModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_branch_tests"
+
+        @property
+        def profile(self) -> object:
+            state = getattr(self, "_profile_state", "missing")
+            if state == "missing":
+                raise ObjectDoesNotExist
+            return getattr(self, "_profile_value", None)
+
+    reverse_rows = (
+        ReverseSourceModel(id=1),
+        ReverseSourceModel(id=2),
+        ReverseSourceModel(id=3),
+        ReverseSourceModel(id=4),
+    )
+    for row in reverse_rows:
+        row._state.db = "replica"
+    reverse_rows[1]._profile_state = "empty"
+    reverse_rows[2]._profile_state = "invalid"
+    invalid_profile = RelatedModel(id=9)
+    invalid_profile.pk = []
+    reverse_rows[2]._profile_value = invalid_profile
+    reverse_rows[3]._profile_state = "good"
+    reverse_rows[3]._profile_value = good_related
+
+    class ReverseContext(RunContext):
+        def get_orm_model_row_items(
+            self, _model: type[object]
+        ) -> tuple[tuple[tuple[object, object | None], ReverseSourceModel], ...]:
+            return tuple(((row.pk, row._state.db), row) for row in reverse_rows)
+
+    reverse_context = ReverseContext()
+    with (
+        patch(
+            "general_manager.cache.run_context.current_calculation_run_context",
+            return_value=reverse_context,
+        ),
+        patch(
+            "general_manager.interface.capabilities.orm_utils.field_descriptors._prefetch_relation_in_chunks"
+        ) as prefetch,
+    ):
+        assert _prefetch_direct_relation_managers(
+            SimpleNamespace(_instance=reverse_rows[0]),
+            accessor_name="profile",
+            manager_type=RelatedManager,
+            related_model=RelatedModel,
+            raw_id_name=None,
+        )
+
+    prefetch.assert_called_once()
+
+
+def test_direct_relation_accessor_preserves_loaded_and_fallback_paths() -> None:
+    class RelatedModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_accessor_tests"
+
+    related = RelatedModel(id=7)
+    tracked: list[bool] = []
+
+    class RelatedManager:
+        def __init__(self, pk: object) -> None:
+            self.pk = pk
+
+        def _track_own_identification_dependency_active(self) -> None:
+            tracked.append(True)
+
+    class Context:
+        def __init__(self) -> None:
+            self.values: dict[object, object] = {}
+
+        def get_orm_relation_manager(self, key: object) -> object:
+            return self.values.get(key)
+
+        def set_orm_relation_manager(self, key: object, value: object) -> None:
+            self.values[key] = value
+
+    context = Context()
+    loaded_accessor = _general_manager_accessor(
+        "owner",
+        RelatedManager,
+        raw_id_name="owner_id",
+    )
+    loaded_source = SimpleNamespace(
+        owner_id=7,
+        _state=SimpleNamespace(db=None, fields_cache={"owner": related}),
+    )
+    with patch(
+        "general_manager.cache.run_context.current_calculation_run_context",
+        return_value=context,
+    ):
+        first = loaded_accessor(SimpleNamespace(_instance=loaded_source))
+        with DependencyTracker():
+            second = loaded_accessor(SimpleNamespace(_instance=loaded_source))
+
+    assert isinstance(first, RelatedManager)
+    assert second is first
+    assert first.pk == 7
+    assert tracked == [True]
+
+    class UnhashableContext(Context):
+        def get_orm_relation_manager(self, _key: object) -> object:
+            raise TypeError
+
+    fallback_accessor = _general_manager_accessor(
+        "owner",
+        RelatedManager,
+        raw_id_name="owner_id",
+    )
+    unhashable_source = SimpleNamespace(
+        owner_id=[],
+        _state=SimpleNamespace(db=None, fields_cache={}),
+    )
+    with patch(
+        "general_manager.cache.run_context.current_calculation_run_context",
+        return_value=UnhashableContext(),
+    ):
+        fallback = fallback_accessor(SimpleNamespace(_instance=unhashable_source))
+
+    assert isinstance(fallback, RelatedManager)
+    assert fallback.pk == []
+
+    assert (
+        loaded_accessor(
+            SimpleNamespace(
+                _instance=SimpleNamespace(
+                    owner_id=None,
+                    _state=SimpleNamespace(fields_cache={}),
+                )
+            )
+        )
+        is None
+    )
+    assert (
+        loaded_accessor(
+            SimpleNamespace(
+                _instance=SimpleNamespace(
+                    owner_id=7,
+                    _state=SimpleNamespace(fields_cache={"owner": None}),
+                )
+            )
+        )
+        is None
+    )
+
+    class MissingReverse:
+        @property
+        def profile(self) -> object:
+            raise ObjectDoesNotExist
+
+    reverse_accessor = _general_manager_accessor("profile", RelatedManager)
+    assert reverse_accessor(SimpleNamespace(_instance=MissingReverse())) is None
+    assert (
+        reverse_accessor(SimpleNamespace(_instance=SimpleNamespace(profile=None)))
+        is None
+    )
+
+
+def test_direct_relation_prefetch_returns_false_without_safe_context_or_admission() -> (
+    None
+):
+    class SourceModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_context_tests"
+
+    class RelatedModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_context_tests"
+
+    class RelatedManager:
+        def __init__(self, _pk: object) -> None:
+            pass
+
+    interface_instance = SimpleNamespace(_instance=SourceModel(id=1))
+    with patch(
+        "general_manager.cache.run_context.current_calculation_run_context",
+        return_value=None,
+    ):
+        assert not _prefetch_direct_relation_managers(
+            interface_instance,
+            accessor_name="owner",
+            manager_type=RelatedManager,
+            related_model=RelatedModel,
+            raw_id_name="owner_id",
+        )
+
+    with patch(
+        "general_manager.cache.run_context.current_calculation_run_context",
+        return_value=object(),
+    ):
+        assert not _prefetch_direct_relation_managers(
+            SimpleNamespace(_instance=object()),
+            accessor_name="owner",
+            manager_type=RelatedManager,
+            related_model=RelatedModel,
+            raw_id_name="owner_id",
+        )
+
+    class EmptyContext:
+        def get_orm_model_row_items(self, _model: type[object]) -> tuple[object, ...]:
+            return ()
+
+    class SafeInterface:
+        __init__ = OrmInterfaceBase.__init__
+        _model = RelatedModel
+        database = None
+        _soft_delete_default = False
+
+    class SafeManager:
+        __init__ = GeneralManager.__init__
+        Interface = SafeInterface
+
+    SafeManager._from_trusted_orm_instance = staticmethod(lambda row: row)  # type: ignore[attr-defined]
+    with patch(
+        "general_manager.cache.run_context.current_calculation_run_context",
+        return_value=EmptyContext(),
+    ):
+        assert not _prefetch_direct_relation_managers(
+            SimpleNamespace(_instance=SourceModel(id=1)),
+            accessor_name="owner",
+            manager_type=SafeManager,
+            related_model=RelatedModel,
+            raw_id_name="owner_id",
+        )
 
 
 def test_general_manager_fk_accessor_clears_raw_id_cache_on_data_change() -> None:
