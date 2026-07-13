@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.62.2 (2026-07-13)
+
+### Bug Fixes
+
+- Preserve failed rule validation
+  ([`7e95a1f`](https://github.com/TimKleindick/general_manager/commit/7e95a1facced49d93c53fb13298e455705e2a64a))
+
+### Documentation
+
+- Design rule validation fallback
+  ([`51d68fe`](https://github.com/TimKleindick/general_manager/commit/51d68fee27c7f667e87c9741d93726acf87dde06))
+
+### Testing
+
+- Cover custom non-field rule errors
+  ([`d7ade6c`](https://github.com/TimKleindick/general_manager/commit/d7ade6cc51b26a28885f1abd775ebc269a95ac09))
+
+- Cover failed rule message fallback
+  ([`0b641b6`](https://github.com/TimKleindick/general_manager/commit/0b641b6a62a3b1af791b8998e1cb47d05e83c01a))
+
+
 ## v0.62.1 (2026-07-11)
 
 ### Performance Improvements
