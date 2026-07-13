@@ -1,3 +1,4 @@
+from django.core.exceptions import NON_FIELD_ERRORS
 from django.test import TestCase, override_settings
 from datetime import datetime
 import ast
@@ -631,7 +632,7 @@ class RuleTests(TestCase):
     def test_rule_with_type_hint(self):
         """
         Verifies a Rule correctly evaluates a predicate that uses a type hint cast.
-        Creates a Rule whose predicate casts item.price to float and compares it to 100.0, asserts the evaluation is False for price 150.75, and asserts no error message is produced.
+        Creates a Rule whose predicate casts item.price to float and compares it to 100.0, asserts the evaluation is False for price 150.75, and asserts a fallback error message is produced.
         """
 
         def func(item: DummyObject) -> bool:
@@ -651,7 +652,24 @@ class RuleTests(TestCase):
         result = rule.evaluate(x)
         self.assertFalse(result)
         error_message = rule.get_error_message()
-        self.assertIsNone(error_message)
+        self.assertEqual(
+            error_message,
+            {"price": "[price] combination is not valid"},
+        )
+
+    def test_failed_rule_without_variables_uses_non_field_error(self):
+        """A failed rule always returns an attachable validation message."""
+
+        def func(_item: DummyObject) -> bool:
+            return False
+
+        rule = Rule(func, ignore_if_none=False)
+
+        self.assertFalse(rule.evaluate(DummyObject()))
+        self.assertEqual(
+            rule.get_error_message(),
+            {NON_FIELD_ERRORS: "Rule validation failed"},
+        )
 
     def test_rule_with_none_value(self):
         """Ensure Rules handle None values correctly when ignore_if_none is enabled."""

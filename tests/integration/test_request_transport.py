@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pickle
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 from unittest import mock
 
 from django.core.exceptions import ValidationError
@@ -463,8 +463,8 @@ class RuleProtectedProject(GeneralManager):
             auth_provider = FakeBearerAuth()
             rules: ClassVar[list[Rule]] = [
                 Rule(
-                    lambda project: bool(project.name),
-                    custom_error_message="Name is required: {name}",
+                    lambda project: cast(str, project.name) != "",
+                    ignore_if_none=False,
                 ),
                 Rule(
                     lambda project: project.status in {"active", "inactive"},
@@ -646,13 +646,17 @@ class RequestTransportIntegrationTest(SimpleTestCase):
         self.assertEqual(request.headers["Authorization"], "Bearer good-token")
 
     def test_request_rules_block_invalid_create_mutations(self) -> None:
-        with self.assertRaises(ValidationError):
+        with self.assertRaises(ValidationError) as context:
             RuleProtectedProject.create(
                 name="",
                 status="active",
                 ignore_permission=True,
             )
 
+        self.assertEqual(
+            context.exception.message_dict["name"],
+            ["[name] combination is not valid"],
+        )
         self.assertEqual(RuleProtectedProject.Interface.transport.requests, [])
 
     def test_request_rules_block_invalid_update_mutations(self) -> None:
