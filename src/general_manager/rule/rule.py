@@ -10,6 +10,7 @@ from operator import eq, ge, gt, le, lt, ne
 from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar, cast
 from decimal import Decimal
 
+from django.core.exceptions import NON_FIELD_ERRORS
 from django.utils.module_loading import import_string
 
 from general_manager.rule.handler import (
@@ -289,6 +290,20 @@ class Rule(Generic[GeneralManagerType]):
         if missing:
             raise MissingErrorTemplateVariableError(missing)
 
+    def _generate_fallback_error_messages(
+        self,
+        message: str | None = None,
+    ) -> Dict[str, str]:
+        """Attach a generic failed-rule message to fields or non-field errors."""
+        variables = self._variables or [NON_FIELD_ERRORS]
+        if message is None:
+            if self._variables:
+                combo = ", ".join(f"[{variable}]" for variable in self._variables)
+                message = f"{combo} combination is not valid"
+            else:
+                message = "Rule validation failed"
+        return {variable: message for variable in variables}
+
     def get_error_message(self) -> Optional[Dict[str, str]]:
         """
         Constructs error messages for the last failed evaluation and returns them keyed by variable name.
@@ -330,7 +345,7 @@ class Rule(Generic[GeneralManagerType]):
                     "variables": self._variables,
                 },
             )
-            return {v: formatted for v in self._variables}
+            return self._generate_fallback_error_messages(formatted)
 
         errors = self._generate_error_messages(vals)
         if errors:
@@ -350,7 +365,7 @@ class Rule(Generic[GeneralManagerType]):
                     "manager": manager_class,
                 },
             )
-        return errors or None
+        return errors or self._generate_fallback_error_messages()
 
     def _extract_variables(self) -> List[str]:
         """
