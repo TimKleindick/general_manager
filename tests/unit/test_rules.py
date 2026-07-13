@@ -671,6 +671,24 @@ class RuleTests(TestCase):
             {NON_FIELD_ERRORS: "Rule validation failed"},
         )
 
+    def test_failed_rule_without_variables_preserves_custom_non_field_error(self):
+        """A variable-free custom message is attached as a non-field error."""
+
+        def func(_item: DummyObject) -> bool:
+            return False
+
+        rule = Rule(
+            func,
+            custom_error_message="Custom failure",
+            ignore_if_none=False,
+        )
+
+        self.assertFalse(rule.evaluate(DummyObject()))
+        self.assertEqual(
+            rule.get_error_message(),
+            {NON_FIELD_ERRORS: "Custom failure"},
+        )
+
     def test_rule_with_none_value(self):
         """Ensure Rules handle None values correctly when ignore_if_none is enabled."""
 

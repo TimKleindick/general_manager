@@ -306,10 +306,12 @@ class Rule(Generic[GeneralManagerType]):
 
     def get_error_message(self) -> Optional[Dict[str, str]]:
         """
-        Constructs error messages for the last failed evaluation and returns them keyed by variable name.
+        Construct error messages for the last failed evaluation.
 
         Returns:
-            dict[str, str] | None: Mapping from each referenced variable name to its error message, or `None` if the predicate passed or was not evaluated.
+            dict[str, str] | None: Mapping keyed by referenced variables or
+            Django's `NON_FIELD_ERRORS` fallback when no variables are available;
+            `None` if the predicate passed or was not evaluated.
 
         Raises:
             ErrorMessageGenerationError: If called before any input has been evaluated.
