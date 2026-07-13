@@ -1,6 +1,6 @@
 # type: ignore
 
-from typing import ClassVar
+from typing import ClassVar, cast
 from uuid import UUID
 
 from django.test import TransactionTestCase
@@ -30,6 +30,7 @@ from general_manager.interface.utils.errors import (
     UnknownFieldError,
 )
 from general_manager.manager.input import Input
+from general_manager.rule import Rule
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
     PayloadNormalizer,
@@ -328,6 +329,31 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
             cleaner(self.person)
         self.assertTrue(PersonModel._meta.rules[0].called)
         delattr(PersonModel._meta, "rules")
+
+    def test_rules_and_full_clean_false_without_custom_message(self):
+        """A failed real Rule cannot pass when message inference needs fallback."""
+
+        def positive_age(person: PersonModel) -> bool:
+            return cast(int, person.age) > 0
+
+        PersonModel._meta.rules = [Rule(positive_age, ignore_if_none=False)]
+        cleaner = get_full_clean_methode(PersonModel)
+        invalid = PersonModel(
+            name="Invalid Age",
+            age=0,
+            owner=self.user,
+            changed_by=self.user,
+        )
+
+        try:
+            with self.assertRaises(ValidationError) as context:
+                cleaner(invalid)
+            self.assertEqual(
+                context.exception.message_dict["age"],
+                ["[age] combination is not valid"],
+            )
+        finally:
+            delattr(PersonModel._meta, "rules")
 
     def test_rules_and_full_clean_merges_errors_for_same_field(self):
         """
