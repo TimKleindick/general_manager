@@ -161,11 +161,13 @@ created until those artifacts pass validation.
 
 The validated wheel and source distribution are uploaded together as a
 SHA-addressed workflow artifact and retained for 90 days. Release retries must
-reuse that artifact rather than rebuild it. Recovery verifies that the release
-commit descends directly from the triggering `main` commit, changes only the
-version and changelog, and owns the expected tag before publishing. PyPI retries
-also compare the existing filenames and SHA-256 hashes before skipping an
-upload, then require the complete two-file set afterward.
+reuse that artifact rather than rebuild it. The expected tag may target the
+triggering `main` commit when it already contains the expected version and
+changelog entry. Otherwise, it may target a direct release-only child whose
+nonempty changes are limited to `CHANGELOG.md` and `pyproject.toml`. Recovery
+validates the version and changelog in either form before publishing. PyPI
+retries also compare the existing filenames and SHA-256 hashes before skipping
+an upload, then require the complete two-file set afterward.
 
 GitHub retains the artifact for 90 days, but permits workflow reruns for only 30
 days. Within that rerun window, use **Re-run failed jobs** so the failed release
