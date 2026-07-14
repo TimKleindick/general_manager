@@ -159,15 +159,12 @@ def test_docs_workflow_builds_on_main_or_dispatch_and_deploys_push_only() -> Non
     action_step(deploy_job, "actions/deploy-pages@v4")
 
 
-def test_publish_workflow_serializes_quality_preflight_and_release() -> None:
+def test_publish_workflow_runs_every_exact_sha_through_quality_and_release() -> None:
     workflow = load_workflow("publish.yml")
 
     assert workflow["on"] == {"push": {"branches": ["main"]}}
     assert workflow["permissions"] == {"contents": "read"}
-    assert workflow["concurrency"] == {
-        "group": "${{ github.workflow }}-release-${{ github.ref_name }}",
-        "cancel-in-progress": "false",
-    }
+    assert "concurrency" not in workflow
     assert set(workflow["jobs"]) == {"quality", "artifact", "release"}
     assert workflow["jobs"]["quality"] == {"uses": "./.github/workflows/quality.yml"}
     assert workflow["jobs"]["artifact"]["needs"] == "quality"
@@ -218,29 +215,37 @@ def test_publish_artifact_job_validates_before_uploading_sha_keyed_files() -> No
     released_condition = "${{ steps.prepare.outputs.released == 'true' }}"
     conditional_steps = [step for step in steps if step.get("if") == released_condition]
 
-    assert len(conditional_steps) == 4
+    assert len(conditional_steps) == 5
     commands = [str(step.get("run", "")) for step in conditional_steps]
     venv_python = "/tmp/general-manager-release-venv/bin/python"  # noqa: S108
-    assert commands[0].strip() == "twine check dist/*"
-    assert commands[1].strip() == (
+    version_binding = conditional_steps[0]
+    assert version_binding["env"] == {
+        "EXPECTED_VERSION": "${{ steps.prepare.outputs.version }}"
+    }
+    assert "import os" in commands[0]
+    assert "import tomllib" in commands[0]
+    assert 'configuration["project"]["version"]' in commands[0]
+    assert 'os.environ["EXPECTED_VERSION"]' in commands[0]
+    assert commands[1].strip() == "twine check dist/*"
+    assert commands[2].strip() == (
         "python scripts/validate_distribution.py archives dist"
     )
-    assert "python -m venv /tmp/general-manager-release-venv" in commands[2]
+    assert "python -m venv /tmp/general-manager-release-venv" in commands[3]
     assert (
         f"{venv_python} -m pip install "
         "\"$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)\""
-    ) in commands[2]
-    assert "cd /tmp" in commands[2]
+    ) in commands[3]
+    assert "cd /tmp" in commands[3]
     assert (
         f'{venv_python} "$GITHUB_WORKSPACE/scripts/validate_distribution.py" installed'
-    ) in commands[2]
+    ) in commands[3]
 
-    upload = conditional_steps[3]
+    upload = conditional_steps[4]
     assert upload["uses"] == "actions/upload-artifact@v4"
     assert upload["with"] == {
         "name": "validated-distributions-${{ github.sha }}",
         "path": "dist/*",
-        "retention-days": "7",
+        "retention-days": "90",
         "if-no-files-found": "error",
     }
 
@@ -255,7 +260,7 @@ def test_publish_release_job_mutates_only_after_downloading_validated_files() ->
     assert checkout["with"] == {
         "repository": "TimKleindick/general_manager",
         "ssh-key": "${{ secrets.SSH_DEPLOY_KEY }}",
-        "ssh-strict": "false",
+        "ssh-strict": "true",
         "persist-credentials": "true",
         "fetch-depth": "0",
         "ref": "${{ github.sha }}",
@@ -289,28 +294,75 @@ def test_publish_release_job_mutates_only_after_downloading_validated_files() ->
         "semantic-release version --skip-build"
     )
     assert final_release["env"] == {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
+    assert final_release["continue-on-error"] == "true"
 
     verify = step_by_id(job, "verify_release")
     assert verify["env"] == {
         "EXPECTED_VERSION": "${{ needs.artifact.outputs.version }}",
-        "ACTUAL_VERSION": "${{ steps.release.outputs.version }}",
         "EXPECTED_TAG": "${{ needs.artifact.outputs.tag }}",
+        "ACTUAL_VERSION": "${{ steps.release.outputs.version }}",
         "ACTUAL_TAG": "${{ steps.release.outputs.tag }}",
+        "PSR_RELEASED": "${{ steps.release.outputs.released }}",
+        "PSR_COMMIT_SHA": "${{ steps.release.outputs.commit_sha }}",
+        "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
     }
-    assert 'test "$EXPECTED_VERSION" = "$ACTUAL_VERSION"' in str(verify["run"])
-    assert 'test "$EXPECTED_TAG" = "$ACTUAL_TAG"' in str(verify["run"])
+    verify_command = str(verify["run"])
+    assert (
+        'git fetch --force origin "refs/tags/$EXPECTED_TAG:'
+        'refs/tags/$EXPECTED_TAG"' in verify_command
+    )
+    assert 'TAG_COMMIT="$(git rev-parse "$EXPECTED_TAG^{commit}")"' in verify_command
+    assert 'test "$RELEASE_PARENTS" = "$GITHUB_SHA"' in verify_command
+    assert "git diff-tree --no-commit-id --name-only -r" in verify_command
+    assert (
+        "EXPECTED_FILES=\"$(printf '%s\\n' CHANGELOG.md pyproject.toml | sort)\""
+        in verify_command
+    )
+    assert (
+        'RELEASE_FILES="$(git diff-tree --no-commit-id --name-only -r '
+        '"$TAG_COMMIT" | sort)"' in verify_command
+    )
+    assert 'test "$RELEASE_FILES" = "$EXPECTED_FILES"' in verify_command
+    assert "tomllib.loads" in verify_command
+    assert 'test "$TAG_VERSION" = "$EXPECTED_VERSION"' in verify_command
+    assert 'if [ -n "$PSR_COMMIT_SHA" ]' in verify_command
+    assert 'test "$PSR_COMMIT_SHA" = "$TAG_COMMIT"' in verify_command
+    assert 'if [ "$PSR_RELEASED" = "true" ]' in verify_command
+    assert 'test -n "$PSR_COMMIT_SHA"' in verify_command
+    assert 'gh release view "$EXPECTED_TAG"' in verify_command
+    assert "gh release create" in verify_command
+    assert "--verify-tag" in verify_command
+    assert "--generate-notes" in verify_command
+    assert 'test "$EXPECTED_VERSION" = "$ACTUAL_VERSION"' in verify_command
+    assert 'test "$EXPECTED_TAG" = "$ACTUAL_TAG"' in verify_command
 
-    assert commands.index(str(verify["run"])) < commands.index(
-        "twine upload validated-dist/*"
+    steps = cast(list[dict[str, Any]], job["steps"])
+    pre_upload = step_by_id(job, "verify_pypi_before")
+    publish = step_by_id(job, "publish_pypi")
+    post_upload = step_by_id(job, "verify_pypi_after")
+    assert steps.index(final_release) < steps.index(verify)
+    assert steps.index(verify) < steps.index(pre_upload)
+    assert steps.index(pre_upload) < steps.index(publish)
+    assert steps.index(publish) < steps.index(post_upload)
+
+    assert pre_upload["env"] == {
+        "EXPECTED_VERSION": "${{ needs.artifact.outputs.version }}"
+    }
+    assert str(pre_upload["run"]).strip() == (
+        "python scripts/verify_pypi_artifacts.py "
+        'GeneralManager "$EXPECTED_VERSION" validated-dist'
+    )
+    assert str(publish["run"]).strip() == (
+        "twine upload --non-interactive --skip-existing validated-dist/*"
+    )
+    assert post_upload["env"] == pre_upload["env"]
+    assert str(post_upload["run"]).strip() == (
+        "python scripts/verify_pypi_artifacts.py "
+        'GeneralManager "$EXPECTED_VERSION" validated-dist --require-all'
     )
     assert "twine upload dist/*" not in commands
     assert "semantic-release changelog" not in commands
     assert "git describe --tags" not in commands
-    publish = next(
-        step
-        for step in cast(list[dict[str, Any]], job["steps"])
-        if str(step.get("run", "")).strip() == "twine upload validated-dist/*"
-    )
     assert publish["env"] == {
         "TWINE_USERNAME": "__token__",
         "TWINE_PASSWORD": "${{ secrets.PYPI_API_TOKEN }}",
