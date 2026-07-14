@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata as metadata
+import importlib.resources as resources
+import os
 import re
+import secrets
 import stat
+import subprocess
+import sys
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -20,6 +27,17 @@ REQUIRED_MEMBERS = frozenset(
         "general_manager/chat/evals/datasets/follow_ups.yaml",
         "general_manager/chat/evals/datasets/large_schema.yaml",
         "general_manager/chat/evals/datasets/multi_hop.yaml",
+    }
+)
+
+REQUIRED_DATASETS = frozenset(
+    {
+        "chat/evals/datasets/basic_queries.yaml",
+        "chat/evals/datasets/demo_readiness.yaml",
+        "chat/evals/datasets/edge_cases.yaml",
+        "chat/evals/datasets/follow_ups.yaml",
+        "chat/evals/datasets/large_schema.yaml",
+        "chat/evals/datasets/multi_hop.yaml",
     }
 )
 
@@ -136,6 +154,89 @@ def validate_archives(dist_dir: Path) -> None:
     _require_members(sdist, _sdist_members(sdist, expected_sdist_root))
 
 
+def validate_installed_resources() -> None:
+    """Validate dataset files and metadata in the installed distribution."""
+    package = resources.files("general_manager")
+    missing = sorted(
+        dataset
+        for dataset in REQUIRED_DATASETS
+        if not package.joinpath(*PurePosixPath(dataset).parts).is_file()
+    )
+    if missing:
+        message = (
+            "Installed general_manager package is missing required dataset files: "
+            f"{', '.join(missing)}"
+        )
+        raise ValueError(message)
+
+    if not metadata.version("GeneralManager").strip():
+        message = "Installed GeneralManager distribution has an empty version"
+        raise ValueError(message)
+
+
+def validate_installed_migrations() -> None:
+    """Apply packaged migrations using minimal Django settings."""
+    import django
+    from django.conf import settings
+    from django.core.management import call_command
+
+    if not settings.configured:
+        settings.configure(
+            DATABASES={
+                "default": {
+                    "ENGINE": "django.db.backends.sqlite3",
+                    "NAME": ":memory:",
+                }
+            },
+            INSTALLED_APPS=[
+                "django.contrib.auth",
+                "django.contrib.contenttypes",
+                "general_manager",
+            ],
+            SECRET_KEY=secrets.token_urlsafe(32),
+            USE_TZ=True,
+        )
+    django.setup()
+    call_command("migrate", verbosity=0, interactive=False)
+
+
+def validate_installed_clis() -> None:
+    """Validate packaged Django and module CLI entry points."""
+    from django.core.management import get_commands, load_command_class
+    from django.core.management.base import BaseCommand
+
+    app_name = get_commands().get("chat_cleanup")
+    if app_name is None:
+        message = "Installed general_manager package has no chat_cleanup command"
+        raise ValueError(message)
+    command = (
+        app_name
+        if isinstance(app_name, BaseCommand)
+        else load_command_class(app_name, "chat_cleanup")
+    )
+    help_text = command.create_parser("django-admin", "chat_cleanup").format_help()
+    if not help_text.strip():
+        message = "Installed chat_cleanup command produced no help text"
+        raise ValueError(message)
+
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment["DJANGO_SETTINGS_MODULE"] = "django.conf.global_settings"
+    subprocess.run(  # noqa: S603 - fixed arguments use the current interpreter.
+        [sys.executable, "-m", "general_manager.chat.evals", "--help"],
+        check=True,
+        cwd=Path(tempfile.gettempdir()),
+        env=environment,
+    )
+
+
+def validate_installed() -> None:
+    """Validate an installed GeneralManager distribution."""
+    validate_installed_resources()
+    validate_installed_migrations()
+    validate_installed_clis()
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -143,6 +244,9 @@ def _parse_args() -> argparse.Namespace:
         "archives", help="Validate wheel and sdist archives"
     )
     archives_parser.add_argument("dist_dir", type=Path)
+    subparsers.add_parser(
+        "installed", help="Validate the installed GeneralManager distribution"
+    )
     return parser.parse_args()
 
 
@@ -150,6 +254,8 @@ def main() -> None:
     args = _parse_args()
     if args.command == "archives":
         validate_archives(args.dist_dir)
+    elif args.command == "installed":
+        validate_installed()
 
 
 if __name__ == "__main__":
