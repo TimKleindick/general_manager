@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID
@@ -1852,6 +1852,75 @@ class TestOrmMutationCapability:
         )
         mark_finalizing.assert_called_once_with(locked, target_pk=42)
 
+    @pytest.mark.parametrize("operation", ("create", "update"))
+    def test_non_upload_mutation_supports_legacy_save_with_history_override(
+        self,
+        operation: str,
+    ):
+        """Keep ordinary mutation compatible with the prior override signature."""
+        save_calls: list[tuple[object, object, int | None, str | None]] = []
+
+        class LegacyMutation(OrmMutationCapability):
+            def save_with_history(
+                self,
+                interface_cls,
+                instance,
+                *,
+                creator_id,
+                history_comment,
+            ):
+                save_calls.append(
+                    (interface_cls, instance, creator_id, history_comment)
+                )
+                return 42
+
+        mutation = LegacyMutation()
+        model_instance = Mock()
+        mutation.assign_simple_attributes = Mock(return_value=model_instance)
+        mutation.apply_many_to_many = Mock(return_value=model_instance)
+        support = Mock()
+        support.get_database_alias.return_value = None
+        manager = Mock()
+        manager.get.return_value = model_instance
+        support.get_manager.return_value = manager
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.call_with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._normalize_payload",
+                return_value=({}, {}),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._mutation_capability_for",
+                return_value=mutation,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
+                return_value=nullcontext(),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.discard_orm_instance_cache"
+            ),
+        ):
+            if operation == "create":
+                interface_cls = Mock()
+                interface_cls._model.return_value = model_instance
+                result = OrmCreateCapability().create(interface_cls)
+            else:
+                interface_instance = SimpleNamespace(pk=42)
+                interface_cls = interface_instance.__class__
+                result = OrmUpdateCapability().update(interface_instance)
+
+        assert result == {"id": 42}
+        assert save_calls == [(interface_cls, model_instance, None, None)]
+
     def test_non_upload_create_uses_configured_alias_for_outer_atomic(self):
         """Keep ordinary create persistence on one alias-aware transaction."""
         capability = OrmCreateCapability()
@@ -1895,8 +1964,73 @@ class TestOrmMutationCapability:
             instance,
             creator_id=None,
             history_comment=None,
-            _savepoint=False,
         )
+
+    def test_non_upload_create_elides_base_savepoint_on_configured_alias(self):
+        """Avoid a nested savepoint while retaining both alias-aware atomics."""
+
+        class DelegatingLegacyMutation(OrmMutationCapability):
+            def save_with_history(
+                self,
+                interface_cls,
+                instance,
+                *,
+                creator_id,
+                history_comment,
+            ):
+                return super().save_with_history(
+                    interface_cls,
+                    instance,
+                    creator_id=creator_id,
+                    history_comment=history_comment,
+                )
+
+        capability = OrmCreateCapability()
+        interface_cls = Mock()
+        instance = Mock()
+        instance.pk = 42
+        instance._state = SimpleNamespace(db=None)
+        interface_cls._model.return_value = instance
+        support = Mock()
+        support.get_database_alias.return_value = "replica"
+        mutation = DelegatingLegacyMutation()
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.call_with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._normalize_payload",
+                return_value=({}, {}),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._mutation_capability_for",
+                return_value=mutation,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._assign_history_actor"
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.model_has_field",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
+                side_effect=lambda **_kwargs: nullcontext(),
+            ) as atomic,
+        ):
+            result = capability.create(interface_cls)
+
+        assert result == {"id": 42}
+        assert atomic.call_args_list == [
+            call(using="replica"),
+            call(using="replica", savepoint=False),
+        ]
 
     def test_non_upload_update_uses_configured_alias_for_outer_atomic(self):
         """Keep ordinary update persistence on one alias-aware transaction."""
@@ -1946,7 +2080,6 @@ class TestOrmMutationCapability:
             model_instance,
             creator_id=None,
             history_comment=None,
-            _savepoint=False,
         )
 
     def test_non_upload_update_invalidates_cache_after_many_to_many(self):
