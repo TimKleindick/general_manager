@@ -51,7 +51,12 @@ def test_quality_workflow_has_reusable_least_privilege_triggers() -> None:
         "workflow_dispatch",
     }
     assert workflow["permissions"] == {"contents": "read"}
-    assert set(workflow["jobs"]) == {"test", "lint-and-mypy", "docs"}
+    assert set(workflow["jobs"]) == {
+        "test",
+        "distribution",
+        "lint-and-mypy",
+        "docs",
+    }
 
 
 def test_quality_test_job_preserves_supported_matrix_and_test_services() -> None:
@@ -128,6 +133,72 @@ def test_quality_docs_job_builds_strictly_with_existing_toolchain() -> None:
     )
     assert "pip install -r requirements/development.txt" in commands
     assert "mkdocs build --strict" in commands
+
+
+def test_quality_distribution_job_validates_the_exact_built_artifacts() -> None:
+    job = load_workflow("quality.yml")["jobs"]["distribution"]
+
+    assert job["name"] == "Package smoke test"
+    assert job["if"] == (
+        "${{ github.event_name == 'pull_request' || "
+        "github.event_name == 'workflow_dispatch' }}"
+    )
+    assert action_step(job, "actions/setup-python@v5")["with"] == {
+        "python-version": "3.12"
+    }
+
+    commands = run_commands(job)
+    venv_python = "/tmp/general-manager-quality-venv/bin/python"  # noqa: S108
+    assert "python -m pip install build twine==6.0.1" in commands
+    assert "python -m build" in commands
+    assert "twine check dist/*" in commands
+    assert 'configuration["project"]["version"]' in commands
+    assert (
+        'python scripts/validate_distribution.py archives dist "$EXPECTED_VERSION"'
+        in commands
+    )
+    assert (
+        "WHEEL=\"$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)\""
+        in commands
+    )
+    assert (
+        "SDIST=\"$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print -quit)\""
+        in commands
+    )
+    assert "python -m venv /tmp/general-manager-quality-venv" in commands
+    assert f'{venv_python} -m pip install "$WHEEL"' in commands
+    assert "cd /tmp" in commands
+    assert (
+        f'{venv_python} "$GITHUB_WORKSPACE/scripts/validate_distribution.py" installed'
+        in commands
+    )
+    dynamic_smoke = (
+        f'{venv_python} "$GITHUB_WORKSPACE/tests/packaging/'
+        'smoke_chat_eval_distribution.py" '
+        '"$GITHUB_WORKSPACE/$WHEEL" "$GITHUB_WORKSPACE/$SDIST"'
+    )
+    settings_smoke = (
+        "env -u DJANGO_SETTINGS_MODULE "
+        'PYTHONPATH="$GITHUB_WORKSPACE/tests/packaging" '
+        f"{venv_python} -m general_manager.chat.evals "
+        "--settings chat_eval_smoke_settings --provider builtins.object "
+        "--fixture toy --dataset basic_queries --tier 999"
+    )
+    assert dynamic_smoke in commands
+    assert settings_smoke in commands
+    assert commands.index("python -m build") < commands.index("twine check dist/*")
+    assert commands.index("twine check dist/*") < commands.index(
+        "scripts/validate_distribution.py archives"
+    )
+    assert commands.index("scripts/validate_distribution.py archives") < commands.index(
+        'scripts/validate_distribution.py" installed'
+    )
+    assert commands.index(
+        'scripts/validate_distribution.py" installed'
+    ) < commands.index("smoke_chat_eval_distribution.py")
+    assert commands.index("smoke_chat_eval_distribution.py") < commands.index(
+        "--settings chat_eval_smoke_settings"
+    )
 
 
 def test_legacy_test_and_lint_workflows_are_removed() -> None:
@@ -236,13 +307,36 @@ def test_publish_artifact_job_validates_before_uploading_sha_keyed_files() -> No
     )
     assert "python -m venv /tmp/general-manager-release-venv" in commands[3]
     assert (
-        f"{venv_python} -m pip install "
-        "\"$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)\""
-    ) in commands[3]
+        "WHEEL=\"$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)\""
+        in commands[3]
+    )
+    assert (
+        "SDIST=\"$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print -quit)\""
+        in commands[3]
+    )
+    assert f'{venv_python} -m pip install "$WHEEL"' in commands[3]
     assert "cd /tmp" in commands[3]
     assert (
         f'{venv_python} "$GITHUB_WORKSPACE/scripts/validate_distribution.py" installed'
     ) in commands[3]
+    assert (
+        f'{venv_python} "$GITHUB_WORKSPACE/tests/packaging/'
+        'smoke_chat_eval_distribution.py" '
+        '"$GITHUB_WORKSPACE/$WHEEL" "$GITHUB_WORKSPACE/$SDIST"'
+    ) in commands[3]
+    assert (
+        "env -u DJANGO_SETTINGS_MODULE "
+        'PYTHONPATH="$GITHUB_WORKSPACE/tests/packaging" '
+        f"{venv_python} -m general_manager.chat.evals "
+        "--settings chat_eval_smoke_settings --provider builtins.object "
+        "--fixture toy --dataset basic_queries --tier 999"
+    ) in commands[3]
+    assert commands[3].index('validate_distribution.py" installed') < commands[3].index(
+        "smoke_chat_eval_distribution.py"
+    )
+    assert commands[3].index("smoke_chat_eval_distribution.py") < commands[3].index(
+        "--settings chat_eval_smoke_settings"
+    )
 
     upload = conditional_steps[4]
     assert upload["uses"] == "actions/upload-artifact@v4"
