@@ -200,9 +200,9 @@ from general_manager.api import PublicGraphQLError
 @graph_ql_mutation
 def update_project(info, project_id: int, mode: str) -> Project:
     if mode == "resolver-error":
-        raise PublicGraphQLError("Unknown update mode.", code="BAD_USER_INPUT")
+        raise PublicGraphQLError("Unknown update mode.", code="UNKNOWN_UPDATE_MODE")
     if mode == "validation-error":
-        raise ValidationError({"name": ["This project name is unavailable."]})
+        raise ValidationError({"mode": ["The selected update mode is invalid."]})
     return Project(id=project_id)
 ```
 
