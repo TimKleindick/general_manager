@@ -353,10 +353,16 @@ because phrasing varies across providers and runs.
 
 ```bash
 # Run full eval suite against a provider
-python -m general_manager.chat.evals --provider ollama --model llama3
+python -m general_manager.chat.evals \
+  --settings myproject.settings \
+  --provider general_manager.chat.providers.OllamaProvider \
+  --model llama3
 
 # Run only toy contract cases
-python -m general_manager.chat.evals --fixture toy --tier 0
+python -m general_manager.chat.evals \
+  --settings myproject.settings \
+  --fixture toy \
+  --tier 0
 
 # Run local demo readiness cases with traces
 python scripts/run_chat_evals.py --model glm-4.7-flash:q4_K_M --dataset demo_readiness --tier 1 --trace-jsonl /tmp/chat-demo-eval.jsonl
@@ -365,10 +371,18 @@ python scripts/run_chat_evals.py --model glm-4.7-flash:q4_K_M --dataset demo_rea
 python scripts/run_chat_evals.py --fixture large --dataset large_schema --tier 2
 
 # Run specific dataset
-python -m general_manager.chat.evals --dataset multi_hop
+python -m general_manager.chat.evals \
+  --settings myproject.settings \
+  --dataset multi_hop
 
 # Compare providers side-by-side
-python -m general_manager.chat.evals --compare ollama,anthropic,openai,google
+providers=general_manager.chat.providers.OllamaProvider
+providers+=,general_manager.chat.providers.AnthropicProvider
+providers+=,general_manager.chat.providers.OpenAIProvider
+providers+=,general_manager.chat.providers.GoogleProvider
+python -m general_manager.chat.evals \
+  --settings myproject.settings \
+  --compare "$providers"
 ```
 
 Output: summary table with pass rates per dimension per provider, plus detailed
