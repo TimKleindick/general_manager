@@ -93,8 +93,6 @@ major_on_zero = false
 version_toml = ["pyproject.toml:project.version"]
 branch = "main"
 build_command = "python -m build"
-upload_to_PyPI = true
-upload_to_release = true
 
 [tool.semantic_release.remote]
 ignore_token_for_push = true

@@ -5,6 +5,7 @@ import re
 import stat
 import sys
 import tarfile
+import tomllib
 import zipfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -24,6 +25,20 @@ REQUIRED_MEMBERS = frozenset(
         "general_manager/chat/evals/datasets/multi_hop.yaml",
     }
 )
+
+
+def test_distribution_metadata_packages_datasets_and_uses_workflow_uploads() -> None:
+    pyproject_path = Path(__file__).parents[2] / "pyproject.toml"
+    with pyproject_path.open("rb") as pyproject_file:
+        pyproject = tomllib.load(pyproject_file)
+
+    package_data = pyproject["tool"]["setuptools"]["package-data"]
+    assert package_data["general_manager"] == ["py.typed"]
+    assert "datasets/*.yaml" in package_data["general_manager.chat.evals"]
+
+    semantic_release = pyproject["tool"]["semantic_release"]
+    assert "upload_to_PyPI" not in semantic_release
+    assert "upload_to_release" not in semantic_release
 
 
 def _write_wheel(
