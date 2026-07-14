@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import io
 import re
+import stat
 import sys
 import tarfile
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
@@ -32,13 +33,18 @@ def _write_wheel(
     *,
     build_tag: str | None = None,
     extra_members: tuple[str, ...] = (),
+    member_modes: Mapping[str, int] | None = None,
     suffix: str = "",
 ) -> None:
     build = f"-{build_tag}" if build_tag is not None else ""
     wheel = dist_dir / f"generalmanager-{version}{suffix}{build}-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
         for member in (*members, *extra_members):
-            archive.writestr(member, "test data")
+            info = zipfile.ZipInfo(member)
+            if member_modes is not None and member in member_modes:
+                info.create_system = 3
+                info.external_attr = member_modes[member] << 16
+            archive.writestr(info, "test data")
 
 
 def _write_sdist(
@@ -84,8 +90,16 @@ def test_accepts_complete_archives_with_matching_versions(tmp_path: Path) -> Non
     _validator()(tmp_path)
 
 
-def test_accepts_wheel_with_build_tag(tmp_path: Path) -> None:
-    _write_wheel(tmp_path, "1.2.3", build_tag="1")
+def test_accepts_wheel_with_dotted_build_tag(tmp_path: Path) -> None:
+    _write_wheel(tmp_path, "1.2.3", build_tag="1.foo")
+    _write_sdist(tmp_path, "1.2.3")
+
+    _validator()(tmp_path)
+
+
+def test_accepts_regular_unix_wheel_members(tmp_path: Path) -> None:
+    regular_modes = {member: stat.S_IFREG | 0o644 for member in REQUIRED_MEMBERS}
+    _write_wheel(tmp_path, "1.2.3", member_modes=regular_modes)
     _write_sdist(tmp_path, "1.2.3")
 
     _validator()(tmp_path)
@@ -148,8 +162,10 @@ def test_rejects_sdist_directory_in_place_of_required_file(tmp_path: Path) -> No
     [
         ("wheel", "/escape.txt"),
         ("wheel", "../escape.txt"),
+        ("wheel", r"general_manager\escape.txt"),
         ("sdist", "/escape.txt"),
         ("sdist", "generalmanager-1.2.3/../escape.txt"),
+        ("sdist", r"generalmanager-1.2.3/general_manager\escape.txt"),
     ],
 )
 def test_rejects_unsafe_archive_member_paths(
@@ -161,6 +177,28 @@ def test_rejects_unsafe_archive_member_paths(
     _write_sdist(tmp_path, "1.2.3", extra_members=sdist_extras)
 
     with pytest.raises(ValueError, match="Unsafe archive member path"):
+        _validator()(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "member_type",
+    [stat.S_IFLNK, stat.S_IFDIR],
+    ids=["symlink", "disguised-directory"],
+)
+def test_rejects_non_regular_required_wheel_member(
+    tmp_path: Path, member_type: int
+) -> None:
+    required_file = "general_manager/py.typed"
+    _write_wheel(
+        tmp_path,
+        "1.2.3",
+        member_modes={required_file: member_type | 0o755},
+    )
+    _write_sdist(tmp_path, "1.2.3")
+
+    with pytest.raises(
+        ValueError, match=rf"Non-regular wheel member.*{re.escape(required_file)}"
+    ):
         _validator()(tmp_path)
 
 
