@@ -68,6 +68,14 @@ jobs:
         name: Build Project
         run: python -m build
 
+      - name: Smoke-test built distribution
+        if: ${{ steps.semantic_release.outputs.released == 'true' }}
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          env -u DJANGO_SETTINGS_MODULE python -m general_manager.chat.evals --help
+          env -u DJANGO_SETTINGS_MODULE PYTHONPATH=tests/packaging python -m general_manager.chat.evals --settings chat_eval_smoke_settings --provider builtins.object --fixture toy --dataset basic_queries --tier 999
+          python tests/packaging/smoke_chat_eval_distribution.py dist/*
+
       # 5) Upload nur, wenn wirklich was released wurde
       - name: Publish to PyPI
         if: ${{ steps.semantic_release.outputs.released == 'true' }}
