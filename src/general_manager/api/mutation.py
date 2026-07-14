@@ -297,8 +297,10 @@ def graph_ql_mutation(
     ``success`` field. Resolver execution normalizes GeneralManager arguments,
     calls ``permission.check(normalized_kwargs, info.context.user)`` when a
     permission class is configured, calls the original function, and returns the
-    generated mutation instance. Handled GeneralManager errors are converted via
-    ``GraphQL._handle_graph_ql_error``; other exceptions propagate.
+    generated mutation instance. Explicit ``GraphQLError`` instances are
+    preserved. Validation and deliberately public errors retain their intended
+    client behavior, while unexpected ordinary exceptions are sanitized and
+    assigned correlation IDs by ``GraphQL._handle_graph_ql_error``.
 
     Parameters:
         _func: Decorated function for bare usage, or a positional
