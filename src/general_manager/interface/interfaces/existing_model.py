@@ -28,13 +28,15 @@ class ExistingModelInterface(OrmInterfaceBase[ExistingModelT]):
     string accepted by ``django.apps.apps.get_model()``, such as
     ``settings.AUTH_USER_MODEL``. During manager class creation the
     ``existing_model_resolution`` lifecycle capability resolves that reference,
-    caches the resolved model on the concrete interface, registers history when
-    needed, applies interface rules, and builds a factory for the legacy model.
-    History registration is skipped when the model already exposes a
-    ``model._meta.simple_history_manager_attribute`` marker; otherwise local
-    many-to-many fields are included in the registration. Interface rules are
-    the optional ``Meta.rules`` sequence on the interface. Soft delete is
-    enabled when the resolved model exposes an ``is_active`` attribute.
+    caches the resolved model on the concrete interface, auto-registers
+    database-aware history when needed, applies interface rules, and builds a
+    factory for the legacy model. Auto-registration includes local many-to-many
+    fields. A pre-registered tracker remains compatible on the default database;
+    on a configured non-default alias, its generated history model must carry
+    GeneralManager's database-aware marker or manager creation raises
+    ``UnsafeHistoryConfigurationError``. Interface rules are the optional
+    ``Meta.rules`` sequence on the interface. Soft delete is enabled when the
+    resolved model exposes an ``is_active`` attribute.
 
     Construction and row loading are inherited from ``OrmInterfaceBase``: the
     default public input is the wrapped row ``id`` parsed by ``Input(int)`` plus

@@ -132,9 +132,9 @@ class ExistingModelResolutionCapability(BaseCapability):
 
         def _perform() -> None:
             """
-            Register simple history for the captured Django model if history is not already present.
+            Ensure the captured model has history tracking compatible with its interface database alias.
 
-            If the model's _meta already exposes the simple_history manager attribute, no action is taken. Otherwise, collects the model's local many-to-many field names and registers the model with simple_history including those m2m fields.
+            An untracked model is registered with database-aware history and all local many-to-many fields. An existing tracker is accepted for the default alias; a non-default alias requires GeneralManager's database-aware marker and otherwise raises `UnsafeHistoryConfigurationError`.
             """
             if hasattr(model._meta, "simple_history_manager_attribute"):
                 database_alias = (
