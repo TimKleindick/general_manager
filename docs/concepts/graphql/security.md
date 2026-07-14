@@ -80,7 +80,12 @@ When no provider is configured, the schema does not expose `me`.
 
 ## Authentication
 
-Set `AUTHENTICATION_BACKENDS` and middleware according to your project. The GraphQL view expects `info.context.user` to be populated. Denied permissions return a GraphQL error or an error entry in the mutation payload.
+Set `AUTHENTICATION_BACKENDS` and middleware according to your project. The
+GraphQL view expects `info.context.user` to be populated. For generated
+mutations and mutations created with `@graph_ql_mutation`, a denied mutation
+permission produces a top-level GraphQL `errors` entry with the fixed message
+`Permission denied.` and code `PERMISSION_DENIED`; GraphQL execution sets the
+mutation field in `data` to `null`. It does not return a payload error field.
 
 ## File capabilities and upload tokens
 
