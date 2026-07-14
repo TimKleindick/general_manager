@@ -499,6 +499,14 @@ def _build_validation_error_extensions(
     }
 
 
+def _safe_exception_message(error: Exception) -> str:
+    """Render an exception for server logs without risking a secondary failure."""
+    try:
+        return str(error)
+    except Exception:  # noqa: BLE001 - rendering must not break error sanitization
+        return "Exception message unavailable."
+
+
 def handle_graph_ql_error(
     error: Exception,
     *,
@@ -522,7 +530,7 @@ def handle_graph_ql_error(
     and an opaque correlation ID. Logging level/category is diagnostic behavior
     of the internal ``api.graphql`` logger and is not a public API contract.
     """
-    message = str(error)
+    message = _safe_exception_message(error)
     error_name = type(error).__name__
     if isinstance(error, GraphQLError):
         logger.warning(

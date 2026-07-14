@@ -938,6 +938,50 @@ class MutationDecoratorTests(TestCase):
         )
         self.assertNotIn(private_message, str(caught.exception.formatted))
 
+    def test_mutation_exception_rendering_failure_is_sanitized_by_schema(self):
+        """Graphene execution cannot expose errors raised while rendering errors."""
+        error_id = "0123456789abcdef0123456789abcdef"
+        primary_secret = "primary secret"  # noqa: S105
+        secondary_secret = "secondary secret"  # noqa: S105
+
+        class UnrenderableError(Exception):
+            def __str__(self) -> str:
+                raise OSError(secondary_secret)
+
+        @graph_ql_mutation()
+        def exception_rendering_mutation(info) -> str:
+            _ = info
+            raise UnrenderableError(primary_secret)
+
+        mutation = GraphQL._mutations["exceptionRenderingMutation"]
+
+        class Query(graphene.ObjectType):
+            ready = graphene.Boolean(default_value=True)
+
+        mutation_root = type(
+            "Mutation",
+            (graphene.ObjectType,),
+            {"exceptionRenderingMutation": mutation.Field()},
+        )
+        schema = graphene.Schema(query=Query, mutation=mutation_root)
+
+        with mock.patch("general_manager.api.graphql_errors.uuid4") as uuid4_mock:
+            uuid4_mock.return_value.hex = error_id
+            result = schema.execute(
+                "mutation { exceptionRenderingMutation { success str } }",
+                context_value=object(),
+            )
+
+        self.assertEqual(len(result.errors or []), 1)
+        error = result.errors[0]
+        self.assertEqual(error.message, "An internal server error occurred.")
+        self.assertEqual(
+            error.extensions,
+            {"code": "INTERNAL_SERVER_ERROR", "errorId": error_id},
+        )
+        self.assertNotIn(primary_secret, str(error.formatted))
+        self.assertNotIn(secondary_secret, str(error.formatted))
+
     def test_mutation_with_permission_class(self):
         """Test mutations with custom permission classes."""
         from general_manager.permission.mutation_permission import MutationPermission
