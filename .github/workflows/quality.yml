@@ -56,6 +56,55 @@ jobs:
           version: v11.2.7
           fail_ci_if_error: false
 
+  distribution:
+    name: Package smoke test
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build distribution
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine==6.0.1
+          python -m build
+
+      - name: Validate distribution archives
+        run: |
+          EXPECTED_VERSION="$(
+            python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          with Path("pyproject.toml").open("rb") as project_file:
+              configuration = tomllib.load(project_file)
+          print(configuration["project"]["version"])
+          PY
+          )"
+          twine check dist/*
+          python scripts/validate_distribution.py archives dist "$EXPECTED_VERSION"
+
+      - name: Smoke-test installed distribution
+        run: |
+          set -euo pipefail
+          WHEEL="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          SDIST="$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          test -n "$WHEEL"
+          test -n "$SDIST"
+          python -m venv /tmp/general-manager-quality-venv
+          /tmp/general-manager-quality-venv/bin/python -m pip install --upgrade pip
+          /tmp/general-manager-quality-venv/bin/python -m pip install "$WHEEL"
+          cd /tmp
+          /tmp/general-manager-quality-venv/bin/python "$GITHUB_WORKSPACE/scripts/validate_distribution.py" installed
+          /tmp/general-manager-quality-venv/bin/python "$GITHUB_WORKSPACE/tests/packaging/smoke_chat_eval_distribution.py" "$GITHUB_WORKSPACE/$WHEEL" "$GITHUB_WORKSPACE/$SDIST"
+          env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$GITHUB_WORKSPACE/tests/packaging" /tmp/general-manager-quality-venv/bin/python -m general_manager.chat.evals --settings chat_eval_smoke_settings --provider builtins.object --fixture toy --dataset basic_queries --tier 999
+
   lint-and-mypy:
     name: lint-and-mypy
     runs-on: ubuntu-latest
