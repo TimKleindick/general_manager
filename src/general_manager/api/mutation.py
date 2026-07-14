@@ -17,9 +17,9 @@ from typing import (
     cast,
 )
 import graphene
-from graphql import GraphQLResolveInfo
+from graphql import GraphQLError, GraphQLResolveInfo
 
-from general_manager.api.graphql import GraphQL, HANDLED_MANAGER_ERRORS
+from general_manager.api.graphql import GraphQL
 from general_manager.manager.general_manager import GeneralManager
 
 from general_manager.utils.format_string import snake_to_camel
@@ -462,7 +462,7 @@ def graph_ql_mutation(
                     expected_count = len(out_types)
                     received_count = len(result_values)
                     if received_count != expected_count:
-                        raise MutationTupleReturnLengthMismatchError(
+                        raise MutationTupleReturnLengthMismatchError(  # noqa: TRY301
                             fn.__name__,
                             expected_count,
                             received_count,
@@ -479,7 +479,9 @@ def graph_ql_mutation(
                     data[only] = result
                 data["success"] = True
                 return mutation_class(**data)
-            except HANDLED_MANAGER_ERRORS as error:
+            except GraphQLError:
+                raise
+            except Exception as error:
                 raise GraphQL._handle_graph_ql_error(
                     error,
                     field_name_mapper=snake_to_camel,
