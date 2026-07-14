@@ -8,10 +8,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-release-${{ github.ref_name }}
-  cancel-in-progress: false
-
 jobs:
   quality:
     uses: ./.github/workflows/quality.yml
@@ -56,6 +52,27 @@ jobs:
           --no-push
           --no-vcs-release
 
+      - name: Verify the stamped project version
+        if: ${{ steps.prepare.outputs.released == 'true' }}
+        env:
+          EXPECTED_VERSION: ${{ steps.prepare.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          with Path("pyproject.toml").open("rb") as project_file:
+              configuration = tomllib.load(project_file)
+          actual_version = configuration["project"]["version"]
+          expected_version = os.environ["EXPECTED_VERSION"]
+          if actual_version != expected_version:
+              raise SystemExit(
+                  f"Stamped version {actual_version!r} does not match "
+                  f"semantic-release version {expected_version!r}"
+              )
+          PY
+
       - name: Check distribution metadata
         if: ${{ steps.prepare.outputs.released == 'true' }}
         run: twine check dist/*
@@ -79,7 +96,7 @@ jobs:
         with:
           name: validated-distributions-${{ github.sha }}
           path: dist/*
-          retention-days: 7
+          retention-days: 90
           if-no-files-found: error
 
   release:
@@ -96,7 +113,7 @@ jobs:
         with:
           repository: TimKleindick/general_manager
           ssh-key: ${{ secrets.SSH_DEPLOY_KEY }}
-          ssh-strict: false
+          ssh-strict: true
           persist-credentials: true
           fetch-depth: 0
           ref: ${{ github.sha }}
@@ -128,23 +145,83 @@ jobs:
 
       - id: release
         name: Create the release without rebuilding
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: semantic-release version --skip-build
 
       - id: verify_release
-        name: Verify the released version and tag
+        name: Verify or recover the release provenance
         env:
           EXPECTED_VERSION: ${{ needs.artifact.outputs.version }}
-          ACTUAL_VERSION: ${{ steps.release.outputs.version }}
           EXPECTED_TAG: ${{ needs.artifact.outputs.tag }}
+          ACTUAL_VERSION: ${{ steps.release.outputs.version }}
           ACTUAL_TAG: ${{ steps.release.outputs.tag }}
+          PSR_RELEASED: ${{ steps.release.outputs.released }}
+          PSR_COMMIT_SHA: ${{ steps.release.outputs.commit_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          test "$EXPECTED_VERSION" = "$ACTUAL_VERSION"
-          test "$EXPECTED_TAG" = "$ACTUAL_TAG"
+          set -euo pipefail
+          test -n "$EXPECTED_VERSION"
+          test -n "$EXPECTED_TAG"
 
-      - name: Publish validated distributions to PyPI
-        run: twine upload validated-dist/*
+          if [ -n "$ACTUAL_VERSION" ]; then
+            test "$EXPECTED_VERSION" = "$ACTUAL_VERSION"
+          fi
+          if [ -n "$ACTUAL_TAG" ]; then
+            test "$EXPECTED_TAG" = "$ACTUAL_TAG"
+          fi
+
+          git fetch --force origin "refs/tags/$EXPECTED_TAG:refs/tags/$EXPECTED_TAG"
+          TAG_COMMIT="$(git rev-parse "$EXPECTED_TAG^{commit}")"
+          RELEASE_PARENTS="$(git show -s --format=%P "$TAG_COMMIT")"
+          test "$RELEASE_PARENTS" = "$GITHUB_SHA"
+
+          EXPECTED_FILES="$(printf '%s\n' CHANGELOG.md pyproject.toml | sort)"
+          RELEASE_FILES="$(git diff-tree --no-commit-id --name-only -r "$TAG_COMMIT" | sort)"
+          test "$RELEASE_FILES" = "$EXPECTED_FILES"
+
+          TAG_VERSION="$(
+            git show "$TAG_COMMIT:pyproject.toml" |
+              python -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])'
+          )"
+          test "$TAG_VERSION" = "$EXPECTED_VERSION"
+
+          if [ "$PSR_RELEASED" = "true" ]; then
+            test -n "$PSR_COMMIT_SHA"
+          fi
+          if [ -n "$PSR_COMMIT_SHA" ]; then
+            test "$PSR_COMMIT_SHA" = "$TAG_COMMIT"
+          fi
+
+          if ! gh release view "$EXPECTED_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$EXPECTED_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$EXPECTED_TAG" \
+              --generate-notes
+          fi
+          gh release view "$EXPECTED_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - id: verify_pypi_before
+        name: Verify existing PyPI artifact hashes
+        env:
+          EXPECTED_VERSION: ${{ needs.artifact.outputs.version }}
+        run: >-
+          python scripts/verify_pypi_artifacts.py
+          GeneralManager "$EXPECTED_VERSION" validated-dist
+
+      - id: publish_pypi
+        name: Publish missing validated distributions to PyPI
+        run: twine upload --non-interactive --skip-existing validated-dist/*
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+
+      - id: verify_pypi_after
+        name: Verify every published PyPI artifact hash
+        env:
+          EXPECTED_VERSION: ${{ needs.artifact.outputs.version }}
+        run: >-
+          python scripts/verify_pypi_artifacts.py
+          GeneralManager "$EXPECTED_VERSION" validated-dist --require-all
