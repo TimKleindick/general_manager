@@ -165,8 +165,12 @@ reuse that artifact rather than rebuild it. Recovery verifies that the release
 commit descends directly from the triggering `main` commit, changes only the
 version and changelog, and owns the expected tag before publishing. PyPI retries
 also compare the existing filenames and SHA-256 hashes before skipping an
-upload, then require the complete two-file set afterward. The 90-day retention
-period is the supported automated recovery window; after it expires, stop and
-investigate instead of rebuilding or uploading files manually.
+upload, then require the complete two-file set afterward.
+
+GitHub retains the artifact for 90 days, but permits workflow reruns for only 30
+days. Within that rerun window, use **Re-run failed jobs** so the failed release
+job reuses the validated artifact; do not rerun all jobs and rebuild it. After
+30 days, stop and investigate instead of rebuilding or uploading files
+manually.
 
 Thanks again for investing your time into GeneralManager!
