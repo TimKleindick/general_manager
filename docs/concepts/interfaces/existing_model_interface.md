@@ -106,11 +106,14 @@ own declaration instead of reusing the parent wrapper's cached model.
 
 `ExistingModelInterface` reuses the same write helpers as `DatabaseInterface`:
 
+- `create()` and `update()` share the
+  [`DatabaseInterface` atomic write contract](db_based_interface.md#atomic-writes),
+  including its upload-aware and transaction-aware cache behavior.
 - `update()` refreshes the current manager in place and returns that same manager instance. Reassigning the return value is optional now, so `customer.update(name="New")` immediately makes `customer.name` reflect the saved value.
 - `history` exposes the audit trail queryset for the wrapped legacy row, scoped to the current object's ID. Use it when you want raw historical entries rather than a manager snapshot.
 - `delete()` invalidates the current manager instance for subsequent field reads. This applies to both hard deletes and soft deletes on models with `is_active`; the row may still exist for `include_inactive=True` lookups, but the deleted manager object itself should be treated as spent.
 
-- Pass many-to-many identifiers with the `<relation>_id_list` convention or provide GeneralManager instances; the interface normalises and applies them after saving the main record.
+- Pass many-to-many identifiers with the `<relation>_id_list` convention or provide GeneralManager instances; the interface normalises and applies them as part of the same create or update transaction as the main record.
 - Foreign key assignments accept manager instances or raw IDs.
 - `filter`, `exclude`, and `all` return manager instances backed by the legacy rows. Use `search_date=...` on `filter()`/`exclude()` or `ManagerInterface(search_date=...)` when you want a point-in-time manager view instead of raw history records.
 

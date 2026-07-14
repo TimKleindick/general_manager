@@ -80,16 +80,32 @@ generated model's `DoesNotExist` exception.
 Create and update payloads accept `creator_id` and `history_comment` alongside
 model fields. The write path removes those metadata keys before field
 normalization, validates payload keys, converts manager-valued foreign keys to
-identifiers, saves inside a transaction, then applies many-to-many
-`<relation>_id_list` values after the main row exists. Updates clear the
-run-scoped ORM read cache for the saved primary key. Deletes use soft delete
-when enabled by setting `is_active=False`; otherwise they hard-delete inside the
-configured database transaction. Both delete paths record history comments and
-clear the same read cache. Internally the mutation capability returns
+identifiers, and applies the atomic write contract described below. Deletes use
+soft delete when enabled by setting `is_active=False`; otherwise they hard-delete
+inside the configured database transaction. Both delete paths record history
+comments and clear the same read cache. Internally the mutation capability returns
 `{"id": pk}` to the manager layer. The public manager API turns that result into
 the manager behavior described here: `create()` returns a manager instance,
 `update()` refreshes and returns the same manager instance, and `delete()`
 invalidates the current manager for later field reads.
+
+### Atomic writes
+
+For ordinary ORM `create()` and `update()` calls, the row save, audit and history
+updates, and any many-to-many `<relation>_id_list` changes form one transaction
+on the configured database alias. An exception during validation or saving,
+history-reason handling, or many-to-many application leaves the complete
+mutation rolled back. Upload-aware writes already use their dedicated atomic
+upload transaction; their post-commit finalization behavior is unchanged.
+
+After an update completes successfully, GeneralManager clears the saved row
+from the run-scoped ORM read cache. If an update runs inside a caller-owned
+transaction using the interface's database alias, fresh manager or interface
+loads within that transaction see its current state without publishing the
+uncommitted identity row to the run-scoped cache. After a rollback, subsequent
+fresh loads therefore return the persisted state. The manager object updated in
+place retains its transactional values after that rollback; discard it and
+construct a fresh manager from its ID before continuing.
 
 History-capable managers expose `manager.history` as the audit trail for that object's ID. The returned queryset lets you inspect or filter raw history entries directly:
 
@@ -123,7 +139,9 @@ New database-backed managers perform hard deletes by default. Add `use_soft_dele
 
 ## Many-to-many relationships
 
-Pass related IDs using the `<field>_id_list` convention. The interface applies the relation after saving the main record to ensure audit entries are consistent.
+Pass related IDs using the `<field>_id_list` convention. The interface saves the
+main record before applying the relation, but both changes remain part of the
+same create or update transaction.
 
 ```python
 Project.create(
