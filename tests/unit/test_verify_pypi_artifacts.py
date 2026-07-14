@@ -211,6 +211,44 @@ def test_requires_exactly_one_local_wheel(
         _verifier()("GeneralManager", "1.2.3", tmp_path)
 
 
+def test_rejects_unexpected_local_entries_before_querying_pypi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_dist(tmp_path)
+    (tmp_path / "unexpected.txt").write_text("not a release artifact")
+
+    def unexpected_request(request: Request, *, timeout: int) -> FakeResponse:
+        del request, timeout
+        pytest.fail("PyPI queried before exact local artifact validation")
+
+    monkeypatch.setattr(_module(), "urlopen", unexpected_request)
+
+    with pytest.raises(ValueError, match=r"Unexpected local artifact.*unexpected\.txt"):
+        _verifier()("GeneralManager", "1.2.3", tmp_path)
+
+
+@pytest.mark.parametrize("require_all", [False, True])
+def test_rejects_unexpected_remote_filenames(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    require_all: bool,
+) -> None:
+    checksums = _write_dist(tmp_path)
+    checksums["generalmanager-1.2.3-py2-none-any.whl"] = "a" * 64
+    _install_response(monkeypatch, _remote_payload(checksums))
+
+    with pytest.raises(
+        ValueError,
+        match=r"Unexpected PyPI artifact.*generalmanager-1\.2\.3-py2",
+    ):
+        _verifier()(
+            "GeneralManager",
+            "1.2.3",
+            tmp_path,
+            require_all=require_all,
+        )
+
+
 def test_cli_passes_require_all_to_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _module()
     calls: list[tuple[str, str, Path, bool]] = []

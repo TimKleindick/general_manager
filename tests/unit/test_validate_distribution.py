@@ -50,6 +50,7 @@ def _write_wheel(
     extra_members: tuple[str, ...] = (),
     member_modes: Mapping[str, int] | None = None,
     suffix: str = "",
+    metadata_version: str | None = None,
 ) -> None:
     build = f"-{build_tag}" if build_tag is not None else ""
     wheel = dist_dir / f"generalmanager-{version}{suffix}{build}-py3-none-any.whl"
@@ -60,6 +61,12 @@ def _write_wheel(
                 info.create_system = 3
                 info.external_attr = member_modes[member] << 16
             archive.writestr(info, "test data")
+        archive.writestr(
+            f"generalmanager-{version}.dist-info/METADATA",
+            "Metadata-Version: 2.4\n"
+            "Name: GeneralManager\n"
+            f"Version: {metadata_version or version}\n",
+        )
 
 
 def _write_sdist(
@@ -71,6 +78,7 @@ def _write_sdist(
     extra_members: tuple[str, ...] = (),
     root: str | None = None,
     suffix: str = "",
+    metadata_version: str | None = None,
 ) -> None:
     filename_root = f"generalmanager-{version}{suffix}"
     archive_root = root or filename_root
@@ -90,9 +98,17 @@ def _write_sdist(
             info = tarfile.TarInfo(member)
             info.size = len(contents)
             archive.addfile(info, io.BytesIO(contents))
+        metadata = (
+            "Metadata-Version: 2.4\n"
+            "Name: GeneralManager\n"
+            f"Version: {metadata_version or version}\n"
+        ).encode()
+        info = tarfile.TarInfo(f"{archive_root}/PKG-INFO")
+        info.size = len(metadata)
+        archive.addfile(info, io.BytesIO(metadata))
 
 
-def _validator() -> Callable[[Path], None]:
+def _validator() -> Callable[..., None]:
     from scripts.validate_distribution import validate_archives
 
     return validate_archives
@@ -126,11 +142,69 @@ def test_archives_cli_validates_distribution(
     _write_wheel(tmp_path, "1.2.3")
     _write_sdist(tmp_path, "1.2.3")
     monkeypatch.setattr(
-        sys, "argv", ["validate_distribution.py", "archives", str(tmp_path)]
+        sys,
+        "argv",
+        ["validate_distribution.py", "archives", str(tmp_path), "1.2.3"],
     )
     from scripts import validate_distribution
 
     validate_distribution.main()
+
+
+def test_archives_cli_rejects_metadata_not_bound_to_expected_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_wheel(tmp_path, "1.2.3", metadata_version="9.9.9")
+    _write_sdist(tmp_path, "1.2.3")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["validate_distribution.py", "archives", str(tmp_path), "1.2.3"],
+    )
+    from scripts import validate_distribution
+
+    with pytest.raises(ValueError, match="wheel METADATA version"):
+        validate_distribution.main()
+
+
+@pytest.mark.parametrize(
+    ("wheel_version", "wheel_metadata", "sdist_version", "sdist_metadata", "field"),
+    [
+        ("1.2.2", "1.2.3", "1.2.3", "1.2.3", "wheel filename"),
+        ("1.2.3", "1.2.3", "1.2.2", "1.2.3", "sdist filename"),
+        ("1.2.3", "1.2.2", "1.2.3", "1.2.3", "wheel METADATA"),
+        ("1.2.3", "1.2.3", "1.2.3", "1.2.2", "sdist PKG-INFO"),
+    ],
+)
+def test_expected_version_binds_archive_filenames_and_metadata(
+    tmp_path: Path,
+    wheel_version: str,
+    wheel_metadata: str,
+    sdist_version: str,
+    sdist_metadata: str,
+    field: str,
+) -> None:
+    _write_wheel(tmp_path, wheel_version, metadata_version=wheel_metadata)
+    _write_sdist(tmp_path, sdist_version, metadata_version=sdist_metadata)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"{field} version.*1\.2\.2.*expected.*1\.2\.3",
+    ):
+        _validator()(tmp_path, expected_version="1.2.3")
+
+
+def test_rejects_duplicate_sdist_pkg_info(tmp_path: Path) -> None:
+    version = "1.2.3"
+    _write_wheel(tmp_path, version)
+    _write_sdist(
+        tmp_path,
+        version,
+        extra_members=(f"generalmanager-{version}/PKG-INFO",),
+    )
+
+    with pytest.raises(ValueError, match="exactly one sdist PKG-INFO"):
+        _validator()(tmp_path, expected_version=version)
 
 
 @pytest.mark.parametrize("archive_kind", ["wheel", "sdist"])
