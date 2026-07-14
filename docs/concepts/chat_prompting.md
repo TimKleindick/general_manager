@@ -85,6 +85,31 @@ For debugging a specific dataset, include the transcript:
 PYTHONPATH=src python scripts/run_chat_evals.py --model gemma4:e4b --dataset basic_queries -v --show-chat --trace-jsonl /tmp/chat-basic-eval.jsonl
 ```
 
+### Installed module CLI
+
+The built-in YAML eval datasets ship with GeneralManager. The installed module
+CLI still needs the consuming Django project's settings for Django and provider
+configuration. For `basic_queries`, register its matching built-in toy schema
+and data:
+
+```bash
+python -m general_manager.chat.evals \
+  --settings myproject.settings \
+  --dataset basic_queries \
+  --fixture toy \
+  --provider general_manager.chat.providers.OllamaProvider
+```
+
+Omit a built-in fixture only when the selected dataset's managers and
+expectations match the configured project's schema and data.
+
+You can set `DJANGO_SETTINGS_MODULE` instead of passing `--settings`. Displaying
+the CLI help does not require Django settings:
+
+```bash
+python -m general_manager.chat.evals --help
+```
+
 Treat failures by category:
 
 - **Product contract**: fix unsafe behavior, wrong data, hallucinated fields, or
