@@ -7,7 +7,7 @@ from typing import ClassVar
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
-from django.db import models
+from django.db import connections, models
 from django.utils import timezone
 
 from general_manager.interface import ExistingModelInterface
@@ -454,3 +454,189 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
             pk=factory_instance.identification["id"]
         )
         self.assertIsNotNone(stored)
+
+
+class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCase):
+    databases: ClassVar[set[str]] = {"default", "secondary"}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        class MultiDatabaseRecord(models.Model):
+            name = models.CharField(max_length=64)
+
+            class Meta:
+                app_label = "general_manager"
+
+        class MultiDatabaseInterface(ExistingModelInterface):
+            model = MultiDatabaseRecord
+            database = "secondary"
+
+        class MultiDatabaseManager(GeneralManager):
+            Interface = MultiDatabaseInterface
+
+        cls.MultiDatabaseRecord = MultiDatabaseRecord
+        cls.MultiDatabaseManager = MultiDatabaseManager
+        cls.general_manager_classes = [MultiDatabaseManager]
+        super().setUpClass()
+
+    def setUp(self) -> None:
+        super().setUp()
+        secondary = connections["secondary"]
+        if (
+            self.MultiDatabaseRecord._meta.db_table
+            in secondary.introspection.table_names()
+        ):
+            return
+        with secondary.schema_editor() as editor:
+            editor.create_model(self.MultiDatabaseRecord)
+            editor.create_model(self.MultiDatabaseRecord.history.model)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        secondary = connections["secondary"]
+        if (
+            cls.MultiDatabaseRecord._meta.db_table
+            in secondary.introspection.table_names()
+        ):
+            with secondary.schema_editor() as editor:
+                editor.delete_model(cls.MultiDatabaseRecord.history.model)
+                editor.delete_model(cls.MultiDatabaseRecord)
+        super().tearDownClass()
+
+    def test_create_keeps_history_reason_and_rollback_on_configured_alias(
+        self,
+    ) -> None:
+        original_apply_many_to_many = OrmMutationCapability.apply_many_to_many
+        failure = RuntimeError("post-history failure")
+
+        def apply_many_to_many_then_fail(*args: object, **kwargs: object) -> None:
+            original_apply_many_to_many(*args, **kwargs)
+            raise failure
+
+        with (
+            patch.object(
+                OrmMutationCapability,
+                "apply_many_to_many",
+                autospec=True,
+                side_effect=apply_many_to_many_then_fail,
+            ),
+            self.assertRaisesRegex(RuntimeError, "post-history failure"),
+        ):
+            self.MultiDatabaseManager.create(
+                history_comment="rolled back create",
+                name="Rolled Back",
+                ignore_permission=True,
+            )
+
+        self.assertFalse(
+            self.MultiDatabaseRecord.objects.using("secondary")
+            .filter(name="Rolled Back")
+            .exists()
+        )
+        self.assertFalse(
+            self.MultiDatabaseRecord.history.using("secondary")
+            .filter(name="Rolled Back")
+            .exists()
+        )
+        self.assertFalse(
+            self.MultiDatabaseRecord.history.using("default")
+            .filter(name="Rolled Back")
+            .exists()
+        )
+
+        created = self.MultiDatabaseManager.create(
+            history_comment="created on secondary",
+            name="Persisted",
+            ignore_permission=True,
+        )
+        record_id = created.identification["id"]
+        self.assertTrue(
+            self.MultiDatabaseRecord.objects.using("secondary")
+            .filter(pk=record_id, name="Persisted")
+            .exists()
+        )
+        self.assertEqual(
+            list(
+                self.MultiDatabaseRecord.history.using("secondary")
+                .filter(id=record_id)
+                .values_list("history_change_reason", flat=True)
+            ),
+            ["created on secondary"],
+        )
+        self.assertFalse(
+            self.MultiDatabaseRecord.objects.using("default")
+            .filter(pk=record_id)
+            .exists()
+        )
+        self.assertFalse(
+            self.MultiDatabaseRecord.history.using("default")
+            .filter(id=record_id)
+            .exists()
+        )
+
+    def test_update_keeps_history_reason_and_rollback_on_configured_alias(
+        self,
+    ) -> None:
+        record = self.MultiDatabaseRecord(name="Original")
+        self.MultiDatabaseRecord.objects.using("secondary").bulk_create([record])
+        manager = self.MultiDatabaseManager(id=record.pk)
+        original_apply_many_to_many = OrmMutationCapability.apply_many_to_many
+        failure = RuntimeError("post-history failure")
+
+        def apply_many_to_many_then_fail(*args: object, **kwargs: object) -> None:
+            original_apply_many_to_many(*args, **kwargs)
+            raise failure
+
+        with (
+            patch.object(
+                OrmMutationCapability,
+                "apply_many_to_many",
+                autospec=True,
+                side_effect=apply_many_to_many_then_fail,
+            ),
+            self.assertRaisesRegex(RuntimeError, "post-history failure"),
+        ):
+            manager.update(
+                history_comment="rolled back update",
+                name="Rolled Back",
+                ignore_permission=True,
+            )
+
+        record.refresh_from_db(using="secondary")
+        self.assertEqual(record.name, "Original")
+        self.assertFalse(
+            self.MultiDatabaseRecord.history.using("secondary")
+            .filter(id=record.pk)
+            .exists()
+        )
+        self.assertFalse(
+            self.MultiDatabaseRecord.history.using("default")
+            .filter(id=record.pk)
+            .exists()
+        )
+
+        manager.update(
+            history_comment="updated on secondary",
+            name="Persisted",
+            ignore_permission=True,
+        )
+        record.refresh_from_db(using="secondary")
+        self.assertEqual(record.name, "Persisted")
+        self.assertEqual(
+            list(
+                self.MultiDatabaseRecord.history.using("secondary")
+                .filter(id=record.pk)
+                .values_list("history_change_reason", flat=True)
+            ),
+            ["updated on secondary"],
+        )
+        self.assertFalse(
+            self.MultiDatabaseRecord.objects.using("default")
+            .filter(pk=record.pk)
+            .exists()
+        )
+        self.assertFalse(
+            self.MultiDatabaseRecord.history.using("default")
+            .filter(id=record.pk)
+            .exists()
+        )
