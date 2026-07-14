@@ -9,6 +9,7 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.db import connections, models
 from django.utils import timezone
+from simple_history.models import HistoricalRecords
 
 from general_manager.interface import ExistingModelInterface
 from general_manager.interface.capabilities.orm.mutations import (
@@ -463,6 +464,8 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
     def setUpClass(cls) -> None:
         class MultiDatabaseRecord(models.Model):
             name = models.CharField(max_length=64)
+            owners = models.ManyToManyField(User, blank=True)
+            history = HistoricalRecords(m2m_fields=["owners"])
 
             class Meta:
                 app_label = "general_manager"
@@ -475,6 +478,7 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
             Interface = MultiDatabaseInterface
 
         cls.MultiDatabaseRecord = MultiDatabaseRecord
+        cls.MultiDatabaseOwnersHistory = MultiDatabaseRecord.history.model.owners.model
         cls.MultiDatabaseManager = MultiDatabaseManager
         cls.general_manager_classes = [MultiDatabaseManager]
         super().setUpClass()
@@ -490,6 +494,7 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
         with secondary.schema_editor() as editor:
             editor.create_model(self.MultiDatabaseRecord)
             editor.create_model(self.MultiDatabaseRecord.history.model)
+            editor.create_model(self.MultiDatabaseOwnersHistory)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -499,6 +504,7 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
             in secondary.introspection.table_names()
         ):
             with secondary.schema_editor() as editor:
+                editor.delete_model(cls.MultiDatabaseOwnersHistory)
                 editor.delete_model(cls.MultiDatabaseRecord.history.model)
                 editor.delete_model(cls.MultiDatabaseRecord)
         super().tearDownClass()
@@ -639,4 +645,116 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
             self.MultiDatabaseRecord.history.using("default")
             .filter(id=record.pk)
             .exists()
+        )
+
+    def test_many_to_many_create_keeps_all_artifacts_on_configured_alias(
+        self,
+    ) -> None:
+        owner = User.objects.using("secondary").create(username="secondary-owner")
+        original_apply_many_to_many = OrmMutationCapability.apply_many_to_many
+        failure = RuntimeError("post-history failure")
+
+        def apply_many_to_many_then_fail(*args: object, **kwargs: object) -> None:
+            original_apply_many_to_many(*args, **kwargs)
+            raise failure
+
+        with (
+            patch.object(
+                OrmMutationCapability,
+                "apply_many_to_many",
+                autospec=True,
+                side_effect=apply_many_to_many_then_fail,
+            ),
+            self.assertRaisesRegex(RuntimeError, "post-history failure"),
+        ):
+            self.MultiDatabaseManager.create(
+                history_comment="rolled back with owner",
+                name="Rolled Back With Owner",
+                owners_id_list=[owner.pk],
+                ignore_permission=True,
+            )
+
+        live_through = self.MultiDatabaseRecord.owners.through
+        rollback_artifacts = {
+            "secondary_live": self.MultiDatabaseRecord.objects.using("secondary")
+            .filter(name="Rolled Back With Owner")
+            .count(),
+            "secondary_live_m2m": live_through.objects.using("secondary").count(),
+            "secondary_history_reasons": list(
+                self.MultiDatabaseRecord.history.using("secondary")
+                .filter(name="Rolled Back With Owner")
+                .values_list("history_change_reason", flat=True)
+            ),
+            "secondary_history_m2m": self.MultiDatabaseOwnersHistory.objects.using(
+                "secondary"
+            ).count(),
+            "default_live": self.MultiDatabaseRecord.objects.using("default")
+            .filter(name="Rolled Back With Owner")
+            .count(),
+            "default_live_m2m": live_through.objects.using("default").count(),
+            "default_history_reasons": list(
+                self.MultiDatabaseRecord.history.using("default")
+                .filter(name="Rolled Back With Owner")
+                .values_list("history_change_reason", flat=True)
+            ),
+            "default_history_m2m": self.MultiDatabaseOwnersHistory.objects.using(
+                "default"
+            ).count(),
+        }
+        self.assertEqual(
+            rollback_artifacts,
+            {
+                "secondary_live": 0,
+                "secondary_live_m2m": 0,
+                "secondary_history_reasons": [],
+                "secondary_history_m2m": 0,
+                "default_live": 0,
+                "default_live_m2m": 0,
+                "default_history_reasons": [],
+                "default_history_m2m": 0,
+            },
+        )
+
+        created = self.MultiDatabaseManager.create(
+            history_comment="created with owner on secondary",
+            name="Persisted With Owner",
+            owners_id_list=[owner.pk],
+            ignore_permission=True,
+        )
+        record_id = created.identification["id"]
+        self.assertTrue(
+            self.MultiDatabaseRecord.objects.using("secondary")
+            .filter(pk=record_id, name="Persisted With Owner")
+            .exists()
+        )
+        self.assertTrue(
+            live_through.objects.using("secondary")
+            .filter(multidatabaserecord_id=record_id, user_id=owner.pk)
+            .exists()
+        )
+        reasons = list(
+            self.MultiDatabaseRecord.history.using("secondary")
+            .filter(id=record_id)
+            .values_list("history_change_reason", flat=True)
+        )
+        self.assertGreaterEqual(len(reasons), 2)
+        self.assertEqual(set(reasons), {"created with owner on secondary"})
+        self.assertTrue(
+            self.MultiDatabaseOwnersHistory.objects.using("secondary")
+            .filter(multidatabaserecord_id=record_id, user_id=owner.pk)
+            .exists()
+        )
+        self.assertFalse(
+            self.MultiDatabaseRecord.objects.using("default")
+            .filter(pk=record_id)
+            .exists()
+        )
+        self.assertFalse(live_through.objects.using("default").exists())
+        self.assertFalse(
+            self.MultiDatabaseRecord.history.using("default")
+            .filter(id=record_id)
+            .exists()
+        )
+        self.assertFalse(
+            self.MultiDatabaseOwnersHistory.objects.using("default").exists()
         )
