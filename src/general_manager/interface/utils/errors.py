@@ -16,6 +16,7 @@ __all__ = [
     "MissingUniqueFieldError",
     "ReadOnlyRelationLookupError",
     "UnknownFieldError",
+    "UnsafeHistoryConfigurationError",
 ]
 
 
@@ -226,3 +227,14 @@ class InvalidModelReferenceError(TypeError):
             `Invalid model reference '{reference}'.`
         """
         super().__init__(f"Invalid model reference '{reference}'.")
+
+
+class UnsafeHistoryConfigurationError(ValueError):
+    """Raised when pre-registered history cannot follow an interface alias."""
+
+    def __init__(self, model_name: str, interface_name: str, alias: str) -> None:
+        """Build guidance for replacing an unsafe simple-history tracker."""
+        super().__init__(
+            f"{model_name} must use DatabaseAwareHistoricalRecords before "
+            f"{interface_name} configures non-default database alias '{alias}'."
+        )

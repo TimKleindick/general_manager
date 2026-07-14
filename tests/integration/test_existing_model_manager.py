@@ -6,10 +6,10 @@ from datetime import timedelta
 from typing import ClassVar
 from unittest.mock import patch
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, Permission, User
+from django.contrib.contenttypes.models import ContentType
 from django.db import connections, models
 from django.utils import timezone
-from simple_history.models import HistoricalRecords
 
 from general_manager.interface import ExistingModelInterface
 from general_manager.interface.capabilities.orm.mutations import (
@@ -462,10 +462,27 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
 
     @classmethod
     def setUpClass(cls) -> None:
+        alias = "secondary"
+        cls._secondary_original_config = connections.databases.get(alias)
+        cls._secondary_had_cached_connection = hasattr(
+            connections._connections,
+            alias,
+        )
+        cls._secondary_original_connection = (
+            getattr(connections._connections, alias)
+            if cls._secondary_had_cached_connection
+            else None
+        )
+        if cls._secondary_had_cached_connection:
+            del connections[alias]
+        connections.databases[alias] = {
+            **connections.databases["default"],
+            "NAME": ":memory:",
+        }
+
         class MultiDatabaseRecord(models.Model):
             name = models.CharField(max_length=64)
             owners = models.ManyToManyField(User, blank=True)
-            history = HistoricalRecords(m2m_fields=["owners"])
 
             class Meta:
                 app_label = "general_manager"
@@ -482,32 +499,44 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
         cls.MultiDatabaseManager = MultiDatabaseManager
         cls.general_manager_classes = [MultiDatabaseManager]
         super().setUpClass()
-
-    def setUp(self) -> None:
-        super().setUp()
         secondary = connections["secondary"]
-        if (
-            self.MultiDatabaseRecord._meta.db_table
-            in secondary.introspection.table_names()
-        ):
-            return
+        secondary.connect()
         with secondary.schema_editor() as editor:
-            editor.create_model(self.MultiDatabaseRecord)
-            editor.create_model(self.MultiDatabaseRecord.history.model)
-            editor.create_model(self.MultiDatabaseOwnersHistory)
+            editor.create_model(ContentType)
+            editor.create_model(Permission)
+            editor.create_model(Group)
+            editor.create_model(User)
+            editor.create_model(cls.MultiDatabaseRecord)
+            editor.create_model(cls.MultiDatabaseRecord.history.model)
+            editor.create_model(cls.MultiDatabaseOwnersHistory)
 
     @classmethod
     def tearDownClass(cls) -> None:
         secondary = connections["secondary"]
-        if (
-            cls.MultiDatabaseRecord._meta.db_table
-            in secondary.introspection.table_names()
-        ):
+        try:
             with secondary.schema_editor() as editor:
                 editor.delete_model(cls.MultiDatabaseOwnersHistory)
                 editor.delete_model(cls.MultiDatabaseRecord.history.model)
                 editor.delete_model(cls.MultiDatabaseRecord)
-        super().tearDownClass()
+                editor.delete_model(User)
+                editor.delete_model(Group)
+                editor.delete_model(Permission)
+                editor.delete_model(ContentType)
+        finally:
+            try:
+                super().tearDownClass()
+            finally:
+                secondary.close()
+                if hasattr(connections._connections, "secondary"):
+                    del connections["secondary"]
+                if cls._secondary_original_config is None:
+                    connections.databases.pop("secondary", None)
+                else:
+                    connections.databases["secondary"] = cls._secondary_original_config
+                if cls._secondary_had_cached_connection:
+                    connections._connections.secondary = (  # type: ignore[attr-defined]
+                        cls._secondary_original_connection
+                    )
 
     def test_create_keeps_history_reason_and_rollback_on_configured_alias(
         self,

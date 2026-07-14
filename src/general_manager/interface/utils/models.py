@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING, Callable, ClassVar, Protocol, TypeVar, cast
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser
 from django.core.exceptions import FieldDoesNotExist
-from simple_history.models import HistoricalRecords
 from django.core.exceptions import ValidationError
+
+from general_manager.interface.utils.history import DatabaseAwareHistoricalRecords
 
 
 if TYPE_CHECKING:
@@ -201,7 +202,7 @@ class GeneralManagerBasisModel(models.Model):
     """
 
     _general_manager_class: ClassVar[type[GeneralManager]]
-    history = HistoricalRecords(inherit=True)
+    history = DatabaseAwareHistoricalRecords(inherit=True)
 
     class Meta:
         abstract = True

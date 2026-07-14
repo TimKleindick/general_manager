@@ -139,9 +139,17 @@ def test_ensure_history_registers_when_missing(monkeypatch: pytest.MonkeyPatch) 
     capability = ExistingModelResolutionCapability()
     called: dict[str, Any] = {}
 
-    def fake_register(target: type[models.Model], *, m2m_fields: list[str]) -> None:
+    def fake_register(
+        target: type[models.Model],
+        *,
+        m2m_fields: list[str],
+        records_class: type,
+        use_base_model_db: bool,
+    ) -> None:
         called["target"] = target
         called["m2m_fields"] = list(m2m_fields)
+        called["records_class"] = records_class
+        called["use_base_model_db"] = use_base_model_db
 
     monkeypatch.setattr(
         "general_manager.interface.capabilities.existing_model.resolution.register",
@@ -154,6 +162,8 @@ def test_ensure_history_registers_when_missing(monkeypatch: pytest.MonkeyPatch) 
 
     assert called["target"] is model
     assert isinstance(called["m2m_fields"], list)
+    assert called["records_class"].__name__ == "DatabaseAwareHistoricalRecords"
+    assert called["use_base_model_db"] is True
 
 
 def test_ensure_history_skips_when_already_registered(

@@ -5,7 +5,9 @@ from __future__ import annotations
 from general_manager.interface.capabilities.core.utils import (
     with_observability as with_observability,
 )
-from simple_history.utils import update_change_reason as update_change_reason
+from general_manager.interface.utils.history import (
+    update_change_reason as update_change_reason,
+)
 
 from .history import HistoryNotSupportedError, OrmHistoryCapability
 from .lifecycle import OrmLifecycleCapability
