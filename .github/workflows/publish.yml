@@ -101,6 +101,14 @@ jobs:
           /tmp/general-manager-release-venv/bin/python "$GITHUB_WORKSPACE/tests/packaging/smoke_chat_eval_distribution.py" "$GITHUB_WORKSPACE/$WHEEL" "$GITHUB_WORKSPACE/$SDIST"
           env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$GITHUB_WORKSPACE/tests/packaging" /tmp/general-manager-release-venv/bin/python -m general_manager.chat.evals --settings chat_eval_smoke_settings --provider builtins.object --fixture toy --dataset basic_queries --tier 999
 
+      - name: Verify existing PyPI artifact hashes before release
+        if: ${{ steps.prepare.outputs.released == 'true' }}
+        env:
+          EXPECTED_VERSION: ${{ steps.prepare.outputs.version }}
+        run: >-
+          python scripts/verify_pypi_artifacts.py
+          GeneralManager "$EXPECTED_VERSION" dist
+
       - name: Upload validated distributions
         if: ${{ steps.prepare.outputs.released == 'true' }}
         uses: actions/upload-artifact@v4
@@ -178,6 +186,7 @@ jobs:
 
           validate_release_commit() {
             RELEASE_COMMIT="$1"
+            git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main || return 1
             TAG_VERSION="$(
               git show "$RELEASE_COMMIT:pyproject.toml" |
                 python -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])'

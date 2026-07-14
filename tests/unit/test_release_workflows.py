@@ -287,7 +287,7 @@ def test_publish_artifact_job_validates_before_uploading_sha_keyed_files() -> No
     released_condition = "${{ steps.prepare.outputs.released == 'true' }}"
     conditional_steps = [step for step in steps if step.get("if") == released_condition]
 
-    assert len(conditional_steps) == 5
+    assert len(conditional_steps) == 6
     commands = [str(step.get("run", "")) for step in conditional_steps]
     venv_python = "/tmp/general-manager-release-venv/bin/python"  # noqa: S108
     version_binding = conditional_steps[0]
@@ -339,7 +339,16 @@ def test_publish_artifact_job_validates_before_uploading_sha_keyed_files() -> No
         "--settings chat_eval_smoke_settings"
     )
 
-    upload = conditional_steps[4]
+    pypi_preflight = conditional_steps[4]
+    assert pypi_preflight["env"] == {
+        "EXPECTED_VERSION": "${{ steps.prepare.outputs.version }}"
+    }
+    assert str(pypi_preflight["run"]).strip() == (
+        "python scripts/verify_pypi_artifacts.py "
+        'GeneralManager "$EXPECTED_VERSION" dist'
+    )
+
+    upload = conditional_steps[5]
     assert upload["uses"] == "actions/upload-artifact@v4"
     assert upload["with"] == {
         "name": "validated-distributions-${{ github.sha }}",
@@ -538,9 +547,14 @@ def test_publish_release_accepts_a_tag_on_the_prestamped_trigger() -> None:
     version_check = '[ "$TAG_VERSION" = "$EXPECTED_VERSION" ] || return 1'
     changelog_check = 'awk -v heading="## $EXPECTED_TAG "'
     trigger_shape = 'if [ "$RELEASE_COMMIT" = "$GITHUB_SHA" ]; then'
+    release_ancestry = (
+        'git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main || return 1'
+    )
+    assert release_ancestry in verify_command
     assert version_check in verify_command
     assert changelog_check in verify_command
     assert trigger_shape in verify_command
+    assert verify_command.index(release_ancestry) < verify_command.index(trigger_shape)
     assert verify_command.index(version_check) < verify_command.index(trigger_shape)
     assert verify_command.index(changelog_check) < verify_command.index(trigger_shape)
     assert "return 0" in verify_command[verify_command.index(trigger_shape) :]
