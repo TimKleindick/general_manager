@@ -56,26 +56,17 @@ jobs:
           version: v11.2.7
           fail_ci_if_error: false
 
-  distribution:
-    name: Package smoke test
-    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Build distribution
+      - id: build_distribution
+        name: Build distribution
+        if: ${{ matrix.python-version == '3.12' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') }}
         run: |
           python -m pip install --upgrade pip
           python -m pip install build twine==6.0.1
           python -m build
 
-      - name: Validate distribution archives
+      - id: validate_distribution
+        name: Validate distribution archives
+        if: ${{ matrix.python-version == '3.12' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') }}
         run: |
           EXPECTED_VERSION="$(
             python - <<'PY'
@@ -90,7 +81,9 @@ jobs:
           twine check dist/*
           python scripts/validate_distribution.py archives dist "$EXPECTED_VERSION"
 
-      - name: Smoke-test installed distribution
+      - id: smoke_distribution
+        name: Smoke-test installed distribution
+        if: ${{ matrix.python-version == '3.12' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') }}
         run: |
           set -euo pipefail
           WHEEL="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
