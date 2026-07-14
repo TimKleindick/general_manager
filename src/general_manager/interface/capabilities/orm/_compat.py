@@ -52,8 +52,8 @@ def call_update_change_reason(instance: models.Model, reason: str) -> None:
     Delegate invocation to the package-level `update_change_reason` callable.
 
     This resolves the callable from `general_manager.interface.capabilities.orm` at call time so that runtime patches to that attribute are respected.
-    The default package-level callable is django-simple-history's
-    `update_change_reason`. If simple-history is absent from the model, if a
+    The default package-level callable is GeneralManager's database-aware
+    change-reason wrapper. If simple-history is absent from the model, if a
     patched callable is missing expected behavior, or if the callable raises,
     that exception propagates unchanged.
 
