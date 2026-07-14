@@ -97,6 +97,8 @@ on the configured database alias. An exception during validation or saving,
 history-reason handling, or many-to-many application leaves the complete
 mutation rolled back. Upload-aware writes already use their dedicated atomic
 upload transaction; their post-commit finalization behavior is unchanged.
+Generated model history, including tracked many-to-many snapshots, follows the
+same configured database alias as the live row.
 
 After an update completes successfully, GeneralManager clears the saved row
 from the run-scoped ORM read cache. If an update runs inside a caller-owned
@@ -104,8 +106,9 @@ transaction using the interface's database alias, fresh manager or interface
 loads within that transaction see its current state without publishing the
 uncommitted identity row to the run-scoped cache. After a rollback, subsequent
 fresh loads therefore return the persisted state. The manager object updated in
-place retains its transactional values after that rollback; discard it and
-construct a fresh manager from its ID before continuing.
+place may retain transactional values if they were materialized before that
+rollback; discard it and construct a fresh manager from its ID before
+continuing.
 
 History-capable managers expose `manager.history` as the audit trail for that object's ID. The returned queryset lets you inspect or filter raw history entries directly:
 

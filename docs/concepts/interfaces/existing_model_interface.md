@@ -49,17 +49,18 @@ generated manager class back onto the model as `_general_manager_class`. Model
 references may be Django model classes or strings accepted by Django's app
 registry, including `settings.AUTH_USER_MODEL` and `"app_label.ModelName"`.
 Invalid or missing model references fail early with the existing-model
-configuration errors. The lifecycle also registers django-simple-history when
-history is not already present, includes local many-to-many fields in that
-registration, and leaves models that already expose the simple-history manager
-marker unchanged. The soft-delete capability is enabled when the resolved model
-exposes an `is_active` attribute; deletes then toggle that flag instead of
-removing the row. For soft-delete-aware models, the lifecycle sets up `objects`
-plus `all_objects` managers. If the legacy model already has an unfiltered
-`all_objects`, GeneralManager uses it. If it does not, GeneralManager falls back
-to the model's `_default_manager`; that fallback follows the legacy model's
-default manager behavior and is not guaranteed to include inactive rows when the
-default manager filters them.
+configuration errors. The lifecycle also registers database-aware
+django-simple-history tracking when history is not already present and includes
+local many-to-many fields in that registration. Generated history rows and
+many-to-many snapshots then use the same database alias as the wrapped row. The
+soft-delete capability is enabled when the resolved model exposes an `is_active`
+attribute; deletes then toggle that flag instead of removing the row. For
+soft-delete-aware models, the lifecycle sets up `objects` plus `all_objects`
+managers. If the legacy model already has an unfiltered `all_objects`,
+GeneralManager uses it. If it does not, GeneralManager falls back to the model's
+`_default_manager`; that fallback follows the legacy model's default manager
+behavior and is not guaranteed to include inactive rows when the default manager
+filters them.
 
 The simple-history marker checked by the lifecycle is
 `model._meta.simple_history_manager_attribute`. Interface rules are the optional
@@ -87,6 +88,27 @@ are ORM support descriptor-map entries for custom fields and generated relation
 helpers. The model cache is local to the concrete interface class: if you
 subclass one wrapper and declare a different `model`, the subclass resolves its
 own declaration instead of reusing the parent wrapper's cached model.
+
+If a legacy model already has django-simple-history tracking and its interface
+selects a non-default `database`, declare the tracker with GeneralManager's
+database-aware records class before defining the manager:
+
+```python
+from django.db import models
+
+from general_manager.interface.utils.history import DatabaseAwareHistoricalRecords
+
+
+class LegacyCustomer(models.Model):
+    groups = models.ManyToManyField("auth.Group")
+    history = DatabaseAwareHistoricalRecords(m2m_fields=["groups"])
+```
+
+GeneralManager cannot safely replace an existing simple-history tracker's
+connected signal receivers. It therefore raises
+`UnsafeHistoryConfigurationError` during manager class creation when a
+pre-registered tracker lacks the database-aware marker on a non-default alias.
+Existing trackers remain compatible for the default alias.
 
 ## Auditing and validation
 
