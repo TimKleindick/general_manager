@@ -178,18 +178,31 @@ jobs:
 
           validate_release_commit() {
             RELEASE_COMMIT="$1"
-            RELEASE_PARENTS="$(git show -s --format=%P "$RELEASE_COMMIT")"
-            test "$RELEASE_PARENTS" = "$GITHUB_SHA"
-
-            EXPECTED_FILES="$(printf '%s\n' CHANGELOG.md pyproject.toml | sort)"
-            RELEASE_FILES="$(git diff-tree --no-commit-id --name-only -r "$RELEASE_COMMIT" | sort)"
-            test "$RELEASE_FILES" = "$EXPECTED_FILES"
-
             TAG_VERSION="$(
               git show "$RELEASE_COMMIT:pyproject.toml" |
                 python -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])'
-            )"
-            test "$TAG_VERSION" = "$EXPECTED_VERSION"
+            )" || return 1
+            [ "$TAG_VERSION" = "$EXPECTED_VERSION" ] || return 1
+            git show "$RELEASE_COMMIT:CHANGELOG.md" |
+              awk -v heading="## $EXPECTED_TAG " '
+                index($0, heading) == 1 { found = 1 }
+                END { exit !found }
+              ' || return 1
+
+            if [ "$RELEASE_COMMIT" = "$GITHUB_SHA" ]; then
+              return 0
+            fi
+
+            RELEASE_PARENTS="$(git show -s --format=%P "$RELEASE_COMMIT")" || return 1
+            [ "$RELEASE_PARENTS" = "$GITHUB_SHA" ] || return 1
+            RELEASE_FILES="$(git diff-tree --no-commit-id --name-only -r "$RELEASE_COMMIT" | sort)" || return 1
+            [ -n "$RELEASE_FILES" ] || return 1
+            while IFS= read -r RELEASE_FILE; do
+              case "$RELEASE_FILE" in
+                CHANGELOG.md|pyproject.toml) ;;
+                *) return 1 ;;
+              esac
+            done <<< "$RELEASE_FILES"
           }
 
           if [ -n "$ACTUAL_VERSION" ]; then
@@ -200,6 +213,7 @@ jobs:
           fi
 
           git fetch origin "+refs/heads/main:refs/remotes/origin/main"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           REMOTE_TAG_STATUS=0
           git ls-remote --exit-code --refs origin "refs/tags/$EXPECTED_TAG" \
             >/dev/null || REMOTE_TAG_STATUS="$?"
@@ -208,15 +222,18 @@ jobs:
               git fetch --force origin "refs/tags/$EXPECTED_TAG:refs/tags/$EXPECTED_TAG"
               ;;
             2)
-              git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-              CANDIDATE_COMMIT="$(
-                git rev-list --first-parent --reverse "$GITHUB_SHA..origin/main" |
-                  sed -n '1p'
-              )"
-              test -n "$CANDIDATE_COMMIT"
-              validate_release_commit "$CANDIDATE_COMMIT"
+              if validate_release_commit "$GITHUB_SHA"; then
+                CANDIDATE_COMMIT="$GITHUB_SHA"
+              else
+                CANDIDATE_COMMIT="$(
+                  git rev-list --first-parent --reverse "$GITHUB_SHA..origin/main" |
+                    sed -n '1p'
+                )"
+                test -n "$CANDIDATE_COMMIT"
+                validate_release_commit "$CANDIDATE_COMMIT"
+              fi
 
-              git tag --force "$EXPECTED_TAG" "$CANDIDATE_COMMIT"
+              git tag --annotate --force --message "$EXPECTED_TAG" "$EXPECTED_TAG" "$CANDIDATE_COMMIT"
               TAG_PUSH_STATUS=0
               git push origin "refs/tags/$EXPECTED_TAG" || TAG_PUSH_STATUS="$?"
               if [ "$TAG_PUSH_STATUS" -ne 0 ]; then
