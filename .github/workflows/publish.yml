@@ -227,8 +227,6 @@ jobs:
 
           if [ "$PSR_RELEASED" = "true" ]; then
             test -n "$PSR_COMMIT_SHA"
-          fi
-          if [ -n "$PSR_COMMIT_SHA" ]; then
             test "$PSR_COMMIT_SHA" = "$TAG_COMMIT"
           fi
 

@@ -329,10 +329,15 @@ def test_publish_release_job_mutates_only_after_downloading_validated_files() ->
     assert 'test "$RELEASE_FILES" = "$EXPECTED_FILES"' in verify_command
     assert "tomllib.loads" in verify_command
     assert 'test "$TAG_VERSION" = "$EXPECTED_VERSION"' in verify_command
-    assert 'if [ -n "$PSR_COMMIT_SHA" ]' in verify_command
     assert 'test "$PSR_COMMIT_SHA" = "$TAG_COMMIT"' in verify_command
     assert 'if [ "$PSR_RELEASED" = "true" ]' in verify_command
     assert 'test -n "$PSR_COMMIT_SHA"' in verify_command
+    released_commit_check = """if [ "$PSR_RELEASED" = "true" ]; then
+  test -n "$PSR_COMMIT_SHA"
+  test "$PSR_COMMIT_SHA" = "$TAG_COMMIT"
+fi"""
+    assert released_commit_check in verify_command
+    assert 'if [ -n "$PSR_COMMIT_SHA" ]' not in verify_command
     assert 'gh release view "$EXPECTED_TAG"' in verify_command
     assert "gh release create" in verify_command
     assert "--verify-tag" in verify_command
