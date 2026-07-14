@@ -57,7 +57,7 @@ jobs:
           fail_ci_if_error: false
 
   lint-and-mypy:
-    name: Lint and Type Check
+    name: lint-and-mypy
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
