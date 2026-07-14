@@ -3,7 +3,7 @@
 GeneralManager can auto-generate a Graphene schema that exposes your managers, buckets, and mutations. The integration covers:
 
 - Type generation based on manager attributes and GraphQL properties.
-- CRUD mutations with consistent success/error payloads.
+- CRUD mutations with typed success payloads and top-level GraphQL errors.
 - Measurements, buckets, and pagination helpers.
 - Permission enforcement based on the caller's user account.
 
