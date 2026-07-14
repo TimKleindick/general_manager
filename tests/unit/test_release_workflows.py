@@ -87,7 +87,7 @@ def test_quality_lint_job_runs_all_static_quality_gates() -> None:
     job = load_workflow("quality.yml")["jobs"]["lint-and-mypy"]
     commands = run_commands(job)
 
-    assert job["name"] == "Lint and Type Check"
+    assert job["name"] == "lint-and-mypy"
     assert "ruff check --config pyproject.toml src tests scripts" in commands
     assert "ruff format --config pyproject.toml --check ." in commands
     assert "mypy --strict" in commands
@@ -128,7 +128,7 @@ def test_legacy_test_and_lint_workflows_are_removed() -> None:
     assert not (WORKFLOWS / "lint.yml").exists()
 
 
-def test_docs_workflow_only_deploys_from_main_or_manual_runs() -> None:
+def test_docs_workflow_builds_on_main_or_dispatch_and_deploys_push_only() -> None:
     workflow = load_workflow("docs.yml")
 
     assert workflow["on"] == {
@@ -141,7 +141,12 @@ def test_docs_workflow_only_deploys_from_main_or_manual_runs() -> None:
         "id-token": "write",
     }
     assert set(workflow["jobs"]) == {"build", "deploy"}
-    assert workflow["jobs"]["deploy"]["needs"] == "build"
+    deploy_job = workflow["jobs"]["deploy"]
+    assert deploy_job["needs"] == "build"
+    assert deploy_job["if"] == "${{ github.event_name == 'push' }}"
     assert "mkdocs build --strict" in run_commands(workflow["jobs"]["build"])
-    action_step(workflow["jobs"]["build"], "actions/upload-pages-artifact@v3")
-    action_step(workflow["jobs"]["deploy"], "actions/deploy-pages@v4")
+    upload_step = action_step(
+        workflow["jobs"]["build"], "actions/upload-pages-artifact@v3"
+    )
+    assert upload_step["if"] == "${{ github.event_name == 'push' }}"
+    action_step(deploy_job, "actions/deploy-pages@v4")
