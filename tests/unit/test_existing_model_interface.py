@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from typing import ClassVar, Callable
+from unittest.mock import patch
 
 from django.apps import apps
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.db import connection, models
 from django.test import TransactionTestCase
+from simple_history.models import HistoricalRecords
 
 from general_manager.interface import ExistingModelInterface
 from general_manager.interface.interfaces import existing_model as existing_model_module
@@ -18,6 +20,8 @@ from general_manager.interface.utils.errors import (
     InvalidModelReferenceError,
     MissingModelConfigurationError,
 )
+from general_manager.interface.utils import errors as interface_errors
+from general_manager.interface.utils.history import DatabaseAwareHistoricalRecords
 from general_manager.manager.general_manager import GeneralManager
 
 
@@ -296,10 +300,92 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         )
 
         capability = self._resolution_capability(ExistingModelInterface)
-        capability.ensure_history(UnhistoredModel, ExistingModelInterface)
+        with patch(
+            "general_manager.interface.capabilities.existing_model.resolution.register"
+        ) as register_history:
+            capability.ensure_history(UnhistoredModel, ExistingModelInterface)
 
-        # Now should have history
-        self.assertTrue(hasattr(UnhistoredModel, "history"))
+        register_history.assert_called_once()
+        _, kwargs = register_history.call_args
+        self.assertEqual(kwargs["m2m_fields"], [])
+        self.assertTrue(kwargs["use_base_model_db"])
+        self.assertEqual(
+            kwargs["records_class"].__name__, "DatabaseAwareHistoricalRecords"
+        )
+
+    def test_database_aware_history_marks_generated_history_model(self) -> None:
+        class DatabaseAwareModel(models.Model):
+            name = models.CharField(max_length=64)
+            history = DatabaseAwareHistoricalRecords()
+
+            class Meta:
+                app_label = "general_manager"
+
+        self.assertTrue(
+            getattr(
+                DatabaseAwareModel.history.model,
+                "_general_manager_database_aware_history",
+                False,
+            )
+        )
+
+    def test_ensure_history_rejects_unsafe_tracker_for_non_default_alias(
+        self,
+    ) -> None:
+        class UnsafeTrackedModel(models.Model):
+            name = models.CharField(max_length=64)
+            history = HistoricalRecords()
+
+            class Meta:
+                app_label = "general_manager"
+
+        class SecondaryInterface(ExistingModelInterface):
+            model = UnsafeTrackedModel
+            database = "secondary"
+
+        error_type = getattr(
+            interface_errors,
+            "UnsafeHistoryConfigurationError",
+            RuntimeError,
+        )
+        capability = self._resolution_capability(SecondaryInterface)
+        with self.assertRaisesRegex(
+            error_type,
+            "DatabaseAwareHistoricalRecords.*secondary",
+        ):
+            capability.ensure_history(UnsafeTrackedModel, SecondaryInterface)
+
+    def test_ensure_history_accepts_database_aware_tracker_for_non_default_alias(
+        self,
+    ) -> None:
+        class SafeTrackedModel(models.Model):
+            name = models.CharField(max_length=64)
+            history = DatabaseAwareHistoricalRecords()
+
+            class Meta:
+                app_label = "general_manager"
+
+        class SecondaryInterface(ExistingModelInterface):
+            model = SafeTrackedModel
+            database = "secondary"
+
+        capability = self._resolution_capability(SecondaryInterface)
+        capability.ensure_history(SafeTrackedModel, SecondaryInterface)
+
+    def test_ensure_history_accepts_existing_tracker_for_default_alias(self) -> None:
+        class DefaultTrackedModel(models.Model):
+            name = models.CharField(max_length=64)
+            history = HistoricalRecords()
+
+            class Meta:
+                app_label = "general_manager"
+
+        class DefaultInterface(ExistingModelInterface):
+            model = DefaultTrackedModel
+            database = "default"
+
+        capability = self._resolution_capability(DefaultInterface)
+        capability.ensure_history(DefaultTrackedModel, DefaultInterface)
 
     def test_apply_rules_to_model_with_no_rules(self) -> None:
         """

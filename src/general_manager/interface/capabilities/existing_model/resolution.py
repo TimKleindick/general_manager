@@ -6,13 +6,18 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.apps import apps
-from django.db import models
+from django.db import DEFAULT_DB_ALIAS, models
 from simple_history import register
 
 from general_manager.factory.auto_factory import AutoFactory
 from general_manager.interface.utils.errors import (
     InvalidModelReferenceError,
     MissingModelConfigurationError,
+    UnsafeHistoryConfigurationError,
+)
+from general_manager.interface.utils.history import (
+    DATABASE_AWARE_HISTORY_MARKER,
+    DatabaseAwareHistoricalRecords,
 )
 from general_manager.interface.utils.models import get_full_clean_methode
 
@@ -132,9 +137,31 @@ class ExistingModelResolutionCapability(BaseCapability):
             If the model's _meta already exposes the simple_history manager attribute, no action is taken. Otherwise, collects the model's local many-to-many field names and registers the model with simple_history including those m2m fields.
             """
             if hasattr(model._meta, "simple_history_manager_attribute"):
+                database_alias = (
+                    getattr(interface_cls, "database", None) if interface_cls else None
+                )
+                if database_alias and database_alias != DEFAULT_DB_ALIAS:
+                    assert interface_cls is not None
+                    manager_name = model._meta.simple_history_manager_attribute
+                    history_model = getattr(model, manager_name).model
+                    if not getattr(
+                        history_model,
+                        DATABASE_AWARE_HISTORY_MARKER,
+                        False,
+                    ):
+                        raise UnsafeHistoryConfigurationError(
+                            model.__name__,
+                            interface_cls.__name__,
+                            database_alias,
+                        )
                 return
             m2m_fields = [field.name for field in model._meta.local_many_to_many]
-            register(model, m2m_fields=m2m_fields)
+            register(
+                model,
+                m2m_fields=m2m_fields,
+                records_class=DatabaseAwareHistoricalRecords,
+                use_base_model_db=True,
+            )
 
         target = interface_cls or model
         return call_with_observability(

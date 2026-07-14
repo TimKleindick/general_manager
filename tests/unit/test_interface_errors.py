@@ -17,6 +17,7 @@ from general_manager.interface.utils.errors import (
     MissingUniqueFieldError,
     ReadOnlyRelationLookupError,
     UnknownFieldError,
+    UnsafeHistoryConfigurationError,
 )
 
 
@@ -40,6 +41,7 @@ class InterfaceErrorsPublicExportsTests(SimpleTestCase):
                 "MissingUniqueFieldError",
                 "ReadOnlyRelationLookupError",
                 "UnknownFieldError",
+                "UnsafeHistoryConfigurationError",
             ],
         )
 
@@ -97,6 +99,15 @@ class InterfaceErrorMessageFormatTests(SimpleTestCase):
             (
                 InvalidModelReferenceError("invalid.path.to.Model"),
                 "Invalid model reference 'invalid.path.to.Model'.",
+            ),
+            (
+                UnsafeHistoryConfigurationError(
+                    "LegacyRecord",
+                    "LegacyInterface",
+                    "secondary",
+                ),
+                "LegacyRecord must use DatabaseAwareHistoricalRecords before "
+                "LegacyInterface configures non-default database alias 'secondary'.",
             ),
         ]
 
