@@ -165,9 +165,10 @@ reuse that artifact rather than rebuild it. The expected tag may target the
 triggering `main` commit when it already contains the expected version and
 changelog entry. Otherwise, it may target a direct release-only child whose
 nonempty changes are limited to `CHANGELOG.md` and `pyproject.toml`. Recovery
-validates the version and changelog in either form before publishing. PyPI
-retries also compare the existing filenames and SHA-256 hashes before skipping
-an upload, then require the complete two-file set afterward.
+validates the version and changelog in either form before publishing. Existing
+PyPI filenames and SHA-256 hashes are checked against the validated artifacts
+before any release mutation, then checked again immediately before each upload
+or retry. The post-upload check requires the exact, complete two-file set.
 
 GitHub retains the artifact for 90 days, but permits workflow reruns for only 30
 days. Within that rerun window, use **Re-run failed jobs** so the failed release
