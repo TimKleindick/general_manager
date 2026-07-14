@@ -187,25 +187,29 @@ still enforce their own create, update, or delete permissions.
 
 ## Error handling
 
-The generated mutation converts errors handled by GeneralManager into GraphQL
-errors. Both Django's `ValidationError`, commonly raised by manager methods, and
-a standard `ValueError` raised directly by a resolver become `BAD_USER_INPUT`
-errors:
+Decorator-generated mutations convert exceptions through GeneralManager's safe
+GraphQL error mapper. Raise `PublicGraphQLError` when a resolver deliberately
+needs to expose a safe message and stable application code. Use Django's
+`ValidationError`, commonly raised by manager methods, for validation failures:
 
 ```python
 from django.core.exceptions import ValidationError
+from general_manager.api import PublicGraphQLError
 
 
 @graph_ql_mutation
 def update_project(info, project_id: int, mode: str) -> Project:
     if mode == "resolver-error":
-        raise ValueError("Unknown update mode.")
+        raise PublicGraphQLError("Unknown update mode.", code="BAD_USER_INPUT")
     if mode == "validation-error":
-        raise ValidationError("The project cannot be updated.")
+        raise ValidationError({"name": ["This project name is unavailable."]})
     return Project(id=project_id)
 ```
 
-Exceptions outside GeneralManager's handled error set surface through GraphQL's
-normal error handling. Keep business logic in manager methods where possible so
-validation, permissions, history, and other framework behavior remain
-consistent.
+Plain `ValueError` is treated as an internal failure and its message is
+sanitized. Migrate resolvers that previously used `ValueError` for client-facing
+failures to `PublicGraphQLError`, or to `ValidationError` for validation.
+Structured field errors should use a Django `ValidationError` with a message
+dictionary, as above. Public error and validation messages must never contain
+secrets. Keep business logic in manager methods where possible so validation,
+permissions, history, and other framework behavior remain consistent.
