@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import stat
 import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -23,7 +24,7 @@ REQUIRED_MEMBERS = frozenset(
 )
 
 _WHEEL_FILENAME = re.compile(
-    r"^generalmanager-(?P<version>[^-]+)(?:-[0-9][0-9A-Za-z_]*)?"
+    r"^generalmanager-(?P<version>[^-]+)(?:-[0-9][^-]*)?"
     r"-[^-]+-[^-]+-[^-]+\.whl$",
     re.IGNORECASE,
 )
@@ -65,8 +66,8 @@ def _require_members(archive: Path, members: set[str]) -> None:
 
 
 def _member_parts(archive: Path, member_name: str) -> tuple[str, ...]:
-    path = PurePosixPath(member_name.replace("\\", "/"))
-    if path.is_absolute() or ".." in path.parts:
+    path = PurePosixPath(member_name)
+    if "\\" in member_name or path.is_absolute() or ".." in path.parts:
         message = f"Unsafe archive member path in {archive.name}: {member_name}"
         raise ValueError(message)
     return path.parts
@@ -78,6 +79,12 @@ def _wheel_members(wheel: Path) -> set[str]:
             members: set[str] = set()
             for member in archive.infolist():
                 _member_parts(wheel, member.filename)
+                file_type = stat.S_IFMT(member.external_attr >> 16)
+                if file_type not in (0, stat.S_IFREG):
+                    message = (
+                        f"Non-regular wheel member in {wheel.name}: {member.filename}"
+                    )
+                    raise ValueError(message)
                 if not member.is_dir():
                     members.add(member.filename)
             return members
