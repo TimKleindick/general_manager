@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.62.3 (2026-07-14)
+
+### Bug Fixes
+
+- Make chat eval CLI settings-safe
+  ([`5f29d85`](https://github.com/TimKleindick/general_manager/commit/5f29d85a21c3d7ef7305daab3e1203ac40352db1))
+
+- Ship chat eval datasets
+  ([`7c75f6f`](https://github.com/TimKleindick/general_manager/commit/7c75f6fe96178ea511ef8dad1ddf2f08e950b469))
+
+### Continuous Integration
+
+- Smoke-test built chat eval distribution
+  ([`d7168a5`](https://github.com/TimKleindick/general_manager/commit/d7168a5e03863c6276b554221d009cc9971e48f0))
+
+### Documentation
+
+- Explain installed chat eval CLI settings
+  ([`3bccaf4`](https://github.com/TimKleindick/general_manager/commit/3bccaf4e760b9d3b1ea30b43a927aaa41b3c6d9c))
+
+
 ## v0.62.2 (2026-07-13)
 
 ### Bug Fixes
