@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.contrib.auth import get_user_model
@@ -47,6 +50,21 @@ type OrmInterfaceInstance = "OrmInterfaceBase[models.Model]"
 type MutationPayload = dict[str, object]
 type ManyToManyPayload = dict[str, list[object]]
 type MutationResult = dict[str, object]
+
+_save_with_history_savepoint = ContextVar(
+    "save_with_history_savepoint",
+    default=True,
+)
+
+
+@contextmanager
+def _without_save_with_history_savepoint() -> Iterator[None]:
+    """Suppress the nested savepoint within an encompassing mutation atomic."""
+    token = _save_with_history_savepoint.set(False)
+    try:
+        yield
+    finally:
+        _save_with_history_savepoint.reset(token)
 
 
 class OrmMutationCapability(BaseCapability):
@@ -115,7 +133,6 @@ class OrmMutationCapability(BaseCapability):
         *,
         creator_id: int | None,
         history_comment: str | None,
-        _savepoint: bool = True,
     ) -> object:
         """
         Persist the model instance while recording creator metadata and an optional change reason.
@@ -127,9 +144,6 @@ class OrmMutationCapability(BaseCapability):
             instance (models.Model): The Django model instance to validate and save.
             creator_id (int | None): Identifier of the user or process responsible for the change; assigned to `instance.changed_by_id` when supported.
             history_comment (str | None): Optional comment describing the change; attached as a change reason after save when provided.
-            _savepoint (bool): Internal control for avoiding a redundant nested
-                savepoint when an encompassing mutation transaction already
-                provides the rollback boundary.
 
         Returns:
             object: The primary key (`pk`) of the saved instance. Django primary
@@ -160,16 +174,17 @@ class OrmMutationCapability(BaseCapability):
             database_alias = support.get_database_alias(interface_cls)
             if database_alias:
                 instance._state.db = database_alias
+            savepoint = _save_with_history_savepoint.get()
             if database_alias:
                 atomic_context = (
                     transaction.atomic(using=database_alias)
-                    if _savepoint
+                    if savepoint
                     else transaction.atomic(using=database_alias, savepoint=False)
                 )
             else:
                 atomic_context = (
                     transaction.atomic()
-                    if _savepoint
+                    if savepoint
                     else transaction.atomic(savepoint=False)
                 )
             with atomic_context:
@@ -379,13 +394,13 @@ class OrmCreateCapability(BaseCapability):
                 else transaction.atomic()
             )
             with atomic_context:
-                pk = mutation.save_with_history(
-                    interface_cls,
-                    instance,
-                    creator_id=creator_id,
-                    history_comment=history_comment,
-                    _savepoint=False,
-                )
+                with _without_save_with_history_savepoint():
+                    pk = mutation.save_with_history(
+                        interface_cls,
+                        instance,
+                        creator_id=creator_id,
+                        history_comment=history_comment,
+                    )
                 mutation.apply_many_to_many(
                     interface_cls,
                     instance,
@@ -529,13 +544,13 @@ class OrmUpdateCapability(BaseCapability):
                 else transaction.atomic()
             )
             with atomic_context:
-                pk = mutation.save_with_history(
-                    interface_instance.__class__,
-                    instance,
-                    creator_id=creator_id,
-                    history_comment=history_comment,
-                    _savepoint=False,
-                )
+                with _without_save_with_history_savepoint():
+                    pk = mutation.save_with_history(
+                        interface_instance.__class__,
+                        instance,
+                        creator_id=creator_id,
+                        history_comment=history_comment,
+                    )
                 mutation.apply_many_to_many(
                     interface_instance.__class__,
                     instance,
