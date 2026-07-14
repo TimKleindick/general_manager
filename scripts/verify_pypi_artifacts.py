@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+import stat
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,25 @@ def _sha256(path: Path) -> str:
 def _local_checksums(dist_dir: Path) -> dict[str, str]:
     wheel = _single_artifact(dist_dir, "*.whl", "wheel")
     sdist = _single_artifact(dist_dir, "*.tar.gz", "sdist")
+    intended = {wheel, sdist}
+    try:
+        entries = set(dist_dir.iterdir())
+    except OSError as exc:
+        message = f"Could not inspect distribution directory {dist_dir}: {exc}"
+        raise VerificationError(message) from exc
+    unexpected = sorted(entry.name for entry in entries - intended)
+    if unexpected:
+        message = f"Unexpected local artifact entries: {', '.join(unexpected)}"
+        raise VerificationError(message)
+    for artifact in intended:
+        try:
+            mode = artifact.stat(follow_symlinks=False).st_mode
+        except OSError as exc:
+            message = f"Could not inspect local artifact {artifact}: {exc}"
+            raise VerificationError(message) from exc
+        if not stat.S_ISREG(mode):
+            message = f"Local artifact is not a regular file: {artifact.name}"
+            raise VerificationError(message)
     return {artifact.name: _sha256(artifact) for artifact in (wheel, sdist)}
 
 
@@ -118,6 +138,11 @@ def verify_artifacts(
     """Verify matching PyPI files and optionally require every local artifact."""
     local = _local_checksums(dist_dir)
     remote = _remote_checksums(project, version)
+
+    unexpected = sorted(remote.keys() - local.keys())
+    if unexpected:
+        message = f"Unexpected PyPI artifacts: {', '.join(unexpected)}"
+        raise VerificationError(message)
 
     for filename, local_checksum in local.items():
         remote_checksum = remote.get(filename)

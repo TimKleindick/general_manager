@@ -28,6 +28,10 @@ def test_accepts_src_layout_source_distribution(tmp_path: Path) -> None:
     with zipfile.ZipFile(tmp_path / f"{root}-py3-none-any.whl", "w") as wheel:
         for member in REQUIRED_MEMBERS:
             wheel.writestr(member, "test data")
+        wheel.writestr(
+            f"{root}.dist-info/METADATA",
+            f"Metadata-Version: 2.4\nName: GeneralManager\nVersion: {version}\n",
+        )
 
     with tarfile.open(tmp_path / f"{root}.tar.gz", "w:gz") as sdist:
         for member in REQUIRED_MEMBERS:
@@ -35,5 +39,11 @@ def test_accepts_src_layout_source_distribution(tmp_path: Path) -> None:
             info = tarfile.TarInfo(f"{root}/src/{member}")
             info.size = len(contents)
             sdist.addfile(info, io.BytesIO(contents))
+        metadata = (
+            f"Metadata-Version: 2.4\nName: GeneralManager\nVersion: {version}\n"
+        ).encode()
+        info = tarfile.TarInfo(f"{root}/PKG-INFO")
+        info.size = len(metadata)
+        sdist.addfile(info, io.BytesIO(metadata))
 
-    validate_archives(tmp_path)
+    validate_archives(tmp_path, expected_version=version)
