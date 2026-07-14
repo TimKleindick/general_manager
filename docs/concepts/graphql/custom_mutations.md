@@ -136,8 +136,9 @@ Tuple output types must produce unique field names. Type aliases are useful when
 multiple values share the same underlying Python type. A type alias exposes the
 alias name but maps through the alias target when building the Graphene field.
 At runtime, tuple values are assigned to output fields in annotation order; the
-current implementation does not validate that the returned tuple length exactly
-matches the annotated tuple length.
+returned tuple must contain exactly one value per annotated output. A count
+mismatch becomes a sanitized `INTERNAL_SERVER_ERROR`; internal mismatch details
+are not exposed to the client.
 
 ## Protect a mutation
 

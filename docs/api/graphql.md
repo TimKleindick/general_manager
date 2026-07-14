@@ -161,12 +161,17 @@ mapping inputs with `Manager(**value)`, and constructs non-mapping inputs with
 item follows that same normalization. Return annotations create output fields
 plus required `success`; tuple annotations create multiple output fields and
 duplicate field names are rejected. Type aliases expose the alias name while
-mapping through the target type. Runtime tuple results are assigned to output
-fields in annotation order without exact length validation. Resolver execution
+mapping through the target type. Runtime tuple results must contain exactly one
+value per annotated tuple output and are assigned to fields in annotation order.
+A count mismatch is sanitized as `INTERNAL_SERVER_ERROR` under the shared
+mutation boundary; internal mismatch details are not exposed. Resolver execution
 normalizes manager arguments before permission checks and before calling the
 original function.
-Handled GeneralManager domain errors are converted with the normal GraphQL error
-mapper; other exceptions propagate.
+
+At that boundary, explicit `GraphQLError` instances are preserved;
+`ValidationError` and `PublicGraphQLError` retain their intended public
+behavior; `PermissionError` receives the fixed safe denial; and every other
+ordinary `Exception` is sanitized and correlated for server logs.
 
 ::: general_manager.api.property.graph_ql_property
 
