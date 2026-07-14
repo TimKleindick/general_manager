@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,6 +11,8 @@ import pytest
 
 from general_manager.chat.evals import __main__ as eval_cli
 from general_manager.chat.settings import get_chat_settings
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _Provider:
@@ -32,12 +37,12 @@ def test_instantiate_provider_without_model_uses_current_settings() -> None:
     assert isinstance(provider, _Provider)
 
 
-def test_main_defaults_django_settings_module_when_unset(capsys, monkeypatch) -> None:
+def test_main_requires_django_settings_module_when_unset(capsys, monkeypatch) -> None:
     result = SimpleNamespace(passed=True)
     monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
 
     with (
-        patch("django.setup") as django_setup,
+        patch("django.setup"),
         patch(
             "general_manager.chat.settings.import_provider",
             return_value=_Provider,
@@ -51,11 +56,57 @@ def test_main_defaults_django_settings_module_when_unset(capsys, monkeypatch) ->
             return_value="all good",
         ),
     ):
-        eval_cli.main([])
+        with pytest.raises(SystemExit) as exit_info:
+            eval_cli.main([])
 
-    django_setup.assert_called_once_with()
-    assert os.environ["DJANGO_SETTINGS_MODULE"] == "tests.test_settings"
-    assert capsys.readouterr().out == "all good\n"
+    assert exit_info.value.code == 2
+    assert "--settings" in capsys.readouterr().err
+    assert "DJANGO_SETTINGS_MODULE" not in os.environ
+
+
+def test_main_requires_django_settings_module_when_empty(capsys, monkeypatch) -> None:
+    result = SimpleNamespace(passed=True)
+    monkeypatch.setenv("DJANGO_SETTINGS_MODULE", "")
+
+    with (
+        patch("django.setup"),
+        patch(
+            "general_manager.chat.settings.import_provider",
+            return_value=_Provider,
+        ),
+        patch(
+            "general_manager.chat.evals.runner.run_eval_suite_sync",
+            return_value=[result],
+        ),
+        patch(
+            "general_manager.chat.evals.runner.print_report",
+            return_value="all good",
+        ),
+    ):
+        with pytest.raises(SystemExit) as exit_info:
+            eval_cli.main([])
+
+    assert exit_info.value.code == 2
+    assert "--settings" in capsys.readouterr().err
+
+
+def test_module_help_runs_without_django_settings() -> None:
+    env = os.environ.copy()
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    env["PYTHONPATH"] = str(PROJECT_ROOT / "src")
+
+    result = subprocess.run(  # noqa: S603 - trusted current interpreter
+        [sys.executable, "-m", "general_manager.chat.evals", "--help"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Run the GeneralManager chat evaluation suite." in result.stdout
+    assert "settings are not configured" not in result.stderr
 
 
 def test_main_explicit_settings_overrides_existing_env(capsys, monkeypatch) -> None:

@@ -70,8 +70,11 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.settings:
         os.environ["DJANGO_SETTINGS_MODULE"] = args.settings
-    else:
-        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tests.test_settings")
+    elif not os.environ.get("DJANGO_SETTINGS_MODULE"):
+        parser.error(
+            "Django settings are required; pass --settings or set "
+            "DJANGO_SETTINGS_MODULE."
+        )
 
     import django
 
