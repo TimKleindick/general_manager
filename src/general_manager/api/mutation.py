@@ -448,7 +448,12 @@ def graph_ql_mutation(
                 **kwargs: Mutation arguments provided by the client.
 
             Returns:
-                mutation_class: Instance of the mutation with output fields populated; `success` is `True` on successful execution and `False` if a handled manager error occurred (after being forwarded to GraphQL._handle_graph_ql_error).
+                An instance of the generated mutation with output fields populated
+                and ``success=True``. An instance is returned only on success.
+
+            Raises:
+                GraphQLError: The resolver raises an explicit GraphQL error, or a
+                    resolver failure is mapped to a GraphQL error.
             """
             try:
                 normalized_kwargs = _normalize_mutation_arguments(

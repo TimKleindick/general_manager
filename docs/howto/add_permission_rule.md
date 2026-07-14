@@ -63,4 +63,12 @@ with pytest.raises(PermissionError):
 
 ## Step 4: Expose error messages in GraphQL
 
-When a mutation violates a rule, the response includes `success: false` and a structured error list. Display the messages in the frontend or log them for audit purposes.
+When a mutation violates a rule, the failure is raised into the GraphQL `errors`
+list and GraphQL execution sets that mutation's data field to `null`.
+`PermissionError` exposes only the fixed message `Permission denied.` with code
+`PERMISSION_DENIED`. For validation failures, a structured Django
+`ValidationError` exposes `fieldErrors` and `nonFieldErrors`.
+
+Display only deliberately safe public or validation messages. Use the opaque
+`errorId` from an internal error for support correlation, and use server audit
+logs—not the client response—for internal details.
