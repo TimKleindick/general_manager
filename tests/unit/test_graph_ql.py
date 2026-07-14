@@ -160,6 +160,7 @@ class GraphQLPropertyTests(TestCase):
 
     def test_public_graphql_error_is_importable_from_api_module(self):
         """PublicGraphQLError is part of the stable API module."""
+        import general_manager._types.api as type_api
         from general_manager._types.api import (
             PublicGraphQLError as typed_public_error,
         )
@@ -168,6 +169,7 @@ class GraphQLPropertyTests(TestCase):
 
         self.assertIs(public_error, PublicGraphQLError)
         self.assertIs(typed_public_error, PublicGraphQLError)
+        self.assertIn("PublicGraphQLError", type_api.__all__)
 
     def test_graphql_property_cache_options_exclude_auto(self):
         """GraphQL property cache scopes expose only user-selectable values."""
