@@ -411,19 +411,12 @@ def test_publish_release_job_mutates_only_after_downloading_validated_files() ->
         'refs/tags/$EXPECTED_TAG"' in verify_command
     )
     assert 'TAG_COMMIT="$(git rev-parse "$EXPECTED_TAG^{commit}")"' in verify_command
-    assert 'test "$RELEASE_PARENTS" = "$GITHUB_SHA"' in verify_command
+    assert '[ "$RELEASE_PARENTS" = "$GITHUB_SHA" ] || return 1' in verify_command
     assert "git diff-tree --no-commit-id --name-only -r" in verify_command
-    assert (
-        "EXPECTED_FILES=\"$(printf '%s\\n' CHANGELOG.md pyproject.toml | sort)\""
-        in verify_command
-    )
-    assert (
-        'RELEASE_FILES="$(git diff-tree --no-commit-id --name-only -r '
-        '"$RELEASE_COMMIT" | sort)"' in verify_command
-    )
-    assert 'test "$RELEASE_FILES" = "$EXPECTED_FILES"' in verify_command
+    assert '[ -n "$RELEASE_FILES" ] || return 1' in verify_command
     assert "tomllib.loads" in verify_command
-    assert 'test "$TAG_VERSION" = "$EXPECTED_VERSION"' in verify_command
+    assert '[ "$TAG_VERSION" = "$EXPECTED_VERSION" ] || return 1' in verify_command
+    assert 'awk -v heading="## $EXPECTED_TAG "' in verify_command
     assert 'test "$PSR_COMMIT_SHA" = "$TAG_COMMIT"' in verify_command
     assert 'if [ "$PSR_RELEASED" = "true" ]' in verify_command
     assert 'test -n "$PSR_COMMIT_SHA"' in verify_command
@@ -488,20 +481,34 @@ def test_publish_release_recovers_a_verified_branch_push_when_tag_is_missing() -
     inspect_remote_tag = (
         'git ls-remote --exit-code --refs origin "refs/tags/$EXPECTED_TAG"'
     )
+    ancestor_check = 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main'
     assert fetch_main in verify_command
+    assert ancestor_check in verify_command
     assert inspect_remote_tag in verify_command
-    assert verify_command.index(fetch_main) < verify_command.index(inspect_remote_tag)
+    assert verify_command.index(fetch_main) < verify_command.index(ancestor_check)
+    assert verify_command.index(ancestor_check) < verify_command.index(
+        inspect_remote_tag
+    )
     assert 'case "$REMOTE_TAG_STATUS" in' in verify_command
     assert "2)" in verify_command
     assert "*)" in verify_command
-    assert 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main' in verify_command
+    validate_trigger = 'if validate_release_commit "$GITHUB_SHA"; then'
+    use_trigger = 'CANDIDATE_COMMIT="$GITHUB_SHA"'
+    assert validate_trigger in verify_command
+    assert use_trigger in verify_command
+    assert ancestor_check in verify_command
+    assert verify_command.index(ancestor_check) < verify_command.index(validate_trigger)
+    assert verify_command.index(validate_trigger) < verify_command.index(use_trigger)
     assert (
         'git rev-list --first-parent --reverse "$GITHUB_SHA..origin/main"'
         in verify_command
     )
 
     validate_candidate = 'validate_release_commit "$CANDIDATE_COMMIT"'
-    create_tag = 'git tag --force "$EXPECTED_TAG" "$CANDIDATE_COMMIT"'
+    create_tag = (
+        'git tag --annotate --force --message "$EXPECTED_TAG" '
+        '"$EXPECTED_TAG" "$CANDIDATE_COMMIT"'
+    )
     push_tag = 'git push origin "refs/tags/$EXPECTED_TAG"'
     refetch_tag = (
         'git fetch --force origin "refs/tags/$EXPECTED_TAG:refs/tags/$EXPECTED_TAG"'
@@ -519,9 +526,35 @@ def test_publish_release_recovers_a_verified_branch_push_when_tag_is_missing() -
         validate_remote_tag
     )
     assert 'TAG_PUSH_STATUS="$?"' in verify_command
-    assert 'test "$RELEASE_PARENTS" = "$GITHUB_SHA"' in verify_command
-    assert 'test "$RELEASE_FILES" = "$EXPECTED_FILES"' in verify_command
-    assert 'test "$TAG_VERSION" = "$EXPECTED_VERSION"' in verify_command
+    assert '[ "$RELEASE_PARENTS" = "$GITHUB_SHA" ] || return 1' in verify_command
+    assert '[ -n "$RELEASE_FILES" ] || return 1' in verify_command
+    assert '[ "$TAG_VERSION" = "$EXPECTED_VERSION" ] || return 1' in verify_command
+
+
+def test_publish_release_accepts_a_tag_on_the_prestamped_trigger() -> None:
+    job = load_workflow("publish.yml")["jobs"]["release"]
+    verify_command = str(step_by_id(job, "verify_release")["run"])
+
+    version_check = '[ "$TAG_VERSION" = "$EXPECTED_VERSION" ] || return 1'
+    changelog_check = 'awk -v heading="## $EXPECTED_TAG "'
+    trigger_shape = 'if [ "$RELEASE_COMMIT" = "$GITHUB_SHA" ]; then'
+    assert version_check in verify_command
+    assert changelog_check in verify_command
+    assert trigger_shape in verify_command
+    assert verify_command.index(version_check) < verify_command.index(trigger_shape)
+    assert verify_command.index(changelog_check) < verify_command.index(trigger_shape)
+    assert "return 0" in verify_command[verify_command.index(trigger_shape) :]
+
+
+def test_publish_release_child_requires_a_nonempty_allowed_file_subset() -> None:
+    job = load_workflow("publish.yml")["jobs"]["release"]
+    verify_command = str(step_by_id(job, "verify_release")["run"])
+
+    assert '[ -n "$RELEASE_FILES" ] || return 1' in verify_command
+    assert "while IFS= read -r RELEASE_FILE; do" in verify_command
+    assert "CHANGELOG.md|pyproject.toml)" in verify_command
+    assert "*) return 1 ;;" in verify_command
+    assert 'done <<< "$RELEASE_FILES"' in verify_command
 
 
 def test_semantic_release_keeps_build_as_its_only_publish_artifact_path() -> None:
