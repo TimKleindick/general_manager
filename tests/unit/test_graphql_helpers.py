@@ -27,6 +27,7 @@ from general_manager.api.graphql import (
     UnsupportedGraphQLFieldTypeError,
     get_read_permission_filter,
 )
+from general_manager.api.graphql_errors import PublicGraphQLError
 from typing import ClassVar
 
 from general_manager.apps import GeneralmanagerConfig
@@ -460,6 +461,16 @@ class GraphQLHelperTests(SimpleTestCase):
         error = GraphQLError("explicit", extensions={"code": "CUSTOM"})
 
         assert GraphQL._handle_graph_ql_error(error) is error
+
+    def test_handle_graphql_error_preserves_public_graphql_error(self) -> None:
+        error = PublicGraphQLError(
+            "The project cannot be archived.",
+            code="PROJECT_NOT_ARCHIVABLE",
+        )
+
+        assert GraphQL._handle_graph_ql_error(error) is error
+        assert error.message == "The project cannot be archived."
+        assert error.extensions == {"code": "PROJECT_NOT_ARCHIVABLE"}
 
     def test_handle_graphql_error_structures_validation_message_dict(self) -> None:
         error = GraphQL._handle_graph_ql_error(
