@@ -133,6 +133,13 @@ class SubscriptionEvent:
 # ---------------------------------------------------------------------------
 
 
+class PublicGraphQLError(GraphQLError):
+    """Deliberately public GraphQL failure with a stable client code."""
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message, extensions={"code": code})
+
+
 class InvalidMeasurementValueError(TypeError):
     """Internal scalar error for serializing a non-``Measurement`` value.
 
