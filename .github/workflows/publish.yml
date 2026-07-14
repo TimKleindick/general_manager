@@ -5,21 +5,93 @@ on:
     branches:
       - main
 
-jobs:
-  release:
-    name: 🚀 Release & Publish
-    runs-on: ubuntu-latest
-    concurrency:
-      group: ${{ github.workflow }}-release-${{ github.ref_name }}
-      cancel-in-progress: false
+permissions:
+  contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+
+  artifact:
+    name: Build and validate release artifacts
+    needs: quality
+    runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      contents: read
+    outputs:
+      released: ${{ steps.prepare.outputs.released || 'false' }}
+      version: ${{ steps.prepare.outputs.version }}
+      tag: ${{ steps.prepare.outputs.tag }}
+
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install release tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install python-semantic-release==10.6.1 build twine==6.0.1
+
+      - id: prepare
+        name: Prepare release artifacts without mutating Git
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          semantic-release version
+          --no-commit
+          --no-tag
+          --no-push
+          --no-vcs-release
+
+      - name: Check distribution metadata
+        if: ${{ steps.prepare.outputs.released == 'true' }}
+        run: twine check dist/*
+
+      - name: Validate distribution archives
+        if: ${{ steps.prepare.outputs.released == 'true' }}
+        run: python scripts/validate_distribution.py archives dist
+
+      - name: Validate the installed wheel
+        if: ${{ steps.prepare.outputs.released == 'true' }}
+        run: |
+          python -m venv /tmp/general-manager-release-venv
+          /tmp/general-manager-release-venv/bin/python -m pip install --upgrade pip
+          /tmp/general-manager-release-venv/bin/python -m pip install "$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          cd /tmp
+          /tmp/general-manager-release-venv/bin/python "$GITHUB_WORKSPACE/scripts/validate_distribution.py" installed
+
+      - name: Upload validated distributions
+        if: ${{ steps.prepare.outputs.released == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-distributions-${{ github.sha }}
+          path: dist/*
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    name: Release and publish validated artifacts
+    needs: artifact
+    if: ${{ needs.artifact.outputs.released == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
       contents: write
 
     steps:
-      # 1) Checkout via SSH
-      - name: Checkout Repository über SSH
+      - name: Checkout exact release commit over SSH
         uses: actions/checkout@v4
         with:
           repository: TimKleindick/general_manager
@@ -27,59 +99,52 @@ jobs:
           ssh-strict: false
           persist-credentials: true
           fetch-depth: 0
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
 
-      # 2) Set the Remote Repository
-      - id: configure_repository
-        name: Set the GIT Origin Name and Email for use with SSH
+      - name: Configure release branch and SSH origin
         run: |
           git remote set-url origin git@github.com:TimKleindick/general_manager.git
+          git fetch origin main
+          git switch -C main "$GITHUB_SHA"
+          git branch --set-upstream-to=origin/main main
           git config --global user.name "github-actions"
           git config --global user.email "actions@users.noreply.github.com"
 
-      - id: install_requirements
-        name: Install Requirements
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install release tooling
         run: |
           python -m pip install --upgrade pip
-          pip install python-semantic-release build build twine==6.0.1
+          python -m pip install python-semantic-release==10.6.1 twine==6.0.1
 
-      # 3) Push the Release to Github
-      - id: semantic_release
-        name: Semantic Release
+      - name: Download validated distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: validated-distributions-${{ github.sha }}
+          path: validated-dist
+
+      - id: release
+        name: Create the release without rebuilding
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          semantic-release version
+        run: semantic-release version --skip-build
 
-      - name: Get latest tag
-        id: get_tag
-        run: echo "tag=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
-
-      - id: semantic_changelog
-        name: Semantic Changelog
+      - id: verify_release
+        name: Verify the released version and tag
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_VERSION: ${{ needs.artifact.outputs.version }}
+          ACTUAL_VERSION: ${{ steps.release.outputs.version }}
+          EXPECTED_TAG: ${{ needs.artifact.outputs.tag }}
+          ACTUAL_TAG: ${{ steps.release.outputs.tag }}
         run: |
-          semantic-release changelog --post-to-release-tag ${{ steps.get_tag.outputs.tag }}
+          test "$EXPECTED_VERSION" = "$ACTUAL_VERSION"
+          test "$EXPECTED_TAG" = "$ACTUAL_TAG"
 
-      # 4) Build nur, wenn wirklich was released wurde
-      - id: build
-        if: ${{ steps.semantic_release.outputs.released == 'true' }}
-        name: Build Project
-        run: python -m build
-
-      - name: Smoke-test built distribution
-        if: ${{ steps.semantic_release.outputs.released == 'true' }}
-        run: |
-          python -m pip install --force-reinstall dist/*.whl
-          env -u DJANGO_SETTINGS_MODULE python -m general_manager.chat.evals --help
-          env -u DJANGO_SETTINGS_MODULE PYTHONPATH=tests/packaging python -m general_manager.chat.evals --settings chat_eval_smoke_settings --provider builtins.object --fixture toy --dataset basic_queries --tier 999
-          python tests/packaging/smoke_chat_eval_distribution.py dist/*
-
-      # 5) Upload nur, wenn wirklich was released wurde
-      - name: Publish to PyPI
-        if: ${{ steps.semantic_release.outputs.released == 'true' }}
-        run: twine upload dist/*
+      - name: Publish validated distributions to PyPI
+        run: twine upload validated-dist/*
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}

@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
+import tomllib
 
 import yaml
 
@@ -33,6 +34,12 @@ def action_step(job: Mapping[str, Any], action: str) -> dict[str, Any]:
     """Return the step that invokes a specific action."""
     steps = cast(list[dict[str, Any]], job["steps"])
     return next(step for step in steps if step.get("uses") == action)
+
+
+def step_by_id(job: Mapping[str, Any], step_id: str) -> dict[str, Any]:
+    """Return the step with a specific workflow identifier."""
+    steps = cast(list[dict[str, Any]], job["steps"])
+    return next(step for step in steps if step.get("id") == step_id)
 
 
 def test_quality_workflow_has_reusable_least_privilege_triggers() -> None:
@@ -150,3 +157,181 @@ def test_docs_workflow_builds_on_main_or_dispatch_and_deploys_push_only() -> Non
     )
     assert upload_step["if"] == "${{ github.event_name == 'push' }}"
     action_step(deploy_job, "actions/deploy-pages@v4")
+
+
+def test_publish_workflow_serializes_quality_preflight_and_release() -> None:
+    workflow = load_workflow("publish.yml")
+
+    assert workflow["on"] == {"push": {"branches": ["main"]}}
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["concurrency"] == {
+        "group": "${{ github.workflow }}-release-${{ github.ref_name }}",
+        "cancel-in-progress": "false",
+    }
+    assert set(workflow["jobs"]) == {"quality", "artifact", "release"}
+    assert workflow["jobs"]["quality"] == {"uses": "./.github/workflows/quality.yml"}
+    assert workflow["jobs"]["artifact"]["needs"] == "quality"
+    assert workflow["jobs"]["release"]["needs"] == "artifact"
+
+
+def test_publish_artifact_job_builds_once_at_the_exact_commit() -> None:
+    workflow = load_workflow("publish.yml")
+    job = workflow["jobs"]["artifact"]
+
+    assert job["permissions"] == {"contents": "read"}
+    assert job["outputs"] == {
+        "released": "${{ steps.prepare.outputs.released || 'false' }}",
+        "version": "${{ steps.prepare.outputs.version }}",
+        "tag": "${{ steps.prepare.outputs.tag }}",
+    }
+    assert action_step(job, "actions/checkout@v4")["with"] == {
+        "ref": "${{ github.sha }}",
+        "fetch-depth": "0",
+        "persist-credentials": "false",
+    }
+    assert action_step(job, "actions/setup-python@v5")["with"] == {
+        "python-version": "3.12"
+    }
+
+    commands = run_commands(job)
+    assert "python -m pip install --upgrade pip" in commands
+    assert (
+        "python -m pip install python-semantic-release==10.6.1 build twine==6.0.1"
+    ) in commands
+    prepare = step_by_id(job, "prepare")
+    assert prepare["env"] == {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
+    prepare_command = str(prepare["run"])
+    assert "semantic-release version" in prepare_command
+    for flag in (
+        "--no-commit",
+        "--no-tag",
+        "--no-push",
+        "--no-vcs-release",
+    ):
+        assert flag in prepare_command
+    assert "python -m build" not in commands
+
+
+def test_publish_artifact_job_validates_before_uploading_sha_keyed_files() -> None:
+    job = load_workflow("publish.yml")["jobs"]["artifact"]
+    steps = cast(list[dict[str, Any]], job["steps"])
+    released_condition = "${{ steps.prepare.outputs.released == 'true' }}"
+    conditional_steps = [step for step in steps if step.get("if") == released_condition]
+
+    assert len(conditional_steps) == 4
+    commands = [str(step.get("run", "")) for step in conditional_steps]
+    venv_python = "/tmp/general-manager-release-venv/bin/python"  # noqa: S108
+    assert commands[0].strip() == "twine check dist/*"
+    assert commands[1].strip() == (
+        "python scripts/validate_distribution.py archives dist"
+    )
+    assert "python -m venv /tmp/general-manager-release-venv" in commands[2]
+    assert (
+        f"{venv_python} -m pip install "
+        "\"$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)\""
+    ) in commands[2]
+    assert "cd /tmp" in commands[2]
+    assert (
+        f'{venv_python} "$GITHUB_WORKSPACE/scripts/validate_distribution.py" installed'
+    ) in commands[2]
+
+    upload = conditional_steps[3]
+    assert upload["uses"] == "actions/upload-artifact@v4"
+    assert upload["with"] == {
+        "name": "validated-distributions-${{ github.sha }}",
+        "path": "dist/*",
+        "retention-days": "7",
+        "if-no-files-found": "error",
+    }
+
+
+def test_publish_release_job_mutates_only_after_downloading_validated_files() -> None:
+    workflow = load_workflow("publish.yml")
+    job = workflow["jobs"]["release"]
+
+    assert job["if"] == "${{ needs.artifact.outputs.released == 'true' }}"
+    assert job["permissions"] == {"contents": "write"}
+    checkout = action_step(job, "actions/checkout@v4")
+    assert checkout["with"] == {
+        "repository": "TimKleindick/general_manager",
+        "ssh-key": "${{ secrets.SSH_DEPLOY_KEY }}",
+        "ssh-strict": "false",
+        "persist-credentials": "true",
+        "fetch-depth": "0",
+        "ref": "${{ github.sha }}",
+    }
+
+    commands = run_commands(job)
+    assert 'git switch -C main "$GITHUB_SHA"' in commands
+    assert (
+        "git remote set-url origin git@github.com:TimKleindick/general_manager.git"
+    ) in commands
+    assert "git branch --set-upstream-to=origin/main main" in commands
+    assert 'git config --global user.name "github-actions"' in commands
+    assert (
+        'git config --global user.email "actions@users.noreply.github.com"' in commands
+    )
+    assert action_step(job, "actions/setup-python@v5")["with"] == {
+        "python-version": "3.12"
+    }
+    assert (
+        "python -m pip install python-semantic-release==10.6.1 twine==6.0.1" in commands
+    )
+    assert "python -m build" not in commands
+
+    download = action_step(job, "actions/download-artifact@v4")
+    assert download["with"] == {
+        "name": "validated-distributions-${{ github.sha }}",
+        "path": "validated-dist",
+    }
+    final_release = step_by_id(job, "release")
+    assert str(final_release["run"]).strip() == (
+        "semantic-release version --skip-build"
+    )
+    assert final_release["env"] == {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
+
+    verify = step_by_id(job, "verify_release")
+    assert verify["env"] == {
+        "EXPECTED_VERSION": "${{ needs.artifact.outputs.version }}",
+        "ACTUAL_VERSION": "${{ steps.release.outputs.version }}",
+        "EXPECTED_TAG": "${{ needs.artifact.outputs.tag }}",
+        "ACTUAL_TAG": "${{ steps.release.outputs.tag }}",
+    }
+    assert 'test "$EXPECTED_VERSION" = "$ACTUAL_VERSION"' in str(verify["run"])
+    assert 'test "$EXPECTED_TAG" = "$ACTUAL_TAG"' in str(verify["run"])
+
+    assert commands.index(str(verify["run"])) < commands.index(
+        "twine upload validated-dist/*"
+    )
+    assert "twine upload dist/*" not in commands
+    assert "semantic-release changelog" not in commands
+    assert "git describe --tags" not in commands
+    publish = next(
+        step
+        for step in cast(list[dict[str, Any]], job["steps"])
+        if str(step.get("run", "")).strip() == "twine upload validated-dist/*"
+    )
+    assert publish["env"] == {
+        "TWINE_USERNAME": "__token__",
+        "TWINE_PASSWORD": "${{ secrets.PYPI_API_TOKEN }}",
+    }
+
+    write_jobs = {
+        name
+        for name, candidate in workflow["jobs"].items()
+        if candidate.get("permissions", {}).get("contents") == "write"
+    }
+    assert write_jobs == {"release"}
+
+
+def test_semantic_release_keeps_build_as_its_only_publish_artifact_path() -> None:
+    configuration = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    semantic_release = configuration["tool"]["semantic_release"]
+
+    assert semantic_release["build_command"] == "python -m build"
+    assert "upload_to_pypi" not in semantic_release
+    assert "upload_to_release" not in semantic_release
+    assert "upload_to_repository" not in semantic_release
+
+    publish_workflow = (WORKFLOWS / "publish.yml").read_text()
+    assert "python -m build" not in publish_workflow
