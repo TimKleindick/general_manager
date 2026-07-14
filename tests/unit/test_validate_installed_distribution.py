@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.metadata as metadata
+import importlib.resources as resources
 import os
 import subprocess
 import sys
@@ -9,6 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import django.core.management
 from django.core.management import get_commands
 
 from scripts import validate_distribution
@@ -40,12 +43,44 @@ def test_installed_resources_names_missing_datasets(
         def joinpath(self, *descendants: str) -> FakeResource:
             return FakeResource("/".join(descendants))
 
-    monkeypatch.setattr(
-        validate_distribution.resources, "files", lambda _: FakePackage()
-    )
+    monkeypatch.setattr(resources, "files", lambda _: FakePackage())
 
     with pytest.raises(ValueError, match=r"multi_hop\.yaml"):
         _validator("validate_installed_resources")()
+
+
+def test_installed_resources_rejects_missing_distribution_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing_version(_: str) -> str:
+        raise metadata.PackageNotFoundError("GeneralManager")
+
+    monkeypatch.setattr(metadata, "version", missing_version)
+
+    with pytest.raises(ValueError, match="distribution metadata"):
+        _validator("validate_installed_resources")()
+
+
+def test_installed_resources_rejects_empty_distribution_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(metadata, "version", lambda _: "  ")
+
+    with pytest.raises(ValueError, match="empty version"):
+        _validator("validate_installed_resources")()
+
+
+def test_installed_migrations_rejects_preconfigured_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_migrate(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        pytest.fail("migrate was called with preconfigured settings")
+
+    monkeypatch.setattr(django.core.management, "call_command", unexpected_migrate)
+
+    with pytest.raises(ValueError, match="already configured"):
+        _validator("validate_installed_migrations")()
 
 
 def test_installed_migrations_apply_with_isolated_minimal_settings(
@@ -89,21 +124,33 @@ def test_installed_clis_discovers_command_and_uses_current_interpreter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[list[str], dict[str, Any]]] = []
+    private_cwds: list[Path] = []
 
     def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         calls.append((command, kwargs))
+        private_cwd = Path(kwargs["cwd"])
+        assert private_cwd.is_dir()
+        private_cwds.append(private_cwd)
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(validate_distribution.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("PYTHONPATH", str(Path(tempfile.gettempdir()) / "hostile"))
 
     _validator("validate_installed_clis")()
 
     assert get_commands()["chat_cleanup"] == "general_manager"
     assert len(calls) == 1
     command, options = calls[0]
-    assert command == [sys.executable, "-m", "general_manager.chat.evals", "--help"]
+    assert command == [
+        sys.executable,
+        "-I",
+        "-m",
+        "general_manager.chat.evals",
+        "--help",
+    ]
     assert options["check"] is True
-    assert options["cwd"] == Path(tempfile.gettempdir())
+    assert private_cwds[0].parent == Path(tempfile.gettempdir())
+    assert not private_cwds[0].exists()
     assert options["env"]["DJANGO_SETTINGS_MODULE"] == "django.conf.global_settings"
     assert "PYTHONPATH" not in options["env"]
 
