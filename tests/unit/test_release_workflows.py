@@ -51,12 +51,7 @@ def test_quality_workflow_has_reusable_least_privilege_triggers() -> None:
         "workflow_dispatch",
     }
     assert workflow["permissions"] == {"contents": "read"}
-    assert set(workflow["jobs"]) == {
-        "test",
-        "distribution",
-        "lint-and-mypy",
-        "docs",
-    }
+    assert set(workflow["jobs"]) == {"test", "lint-and-mypy", "docs"}
 
 
 def test_quality_test_job_preserves_supported_matrix_and_test_services() -> None:
@@ -135,19 +130,25 @@ def test_quality_docs_job_builds_strictly_with_existing_toolchain() -> None:
     assert "mkdocs build --strict" in commands
 
 
-def test_quality_distribution_job_validates_the_exact_built_artifacts() -> None:
-    job = load_workflow("quality.yml")["jobs"]["distribution"]
-
-    assert job["name"] == "Package smoke test"
-    assert job["if"] == (
-        "${{ github.event_name == 'pull_request' || "
-        "github.event_name == 'workflow_dispatch' }}"
+def test_quality_required_python_312_leg_validates_built_artifacts() -> None:
+    job = load_workflow("quality.yml")["jobs"]["test"]
+    steps = cast(list[dict[str, Any]], job["steps"])
+    required_condition = (
+        "${{ matrix.python-version == '3.12' && "
+        "(github.event_name == 'pull_request' || "
+        "github.event_name == 'workflow_dispatch') }}"
     )
-    assert action_step(job, "actions/setup-python@v5")["with"] == {
-        "python-version": "3.12"
-    }
+    distribution_steps = [
+        step_by_id(job, "build_distribution"),
+        step_by_id(job, "validate_distribution"),
+        step_by_id(job, "smoke_distribution"),
+    ]
 
-    commands = run_commands(job)
+    assert all(step["if"] == required_condition for step in distribution_steps)
+    assert steps.index(distribution_steps[0]) < steps.index(distribution_steps[1])
+    assert steps.index(distribution_steps[1]) < steps.index(distribution_steps[2])
+
+    commands = "\n".join(str(step["run"]) for step in distribution_steps)
     venv_python = "/tmp/general-manager-quality-venv/bin/python"  # noqa: S108
     assert "python -m pip install build twine==6.0.1" in commands
     assert "python -m build" in commands
