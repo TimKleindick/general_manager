@@ -1,4 +1,5 @@
 from typing import Optional, List, ClassVar
+from unittest import mock
 
 import graphene
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
@@ -6,6 +7,7 @@ from django.test import TestCase
 from django.contrib.auth.models import AnonymousUser, User
 
 from general_manager.api.graphql_mutations import _normalize_mutation_kwargs_for_manager
+from general_manager.api.graphql_errors import PublicGraphQLError
 from general_manager.api.mutation import _sequence_argument, graph_ql_mutation
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.general_manager import GeneralManager
@@ -340,7 +342,9 @@ class MutationDecoratorTests(TestCase):
         with self.assertRaises(GraphQLError) as ctx:
             mutation.mutate(None, info, item="not-an-int")
 
-        self.assertEqual(ctx.exception.extensions["code"], "BAD_USER_INPUT")
+        self.assertEqual(ctx.exception.message, "An internal server error occurred.")
+        self.assertEqual(ctx.exception.extensions["code"], "INTERNAL_SERVER_ERROR")
+        self.assertNotIn("not-an-int", str(ctx.exception.formatted))
 
     def test_decorator_mutation_validation_errors_use_schema_argument_names(self):
         @graph_ql_mutation()
@@ -555,10 +559,10 @@ class MutationDecoratorTests(TestCase):
         with self.assertRaises(GraphQLError) as ctx:
             mutation.mutate(None, Info, value=1)
 
-        self.assertEqual(ctx.exception.extensions["code"], "BAD_USER_INPUT")
-        message = str(ctx.exception)
-        self.assertIn("expected 2", message)
-        self.assertIn("received 1", message)
+        self.assertEqual(ctx.exception.message, "An internal server error occurred.")
+        self.assertEqual(ctx.exception.extensions["code"], "INTERNAL_SERVER_ERROR")
+        self.assertNotIn("expected 2", str(ctx.exception.formatted))
+        self.assertNotIn("received 1", str(ctx.exception.formatted))
 
     def test_tuple_return_length_mismatch_too_long_raises_graphql_error(self):
         @graph_ql_mutation()
@@ -572,10 +576,10 @@ class MutationDecoratorTests(TestCase):
         with self.assertRaises(GraphQLError) as ctx:
             mutation.mutate(None, Info, value=1)
 
-        self.assertEqual(ctx.exception.extensions["code"], "BAD_USER_INPUT")
-        message = str(ctx.exception)
-        self.assertIn("expected 2", message)
-        self.assertIn("received 3", message)
+        self.assertEqual(ctx.exception.message, "An internal server error occurred.")
+        self.assertEqual(ctx.exception.extensions["code"], "INTERNAL_SERVER_ERROR")
+        self.assertNotIn("expected 2", str(ctx.exception.formatted))
+        self.assertNotIn("received 3", str(ctx.exception.formatted))
 
     def test_mutation_execution_and_auth(self):
         class addPermission(MutationPermission):
@@ -886,7 +890,10 @@ class MutationDecoratorTests(TestCase):
         def error_mutation(info, should_fail: bool) -> str:
             _ = info
             if should_fail:
-                raise ValueError("Expected error")  # noqa: TRY003
+                raise PublicGraphQLError(  # noqa: TRY003
+                    "Expected error",
+                    code="EXPECTED_ERROR",
+                )
             return "success"
 
         mutation = GraphQL._mutations["errorMutation"]
@@ -894,13 +901,42 @@ class MutationDecoratorTests(TestCase):
         Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
 
         # Should fail
-        with self.assertRaises(GraphQLError):
+        with self.assertRaises(GraphQLError) as caught:
             mutation.mutate(None, Info, should_fail=True)
+        self.assertEqual(caught.exception.message, "Expected error")
+        self.assertEqual(caught.exception.extensions, {"code": "EXPECTED_ERROR"})
 
         # Should succeed when no error
         result = mutation.mutate(None, Info, should_fail=False)
         self.assertTrue(result.success)
         self.assertEqual(result.str, "success")
+
+    def test_mutation_unexpected_exception_is_sanitized(self):
+        """Decorator-generated mutations hide arbitrary internal exceptions."""
+        error_id = "0123456789abcdef0123456789abcdef"
+        private_message = "filesystem path=/secret"
+
+        @graph_ql_mutation()
+        def unexpected_exception_mutation(info) -> str:
+            _ = info
+            raise OSError(private_message)
+
+        mutation = GraphQL._mutations["unexpectedExceptionMutation"]
+        Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        with (
+            mock.patch("general_manager.api.graphql_errors.uuid4") as uuid4_mock,
+            self.assertRaises(GraphQLError) as caught,
+        ):
+            uuid4_mock.return_value.hex = error_id
+            mutation.mutate(None, Info)
+
+        self.assertEqual(caught.exception.message, "An internal server error occurred.")
+        self.assertEqual(
+            caught.exception.extensions,
+            {"code": "INTERNAL_SERVER_ERROR", "errorId": error_id},
+        )
+        self.assertNotIn(private_message, str(caught.exception.formatted))
 
     def test_mutation_with_permission_class(self):
         """Test mutations with custom permission classes."""

@@ -1372,6 +1372,42 @@ class TestGrapQlMutation(TestCase):
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info, field1="test_value")
 
+    def test_generate_create_mutation_unexpected_exception_is_sanitized(self):
+        error_id = "0123456789abcdef0123456789abcdef"
+        private_message = "database host=secret"
+
+        class DummyManager:
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {}
+
+            @classmethod
+            def create(cls, **_kwargs):
+                raise OSError(private_message)
+
+        mutation_class = GraphQL.generate_create_mutation_class(
+            DummyManager, {"success": graphene.Boolean()}
+        )
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with (
+            patch("general_manager.api.graphql_errors.uuid4") as uuid4_mock,
+            self.assertRaises(GraphQLError) as caught,
+        ):
+            uuid4_mock.return_value.hex = error_id
+            mutation_class.mutate(None, info)
+
+        self.assertEqual(caught.exception.message, "An internal server error occurred.")
+        self.assertEqual(
+            caught.exception.extensions,
+            {"code": "INTERNAL_SERVER_ERROR", "errorId": error_id},
+        )
+        self.assertNotIn(private_message, str(caught.exception.formatted))
+
     def test_create_and_update_mutations_exclude_raw_relation_id_aliases(self):
         class DummyManager:
             class Interface(InterfaceBase):
@@ -1620,6 +1656,44 @@ class TestGrapQlMutation(TestCase):
 
         update_mock.assert_called_once_with(creator_id=info.context.user.id)
 
+    def test_generate_update_mutation_unexpected_exception_is_sanitized(self):
+        error_id = "0123456789abcdef0123456789abcdef"
+        private_message = "database host=secret"
+
+        class DummyManager:
+            def __init__(self, **_kwargs):
+                pass
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {}
+
+            def update(self, **_kwargs):
+                raise OSError(private_message)
+
+        mutation_class = GraphQL.generate_update_mutation_class(
+            DummyManager, {"success": graphene.Boolean()}
+        )
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with (
+            patch("general_manager.api.graphql_errors.uuid4") as uuid4_mock,
+            self.assertRaises(GraphQLError) as caught,
+        ):
+            uuid4_mock.return_value.hex = error_id
+            mutation_class.mutate(None, info, id="1")
+
+        self.assertEqual(caught.exception.message, "An internal server error occurred.")
+        self.assertEqual(
+            caught.exception.extensions,
+            {"code": "INTERNAL_SERVER_ERROR", "errorId": error_id},
+        )
+        self.assertNotIn(private_message, str(caught.exception.formatted))
+
     def test_generate_update_mutation_class_forwards_history_comment(self):
         class DummyManager:
             def __init__(self, *_, **_kwargs):
@@ -1781,6 +1855,44 @@ class TestGrapQlMutation(TestCase):
             creator_id=info.context.user.id,
             history_comment="deleted through GraphQL",
         )
+
+    def test_generate_delete_mutation_unexpected_exception_is_sanitized(self):
+        error_id = "0123456789abcdef0123456789abcdef"
+        private_message = "database host=secret"
+
+        class DummyManager:
+            def __init__(self, **_kwargs):
+                pass
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {}
+
+            def delete(self, **_kwargs):
+                raise OSError(private_message)
+
+        mutation_class = GraphQL.generate_delete_mutation_class(
+            DummyManager, {"success": graphene.Boolean()}
+        )
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with (
+            patch("general_manager.api.graphql_errors.uuid4") as uuid4_mock,
+            self.assertRaises(GraphQLError) as caught,
+        ):
+            uuid4_mock.return_value.hex = error_id
+            mutation_class.mutate(None, info, id="1")
+
+        self.assertEqual(caught.exception.message, "An internal server error occurred.")
+        self.assertEqual(
+            caught.exception.extensions,
+            {"code": "INTERNAL_SERVER_ERROR", "errorId": error_id},
+        )
+        self.assertNotIn(private_message, str(caught.exception.formatted))
 
 
 class GraphQLPropertyTypeHintTests(TestCase):

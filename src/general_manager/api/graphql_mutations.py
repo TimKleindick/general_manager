@@ -28,7 +28,6 @@ from general_manager.uploads.types import UploadOperation
 from general_manager.utils.type_checks import safe_issubclass
 from general_manager.utils.format_string import snake_to_camel
 from general_manager.api.graphql_errors import (
-    HANDLED_MANAGER_ERRORS,
     MissingManagerIdentifierError,
     handle_graph_ql_error,
     map_field_to_graphene_base_type,
@@ -396,7 +395,7 @@ def generate_create_mutation_class(
                 instance = create(**create_kwargs)
         except GraphQLError:
             raise
-        except HANDLED_MANAGER_ERRORS as error:
+        except Exception as error:
             raise handle_graph_ql_error(
                 error,
                 field_name_mapper=lambda field_name: _graphql_mutation_field_name(
@@ -491,7 +490,7 @@ def generate_update_mutation_class(
                 instance = update(**update_kwargs)
         except GraphQLError:
             raise
-        except HANDLED_MANAGER_ERRORS as error:
+        except Exception as error:
             raise handle_graph_ql_error(
                 error,
                 field_name_mapper=lambda field_name: _graphql_mutation_field_name(
@@ -572,7 +571,9 @@ def generate_delete_mutation_class(
                     creator_id=info.context.user.id,
                     history_comment=history_comment,
                 )
-        except HANDLED_MANAGER_ERRORS as error:
+        except GraphQLError:
+            raise
+        except Exception as error:
             raise handle_graph_ql_error(
                 error,
                 field_name_mapper=lambda field_name: _graphql_mutation_field_name(
