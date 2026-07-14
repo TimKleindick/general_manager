@@ -169,7 +169,12 @@ def validate_installed_resources() -> None:
         )
         raise ValueError(message)
 
-    if not metadata.version("GeneralManager").strip():
+    try:
+        installed_version = metadata.version("GeneralManager")
+    except metadata.PackageNotFoundError as exc:
+        message = "Installed GeneralManager distribution metadata is missing"
+        raise ValueError(message) from exc
+    if not installed_version.strip():
         message = "Installed GeneralManager distribution has an empty version"
         raise ValueError(message)
 
@@ -180,22 +185,27 @@ def validate_installed_migrations() -> None:
     from django.conf import settings
     from django.core.management import call_command
 
-    if not settings.configured:
-        settings.configure(
-            DATABASES={
-                "default": {
-                    "ENGINE": "django.db.backends.sqlite3",
-                    "NAME": ":memory:",
-                }
-            },
-            INSTALLED_APPS=[
-                "django.contrib.auth",
-                "django.contrib.contenttypes",
-                "general_manager",
-            ],
-            SECRET_KEY=secrets.token_urlsafe(32),
-            USE_TZ=True,
+    if settings.configured:
+        message = (
+            "Django settings are already configured; refusing to run installed "
+            "migration validation"
         )
+        raise ValueError(message)
+    settings.configure(
+        DATABASES={
+            "default": {
+                "ENGINE": "django.db.backends.sqlite3",
+                "NAME": ":memory:",
+            }
+        },
+        INSTALLED_APPS=[
+            "django.contrib.auth",
+            "django.contrib.contenttypes",
+            "general_manager",
+        ],
+        SECRET_KEY=secrets.token_urlsafe(32),
+        USE_TZ=True,
+    )
     django.setup()
     call_command("migrate", verbosity=0, interactive=False)
 
@@ -222,12 +232,19 @@ def validate_installed_clis() -> None:
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
     environment["DJANGO_SETTINGS_MODULE"] = "django.conf.global_settings"
-    subprocess.run(  # noqa: S603 - fixed arguments use the current interpreter.
-        [sys.executable, "-m", "general_manager.chat.evals", "--help"],
-        check=True,
-        cwd=Path(tempfile.gettempdir()),
-        env=environment,
-    )
+    with tempfile.TemporaryDirectory() as private_directory:
+        subprocess.run(  # noqa: S603 - fixed arguments use the current interpreter.
+            [
+                sys.executable,
+                "-I",
+                "-m",
+                "general_manager.chat.evals",
+                "--help",
+            ],
+            check=True,
+            cwd=Path(private_directory),
+            env=environment,
+        )
 
 
 def validate_installed() -> None:
