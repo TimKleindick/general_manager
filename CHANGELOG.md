@@ -2,6 +2,50 @@
 
 <!-- version list -->
 
+## v0.63.0 (2026-07-14)
+
+### Bug Fixes
+
+- Harden GraphQL exception rendering
+  ([`b1d1848`](https://github.com/TimKleindick/general_manager/commit/b1d18484a3959d79cc30fa170493c614dea04862))
+
+- Sanitize internal GraphQL errors
+  ([`29c31c2`](https://github.com/TimKleindick/general_manager/commit/29c31c26eba50959e7ef80b184222b206d826d73))
+
+- Sanitize unexpected mutation exceptions
+  ([`083a74e`](https://github.com/TimKleindick/general_manager/commit/083a74e087b6b430db2321c9585011ac1b92b24b))
+
+### Documentation
+
+- Align GraphQL mutation error contracts
+  ([`09cf451`](https://github.com/TimKleindick/general_manager/commit/09cf4514a4e56481dbbf7c8435aec56a6c1bff2b))
+
+- Clarify GraphQL permission error shape
+  ([`69305c8`](https://github.com/TimKleindick/general_manager/commit/69305c8ef37c972637918aafcf968bf03633783e))
+
+- Correct GraphQL mutation failure semantics
+  ([`cfb04f9`](https://github.com/TimKleindick/general_manager/commit/cfb04f93ebf340726a6c4920dbc8d741a1af4f4a))
+
+- Correct GraphQL overview error shape
+  ([`6cc9ece`](https://github.com/TimKleindick/general_manager/commit/6cc9ece75cd7e9cb4156ab80975d2555655a1901))
+
+- Document safe GraphQL error handling
+  ([`b94ee98`](https://github.com/TimKleindick/general_manager/commit/b94ee984c64b616835264a37f964660a4e60b175))
+
+- Refine GraphQL error migration example
+  ([`80b0a3b`](https://github.com/TimKleindick/general_manager/commit/80b0a3bab08e8da18cefb4679abb2cf379231caa))
+
+### Features
+
+- Add explicit public GraphQL error contract
+  ([`39680fd`](https://github.com/TimKleindick/general_manager/commit/39680fd366463e0d0607192b43cdf9fe1395ade3))
+
+### Testing
+
+- Cover GraphQL error type export list
+  ([`8608d39`](https://github.com/TimKleindick/general_manager/commit/8608d39b74c57c1552e1d9e847e4d833823c69de))
+
+
 ## v0.62.3 (2026-07-14)
 
 ### Bug Fixes
