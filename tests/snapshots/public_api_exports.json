@@ -194,6 +194,10 @@
       "general_manager.uploads.adapters",
       "ProxyUploadSink"
     ],
+    "PublicGraphQLError": [
+      "general_manager.api.graphql_errors",
+      "PublicGraphQLError"
+    ],
     "RemoteInvalidationClient": [
       "general_manager.api.remote_invalidation_client",
       "RemoteInvalidationClient"

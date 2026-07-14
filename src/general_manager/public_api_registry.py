@@ -92,6 +92,10 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
 
 API_EXPORTS: LazyExportMap = {
     "GraphQL": ("general_manager.api.graphql", "GraphQL"),
+    "PublicGraphQLError": (
+        "general_manager.api.graphql_errors",
+        "PublicGraphQLError",
+    ),
     "GraphQLPropertyReturnAnnotationError": (
         "general_manager.api.property",
         "GraphQLPropertyReturnAnnotationError",

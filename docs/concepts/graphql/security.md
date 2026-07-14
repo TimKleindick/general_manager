@@ -8,7 +8,7 @@ Security in the GraphQL layer relies on permission checks and robust error handl
 - Permission classes can return a full `ReadPermissionPlan` from the zero-argument permission instance method `get_read_permission_plan()`. `ReadPermissionPlan` is an internal adapter with `filters`, `requires_instance_check`, and `instance_check_reasons`; it is used by generated resolvers, not intended as a stable user import. If `get_read_permission_plan()` is absent or does not return that adapter, GraphQL falls back to the zero-argument legacy permission instance method `get_permission_filter()` and runs per-object read checks after the prefilter.
 - The helper reads `Permission` from the manager class with normal Python attribute lookup and calls it positionally as `Permission(manager_class, info.context.user)`. The later row gate calls the same permission class as `Permission(instance, info.context.user).can_read_instance()`.
 - Legacy permission filter entries may contain optional `filter` and `exclude` mappings. Missing keys are treated as empty mappings by resolvers. Malformed entries are not validated by the helper and fail later when applied to the bucket or search backend. If the fallback `get_permission_filter()` method is missing, the resulting `AttributeError` propagates. The legacy fallback plan uses `requires_instance_check=True` and `instance_check_reasons=("no_prefilter_backend",)`.
-- Mutations invoke `check_create_permission`, `check_update_permission`, or `check_delete_permission` before executing. Permission errors translate into `success: false` responses with descriptive messages.
+- Mutations invoke `check_create_permission`, `check_update_permission`, or `check_delete_permission` before executing. A `PermissionError` returns the fixed public message `Permission denied.` rather than its original text.
 - Attribute-level restrictions hide protected fields even when the user can access the object.
 - Optional GraphQL permission capabilities expose advisory boolean hints for clients. They do not replace read or mutation permission checks.
 
@@ -125,20 +125,37 @@ consistency model.
 
 ## Error propagation
 
-Explicit `GraphQLError` instances keep their existing object identity, message,
-and full extensions mapping. Converted errors use an extensions mapping with a
-single `code` key.
-`PermissionError` maps to `PERMISSION_DENIED`. Django `ValidationError` and
-plain `ValueError` map to `BAD_USER_INPUT`. `TypeError`, `AttributeError`, and
-`RuntimeError` are treated as suspicious handled errors and map to
-`INTERNAL_SERVER_ERROR`. Other handled manager exceptions, including
-`LookupError`, currently also map to `INTERNAL_SERVER_ERROR`. The original
-exception text is exposed as the GraphQL error message for compatibility.
-Logging is diagnostic behavior of the internal `api.graphql` logger and should
-not be treated as a public API contract. These helper details document current
-generated-resolver compatibility behavior, not stable direct-import guarantees.
-Use try/except blocks in custom resolvers to add more context while preserving
-the original message for clients.
+GeneralManager's generated mutations and mutations created with
+`@graph_ql_mutation` pass exceptions through a shared safe error mapper. This is
+a guarantee at those GeneralManager mutation boundaries, not a claim that every
+arbitrary third-party GraphQL resolver is intercepted when it bypasses them.
+
+Explicit `GraphQLError` instances are trusted and returned unchanged, preserving
+their object identity, message, and full extensions mapping.
+`PublicGraphQLError`, imported from `general_manager.api`, is the stable
+application contract for deliberately public resolver failures: applications
+provide both a safe message and a stable `code`.
+
+Django `ValidationError` remains a public validation path. A structured error
+with `message_dict` returns `Validation failed.` with code `BAD_USER_INPUT`, plus
+`fieldErrors` and `nonFieldErrors`. An unstructured `ValidationError` retains
+Django's rendered validation message and returns code `BAD_USER_INPUT`.
+`PermissionError` always returns the fixed message `Permission denied.` and code
+`PERMISSION_DENIED`; applications that deliberately need a different public
+permission message must raise an explicit public error instead.
+
+Every other ordinary exception crossing these mutation boundaries, including
+`ValueError`, returns exactly `An internal server error occurred.` with code
+`INTERNAL_SERVER_ERROR` and an opaque `errorId`. Server logs retain the original
+exception details and traceback under the matching `error_id` so operators can
+correlate a client report without exposing internals. If rendering the original
+exception itself fails, the client response remains sanitized.
+
+Migrate client-facing uses of plain `ValueError` to `PublicGraphQLError`, or to
+Django `ValidationError` for validation failures. Treat every deliberately
+public message, including validation text and explicit `GraphQLError` messages,
+as untrusted output design: it must never contain secrets, credentials, private
+paths, or other internal details.
 
 ## Hardening tips
 

@@ -8,9 +8,11 @@
 
 ::: general_manager.api.graphql.BigIntScalar
 
+::: general_manager.api.graphql_errors.PublicGraphQLError
+
 Stable imports from `general_manager.api` include `GraphQL`,
-`MeasurementType`, `MeasurementScalar`, and the file-upload contracts documented
-below. Stable imports from
+`MeasurementType`, `MeasurementScalar`, `PublicGraphQLError`, and the file-upload
+contracts documented below. Stable imports from
 `general_manager.api.graphql` are limited to the compatibility exports `GraphQL`,
 `MeasurementType`, `MeasurementScalar`, and `BigIntScalar`. The implementation keeps lower-level helpers,
 constants, pagination types, permission-plan adapters, and exception mappers in
@@ -238,25 +240,39 @@ methods named `resolve_<field>` are used when present, otherwise the field is
 read from the current request user. Provider `graphql_capabilities` entries that
 are not `GraphQLPermissionCapability` instances are ignored.
 
-Generated GraphQL resolvers convert handled manager exceptions through the
-shared error mapper. Existing `GraphQLError` instances are returned unchanged,
-preserving object identity and the full existing `extensions` mapping. Converted
-errors always include an `extensions.code` value. `PermissionError` becomes
-`PERMISSION_DENIED`; plain `ValueError` and unstructured Django
-`ValidationError` become `BAD_USER_INPUT`; `TypeError`, `AttributeError`,
-`RuntimeError`, `LookupError`, and other handled internal exceptions currently
-become `INTERNAL_SERVER_ERROR`. Non-structured converted exceptions keep
-`str(error)` as the GraphQL message, preserving current Django
-`ValidationError` message formatting.
+GeneralManager-generated mutations and mutations created with
+`@graph_ql_mutation` convert exceptions through the shared safe error mapper.
+This boundary does not intercept arbitrary third-party GraphQL resolvers that
+bypass GeneralManager's generated and decorator mutation paths.
 
-When Django `ValidationError` instances have `message_dict`, mutation errors use
-the generic message `Validation failed.` and include structured details in
+Existing `GraphQLError` instances are trusted and returned unchanged, preserving
+object identity, message, and the full existing `extensions` mapping.
+`PublicGraphQLError` is the stable application contract for an intentional
+public failure with a safe message and stable application `code`; import it from
+`general_manager.api`.
+
+Django `ValidationError` remains public validation output. Unstructured errors
+preserve Django's rendered validation message with code `BAD_USER_INPUT`. When a
+`ValidationError` has `message_dict`, the mutation error uses the generic message
+`Validation failed.` and includes structured details in
 `extensions.fieldErrors` and `extensions.nonFieldErrors`. Generated mutations
 use schema-aware input field names, so a Python/Django field such as
 `project_phase_type` is reported as `projectPhaseType`, and relation raw-id
 implementation keys such as `customer_id` are reported as their exposed GraphQL
 input field, such as `customer`. Decorator-created mutations map structured
 validation field keys with `snake_to_camel`.
+
+`PermissionError` returns the fixed message `Permission denied.` with code
+`PERMISSION_DENIED`, unless application code deliberately raises an explicit
+public error. Every other ordinary exception crossing these boundaries,
+including `ValueError`, returns exactly `An internal server error occurred.`
+with code `INTERNAL_SERVER_ERROR` and an opaque `errorId`. Server logs retain the
+original exception details and traceback with the matching `error_id`; failures
+while rendering the original exception are also kept out of the client response.
+
+Migrate client-facing `ValueError` uses to `PublicGraphQLError`, or to Django
+`ValidationError` for validation (use structured validation errors for field
+details). Public messages must never contain secrets or other internal details.
 
 ::: general_manager.api.graphql_view.GeneralManagerGraphQLView
 
