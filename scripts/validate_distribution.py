@@ -106,7 +106,11 @@ def _sdist_members(sdist: Path, expected_root: str) -> set[str]:
                     )
                     raise ValueError(message)
                 if member.isfile() and len(parts) > 1:
-                    members.add("/".join(parts[1:]))
+                    relative_parts = parts[1:]
+                    if relative_parts[:1] == ("src",):
+                        relative_parts = relative_parts[1:]
+                    if relative_parts:
+                        members.add("/".join(relative_parts))
             return members
     except (OSError, tarfile.TarError) as exc:
         message = f"Could not inspect sdist {sdist.name}: {exc}"
