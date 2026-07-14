@@ -152,4 +152,21 @@ entries automatically. Avoid editing version numbers manually; instead focus on
 clear commit messages and updated tests so release automation can classify your
 changes correctly.
 
+Every commit pushed to `main` passes the same reusable quality workflow used by
+pull requests. If semantic-release identifies that exact commit as
+release-eligible, the publish workflow builds the wheel and source distribution
+once, then checks their metadata, required package contents, expected version,
+and installed behavior. No release commit, tag, GitHub release, or PyPI upload is
+created until those artifacts pass validation.
+
+The validated wheel and source distribution are uploaded together as a
+SHA-addressed workflow artifact and retained for 90 days. Release retries must
+reuse that artifact rather than rebuild it. Recovery verifies that the release
+commit descends directly from the triggering `main` commit, changes only the
+version and changelog, and owns the expected tag before publishing. PyPI retries
+also compare the existing filenames and SHA-256 hashes before skipping an
+upload, then require the complete two-file set afterward. The 90-day retention
+period is the supported automated recovery window; after it expires, stop and
+investigate instead of rebuilding or uploading files manually.
+
 Thanks again for investing your time into GeneralManager!
