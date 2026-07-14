@@ -11,6 +11,9 @@ from django.db import models
 from django.utils import timezone
 
 from general_manager.interface import ExistingModelInterface
+from general_manager.interface.capabilities.orm.mutations import (
+    OrmMutationCapability,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
@@ -187,6 +190,157 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
             .last()
         )  # type: ignore[attr-defined]
         self.assertEqual(history.history_change_reason, "renamed")  # type: ignore[union-attr]
+
+    def test_non_upload_create_rolls_back_when_many_to_many_fails(self) -> None:
+        attempted_name = "Failed M2M Create"
+        original_apply_many_to_many = OrmMutationCapability.apply_many_to_many
+        failure = RuntimeError("M2M failed")
+
+        def apply_many_to_many_then_fail(*args: object, **kwargs: object) -> None:
+            original_apply_many_to_many(*args, **kwargs)
+            raise failure
+
+        with (
+            patch.object(
+                OrmMutationCapability,
+                "apply_many_to_many",
+                autospec=True,
+                side_effect=apply_many_to_many_then_fail,
+            ),
+            self.assertRaisesRegex(RuntimeError, "M2M failed"),
+        ):
+            self.CustomerManager.create(
+                creator_id=self.user1.pk,
+                name=attempted_name,
+                owners_id_list=[self.user2.pk],
+                ignore_permission=True,
+            )
+
+        self.assertEqual(
+            {
+                "live": self.LegacyCustomer.objects.filter(
+                    name=attempted_name
+                ).exists(),
+                "historical": self.LegacyCustomer.history.filter(
+                    name=attempted_name
+                ).exists(),
+            },
+            {"live": False, "historical": False},
+        )
+
+    def test_non_upload_update_rolls_back_when_many_to_many_fails(self) -> None:
+        customer_id = self.customer_a.identification["id"]
+        baseline = self.LegacyCustomer.objects.get(pk=customer_id)
+        baseline_state = {
+            "name": baseline.name,
+            "owner_ids": list(
+                baseline.owners.order_by("pk").values_list("pk", flat=True)
+            ),
+            "changed_by_id": baseline.changed_by_id,
+            "history_count": self.LegacyCustomer.history.filter(id=customer_id).count(),
+        }
+        original_apply_many_to_many = OrmMutationCapability.apply_many_to_many
+        failure = RuntimeError("M2M failed")
+
+        def apply_many_to_many_then_fail(*args: object, **kwargs: object) -> None:
+            original_apply_many_to_many(*args, **kwargs)
+            raise failure
+
+        with (
+            patch.object(
+                OrmMutationCapability,
+                "apply_many_to_many",
+                autospec=True,
+                side_effect=apply_many_to_many_then_fail,
+            ),
+            self.assertRaisesRegex(RuntimeError, "M2M failed"),
+        ):
+            self.customer_a.update(
+                creator_id=self.user2.pk,
+                name="Failed M2M Update",
+                owners_id_list=[self.user2.pk],
+                ignore_permission=True,
+            )
+
+        persisted = self.LegacyCustomer.objects.get(pk=customer_id)
+        persisted_state = {
+            "name": persisted.name,
+            "owner_ids": list(
+                persisted.owners.order_by("pk").values_list("pk", flat=True)
+            ),
+            "changed_by_id": persisted.changed_by_id,
+            "history_count": self.LegacyCustomer.history.filter(id=customer_id).count(),
+        }
+        self.assertEqual(persisted_state, baseline_state)
+
+    def test_non_upload_create_rolls_back_when_history_reason_fails(self) -> None:
+        attempted_name = "Failed History Create"
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.mutations."
+                "call_update_change_reason",
+                side_effect=RuntimeError("history failed"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "history failed"),
+        ):
+            self.CustomerManager.create(
+                creator_id=self.user1.pk,
+                history_comment="create reason",
+                name=attempted_name,
+                ignore_permission=True,
+            )
+
+        self.assertEqual(
+            {
+                "live": self.LegacyCustomer.objects.filter(
+                    name=attempted_name
+                ).exists(),
+                "historical": self.LegacyCustomer.history.filter(
+                    name=attempted_name
+                ).exists(),
+            },
+            {"live": False, "historical": False},
+        )
+
+    def test_non_upload_update_rolls_back_when_history_reason_fails(self) -> None:
+        customer_id = self.customer_a.identification["id"]
+        baseline = self.LegacyCustomer.objects.get(pk=customer_id)
+        baseline_state = {
+            "name": baseline.name,
+            "owner_ids": list(
+                baseline.owners.order_by("pk").values_list("pk", flat=True)
+            ),
+            "changed_by_id": baseline.changed_by_id,
+            "history_count": self.LegacyCustomer.history.filter(id=customer_id).count(),
+        }
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.mutations."
+                "call_update_change_reason",
+                side_effect=RuntimeError("history failed"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "history failed"),
+        ):
+            self.customer_a.update(
+                creator_id=self.user2.pk,
+                history_comment="update reason",
+                name="Failed History Update",
+                owners_id_list=[self.user2.pk],
+                ignore_permission=True,
+            )
+
+        persisted = self.LegacyCustomer.objects.get(pk=customer_id)
+        persisted_state = {
+            "name": persisted.name,
+            "owner_ids": list(
+                persisted.owners.order_by("pk").values_list("pk", flat=True)
+            ),
+            "changed_by_id": persisted.changed_by_id,
+            "history_count": self.LegacyCustomer.history.filter(id=customer_id).count(),
+        }
+        self.assertEqual(persisted_state, baseline_state)
 
     def test_delete_marks_customer_inactive(self) -> None:
         """
