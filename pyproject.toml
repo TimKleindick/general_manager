@@ -85,6 +85,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "general_manager" = ["py.typed"]
+"general_manager.chat.evals" = ["datasets/*.yaml"]
 
 [tool.semantic_release]
 allow_zero_version = true
