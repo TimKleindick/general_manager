@@ -1048,6 +1048,7 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
             *,
             creator_id: int | None,
             history_comment: str | None,
+            _savepoint: bool = True,
         ) -> object:
             history_write_callbacks.increment()
             return original_save_with_history(
@@ -1056,6 +1057,7 @@ class TestPerf337RelationAndHistoryWorkloads(GeneralManagerTransactionTestCase):
                 instance,
                 creator_id=creator_id,
                 history_comment=history_comment,
+                _savepoint=_savepoint,
             )
 
         with patch.object(

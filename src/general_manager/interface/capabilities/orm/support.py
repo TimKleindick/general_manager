@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Type, cast
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db import models
+from django.db import DEFAULT_DB_ALIAS, connections, models
 from django.db.models import Subquery
 from django.utils import timezone
 from general_manager.bucket.database_bucket import DatabaseBucket
@@ -303,14 +303,22 @@ class OrmReadCapability(BaseCapability):
             raise model_cls.DoesNotExist
 
         context = current_calculation_run_context()
-        read_func = (
-            _perform
-            if context is None
-            else lambda: context.get_or_set(
-                _orm_instance_cache_key(interface_instance),
-                _perform,
+        if context is None:
+            read_func = _perform
+        else:
+            interface_cls = interface_instance.__class__
+            support = get_support_capability(interface_cls)
+            database_alias = (
+                support.get_database_alias(interface_cls) or DEFAULT_DB_ALIAS
             )
-        )
+            read_func = (
+                _perform
+                if _connection_has_application_atomic_block(database_alias)
+                else lambda: context.get_or_set(
+                    _orm_instance_cache_key(interface_instance),
+                    _perform,
+                )
+            )
 
         return call_with_observability(
             interface_instance,
@@ -1070,6 +1078,25 @@ def _orm_instance_cache_key(
         only_active,
         interface_instance._search_date,
     )
+
+
+def _connection_has_application_atomic_block(database_alias: str) -> bool:
+    """Return whether a connection is inside a non-TestCase atomic block."""
+    connection = connections[database_alias]
+    try:
+        blocks = getattr(connection, "atomic_blocks")  # noqa: B009
+    except (AttributeError, TypeError):
+        return bool(getattr(connection, "in_atomic_block", False))
+    if not isinstance(blocks, (list, tuple)) or not blocks:
+        return bool(getattr(connection, "in_atomic_block", False))
+
+    def _is_testcase_wrapper(block: object) -> bool:
+        try:
+            return getattr(block, "_from_testcase") is True  # noqa: B009
+        except (AttributeError, TypeError):
+            return False
+
+    return any(not _is_testcase_wrapper(block) for block in blocks)
 
 
 def discard_orm_instance_cache(

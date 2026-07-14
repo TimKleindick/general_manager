@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from datetime import datetime, timedelta
-from django.db import models
+from django.db import models, transaction
 from django.core.exceptions import ValidationError, FieldError
 from django.contrib.auth.models import User
 from django.utils.crypto import get_random_string
@@ -619,6 +619,30 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 self.TestHuman(id=self.test_human1.id).name,
                 "Alice Updated",
             )
+
+    def test_outer_transaction_rollback_does_not_cache_uncommitted_update(self):
+        class ForcedRollback(RuntimeError):
+            pass
+
+        human_id = self.test_human1.id
+
+        with CalculationRunContext():
+            cached_human = self.TestHuman(id=human_id)
+            self.assertEqual(cached_human.name, "Alice")
+
+            with self.assertRaises(ForcedRollback):
+                with transaction.atomic():
+                    cached_human.update(
+                        name="Alice Uncommitted",
+                        ignore_permission=True,
+                    )
+                    self.assertEqual(
+                        self.TestHuman(id=human_id).name,
+                        "Alice Uncommitted",
+                    )
+                    raise ForcedRollback
+
+            self.assertEqual(self.TestHuman(id=human_id).name, "Alice")
 
     def test_delete_invalidates_run_scoped_orm_identity_cache(self):
         human_id = self.test_human2.id

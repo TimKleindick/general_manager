@@ -24,6 +24,7 @@ from general_manager.interface.capabilities.orm import (
     OrmPersistenceSupportCapability,
     OrmQueryCapability,
     OrmReadCapability,
+    OrmUpdateCapability,
     OrmValidationCapability,
     SoftDeleteCapability,
 )
@@ -34,6 +35,7 @@ from general_manager.interface.capabilities.orm.mutations import (
 from general_manager.interface.capabilities.orm.support import (
     AmbiguousReverseFilterAliasError,
     _build_reverse_filter_alias_map,
+    _connection_has_application_atomic_block,
     _resolve_filter_segment,
     _translate_reverse_filter_aliases,
     _translate_reverse_filter_key,
@@ -174,6 +176,25 @@ class TestOrmPersistenceSupportCapability:
 class TestOrmReadCapability:
     """Tests for ORM read capability."""
 
+    def test_connection_atomic_detection_ignores_testcase_wrapper(self):
+        """Keep identity caching enabled for Django's TestCase transaction."""
+        testcase_block = SimpleNamespace(_from_testcase=True)
+        application_block = SimpleNamespace(_from_testcase=False)
+        connection = SimpleNamespace(
+            atomic_blocks=[testcase_block],
+            in_atomic_block=True,
+        )
+
+        with patch(
+            "general_manager.interface.capabilities.orm.support.connections",
+            {"secondary": connection},
+        ):
+            assert not _connection_has_application_atomic_block("secondary")
+
+            connection.atomic_blocks.append(application_block)
+
+            assert _connection_has_application_atomic_block("secondary")
+
     def test_get_data_reuses_instance_inside_calculation_run_context(self):
         """Test that repeated ORM reads reuse the row within an explicit run context."""
         capability = OrmReadCapability()
@@ -214,15 +235,23 @@ class TestOrmReadCapability:
                 "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
                 return_value=False,
             ):
-                with patch(
-                    "general_manager.interface.capabilities.orm.with_observability",
-                    side_effect=lambda *_args, **kwargs: kwargs["func"](),
+                with (
+                    patch(
+                        "general_manager.interface.capabilities.orm.support._connection_has_application_atomic_block",
+                        return_value=False,
+                    ) as has_application_atomic,
+                    patch(
+                        "general_manager.interface.capabilities.orm.with_observability",
+                        side_effect=lambda *_args, **kwargs: kwargs["func"](),
+                    ),
+                    CalculationRunContext(),
                 ):
-                    with CalculationRunContext():
-                        assert capability.get_data(first) is model_instance
-                        assert capability.get_data(second) is model_instance
+                    assert capability.get_data(first) is model_instance
+                    assert capability.get_data(second) is model_instance
 
         mock_manager.get.assert_called_once_with(pk=42)
+        assert has_application_atomic.call_count == 2
+        has_application_atomic.assert_called_with("secondary")
 
     def test_get_data_retrieves_instance_by_pk(self):
         """Test that get_data retrieves model instance by primary key."""
@@ -1823,6 +1852,206 @@ class TestOrmMutationCapability:
         )
         mark_finalizing.assert_called_once_with(locked, target_pk=42)
 
+    def test_non_upload_create_uses_configured_alias_for_outer_atomic(self):
+        """Keep ordinary create persistence on one alias-aware transaction."""
+        capability = OrmCreateCapability()
+        interface_cls = Mock()
+        instance = Mock()
+        interface_cls._model.return_value = instance
+        support = Mock()
+        support.get_database_alias.return_value = "replica"
+        mutation = Mock()
+        mutation.assign_simple_attributes.return_value = instance
+        mutation.save_with_history.return_value = 42
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.call_with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._normalize_payload",
+                return_value=({"name": "created"}, {"owners_id_list": [1]}),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._mutation_capability_for",
+                return_value=mutation,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
+                return_value=nullcontext(),
+            ) as atomic,
+        ):
+            result = capability.create(interface_cls, name="created")
+
+        assert result == {"id": 42}
+        atomic.assert_called_once_with(using="replica")
+        mutation.save_with_history.assert_called_once_with(
+            interface_cls,
+            instance,
+            creator_id=None,
+            history_comment=None,
+            _savepoint=False,
+        )
+
+    def test_non_upload_update_uses_configured_alias_for_outer_atomic(self):
+        """Keep ordinary update persistence on one alias-aware transaction."""
+        capability = OrmUpdateCapability()
+        interface_instance = SimpleNamespace(pk=7)
+        model_instance = Mock()
+        support = Mock()
+        manager = Mock()
+        manager.get.return_value = model_instance
+        support.get_manager.return_value = manager
+        support.get_database_alias.return_value = "archive"
+        mutation = Mock()
+        mutation.assign_simple_attributes.return_value = model_instance
+        mutation.save_with_history.return_value = 7
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.call_with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._normalize_payload",
+                return_value=({"name": "updated"}, {"owners_id_list": [2]}),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._mutation_capability_for",
+                return_value=mutation,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
+                return_value=nullcontext(),
+            ) as atomic,
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.discard_orm_instance_cache"
+            ),
+        ):
+            result = capability.update(interface_instance, name="updated")
+
+        assert result == {"id": 7}
+        atomic.assert_called_once_with(using="archive")
+        mutation.save_with_history.assert_called_once_with(
+            interface_instance.__class__,
+            model_instance,
+            creator_id=None,
+            history_comment=None,
+            _savepoint=False,
+        )
+
+    def test_non_upload_update_invalidates_cache_after_many_to_many(self):
+        """Expose the committed relation state before invalidating cached reads."""
+        capability = OrmUpdateCapability()
+        interface_instance = SimpleNamespace(pk=7)
+        model_instance = Mock()
+        support = Mock()
+        manager = Mock()
+        manager.get.return_value = model_instance
+        support.get_manager.return_value = manager
+        support.get_database_alias.return_value = None
+        events: list[str] = []
+
+        class RecordingAtomic:
+            def __enter__(self):
+                events.append("atomic enter")
+
+            def __exit__(self, *_args):
+                events.append("atomic exit")
+
+        mutation = Mock()
+        mutation.assign_simple_attributes.return_value = model_instance
+        mutation.save_with_history.return_value = 7
+        mutation.apply_many_to_many.side_effect = lambda *_args, **_kwargs: (
+            events.append("m2m")
+        )
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.call_with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._normalize_payload",
+                return_value=({}, {"owners_id_list": [2]}),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._mutation_capability_for",
+                return_value=mutation,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
+                return_value=RecordingAtomic(),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.discard_orm_instance_cache",
+                side_effect=lambda *_args: events.append("discard"),
+            ),
+        ):
+            capability.update(interface_instance, owners_id_list=[2])
+
+        assert events == ["atomic enter", "m2m", "atomic exit", "discard"]
+
+    def test_non_upload_update_does_not_invalidate_cache_when_many_to_many_fails(
+        self,
+    ):
+        """Leave cached reads untouched when the transaction is rolled back."""
+        capability = OrmUpdateCapability()
+        interface_instance = SimpleNamespace(pk=7)
+        model_instance = Mock()
+        support = Mock()
+        manager = Mock()
+        manager.get.return_value = model_instance
+        support.get_manager.return_value = manager
+        support.get_database_alias.return_value = None
+        mutation = Mock()
+        mutation.assign_simple_attributes.return_value = model_instance
+        mutation.save_with_history.return_value = 7
+        mutation.apply_many_to_many.side_effect = RuntimeError("m2m failed")
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.call_with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._normalize_payload",
+                return_value=({}, {"owners_id_list": [2]}),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations._mutation_capability_for",
+                return_value=mutation,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
+                return_value=nullcontext(),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.mutations.discard_orm_instance_cache"
+            ) as discard_cache,
+        ):
+            with pytest.raises(RuntimeError, match="m2m failed"):
+                capability.update(interface_instance, owners_id_list=[2])
+
+        discard_cache.assert_not_called()
+
     def test_assign_simple_attributes_skips_not_provided(self):
         """Test that assign_simple_attributes skips NOT_PROVIDED values."""
         from django.db.models import NOT_PROVIDED
@@ -1910,7 +2139,7 @@ class TestOrmMutationCapability:
                             with patch(
                                 "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
                                 return_value=nullcontext(),
-                            ):
+                            ) as atomic:
                                 result = capability.save_with_history(
                                     interface_cls,
                                     instance,
@@ -1920,6 +2149,7 @@ class TestOrmMutationCapability:
 
         assert result == 42
         assert instance._state.db == "replica"
+        atomic.assert_called_once_with(using="replica")
         instance.save.assert_called_once_with(using="replica")
 
     def test_delete_hard_deletes_with_database_alias(self):

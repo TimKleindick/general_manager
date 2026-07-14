@@ -115,6 +115,7 @@ class OrmMutationCapability(BaseCapability):
         *,
         creator_id: int | None,
         history_comment: str | None,
+        _savepoint: bool = True,
     ) -> object:
         """
         Persist the model instance while recording creator metadata and an optional change reason.
@@ -126,6 +127,9 @@ class OrmMutationCapability(BaseCapability):
             instance (models.Model): The Django model instance to validate and save.
             creator_id (int | None): Identifier of the user or process responsible for the change; assigned to `instance.changed_by_id` when supported.
             history_comment (str | None): Optional comment describing the change; attached as a change reason after save when provided.
+            _savepoint (bool): Internal control for avoiding a redundant nested
+                savepoint when an encompassing mutation transaction already
+                provides the rollback boundary.
 
         Returns:
             object: The primary key (`pk`) of the saved instance. Django primary
@@ -156,11 +160,18 @@ class OrmMutationCapability(BaseCapability):
             database_alias = support.get_database_alias(interface_cls)
             if database_alias:
                 instance._state.db = database_alias
-            atomic_context = (
-                transaction.atomic(using=database_alias)
-                if database_alias
-                else transaction.atomic()
-            )
+            if database_alias:
+                atomic_context = (
+                    transaction.atomic(using=database_alias)
+                    if _savepoint
+                    else transaction.atomic(using=database_alias, savepoint=False)
+                )
+            else:
+                atomic_context = (
+                    transaction.atomic()
+                    if _savepoint
+                    else transaction.atomic(savepoint=False)
+                )
             with atomic_context:
                 _assign_history_actor(
                     instance,
@@ -360,18 +371,27 @@ class OrmCreateCapability(BaseCapability):
             instance = mutation.assign_simple_attributes(
                 interface_cls, interface_cls._model(), normalized_simple
             )
-            pk = mutation.save_with_history(
-                interface_cls,
-                instance,
-                creator_id=creator_id,
-                history_comment=history_comment,
+            support = get_support_capability(interface_cls)
+            database_alias = support.get_database_alias(interface_cls)
+            atomic_context = (
+                transaction.atomic(using=database_alias)
+                if database_alias
+                else transaction.atomic()
             )
-            mutation.apply_many_to_many(
-                interface_cls,
-                instance,
-                many_to_many_kwargs=normalized_many,
-                history_comment=history_comment,
-            )
+            with atomic_context:
+                pk = mutation.save_with_history(
+                    interface_cls,
+                    instance,
+                    creator_id=creator_id,
+                    history_comment=history_comment,
+                    _savepoint=False,
+                )
+                mutation.apply_many_to_many(
+                    interface_cls,
+                    instance,
+                    many_to_many_kwargs=normalized_many,
+                    history_comment=history_comment,
+                )
             return {"id": pk}
 
         return call_with_observability(
@@ -502,19 +522,27 @@ class OrmUpdateCapability(BaseCapability):
             instance = mutation.assign_simple_attributes(
                 interface_instance.__class__, instance, normalized_simple
             )
-            pk = mutation.save_with_history(
-                interface_instance.__class__,
-                instance,
-                creator_id=creator_id,
-                history_comment=history_comment,
+            database_alias = support.get_database_alias(interface_instance.__class__)
+            atomic_context = (
+                transaction.atomic(using=database_alias)
+                if database_alias
+                else transaction.atomic()
             )
+            with atomic_context:
+                pk = mutation.save_with_history(
+                    interface_instance.__class__,
+                    instance,
+                    creator_id=creator_id,
+                    history_comment=history_comment,
+                    _savepoint=False,
+                )
+                mutation.apply_many_to_many(
+                    interface_instance.__class__,
+                    instance,
+                    many_to_many_kwargs=normalized_many,
+                    history_comment=history_comment,
+                )
             discard_orm_instance_cache(interface_instance.__class__, pk)
-            mutation.apply_many_to_many(
-                interface_instance.__class__,
-                instance,
-                many_to_many_kwargs=normalized_many,
-                history_comment=history_comment,
-            )
             return {"id": pk}
 
         return call_with_observability(
