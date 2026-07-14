@@ -23,7 +23,8 @@ REQUIRED_MEMBERS = frozenset(
 )
 
 _WHEEL_FILENAME = re.compile(
-    r"^generalmanager-(?P<version>[^-]+)-[^-]+-[^-]+-[^-]+\.whl$",
+    r"^generalmanager-(?P<version>[^-]+)(?:-[0-9][0-9A-Za-z_]*)?"
+    r"-[^-]+-[^-]+-[^-]+\.whl$",
     re.IGNORECASE,
 )
 _SDIST_FILENAME = re.compile(
@@ -33,7 +34,11 @@ _SDIST_FILENAME = re.compile(
 
 
 def _single_archive(dist_dir: Path, pattern: str, label: str) -> Path:
-    archives = sorted(dist_dir.glob(pattern))
+    try:
+        archives = sorted(dist_dir.glob(pattern))
+    except OSError as exc:
+        message = f"Could not inspect distribution directory {dist_dir}: {exc}"
+        raise ValueError(message) from exc
     if len(archives) != 1:
         names = ", ".join(archive.name for archive in archives) or "none"
         message = (
@@ -59,14 +64,46 @@ def _require_members(archive: Path, members: set[str]) -> None:
         raise ValueError(message)
 
 
-def _sdist_members(sdist: Path) -> set[str]:
-    with tarfile.open(sdist, "r:gz") as archive:
-        members: set[str] = set()
-        for member in archive.getmembers():
-            parts = PurePosixPath(member.name).parts
-            if len(parts) > 1:
-                members.add("/".join(parts[1:]))
-        return members
+def _member_parts(archive: Path, member_name: str) -> tuple[str, ...]:
+    path = PurePosixPath(member_name.replace("\\", "/"))
+    if path.is_absolute() or ".." in path.parts:
+        message = f"Unsafe archive member path in {archive.name}: {member_name}"
+        raise ValueError(message)
+    return path.parts
+
+
+def _wheel_members(wheel: Path) -> set[str]:
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            members: set[str] = set()
+            for member in archive.infolist():
+                _member_parts(wheel, member.filename)
+                if not member.is_dir():
+                    members.add(member.filename)
+            return members
+    except (OSError, zipfile.BadZipFile) as exc:
+        message = f"Could not inspect wheel {wheel.name}: {exc}"
+        raise ValueError(message) from exc
+
+
+def _sdist_members(sdist: Path, expected_root: str) -> set[str]:
+    try:
+        with tarfile.open(sdist, "r:gz") as archive:
+            members: set[str] = set()
+            for member in archive.getmembers():
+                parts = _member_parts(sdist, member.name)
+                if not parts or parts[0] != expected_root:
+                    message = (
+                        f"{sdist.name} member {member.name!r} is outside expected "
+                        f"top-level root {expected_root!r}"
+                    )
+                    raise ValueError(message)
+                if member.isfile() and len(parts) > 1:
+                    members.add("/".join(parts[1:]))
+            return members
+    except (OSError, tarfile.TarError) as exc:
+        message = f"Could not inspect sdist {sdist.name}: {exc}"
+        raise ValueError(message) from exc
 
 
 def validate_archives(dist_dir: Path) -> None:
@@ -83,9 +120,9 @@ def validate_archives(dist_dir: Path) -> None:
         )
         raise ValueError(message)
 
-    with zipfile.ZipFile(wheel) as archive:
-        _require_members(wheel, set(archive.namelist()))
-    _require_members(sdist, _sdist_members(sdist))
+    _require_members(wheel, _wheel_members(wheel))
+    expected_sdist_root = sdist.name.removesuffix(".tar.gz")
+    _require_members(sdist, _sdist_members(sdist, expected_sdist_root))
 
 
 def _parse_args() -> argparse.Namespace:
