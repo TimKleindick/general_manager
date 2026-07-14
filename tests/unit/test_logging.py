@@ -412,20 +412,43 @@ def test_api_graphql_error_logging() -> None:
         assert info_call.args[0] == "graphql permission error"
         assert info_call.kwargs["context"]["error"] == "PermissionError"
 
-    with patch("general_manager.api.graphql_errors.logger") as mock_logger:
-        GraphQL._handle_graph_ql_error(ValueError("bad input"))
-        warning_call = mock_logger.warning.call_args_list[0]
-        assert warning_call.args[0] == "graphql user error"
-        assert warning_call.kwargs["context"]["error"] == "ValueError"
+    value_error = ValueError("bad input")
+    with (
+        patch("general_manager.api.graphql_errors.logger") as mock_logger,
+        patch("general_manager.api.graphql_errors.uuid4") as uuid4_mock,
+    ):
+        uuid4_mock.return_value.hex = "0123456789abcdef0123456789abcdef"
 
-    with patch("general_manager.api.graphql_errors.logger") as mock_logger:
-        GraphQL._handle_graph_ql_error(RuntimeError("boom"))
-        warning_call = mock_logger.warning.call_args_list[0]
-        assert (
-            warning_call.args[0]
-            == "graphql caught suspicious error (may indicate a bug)"
+        GraphQL._handle_graph_ql_error(value_error)
+
+        mock_logger.error.assert_called_once_with(
+            "graphql internal error",
+            context={
+                "error": "ValueError",
+                "message": "bad input",
+                "error_id": "0123456789abcdef0123456789abcdef",
+            },
+            exc_info=value_error,
         )
-        assert warning_call.kwargs["context"]["error"] == "RuntimeError"
+
+    runtime_error = RuntimeError("boom")
+    with (
+        patch("general_manager.api.graphql_errors.logger") as mock_logger,
+        patch("general_manager.api.graphql_errors.uuid4") as uuid4_mock,
+    ):
+        uuid4_mock.return_value.hex = "fedcba9876543210fedcba9876543210"
+
+        GraphQL._handle_graph_ql_error(runtime_error)
+
+        mock_logger.error.assert_called_once_with(
+            "graphql internal error",
+            context={
+                "error": "RuntimeError",
+                "message": "boom",
+                "error_id": "fedcba9876543210fedcba9876543210",
+            },
+            exc_info=runtime_error,
+        )
 
 
 def test_manager_meta_logging_on_class_creation() -> None:

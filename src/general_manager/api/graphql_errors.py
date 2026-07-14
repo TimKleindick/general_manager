@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol, TypeAlias, TypedDict, cast
+from uuid import uuid4
 
 from graphql import GraphQLError
 from graphql.language import ast
@@ -66,6 +67,9 @@ else:
     )
 
 logger = get_logger("api.graphql")
+
+_INTERNAL_ERROR_MESSAGE = "An internal server error occurred."
+_PERMISSION_DENIED_MESSAGE = "Permission denied."
 
 GrapheneBaseType: TypeAlias = "_GrapheneMountedType"
 GrapheneBaseTypeClass: TypeAlias = type[GrapheneBaseType]
@@ -222,18 +226,18 @@ class InvalidReadPermissionConfigurationError(TypeError):
 EXPECTED_MANAGER_ERRORS: tuple[type[Exception], ...] = (
     PermissionError,
     ValidationError,
-    ValueError,
-    LookupError,
     GraphQLError,
 )
-"""Internal handling tuple for ``PermissionError``, Django ``ValidationError``, ``ValueError``, ``LookupError``, and ``GraphQLError``."""
+"""Compatibility metadata for permission, validation, and explicit errors."""
 
 SUSPICIOUS_MANAGER_ERRORS: tuple[type[Exception], ...] = (
+    ValueError,
+    LookupError,
     TypeError,
     AttributeError,
     RuntimeError,
 )
-"""Internal handling tuple for suspicious ``TypeError``, ``AttributeError``, and ``RuntimeError`` cases."""
+"""Compatibility metadata for value, lookup, type, attribute, and runtime errors."""
 
 HANDLED_MANAGER_ERRORS: tuple[type[Exception], ...] = (
     *EXPECTED_MANAGER_ERRORS,
@@ -513,10 +517,10 @@ def handle_graph_ql_error(
     ``"Validation failed."`` with ``BAD_USER_INPUT`` plus ``fieldErrors`` and
     ``nonFieldErrors``. When ``field_name_mapper`` is provided, it maps
     ``message_dict`` field keys before they are emitted in ``fieldErrors``;
-    non-field errors are not mapped. Other converted exceptions keep their
-    original message and category-specific code. Logging level/category is
-    diagnostic behavior of the internal ``api.graphql`` logger and is not a
-    public API contract.
+    non-field errors are not mapped. ``PermissionError`` instances use a fixed
+    public message. All other exceptions use a generic internal-error message
+    and an opaque correlation ID. Logging level/category is diagnostic behavior
+    of the internal ``api.graphql`` logger and is not a public API contract.
     """
     message = str(error)
     error_name = type(error).__name__
@@ -526,12 +530,6 @@ def handle_graph_ql_error(
             context={"error": error_name, "message": message},
         )
         return error
-    elif isinstance(error, PermissionError):
-        logger.info(
-            "graphql permission error",
-            context={"error": error_name, "message": message},
-        )
-        return GraphQLError(message, extensions={"code": "PERMISSION_DENIED"})
     elif isinstance(error, ValidationError):
         logger.warning(
             "graphql user error",
@@ -546,26 +544,26 @@ def handle_graph_ql_error(
                 ),
             )
         return GraphQLError(message, extensions={"code": "BAD_USER_INPUT"})
-    elif isinstance(error, ValueError):
-        logger.warning(
-            "graphql user error",
+    elif isinstance(error, PermissionError):
+        logger.info(
+            "graphql permission error",
             context={"error": error_name, "message": message},
         )
-        return GraphQLError(message, extensions={"code": "BAD_USER_INPUT"})
-    elif isinstance(error, SUSPICIOUS_MANAGER_ERRORS):
-        logger.warning(
-            "graphql caught suspicious error (may indicate a bug)",
-            context={"error": error_name, "message": message},
-            exc_info=error,
+        return GraphQLError(
+            _PERMISSION_DENIED_MESSAGE,
+            extensions={"code": "PERMISSION_DENIED"},
         )
-        return GraphQLError(message, extensions={"code": "INTERNAL_SERVER_ERROR"})
-    else:
-        logger.error(
-            "graphql internal error",
-            context={"error": error_name, "message": message},
-            exc_info=error,
-        )
-        return GraphQLError(message, extensions={"code": "INTERNAL_SERVER_ERROR"})
+
+    error_id = uuid4().hex
+    logger.error(
+        "graphql internal error",
+        context={"error": error_name, "message": message, "error_id": error_id},
+        exc_info=error,
+    )
+    return GraphQLError(
+        _INTERNAL_ERROR_MESSAGE,
+        extensions={"code": "INTERNAL_SERVER_ERROR", "errorId": error_id},
+    )
 
 
 def get_read_permission_filter(

@@ -518,6 +518,72 @@ class GraphQLHelperTests(SimpleTestCase):
         assert error.extensions == {"code": "BAD_USER_INPUT"}
         assert error.message == "['bad data']"
 
+    def test_handle_graphql_error_sanitizes_internal_exceptions(self) -> None:
+        error_id = "0123456789abcdef0123456789abcdef"
+        private_message = "tenant secret must not escape"
+        exception_types = (
+            ValueError,
+            TypeError,
+            AttributeError,
+            RuntimeError,
+            LookupError,
+            OSError,
+        )
+
+        with mock.patch("general_manager.api.graphql_errors.uuid4") as uuid4_mock:
+            uuid4_mock.return_value.hex = error_id
+            for exception_type in exception_types:
+                with self.subTest(exception_type=exception_type.__name__):
+                    error = GraphQL._handle_graph_ql_error(
+                        exception_type(private_message)
+                    )
+
+                    assert error.message == "An internal server error occurred."
+                    assert error.extensions == {
+                        "code": "INTERNAL_SERVER_ERROR",
+                        "errorId": error_id,
+                    }
+                    assert private_message not in str(error.formatted)
+
+            assert uuid4_mock.call_count == len(exception_types)
+
+    def test_handle_graphql_error_sanitizes_permission_error(self) -> None:
+        private_message = "tenant secret must not escape"
+
+        error = GraphQL._handle_graph_ql_error(PermissionError(private_message))
+
+        assert error.message == "Permission denied."
+        assert error.extensions == {"code": "PERMISSION_DENIED"}
+        assert private_message not in str(error.formatted)
+
+    def test_handle_graphql_error_correlates_internal_error_log(self) -> None:
+        error_id = "fedcba9876543210fedcba9876543210"
+        original_error = RuntimeError("database dsn=secret")
+
+        with (
+            mock.patch("general_manager.api.graphql_errors.uuid4") as uuid4_mock,
+            mock.patch(
+                "general_manager.api.graphql_errors.logger.error"
+            ) as logger_error,
+        ):
+            uuid4_mock.return_value.hex = error_id
+
+            error = GraphQL._handle_graph_ql_error(original_error)
+
+        logger_error.assert_called_once_with(
+            "graphql internal error",
+            context={
+                "error": "RuntimeError",
+                "message": "database dsn=secret",
+                "error_id": error_id,
+            },
+            exc_info=original_error,
+        )
+        assert error.extensions == {
+            "code": "INTERNAL_SERVER_ERROR",
+            "errorId": error_id,
+        }
+
     def test_apply_permission_filters_enforces_instance_read_gate(self) -> None:
         class AdminOnlyPermission(BasePermission):
             def check_permission(self, *args, **kwargs) -> bool:
@@ -805,7 +871,7 @@ class GraphQLHelperTests(SimpleTestCase):
         perm_error = GraphQL._handle_graph_ql_error(PermissionError("nope"))
         assert perm_error.extensions["code"] == "PERMISSION_DENIED"
         value_error = GraphQL._handle_graph_ql_error(ValueError("bad"))
-        assert value_error.extensions["code"] == "BAD_USER_INPUT"
+        assert value_error.extensions["code"] == "INTERNAL_SERVER_ERROR"
         lookup_error = GraphQL._handle_graph_ql_error(LookupError("missing"))
         assert lookup_error.extensions["code"] == "INTERNAL_SERVER_ERROR"
         runtime_error = GraphQL._handle_graph_ql_error(RuntimeError("oops"))
