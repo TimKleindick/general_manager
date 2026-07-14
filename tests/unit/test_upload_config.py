@@ -20,7 +20,7 @@ def test_image_upload_dependencies_match_development_type_check_environment() ->
     root = Path(__file__).resolve().parents[2]
     configuration = tomllib.loads((root / "pyproject.toml").read_text())
     development = (root / "requirements" / "development.txt").read_text()
-    test_workflow = (root / ".github" / "workflows" / "test.yml").read_text()
+    quality_workflow = (root / ".github" / "workflows" / "quality.yml").read_text()
 
     assert configuration["project"]["optional-dependencies"]["file-upload-image"] == [
         "Pillow>=12.2.0"
@@ -28,7 +28,7 @@ def test_image_upload_dependencies_match_development_type_check_environment() ->
     assert "-e .[file-upload-image]" in development
     assert "django-types==0.21.0" in development
     assert "django-stubs" not in development
-    assert 'pip install -e ".[file-upload-image]"' in test_workflow
+    assert 'pip install -e ".[file-upload-image]"' in quality_workflow
 
 
 def test_upload_settings_default_to_secure_finite_values(settings) -> None:
