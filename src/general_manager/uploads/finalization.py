@@ -2218,10 +2218,10 @@ def _has_unsafe_sqlite_outer_atomic(alias: str) -> bool:
     connection = connections[alias]
     if connection.vendor != "sqlite":
         return False
-    return any(
-        not getattr(block, "_from_testcase", False)
-        for block in connection.atomic_blocks
-    )
+    blocks = services._connection_atomic_blocks(connection)
+    if blocks is None or not blocks:
+        return bool(getattr(connection, "in_atomic_block", False))
+    return any(not services._atomic_block_is_from_testcase(block) for block in blocks)
 
 
 def _parse_target_pk(value: str | None, model: type[models.Model]) -> object:

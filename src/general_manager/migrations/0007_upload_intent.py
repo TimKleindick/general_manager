@@ -43,7 +43,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 "constraints": (
-                    models.CheckConstraint(  # type: ignore[call-arg]
+                    models.CheckConstraint(
                         condition=models.Q(("id", 1)),
                         name="gm_upload_quota_lock_singleton",
                     ),
@@ -153,11 +153,11 @@ class Migration(migrations.Migration):
                     ),
                 ),
                 "constraints": (
-                    models.CheckConstraint(  # type: ignore[call-arg]
+                    models.CheckConstraint(
                         condition=models.Q(("declared_size__gte", 0)),
                         name="gm_upload_declared_size_gte_0",
                     ),
-                    models.CheckConstraint(  # type: ignore[call-arg]
+                    models.CheckConstraint(
                         condition=models.Q(
                             ("verified_size__isnull", True),
                             ("verified_size__gte", 0),
@@ -165,11 +165,11 @@ class Migration(migrations.Migration):
                         ),
                         name="gm_upload_verified_size_gte_0",
                     ),
-                    models.CheckConstraint(  # type: ignore[call-arg]
+                    models.CheckConstraint(
                         condition=models.Q(("finalization_attempt_count__gte", 0)),
                         name="gm_upload_attempt_count_gte_0",
                     ),
-                    models.CheckConstraint(  # type: ignore[call-arg]
+                    models.CheckConstraint(
                         condition=models.Q(("transfer_attempt_count__gte", 0)),
                         name="gm_upload_transfer_attempt_gte_0",
                     ),
