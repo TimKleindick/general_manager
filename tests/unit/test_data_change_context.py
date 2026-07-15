@@ -1,82 +1,86 @@
-"""Tests for ORM data-change transaction ownership metadata."""
+"""Tests for context-local ORM data-change transaction ownership."""
 
 from contextvars import copy_context
+import inspect
 
-import pytest
-from django.db import DEFAULT_DB_ALIAS, connection, transaction
-
-from general_manager.cache.data_change_context import (
-    exclusively_owns_data_change_transaction,
-    own_data_change_transaction,
-    owns_data_change_transaction,
-)
+from general_manager.cache import data_change_context
 
 
-@pytest.mark.django_db(transaction=True)
-def test_nested_owned_transaction_remains_exclusive() -> None:
-    """Nested envelopes record each same-alias atomic block as owned."""
-    with transaction.atomic():
-        with own_data_change_transaction(DEFAULT_DB_ALIAS):
-            with transaction.atomic():
-                with own_data_change_transaction(DEFAULT_DB_ALIAS):
-                    assert owns_data_change_transaction(DEFAULT_DB_ALIAS)
-                    assert exclusively_owns_data_change_transaction(DEFAULT_DB_ALIAS)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_unowned_outer_transaction_prevents_exclusive_ownership() -> None:
-    """An arbitrary transaction beneath an envelope remains detectable."""
-    with transaction.atomic():
-        with transaction.atomic():
-            with own_data_change_transaction(DEFAULT_DB_ALIAS):
-                assert owns_data_change_transaction(DEFAULT_DB_ALIAS)
-                assert not exclusively_owns_data_change_transaction(DEFAULT_DB_ALIAS)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_interposed_transaction_prevents_exclusive_ownership() -> None:
-    """An arbitrary transaction opened above an envelope remains detectable."""
-    with transaction.atomic():
-        with own_data_change_transaction(DEFAULT_DB_ALIAS):
-            with transaction.atomic():
-                assert not exclusively_owns_data_change_transaction(DEFAULT_DB_ALIAS)
-
-
-@pytest.mark.django_db
-def test_testcase_atomic_blocks_are_not_treated_as_application_transactions() -> None:
-    """Django TestCase wrappers do not defeat exclusive envelope ownership."""
-    assert any(
-        getattr(block, "_from_testcase", False) for block in connection.atomic_blocks
+def _own(database_alias: str, *, caller_in_atomic_block: bool):
+    return data_change_context.own_data_change_transaction(
+        database_alias,
+        caller_in_atomic_block=caller_in_atomic_block,
     )
 
-    with transaction.atomic():
-        with own_data_change_transaction(DEFAULT_DB_ALIAS):
-            assert exclusively_owns_data_change_transaction(DEFAULT_DB_ALIAS)
+
+def test_context_ownership_does_not_inspect_django_atomic_internals() -> None:
+    """Core ownership must remain independent of Django's private stack."""
+    source = inspect.getsource(data_change_context)
+
+    assert "atomic_blocks" not in source
+    assert "_from_testcase" not in source
 
 
-@pytest.mark.django_db(transaction=True)
-def test_transaction_ownership_is_alias_scoped_and_resets() -> None:
-    """Ownership state for one alias neither leaks nor changes another alias."""
-    with transaction.atomic():
-        with own_data_change_transaction(DEFAULT_DB_ALIAS):
-            assert owns_data_change_transaction(DEFAULT_DB_ALIAS)
-            assert not owns_data_change_transaction("secondary")
+def test_operation_authorization_is_limited_to_the_decorated_body() -> None:
+    """Envelope ownership alone does not authorize upload-envelope reuse."""
+    with _own("default", caller_in_atomic_block=False):
+        assert data_change_context.owns_data_change_transaction("default")
+        assert not data_change_context.is_data_change_operation_authorized("default")
+        assert not data_change_context.may_reuse_data_change_transaction("default")
 
-    assert not owns_data_change_transaction(DEFAULT_DB_ALIAS)
+        with data_change_context.authorize_data_change_operation("default"):
+            assert data_change_context.is_data_change_operation_authorized("default")
+            assert data_change_context.may_reuse_data_change_transaction("default")
+
+        assert not data_change_context.is_data_change_operation_authorized("default")
+        assert not data_change_context.may_reuse_data_change_transaction("default")
 
 
-@pytest.mark.django_db(transaction=True)
+def test_outer_transaction_prevents_conservative_reuse_authorization() -> None:
+    """Public caller state makes arbitrary outer transactions fail closed."""
+    with _own("default", caller_in_atomic_block=True):
+        with data_change_context.authorize_data_change_operation("default"):
+            assert data_change_context.owns_data_change_transaction("default")
+            assert data_change_context.is_data_change_operation_authorized("default")
+            assert not data_change_context.may_reuse_data_change_transaction("default")
+
+
+def test_transaction_ownership_is_alias_scoped_and_nesting_safe() -> None:
+    """A nested alias neither replaces nor authorizes its outer owner."""
+    with _own("default", caller_in_atomic_block=False):
+        with data_change_context.authorize_data_change_operation("default"):
+            with _own("secondary", caller_in_atomic_block=False):
+                assert data_change_context.owns_data_change_transaction("default")
+                assert data_change_context.owns_data_change_transaction("secondary")
+                assert data_change_context.may_reuse_data_change_transaction("default")
+                assert not data_change_context.may_reuse_data_change_transaction(
+                    "secondary"
+                )
+
+                with data_change_context.authorize_data_change_operation("secondary"):
+                    assert data_change_context.may_reuse_data_change_transaction(
+                        "default"
+                    )
+                    assert data_change_context.may_reuse_data_change_transaction(
+                        "secondary"
+                    )
+
+    assert not data_change_context.owns_data_change_transaction("default")
+    assert not data_change_context.owns_data_change_transaction("secondary")
+
+
 def test_copied_context_cannot_retain_stale_transaction_ownership() -> None:
-    """A copied ContextVar state cannot outlive its recorded atomic block."""
-    with transaction.atomic():
-        with own_data_change_transaction(DEFAULT_DB_ALIAS):
+    """A copied ContextVar state cannot outlive its live owner marker."""
+    with _own("default", caller_in_atomic_block=False):
+        with data_change_context.authorize_data_change_operation("default"):
             stale_context = copy_context()
 
     assert not stale_context.run(
-        owns_data_change_transaction,
-        DEFAULT_DB_ALIAS,
+        data_change_context.owns_data_change_transaction, "default"
     )
     assert not stale_context.run(
-        exclusively_owns_data_change_transaction,
-        DEFAULT_DB_ALIAS,
+        data_change_context.is_data_change_operation_authorized, "default"
+    )
+    assert not stale_context.run(
+        data_change_context.may_reuse_data_change_transaction, "default"
     )

@@ -32,7 +32,8 @@ from django.utils import timezone
 
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.data_change_context import (
-    exclusively_owns_data_change_transaction,
+    is_data_change_operation_authorized,
+    may_reuse_data_change_transaction,
 )
 from general_manager.uploads import services
 from general_manager.uploads.adapters import (
@@ -272,10 +273,9 @@ def prepare_upload_claims(
     if not settings.enabled:
         raise UploadStorageError
     database_alias = _database_alias(interface_cls)
-    unsafe_outer_atomic = _has_unsafe_sqlite_outer_atomic(database_alias)
-    if unsafe_outer_atomic and not exclusively_owns_data_change_transaction(
+    if _has_unsafe_sqlite_outer_atomic(
         database_alias
-    ):
+    ) and not _may_reuse_manager_sqlite_envelope(database_alias):
         raise UploadStorageError
     if database_alias != services._normalized_database_alias(settings.intent_database):
         raise UploadBindingMismatchError
@@ -424,7 +424,7 @@ def run_upload_transaction(
 ) -> _T:
     """Reuse the signal envelope or safely retry a fresh upload transaction."""
 
-    if exclusively_owns_data_change_transaction(prepared.database_alias):
+    if _may_reuse_manager_sqlite_envelope(prepared.database_alias):
         # The manager-level signal envelope owns the complete rollback boundary.
         # A nested SQLite savepoint cannot be restarted safely after contention.
         try:
@@ -2239,6 +2239,38 @@ def _has_unsafe_sqlite_outer_atomic(alias: str) -> bool:
     if blocks is None or not blocks:
         return bool(getattr(connection, "in_atomic_block", False))
     return any(not services._atomic_block_is_from_testcase(block) for block in blocks)
+
+
+def _may_reuse_manager_sqlite_envelope(alias: str) -> bool:
+    """Allow only the one known manager block, plus Django TestCase wrappers.
+
+    Core transaction ownership intentionally uses only context-local state and
+    the public ``in_atomic_block`` flag. This upload-specific compatibility
+    boundary retains the pre-existing private stack check so Django TestCase
+    wrappers do not look like arbitrary application transactions on SQLite.
+    """
+    connection = connections[alias]
+    if connection.vendor != "sqlite" or not is_data_change_operation_authorized(alias):
+        return False
+    if may_reuse_data_change_transaction(alias):
+        return True
+
+    # ``in_atomic_block`` is already true around Django TestCase methods. Only
+    # this compatibility branch consults the same private metadata as the
+    # pre-existing SQLite guard, and it accepts exactly the manager envelope.
+    atomic_blocks = services._connection_atomic_blocks(connection)
+    if atomic_blocks is None:
+        return False
+    application_blocks = tuple(
+        block
+        for block in atomic_blocks
+        if not services._atomic_block_is_from_testcase(block)
+    )
+    if len(application_blocks) != 1:
+        return False
+    return any(
+        services._atomic_block_is_from_testcase(block) for block in atomic_blocks
+    )
 
 
 def _parse_target_pk(value: str | None, model: type[models.Model]) -> object:

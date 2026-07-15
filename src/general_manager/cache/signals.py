@@ -7,10 +7,14 @@ from copy import deepcopy
 from functools import wraps
 from typing import Callable, ParamSpec, TypeVar, cast, overload
 
-from django.db import DEFAULT_DB_ALIAS, transaction
+from django.db import DEFAULT_DB_ALIAS, connections, transaction
 from django.dispatch import Signal
+from django.utils.connection import ConnectionDoesNotExist
 
-from general_manager.cache.data_change_context import own_data_change_transaction
+from general_manager.cache.data_change_context import (
+    authorize_data_change_operation,
+    own_data_change_transaction,
+)
 from general_manager.logging import get_logger
 
 post_data_change = Signal()
@@ -21,6 +25,16 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 logger = get_logger("cache.signals")
+
+
+def _caller_in_atomic_block(database_alias: str) -> bool:
+    """Read public transaction state when the configured alias is available."""
+    try:
+        return bool(connections[database_alias].in_atomic_block)
+    except ConnectionDoesNotExist:
+        # Preserve lightweight callers that replace ``transaction.atomic`` in
+        # isolation. A real atomic call will still reject an unknown alias.
+        return False
 
 
 @overload
@@ -129,8 +143,14 @@ def data_change(
                 if is_orm_backed
                 else nullcontext()
             )
+            caller_in_atomic_block = (
+                _caller_in_atomic_block(database_alias) if is_orm_backed else False
+            )
             ownership_context = (
-                own_data_change_transaction(database_alias)
+                own_data_change_transaction(
+                    database_alias,
+                    caller_in_atomic_block=caller_in_atomic_block,
+                )
                 if is_orm_backed
                 else nullcontext()
             )
@@ -145,11 +165,17 @@ def data_change(
                 pre_identification = deepcopy(
                     getattr(instance_before, "identification", None)
                 )
-                if isinstance(func, classmethod):
-                    inner = cast(Callable[P, R], func.__func__)
-                    result = inner(*args, **kwargs)
-                else:
-                    result = func(*args, **kwargs)
+                operation_context = (
+                    authorize_data_change_operation(database_alias)
+                    if is_orm_backed
+                    else nullcontext()
+                )
+                with operation_context:
+                    if isinstance(func, classmethod):
+                        inner = cast(Callable[P, R], func.__func__)
+                        result = inner(*args, **kwargs)
+                    else:
+                        result = func(*args, **kwargs)
 
                 context = current_calculation_run_context()
                 if context is not None:
