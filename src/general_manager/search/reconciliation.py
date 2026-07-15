@@ -10,7 +10,7 @@ from datetime import timedelta
 from typing import Iterable
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
@@ -45,6 +45,17 @@ class SearchIndexTarget:
     manager_path: str
     index_name: str
     schema_fingerprint: str
+
+
+@dataclass(frozen=True)
+class DirtySearchIndex:
+    """Generation-fenced result of marking one configured search index dirty."""
+
+    state_id: int
+    manager_path: str
+    index_name: str
+    generation: int
+    acknowledgeable: bool
 
 
 @dataclass(frozen=True)
@@ -248,41 +259,118 @@ def mark_search_indexes_dirty(
     Mark all configured search indexes for a manager dirty.
 
     Returns the number of configured index entries marked. Managers without
-    search config return `0`. State rows are created when missing, schema
-    fingerprints are refreshed before marking, duplicate configured index names
-    are processed once per config entry against the same durable row, and
-    repeated processing preserves the first `dirty_since` timestamp while
-    overwriting `dirty_reason` with the provided reason. Database errors
-    propagate. Runtime invalid manager classes are not separately validated and
-    fail through search-config or model-state access.
-
-    Returns the number of configured index entries marked. Managers without
-    search config return `0`. State rows are created when missing, schema
-    fingerprints are refreshed before marking, duplicate configured index names
-    are processed once per config entry, and database errors propagate.
+    search config return `0`. State rows are created when missing as
+    initialization work, while stored schema mismatches become schema-change
+    work. Duplicate configured index names are processed once per config entry
+    against the same durable row, preserving the wrapper's count semantics.
+    Repeated processing preserves the first `dirty_since`, advances
+    `dirty_generation`, and does not downgrade stronger work to a data-change
+    reason. Database errors propagate.
     """
-    marked = 0
     config = get_search_config(manager_class)
     if config is None:
         return 0
+    marked = 0
     for index_config in config.indexes:
-        target_fingerprint = build_search_schema_fingerprint(
-            manager_class, index_config
-        )
-        with transaction.atomic():
-            state, _created = (
-                SearchIndexState.objects.select_for_update().get_or_create(
-                    manager_path=manager_import_path(manager_class),
-                    index_name=index_config.name,
-                    defaults={"schema_fingerprint": target_fingerprint},
-                )
-            )
-            if state.schema_fingerprint != target_fingerprint:
-                state.schema_fingerprint = target_fingerprint
-                state.save(update_fields=["schema_fingerprint", "updated_at"])
-            state.mark_dirty(reason)
+        _mark_search_index_config_dirty(manager_class, index_config, reason=reason)
         marked += 1
     return marked
+
+
+def _mark_search_index_config_dirty(
+    manager_class: type[GeneralManager],
+    index_config: IndexConfig,
+    *,
+    reason: str,
+) -> DirtySearchIndex:
+    """Mark one configured manager/index entry under its per-pair row lock."""
+    manager_path = manager_import_path(manager_class)
+    target_fingerprint = build_search_schema_fingerprint(
+        manager_class,
+        index_config,
+    )
+    with transaction.atomic():
+        state, created = SearchIndexState.objects.select_for_update().get_or_create(
+            manager_path=manager_path,
+            index_name=index_config.name,
+            defaults={"schema_fingerprint": target_fingerprint},
+        )
+        was_clean = state.dirty_since is None
+        fingerprint_current = state.schema_fingerprint == target_fingerprint
+        if created:
+            dirty_reason = SEARCH_INDEX_DIRTY_REASON_INITIALIZATION
+        elif not fingerprint_current:
+            state.schema_fingerprint = target_fingerprint
+            state.save(update_fields=["schema_fingerprint", "updated_at"])
+            dirty_reason = SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED
+        elif (
+            reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
+            and state.dirty_since is not None
+            and state.dirty_reason
+            in {
+                SEARCH_INDEX_DIRTY_REASON_INITIALIZATION,
+                SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED,
+                SEARCH_INDEX_DIRTY_REASON_FORCED,
+            }
+        ):
+            dirty_reason = state.dirty_reason
+        else:
+            dirty_reason = reason
+
+        state.mark_dirty(dirty_reason)
+        acknowledgeable = (
+            not created
+            and fingerprint_current
+            and was_clean
+            and reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
+        )
+        return DirtySearchIndex(
+            state_id=state.pk,
+            manager_path=manager_path,
+            index_name=index_config.name,
+            generation=state.dirty_generation,
+            acknowledgeable=acknowledgeable,
+        )
+
+
+def mark_search_index_dirty(
+    manager_class: type[GeneralManager],
+    index_name: str,
+    *,
+    reason: str = SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
+) -> DirtySearchIndex | None:
+    """Mark one configured manager/index pair dirty and return its fence token."""
+    config = get_search_config(manager_class)
+    if config is None:
+        return None
+    for index_config in config.indexes:
+        if index_config.name == index_name:
+            return _mark_search_index_config_dirty(
+                manager_class,
+                index_config,
+                reason=reason,
+            )
+    return None
+
+
+def acknowledge_search_index_dirty(token: DirtySearchIndex) -> bool:
+    """Clear an incremental data mark only while its generation remains current."""
+    if not token.acknowledgeable:
+        return False
+    now = timezone.now()
+    updated = SearchIndexState.objects.filter(
+        pk=token.state_id,
+        dirty_generation=token.generation,
+        dirty_reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
+        dirty_since__isnull=False,
+        claim_token="",
+    ).update(
+        dirty_since=None,
+        dirty_reason="",
+        last_error="",
+        updated_at=now,
+    )
+    return updated == 1
 
 
 def _resolve_manager_path(manager_path: str) -> type[GeneralManager]:
@@ -331,20 +419,35 @@ def _claim_dirty_states(
     return states
 
 
-def _release_claim_with_error(state: SearchIndexState, error: str) -> None:
-    """Release a state claim and persist the reconciliation error message."""
-    state.claim_token = ""
-    state.claimed_at = None
-    state.claim_expires_at = None
-    state.last_error = error
-    state.save(
-        update_fields=[
-            "claim_token",
-            "claimed_at",
-            "claim_expires_at",
-            "last_error",
-            "updated_at",
-        ]
+def _release_claim(state_id: int, claim_token: str) -> None:
+    """Release only the claim still owned by the captured worker token."""
+    SearchIndexState.objects.filter(
+        pk=state_id,
+        claim_token=claim_token,
+    ).update(
+        claim_token="",
+        claimed_at=None,
+        claim_expires_at=None,
+        updated_at=timezone.now(),
+    )
+
+
+def _release_claim_with_error(
+    state_id: int,
+    claim_token: str,
+    error: str,
+) -> None:
+    """Record a current worker failure without overwriting newer work."""
+    SearchIndexState.objects.filter(
+        pk=state_id,
+        claim_token=claim_token,
+    ).update(
+        claim_token="",
+        claimed_at=None,
+        claim_expires_at=None,
+        last_error=error,
+        dirty_generation=F("dirty_generation") + 1,
+        updated_at=timezone.now(),
     )
 
 
@@ -400,6 +503,9 @@ def reconcile_search_indexes(
     failed = 0
     documents = 0
     for state in claimed_states:
+        state_id = state.pk
+        claim_token = state.claim_token
+        dirty_generation = state.dirty_generation
         try:
             manager_class = _resolve_manager_path(state.manager_path)
             document_count = indexer.reindex_manager_index(
@@ -407,19 +513,29 @@ def reconcile_search_indexes(
                 state.index_name,
             )
             documents += document_count
-            state.clear_dirty()
-            reconciled += 1
-            logger.info(
-                "search index reconciled",
-                context={
-                    "manager": state.manager_path,
-                    "index": state.index_name,
-                    "documents": document_count,
-                },
+            cleared = state.clear_dirty(
+                claim_token=claim_token,
+                dirty_generation=dirty_generation,
             )
+            if cleared:
+                reconciled += 1
+                logger.info(
+                    "search index reconciled",
+                    context={
+                        "manager": state.manager_path,
+                        "index": state.index_name,
+                        "documents": document_count,
+                    },
+                )
+            else:
+                _release_claim(state_id, claim_token)
         except Exception as exc:
             failed += 1
-            _release_claim_with_error(state, str(exc))
+            _release_claim_with_error(
+                state_id,
+                claim_token,
+                str(exc),
+            )
             logger.exception(
                 "search index reconciliation failed",
                 context={"manager": state.manager_path, "index": state.index_name},

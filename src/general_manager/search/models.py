@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from django.db import models
+from django.db.models import F
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 SEARCH_INDEX_DIRTY_REASON_INITIALIZATION = "initialization"
@@ -50,6 +52,9 @@ class SearchIndexState(models.Model):
         blank=True,
         default="",
     )
+    dirty_generation: models.PositiveBigIntegerField[int] = (
+        models.PositiveBigIntegerField(default=0)
+    )
     claim_token: models.CharField[str] = models.CharField(
         max_length=64, blank=True, default=""
     )
@@ -94,9 +99,9 @@ class SearchIndexState(models.Model):
         Mark this state as needing reconciliation.
 
         The first dirty timestamp is recorded with `timezone.now()` and
-        preserved so repeated marks keep the
-        original age of the pending work. `dirty_reason` is always overwritten
-        with the provided string; callers should pass one of
+        preserved so repeated marks keep the original age of the pending work.
+        `dirty_generation` advances once per call and `dirty_reason` is
+        overwritten with the provided string; callers should pass one of
         `SEARCH_INDEX_DIRTY_REASON_INITIALIZATION`,
         `SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED`,
         `SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED`, or
@@ -107,47 +112,60 @@ class SearchIndexState(models.Model):
             reason: Stored dirty reason string.
 
         Raises:
-            django.db.Error: Database save errors propagate unchanged.
-            ValueError: Propagated from Django field assignment/save validation
-                if a configured backend validates the value.
+            django.db.Error: Database update errors propagate unchanged.
+            SearchIndexState.DoesNotExist: The row was deleted before the
+                updated fields could be refreshed.
         """
-        if self.dirty_since is None:
-            self.dirty_since = timezone.now()
-        self.dirty_reason = reason
-        self.save(update_fields=["dirty_since", "dirty_reason", "updated_at"])
+        now = timezone.now()
+        type(self).objects.filter(pk=self.pk).update(
+            dirty_since=Coalesce("dirty_since", now),
+            dirty_reason=reason,
+            dirty_generation=F("dirty_generation") + 1,
+            updated_at=now,
+        )
+        self.refresh_from_db(
+            fields=[
+                "dirty_since",
+                "dirty_reason",
+                "dirty_generation",
+                "updated_at",
+            ]
+        )
 
-    def clear_dirty(self) -> None:
+    def clear_dirty(self, *, claim_token: str, dirty_generation: int) -> bool:
         """
-        Record successful reconciliation and release any active claim.
+        Record successful reconciliation when the claim fence still matches.
 
-        Timestamps use `timezone.now()`. On first success this also initializes
-        `initialized_at`. Every call updates `last_reconciled_at`, clears dirty
-        state, claim state, and `last_error`, then persists only the changed
-        reconciliation fields.
+        A single conditional update matches this row, `claim_token`, and
+        `dirty_generation`. On a match, timestamps use `timezone.now()`, first
+        success initializes `initialized_at`, `last_reconciled_at` advances,
+        and dirty, claim, and error fields are cleared. A stale claim or
+        generation leaves the row unchanged.
+
+        Returns:
+            `True` when exactly one row matched and was cleared.
 
         Raises:
             django.db.Error: Database save errors propagate unchanged.
         """
         now = timezone.now()
-        if self.initialized_at is None:
-            self.initialized_at = now
-        self.last_reconciled_at = now
-        self.dirty_since = None
-        self.dirty_reason = ""
-        self.claim_token = ""
-        self.claimed_at = None
-        self.claim_expires_at = None
-        self.last_error = ""
-        self.save(
-            update_fields=[
-                "initialized_at",
-                "last_reconciled_at",
-                "dirty_since",
-                "dirty_reason",
-                "claim_token",
-                "claimed_at",
-                "claim_expires_at",
-                "last_error",
-                "updated_at",
-            ]
+        updated = (
+            type(self)
+            .objects.filter(
+                pk=self.pk,
+                claim_token=claim_token,
+                dirty_generation=dirty_generation,
+            )
+            .update(
+                initialized_at=Coalesce("initialized_at", now),
+                last_reconciled_at=now,
+                dirty_since=None,
+                dirty_reason="",
+                claim_token="",
+                claimed_at=None,
+                claim_expires_at=None,
+                last_error="",
+                updated_at=now,
+            )
         )
+        return updated == 1

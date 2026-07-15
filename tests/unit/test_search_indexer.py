@@ -13,7 +13,7 @@ from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.config import IndexConfig
 from general_manager.search.indexer import SearchIndexer
 from general_manager.search.models import (
-    SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
+    SEARCH_INDEX_DIRTY_REASON_INITIALIZATION,
     SearchIndexState,
 )
 from general_manager.search.utils import build_document_id
@@ -259,7 +259,7 @@ class SearchIndexerSignalStateTests(TestCase):
         )
 
         state = SearchIndexState.objects.get(index_name="global")
-        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_INITIALIZATION
 
     def test_pre_delete_marks_search_state_dirty(self) -> None:
         """Mark search state dirty before delete signals."""
@@ -270,7 +270,7 @@ class SearchIndexerSignalStateTests(TestCase):
         )
 
         state = SearchIndexState.objects.get(index_name="global")
-        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_INITIALIZATION
 
     def test_post_change_dispatches_when_dirty_marker_fails(self) -> None:
         """Dispatch immediate indexing even when dirty marking fails."""

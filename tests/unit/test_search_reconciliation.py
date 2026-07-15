@@ -20,9 +20,12 @@ from general_manager.search.models import (
     SearchIndexState,
 )
 from general_manager.search.reconciliation import (
+    DirtySearchIndex,
+    acknowledge_search_index_dirty,
     build_search_schema_fingerprint,
     ensure_search_index_states,
     iter_search_index_targets,
+    mark_search_index_dirty,
     mark_search_indexes_dirty,
     manager_import_path,
 )
@@ -115,6 +118,7 @@ class SearchReconciliationDiscoveryTests(TestCase):
         state = SearchIndexState.objects.get()
         assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_INITIALIZATION
         assert state.dirty_since is not None
+        assert state.dirty_generation == 1
 
     def test_ensure_states_marks_schema_changes_dirty(self) -> None:
         """Mark existing state dirty when the stored fingerprint changes."""
@@ -139,6 +143,7 @@ class SearchReconciliationDiscoveryTests(TestCase):
         assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED
         assert state.dirty_since is not None
         assert state.schema_fingerprint != "outdated"
+        assert state.dirty_generation == 2
 
 
 class SearchDirtyMarkerTests(TestCase):
@@ -167,8 +172,9 @@ class SearchDirtyMarkerTests(TestCase):
             manager_path=manager_import_path(ReconcileProject),
             index_name="global",
         )
-        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_INITIALIZATION
         assert state.dirty_since is not None
+        assert state.dirty_generation == 1
 
     def test_mark_dirty_preserves_existing_dirty_since(self) -> None:
         """Keep the original dirty timestamp when marking dirty again."""
@@ -186,6 +192,147 @@ class SearchDirtyMarkerTests(TestCase):
         state.refresh_from_db()
 
         assert state.dirty_since == original_dirty_since
+        assert state.dirty_generation == 2
+
+    def test_mark_exact_index_only_and_returns_none_for_unknown_index(self) -> None:
+        """Dirty only the requested configured manager/index pair."""
+        indexes = [
+            ReconcileProject.SearchConfig.indexes[0],
+            IndexConfig(name="secondary", fields=["name"]),
+        ]
+
+        with patch.object(ReconcileProject.SearchConfig, "indexes", indexes):
+            token = mark_search_index_dirty(ReconcileProject, "secondary")
+            missing = mark_search_index_dirty(ReconcileProject, "missing")
+
+        assert token is not None
+        assert isinstance(token, DirtySearchIndex)
+        assert token.index_name == "secondary"
+        assert token.acknowledgeable is False
+        assert missing is None
+        assert list(SearchIndexState.objects.values_list("index_name", flat=True)) == [
+            "secondary"
+        ]
+
+    def test_new_initialization_marker_is_not_acknowledgeable(self) -> None:
+        """Require full reconciliation for state created by an exact mark."""
+        token = mark_search_index_dirty(ReconcileProject, "global")
+
+        assert token is not None
+        assert token.generation == 1
+        assert token.acknowledgeable is False
+        with self.assertNumQueries(0):
+            assert acknowledge_search_index_dirty(token) is False
+
+    def test_fingerprint_mismatch_is_schema_work_not_acknowledgeable(self) -> None:
+        """Promote an outdated exact marker to full schema reconciliation."""
+        state = SearchIndexState.objects.create(
+            manager_path=manager_import_path(ReconcileProject),
+            index_name="global",
+            schema_fingerprint="outdated",
+            dirty_generation=7,
+        )
+
+        token = mark_search_index_dirty(ReconcileProject, "global")
+        state.refresh_from_db()
+
+        assert token is not None
+        assert token.generation == 8
+        assert token.acknowledgeable is False
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED
+        assert state.schema_fingerprint != "outdated"
+
+    def test_data_marker_does_not_downgrade_stronger_dirty_reason(self) -> None:
+        """Keep initialization/schema/forced work eligible for a full rebuild."""
+        ensure_search_index_states()
+        state = SearchIndexState.objects.get()
+        first_dirty = state.dirty_since
+
+        token = mark_search_index_dirty(ReconcileProject, "global")
+        state.refresh_from_db()
+
+        assert token is not None
+        assert token.acknowledgeable is False
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_INITIALIZATION
+        assert state.dirty_since == first_dirty
+        assert state.dirty_generation == 2
+
+    def test_clean_data_marker_acknowledges_matching_generation(self) -> None:
+        """Clear only exact clean-to-dirty data work without full reconcile."""
+        ensure_search_index_states()
+        state = SearchIndexState.objects.get()
+        SearchIndexState.objects.filter(pk=state.pk).update(
+            dirty_since=None,
+            dirty_reason="",
+        )
+
+        token = mark_search_index_dirty(ReconcileProject, "global")
+
+        assert token is not None
+        assert token.acknowledgeable is True
+        assert acknowledge_search_index_dirty(token) is True
+        state.refresh_from_db()
+        assert state.dirty_since is None
+        assert state.dirty_reason == ""
+        assert state.last_error == ""
+        assert state.initialized_at is None
+        assert state.last_reconciled_at is None
+
+    def test_acknowledgement_rejects_stale_generation(self) -> None:
+        """Keep a newer exact dirty marker pending."""
+        state = SearchIndexState.objects.create(
+            manager_path=manager_import_path(ReconcileProject),
+            index_name="global",
+            schema_fingerprint=build_search_schema_fingerprint(
+                ReconcileProject,
+                ReconcileProject.SearchConfig.indexes[0],
+            ),
+        )
+        token = mark_search_index_dirty(ReconcileProject, "global")
+        newer_token = mark_search_index_dirty(ReconcileProject, "global")
+
+        assert token is not None
+        assert token.acknowledgeable is True
+        assert newer_token is not None
+        assert newer_token.acknowledgeable is False
+        assert acknowledge_search_index_dirty(token) is False
+        state.refresh_from_db()
+        assert state.dirty_since is not None
+        assert state.dirty_generation == 2
+
+    def test_acknowledgement_rejects_active_claim(self) -> None:
+        """Do not let incremental work clear a fully claimed dirty state."""
+        claim_token = uuid.uuid4().hex
+        state = SearchIndexState.objects.create(
+            manager_path=manager_import_path(ReconcileProject),
+            index_name="global",
+            schema_fingerprint=build_search_schema_fingerprint(
+                ReconcileProject,
+                ReconcileProject.SearchConfig.indexes[0],
+            ),
+            claim_token=claim_token,
+        )
+
+        token = mark_search_index_dirty(ReconcileProject, "global")
+
+        assert token is not None
+        assert token.acknowledgeable is True
+        assert acknowledge_search_index_dirty(token) is False
+        state.refresh_from_db()
+        assert state.dirty_since is not None
+        assert state.claim_token == claim_token
+
+    def test_all_index_wrapper_preserves_duplicate_count_and_marks(self) -> None:
+        """Process duplicate configured index entries once per occurrence."""
+        index = ReconcileProject.SearchConfig.indexes[0]
+
+        with patch.object(ReconcileProject.SearchConfig, "indexes", [index, index]):
+            marked = mark_search_indexes_dirty(ReconcileProject)
+
+        assert marked == 2
+        state = SearchIndexState.objects.get()
+        assert state.dirty_generation == 2
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_INITIALIZATION
 
 
 class SearchReconcileEngineTests(TestCase):
@@ -206,7 +353,7 @@ class SearchReconcileEngineTests(TestCase):
         """Skip backend writes when all search states are clean."""
         ensure_search_index_states()
         state = SearchIndexState.objects.get()
-        state.clear_dirty()
+        state.clear_dirty(claim_token="", dirty_generation=state.dirty_generation)
 
         from general_manager.search.reconciliation import reconcile_search_indexes
 
@@ -257,6 +404,123 @@ class SearchReconcileEngineTests(TestCase):
         assert state.dirty_since is not None
         assert state.claim_token == ""
         assert "backend down" in state.last_error
+        assert state.dirty_generation == 2
+
+    def test_reconcile_does_not_clear_mark_created_during_backend_write(
+        self,
+    ) -> None:
+        """Leave a newer generation dirty and release this worker's claim."""
+        ensure_search_index_states()
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        def mark_during_reindex(*_args: object) -> int:
+            token = mark_search_index_dirty(ReconcileProject, "global")
+            assert token is not None
+            assert token.generation == 2
+            return 3
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            indexer.return_value.reindex_manager_index.side_effect = mark_during_reindex
+
+            result = reconcile_search_indexes()
+
+        assert result.documents == 3
+        assert result.reconciled == 0
+        assert result.failed == 0
+        state = SearchIndexState.objects.get()
+        assert state.dirty_since is not None
+        assert state.dirty_generation == 2
+        assert state.claim_token == ""
+
+    def test_reconcile_failure_records_error_after_mark_during_backend_write(
+        self,
+    ) -> None:
+        """Record worker failure after a same-claim generation advances."""
+        ensure_search_index_states()
+        state = SearchIndexState.objects.get()
+        first_dirty = state.dirty_since
+        backend_error = RuntimeError("backend failed after newer mark")
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        def mark_then_fail(*_args: object) -> int:
+            token = mark_search_index_dirty(ReconcileProject, "global")
+            assert token is not None
+            assert token.generation == 2
+            raise backend_error
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            indexer.return_value.reindex_manager_index.side_effect = mark_then_fail
+
+            result = reconcile_search_indexes()
+
+        assert result.failed == 1
+        state.refresh_from_db()
+        assert state.dirty_since == first_dirty
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_INITIALIZATION
+        assert state.dirty_generation == 3
+        assert state.claim_token == ""
+        assert state.last_error == str(backend_error)
+
+    def test_stale_reconcile_success_does_not_clear_replacement_claim(self) -> None:
+        """Keep another worker's claim when stale backend work succeeds."""
+        ensure_search_index_states()
+        replacement_claim = uuid.uuid4().hex
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        def replace_claim(*_args: object) -> int:
+            SearchIndexState.objects.update(
+                claim_token=replacement_claim,
+                claimed_at=timezone.now(),
+                claim_expires_at=timezone.now() + timedelta(minutes=5),
+            )
+            return 2
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            indexer.return_value.reindex_manager_index.side_effect = replace_claim
+
+            result = reconcile_search_indexes()
+
+        assert result.documents == 2
+        assert result.reconciled == 0
+        state = SearchIndexState.objects.get()
+        assert state.dirty_since is not None
+        assert state.claim_token == replacement_claim
+
+    def test_stale_reconcile_failure_does_not_overwrite_replacement_claim(
+        self,
+    ) -> None:
+        """Keep another worker's claim and error when stale backend work fails."""
+        ensure_search_index_states()
+        replacement_claim = uuid.uuid4().hex
+        backend_error = RuntimeError("stale worker error")
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        def replace_claim_then_fail(*_args: object) -> int:
+            SearchIndexState.objects.update(
+                claim_token=replacement_claim,
+                claimed_at=timezone.now(),
+                claim_expires_at=timezone.now() + timedelta(minutes=5),
+                last_error="replacement error",
+            )
+            raise backend_error
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            indexer.return_value.reindex_manager_index.side_effect = (
+                replace_claim_then_fail
+            )
+
+            result = reconcile_search_indexes()
+
+        assert result.failed == 1
+        state = SearchIndexState.objects.get()
+        assert state.dirty_since is not None
+        assert state.claim_token == replacement_claim
+        assert state.last_error == "replacement error"
+        assert state.dirty_generation == 1
 
     def test_reconcile_records_invalid_manager_path_error(self) -> None:
         """Record a deliberate validation error for non-manager import targets."""
@@ -282,7 +546,7 @@ class SearchReconcileEngineTests(TestCase):
         """Force clean states back through reconciliation."""
         ensure_search_index_states()
         state = SearchIndexState.objects.get()
-        state.clear_dirty()
+        state.clear_dirty(claim_token="", dirty_generation=state.dirty_generation)
 
         from general_manager.search.reconciliation import reconcile_search_indexes
 
