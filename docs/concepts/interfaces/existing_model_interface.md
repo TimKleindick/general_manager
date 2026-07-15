@@ -110,6 +110,12 @@ connected signal receivers. It therefore raises
 pre-registered tracker lacks the database-aware marker on a non-default alias.
 Existing trackers remain compatible for the default alias.
 
+`DatabaseAwareHistoricalRecords` and `UnsafeHistoryConfigurationError` are
+required implementation contracts for this non-default-alias case in 0.63.1,
+but they are not stable `general_manager.interface` exports. Use the documented
+setup below without treating their implementation-module paths as a broader
+compatibility promise.
+
 ## Auditing and validation
 
 - `create` and `update` assign `changed_by_id` when the model exposes that column and record `history_comment` values using `django-simple-history`.
@@ -127,6 +133,9 @@ Existing trackers remain compatible for the default alias.
 ## Writing data through the manager
 
 `ExistingModelInterface` reuses the same write helpers as `DatabaseInterface`:
+
+See [Keep ORM writes and history on one database](../../howto/orm_atomic_writes.md)
+for the complete configuration and rollback workflow.
 
 - `create()` and `update()` share the
   [`DatabaseInterface` atomic write contract](db_based_interface.md#atomic-writes),

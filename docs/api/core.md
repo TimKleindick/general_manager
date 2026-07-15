@@ -28,6 +28,16 @@ returns the same manager instance. `manager.delete(...)` checks delete
 permission unless skipped, delegates to the interface, invalidates the manager
 for later field reads, and returns `None`.
 
+For writable ORM interfaces as of GeneralManager 0.63.1, ordinary
+`create()`/`update()` calls commit the row save, history actor/reason, and
+many-to-many `<relation>_id_list` changes in one transaction on the configured
+database alias. Validation, save, history, relation, and transaction exceptions
+propagate and roll back that complete unit. Upload-aware writes retain their
+separate atomic upload/finalization contract. After a caller-owned transaction
+rolls back, discard an in-place-updated manager and reconstruct it from its ID;
+materialized values on that Python object may reflect the failed transaction.
+The [ORM transaction guide](../howto/orm_atomic_writes.md) shows the pattern.
+
 `GeneralManager.filter(**lookups)` and `exclude(**lookups)` forward lookup
 expressions to the interface and return `Bucket[Self]`. Lookup values may be
 manager instances or lists/tuples containing manager instances; those values are
@@ -668,6 +678,22 @@ so it uses normal manager equality/identity rather than request lookup
 semantics.
 
 ::: general_manager.rule.rule.Rule
+
+`Rule(func, custom_error_message=None, ignore_if_none=True)` returns the
+predicate result from `evaluate(manager)` as `True`, `False`, or `None` when a
+referenced value is skipped. After `False`, `get_error_message()` returns a
+non-empty `dict[str, str]`: handler-derived messages when available, a
+variable-keyed combination fallback otherwise, or Django's `"__all__"` key for
+a variable-free predicate. A custom message is retained by the fallback.
+Calling `get_error_message()` before evaluation or after a passing/skipped
+evaluation returns `None`. For a failed rule, missing custom-message
+placeholders raise `MissingErrorTemplateVariableError`, and documented custom or
+built-in handler exceptions propagate unchanged. The defensive
+`ErrorMessageGenerationError` applies only if internal state records failure
+without retaining the evaluated input. The non-empty failed-rule fallback is
+guaranteed from 0.62.2.
+See the [task guide](../howto/write_validation_rules.md) and
+[cookbook recipe](../examples/rule_validation.md).
 
 `BaseRuleHandler.handle(node, left, right, op, var_values, rule)` is called by
 `Rule` while explaining a failed predicate. It returns `{variable: message}` and

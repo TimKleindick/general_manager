@@ -10,6 +10,26 @@
 
 ::: general_manager.api.graphql_errors.PublicGraphQLError
 
+`PublicGraphQLError(message: str, *, code: str)` constructs a GraphQL error for
+an intentionally public application failure. `message` is exposed unchanged to
+the client. The required keyword-only `code` is stored as the complete
+`extensions` mapping: `{"code": code}`. Construction returns a
+`PublicGraphQLError` instance, which is also a `graphql.GraphQLError`; it does
+not perform code-format validation or sanitize the supplied message. Callers
+are responsible for ensuring both values are safe and stable. Import the class
+from `general_manager.api`, not its implementation module.
+
+The constructor has no GeneralManager-specific failure path. Normal Python and
+`GraphQLError` constructor errors propagate if callers pass incompatible values.
+When raised inside a GeneralManager-generated mutation or a mutation registered
+with `@graph_ql_mutation`, the same error instance, message, and extensions are
+preserved.
+
+Compatibility: this stable export was added in GeneralManager 0.63.0. In the
+same release, plain `ValueError` stopped producing public `BAD_USER_INPUT`
+messages at GeneralManager mutation boundaries; use `PublicGraphQLError` for an
+application code or Django `ValidationError` for validation details.
+
 Stable imports from `general_manager.api` include `GraphQL`,
 `MeasurementType`, `MeasurementScalar`, `PublicGraphQLError`, and the file-upload
 contracts documented below. Stable imports from
@@ -30,9 +50,15 @@ import promises.
 
 Configuration and inspection:
 
-- `FileUploadPolicy` configures one manager file field.
+- `FileUploadPolicy(max_bytes=None, allowed_content_types=None,
+  allowed_extensions=None, public=None, content_inspector=None)` configures one
+  manager file field. Invalid limits, allowlists, booleans, or inspectors raise
+  `FileUploadConfigurationError` during construction.
 - `FileInspection` is the credential-free bounded value passed to a
   `FileContentInspector`.
+- `FileContentInspector` has the callable signature
+  `(inspection: FileInspection) -> str | None`; a returned string rejects the
+  file with that reason and `None` accepts it.
 - `FileUploadConfigurationError` reports invalid policy/settings construction.
 
 GraphQL contracts:
@@ -44,8 +70,12 @@ GraphQL contracts:
 
 Custom storage extension contracts:
 
-- `register_upload_adapter(storage_class, factory)` registers one global
-  `UploadAdapterFactory` before upload use.
+- `register_upload_adapter(storage_class: type[Storage], factory:
+  UploadAdapterFactory) -> None` registers one global factory before upload
+  use. Invalid arguments raise `TypeError`; duplicate or ambiguous registration
+  raises `ValueError`.
+- `UploadAdapterFactory` has the callable signature
+  `(storage: Storage) -> UploadAdapter`.
 - `UploadAdapter` is the complete transfer/inspect/download protocol.
 - `UploadFinalizationAdapter` is the exact post-commit and replacement cleanup
   protocol.
@@ -58,9 +88,16 @@ Custom storage extension contracts:
   do not log it.
 
 See [the setup and custom-adapter guide](../howto/graphql_file_uploads.md) for
-method semantics and contract testing. Persistence models, token/digest helpers,
+method semantics and contract testing, or use the
+[end-to-end upload recipe](../examples/graphql_file_upload.md). Persistence models, token/digest helpers,
 the registry instance, local capability codecs, and finalization functions are
 not public API.
+
+The file-upload surface was introduced in GeneralManager 0.62.0. The current
+contract includes the same-release hardening for Unicode-safe paths,
+no-overwrite storage behavior, deterministic admission, single-use token
+preflight, post-commit finalization, secure downloads, and cleanup. Callers must
+not depend on the intermediate behavior of earlier commits in that release.
 
 Expected failures derive from `UploadError` and carry stable `code` class
 attributes. Public exception classes are:
@@ -101,6 +138,8 @@ an adapter with a backend-native atomic exact-delete operation.
 
 ::: general_manager.uploads.config.FileInspection
 
+::: general_manager.uploads.config.FileUploadConfigurationError
+
 ::: general_manager.uploads.public.register_upload_adapter
 
 ::: general_manager.uploads.adapters.UploadAdapter
@@ -111,11 +150,29 @@ an adapter with a backend-native atomic exact-delete operation.
 
 ::: general_manager.uploads.adapters.ProxyUploadSink
 
+::: general_manager.uploads.adapters.UploadInstructions
+
+::: general_manager.uploads.adapters.ClaimedObject
+
+::: general_manager.uploads.types.ObjectVersion
+
+::: general_manager.uploads.types.UploadTransport
+
+::: general_manager.uploads.types.StoredFileStatus
+
 ::: general_manager.uploads.graphql_types.UploadToken
 
 ::: general_manager.uploads.graphql_types.StoredFile
 
 ::: general_manager.uploads.graphql_types.StoredImage
+
+::: general_manager.uploads.errors.UploadError
+
+Every public upload exception listed above inherits
+`UploadError(message: str | None = None)`, returns no value when raised, and
+exposes its stable `code` plus a safe default message. Passing a message changes
+the local exception text, but GraphQL and HTTP boundaries sanitize arbitrary
+messages and non-framework subclasses.
 
 `MeasurementScalar` parses string inputs such as `"12.5 m/s"` into
 `Measurement` values and serializes stored measurements with the canonical
@@ -278,6 +335,9 @@ while rendering the original exception are also kept out of the client response.
 Migrate client-facing `ValueError` uses to `PublicGraphQLError`, or to Django
 `ValidationError` for validation (use structured validation errors for field
 details). Public messages must never contain secrets or other internal details.
+
+See the [safe mutation error recipe](../examples/graphql_error_handling.md) for
+a directly usable resolver and client-handling pattern.
 
 ::: general_manager.api.graphql_view.GeneralManagerGraphQLView
 

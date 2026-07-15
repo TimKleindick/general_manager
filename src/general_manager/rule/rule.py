@@ -311,10 +311,15 @@ class Rule(Generic[GeneralManagerType]):
         Returns:
             dict[str, str] | None: Mapping keyed by referenced variables or
             Django's `NON_FIELD_ERRORS` fallback when no variables are available;
-            `None` if the predicate passed or was not evaluated.
+            `None` if the predicate passed, was skipped, or has not been evaluated.
 
         Raises:
-            ErrorMessageGenerationError: If called before any input has been evaluated.
+            MissingErrorTemplateVariableError: If a failed rule's custom message
+                omits a placeholder for a referenced variable.
+            ErrorMessageGenerationError: If internal evaluation state records a
+                failed result without retaining its evaluated input.
+            Exception: A matching rule handler's documented message-generation
+                exceptions propagate unchanged.
         """
         if self._last_result or self._last_result is None:
             return None

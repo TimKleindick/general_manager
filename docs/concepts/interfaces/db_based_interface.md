@@ -110,6 +110,11 @@ place may retain transactional values if they were materialized before that
 rollback; discard it and construct a fresh manager from its ID before
 continuing.
 
+For a task-oriented rollback pattern, see
+[Keep ORM writes and history on one database](../../howto/orm_atomic_writes.md).
+The [existing-model cookbook](../../examples/existing_model_interface.md#route-atomic-writes-and-history-to-another-database)
+contains a directly usable multi-database example.
+
 History-capable managers expose `manager.history` as the audit trail for that object's ID. The returned queryset lets you inspect or filter raw history entries directly:
 
 ```python

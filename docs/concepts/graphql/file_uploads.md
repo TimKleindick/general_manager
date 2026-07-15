@@ -166,4 +166,8 @@ fail closed with `downloadUrl: null`. Public URLs have no expiry.
   uploaded through this workflow.
 
 See [the local-storage guide](../../howto/graphql_file_uploads.md) and
-[the S3 guide](../../howto/graphql_file_uploads_s3.md) for complete setup.
+[the S3 guide](../../howto/graphql_file_uploads_s3.md) for complete setup. For a
+directly usable client flow, see the
+[GraphQL upload cookbook entry](../../examples/graphql_file_upload.md). The
+[GraphQL API reference](../../api/graphql.md#file-uploads) lists the stable
+Python extension contracts and failure types.
