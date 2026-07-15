@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterator, Mapping
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +12,27 @@ from asgiref.sync import async_to_sync
 
 from general_manager.api import bulk_data_change_notifications
 from general_manager.api.notification_batching import _queue_notification
+
+
+class _SingleUseMapping(Mapping[str, object]):
+    """Expose a payload that fails if batching copies it more than once."""
+
+    def __init__(self) -> None:
+        self.iterations = 0
+
+    def __getitem__(self, key: str) -> object:
+        if key != "action":
+            raise KeyError(key)
+        return "refresh"
+
+    def __iter__(self) -> Iterator[str]:
+        self.iterations += 1
+        if self.iterations > 1:
+            raise AssertionError("duplicate payload was copied")  # noqa: TRY003
+        return iter(("action",))
+
+    def __len__(self) -> int:
+        return 1
 
 
 def test_queue_notification_returns_false_outside_batch() -> None:
@@ -70,6 +92,26 @@ def test_nested_batch_deduplicates_first_target_and_flushes_once() -> None:
             {"type": "gm.subscription.event", "action": "refresh"},
         )
     ]
+
+
+def test_duplicate_registration_does_not_copy_payload_again() -> None:
+    sent: list[dict[str, object]] = []
+    message = _SingleUseMapping()
+
+    async def group_send(_group: str, payload: dict[str, object]) -> None:
+        sent.append(payload)
+
+    with bulk_data_change_notifications():
+        for _ in range(2):
+            assert _queue_notification(
+                key=("graphql", "Project"),
+                group_send=group_send,
+                group="project-refresh",
+                message=message,
+            )
+
+    assert message.iterations == 1
+    assert sent == [{"action": "refresh"}]
 
 
 def test_batch_dispatches_sequentially_in_sorted_key_order() -> None:
@@ -223,5 +265,26 @@ def test_body_and_memory_failure_are_preserved() -> None:
 
     assert [type(exc) for exc in caught.value.exceptions] == [
         ValueError,
+        MemoryError,
+    ]
+
+
+def test_base_exception_body_and_memory_failure_are_preserved() -> None:
+    async def exhausted(_group: str, _message: dict[str, object]) -> None:
+        raise MemoryError
+
+    with pytest.raises(BaseExceptionGroup) as caught:
+        with bulk_data_change_notifications():
+            assert _queue_notification(
+                key=("graphql", "Project"),
+                group_send=exhausted,
+                group="project-refresh",
+                message={"action": "refresh"},
+            )
+            raise KeyboardInterrupt
+
+    assert type(caught.value) is BaseExceptionGroup
+    assert [type(exc) for exc in caught.value.exceptions] == [
+        KeyboardInterrupt,
         MemoryError,
     ]

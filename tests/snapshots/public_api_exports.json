@@ -330,6 +330,10 @@
       "general_manager.uploads.types",
       "UploadTransport"
     ],
+    "bulk_data_change_notifications": [
+      "general_manager.api.notification_batching",
+      "bulk_data_change_notifications"
+    ],
     "graph_ql_mutation": [
       "general_manager.api.mutation",
       "graph_ql_mutation"
