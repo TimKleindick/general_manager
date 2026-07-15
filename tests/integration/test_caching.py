@@ -635,6 +635,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         """Characterize immediate cache invalidation inside a notification batch."""
         commercials = self.TestCommercials(project=self.project1)
         self.assertEqual(commercials.budget_left, Measurement(800, "EUR"))
+        self.assert_cache_miss()
+        self.assertEqual(commercials.budget_left, Measurement(800, "EUR"))
+        self.assert_cache_hit()
 
         with bulk_data_change_notifications():
             self.project1 = self.project1.update(
@@ -647,6 +650,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 refreshed_commercials.budget_left,
                 Measurement(400, "EUR"),
             )
+            self.assert_cache_miss()
 
     def test_filter_dependency_invalidation(self):
         """
