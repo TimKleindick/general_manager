@@ -773,8 +773,8 @@ def test_partial_static_config_failure_uses_all_durable_exact_indexes() -> None:
     )
 
 
-def test_update_before_config_failure_does_not_synthesize_fallback() -> None:
-    """Update recovery requires exact rules captured by an earlier phase."""
+def test_update_before_config_failure_synthesizes_exact_fallback() -> None:
+    """A failed update-before capture conservatively dirties every owner index."""
     configure(
         Owner,
         SearchInvalidationRule(source=Source, resolve=None),
@@ -792,7 +792,76 @@ def test_update_before_config_failure_does_not_synthesize_fallback() -> None:
             resolve_search_invalidation_phase(change("update", "before", Source(id=1)))
         )
 
-    assert plan == SearchInvalidationPlan()
+    assert plan.targets == ()
+    assert plan.dirty_fallbacks == (
+        SearchInvalidationPair(Owner, "global"),
+        SearchInvalidationPair(Owner, "private"),
+    )
+
+
+def test_persistent_update_config_failure_retains_synthetic_fallback() -> None:
+    """Update-after retains the exact synthetic fallback captured before."""
+    configure(
+        Owner,
+        SearchInvalidationRule(source=Source, resolve=None),
+    )
+    GeneralManagerMeta.all_classes = [Owner]
+
+    with (
+        patch(
+            "general_manager.search.invalidation.get_search_config",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        before = resolve_search_invalidation_phase(
+            change("update", "before", Source(id=1))
+        )
+        after = resolve_search_invalidation_phase(
+            change("update", "after", Source(id=1)),
+            previous=before,
+        )
+
+    plan = finalize_search_invalidation_capture(after)
+    assert plan.targets == ()
+    assert plan.dirty_fallbacks == (
+        SearchInvalidationPair(Owner, "global"),
+        SearchInvalidationPair(Owner, "private"),
+    )
+
+
+def test_transient_update_before_config_failure_survives_successful_after() -> None:
+    """Successful after targets cannot clear uncertainty from failed before."""
+    configure(
+        Owner,
+        SearchInvalidationRule(
+            source=Source,
+            resolve=lambda _event, owner: (owner(id=130),),
+        ),
+    )
+    GeneralManagerMeta.all_classes = [Owner]
+
+    with (
+        patch(
+            "general_manager.search.invalidation.get_search_config",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        before = resolve_search_invalidation_phase(
+            change("update", "before", Source(id=1))
+        )
+    after = resolve_search_invalidation_phase(
+        change("update", "after", Source(id=1)),
+        previous=before,
+    )
+
+    plan = finalize_search_invalidation_capture(after)
+    assert target_ids(plan) == [130, 130]
+    assert plan.dirty_fallbacks == (
+        SearchInvalidationPair(Owner, "global"),
+        SearchInvalidationPair(Owner, "private"),
+    )
 
 
 def test_config_and_durable_fallback_failures_never_escape_mutation() -> None:
