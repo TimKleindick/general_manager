@@ -83,6 +83,90 @@ class Project(GeneralManager):
 indexing. Filter fields listed in `filters` are included automatically if not
 present in the returned mapping.
 
+### Related-data invalidation
+
+An indexed field can depend on a different manager. Declare that dependency on
+the manager that owns the search document with `SearchInvalidationRule`:
+
+```python
+from general_manager import GeneralManager, IndexConfig, SearchInvalidationRule
+from investments.managers import InvestNumber
+
+
+def affected_projects(change, owner_class):
+    return owner_class.filter(customer=change.instance)
+
+
+class Project(GeneralManager):
+    class SearchConfig:
+        indexes = (
+            IndexConfig(name="global", fields=("customer__name",)),
+        )
+        invalidation_rules = (
+            SearchInvalidationRule(
+                source="customers.managers.Customer",
+                resolve=affected_projects,
+                indexes=("global",),
+            ),
+            SearchInvalidationRule(
+                source=InvestNumber,
+                resolve=lambda change, owner: owner.filter(
+                    invest_numbers=change.instance
+                ),
+                relation="invest_numbers",
+                indexes=("global",),
+            ),
+        )
+```
+
+Here `Customer` and `InvestNumber` are existing manager classes, and
+`Project.Interface` defines the `invest_numbers` many-to-many field. A resolver
+receives a frozen `SearchChange` and the owning manager class. It must return
+instances of that owner manager; returning identifiers, ORM model instances, or
+another manager type makes the entire rule fall back to reconciliation. Setting
+`resolve=None` deliberately chooses that dirty-only fallback.
+
+Resolver phases preserve the information needed to find changing relations:
+
+- create resolves only `after` the new source instance exists;
+- update resolves `before` and `after`, then combines and deduplicates both
+  owner sets;
+- delete resolves only `before` the source disappears.
+
+Target identifications are copied while the resolver runs, so later mutation of
+the returned manager objects cannot alter queued work. Resolver exceptions,
+invalid targets, an invalid bound setting, or more than
+`SEARCH_INVALIDATION_MAX_TARGETS` targets produce no partial targeted work for
+that rule. Instead, every selected owner/index pair remains dirty for a full
+reconciliation. The default maximum is `1000`; accepted targets are dispatched
+in `SEARCH_INVALIDATION_BATCH_SIZE` chunks, which default to `100`. Both values
+must be positive, non-boolean integers.
+
+Normal lifecycle work is commit-bound. On Django's `default` database alias,
+dirty markers are written inside the business transaction and dispatch runs
+after commit, so rollback leaks neither marker nor task. For another source
+alias, the post-commit callback writes the marker in the default control-plane
+database and then dispatches. This avoids rollback leakage but cannot make the
+two databases atomic: a process crash after the source commit and before that
+callback is a known gap. Periodic reconciliation is the repair path.
+
+Many-to-many rules additionally set `relation` to the owner-side M2M field.
+GeneralManager listens to the exact auto-created or custom through model and
+supports related-manager `add()`, `remove()`, `clear()`, and `set()` in both
+forward and reverse directions. The owner must use exactly the standard
+`{"id": pk}` identification, and both through foreign keys must store their
+endpoint primary keys. Direct through-model saves/deletes, raw SQL, bulk writes,
+and self-symmetrical M2M relations are unsupported; use the related manager API
+or explicitly reconcile afterward. A `.set()` may emit more than one bounded
+event, so duplicate batches are permitted.
+
+Search invalidation is intentionally at-least-repairable, not exactly-once. It
+does not maintain dependency snapshots, an outbox, cross-database atomicity, or
+transaction-wide event coalescing. Every exact manager/index pair is generation
+fenced: newer dirty work cannot be cleared by an older task or reconciliation
+claim. A worker that accepts a task and later fails best-effort marks the exact
+pair dirty again. Reconciliation remains the durable safety net.
+
 ## Document identity and permissions
 
 Search documents always include the manager `identification` mapping. The
@@ -90,6 +174,11 @@ default document id is derived from that identification plus the manager type,
 so ids remain stable across database and non-database interfaces. If you override
 `type_label`, keep it stable; it is part of the id and is used to segment
 results by manager type.
+
+If you provide `SearchConfig.document_id`, it is also the delete identity. It
+must return the same stable value for an object before and after updates,
+including updates caused by related-data invalidation. Changing the result can
+leave the old backend document behind until reconciliation removes it.
 
 GraphQL search applies `get_read_permission_filter()` to the search query and
 then re-checks permissions on instantiated results. User filters are merged with

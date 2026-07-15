@@ -14,6 +14,30 @@ Each searchable manager/index pair gets a durable state row. The reconciler:
 - clears dirty state only after a successful backend write
 - keeps the dirty marker and records `last_error` when reconciliation fails
 
+Lifecycle invalidation uses this row as its durable handoff. Every dirty mark
+increments `dirty_generation`. The dispatch handoff acknowledges only the
+generation it marked, and reconciliation clears only when both its claim token
+and generation still match. Consequently, older work cannot clear a newer
+mutation. If an accepted indexing or deletion task later fails, the worker
+best-effort marks the exact manager/index pair dirty again.
+
+Only a previously clean incremental `data_changed` marker can be acknowledged
+after every unit for that pair is accepted. Existing dirty rows and
+initialization, schema-change, forced, resolver-error, invalid-target,
+target-overflow, and `resolve=None` fallbacks remain dirty. Direct deletes carry
+the immutable document id captured before deletion; async workers apply the
+expected generation fence and re-dirty the pair rather than deleting when that
+fence is stale.
+
+Targeted lifecycle work is still not an outbox or an exactly-once protocol. On
+the default database alias, marker writes share the source transaction and task
+dispatch waits for commit. For a non-default source alias, the commit callback
+writes the marker to the default control-plane database before dispatching;
+there is an unavoidable crash window between the source commit and that
+callback. There is also no cross-database atomicity or transaction-wide event
+coalescing. Schedule reconciliation often enough for the application's repair
+objective.
+
 The schema fingerprint includes the manager import path, index fields, filters,
 sorts, boosts, min score, type label, update strategy, and custom
 `document_id`/`to_document` callable paths. Stored manager paths must import to a
@@ -141,6 +165,19 @@ In watch mode, `--force` applies to the first sweep only; later sweeps reconcile
 normally. Use `--max-states N` to cap each sweep to a positive number of dirty
 states.
 
+Use the same procedure after an unsupported direct M2M through-table, raw SQL,
+or bulk write:
+
+```bash
+python manage.py search_reconcile --once --force
+```
+
+The force pass rebuilds configured manager/index pairs and removes stale
+documents through the single-index reconciliation path. For a normal resolver
+error, invalid target, target overflow, broker failure, or worker failure, the
+affected exact pairs are already dirty and the non-forced `--once` command is
+sufficient.
+
 ## Troubleshooting
 
 - If searches return no results after startup, run
@@ -153,14 +190,18 @@ states.
 
 `SearchIndexState` is the durable row behind reconciliation. It is unique per
 `manager_path` and `index_name`, stores the current `schema_fingerprint`, and
-uses dirty fields plus claim fields to coordinate workers. `mark_dirty(reason)`
+uses dirty fields plus claim fields to coordinate workers. Migration
+`0010_search_index_state_dirty_generation` adds the generation fence required by
+the lifecycle handoff. `mark_dirty(reason)`
 preserves the first `dirty_since` timestamp while replacing `dirty_reason` with
-the provided string; pass one of `SEARCH_INDEX_DIRTY_REASON_INITIALIZATION`,
+the provided string and incrementing `dirty_generation`; pass one of
+`SEARCH_INDEX_DIRTY_REASON_INITIALIZATION`,
 `SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED`,
 `SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED`, or
 `SEARCH_INDEX_DIRTY_REASON_FORCED` because the method does not pre-validate
-choices. `clear_dirty()` records a successful run, sets `initialized_at` on
-first success, updates `last_reconciled_at`, clears dirty fields, releases claim
+choices. `clear_dirty(claim_token=..., dirty_generation=...)` records a
+successful run only when both fences still match, sets `initialized_at` on first
+success, updates `last_reconciled_at`, clears dirty fields, releases claim
 fields, and clears `last_error`. Both methods use `django.utils.timezone.now()`
 for timestamps. The reconciliation planner creates and updates
 `schema_fingerprint`; claim acquisition and expiration are handled by the
