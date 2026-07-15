@@ -22,6 +22,7 @@ from general_manager.api.remote_api import (
     build_remote_api_registry,
     get_remote_api_config,
 )
+from general_manager.api.notification_batching import _queue_notification
 from general_manager.cache.signals import post_data_change
 from general_manager.logging import get_logger
 
@@ -84,6 +85,27 @@ def _json_safe_identification(
     }
 
 
+def _build_remote_invalidation_payload(
+    config: RemoteAPIConfig,
+    *,
+    action: str,
+    identification: IdentificationPayload | None,
+    event_id: str,
+) -> RemoteInvalidationPayload:
+    """Build one protocol-complete RemoteAPI invalidation payload."""
+    return {
+        "type": "gm.remote.invalidation",
+        "protocol_version": config.protocol_version,
+        "base_path": config.base_path,
+        "resource_name": config.resource_name,
+        "action": action,
+        "identification": _json_safe_identification(identification)
+        if identification is not None
+        else None,
+        "event_id": event_id,
+    }
+
+
 def remote_invalidation_group_name(config: RemoteAPIConfig) -> str:
     """
     Return the channel-layer group name for a RemoteAPI websocket resource.
@@ -117,7 +139,7 @@ def emit_remote_invalidation(
     **_: object,
 ) -> None:
     """
-    Emit one websocket invalidation event for a RemoteAPI-enabled manager.
+    Emit or queue a websocket invalidation for a RemoteAPI-enabled manager.
 
     Returns without sending when the manager has no RemoteAPI config, websocket
     invalidation is disabled, or Channels has no configured channel layer.
@@ -127,9 +149,11 @@ def emit_remote_invalidation(
     validation. UUID, date, and datetime identification values are serialized to
     strings, and other non-JSON values fall back to `str(value)`.
 
-    The synchronous signal receiver sends one channel-layer payload through
-    `async_to_sync(channel_layer.group_send)`. Payload fields are `type`
-    (`"gm.remote.invalidation"`), `protocol_version`, `base_path`,
+    During a bulk notification batch, the receiver queues one resource-wide
+    `refresh` payload and returns without resolving row identification or
+    creating an immediate async bridge. Outside a batch, it sends one row-level
+    payload through `async_to_sync(channel_layer.group_send)`. Payload fields
+    are `type` (`"gm.remote.invalidation"`), `protocol_version`, `base_path`,
     `resource_name`, `action`, `identification`, and `event_id` as a UUID4
     string. Identification serialization is shallow; nested lists or mappings
     fall back to `str(value)`. Missing `instance.identification`, pathological
@@ -141,22 +165,33 @@ def emit_remote_invalidation(
     channel_layer = _get_channel_layer_safe()
     if channel_layer is None:
         return
+    group_name = remote_invalidation_group_name(config)
+    event_id = str(uuid4())
+    refresh_payload = _build_remote_invalidation_payload(
+        config,
+        action="refresh",
+        identification=None,
+        event_id=event_id,
+    )
+    if _queue_notification(
+        key=("remote", group_name, config.protocol_version),
+        group_send=channel_layer.group_send,
+        group=group_name,
+        message=refresh_payload,
+    ):
+        return
+
     event_identification = identification
     if event_identification is None and instance is not None:
         event_identification = dict(instance.identification)
-    payload: RemoteInvalidationPayload = {
-        "type": "gm.remote.invalidation",
-        "protocol_version": config.protocol_version,
-        "base_path": config.base_path,
-        "resource_name": config.resource_name,
-        "action": action,
-        "identification": _json_safe_identification(event_identification)
-        if event_identification is not None
-        else None,
-        "event_id": str(uuid4()),
-    }
+    payload = _build_remote_invalidation_payload(
+        config,
+        action=action,
+        identification=event_identification,
+        event_id=event_id,
+    )
     async_to_sync(channel_layer.group_send)(
-        remote_invalidation_group_name(config),
+        group_name,
         payload,
     )
 
