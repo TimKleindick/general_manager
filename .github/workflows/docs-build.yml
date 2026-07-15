@@ -1,0 +1,57 @@
+name: Build MkDocs
+
+on:
+  workflow_call:
+    inputs:
+      upload_pages_artifact:
+        description: Upload the built site for GitHub Pages deployment
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build MkDocs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Pages
+        if: ${{ inputs.upload_pages_artifact }}
+        uses: actions/configure-pages@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml', 'mkdocs.yml', 'requirements/*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install mkdocs-material mkdocstrings[python] pymdown-extensions
+          pip install -r requirements/development.txt
+
+      - name: Build site
+        run: mkdocs build --strict
+
+      - name: Upload artifact
+        if: ${{ inputs.upload_pages_artifact }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site

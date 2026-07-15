@@ -79,6 +79,9 @@ def test_quality_test_job_preserves_supported_matrix_and_test_services() -> None
     assert action_step(job, "actions/setup-python@v5")["with"] == {
         "python-version": "${{ matrix.python-version }}"
     }
+    assert action_step(job, "actions/checkout@v4")["with"] == {
+        "persist-credentials": "false"
+    }
     assert action_step(
         job,
         "codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354",
@@ -95,6 +98,9 @@ def test_quality_lint_job_runs_all_static_quality_gates() -> None:
     commands = run_commands(job)
 
     assert job["name"] == "lint-and-mypy"
+    assert action_step(job, "actions/checkout@v4")["with"] == {
+        "persist-credentials": "false"
+    }
     assert "ruff check --config pyproject.toml src tests scripts" in commands
     assert "ruff format --config pyproject.toml --check ." in commands
     assert "mypy --strict" in commands
@@ -104,15 +110,34 @@ def test_quality_lint_job_runs_all_static_quality_gates() -> None:
 def test_quality_docs_job_builds_strictly_with_existing_toolchain() -> None:
     job = load_workflow("quality.yml")["jobs"]["docs"]
 
-    assert job["name"] == "Build MkDocs"
-    assert action_step(job, "actions/checkout@v4")["with"] == {
+    assert job == {
+        "name": "Build MkDocs",
+        "uses": "./.github/workflows/docs-build.yml",
+    }
+
+    workflow = load_workflow("docs-build.yml")
+    assert workflow["on"] == {
+        "workflow_call": {
+            "inputs": {
+                "upload_pages_artifact": {
+                    "description": "Upload the built site for GitHub Pages deployment",
+                    "required": "false",
+                    "type": "boolean",
+                    "default": "false",
+                }
+            }
+        }
+    }
+    assert workflow["permissions"] == {"contents": "read"}
+    build_job = workflow["jobs"]["build"]
+    assert action_step(build_job, "actions/checkout@v4")["with"] == {
         "fetch-depth": "0",
         "persist-credentials": "false",
     }
-    assert action_step(job, "actions/setup-python@v5")["with"] == {
+    assert action_step(build_job, "actions/setup-python@v5")["with"] == {
         "python-version": "3.12"
     }
-    assert action_step(job, "actions/cache@v4")["with"] == {
+    assert action_step(build_job, "actions/cache@v4")["with"] == {
         "path": "~/.cache/pip",
         "key": (
             "${{ runner.os }}-pip-${{ "
@@ -120,7 +145,7 @@ def test_quality_docs_job_builds_strictly_with_existing_toolchain() -> None:
         ),
         "restore-keys": "${{ runner.os }}-pip-\n",
     }
-    commands = run_commands(job)
+    commands = run_commands(build_job)
     assert "pip install -e ." in commands
     assert (
         "pip install mkdocs-material mkdocstrings[python] pymdown-extensions"
@@ -128,6 +153,9 @@ def test_quality_docs_job_builds_strictly_with_existing_toolchain() -> None:
     )
     assert "pip install -r requirements/development.txt" in commands
     assert "mkdocs build --strict" in commands
+    upload_step = action_step(build_job, "actions/upload-pages-artifact@v3")
+    assert upload_step["if"] == "${{ inputs.upload_pages_artifact }}"
+    assert upload_step["with"] == {"path": "./site"}
 
 
 def test_quality_required_python_312_leg_validates_built_artifacts() -> None:
@@ -220,14 +248,14 @@ def test_docs_workflow_builds_on_main_or_dispatch_and_deploys_push_only() -> Non
         "id-token": "write",
     }
     assert set(workflow["jobs"]) == {"build", "deploy"}
+    assert workflow["jobs"]["build"] == {
+        "name": "Build MkDocs",
+        "uses": "./.github/workflows/docs-build.yml",
+        "with": {"upload_pages_artifact": "${{ github.event_name == 'push' }}"},
+    }
     deploy_job = workflow["jobs"]["deploy"]
     assert deploy_job["needs"] == "build"
     assert deploy_job["if"] == "${{ github.event_name == 'push' }}"
-    assert "mkdocs build --strict" in run_commands(workflow["jobs"]["build"])
-    upload_step = action_step(
-        workflow["jobs"]["build"], "actions/upload-pages-artifact@v3"
-    )
-    assert upload_step["if"] == "${{ github.event_name == 'push' }}"
     action_step(deploy_job, "actions/deploy-pages@v4")
 
 
@@ -241,6 +269,11 @@ def test_publish_workflow_runs_every_exact_sha_through_quality_and_release() -> 
     assert workflow["jobs"]["quality"] == {"uses": "./.github/workflows/quality.yml"}
     assert workflow["jobs"]["artifact"]["needs"] == "quality"
     assert workflow["jobs"]["release"]["needs"] == "artifact"
+    assert workflow["jobs"]["release"]["concurrency"] == {
+        "group": "${{ github.workflow }}-${{ github.repository }}-release",
+        "cancel-in-progress": "false",
+        "queue": "max",
+    }
 
 
 def test_publish_artifact_job_builds_once_at_the_exact_commit() -> None:
@@ -366,7 +399,7 @@ def test_publish_release_job_mutates_only_after_downloading_validated_files() ->
     assert job["permissions"] == {"contents": "write"}
     checkout = action_step(job, "actions/checkout@v4")
     assert checkout["with"] == {
-        "repository": "TimKleindick/general_manager",
+        "repository": "${{ github.repository }}",
         "ssh-key": "${{ secrets.SSH_DEPLOY_KEY }}",
         "ssh-strict": "true",
         "persist-credentials": "true",
@@ -377,7 +410,7 @@ def test_publish_release_job_mutates_only_after_downloading_validated_files() ->
     commands = run_commands(job)
     assert 'git switch -C main "$GITHUB_SHA"' in commands
     assert (
-        "git remote set-url origin git@github.com:TimKleindick/general_manager.git"
+        'git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"'
     ) in commands
     assert "git branch --set-upstream-to=origin/main main" in commands
     assert 'git config --global user.name "github-actions"' in commands
