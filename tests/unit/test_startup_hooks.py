@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from typing import Callable, ClassVar
 from unittest.mock import patch
 
@@ -272,6 +273,23 @@ class StartupHookRunnerTests(SimpleTestCase):
         result = BaseCommand().run_from_argv(["manage.py", "custom"])
         self.assertEqual(result, "ok")
         self.assertEqual(calls, ["ran"])
+
+    def test_runner_preserves_tuple_argv_for_original_runner(self) -> None:
+        received_argv: list[Sequence[str]] = []
+
+        def fake_run(self: BaseCommand, argv: Sequence[str]) -> str:
+            received_argv.append(argv)
+            return "ok"
+
+        BaseCommand.run_from_argv = fake_run  # type: ignore[assignment]
+        gm_bootstrap.install_startup_hook_runner()
+        argv = ("manage.py", "custom")
+
+        result = BaseCommand().run_from_argv(argv)
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(received_argv, [argv])
+        self.assertIs(received_argv[0], argv)
 
     def test_runner_skips_runserver_autoreload(self) -> None:
         """
