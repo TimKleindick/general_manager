@@ -371,6 +371,39 @@ def mark_search_index_dirty(
     return None
 
 
+def mark_existing_search_index_dirty(
+    manager_path: str,
+    index_name: str,
+) -> bool:
+    """Redirty an existing durable pair when its manager class cannot import.
+
+    This recovery path intentionally never creates state or changes its schema
+    fingerprint because those operations require the unavailable manager
+    configuration. The row is locked while its current reason is inspected;
+    stronger initialization, schema-change, and forced reasons are preserved.
+    """
+    with transaction.atomic():
+        try:
+            state = SearchIndexState.objects.select_for_update().get(
+                manager_path=manager_path,
+                index_name=index_name,
+            )
+        except SearchIndexState.DoesNotExist:
+            return False
+        reason = (
+            state.dirty_reason
+            if state.dirty_reason
+            in {
+                SEARCH_INDEX_DIRTY_REASON_INITIALIZATION,
+                SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED,
+                SEARCH_INDEX_DIRTY_REASON_FORCED,
+            }
+            else SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
+        )
+        state.mark_dirty(reason)
+    return True
+
+
 def acknowledge_search_index_dirty(token: DirtySearchIndex) -> bool:
     """Clear an incremental data mark only while its generation remains current."""
     if not token.acknowledgeable:
