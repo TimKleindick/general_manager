@@ -383,6 +383,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         async def run_subscription() -> None:
             successfully_added: list[str] = []
             discard_attempts: list[str] = []
+            stream: Any = None
 
             async def failing_group_add(group: str, channel: str) -> None:
                 if successfully_added:
@@ -394,19 +395,116 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
                 discard_attempts.append(group)
                 await original_group_discard(group, channel)
 
+            try:
+                with (
+                    patch.object(channel_layer, "group_add", new=failing_group_add),
+                    patch.object(
+                        channel_layer,
+                        "group_discard",
+                        new=tracking_group_discard,
+                    ),
+                    self.assertRaises(RuntimeError) as caught,
+                ):
+                    stream = await subscribe(None, info, id=employee.id)
+                    await stream.__anext__()
+            finally:
+                if stream is not None:
+                    await stream.aclose()
+
+            self.assertIs(caught.exception, setup_error)
+            self.assertEqual(discard_attempts, successfully_added)
+
+        asyncio.run(run_subscription())
+
+    def test_unstarted_detail_subscription_allocates_no_channel_resources(self) -> None:
+        employee = self.Employee.create(name="Alice", creator_id=self.user.id)
+        context = SimpleNamespace(user=self.user)
+        info = SimpleNamespace(field_nodes=[], fragments={}, context=context)
+        subscribe = GraphQL._subscription_fields["subscribe_on_employee_change"]
+        channel_layer = GraphQL._get_channel_layer(strict=True)
+
+        async def run_subscription() -> None:
             with (
-                patch.object(channel_layer, "group_add", new=failing_group_add),
+                patch.object(
+                    channel_layer,
+                    "new_channel",
+                    new=AsyncMock(return_value="detail.test.channel"),
+                ) as new_channel,
+                patch.object(
+                    channel_layer,
+                    "group_add",
+                    new=AsyncMock(),
+                ) as group_add,
+                patch.object(
+                    GraphQL,
+                    "_channel_listener",
+                    new=AsyncMock(),
+                ) as listener,
+            ):
+                stream = await subscribe(None, info, id=employee.id)
+                await stream.aclose()
+                new_channel.assert_not_awaited()
+                group_add.assert_not_awaited()
+                listener.assert_not_called()
+
+        asyncio.run(run_subscription())
+
+    def test_cancelled_detail_first_pull_rolls_back_joined_groups(self) -> None:
+        employee = self.Employee.create(name="Alice", creator_id=self.user.id)
+        context = SimpleNamespace(user=self.user)
+        info = SimpleNamespace(field_nodes=[], fragments={}, context=context)
+        subscribe = GraphQL._subscription_fields["subscribe_on_employee_change"]
+        channel_layer = GraphQL._get_channel_layer(strict=True)
+
+        async def run_subscription() -> None:
+            successfully_added: list[str] = []
+            discard_attempts: list[str] = []
+            second_add_started = asyncio.Event()
+            never_finish_add = asyncio.Event()
+
+            async def blocking_group_add(group: str, _channel: str) -> None:
+                if not successfully_added:
+                    successfully_added.append(group)
+                    return
+                second_add_started.set()
+                await never_finish_add.wait()
+
+            async def tracking_group_discard(group: str, _channel: str) -> None:
+                discard_attempts.append(group)
+
+            with (
+                patch.object(
+                    channel_layer,
+                    "new_channel",
+                    new=AsyncMock(return_value="detail.cancel.channel"),
+                ),
+                patch.object(channel_layer, "group_add", new=blocking_group_add),
                 patch.object(
                     channel_layer,
                     "group_discard",
                     new=tracking_group_discard,
                 ),
-                self.assertRaises(RuntimeError) as caught,
+                patch.object(GraphQL, "_channel_listener") as listener,
             ):
-                await subscribe(None, info, id=employee.id)
+                stream = await asyncio.wait_for(
+                    subscribe(None, info, id=employee.id),
+                    timeout=1,
+                )
+                first_pull = asyncio.create_task(stream.__anext__())
+                try:
+                    await asyncio.wait_for(second_add_started.wait(), timeout=1)
+                    first_pull.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await first_pull
+                finally:
+                    if not first_pull.done():
+                        first_pull.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await first_pull
+                    await stream.aclose()
 
-            self.assertIs(caught.exception, setup_error)
-            self.assertEqual(discard_attempts, successfully_added)
+                self.assertEqual(discard_attempts, successfully_added)
+                listener.assert_not_called()
 
         asyncio.run(run_subscription())
 
@@ -695,6 +793,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         async def run_subscription() -> None:
             successfully_added: list[str] = []
             discard_attempts: list[str] = []
+            stream: Any = None
 
             async def failing_group_add(group: str, channel: str) -> None:
                 if successfully_added:
@@ -707,21 +806,113 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
                 await original_group_discard(group, channel)
                 raise discard_error
 
-            with (
-                patch.object(channel_layer, "group_add", new=failing_group_add),
-                patch.object(
-                    channel_layer,
-                    "group_discard",
-                    new=failing_group_discard,
-                ),
-                self.assertRaises(BaseExceptionGroup) as caught,
-            ):
-                await subscribe(None, info)
+            try:
+                with (
+                    patch.object(channel_layer, "group_add", new=failing_group_add),
+                    patch.object(
+                        channel_layer,
+                        "group_discard",
+                        new=failing_group_discard,
+                    ),
+                    self.assertRaises(BaseExceptionGroup) as caught,
+                ):
+                    stream = await subscribe(None, info)
+                    await stream.__anext__()
+            finally:
+                if stream is not None:
+                    await stream.aclose()
 
             leaves = _exception_group_leaves(caught.exception)
             self.assertIn(setup_error, leaves)
             self.assertIn(discard_error, leaves)
             self.assertEqual(discard_attempts, successfully_added)
+
+        asyncio.run(run_subscription())
+
+    def test_unstarted_class_subscription_allocates_no_channel_resources(self) -> None:
+        context = SimpleNamespace(user=self.user)
+        info = SimpleNamespace(context=context)
+        subscribe = GraphQL._subscription_fields["subscribe_on_employee_class_change"]
+        channel_layer = GraphQL._get_channel_layer(strict=True)
+
+        async def run_subscription() -> None:
+            with (
+                patch.object(
+                    channel_layer,
+                    "new_channel",
+                    new=AsyncMock(return_value="class.test.channel"),
+                ) as new_channel,
+                patch.object(
+                    channel_layer,
+                    "group_add",
+                    new=AsyncMock(),
+                ) as group_add,
+                patch.object(
+                    GraphQL,
+                    "_channel_message_listener",
+                    new=AsyncMock(),
+                ) as listener,
+            ):
+                stream = await subscribe(None, info)
+                await stream.aclose()
+                new_channel.assert_not_awaited()
+                group_add.assert_not_awaited()
+                listener.assert_not_called()
+
+        asyncio.run(run_subscription())
+
+    def test_cancelled_class_first_pull_rolls_back_joined_groups(self) -> None:
+        context = SimpleNamespace(user=self.user)
+        info = SimpleNamespace(context=context)
+        subscribe = GraphQL._subscription_fields["subscribe_on_employee_class_change"]
+        channel_layer = GraphQL._get_channel_layer(strict=True)
+
+        async def run_subscription() -> None:
+            successfully_added: list[str] = []
+            discard_attempts: list[str] = []
+            second_add_started = asyncio.Event()
+            never_finish_add = asyncio.Event()
+
+            async def blocking_group_add(group: str, _channel: str) -> None:
+                if not successfully_added:
+                    successfully_added.append(group)
+                    return
+                second_add_started.set()
+                await never_finish_add.wait()
+
+            async def tracking_group_discard(group: str, _channel: str) -> None:
+                discard_attempts.append(group)
+
+            with (
+                patch.object(
+                    channel_layer,
+                    "new_channel",
+                    new=AsyncMock(return_value="class.cancel.channel"),
+                ),
+                patch.object(channel_layer, "group_add", new=blocking_group_add),
+                patch.object(
+                    channel_layer,
+                    "group_discard",
+                    new=tracking_group_discard,
+                ),
+                patch.object(GraphQL, "_channel_message_listener") as listener,
+            ):
+                stream = await asyncio.wait_for(subscribe(None, info), timeout=1)
+                first_pull = asyncio.create_task(stream.__anext__())
+                try:
+                    await asyncio.wait_for(second_add_started.wait(), timeout=1)
+                    first_pull.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await first_pull
+                finally:
+                    if not first_pull.done():
+                        first_pull.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await first_pull
+                    await stream.aclose()
+
+                self.assertEqual(discard_attempts, successfully_added)
+                listener.assert_not_called()
 
         asyncio.run(run_subscription())
 
@@ -783,16 +974,24 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
             ):
                 stream = await subscribe(None, info)
                 try:
-                    await asyncio.wait_for(listener_finished.wait(), timeout=1)
-                    with (
-                        patch.object(
-                            GraphQL,
-                            "_instantiate_manager",
-                            side_effect=stream_error,
-                        ),
-                        self.assertRaises(BaseExceptionGroup) as caught,
+                    with patch.object(
+                        GraphQL,
+                        "_instantiate_manager",
+                        side_effect=stream_error,
                     ):
-                        await stream.__anext__()
+                        next_event = asyncio.create_task(stream.__anext__())
+                        try:
+                            await asyncio.wait_for(
+                                listener_finished.wait(),
+                                timeout=1,
+                            )
+                            with self.assertRaises(BaseExceptionGroup) as caught:
+                                await next_event
+                        finally:
+                            if not next_event.done():
+                                next_event.cancel()
+                                with contextlib.suppress(asyncio.CancelledError):
+                                    await next_event
                 finally:
                     await stream.aclose()
 
@@ -848,6 +1047,112 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         self.assertIsNone(event.errors)
         payload = event.data["onEmployeeClassChange"]
         self.assertEqual(payload["action"], "create")
+        self.assertEqual(payload["item"]["name"], "Visible")
+
+    def test_class_subscription_hydrates_authorized_row_refresh(self) -> None:
+        employee = self.Employee.create(name="Visible", creator_id=self.user.id)
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        async def fake_listener(
+            _channel_layer: object,
+            _channel_name: str,
+            queue: asyncio.Queue[dict[str, object]],
+        ) -> None:
+            await queue.put(
+                {
+                    "type": "gm.subscription.event",
+                    "manager": "Employee",
+                    "action": "refresh",
+                    "identification": employee.identification,
+                }
+            )
+            await asyncio.Event().wait()
+
+        async def run_subscription() -> object:
+            with patch.object(
+                GraphQL,
+                "_channel_message_listener",
+                new=fake_listener,
+            ):
+                generator = await schema.subscribe(subscription, context_value=context)
+                if hasattr(generator, "errors"):
+                    raise AssertionError(generator.errors)
+                try:
+                    return await asyncio.wait_for(generator.__anext__(), timeout=1)
+                finally:
+                    await generator.aclose()
+
+        event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        payload = event.data["onEmployeeClassChange"]
+        self.assertEqual(payload["action"], "refresh")
+        self.assertEqual(payload["item"]["name"], "Visible")
+
+    def test_class_subscription_suppresses_unreadable_row_refresh(self) -> None:
+        hidden = self.Employee.create(name="Hidden", creator_id=self.user.id)
+        visible = self.Employee.create(name="Visible", creator_id=self.user.id)
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        async def fake_listener(
+            _channel_layer: object,
+            _channel_name: str,
+            queue: asyncio.Queue[dict[str, object]],
+        ) -> None:
+            for employee in (hidden, visible):
+                await queue.put(
+                    {
+                        "type": "gm.subscription.event",
+                        "manager": "Employee",
+                        "action": "refresh",
+                        "identification": employee.identification,
+                    }
+                )
+            await asyncio.Event().wait()
+
+        async def run_subscription() -> object:
+            with patch.object(
+                GraphQL,
+                "_channel_message_listener",
+                new=fake_listener,
+            ):
+                generator = await schema.subscribe(subscription, context_value=context)
+                if hasattr(generator, "errors"):
+                    raise AssertionError(generator.errors)
+                try:
+                    return await asyncio.wait_for(generator.__anext__(), timeout=1)
+                finally:
+                    await generator.aclose()
+
+        event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        payload = event.data["onEmployeeClassChange"]
+        self.assertEqual(payload["action"], "refresh")
         self.assertEqual(payload["item"]["name"], "Visible")
 
     def test_class_subscription_suppresses_non_string_actions(self) -> None:
