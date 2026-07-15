@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
+from contextlib import asynccontextmanager
 from copy import deepcopy
 import re
 from types import UnionType
@@ -158,6 +158,101 @@ GraphQLFilterNormalizer = Callable[
     dict[str, GraphQLFilterMapping],
 ]
 GraphQLMutationMap = dict[str, type[graphene.Mutation]]
+_SUBSCRIPTION_CLEANUP_FAILURE_MESSAGE = "subscription cleanup failed"
+_SUBSCRIPTION_ROLLBACK_FAILURE_MESSAGE = "subscription setup and rollback failed"
+_SUBSCRIPTION_STREAM_CLEANUP_FAILURE_MESSAGE = "subscription stream and cleanup failed"
+
+
+async def _cleanup_subscription_resources(
+    channel_layer: BaseChannelLayer,
+    channel_name: str,
+    joined_groups: Iterable[str],
+    listener_task: asyncio.Task[None] | None = None,
+) -> None:
+    """Stop a listener and attempt to discard every successfully joined group."""
+    cleanup_errors: list[BaseException] = []
+    if listener_task is not None:
+        listener_task.cancel()
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
+        except BaseException as exc:  # noqa: BLE001
+            cleanup_errors.append(exc)
+
+    for group in joined_groups:
+        try:
+            await channel_layer.group_discard(group, channel_name)
+        except BaseException as exc:  # noqa: BLE001
+            cleanup_errors.append(exc)
+
+    if len(cleanup_errors) == 1:
+        raise cleanup_errors[0]
+    if cleanup_errors:
+        raise BaseExceptionGroup(
+            _SUBSCRIPTION_CLEANUP_FAILURE_MESSAGE,
+            cleanup_errors,
+        )
+
+
+async def _join_subscription_groups(
+    channel_layer: BaseChannelLayer,
+    channel_name: str,
+    group_names: Iterable[str],
+) -> list[str]:
+    """Join groups and roll back every successful join if a later join fails."""
+    joined_groups: list[str] = []
+    try:
+        for group in group_names:
+            await channel_layer.group_add(group, channel_name)
+            joined_groups.append(group)
+    except BaseException as setup_error:
+        try:
+            await _cleanup_subscription_resources(
+                channel_layer,
+                channel_name,
+                joined_groups,
+            )
+        except BaseException as cleanup_error:  # noqa: BLE001
+            raise BaseExceptionGroup(
+                _SUBSCRIPTION_ROLLBACK_FAILURE_MESSAGE,
+                [setup_error, cleanup_error],
+            ) from None
+        raise
+    return joined_groups
+
+
+@asynccontextmanager
+async def _subscription_cleanup_scope(
+    channel_layer: BaseChannelLayer,
+    channel_name: str,
+    joined_groups: Iterable[str],
+    listener_task: asyncio.Task[None],
+) -> AsyncIterator[None]:
+    """Clean subscription resources without masking an active stream failure."""
+    try:
+        yield
+    except BaseException as stream_error:
+        try:
+            await _cleanup_subscription_resources(
+                channel_layer,
+                channel_name,
+                joined_groups,
+                listener_task,
+            )
+        except BaseException as cleanup_error:  # noqa: BLE001
+            raise BaseExceptionGroup(
+                _SUBSCRIPTION_STREAM_CLEANUP_FAILURE_MESSAGE,
+                [stream_error, cleanup_error],
+            ) from None
+        raise
+    else:
+        await _cleanup_subscription_resources(
+            channel_layer,
+            channel_name,
+            joined_groups,
+            listener_task,
+        )
 
 
 class GraphQL:
@@ -1412,8 +1507,11 @@ class GraphQL:
                 )
                 group_names.add(cls._refresh_group_name(dependency_class))
 
-            for group in group_names:
-                await channel_layer.group_add(group, channel_name)
+            joined_groups = await _join_subscription_groups(
+                channel_layer,
+                channel_name,
+                group_names,
+            )
 
             listener_task = asyncio.create_task(
                 cls._channel_listener(channel_layer, channel_name, queue)
@@ -1429,7 +1527,12 @@ class GraphQL:
                 Notes:
                     When the iterator is closed or exits, the background listener task is cancelled and the subscription's channel group memberships are discarded.
                 """
-                try:
+                async with _subscription_cleanup_scope(
+                    channel_layer,
+                    channel_name,
+                    joined_groups,
+                    listener_task,
+                ):
                     clear_capability_context(info)
                     yield SubscriptionEvent(item=instance, action="snapshot")
                     while True:
@@ -1445,12 +1548,6 @@ class GraphQL:
                             item = None
                         clear_capability_context(info)
                         yield SubscriptionEvent(item=item, action=action)
-                finally:
-                    listener_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await listener_task
-                    for group in group_names:
-                        await channel_layer.group_discard(group, channel_name)
 
             return event_stream()
 
@@ -1496,14 +1593,22 @@ class GraphQL:
                 cls._class_group_name(generalManagerClass),
                 cls._refresh_group_name(generalManagerClass),
             }
-            for group in group_names:
-                await channel_layer.group_add(group, channel_name)
+            joined_groups = await _join_subscription_groups(
+                channel_layer,
+                channel_name,
+                group_names,
+            )
             listener_task = asyncio.create_task(
                 cls._channel_message_listener(channel_layer, channel_name, queue)
             )
 
             async def event_stream() -> AsyncIterator[SubscriptionEvent]:
-                try:
+                async with _subscription_cleanup_scope(
+                    channel_layer,
+                    channel_name,
+                    joined_groups,
+                    listener_task,
+                ):
                     while True:
                         message = await queue.get()
                         if message.get("manager") != generalManagerClass.__name__:
@@ -1531,12 +1636,6 @@ class GraphQL:
                             continue
                         clear_capability_context(info)
                         yield SubscriptionEvent(item=item, action=action)
-                finally:
-                    listener_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await listener_task
-                    for group in group_names:
-                        await channel_layer.group_discard(group, channel_name)
 
             return event_stream()
 
