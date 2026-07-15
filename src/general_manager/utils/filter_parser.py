@@ -192,7 +192,7 @@ def create_filter_function(lookup_str: str, value: object) -> FilterFunction:
     parts = lookup_str.split("__") if lookup_str else []
     lookup: LookupName
     if parts and parts[-1] in _SUPPORTED_LOOKUPS:
-        lookup = cast(LookupName, parts[-1])
+        lookup = parts[-1]
         attr_path = parts[:-1]
     else:
         lookup = "exact"

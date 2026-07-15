@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections import UserList
+from collections.abc import Mapping, Sequence
+
 import pytest
 
 from general_manager.search.backend import SearchBackendError, SearchDocument
@@ -667,6 +670,17 @@ def test_meilisearch_backend_build_filter_expression_groups() -> None:
     assert 'type = "TypeB"' in expr
     assert 'status = "ready"' in expr
     assert 'status = "paused"' in expr
+
+
+def test_meilisearch_backend_build_filter_expression_accepts_general_sequence() -> None:
+    """Build grouped filters from sequences other than lists and tuples."""
+    filters: Sequence[Mapping[str, object]] = UserList(
+        [{"status": "ready"}, {"status": "paused"}]
+    )
+
+    expr = MeilisearchBackend._build_filter_expression(filters, types=None)
+
+    assert expr == '(status = "ready") OR (status = "paused")'
 
 
 def test_meilisearch_backend_build_filter_expression_empty() -> None:

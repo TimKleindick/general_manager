@@ -447,7 +447,7 @@ class MeilisearchBackend:
             )
             clauses.append(f"({type_clause})")
         if filters:
-            filter_groups = filters if isinstance(filters, (list, tuple)) else [filters]
+            filter_groups = [filters] if isinstance(filters, Mapping) else filters
             group_clauses: list[str] = []
             for group in filter_groups:
                 parts: list[str] = []
