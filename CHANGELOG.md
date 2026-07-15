@@ -2,6 +2,73 @@
 
 <!-- version list -->
 
+## v0.64.0 (2026-07-15)
+
+### Bug Fixes
+
+- Align search typing with runtime contracts
+  ([`1afab72`](https://github.com/TimKleindick/general_manager/commit/1afab72d20f61901dc238f08c7f8c06159d7fc11))
+
+- Align upload typing with Django contracts
+  ([`4145652`](https://github.com/TimKleindick/general_manager/commit/4145652894d958ef396aac1375dff8f97ad683bf))
+
+- Batch GraphQL subscription dispatch
+  ([`db81131`](https://github.com/TimKleindick/general_manager/commit/db81131a901926fb9cbcda69274166c679f5300e))
+
+- Clean up GraphQL subscription groups safely
+  ([`f99ce8e`](https://github.com/TimKleindick/general_manager/commit/f99ce8ee749e5fc353ae39bd2182d61289f17e14))
+
+- Harden notification batch cleanup
+  ([`4c8f3df`](https://github.com/TimKleindick/general_manager/commit/4c8f3df201cdd4ae7a7fc55ebfdc565001c32249))
+
+- Match Django command argument typing
+  ([`926242d`](https://github.com/TimKleindick/general_manager/commit/926242d69d9c0416c5d183e5e0484a74092caf81))
+
+- Preserve GraphQL bridge failure handling
+  ([`c05efc3`](https://github.com/TimKleindick/general_manager/commit/c05efc3f123f93f79ec6e00ece5f5e765139d903))
+
+- Secure GraphQL refresh lifecycle
+  ([`98c5d8a`](https://github.com/TimKleindick/general_manager/commit/98c5d8a642bae672b9272079a38e8ef2065f9468))
+
+### Continuous Integration
+
+- Align typing dependencies with Django 5.2
+  ([`78f9a17`](https://github.com/TimKleindick/general_manager/commit/78f9a1758baf8444c61991d551cd660bea13a355))
+
+### Documentation
+
+- Clarify notification transaction boundary
+  ([`5fdcb5a`](https://github.com/TimKleindick/general_manager/commit/5fdcb5a0f5e964e9dfad430e5f543e2e2940256b))
+
+- Design bulk notification batching
+  ([`ee04086`](https://github.com/TimKleindick/general_manager/commit/ee04086b9402123acd5e66ee0bcbe66ff1342adc))
+
+- Explain bulk notification refreshes
+  ([`4715cc4`](https://github.com/TimKleindick/general_manager/commit/4715cc48125f77c4911d4ae36371c66d5e6a6866))
+
+- Plan bulk notification batching
+  ([`bb15010`](https://github.com/TimKleindick/general_manager/commit/bb15010c34dddcd250fe92f1835c9740f909e846))
+
+### Features
+
+- Add bulk notification batch context
+  ([`00071a7`](https://github.com/TimKleindick/general_manager/commit/00071a794235ec32835ae27fe3117f9b44ef88de))
+
+- Batch RemoteAPI refresh invalidation
+  ([`41e9031`](https://github.com/TimKleindick/general_manager/commit/41e9031eb5e7a10958305481548654cda2ba9480))
+
+- Deliver GraphQL batch refresh events
+  ([`fbab341`](https://github.com/TimKleindick/general_manager/commit/fbab341c52412ad6bd0bd0f248d1cd1ebfe6187a))
+
+### Testing
+
+- Cover notification context propagation
+  ([`028b1d3`](https://github.com/TimKleindick/general_manager/commit/028b1d36e024a4a7cdbc8192156373e4dae6a02c))
+
+- Harden notification batch contract
+  ([`990a927`](https://github.com/TimKleindick/general_manager/commit/990a927b6cb2d5d9eeb92512636be9b66df72416))
+
+
 ## v0.63.2 (2026-07-15)
 
 ### Bug Fixes
