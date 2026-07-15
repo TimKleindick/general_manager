@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from general_manager.manager.general_manager import GeneralManager
 
@@ -31,6 +31,32 @@ class InvalidIndexMinScoreError(ValueError):
     def __init__(self) -> None:
         """Initialize the invalid index minimum-score error message."""
         super().__init__("IndexConfig.min_score must be non-negative.")
+
+
+@dataclass(frozen=True)
+class SearchChange:
+    """One source-manager lifecycle phase presented to an invalidation resolver."""
+
+    action: Literal["create", "update", "delete"]
+    phase: Literal["before", "after"]
+    instance: GeneralManager
+    database_alias: str
+
+
+@dataclass(frozen=True)
+class SearchInvalidationRule:
+    """Declare how one source manager invalidates documents owned by another."""
+
+    source: type[GeneralManager] | str
+    resolve: (
+        Callable[
+            [SearchChange, type[GeneralManager]],
+            Iterable[GeneralManager],
+        ]
+        | None
+    ) = None
+    indexes: tuple[str, ...] | None = None
+    relation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -134,9 +160,12 @@ class SearchConfigProtocol(Protocol):
     `document_id` and `to_document` receive the manager instance being indexed.
     `document_id` must return a stable document id string. `to_document` must
     return a mapping of document field names to arbitrary payload values.
+    `invalidation_rules` declares source managers and optional owner relations
+    whose changes may invalidate documents from this manager.
     """
 
     indexes: Sequence[IndexConfig]
+    invalidation_rules: Sequence[SearchInvalidationRule]
     document_id: Callable[[GeneralManager], str] | None
     type_label: str | None
     to_document: Callable[[GeneralManager], Mapping[str, object]] | None
@@ -150,6 +179,7 @@ class SearchConfigSpec:
     Attributes:
         indexes: Required tuple of configured search indexes; there is no
             constructor default.
+        invalidation_rules: Frozen declarative related-data invalidation rules.
         document_id: Optional callable receiving a manager instance and
             returning a stable document id string.
         type_label: Optional searchable type label; registries fall back to the
@@ -160,6 +190,7 @@ class SearchConfigSpec:
     """
 
     indexes: tuple[IndexConfig, ...]
+    invalidation_rules: tuple[SearchInvalidationRule, ...] = ()
     document_id: Callable[[GeneralManager], str] | None = None
     type_label: str | None = None
     to_document: Callable[[GeneralManager], Mapping[str, object]] | None = None
@@ -172,9 +203,10 @@ def resolve_search_config(config: object | None) -> SearchConfigSpec | None:
 
     If `config` is `None`, returns `None`. If `config` is already a
     `SearchConfigSpec`, returns it unchanged. Otherwise, extracts `indexes`,
-    `document_id`, `type_label`, `to_document`, and `update_strategy` attributes
-    from `config`, using default values when attributes are missing. Missing
-    `indexes` resolves to an empty tuple.
+    `invalidation_rules`, `document_id`, `type_label`, `to_document`, and
+    `update_strategy` attributes from `config`, using default values when
+    attributes are missing. Missing `indexes` and `invalidation_rules` resolve
+    to empty tuples.
 
     Args:
         config: Configuration object or resolved spec to normalize.
@@ -185,9 +217,9 @@ def resolve_search_config(config: object | None) -> SearchConfigSpec | None:
     Notes:
         This helper does not validate that `document_id` or `to_document` are
         callable and does not validate the element type of `indexes`; invalid
-        values fail later where the indexer or registry uses them. Missing
-        optional attributes default to `None`. Attribute access errors from
-        unusual config objects propagate.
+        values fail later where the indexer, registry, or startup checks use
+        them. Missing optional attributes default to `None`. Attribute access
+        errors from unusual config objects propagate.
     """
     if config is None:
         return None
@@ -195,6 +227,7 @@ def resolve_search_config(config: object | None) -> SearchConfigSpec | None:
         return config
 
     indexes = tuple(getattr(config, "indexes", ()))
+    invalidation_rules = tuple(getattr(config, "invalidation_rules", ()))
     document_id = cast(
         Callable[[GeneralManager], str] | None,
         getattr(config, "document_id", None),
@@ -208,6 +241,7 @@ def resolve_search_config(config: object | None) -> SearchConfigSpec | None:
 
     return SearchConfigSpec(
         indexes=indexes,
+        invalidation_rules=invalidation_rules,
         document_id=document_id,
         type_label=type_label,
         to_document=to_document,

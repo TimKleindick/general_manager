@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Type-only imports for public API re-exports."""
+
+from __future__ import annotations
 
 __all__ = [
     "ClaimedObject",
@@ -79,9 +79,9 @@ from general_manager.uploads.errors import InvalidUploadFilenameError
 from general_manager.uploads.errors import InvalidUploadSizeError
 from general_manager.api.graphql import MeasurementScalar
 from general_manager.api.graphql import MeasurementType
-from general_manager.api.graphql_errors import PublicGraphQLError
 from general_manager.uploads.types import ObjectVersion
 from general_manager.uploads.adapters import ProxyUploadSink
+from general_manager.api.graphql_errors import PublicGraphQLError
 from general_manager.api.remote_invalidation_client import RemoteInvalidationClient
 from general_manager.uploads.graphql_types import StoredFile
 from general_manager.uploads.types import StoredFileStatus

@@ -104,3 +104,11 @@ def test_public_api_invalid_attribute_raises(module_path: str) -> None:
 
     with pytest.raises(AttributeError):
         module.does_not_exist  # noqa: B018
+
+
+@pytest.mark.parametrize("module_path", ["general_manager", "general_manager.search"])
+def test_search_invalidation_contract_is_exported(module_path: str) -> None:
+    module = import_module(module_path)
+
+    assert module.SearchChange.__module__ == "general_manager.search.config"
+    assert module.SearchInvalidationRule.__module__ == "general_manager.search.config"

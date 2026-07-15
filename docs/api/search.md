@@ -14,6 +14,10 @@ submodules shown below, but they are not re-exported from `general_manager.searc
 
 ::: general_manager.search.config.SearchConfigSpec
 
+::: general_manager.search.config.SearchChange
+
+::: general_manager.search.config.SearchInvalidationRule
+
 ::: general_manager.search.config.resolve_search_config
 
 ::: general_manager.search.config.iter_index_names
@@ -25,14 +29,25 @@ when provided; `IndexConfig.min_score` must be non-negative when provided.
 `FieldConfig(name=...)` while preserving field order, and `field_boosts()` keeps
 only explicit field boosts.
 
+`SearchInvalidationRule` declares a source manager whose lifecycle changes can
+invalidate search documents owned by the manager containing the rule. Sources
+may be manager classes or dotted import paths; dotted paths remain unchanged in
+the frozen declaration and are resolved lazily by startup validation. Optional
+`indexes` select a non-empty subset of the owner's configured indexes. Optional
+`relation` names a supported owner-side many-to-many relation. Resolver
+callbacks receive a frozen `SearchChange` and the owner manager class. Resolved
+configurations normalize `invalidation_rules` to a tuple, defaulting to an empty
+tuple.
+
 `SearchConfigSpec.document_id` is a callable that receives the manager instance
 being indexed and returns a stable document id string. `SearchConfigSpec.to_document`
 receives the manager instance and returns a mapping of document field names to
 payload values. `SearchConfigSpec.indexes` is required when constructing the
 spec directly. `resolve_search_config()` copies `indexes`, `document_id`,
-`type_label`, `to_document`, and `update_strategy` attributes from arbitrary
-config objects; a missing `indexes` attribute becomes an empty tuple and missing
-optional attributes become `None`. It does not validate that callable attributes
+`type_label`, `to_document`, `update_strategy`, and `invalidation_rules`
+attributes from arbitrary config objects; missing `indexes` and
+`invalidation_rules` attributes become empty tuples and missing optional
+attributes become `None`. It does not validate that callable attributes
 are callable or that every `indexes` entry is an `IndexConfig`; invalid values
 fail later when the registry or indexer uses them. Attribute access errors from
 unusual config objects propagate. `iter_index_names()` returns a concrete list

@@ -19,9 +19,11 @@ __all__ = [
     "RequestInterface",
     "Rule",
     "SearchBackend",
+    "SearchChange",
     "SearchConfigProtocol",
     "SearchConfigSpec",
     "SearchIndexer",
+    "SearchInvalidationRule",
     "configure_search_backend",
     "configure_search_backend_from_settings",
     "get_logger",
@@ -54,9 +56,11 @@ from general_manager.interface.interfaces.remote_manager import RemoteManagerInt
 from general_manager.interface.interfaces.request import RequestInterface
 from general_manager.rule.rule import Rule
 from general_manager.search.backend import SearchBackend
+from general_manager.search.config import SearchChange
 from general_manager.search.config import SearchConfigProtocol
 from general_manager.search.config import SearchConfigSpec
 from general_manager.search.indexer import SearchIndexer
+from general_manager.search.config import SearchInvalidationRule
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.backend_registry import (
     configure_search_backend_from_settings,

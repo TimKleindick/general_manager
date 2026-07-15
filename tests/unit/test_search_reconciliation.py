@@ -12,7 +12,11 @@ from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
-from general_manager.search.config import FieldConfig, IndexConfig
+from general_manager.search.config import (
+    FieldConfig,
+    IndexConfig,
+    SearchInvalidationRule,
+)
 from general_manager.search.models import (
     SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
     SEARCH_INDEX_DIRTY_REASON_INITIALIZATION,
@@ -65,6 +69,14 @@ class ReconcileProject(GeneralManager):
         update_strategy = "inline"
 
 
+def _resolve_reconcile_project(_change, _owner):
+    return ()
+
+
+def _resolve_reconcile_project_alternative(_change, _owner):
+    return ()
+
+
 class SearchReconciliationDiscoveryTests(TestCase):
     def setUp(self) -> None:
         """Register the searchable manager class for discovery tests."""
@@ -109,6 +121,53 @@ class SearchReconciliationDiscoveryTests(TestCase):
         changed = build_search_schema_fingerprint(ReconcileProject, changed_index)
 
         assert original != changed
+
+    def test_fingerprint_changes_when_invalidation_rule_metadata_changes(
+        self,
+    ) -> None:
+        changed_rules = [
+            SearchInvalidationRule(source="example.OtherSource"),
+            SearchInvalidationRule(
+                source=ReconcileProject,
+                resolve=_resolve_reconcile_project_alternative,
+            ),
+            SearchInvalidationRule(
+                source=ReconcileProject,
+                resolve=_resolve_reconcile_project,
+                indexes=("global",),
+            ),
+            SearchInvalidationRule(
+                source=ReconcileProject,
+                resolve=_resolve_reconcile_project,
+                relation="tags",
+            ),
+        ]
+        base_rule = SearchInvalidationRule(
+            source=ReconcileProject,
+            resolve=_resolve_reconcile_project,
+        )
+        index = ReconcileProject.SearchConfig.indexes[0]
+
+        with patch.object(
+            ReconcileProject.SearchConfig,
+            "invalidation_rules",
+            (base_rule,),
+            create=True,
+        ):
+            original = build_search_schema_fingerprint(ReconcileProject, index)
+        for changed_rule in changed_rules:
+            with (
+                self.subTest(changed_rule=changed_rule),
+                patch.object(
+                    ReconcileProject.SearchConfig,
+                    "invalidation_rules",
+                    (changed_rule,),
+                    create=True,
+                ),
+            ):
+                changed = build_search_schema_fingerprint(ReconcileProject, index)
+
+            assert original != changed
 
     def test_ensure_states_marks_missing_targets_dirty_for_initialization(self) -> None:
         """Create missing state rows as dirty initialization work."""

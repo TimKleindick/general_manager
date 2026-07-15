@@ -13,11 +13,13 @@ __all__ = [
     "SearchBackendError",
     "SearchBackendNotConfiguredError",
     "SearchBackendNotImplementedError",
+    "SearchChange",
     "SearchConfigProtocol",
     "SearchConfigSpec",
     "SearchDocument",
     "SearchHit",
     "SearchIndexer",
+    "SearchInvalidationRule",
     "SearchResult",
     "TypesenseBackend",
     "configure_search_backend",
@@ -37,11 +39,13 @@ from general_manager.search.backend import SearchBackendClientMissingError
 from general_manager.search.backend import SearchBackendError
 from general_manager.search.backend import SearchBackendNotConfiguredError
 from general_manager.search.backend import SearchBackendNotImplementedError
+from general_manager.search.config import SearchChange
 from general_manager.search.config import SearchConfigProtocol
 from general_manager.search.config import SearchConfigSpec
 from general_manager.search.backend import SearchDocument
 from general_manager.search.backend import SearchHit
 from general_manager.search.indexer import SearchIndexer
+from general_manager.search.config import SearchInvalidationRule
 from general_manager.search.backend import SearchResult
 from general_manager.search.backends.typesense import TypesenseBackend
 from general_manager.search.backend_registry import configure_search_backend

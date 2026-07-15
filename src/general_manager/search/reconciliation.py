@@ -128,6 +128,13 @@ def _callable_path(value: object) -> str | None:
     return f"{module}.{name}" if module else name
 
 
+def _manager_or_path(value: type[GeneralManager] | str) -> str:
+    """Return a stable manager import path while preserving dotted strings."""
+    if isinstance(value, str):
+        return value
+    return f"{value.__module__}.{value.__name__}"
+
+
 def _index_payload(index_config: IndexConfig) -> dict[str, object]:
     """Serialize index configuration into the schema fingerprint payload."""
     return {
@@ -169,6 +176,17 @@ def build_search_schema_fingerprint(
         "to_document": _callable_path(config.to_document if config else None),
         "type_label": config.type_label if config else None,
         "update_strategy": config.update_strategy if config else None,
+        "invalidation_rules": [
+            {
+                "source": _manager_or_path(rule.source),
+                "resolver": _callable_path(rule.resolve),
+                "indexes": list(rule.indexes) if rule.indexes is not None else None,
+                "relation": rule.relation,
+            }
+            for rule in config.invalidation_rules
+        ]
+        if config
+        else [],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()

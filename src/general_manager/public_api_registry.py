@@ -22,6 +22,11 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
     "IndexConfig": ("general_manager.search.config", "IndexConfig"),
     "SearchConfigProtocol": ("general_manager.search.config", "SearchConfigProtocol"),
     "SearchConfigSpec": ("general_manager.search.config", "SearchConfigSpec"),
+    "SearchChange": ("general_manager.search.config", "SearchChange"),
+    "SearchInvalidationRule": (
+        "general_manager.search.config",
+        "SearchInvalidationRule",
+    ),
     "resolve_search_config": (
         "general_manager.search.config",
         "resolve_search_config",
@@ -678,6 +683,11 @@ SEARCH_EXPORTS: LazyExportMap = {
     "IndexConfig": ("general_manager.search.config", "IndexConfig"),
     "SearchConfigProtocol": ("general_manager.search.config", "SearchConfigProtocol"),
     "SearchConfigSpec": ("general_manager.search.config", "SearchConfigSpec"),
+    "SearchChange": ("general_manager.search.config", "SearchChange"),
+    "SearchInvalidationRule": (
+        "general_manager.search.config",
+        "SearchInvalidationRule",
+    ),
     "resolve_search_config": (
         "general_manager.search.config",
         "resolve_search_config",

@@ -26,7 +26,7 @@ def _write_module(module_name: str, names: Iterable[str], imports: list[str]) ->
     """
     Create a type-only module under the TYPES_PACKAGE containing a __all__ export list and the given import lines.
 
-    The target file path is derived from the dotted module_name by dropping its leading package component and placing the resulting path inside TYPES_PACKAGE; parent directories are created as needed. The generated file starts with future annotations, a module docstring, a __all__ assignment (listing provided names or an empty list), followed by the provided import lines, and is written as UTF-8 text ending with a newline.
+    The target file path is derived from the dotted module_name by dropping its leading package component and placing the resulting path inside TYPES_PACKAGE; parent directories are created as needed. The generated file starts with a module docstring, then future annotations, a __all__ assignment (listing provided names or an empty list), followed by the provided import lines, and is written as UTF-8 text ending with a newline.
 
     Parameters:
         module_name (str): Dotted module name that determines the output file location inside TYPES_PACKAGE.
@@ -39,9 +39,12 @@ def _write_module(module_name: str, names: Iterable[str], imports: list[str]) ->
     output = TYPES_PACKAGE.joinpath(*relative_parts).with_suffix(".py")
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    lines: list[str] = ["from __future__ import annotations", ""]
-    lines.append('"""Type-only imports for public API re-exports."""')
-    lines.append("")
+    lines: list[str] = [
+        '"""Type-only imports for public API re-exports."""',
+        "",
+        "from __future__ import annotations",
+        "",
+    ]
     if names:
         lines.append("__all__ = [")
         for name in names:
