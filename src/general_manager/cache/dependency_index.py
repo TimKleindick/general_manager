@@ -365,7 +365,7 @@ def _record_dependencies_locked(
     """Mutate an already-loaded dependency index for one cache key."""
     for model_name, action, identifier in set(dependencies):
         if action in ("filter", "exclude"):
-            action_key = cast(Literal["filter", "exclude"], action)
+            action_key = action
             params = parse_dependency_identifier(identifier)
             if not isinstance(params, dict):
                 continue
