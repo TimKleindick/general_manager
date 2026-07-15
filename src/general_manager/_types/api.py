@@ -56,6 +56,7 @@ __all__ = [
     "UploadTokenInvalidError",
     "UploadTransferConflictError",
     "UploadTransport",
+    "bulk_data_change_notifications",
     "graph_ql_mutation",
     "graph_ql_property",
     "register_upload_adapter",
@@ -115,5 +116,6 @@ from general_manager.uploads.errors import UploadTokenInvalidError
 from general_manager.uploads.errors import UploadTransferConflictError
 from general_manager.uploads.types import UploadTransport
 from general_manager.api.mutation import graph_ql_mutation
+from general_manager.api.notification_batching import bulk_data_change_notifications
 from general_manager.api.property import graph_ql_property
 from general_manager.uploads.public import register_upload_adapter
