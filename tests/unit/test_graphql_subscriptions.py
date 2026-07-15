@@ -1659,7 +1659,12 @@ class GraphQLSubscriptionDispatchTests(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError(failure_message)
 
         layer = SimpleNamespace(group_send=group_send)
-        message: dict[str, object] = {"action": "update"}
+        message: dict[str, object] = {
+            "type": "gm.subscription.event",
+            "action": "update",
+            "manager": "Project",
+            "identification": {"secret": "sensitive-value"},
+        }
 
         with patch.object(graphql_subscriptions, "logger") as mock_logger:
             success_count = await graphql_subscriptions.dispatch_subscription_event(
@@ -1675,11 +1680,21 @@ class GraphQLSubscriptionDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(success_count, 1)
         self.assertEqual(mock_logger.warning.call_count, 2)
         self.assertEqual(
+            [call.kwargs["context"] for call in mock_logger.warning.call_args_list],
             [
-                call.kwargs["context"]["group"]
-                for call in mock_logger.warning.call_args_list
+                {
+                    "group": "first-failure",
+                    "event_type": "gm.subscription.event",
+                    "action": "update",
+                    "manager": "Project",
+                },
+                {
+                    "group": "second-failure",
+                    "event_type": "gm.subscription.event",
+                    "action": "update",
+                    "manager": "Project",
+                },
             ],
-            ["first-failure", "second-failure"],
         )
 
     async def test_memory_error_stops_dispatch_immediately(self) -> None:

@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterator, Mapping
-from threading import Thread
+from contextvars import copy_context
+from threading import Event, Thread
 from unittest.mock import patch
 
 import pytest
@@ -211,6 +212,51 @@ def test_asyncio_to_thread_participates_in_active_batch() -> None:
 
     assert queued
     assert sent == ["thread-project-refresh"]
+
+
+def test_child_context_outliving_batch_falls_back_to_immediate_dispatch() -> None:
+    sent: list[str] = []
+    queue_results: list[bool] = []
+    child_ready = Event()
+    release_child = Event()
+
+    async def group_send(group: str, _message: dict[str, object]) -> None:
+        sent.append(group)
+
+    def queue_after_parent_exit() -> None:
+        child_ready.set()
+        assert release_child.wait(timeout=1)
+        queued = _queue_notification(
+            key=("graphql", "LateChildProject"),
+            group_send=group_send,
+            group="late-child-project-refresh",
+            message={"action": "refresh"},
+        )
+        queue_results.append(queued)
+        if not queued:
+            async_to_sync(group_send)(
+                "late-child-project-refresh",
+                {"action": "refresh"},
+            )
+
+    with bulk_data_change_notifications():
+        assert _queue_notification(
+            key=("graphql", "ParentProject"),
+            group_send=group_send,
+            group="parent-project-refresh",
+            message={"action": "refresh"},
+        )
+        child_context = copy_context()
+        thread = Thread(target=child_context.run, args=(queue_after_parent_exit,))
+        thread.start()
+        assert child_ready.wait(timeout=1)
+
+    release_child.set()
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert queue_results == [False]
+    assert sent == ["parent-project-refresh", "late-child-project-refresh"]
 
 
 def test_raw_thread_does_not_inherit_active_batch() -> None:
