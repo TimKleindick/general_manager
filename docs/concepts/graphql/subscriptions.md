@@ -259,14 +259,24 @@ subscriber actually needs.
 
 - Missing channel layer configuration produces a GraphQL error instructing the operator to configure `CHANNEL_LAYERS`.
 - If instantiating the manager or a dependency fails during an update, the subscription sends an event with `item = null` and the incoming `action`. Clients can use this to show a placeholder while retrying the fetch.
-- Class-wide subscriptions check object-level read permission before yielding each event. If the requesting user cannot read the changed object, the event is suppressed entirely so the stream does not reveal hidden object IDs or change timing.
-- If a class-wide event cannot be rehydrated, such as a hard-deleted object that no longer exists, the event is suppressed rather than sent with `item = null`.
-- Class-wide subscriptions suppress these malformed queued messages before
-  hydration: messages for another manager name, missing or non-string `action`
-  values, and missing or non-object `identification` payloads. The lower-level
-  channel listener only requires `type: "gm.subscription.event"` and a present
-  `action` before queueing a message, so other malformed payloads reach the
-  class-wide stream and are handled there or by the normal hydration error path.
+- Class-wide subscriptions check object-level read permission before yielding
+  each ordinary row-level event. If the requesting user cannot read the changed
+  object, the event is suppressed entirely so the stream does not reveal hidden
+  object IDs or change timing. Aggregate batch `refresh` events are exempt from
+  this object-level check because they contain no row identification, as
+  described under Bulk notification refreshes.
+- If an ordinary class-wide row-level event cannot be rehydrated, such as a
+  hard-deleted object that no longer exists, the event is suppressed rather than
+  sent with `item = null`.
+- Class-wide subscriptions suppress these malformed queued ordinary row-level
+  messages before hydration: messages for another manager name, missing or
+  non-string `action` values, and missing or non-object `identification`
+  payloads. Aggregate batch `refresh` events are handled before identification
+  validation and are therefore exempt from the identification requirement. The
+  lower-level channel listener only requires `type: "gm.subscription.event"`
+  and a present `action` before queueing a message, so other malformed payloads
+  reach the class-wide stream and are handled there or by the normal hydration
+  error path.
 - Data-change dispatch publishes to both the instance group and the class-wide
   group only for registered managers and configured channel layers. A provided
   signal identification mapping is used when available; otherwise the changed
