@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterator, Mapping
+from threading import Thread
 from unittest.mock import patch
 
 import pytest
@@ -164,6 +165,78 @@ def test_batch_is_inactive_while_notifications_are_flushed() -> None:
         )
 
     assert reentrant_queue_results == [False]
+
+
+def test_child_asyncio_task_participates_in_active_batch() -> None:
+    sent: list[str] = []
+
+    async def group_send(group: str, _message: dict[str, object]) -> None:
+        sent.append(group)
+
+    async def queue_from_child_task() -> bool:
+        async def queue_notification() -> bool:
+            return _queue_notification(
+                key=("graphql", "TaskProject"),
+                group_send=group_send,
+                group="task-project-refresh",
+                message={"action": "refresh"},
+            )
+
+        return await asyncio.create_task(queue_notification())
+
+    with bulk_data_change_notifications():
+        queued = asyncio.run(queue_from_child_task())
+
+    assert queued
+    assert sent == ["task-project-refresh"]
+
+
+def test_asyncio_to_thread_participates_in_active_batch() -> None:
+    sent: list[str] = []
+
+    async def group_send(group: str, _message: dict[str, object]) -> None:
+        sent.append(group)
+
+    async def queue_from_thread() -> bool:
+        return await asyncio.to_thread(
+            _queue_notification,
+            key=("graphql", "ThreadProject"),
+            group_send=group_send,
+            group="thread-project-refresh",
+            message={"action": "refresh"},
+        )
+
+    with bulk_data_change_notifications():
+        queued = asyncio.run(queue_from_thread())
+
+    assert queued
+    assert sent == ["thread-project-refresh"]
+
+
+def test_raw_thread_does_not_inherit_active_batch() -> None:
+    sent: list[str] = []
+    queue_results: list[bool] = []
+
+    async def group_send(group: str, _message: dict[str, object]) -> None:
+        sent.append(group)
+
+    def queue_from_thread() -> None:
+        queue_results.append(
+            _queue_notification(
+                key=("graphql", "RawThreadProject"),
+                group_send=group_send,
+                group="raw-thread-project-refresh",
+                message={"action": "refresh"},
+            )
+        )
+
+    with bulk_data_change_notifications():
+        thread = Thread(target=queue_from_thread)
+        thread.start()
+        thread.join()
+
+    assert queue_results == [False]
+    assert sent == []
 
 
 def test_ordinary_dispatch_failure_is_logged_and_remaining_targets_continue(
