@@ -2,6 +2,89 @@
 
 <!-- version list -->
 
+## v0.63.2 (2026-07-15)
+
+### Bug Fixes
+
+- Address release workflow review feedback
+  ([`3618944`](https://github.com/TimKleindick/general_manager/commit/3618944a4a62f1e71d604345813c506cc9030418))
+
+- Attach release preflight to branch
+  ([`430bc5e`](https://github.com/TimKleindick/general_manager/commit/430bc5e58f1b778d17f4165a02752517bbbf5b17))
+
+- Bind package smoke to required check
+  ([`56d4267`](https://github.com/TimKleindick/general_manager/commit/56d42676d82e38c800ab5a8bdbd4db2ad514fa9a))
+
+- Block conflicting releases before mutation
+  ([`5982cb9`](https://github.com/TimKleindick/general_manager/commit/5982cb96d8f5e44bafbe0dbb2038b0f0dc4cd982))
+
+- Enforce canonical distribution members
+  ([`4ac5c2b`](https://github.com/TimKleindick/general_manager/commit/4ac5c2ba5a3ae983b8a085b60830e8446d8ac5d4))
+
+- Gate publishing on validated artifacts
+  ([`585110a`](https://github.com/TimKleindick/general_manager/commit/585110a479b74f78f406ea433bc95c0d66c33289))
+
+- Harden distribution archive validation
+  ([`1be3209`](https://github.com/TimKleindick/general_manager/commit/1be320947ec32ce3013caf6d61fee97dfc07d433))
+
+- Harden release recovery
+  ([`2dd3a3e`](https://github.com/TimKleindick/general_manager/commit/2dd3a3ec259715a88256f09a1bef0a4ba5f8b43b))
+
+- Include chat eval datasets in distributions
+  ([`4968ef5`](https://github.com/TimKleindick/general_manager/commit/4968ef5a5e706bdefa978003fa595930d64f3088))
+
+- Isolate installed distribution smoke checks
+  ([`f128cb9`](https://github.com/TimKleindick/general_manager/commit/f128cb99532940082690c9e090ec6542a7359525))
+
+- Preserve required quality check name
+  ([`3692f64`](https://github.com/TimKleindick/general_manager/commit/3692f64a5a44e4dc1112ec4af36e5cf0841d99a8))
+
+- Recover partial release state
+  ([`f2e8ecc`](https://github.com/TimKleindick/general_manager/commit/f2e8ecc6ee2324796057bbf4ed013c32bcfe5db3))
+
+- Recover prestamped release tags
+  ([`10d2038`](https://github.com/TimKleindick/general_manager/commit/10d2038303c20dae61b4e25a8512f36a643617b1))
+
+- Trust recovered release provenance
+  ([`953e0ce`](https://github.com/TimKleindick/general_manager/commit/953e0cedd7bce0fc8570e68fe5e3bbec04e32d61))
+
+- Validate src-layout source distributions
+  ([`365d82b`](https://github.com/TimKleindick/general_manager/commit/365d82b4f6573de56a11ac58a81616c1850d0e19))
+
+### Continuous Integration
+
+- Consolidate reusable quality gates
+  ([`55d85de`](https://github.com/TimKleindick/general_manager/commit/55d85de92ef50634920c8b129e9c8457c5194208))
+
+- Integrate distribution smoke gates
+  ([`a27e9ac`](https://github.com/TimKleindick/general_manager/commit/a27e9acd5ac01129c2e9a784f2584c678ad5dfc0))
+
+### Documentation
+
+- Clarify pre-release PyPI checks
+  ([`ade5e16`](https://github.com/TimKleindick/general_manager/commit/ade5e163c5907fec7ebacaf5cab9fa985073551e))
+
+- Clarify release retry window
+  ([`0884adc`](https://github.com/TimKleindick/general_manager/commit/0884adc72cf2b87fe6303d146581d30506090010))
+
+- Describe valid release provenance
+  ([`a7f93be`](https://github.com/TimKleindick/general_manager/commit/a7f93be41b12e37f01541ec82fce5c24cdf56bf8))
+
+- Explain gated release recovery
+  ([`54f843d`](https://github.com/TimKleindick/general_manager/commit/54f843d6f4110eab835527ea255f83c5771a0c0f))
+
+### Testing
+
+- Add distribution artifact validator
+  ([`5e263d9`](https://github.com/TimKleindick/general_manager/commit/5e263d9a45549b577054d652e8a4c107d93ad725))
+
+- Smoke test installed distributions
+  ([`d275b45`](https://github.com/TimKleindick/general_manager/commit/d275b45950735f6397d3968389d688e431cb87df))
+
+- Verify published artifact hashes
+  ([`fa498c6`](https://github.com/TimKleindick/general_manager/commit/fa498c679841956f37248b147424bcd2fdfc3e0e))
+
+
 ## v0.63.1 (2026-07-15)
 
 ### Bug Fixes
