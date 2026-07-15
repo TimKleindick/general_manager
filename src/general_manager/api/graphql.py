@@ -1486,8 +1486,6 @@ class GraphQL:
                 )
             except RuntimeError as exc:
                 raise GraphQLError(str(exc)) from exc
-            channel_name = cast(str, await channel_layer.new_channel())
-            queue: asyncio.Queue[str] = asyncio.Queue[str]()
 
             group_names = {
                 cls._group_name(
@@ -1507,16 +1505,6 @@ class GraphQL:
                 )
                 group_names.add(cls._refresh_group_name(dependency_class))
 
-            joined_groups = await _join_subscription_groups(
-                channel_layer,
-                channel_name,
-                group_names,
-            )
-
-            listener_task = asyncio.create_task(
-                cls._channel_listener(channel_layer, channel_name, queue)
-            )
-
             async def event_stream() -> AsyncIterator[SubscriptionEvent]:
                 """
                 Yield subscription events for a manager instance, starting with an initial snapshot followed by subsequent updates.
@@ -1527,6 +1515,16 @@ class GraphQL:
                 Notes:
                     When the iterator is closed or exits, the background listener task is cancelled and the subscription's channel group memberships are discarded.
                 """
+                channel_name = cast(str, await channel_layer.new_channel())
+                queue: asyncio.Queue[str] = asyncio.Queue[str]()
+                joined_groups = await _join_subscription_groups(
+                    channel_layer,
+                    channel_name,
+                    group_names,
+                )
+                listener_task = asyncio.create_task(
+                    cls._channel_listener(channel_layer, channel_name, queue)
+                )
                 async with _subscription_cleanup_scope(
                     channel_layer,
                     channel_name,
@@ -1577,9 +1575,10 @@ class GraphQL:
             Stream future authorized change events for any instance of a manager class.
 
             Unlike single-entity subscriptions, class-wide subscriptions do not
-            yield an initial snapshot. Aggregate refresh events carry no item;
-            ordinary row events are hydrated and checked against the request
-            user's object-level read permission before they are yielded.
+            yield an initial snapshot. Aggregate refresh events without an
+            identification carry no item; identified row events, including
+            row-level refresh actions, are hydrated and checked against the
+            request user's object-level read permission before they are yielded.
             """
             try:
                 channel_layer = cast(
@@ -1587,22 +1586,22 @@ class GraphQL:
                 )
             except RuntimeError as exc:
                 raise GraphQLError(str(exc)) from exc
-            channel_name = cast(str, await channel_layer.new_channel())
-            queue: asyncio.Queue[GraphQLFieldMap] = asyncio.Queue()
             group_names = {
                 cls._class_group_name(generalManagerClass),
                 cls._refresh_group_name(generalManagerClass),
             }
-            joined_groups = await _join_subscription_groups(
-                channel_layer,
-                channel_name,
-                group_names,
-            )
-            listener_task = asyncio.create_task(
-                cls._channel_message_listener(channel_layer, channel_name, queue)
-            )
 
             async def event_stream() -> AsyncIterator[SubscriptionEvent]:
+                channel_name = cast(str, await channel_layer.new_channel())
+                queue: asyncio.Queue[GraphQLFieldMap] = asyncio.Queue()
+                joined_groups = await _join_subscription_groups(
+                    channel_layer,
+                    channel_name,
+                    group_names,
+                )
+                listener_task = asyncio.create_task(
+                    cls._channel_message_listener(channel_layer, channel_name, queue)
+                )
                 async with _subscription_cleanup_scope(
                     channel_layer,
                     channel_name,
@@ -1616,11 +1615,11 @@ class GraphQL:
                         action = message.get("action")
                         if not isinstance(action, str):
                             continue
-                        if action == "refresh":
+                        identification = message.get("identification")
+                        if action == "refresh" and identification is None:
                             clear_capability_context(info)
                             yield SubscriptionEvent(item=None, action=action)
                             continue
-                        identification = message.get("identification")
                         if not isinstance(identification, dict):
                             continue
                         identification_copy = deepcopy(identification)
