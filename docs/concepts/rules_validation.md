@@ -63,6 +63,14 @@ if not result:
     print(positive_price.get_error_message())
 ```
 
+Since GeneralManager 0.62.2, a failed rule always returns an error mapping even
+when AST-specific message generation cannot explain the predicate. Referenced
+variables receive a combination error; a variable-free predicate uses Django's
+`NON_FIELD_ERRORS` key (`"__all__"`). A custom message is preserved in both
+cases. See [the validation-rule guide](../howto/write_validation_rules.md), the
+[cookbook recipe](../examples/rule_validation.md), and the
+[API reference](../api/core.md#general_manager.rule.rule.Rule).
+
 ## Custom rule handlers
 
 For advanced scenarios, register additional rule handlers via the

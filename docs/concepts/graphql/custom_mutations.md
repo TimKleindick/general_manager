@@ -214,3 +214,8 @@ Structured field errors should use a Django `ValidationError` with a message
 dictionary, as above. Public error and validation messages must never contain
 secrets. Keep business logic in manager methods where possible so validation,
 permissions, history, and other framework behavior remain consistent.
+
+For a complete resolver and client response handler, use the
+[safe GraphQL mutation error recipe](../../examples/graphql_error_handling.md).
+The [GraphQL API reference](../../api/graphql.md) records the constructor
+signature and the compatibility change from public `ValueError` messages.

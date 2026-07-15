@@ -18,5 +18,8 @@ These tutorials walk you through common development tasks when working with Gene
 14. [Run search reconciliation](search_reconciliation.md)
 15. [Upload files through GraphQL](graphql_file_uploads.md)
 16. [Use direct S3 uploads](graphql_file_uploads_s3.md)
+17. [Run the installed chat evaluation suite](run_chat_evals.md)
+18. [Keep ORM writes and history on one database](orm_atomic_writes.md)
+19. [Write validation rules with reliable fallback errors](write_validation_rules.md)
 
 Follow them in order when you start a new project, or jump to the topic relevant to your current task.

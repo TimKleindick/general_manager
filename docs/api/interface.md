@@ -75,14 +75,16 @@ model that already exists outside GeneralManager. Direct subclasses set
 app registry, such as `settings.AUTH_USER_MODEL` or `"app_label.ModelName"`.
 The `existing_model_resolution` lifecycle capability resolves that reference
 during manager class creation, stores the resolved class on the concrete
-interface as `_model` and `model`, registers simple-history when needed,
-applies interface rules, and builds a factory for the existing table. Missing
+interface as `_model` and `model`, registers database-aware simple-history when
+needed, applies interface rules, and builds a factory for the existing table. Missing
 model declarations raise `MissingModelConfigurationError`; invalid strings,
 non-model classes, and other invalid references raise
-`InvalidModelReferenceError`. History registration is skipped when the legacy
-model already exposes the simple-history manager marker; otherwise local
-many-to-many fields are included in the registration. Soft delete is enabled
-when the resolved model exposes an `is_active` attribute. The simple-history
+`InvalidModelReferenceError`. Auto-registration includes local many-to-many
+fields and routes base and relation history to the live row's database alias. A
+pre-existing tracker is accepted on the default alias. On a configured
+non-default alias its history model must carry GeneralManager's database-aware
+marker or manager creation raises `UnsafeHistoryConfigurationError`. Soft
+delete is enabled when the resolved model exposes an `is_active` attribute. The simple-history
 marker is `model._meta.simple_history_manager_attribute`; interface rules are
 the optional `Meta.rules` sequence on the interface. This shell class does not
 declare separate create/update/delete signatures. Those public operations are
@@ -621,14 +623,20 @@ metadata keys `creator_id` and `history_comment`; other keys are validated as
 model fields/attributes or many-to-many aliases such as `<relation>_id_list`.
 The capability removes the metadata keys, validates and normalizes the remaining
 payload through the validation/support normalizer, creates the model instance,
-saves it, applies many-to-many updates, and returns `{"id": pk}`. The
+saves it, and applies many-to-many updates in one alias-aware transaction before
+returning `{"id": pk}`. Validation, save, history-reason, relation, and
+transaction errors propagate and roll back that unit. The
 GeneralManager layer consumes that result and returns the public manager
 instance from `Manager.create(...)`.
 
 `OrmUpdateCapability.update()` loads the target row by `pk` with inactive rows
 included, ignores positional arguments, applies the same
-normalization/save/many-to-many path, discards the run-scoped ORM read cache for
-the saved primary key, and returns the capability result `{"id": pk}`. The
+normalization/save/many-to-many transaction, discards the run-scoped ORM read
+cache only after that transaction succeeds, and returns the capability result
+`{"id": pk}`. Inside a caller-owned transaction on the same alias, ORM reads
+bypass the run-scoped identity cache so uncommitted rows are not published into
+it. After rollback, callers should reconstruct any in-place-updated manager from
+its ID. The
 GeneralManager layer consumes that result, refreshes the public manager state,
 and returns the same manager instance from `manager.update(...)`.
 
@@ -979,10 +987,18 @@ references, malformed strings, and non-model objects are invalid. Missing model
 configuration raises `MissingModelConfigurationError`; invalid strings or
 non-model references raise `InvalidModelReferenceError`.
 
-`ensure_history(model, interface_cls=None)` registers django-simple-history for
-the model unless the model metadata already has a simple-history manager
-attribute. Local many-to-many field names are passed to simple-history
-registration. Registration errors from django-simple-history propagate.
+`ensure_history(model, interface_cls=None)` registers database-aware
+django-simple-history for an untracked model and includes local many-to-many
+field names. A pre-existing tracker is accepted for the default alias. For a
+non-default interface alias, its generated history model must have
+GeneralManager's database-aware marker; otherwise
+`UnsafeHistoryConfigurationError(model_name, interface_name, alias)` is raised.
+The exception message is
+`<model> must use DatabaseAwareHistoricalRecords before <interface> configures non-default database alias '<alias>'.`.
+The records class and exception currently live in implementation modules and are
+not stable exports from `general_manager.interface`; this is a compatibility
+limitation of 0.63.1, not a promise of those direct import paths. Other
+registration errors from django-simple-history propagate.
 `apply_rules(interface_cls, model)` appends `interface_cls.Meta.rules` after any
 existing `model._meta.rules` and replaces `model.full_clean` with the
 GeneralManager rules-aware implementation. If no interface rules are declared,
@@ -1038,6 +1054,8 @@ manager wiring, ORM support lookup, and observability hooks propagate unchanged.
 ::: general_manager.interface.utils.errors.MissingReadOnlyBindingError
 
 ::: general_manager.interface.utils.errors.MissingModelConfigurationError
+
+::: general_manager.interface.utils.errors.UnsafeHistoryConfigurationError
 
 ::: general_manager.interface.utils.errors.InvalidModelReferenceError
 

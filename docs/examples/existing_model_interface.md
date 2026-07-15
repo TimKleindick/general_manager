@@ -82,3 +82,59 @@ class Project(GeneralManager):
 tracking and activation semantics continue to flow through to `LegacyProject`.
 If Django's field validation also reports `name`, GeneralManager keeps both the
 Django message and the rule message in the final `ValidationError`.
+
+## Route atomic writes and history to another database
+
+For a legacy model that already uses simple-history, select the same database
+alias for the interface and a database-aware history tracker:
+
+```python
+# models.py
+from django.db import models
+
+from general_manager.interface.utils.history import DatabaseAwareHistoricalRecords
+
+
+class LegacyContract(models.Model):
+    title = models.CharField(max_length=120)
+    reviewers = models.ManyToManyField("auth.User", blank=True)
+    history = DatabaseAwareHistoricalRecords(m2m_fields=["reviewers"])
+
+
+# managers.py
+from general_manager.interface import ExistingModelInterface
+from general_manager.manager import GeneralManager
+from contracts.models import LegacyContract
+
+
+class Contract(GeneralManager):
+    class Interface(ExistingModelInterface):
+        model = LegacyContract
+        database = "archive"
+```
+
+With an `archive` entry in `DATABASES`, this directly usable write commits the
+row, audit reason, and relation table together on that alias:
+
+```python
+contract = Contract.create(
+    title="Supply agreement",
+    reviewers_id_list=[reviewer.id],
+    history_comment="imported",
+    ignore_permission=True,
+)
+contract.update(
+    title="Supply agreement v2",
+    reviewers_id_list=[lead_reviewer.id],
+    history_comment="review reassigned",
+    ignore_permission=True,
+)
+```
+
+Any validation, save, history-reason, or many-to-many exception rolls the whole
+ordinary mutation back. Models without pre-existing history are registered
+automatically. `DatabaseAwareHistoricalRecords` is the required 0.63.1 helper
+for a pre-tracked model on a non-default alias, but its implementation-module
+import is not part of the stable `general_manager.interface` export registry;
+pin and test the dependency when using it. See the
+[task guide](../howto/orm_atomic_writes.md) for rollback handling.

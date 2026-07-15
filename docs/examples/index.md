@@ -6,6 +6,10 @@ The cookbook collects self-contained snippets that demonstrate how to solve doma
 <!-- - [Nested set bill of materials](nested_set_bom.md) -->
 - [Derivative aggregation](derivatives_groups.md)
 - [GraphQL query patterns](graphql_queries.md)
+- [Safe GraphQL mutation errors](graphql_error_handling.md)
+- [Upload a file through GraphQL](graphql_file_upload.md)
+- [Validate a manager with field and non-field rule errors](rule_validation.md)
+- [Installed chat eval commands](chat_eval_cli.md)
 - [Permission patterns](permission_patterns.md)
 - [Permission cookbook](permission_cookbook.md)
 - [Custom audit logger](audit_logger_custom.md)
