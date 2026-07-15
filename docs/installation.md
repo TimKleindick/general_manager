@@ -1,71 +1,101 @@
 # Installation
 
-Install GeneralManager and its runtime dependencies in a Django project. The package depends on Django, graphene-like GraphQL tooling, and Pint for unit conversions.
+Install GeneralManager in a new or existing Django project. For the complete
+empty-directory workflow, including a generated model and GraphQL query, follow
+the [quickstart](quickstart.md).
 
 ## Requirements
 
 - Python 3.12 or newer
-- Django 4.2 or newer
-- PostgreSQL or another database supported by Django (JSON fields are recommended for metadata)
-- Optional: Redis for cross-process cache invalidation when you use Celery workers
+- Django 5.2.15 or newer
+- A Django-supported database appropriate for your deployment; this repository's
+  CI exercises SQLite, while the maintained production example uses PostgreSQL
 
-## Install the package
+GeneralManager is pre-1.0, and the `main` branch may be ahead of the latest PyPI
+package. Use the [release history](https://github.com/TimKleindick/general_manager/releases)
+to check which behavior has been published.
+
+## Install the base package
+
+Create and activate a virtual environment, then install from PyPI:
 
 ```bash
-pip install GeneralManager
+python -m pip install GeneralManager
 ```
 
-If you manage dependencies with Poetry, add it with `poetry add GeneralManager`.
+The base package includes the Django, GraphQL, measurement, factory, search,
+workflow, and caching dependencies required by the core framework.
+
+## Optional integrations
+
+Install an extra only when the application uses that integration:
+
+| Extra | Install command | Purpose |
+| --- | --- | --- |
+| Ollama chat | `python -m pip install "GeneralManager[chat-ollama]"` | Local Ollama provider |
+| OpenAI chat | `python -m pip install "GeneralManager[chat-openai]"` | OpenAI provider |
+| Anthropic chat | `python -m pip install "GeneralManager[chat-anthropic]"` | Anthropic provider |
+| Google chat | `python -m pip install "GeneralManager[chat-google]"` | Google provider |
+| Image uploads | `python -m pip install "GeneralManager[file-upload-image]"` | Pillow-backed image inspection |
+| S3 uploads | `python -m pip install "GeneralManager[file-upload-s3]"` | S3 storage adapters |
+
+Provider credentials, storage policies, and production security settings remain
+application responsibilities. See the [chat](concepts/chat_prompting.md) and
+[file-upload](concepts/graphql/file_uploads.md) guides before enabling those
+features.
 
 ## Configure Django
 
-1. Add the app to `INSTALLED_APPS`:
-   ```python
-   INSTALLED_APPS = [
-       ...,
-       "general_manager",
-   ]
-   ```
-2. Ensure `TIME_ZONE`, `USE_TZ`, and database connection settings are correct. Managers rely on timezone-aware timestamps.
-3. Configure Django caches. The default local memory cache works for development. For production, configure a shared backend so cache invalidation reaches all processes:
-   ```python
-   CACHES = {
-       "default": {
-           "BACKEND": "django.core.cache.backends.redis.RedisCache",
-           "LOCATION": "redis://127.0.0.1:6379/1",
-       }
-   }
-   ```
-4. Install and configure your GraphQL stack. GeneralManager ships with schema helper for Graphene. Choose the integration that matches your project and follow the instructions in [GraphQL integration](concepts/graphql/index.md).
-
-## Database migrations
-
-Each DatabaseInterface can generate Django models. Include the auto-generated models module so Django picks it up:
+Add GeneralManager to the Django settings module:
 
 ```python
-# apps/materials/apps.py
-from django.apps import AppConfig
-
-class MaterialsConfig(AppConfig):
-    name = "apps.materials"
-
-    def ready(self) -> None:
-        import apps.materials.managers  # noqa: F401
+INSTALLED_APPS += ["general_manager"]
 ```
 
-Run the standard migration commands:
+Also add each Django application containing manager definitions. GeneralManager
+automatically imports `managers.py` from installed applications during startup;
+do not add a second import in `AppConfig.ready()`.
+
+Generated GraphQL is opt-in. To build the schema and append a route during
+startup, add:
+
+```python
+AUTOCREATE_GRAPHQL = True
+GRAPHQL_URL = "graphql/"
+```
+
+The [quickstart](quickstart.md) shows the complete project application,
+manager, migration, and GraphQL setup.
+
+## Choose database and cache backends
+
+GeneralManager uses Django's database layer. Choose a backend that meets the
+application's own deployment requirements, and validate the application's
+manager definitions and migrations against it. This repository's automated
+test suite exercises SQLite; the maintained
+[Outer Rim Logistics example](https://github.com/TimKleindick/general_manager/tree/main/example_project/outer_rim_logistics)
+uses PostgreSQL. That evidence should not be read as a claim that every Django
+backend is tested here.
+
+Django's local-memory cache is sufficient for one-process development. Use a
+shared cache backend when multiple web or worker processes need coordinated
+dependency invalidation and cached values. Redis and Memcached are deployment
+options, not base installation requirements; follow Django's cache guidance for
+the selected backend.
+
+## Verify the installation
+
+Confirm that the active interpreter can import the package:
 
 ```bash
-python manage.py makemigrations
-python manage.py migrate
+python -c "import general_manager; print(general_manager.__name__)"
 ```
 
-## Verification
+Expected output:
 
-After installing, execute the test suite to confirm everything works with your environment:
-
-```bash
-python -m pytest
+```text
+general_manager
 ```
 
-If you encounter import errors or missing migrations, revisit the `INSTALLED_APPS` and module import steps above.
+Continue with the [five-minute quickstart](quickstart.md) to create a record and
+retrieve it through generated GraphQL.
