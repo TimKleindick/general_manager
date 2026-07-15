@@ -45,6 +45,58 @@ class SymmetricalModel(models.Model):
         app_label = "search_check_tests"
 
 
+class OwnerToFieldModel(models.Model):
+    code = models.CharField(max_length=32, unique=True)
+    sources = models.ManyToManyField(
+        SourceModel,
+        through="OwnerToFieldThrough",
+    )
+
+    class Meta:
+        app_label = "search_check_tests"
+
+
+class OwnerToFieldThrough(models.Model):
+    owner = models.ForeignKey(
+        OwnerToFieldModel,
+        to_field="code",
+        on_delete=models.CASCADE,
+    )
+    source = models.ForeignKey(SourceModel, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = "search_check_tests"
+
+
+class SourceToFieldModel(models.Model):
+    code = models.CharField(max_length=32, unique=True)
+
+    class Meta:
+        app_label = "search_check_tests"
+
+
+class SourceToFieldOwnerModel(models.Model):
+    sources = models.ManyToManyField(
+        SourceToFieldModel,
+        through="SourceToFieldThrough",
+    )
+
+    class Meta:
+        app_label = "search_check_tests"
+
+
+class SourceToFieldThrough(models.Model):
+    owner = models.ForeignKey(SourceToFieldOwnerModel, on_delete=models.CASCADE)
+    source = models.ForeignKey(
+        SourceToFieldModel,
+        to_field="code",
+        on_delete=models.CASCADE,
+    )
+
+    class Meta:
+        app_label = "search_check_tests"
+
+
 class SourceInterface(OrmInterfaceBase[SourceModel]):
     _model = SourceModel
 
@@ -67,6 +119,18 @@ class CompositeOwnerInterface(OrmInterfaceBase[OwnerModel]):
 
 class SymmetricalInterface(OrmInterfaceBase[SymmetricalModel]):
     _model = SymmetricalModel
+
+
+class OwnerToFieldInterface(OrmInterfaceBase[OwnerToFieldModel]):
+    _model = OwnerToFieldModel
+
+
+class SourceToFieldInterface(OrmInterfaceBase[SourceToFieldModel]):
+    _model = SourceToFieldModel
+
+
+class SourceToFieldOwnerInterface(OrmInterfaceBase[SourceToFieldOwnerModel]):
+    _model = SourceToFieldOwnerModel
 
 
 class SourceManager(GeneralManager):
@@ -112,11 +176,34 @@ class SymmetricalManager(GeneralManager):
         invalidation_rules: ClassVar = ()
 
 
+class OwnerToFieldManager(GeneralManager):
+    Interface = BaseTestInterface
+
+    class SearchConfig:
+        indexes: ClassVar = (IndexConfig(name="global", fields=()),)
+        invalidation_rules: ClassVar = ()
+
+
+class SourceToFieldManager(GeneralManager):
+    Interface = BaseTestInterface
+
+
+class SourceToFieldOwnerManager(GeneralManager):
+    Interface = BaseTestInterface
+
+    class SearchConfig:
+        indexes: ClassVar = (IndexConfig(name="global", fields=()),)
+        invalidation_rules: ClassVar = ()
+
+
 SourceManager.Interface = SourceInterface
 OtherSourceManager.Interface = OtherSourceInterface
 OwnerManager.Interface = OwnerInterface
 CompositeOwnerManager.Interface = CompositeOwnerInterface
 SymmetricalManager.Interface = SymmetricalInterface
+OwnerToFieldManager.Interface = OwnerToFieldInterface
+SourceToFieldManager.Interface = SourceToFieldInterface
+SourceToFieldOwnerManager.Interface = SourceToFieldOwnerInterface
 
 for _manager in (
     SourceManager,
@@ -125,6 +212,9 @@ for _manager in (
     NonOrmManager,
     CompositeOwnerManager,
     SymmetricalManager,
+    OwnerToFieldManager,
+    SourceToFieldManager,
+    SourceToFieldOwnerManager,
 ):
     for _registry in (
         GeneralManagerMeta.all_classes,
@@ -298,6 +388,34 @@ def test_search_check_rejects_self_symmetrical_many_to_many() -> None:
         Error(
             "Self-symmetrical M2M search invalidation is not supported.",
             id="general_manager.search.E008",
+        )
+    ]
+
+
+def test_search_check_rejects_owner_through_fk_targeting_non_primary_key() -> None:
+    errors = _run_rule(
+        OwnerToFieldManager,
+        SearchInvalidationRule(source=SourceManager, relation="sources"),
+    )
+
+    assert errors == [
+        Error(
+            "M2M search invalidation through fields must target endpoint primary keys.",
+            id="general_manager.search.E009",
+        )
+    ]
+
+
+def test_search_check_rejects_source_through_fk_targeting_non_primary_key() -> None:
+    errors = _run_rule(
+        SourceToFieldOwnerManager,
+        SearchInvalidationRule(source=SourceToFieldManager, relation="sources"),
+    )
+
+    assert errors == [
+        Error(
+            "M2M search invalidation through fields must target endpoint primary keys.",
+            id="general_manager.search.E009",
         )
     ]
 

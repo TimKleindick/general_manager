@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from django.db import models
+
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.search.config import IndexConfig, SearchInvalidationRule
 from general_manager.search.invalidation import (
@@ -12,6 +14,10 @@ from general_manager.search.invalidation import (
     resolve_search_invalidation_phase,
     SearchScheduledWork,
     schedule_search_invalidation_work,
+)
+from general_manager.search.m2m_invalidation import (
+    M2MInvalidationBinding,
+    _schedule_owner_ids,
 )
 from tests.unit.test_search_invalidation import (
     Owner,
@@ -86,3 +92,42 @@ def test_resolver_overflow_consumes_only_limit_plus_one_targets() -> None:
     plan = finalize_search_invalidation_capture(capture)
     assert plan.targets == ()
     assert len(plan.dirty_fallbacks) == 1
+
+
+def test_m2m_event_deduplicates_ids_before_scheduler_operation_count() -> None:
+    """Duplicate public owner ids do not amplify one event's targeted work."""
+    with (
+        patch(
+            "general_manager.search.m2m_invalidation.get_search_invalidation_max_targets",
+            return_value=1000,
+        ),
+        patch(
+            "general_manager.search.m2m_invalidation.schedule_search_invalidation_work"
+        ) as schedule,
+    ):
+        binding = M2MInvalidationBinding(
+            owner_manager=Owner,
+            source_manager=Source,
+            index_names=("global", "secondary"),
+            owner_model=models.Model,
+            source_model=models.Model,
+            relation_name="unused",
+            through_model=models.Model,
+            owner_through_field="unused_owner",
+            source_through_field="unused_source",
+        )
+        _schedule_owner_ids(binding, (1, 1, 2, 2, 3, 3), using="default")
+
+    work = schedule.call_args.args[0]
+    assert len(work.upserts.targets) == 6
+    assert {
+        (target.index_name, target.identification["id"])
+        for target in work.upserts.targets
+    } == {
+        ("global", 1),
+        ("secondary", 1),
+        ("global", 2),
+        ("secondary", 2),
+        ("global", 3),
+        ("secondary", 3),
+    }

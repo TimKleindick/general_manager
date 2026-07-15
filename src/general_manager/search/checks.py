@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 import inspect
+from typing import Protocol, cast
 
 from django.core.checks import CheckMessage, Error, register
 from django.db import models
@@ -16,6 +17,22 @@ from general_manager.search.config import SearchInvalidationRule, resolve_search
 
 _PREFIX = "general_manager.search"
 _registered = False
+
+
+class _M2MRemoteMetadata(Protocol):
+    """Django-stubs-compatible subset of runtime M2M remote metadata."""
+
+    through: type[models.Model]
+
+
+class _M2MFieldMetadata(Protocol):
+    """Runtime methods Django installs on concrete M2M field instances."""
+
+    remote_field: _M2MRemoteMetadata
+
+    def m2m_field_name(self) -> str: ...
+
+    def m2m_reverse_field_name(self) -> str: ...
 
 
 def _error(message: str, suffix: str) -> Error:
@@ -42,6 +59,23 @@ def _orm_model(manager: type[GeneralManager]) -> type[models.Model] | None:
     if not isinstance(model, type) or not issubclass(model, models.Model):
         return None
     return model
+
+
+def _through_field_targets_primary_key(
+    through_model: type[models.Model],
+    field_name: str,
+    endpoint_model: type[models.Model],
+) -> bool:
+    """Return whether one exact through FK stores the endpoint primary key."""
+    try:
+        through_field = through_model._meta.get_field(field_name)
+    except Exception:  # noqa: BLE001 - malformed metadata is a check error
+        return False
+    return (
+        isinstance(through_field, models.ForeignKey)
+        and through_field.remote_field.model is endpoint_model
+        and through_field.target_field is endpoint_model._meta.pk
+    )
 
 
 def _check_relation(
@@ -112,6 +146,30 @@ def _check_relation(
             _error(
                 "Self-symmetrical M2M search invalidation is not supported.",
                 "E008",
+            )
+        ]
+    metadata = cast(_M2MFieldMetadata, field)
+    through_model = metadata.remote_field.through
+    owner_through_field = metadata.m2m_field_name()
+    source_through_field = metadata.m2m_reverse_field_name()
+    if (
+        not isinstance(through_model, type)
+        or not issubclass(through_model, models.Model)
+        or not _through_field_targets_primary_key(
+            through_model,
+            owner_through_field,
+            owner_model,
+        )
+        or not _through_field_targets_primary_key(
+            through_model,
+            source_through_field,
+            source_model,
+        )
+    ):
+        return [
+            _error(
+                "M2M search invalidation through fields must target endpoint primary keys.",
+                "E009",
             )
         ]
     return []

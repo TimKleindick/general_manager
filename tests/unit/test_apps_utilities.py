@@ -218,6 +218,12 @@ class AppsUtilitiesTests(SimpleTestCase):
                                 ),
                             ),
                             patch(
+                                "general_manager.search.m2m_invalidation.configure_search_m2m_invalidation",
+                                side_effect=lambda: call_order.append(
+                                    "configure_search_m2m_invalidation"
+                                ),
+                            ),
+                            patch(
                                 "general_manager.apps.configure_workflow_engine_from_settings",
                                 side_effect=lambda *_args, **_kwargs: call_order.append(
                                     "configure_workflow_engine"
@@ -265,6 +271,7 @@ class AppsUtilitiesTests(SimpleTestCase):
             "configure_audit",
             "configure_search",
             "configure_search_invalidation",
+            "configure_search_m2m_invalidation",
             "configure_workflow_engine",
             "configure_event_registry",
             "configure_signal_bridge",
