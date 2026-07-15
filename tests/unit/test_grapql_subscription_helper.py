@@ -762,7 +762,15 @@ class GraphQLHandleDataChangeEdgeCasesTests(unittest.TestCase):
             graphql_subscriptions.dispatch_subscription_event
         )
         dispatch_logger.warning.assert_called_once()
-        handler_logger.debug.assert_called_once()
+        handler_logger.debug.assert_called_once_with(
+            "dispatched subscription event",
+            context={
+                "manager": "TestManager",
+                "action": "test",
+                "target_groups": [instance_group, class_group],
+                "successful_group_count": 1,
+            },
+        )
 
     def test_handle_data_change_does_not_log_success_when_all_sends_fail(
         self,
@@ -806,4 +814,98 @@ class GraphQLHandleDataChangeEdgeCasesTests(unittest.TestCase):
             ],
         )
         self.assertEqual(dispatch_logger.warning.call_count, 2)
+        handler_logger.debug.assert_not_called()
+
+    def test_handle_data_change_logs_bridge_construction_failure(self) -> None:
+        """Verify ordinary bridge-construction errors are suppressed and logged."""
+
+        class TestManager(GeneralManager):
+            identification: ClassVar = {"id": 1}
+            Interface = BaseTestInterface
+
+        GraphQL.manager_registry = {"TestManager": TestManager}
+        instance = TestManager()
+        layer = SimpleNamespace(group_send=MagicMock())
+        failure_message = "bridge construction failed"
+        bridge_error = RuntimeError(failure_message)
+
+        with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
+            patch(
+                "general_manager.api.graphql.async_to_sync",
+                side_effect=bridge_error,
+            ),
+            patch("general_manager.api.graphql.logger") as handler_logger,
+        ):
+            GraphQL._handle_data_change(
+                sender=TestManager,
+                instance=instance,
+                action="test",
+            )
+
+        handler_logger.warning.assert_called_once()
+        handler_logger.debug.assert_not_called()
+
+    def test_handle_data_change_logs_bridge_invocation_failure(self) -> None:
+        """Verify ordinary bridge-invocation errors are suppressed and logged."""
+
+        class TestManager(GeneralManager):
+            identification: ClassVar = {"id": 1}
+            Interface = BaseTestInterface
+
+        GraphQL.manager_registry = {"TestManager": TestManager}
+        instance = TestManager()
+        layer = SimpleNamespace(group_send=MagicMock())
+        failure_message = "bridge invocation failed"
+
+        def failing_bridge(*_args: object) -> int:
+            raise RuntimeError(failure_message)
+
+        with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
+            patch(
+                "general_manager.api.graphql.async_to_sync",
+                return_value=failing_bridge,
+            ),
+            patch("general_manager.api.graphql.logger") as handler_logger,
+        ):
+            GraphQL._handle_data_change(
+                sender=TestManager,
+                instance=instance,
+                action="test",
+            )
+
+        handler_logger.warning.assert_called_once()
+        handler_logger.debug.assert_not_called()
+
+    def test_handle_data_change_propagates_bridge_memory_error(self) -> None:
+        """Verify bridge memory exhaustion propagates to the signal caller."""
+
+        class TestManager(GeneralManager):
+            identification: ClassVar = {"id": 1}
+            Interface = BaseTestInterface
+
+        GraphQL.manager_registry = {"TestManager": TestManager}
+        instance = TestManager()
+        layer = SimpleNamespace(group_send=MagicMock())
+
+        def exhausted_bridge(*_args: object) -> int:
+            raise MemoryError
+
+        with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
+            patch(
+                "general_manager.api.graphql.async_to_sync",
+                return_value=exhausted_bridge,
+            ),
+            patch("general_manager.api.graphql.logger") as handler_logger,
+            self.assertRaises(MemoryError),
+        ):
+            GraphQL._handle_data_change(
+                sender=TestManager,
+                instance=instance,
+                action="test",
+            )
+
+        handler_logger.warning.assert_not_called()
         handler_logger.debug.assert_not_called()

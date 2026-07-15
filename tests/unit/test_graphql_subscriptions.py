@@ -1427,6 +1427,45 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
             ],
         )
 
+    def test_handle_data_change_deep_copies_nested_identification(self) -> None:
+        """Verify dispatched row identification is detached from the source."""
+        source_identification: dict[str, object] = {
+            "id": 1,
+            "nested": {"labels": ["alpha", "beta"]},
+        }
+
+        class RegisteredManager(GeneralManager):
+            identification: ClassVar = source_identification
+            Interface = BaseTestInterface
+
+        GraphQL.manager_registry = {"RegisteredManager": RegisteredManager}
+        sent: list[dict[str, object]] = []
+
+        async def group_send(_group: str, message: dict[str, object]) -> None:
+            sent.append(message)
+
+        layer = SimpleNamespace(group_send=group_send)
+        with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
+            patch(
+                "general_manager.api.graphql.async_to_sync",
+                side_effect=lambda async_fn: lambda *args: asyncio.run(async_fn(*args)),
+            ),
+        ):
+            GraphQL._handle_data_change(
+                sender=RegisteredManager,
+                instance=RegisteredManager(),
+                action="update",
+            )
+
+        dispatched_identification = sent[0]["identification"]
+        self.assertEqual(dispatched_identification, source_identification)
+        self.assertIsNot(dispatched_identification, source_identification)
+        self.assertIsNot(
+            dispatched_identification["nested"],  # type: ignore[index]
+            source_identification["nested"],
+        )
+
     def test_bulk_changes_queue_one_manager_refresh(self) -> None:
         """Many changes for one manager flush one aggregate refresh event."""
 
