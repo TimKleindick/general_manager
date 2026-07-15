@@ -19,7 +19,7 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.search.async_tasks import (
     dispatch_delete_documents,
-    dispatch_index_update,
+    dispatch_index_manager_batch,
 )
 from general_manager.search.indexer import SearchDeleteTarget, capture_delete_targets
 from general_manager.search.config import IndexConfig, SearchChange
@@ -123,6 +123,36 @@ class SearchScheduledWork:
 
     upserts: SearchInvalidationPlan = field(default_factory=SearchInvalidationPlan)
     deletes: tuple[SearchDeleteTarget, ...] = ()
+
+
+@dataclass(frozen=True)
+class _SearchUpsertGroup:
+    """One exact owner/index/source-alias identity lane."""
+
+    owner_class: type[GeneralManager]
+    owner_path: str
+    index_name: str
+    database_alias: str
+    identifications: tuple[dict[str, object], ...]
+
+
+@dataclass(frozen=True)
+class _SearchDeleteGroup:
+    """One exact manager/index immutable document-ID lane."""
+
+    manager_class: type[GeneralManager]
+    manager_path: str
+    index_name: str
+    targets: tuple[dict[str, str], ...]
+
+
+@dataclass(frozen=True)
+class _PreparedSearchWork:
+    """Normalized event work ready for one commit-bound handoff."""
+
+    upserts: tuple[_SearchUpsertGroup, ...] = ()
+    deletes: tuple[_SearchDeleteGroup, ...] = ()
+    fallbacks: tuple[SearchInvalidationPair, ...] = ()
 
 
 def _owner_path(owner_class: type[GeneralManager]) -> str:
@@ -459,7 +489,7 @@ def _index_names(manager_class: type[GeneralManager]) -> tuple[str, ...]:
 def _mark_pairs(
     pairs: tuple[SearchInvalidationPair, ...],
     *,
-    action: _DirectAction,
+    action: str,
 ) -> tuple[tuple[SearchInvalidationPair, DirtySearchIndex], ...]:
     """Best-effort mark each affected pair and retain its generation fence."""
     tokens: list[tuple[SearchInvalidationPair, DirtySearchIndex]] = []
@@ -482,112 +512,353 @@ def _mark_pairs(
     return tuple(tokens)
 
 
-def _acknowledge_tokens(tokens: tuple[DirtySearchIndex, ...]) -> None:
-    """Acknowledge successful incremental work under its generation fences."""
-    for token in tokens:
-        acknowledge_search_index_dirty(token)
-
-
-def _run_post_commit_safely(
-    callback: Callable[[], None],
+def _prepare_scheduled_work(
+    work: SearchScheduledWork,
     *,
-    manager_class: type[GeneralManager],
-    action: _DirectAction,
-) -> None:
-    """Fence the open exception taxonomy of post-commit search integrations."""
-    try:
-        callback()
-    except Exception as exc:  # noqa: BLE001 - brokers/backends expose open errors
-        logger.warning(
-            "search post-commit callback failed",
-            context={"manager": manager_class.__name__, "action": action},
-            exc_info=exc,
+    batch_size: int | None,
+) -> _PreparedSearchWork:
+    """Normalize one event, with exact dirty fallbacks taking precedence."""
+    fallbacks = _dedupe_pairs(list(work.upserts.dirty_fallbacks))
+    fallback_keys = {(pair.owner_class, pair.index_name) for pair in fallbacks}
+    if batch_size is None:
+        return _PreparedSearchWork(
+            fallbacks=_dedupe_pairs(
+                [
+                    *fallbacks,
+                    *(
+                        SearchInvalidationPair(
+                            target.owner_class,
+                            target.index_name,
+                        )
+                        for target in work.upserts.targets
+                    ),
+                    *(
+                        SearchInvalidationPair(
+                            target.manager_class,
+                            target.index_name,
+                        )
+                        for target in work.deletes
+                    ),
+                ]
+            )
         )
 
+    upsert_payloads: dict[
+        tuple[type[GeneralManager], str, str, str],
+        list[dict[str, object]],
+    ] = {}
+    upsert_seen: dict[
+        tuple[type[GeneralManager], str, str, str],
+        set[str],
+    ] = {}
+    for upsert_target in work.upserts.targets:
+        pair_key = (upsert_target.owner_class, upsert_target.index_name)
+        if pair_key in fallback_keys:
+            continue
+        upsert_group_key = (
+            upsert_target.owner_class,
+            upsert_target.owner_path,
+            upsert_target.index_name,
+            upsert_target.database_alias,
+        )
+        copied_identification = dict(upsert_target.identification)
+        canonical_identification = upsert_target.canonical_key[1]
+        seen = upsert_seen.setdefault(upsert_group_key, set())
+        if canonical_identification in seen:
+            continue
+        seen.add(canonical_identification)
+        upsert_payloads.setdefault(upsert_group_key, []).append(copied_identification)
 
-def _dispatch_scheduled_work(
-    work: SearchScheduledWork,
+    delete_payloads: dict[
+        tuple[type[GeneralManager], str, str],
+        list[dict[str, str]],
+    ] = {}
+    delete_seen: dict[
+        tuple[type[GeneralManager], str, str],
+        set[str],
+    ] = {}
+    for delete_target in work.deletes:
+        pair_key = (delete_target.manager_class, delete_target.index_name)
+        if pair_key in fallback_keys:
+            continue
+        delete_group_key = (
+            delete_target.manager_class,
+            delete_target.manager_path,
+            delete_target.index_name,
+        )
+        seen = delete_seen.setdefault(delete_group_key, set())
+        if delete_target.document_id in seen:
+            continue
+        seen.add(delete_target.document_id)
+        delete_payloads.setdefault(delete_group_key, []).append(
+            {
+                "index_name": delete_target.index_name,
+                "document_id": delete_target.document_id,
+            }
+        )
+
+    return _PreparedSearchWork(
+        upserts=tuple(
+            _SearchUpsertGroup(
+                owner_class=owner_class,
+                owner_path=owner_path,
+                index_name=index_name,
+                database_alias=database_alias,
+                identifications=tuple(identifications),
+            )
+            for (
+                owner_class,
+                owner_path,
+                index_name,
+                database_alias,
+            ), identifications in upsert_payloads.items()
+        ),
+        deletes=tuple(
+            _SearchDeleteGroup(
+                manager_class=manager_class,
+                manager_path=manager_path,
+                index_name=index_name,
+                targets=tuple(targets),
+            )
+            for (
+                manager_class,
+                manager_path,
+                index_name,
+            ), targets in delete_payloads.items()
+        ),
+        fallbacks=fallbacks,
+    )
+
+
+def _fallback_only_prepared_work(work: SearchScheduledWork) -> _PreparedSearchWork:
+    """Recover every inspectable exact pair without touching target metadata."""
+    pairs: list[SearchInvalidationPair] = []
+    seen: set[tuple[type[GeneralManager], str]] = set()
+
+    def add_pair(owner_class: object, index_name: object) -> None:
+        try:
+            if (
+                not isinstance(owner_class, type)
+                or not issubclass(owner_class, GeneralManager)
+                or not isinstance(index_name, str)
+            ):
+                return
+            key = (owner_class, index_name)
+            if key in seen:
+                return
+            seen.add(key)
+            pairs.append(SearchInvalidationPair(owner_class, index_name))
+        except Exception as exc:  # noqa: BLE001 - hostile metadata is isolated
+            logger.warning("search invalidation fallback metadata failed", exc_info=exc)
+
+    for fallback in work.upserts.dirty_fallbacks:
+        try:
+            add_pair(fallback.owner_class, fallback.index_name)
+        except Exception as exc:  # noqa: BLE001 - hostile metadata is isolated
+            logger.warning("search invalidation fallback metadata failed", exc_info=exc)
+    for fallback_target in work.upserts.targets:
+        try:
+            add_pair(fallback_target.owner_class, fallback_target.index_name)
+        except Exception as exc:  # noqa: BLE001 - hostile metadata is isolated
+            logger.warning("search invalidation target metadata failed", exc_info=exc)
+    for fallback_delete_target in work.deletes:
+        try:
+            add_pair(
+                fallback_delete_target.manager_class,
+                fallback_delete_target.index_name,
+            )
+        except Exception as exc:  # noqa: BLE001 - hostile metadata is isolated
+            logger.warning("search invalidation delete metadata failed", exc_info=exc)
+    return _PreparedSearchWork(fallbacks=tuple(pairs))
+
+
+def _prepared_pairs(
+    work: _PreparedSearchWork,
+) -> tuple[SearchInvalidationPair, ...]:
+    """Return all exact pairs affected by normalized event work."""
+    return _dedupe_pairs(
+        [
+            *(
+                SearchInvalidationPair(group.owner_class, group.index_name)
+                for group in work.upserts
+            ),
+            *work.fallbacks,
+            *(
+                SearchInvalidationPair(group.manager_class, group.index_name)
+                for group in work.deletes
+            ),
+        ]
+    )
+
+
+def _dispatch_prepared_work(
+    work: _PreparedSearchWork,
     token_pairs: tuple[tuple[SearchInvalidationPair, DirtySearchIndex], ...],
     *,
-    action: _DirectAction,
+    batch_size: int,
 ) -> None:
-    """Dispatch both immutable lanes and acknowledge only complete exact pairs."""
-    fallback_keys = {
-        (pair.owner_class, pair.index_name) for pair in work.upserts.dirty_fallbacks
-    }
+    """Run every unit and acknowledge only fully accepted exact pairs."""
     pair_success: dict[tuple[type[GeneralManager], str], bool] = {}
-    for target in work.upserts.targets:
-        key = (target.owner_class, target.index_name)
+    for upsert_group in work.upserts:
+        key = (upsert_group.owner_class, upsert_group.index_name)
         pair_success.setdefault(key, True)
+        iterator = iter(upsert_group.identifications)
+        while chunk := tuple(islice(iterator, batch_size)):
+            try:
+                dispatch_index_manager_batch(
+                    upsert_group.owner_path,
+                    upsert_group.index_name,
+                    tuple(dict(identification) for identification in chunk),
+                )
+            except Exception as exc:  # noqa: BLE001 - broker/backend errors are open
+                pair_success[key] = False
+                logger.warning(
+                    "search indexing batch failed",
+                    context={
+                        "manager": upsert_group.owner_class.__name__,
+                        "index": upsert_group.index_name,
+                    },
+                    exc_info=exc,
+                )
+
+    token_map = {
+        (pair.owner_class, pair.index_name): token for pair, token in token_pairs
+    }
+    for delete_group in work.deletes:
+        key = (delete_group.manager_class, delete_group.index_name)
+        pair_success.setdefault(key, True)
+        token = token_map.get(key)
+        expected_generations = (
+            {delete_group.index_name: token.generation} if token is not None else None
+        )
         try:
-            instance = target.owner_class(**dict(target.identification))
-            dispatch_index_update(
-                action="index",
-                manager_path=target.owner_path,
-                identification=dict(target.identification),
-                instance=instance,
-                index_name=target.index_name,
+            dispatch_delete_documents(
+                delete_group.manager_path,
+                tuple(dict(target) for target in delete_group.targets),
+                expected_generations=expected_generations,
+                require_generation_fence=True,
             )
-        except Exception as exc:  # noqa: BLE001 - manager/backend hooks are open-ended
+        except Exception as exc:  # noqa: BLE001 - document-ID hooks are open-ended
             pair_success[key] = False
             logger.warning(
-                "search indexing failed",
+                "search deletion failed",
                 context={
-                    "manager": target.owner_class.__name__,
-                    "index": target.index_name,
-                    "action": action,
+                    "manager": delete_group.manager_class.__name__,
+                    "index": delete_group.index_name,
+                },
+                exc_info=exc,
+            )
+            if token is None:
+                _mark_pairs(
+                    (
+                        SearchInvalidationPair(
+                            delete_group.manager_class,
+                            delete_group.index_name,
+                        ),
+                    ),
+                    action="delete_recovery",
+                )
+
+    for pair, token in token_pairs:
+        key = (pair.owner_class, pair.index_name)
+        if not pair_success.get(key, False):
+            continue
+        try:
+            acknowledge_search_index_dirty(token)
+        except Exception as exc:  # noqa: BLE001 - control-plane DB errors are open
+            logger.warning(
+                "search dirty acknowledgement failed",
+                context={
+                    "manager": pair.owner_class.__name__,
+                    "index": pair.index_name,
                 },
                 exc_info=exc,
             )
 
-    deletes_by_manager: dict[
-        tuple[type[GeneralManager], str], list[SearchDeleteTarget]
-    ] = {}
-    for delete_target in work.deletes:
-        deletes_by_manager.setdefault(
-            (delete_target.manager_class, delete_target.manager_path), []
-        ).append(delete_target)
-    token_map = {
-        (pair.owner_class, pair.index_name): token for pair, token in token_pairs
-    }
-    for (manager_class, manager_path), delete_targets in deletes_by_manager.items():
-        delete_keys = {(manager_class, target.index_name) for target in delete_targets}
-        for key in delete_keys:
-            pair_success.setdefault(key, True)
-        serialized = tuple(
-            {
-                "index_name": target.index_name,
-                "document_id": target.document_id,
-            }
-            for target in delete_targets
-        )
-        expected_generations = {
-            index_name: token_map[(manager_class, index_name)].generation
-            for _owner, index_name in delete_keys
-            if (manager_class, index_name) in token_map
-        }
-        try:
-            dispatch_delete_documents(
-                manager_path,
-                serialized,
-                expected_generations=expected_generations or None,
-            )
-        except Exception as exc:  # noqa: BLE001 - document-ID hooks are open-ended
-            for key in delete_keys:
-                pair_success[key] = False
-            logger.warning(
-                "search deletion failed",
-                context={"manager": manager_class.__name__, "action": "delete"},
-                exc_info=exc,
-            )
 
-    completed = tuple(
-        token
-        for pair, token in token_pairs
-        if (pair.owner_class, pair.index_name) not in fallback_keys
-        and pair_success.get((pair.owner_class, pair.index_name), False)
+def _run_scheduled_callback_safely(callback: Callable[[], None]) -> None:
+    """Never surface post-commit search failures as business-mutation errors."""
+    try:
+        callback()
+    except Exception as exc:  # noqa: BLE001 - brokers/backends expose open errors
+        logger.warning("search post-commit callback failed", exc_info=exc)
+
+
+def schedule_search_invalidation_work(
+    work: SearchScheduledWork,
+    *,
+    source_database_alias: str,
+) -> None:
+    """Schedule one bounded, generation-fenced lifecycle invalidation event."""
+    if (
+        not work.upserts.targets
+        and not work.upserts.dirty_fallbacks
+        and not work.deletes
+    ):
+        return
+
+    batch_size: int | None
+    try:
+        batch_size = _positive_int_setting("SEARCH_INVALIDATION_BATCH_SIZE", 100)
+    except Exception as exc:  # noqa: BLE001 - settings backends are extensible
+        batch_size = None
+        logger.warning(
+            "search invalidation batch setting failed",
+            context={"source_database_alias": source_database_alias},
+            exc_info=exc,
+        )
+    try:
+        prepared = _prepare_scheduled_work(work, batch_size=batch_size)
+    except Exception as exc:  # noqa: BLE001 - captured metadata remains extensible
+        logger.warning(
+            "search invalidation preparation failed",
+            context={"source_database_alias": source_database_alias},
+            exc_info=exc,
+        )
+        try:
+            prepared = _fallback_only_prepared_work(work)
+        except Exception as fallback_exc:  # noqa: BLE001 - never abort the mutation
+            logger.warning(
+                "search invalidation fallback preparation failed",
+                context={"source_database_alias": source_database_alias},
+                exc_info=fallback_exc,
+            )
+            return
+    affected_pairs = _prepared_pairs(prepared)
+    if not affected_pairs:
+        return
+
+    effective_batch_size = batch_size or 1
+
+    def dispatch_after_marking(
+        tokens: tuple[tuple[SearchInvalidationPair, DirtySearchIndex], ...],
+    ) -> None:
+        _dispatch_prepared_work(
+            prepared,
+            tokens,
+            batch_size=effective_batch_size,
+        )
+
+    if source_database_alias == DEFAULT_DB_ALIAS:
+        tokens = _mark_pairs(affected_pairs, action="change")
+        transaction.on_commit(
+            lambda: _run_scheduled_callback_safely(
+                lambda: dispatch_after_marking(tokens)
+            ),
+            using=source_database_alias,
+        )
+        return
+
+    def after_non_default_commit() -> None:
+        # This cannot be atomic with the source commit. A crash before this
+        # callback is the documented cross-database handoff gap.
+        tokens = _mark_pairs(affected_pairs, action="change")
+        dispatch_after_marking(tokens)
+
+    transaction.on_commit(
+        lambda: _run_scheduled_callback_safely(after_non_default_commit),
+        using=source_database_alias,
     )
-    _acknowledge_tokens(completed)
 
 
 def _handle_search_pre_change(
@@ -752,7 +1023,8 @@ def _handle_search_post_change(
         change_context,
         database_alias,
     )
-    prior = change_context.get(_RELATED_SEARCH_CHANGE_CONTEXT)
+    change_context.pop(_DIRECT_SEARCH_CHANGE_CONTEXT, None)
+    prior = change_context.pop(_RELATED_SEARCH_CHANGE_CONTEXT, None)
     prior_capture = prior if isinstance(prior, SearchInvalidationCapture) else None
     try:
         if direct_action == "delete":
@@ -781,48 +1053,9 @@ def _handle_search_post_change(
         upserts=_combine_plans(direct_plan, related_plan),
         deletes=delete_targets,
     )
-    affected_pairs = _dedupe_pairs(
-        [
-            *(
-                SearchInvalidationPair(target.owner_class, target.index_name)
-                for target in work.upserts.targets
-            ),
-            *work.upserts.dirty_fallbacks,
-            *(
-                SearchInvalidationPair(target.manager_class, target.index_name)
-                for target in work.deletes
-            ),
-        ]
-    )
-    if not affected_pairs:
-        return
-
-    if database_alias == DEFAULT_DB_ALIAS:
-        tokens = _mark_pairs(affected_pairs, action=direct_action)
-        transaction.on_commit(
-            lambda: _run_post_commit_safely(
-                lambda: _dispatch_scheduled_work(work, tokens, action=direct_action),
-                manager_class=manager_class,
-                action=direct_action,
-            ),
-            using=database_alias,
-        )
-        return
-
-    def after_non_default_commit() -> None:
-        # The source transaction cannot atomically include the default-DB control
-        # plane. A process crash after source commit but before this callback is
-        # the explicitly accepted gap; a cross-database outbox is out of scope.
-        tokens = _mark_pairs(affected_pairs, action=direct_action)
-        _dispatch_scheduled_work(work, tokens, action=direct_action)
-
-    transaction.on_commit(
-        lambda: _run_post_commit_safely(
-            after_non_default_commit,
-            manager_class=manager_class,
-            action=direct_action,
-        ),
-        using=database_alias,
+    schedule_search_invalidation_work(
+        work,
+        source_database_alias=database_alias,
     )
 
 

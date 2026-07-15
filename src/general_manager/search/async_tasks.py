@@ -49,6 +49,14 @@ class InvalidSearchManagerPathError(TypeError):
         super().__init__("manager_path must resolve to a GeneralManager subclass")
 
 
+class MissingSearchDeleteGenerationFenceError(RuntimeError):
+    """Raised when lifecycle async deletion lacks an exact generation fence."""
+
+    def __init__(self) -> None:
+        """Build the stable lifecycle safety error."""
+        super().__init__("async lifecycle delete requires an expected generation")
+
+
 _raw_shared_task: object | None = None
 
 try:
@@ -411,10 +419,20 @@ def dispatch_delete_documents(
     manager_path: str,
     targets: Sequence[dict[str, str]],
     expected_generations: Mapping[str, int] | None = None,
+    *,
+    require_generation_fence: bool = False,
 ) -> None:
     """Dispatch captured direct-delete targets inline or through Celery."""
     serialized_targets = [dict(target) for target in targets]
     if _async_enabled() and CELERY_AVAILABLE:
+        if require_generation_fence and (
+            expected_generations is None
+            or any(
+                target["index_name"] not in expected_generations
+                for target in serialized_targets
+            )
+        ):
+            raise MissingSearchDeleteGenerationFenceError
         if expected_generations is None:
             delete_documents_task.delay(manager_path, serialized_targets)
         else:
