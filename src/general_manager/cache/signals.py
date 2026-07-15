@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from copy import deepcopy
-from django.dispatch import Signal
-from typing import Callable, TypeVar, ParamSpec, cast, overload
-
 from functools import wraps
+from typing import Callable, ParamSpec, TypeVar, cast, overload
+
+from django.db import DEFAULT_DB_ALIAS, transaction
+from django.dispatch import Signal
 
 from general_manager.logging import get_logger
 
@@ -39,9 +41,12 @@ def data_change(
     clears run-scoped ORM bucket/index caches, emits `pre_data_change`, invokes
     the wrapped callable, then emits `post_data_change` with the changed
     instance, previous instance, action name, identification, and copied
-    `_old_values` payload. GraphQL warm-up requeue keys collected during signal
-    handling are drained only after the outermost active data-change barrier has
-    closed; failed mutations drain pending keys but do not enqueue rewarm work.
+    `_old_values` payload. Both signals receive a per-call `change_context` and
+    the manager interface's database alias. ORM-backed signal dispatch and the
+    mutation share one transaction. GraphQL warm-up requeue keys collected
+    during signal handling are drained only after the outermost active
+    data-change barrier has closed; failed mutations drain pending keys but do
+    not enqueue rewarm work.
 
     Parameters:
         func: Function that performs a data mutation. Methods named `create`
@@ -85,6 +90,29 @@ def data_change(
             is_dependency_data_change_active,
         )
         from general_manager.cache.run_context import current_calculation_run_context
+        from general_manager.interface.orm_interface import OrmInterfaceBase
+
+        action = decorator_source.__name__
+        if action == "create":
+            sender = args[0]
+            instance_before = None
+        else:
+            instance_before = args[0]
+            sender = instance_before.__class__
+
+        interface = getattr(sender, "Interface", None)
+        is_orm_backed = isinstance(interface, type) and issubclass(
+            interface, OrmInterfaceBase
+        )
+        database_alias = DEFAULT_DB_ALIAS
+        if is_orm_backed:
+            database_alias = getattr(interface, "database", None) or DEFAULT_DB_ALIAS
+        change_context: dict[str, object] = {}
+        signal_kwargs = {
+            **kwargs,
+            "change_context": change_context,
+            "database_alias": database_alias,
+        }
 
         primary_exc: BaseException | None = None
         completed = False
@@ -95,55 +123,53 @@ def data_change(
             context.clear_bucket_indexes()
             context.clear_trusted_orm_managers()
         try:
-            action = func.__name__
-            if func.__name__ == "create":
-                sender = args[0]
-                instance_before = None
-            else:
-                instance = args[0]
-                sender = instance.__class__
-                instance_before = instance
-            pre_data_change.send(
-                sender=sender,
-                instance=instance_before,
-                action=action,
-                **kwargs,
+            transaction_context = (
+                transaction.atomic(using=database_alias)
+                if is_orm_backed
+                else nullcontext()
             )
-            old_relevant_values = getattr(instance_before, "_old_values", {})
-            pre_identification = deepcopy(
-                getattr(instance_before, "identification", None)
-            )
-            if isinstance(func, classmethod):
-                inner = cast(Callable[P, R], func.__func__)
-                result = inner(*args, **kwargs)
-            else:
-                result = func(*args, **kwargs)
+            with transaction_context:
+                pre_data_change.send(
+                    sender=sender,
+                    instance=instance_before,
+                    action=action,
+                    **signal_kwargs,
+                )
+                old_relevant_values = getattr(instance_before, "_old_values", {})
+                pre_identification = deepcopy(
+                    getattr(instance_before, "identification", None)
+                )
+                if isinstance(func, classmethod):
+                    inner = cast(Callable[P, R], func.__func__)
+                    result = inner(*args, **kwargs)
+                else:
+                    result = func(*args, **kwargs)
 
-            context = current_calculation_run_context()
-            if context is not None:
-                context.clear_orm_bucket_results()
-                context.clear_bucket_indexes()
-                context.clear_trusted_orm_managers()
+                context = current_calculation_run_context()
+                if context is not None:
+                    context.clear_orm_bucket_results()
+                    context.clear_bucket_indexes()
+                    context.clear_trusted_orm_managers()
 
-            instance = result
-            identification = getattr(instance, "identification", None)
-            if identification is None:
-                identification = pre_identification
+                instance = result
+                identification = getattr(instance, "identification", None)
+                if identification is None:
+                    identification = pre_identification
 
-            post_data_change.send(
-                sender=sender,
-                instance=instance,
-                previous_instance=instance_before,
-                identification=identification,
-                action=action,
-                old_relevant_values=old_relevant_values,
-                **kwargs,
-            )
-            if instance_before is not None:
-                try:
-                    delattr(instance_before, "_old_values")
-                except AttributeError:
-                    pass
+                post_data_change.send(
+                    sender=sender,
+                    instance=instance,
+                    previous_instance=instance_before,
+                    identification=identification,
+                    action=action,
+                    old_relevant_values=old_relevant_values,
+                    **signal_kwargs,
+                )
+                if instance_before is not None:
+                    try:
+                        delattr(instance_before, "_old_values")
+                    except AttributeError:
+                        pass
             completed = True
         except BaseException as error:
             primary_exc = error
