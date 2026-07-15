@@ -279,6 +279,7 @@ def test_publish_workflow_runs_every_exact_sha_through_quality_and_release() -> 
 def test_publish_artifact_job_builds_once_at_the_exact_commit() -> None:
     workflow = load_workflow("publish.yml")
     job = workflow["jobs"]["artifact"]
+    steps = cast(list[dict[str, Any]], job["steps"])
 
     assert job["permissions"] == {"contents": "read"}
     assert job["outputs"] == {
@@ -286,11 +287,18 @@ def test_publish_artifact_job_builds_once_at_the_exact_commit() -> None:
         "version": "${{ steps.prepare.outputs.version }}",
         "tag": "${{ steps.prepare.outputs.tag }}",
     }
-    assert action_step(job, "actions/checkout@v4")["with"] == {
+    checkout = action_step(job, "actions/checkout@v4")
+    assert checkout["with"] == {
         "ref": "${{ github.sha }}",
         "fetch-depth": "0",
         "persist-credentials": "false",
     }
+    attach_branch = step_by_id(job, "attach_release_branch")
+    assert str(attach_branch["run"]).strip() == (
+        "set -euo pipefail\n"
+        'git switch -C "$GITHUB_REF_NAME" "$GITHUB_SHA"\n'
+        'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'
+    )
     assert action_step(job, "actions/setup-python@v5")["with"] == {
         "python-version": "3.12"
     }
@@ -301,6 +309,7 @@ def test_publish_artifact_job_builds_once_at_the_exact_commit() -> None:
         "python -m pip install python-semantic-release==10.6.1 build twine==6.0.1"
     ) in commands
     prepare = step_by_id(job, "prepare")
+    assert steps.index(checkout) < steps.index(attach_branch) < steps.index(prepare)
     assert prepare["env"] == {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
     prepare_command = str(prepare["run"])
     assert "semantic-release version" in prepare_command

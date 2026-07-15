@@ -31,6 +31,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - id: attach_release_branch
+        name: Attach exact commit to the release branch
+        run: |
+          set -euo pipefail
+          git switch -C "$GITHUB_REF_NAME" "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
