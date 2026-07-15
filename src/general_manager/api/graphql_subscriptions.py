@@ -110,6 +110,51 @@ def class_group_name(manager_class: type[GeneralManager]) -> str:
     return f"gm_subscriptions.{manager_class.__name__}.__class__"
 
 
+def refresh_group_name(manager_class: type[GeneralManager]) -> str:
+    """
+    Build the channel-group name for batched refreshes of a manager class.
+
+    Parameters:
+        manager_class: Manager class used to namespace the refresh group.
+
+    Returns:
+        A stable group identifier for aggregate manager refresh events.
+    """
+    return f"gm_subscriptions.{manager_class.__name__}.__refresh__"
+
+
+async def dispatch_subscription_event(
+    channel_layer: BaseChannelLayer,
+    group_names: Iterable[str],
+    message: SubscriptionMessage,
+) -> int:
+    """
+    Send one subscription event sequentially to each requested group.
+
+    Ordinary dispatch failures are logged for their target and do not prevent
+    later sends. ``MemoryError`` propagates immediately because continuing
+    dispatch during memory exhaustion is unsafe.
+
+    Returns:
+        The number of groups that accepted the event successfully.
+    """
+    dispatched = 0
+    for target_group_name in group_names:
+        try:
+            await channel_layer.group_send(target_group_name, message)
+        except MemoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "failed to dispatch subscription event",
+                context={"group": target_group_name, "message": message},
+                exc_info=exc,
+            )
+        else:
+            dispatched += 1
+    return dispatched
+
+
 async def channel_listener(
     channel_layer: BaseChannelLayer,
     channel_name: str,
