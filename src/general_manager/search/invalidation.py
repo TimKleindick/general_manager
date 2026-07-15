@@ -41,6 +41,7 @@ _POST_DISPATCH_UID = "general_manager.search.invalidation.post"
 _DirectAction = Literal["create", "update", "delete"]
 type SearchInvalidationKey = tuple[str, str, str, str]
 type SearchRuleKey = tuple[str, int]
+_SYNTHETIC_CONFIG_FAILURE_RULE_ORDINAL = -1
 
 
 class InvalidSearchInvalidationSettingError(ValueError):
@@ -412,6 +413,16 @@ def resolve_search_invalidation_phase(
         ):
             continue
         owner_path = _owner_path(owner_class)
+        synthetic_key = (owner_path, _SYNTHETIC_CONFIG_FAILURE_RULE_ORDINAL)
+        prior_synthetic = previous_by_key.get(synthetic_key)
+        if change.action == "update" and prior_synthetic is not None:
+            resolved_rules.append(
+                _rule_fallback(
+                    synthetic_key,
+                    prior_synthetic.owner_class,
+                    prior_synthetic.index_names,
+                )
+            )
         try:
             config = get_search_config(owner_class)
             if config is None:
@@ -430,6 +441,8 @@ def resolve_search_invalidation_phase(
                 if prior_resolution.key[0] == owner_path
             )
             for prior_resolution in prior_resolutions:
+                if prior_resolution.key == synthetic_key:
+                    continue
                 resolved_rules.append(
                     _rule_fallback(
                         prior_resolution.key,
@@ -437,7 +450,10 @@ def resolve_search_invalidation_phase(
                         prior_resolution.index_names,
                     )
                 )
-            if not prior_resolutions and change.action in {"create", "delete"}:
+            should_synthesize = change.action in {"create", "delete"} or (
+                change.action == "update" and change.phase == "before"
+            )
+            if not prior_resolutions and should_synthesize:
                 index_names = _config_failure_index_names(
                     owner_class,
                     phase=change.phase,
@@ -445,7 +461,7 @@ def resolve_search_invalidation_phase(
                 if index_names:
                     resolved_rules.append(
                         _rule_fallback(
-                            (owner_path, -1),
+                            synthetic_key,
                             owner_class,
                             index_names,
                         )
