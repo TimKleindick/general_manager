@@ -817,6 +817,63 @@ class SearchDeleteGenerationFenceTests(TestCase):
         assert recovered.dirty_reason == "data_changed"
         assert recovered.dirty_generation > acknowledged.generation
 
+    def test_delete_import_failure_redirties_every_existing_path_pair(self) -> None:
+        """An accepted delete is recovered by path for every captured index."""
+        from general_manager.search.models import SearchIndexState
+        from general_manager.search.reconciliation import (
+            DirtySearchIndex,
+            acknowledge_search_index_dirty,
+        )
+
+        global_token = self._mark_and_ack()
+        private_state = SearchIndexState.objects.create(
+            manager_path=self.manager_path,
+            index_name="private",
+            schema_fingerprint="private-schema",
+        )
+        private_state.mark_dirty("data_changed")
+        private_token = DirtySearchIndex(
+            state_id=private_state.pk,
+            manager_path=self.manager_path,
+            index_name="private",
+            generation=private_state.dirty_generation,
+            acknowledgeable=True,
+        )
+        assert acknowledge_search_index_dirty(private_token) is True
+
+        with (
+            patch.object(
+                async_tasks,
+                "import_string",
+                side_effect=ImportError("manager module removed"),
+            ),
+            pytest.raises(ImportError, match="manager module removed"),
+        ):
+            async_tasks.delete_documents_task(
+                self.manager_path,
+                [
+                    {"index_name": "global", "document_id": "one"},
+                    {"index_name": "private", "document_id": "two"},
+                    {"index_name": "global", "document_id": "three"},
+                ],
+                {
+                    "global": global_token.generation,
+                    "private": private_token.generation,
+                },
+            )
+
+        recovered = {
+            state.index_name: state
+            for state in SearchIndexState.objects.filter(
+                manager_path=self.manager_path,
+                index_name__in=("global", "private"),
+            )
+        }
+        assert recovered["global"].dirty_since is not None
+        assert recovered["private"].dirty_since is not None
+        assert recovered["global"].dirty_generation == global_token.generation + 1
+        assert recovered["private"].dirty_generation == private_token.generation + 1
+
     def test_batch_import_failure_preserves_stronger_existing_dirty_reason(
         self,
     ) -> None:

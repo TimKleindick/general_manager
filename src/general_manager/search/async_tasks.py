@@ -291,8 +291,13 @@ def delete_documents_task(
     expected_generations: Mapping[str, int] | None = None,
 ) -> None:
     """Delete captured document IDs without reconstructing the deleted row."""
-    manager_class = _resolve_manager_class(manager_path)
-    index_names = tuple(target["index_name"] for target in targets)
+    index_names = tuple(dict.fromkeys(target["index_name"] for target in targets))
+    try:
+        manager_class = _resolve_manager_class(manager_path)
+    except Exception:
+        for index_name in index_names:
+            _mark_worker_path_failure(manager_path, index_name)
+        raise
     try:
         from general_manager.search.indexer import SearchDeleteTarget, SearchIndexer
 
