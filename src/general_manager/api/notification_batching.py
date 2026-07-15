@@ -49,9 +49,13 @@ def _queue_notification(
     state = _active_batch.get()
     if state is None:
         return False
-    state.targets.setdefault(
+    if key in state.targets:
+        return True
+    state.targets[key] = _PendingNotification(
         key,
-        _PendingNotification(key, group_send, group, dict(message)),
+        group_send,
+        group,
+        dict(message),
     )
     return True
 
