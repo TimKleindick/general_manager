@@ -8,12 +8,36 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from general_manager import apps as gm_apps
 
 
 class AppsUtilitiesTests(SimpleTestCase):
+    def test_search_invalidation_configuration_is_idempotent(self) -> None:
+        """Repeated startup calls keep one receiver per lifecycle signal."""
+        from django.dispatch import Signal
+
+        from general_manager.search import invalidation
+
+        pre_receiver = Mock()
+        post_receiver = Mock()
+        pre_signal = Signal()
+        post_signal = Signal()
+        with (
+            patch.object(invalidation, "_handle_search_pre_change", pre_receiver),
+            patch.object(invalidation, "_handle_search_post_change", post_receiver),
+            patch.object(invalidation, "pre_data_change", pre_signal),
+            patch.object(invalidation, "post_data_change", post_signal),
+        ):
+            invalidation.configure_search_invalidation()
+            invalidation.configure_search_invalidation()
+            pre_signal.send(sender=object, instance=None, action="noop")
+            post_signal.send(sender=object, instance=None, action="noop")
+
+        pre_receiver.assert_called_once()
+        post_receiver.assert_called_once()
+
     def test_django_startup_does_not_probe_private_public_api_exports(self) -> None:
         python_path = ["src", "."]
         if existing_python_path := os.environ.get("PYTHONPATH"):
@@ -188,6 +212,12 @@ class AppsUtilitiesTests(SimpleTestCase):
                                 ),
                             ),
                             patch(
+                                "general_manager.search.invalidation.configure_search_invalidation",
+                                side_effect=lambda: call_order.append(
+                                    "configure_search_invalidation"
+                                ),
+                            ),
+                            patch(
                                 "general_manager.apps.configure_workflow_engine_from_settings",
                                 side_effect=lambda *_args, **_kwargs: call_order.append(
                                     "configure_workflow_engine"
@@ -234,6 +264,7 @@ class AppsUtilitiesTests(SimpleTestCase):
             "initialize",
             "configure_audit",
             "configure_search",
+            "configure_search_invalidation",
             "configure_workflow_engine",
             "configure_event_registry",
             "configure_signal_bridge",
@@ -306,6 +337,12 @@ class AppsUtilitiesTests(SimpleTestCase):
                                     ),
                                 ),
                                 patch(
+                                    "general_manager.search.invalidation.configure_search_invalidation",
+                                    side_effect=lambda: call_order.append(
+                                        "configure_search_invalidation"
+                                    ),
+                                ),
+                                patch(
                                     "general_manager.apps.configure_workflow_engine_from_settings",
                                     side_effect=lambda *_args, **_kwargs: (
                                         call_order.append("configure_workflow_engine")
@@ -369,6 +406,7 @@ class AppsUtilitiesTests(SimpleTestCase):
             "remote_api",
             "configure_audit",
             "configure_search",
+            "configure_search_invalidation",
             "configure_workflow_engine",
             "configure_event_registry",
             "configure_signal_bridge",

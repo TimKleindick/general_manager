@@ -127,6 +127,25 @@ class MultiIndexProject(GeneralManager):
         ]
 
 
+class StableDocumentProjectInterface(ProjectInterface):
+    pass
+
+
+class StableDocumentProject(GeneralManager):
+    Interface = StableDocumentProjectInterface
+
+    class SearchConfig:
+        indexes: ClassVar[list[IndexConfig]] = [
+            IndexConfig(name="global", fields=["name"]),
+            IndexConfig(name="private", fields=["status"]),
+        ]
+
+        @staticmethod
+        def document_id(instance: "StableDocumentProject") -> str:
+            """Return the stable external document identifier."""
+            return f"project-{instance.identification['id']}"
+
+
 class SearchIndexerTests(SimpleTestCase):
     def setUp(self) -> None:
         """
@@ -180,6 +199,87 @@ class SearchIndexerTests(SimpleTestCase):
 
         result = backend.search("global", "Alpha", filters={"status": "public"})
         assert result.total == 0
+
+    def test_capture_delete_targets_preserves_custom_id_while_instance_is_live(
+        self,
+    ) -> None:
+        """Capture immutable custom document IDs before a manager is deleted."""
+        from general_manager.search.indexer import capture_delete_targets
+
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [StableDocumentProject], [StableDocumentProject]
+        )
+
+        targets = capture_delete_targets(StableDocumentProject(id=1))
+
+        assert [target.index_name for target in targets] == ["global", "private"]
+        assert {target.document_id for target in targets} == {"project-1"}
+        assert all(target.manager_class is StableDocumentProject for target in targets)
+
+    def test_delete_documents_uses_captured_targets_without_manager_reconstruction(
+        self,
+    ) -> None:
+        """Delete supplied immutable IDs without reading a deleted manager."""
+        from general_manager.search.indexer import SearchDeleteTarget
+
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [StableDocumentProject], [StableDocumentProject]
+        )
+        backend = DevSearchBackend()
+        indexer = SearchIndexer(backend)
+        indexer.index_instance(StableDocumentProject(id=1))
+        manager_path = (
+            f"{StableDocumentProject.__module__}.{StableDocumentProject.__name__}"
+        )
+
+        indexer.delete_documents(
+            (
+                SearchDeleteTarget(
+                    StableDocumentProject, manager_path, "global", "project-1"
+                ),
+                SearchDeleteTarget(
+                    StableDocumentProject, manager_path, "private", "project-1"
+                ),
+            )
+        )
+
+        assert backend.list_document_ids("global") == set()
+        assert backend.list_document_ids("private") == set()
+
+    def test_index_instance_index_writes_only_requested_index(self) -> None:
+        """Incremental indexing can target one exact manager/index pair."""
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [MultiIndexProject], [MultiIndexProject]
+        )
+        backend = DevSearchBackend()
+
+        SearchIndexer(backend).index_instance_index(MultiIndexProject(id=1), "private")
+
+        assert backend.list_document_ids("global") == set()
+        assert backend.list_document_ids("private") == {
+            build_document_id("MultiIndexProject", {"id": 1})
+        }
+
+    def test_custom_document_id_remains_one_document_across_update(self) -> None:
+        """Upserting updated data preserves the configured stable identity."""
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [StableDocumentProject], [StableDocumentProject]
+        )
+        backend = DevSearchBackend()
+        indexer = SearchIndexer(backend)
+        original = dict(StableDocumentProjectInterface.data_store[1])
+        try:
+            indexer.index_instance_index(StableDocumentProject(id=1), "global")
+            StableDocumentProjectInterface.data_store[1] = {
+                **original,
+                "name": "Alpha updated",
+            }
+            indexer.index_instance_index(StableDocumentProject(id=1), "global")
+        finally:
+            StableDocumentProjectInterface.data_store[1] = original
+
+        assert backend.list_document_ids("global") == {"project-1"}
+        assert backend.search("global", "updated").total == 1
 
     def test_indexer_reindex_manager(self) -> None:
         """Reindex all configured documents for a manager class."""
@@ -252,21 +352,44 @@ class SearchIndexerSignalStateTests(TestCase):
 
     def test_post_change_marks_search_state_dirty(self) -> None:
         """Mark search state dirty after create or update signals."""
-        from general_manager.search.indexer import _handle_search_post_change
+        from general_manager.search.invalidation import _handle_search_post_change
+
+        change_context: dict[str, object] = {}
 
         _handle_search_post_change(
-            sender=Project, instance=Project(id=1), action="update"
+            sender=Project,
+            instance=Project(id=1),
+            action="update",
+            change_context=change_context,
+            database_alias="default",
         )
 
         state = SearchIndexState.objects.get(index_name="global")
         assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_INITIALIZATION
 
     def test_pre_delete_marks_search_state_dirty(self) -> None:
-        """Mark search state dirty before delete signals."""
-        from general_manager.search.indexer import _handle_search_pre_delete
+        """Pre-delete only captures immutable targets; post-delete marks state."""
+        from general_manager.search.invalidation import (
+            _handle_search_post_change,
+            _handle_search_pre_change,
+        )
 
-        _handle_search_pre_delete(
-            sender=Project, instance=Project(id=1), action="delete"
+        change_context: dict[str, object] = {}
+        instance = Project(id=1)
+
+        _handle_search_pre_change(
+            sender=Project,
+            instance=instance,
+            action="delete",
+            change_context=change_context,
+        )
+        _handle_search_post_change(
+            sender=Project,
+            instance=None,
+            previous_instance=instance,
+            action="delete",
+            change_context=change_context,
+            database_alias="default",
         )
 
         state = SearchIndexState.objects.get(index_name="global")
@@ -274,34 +397,106 @@ class SearchIndexerSignalStateTests(TestCase):
 
     def test_post_change_dispatches_when_dirty_marker_fails(self) -> None:
         """Dispatch immediate indexing even when dirty marking fails."""
-        from general_manager.search.indexer import _handle_search_post_change
+        from general_manager.search.invalidation import _handle_search_post_change
 
         with (
             patch(
-                "general_manager.search.indexer.mark_search_indexes_dirty",
+                "general_manager.search.invalidation.mark_search_index_dirty",
                 side_effect=RuntimeError("state store unavailable"),
             ),
-            patch("general_manager.search.indexer.dispatch_index_update") as dispatch,
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update"
+            ) as dispatch,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                _handle_search_post_change(
+                    sender=Project,
+                    instance=Project(id=1),
+                    action="update",
+                    change_context={},
+                    database_alias="default",
+                )
+
+        dispatch.assert_called_once()
+
+    def test_delete_dispatches_when_dirty_marker_fails(self) -> None:
+        """Dispatch deletion after commit even when dirty marking fails."""
+        from general_manager.search.invalidation import (
+            _handle_search_post_change,
+            _handle_search_pre_change,
+        )
+
+        change_context: dict[str, object] = {}
+        instance = Project(id=1)
+        _handle_search_pre_change(
+            sender=Project,
+            instance=instance,
+            action="delete",
+            change_context=change_context,
+        )
+
+        with (
+            patch(
+                "general_manager.search.invalidation.mark_search_index_dirty",
+                side_effect=RuntimeError("state store unavailable"),
+            ),
+            patch(
+                "general_manager.search.invalidation.dispatch_delete_documents"
+            ) as dispatch,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                _handle_search_post_change(
+                    sender=Project,
+                    instance=None,
+                    previous_instance=instance,
+                    action="delete",
+                    change_context=change_context,
+                    database_alias="default",
+                )
+
+        dispatch.assert_called_once()
+
+    def test_failed_delete_capture_leaves_pair_dirty_without_acknowledgement(
+        self,
+    ) -> None:
+        """Missing immutable delete IDs cannot be treated as successful work."""
+        from general_manager.search.invalidation import (
+            _DIRECT_SEARCH_CHANGE_CONTEXT,
+            _PendingDirectSearchChange,
+            _handle_search_post_change,
+        )
+        from general_manager.search.reconciliation import DirtySearchIndex
+
+        token = DirtySearchIndex(
+            state_id=1,
+            manager_path="tests.Project",
+            index_name="global",
+            generation=1,
+            acknowledgeable=True,
+        )
+        change_context: dict[str, object] = {
+            _DIRECT_SEARCH_CHANGE_CONTEXT: _PendingDirectSearchChange(action="delete")
+        }
+        with (
+            patch(
+                "general_manager.search.invalidation.mark_search_index_dirty",
+                return_value=token,
+            ),
+            patch(
+                "general_manager.search.invalidation.dispatch_delete_documents"
+            ) as dispatch,
+            patch(
+                "general_manager.search.invalidation.acknowledge_search_index_dirty"
+            ) as acknowledge,
+            self.captureOnCommitCallbacks(execute=True),
         ):
             _handle_search_post_change(
-                sender=Project, instance=Project(id=1), action="update"
+                sender=Project,
+                instance=None,
+                action="delete",
+                change_context=change_context,
+                database_alias="default",
             )
 
-        dispatch.assert_called_once()
-
-    def test_pre_delete_dispatches_when_dirty_marker_fails(self) -> None:
-        """Dispatch immediate deletion even when dirty marking fails."""
-        from general_manager.search.indexer import _handle_search_pre_delete
-
-        with (
-            patch(
-                "general_manager.search.indexer.mark_search_indexes_dirty",
-                side_effect=RuntimeError("state store unavailable"),
-            ),
-            patch("general_manager.search.indexer.dispatch_index_update") as dispatch,
-        ):
-            _handle_search_pre_delete(
-                sender=Project, instance=Project(id=1), action="delete"
-            )
-
-        dispatch.assert_called_once()
+        dispatch.assert_not_called()
+        acknowledge.assert_not_called()

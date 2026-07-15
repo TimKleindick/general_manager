@@ -11,6 +11,7 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.search.config import IndexConfig
+from general_manager.search.utils import build_document_id
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
 
@@ -21,9 +22,9 @@ class _DummyTask:
 
         The `calls` attribute is a list that will store tuples of `(manager_path, identification)` for each simulated delayed invocation.
         """
-        self.calls: list[tuple[str, dict]] = []
+        self.calls: list[tuple[object, ...]] = []
 
-    def delay(self, manager_path: str, identification: dict) -> None:
+    def delay(self, *args: object) -> None:
         """
         Record a delayed task invocation by appending a (manager_path, identification) tuple to self.calls.
 
@@ -31,7 +32,7 @@ class _DummyTask:
             manager_path (str): Dotted import path identifying the manager for the task.
             identification (dict): Mapping that identifies the target instance (for example primary key fields).
         """
-        self.calls.append((manager_path, identification))
+        self.calls.append(args)
 
 
 @override_settings(SEARCH_ASYNC=True)
@@ -83,7 +84,7 @@ class SearchAsyncTaskIntegrationTests(GeneralManagerTransactionTestCase):
                 self.index_task,
             ),
             patch(
-                "general_manager.search.async_tasks.delete_instance_task",
+                "general_manager.search.async_tasks.delete_documents_task",
                 self.delete_task,
             ),
         ]
@@ -111,6 +112,22 @@ class SearchAsyncTaskIntegrationTests(GeneralManagerTransactionTestCase):
             status="public",
             ignore_permission=True,
         )
-        assert self.index_task.calls
+        identification = dict(instance.identification)
+        assert len(self.index_task.calls[0]) == 3
+        assert self.index_task.calls[0][1] == identification
+        assert self.index_task.calls[0][2] == "global"
         instance.delete()
-        assert self.delete_task.calls
+        assert len(self.delete_task.calls) == 1
+        delete_call = self.delete_task.calls[0]
+        assert delete_call[:2] == (
+            self.index_task.calls[0][0],
+            [
+                {
+                    "index_name": "global",
+                    "document_id": build_document_id("Project", identification),
+                }
+            ],
+        )
+        assert len(delete_call) == 3
+        assert set(delete_call[2]) == {"global"}
+        assert isinstance(delete_call[2]["global"], int)

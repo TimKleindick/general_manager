@@ -14,6 +14,9 @@ from general_manager.interface import DatabaseInterface, ExistingModelInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.search.config import IndexConfig, SearchConfigSpec
+from general_manager.search.indexer import SearchDeleteTarget
+from general_manager.search.models import SearchIndexState
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
 
@@ -25,9 +28,26 @@ class ExpectedRollback(RuntimeError):
     """Expected explicit rollback used by transaction boundary tests."""
 
 
+class UnexpectedBrokerFailure(Exception):
+    """Queue failure outside the search bridge's expected exception taxonomy."""
+
+
+class UnexpectedSearchExtensionFailure(Exception):
+    """User search-extension failure outside the expected exception taxonomy."""
+
+    def __init__(self) -> None:
+        """Initialize the test-only extension error."""
+        super().__init__("custom search extension failed")
+
+
 def _force_rollback() -> None:
     """Raise the test-only exception that marks an intentional rollback."""
     raise ExpectedRollback
+
+
+_TEST_SEARCH_CONFIG = SearchConfigSpec(
+    indexes=(IndexConfig(name="global", fields=["name"]),)
+)
 
 
 class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
@@ -143,6 +163,257 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
             )
 
         self.assertEqual(callbacks, [])
+
+    def test_search_create_dispatches_only_after_outer_commit(self) -> None:
+        """Direct create indexing must not escape a surrounding transaction."""
+        from unittest.mock import patch
+
+        with (
+            patch(
+                "general_manager.search.invalidation.get_search_config",
+                return_value=_TEST_SEARCH_CONFIG,
+            ),
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update"
+            ) as dispatch,
+        ):
+            with transaction.atomic():
+                self.Project.create(name="deferred search", ignore_permission=True)
+                dispatch.assert_not_called()
+
+            dispatch.assert_called_once()
+            self.assertEqual(dispatch.call_args.kwargs["index_name"], "global")
+            self.assertEqual(
+                dispatch.call_args.kwargs["instance"].identification,
+                dispatch.call_args.kwargs["identification"],
+            )
+
+    def test_search_create_dispatch_is_discarded_by_outer_rollback(self) -> None:
+        """A rolled-back create has neither a row nor an indexing callback."""
+        from unittest.mock import patch
+
+        with (
+            patch(
+                "general_manager.search.invalidation.get_search_config",
+                return_value=_TEST_SEARCH_CONFIG,
+            ),
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update"
+            ) as dispatch,
+        ):
+            with self.assertRaises(ExpectedRollback):
+                with transaction.atomic():
+                    self.Project.create(
+                        name="search rolled back", ignore_permission=True
+                    )
+                    _force_rollback()
+
+        dispatch.assert_not_called()
+        self.assertFalse(
+            self.ProjectModel.objects.filter(name="search rolled back").exists()
+        )
+
+    def test_search_create_dispatch_is_discarded_by_savepoint_rollback(self) -> None:
+        """A nested savepoint rollback discards only its search callback."""
+        from unittest.mock import patch
+
+        with (
+            patch(
+                "general_manager.search.invalidation.get_search_config",
+                return_value=_TEST_SEARCH_CONFIG,
+            ),
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update"
+            ) as dispatch,
+        ):
+            with transaction.atomic():
+                try:
+                    with transaction.atomic():
+                        self.Project.create(
+                            name="nested search rollback", ignore_permission=True
+                        )
+                        _force_rollback()
+                except ExpectedRollback:
+                    pass
+
+        dispatch.assert_not_called()
+
+    def test_search_update_dispatches_only_after_outer_commit(self) -> None:
+        """Direct updates dispatch exact-pair indexing after commit."""
+        from unittest.mock import patch
+
+        instance = self.Project.create(name="before", ignore_permission=True)
+        with (
+            patch(
+                "general_manager.search.invalidation.get_search_config",
+                return_value=_TEST_SEARCH_CONFIG,
+            ),
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update"
+            ) as dispatch,
+        ):
+            with transaction.atomic():
+                instance.update(name="after", ignore_permission=True)
+                dispatch.assert_not_called()
+
+            dispatch.assert_called_once()
+            self.assertEqual(dispatch.call_args.kwargs["index_name"], "global")
+            self.assertEqual(dispatch.call_args.kwargs["action"], "index")
+
+    def test_unexpected_enqueue_failure_is_suppressed_after_default_commit(
+        self,
+    ) -> None:
+        """Arbitrary broker errors cannot escape after business data commits."""
+        from unittest.mock import patch
+
+        class SearchConfig:
+            indexes = _TEST_SEARCH_CONFIG.indexes
+
+        self.Project.SearchConfig = SearchConfig
+        self.addCleanup(delattr, self.Project, "SearchConfig")
+        with (
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update",
+                side_effect=UnexpectedBrokerFailure("broker unavailable"),
+            ),
+            patch(
+                "general_manager.search.invalidation.acknowledge_search_index_dirty"
+            ) as acknowledge,
+            self.assertLogs("general_manager.search.invalidation", level="WARNING"),
+        ):
+            created = self.Project.create(
+                name="committed despite broker", ignore_permission=True
+            )
+
+        self.assertTrue(
+            self.ProjectModel.objects.filter(
+                pk=created.identification["id"],
+                name="committed despite broker",
+            ).exists()
+        )
+        state = SearchIndexState.objects.get(index_name="global")
+        self.assertIsNotNone(state.dirty_since)
+        acknowledge.assert_not_called()
+
+    def test_unexpected_document_id_failure_does_not_abort_delete(self) -> None:
+        """A custom document-ID exception leaves fallback dirty work behind."""
+        from unittest.mock import patch
+
+        instance = self.Project.create(
+            name="delete despite config", ignore_permission=True
+        )
+        identification = dict(instance.identification)
+
+        class SearchConfig:
+            indexes = _TEST_SEARCH_CONFIG.indexes
+
+            @staticmethod
+            def document_id(_instance: object) -> str:
+                raise UnexpectedSearchExtensionFailure
+
+        self.Project.SearchConfig = SearchConfig
+        self.addCleanup(delattr, self.Project, "SearchConfig")
+        with (
+            patch(
+                "general_manager.search.invalidation.dispatch_delete_documents"
+            ) as dispatch,
+            patch(
+                "general_manager.search.invalidation.acknowledge_search_index_dirty"
+            ) as acknowledge,
+            self.assertLogs("general_manager.search.invalidation", level="WARNING"),
+        ):
+            instance.delete(ignore_permission=True)
+
+        self.assertFalse(
+            self.ProjectModel.objects.filter(pk=identification["id"]).exists()
+        )
+        state = SearchIndexState.objects.get(index_name="global")
+        self.assertIsNotNone(state.dirty_since)
+        dispatch.assert_not_called()
+        acknowledge.assert_not_called()
+
+    def test_unexpected_metadata_copy_failure_keeps_create_and_marks_fallback(
+        self,
+    ) -> None:
+        """Create metadata failures schedule marker-only recovery work."""
+        from unittest.mock import patch
+
+        class SearchConfig:
+            indexes = _TEST_SEARCH_CONFIG.indexes
+
+        self.Project.SearchConfig = SearchConfig
+        self.addCleanup(delattr, self.Project, "SearchConfig")
+        with (
+            patch(
+                "general_manager.search.invalidation.deepcopy",
+                side_effect=UnexpectedSearchExtensionFailure(),
+            ),
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update"
+            ) as dispatch,
+            patch(
+                "general_manager.search.invalidation.acknowledge_search_index_dirty"
+            ) as acknowledge,
+            self.assertLogs("general_manager.search.invalidation", level="WARNING"),
+        ):
+            created = self.Project.create(
+                name="create despite metadata", ignore_permission=True
+            )
+
+        self.assertTrue(
+            self.ProjectModel.objects.filter(pk=created.identification["id"]).exists()
+        )
+        state = SearchIndexState.objects.get(index_name="global")
+        self.assertIsNotNone(state.dirty_since)
+        dispatch.assert_not_called()
+        acknowledge.assert_not_called()
+
+    def test_search_delete_dispatches_captured_custom_id_after_commit(self) -> None:
+        """Delete callbacks use immutable IDs and never reconstruct deleted rows."""
+        from unittest.mock import patch
+
+        instance = self.Project.create(name="to delete", ignore_permission=True)
+        identification = dict(instance.identification)
+        manager_path = f"{self.Project.__module__}.{self.Project.__name__}"
+        target = SearchDeleteTarget(
+            manager_class=self.Project,
+            manager_path=manager_path,
+            index_name="global",
+            document_id=f"project-{identification['id']}",
+        )
+        with (
+            patch(
+                "general_manager.search.invalidation.get_search_config",
+                return_value=_TEST_SEARCH_CONFIG,
+            ),
+            patch(
+                "general_manager.search.invalidation.capture_delete_targets",
+                return_value=(target,),
+            ),
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update"
+            ) as index_dispatch,
+            patch(
+                "general_manager.search.invalidation.dispatch_delete_documents"
+            ) as delete_dispatch,
+        ):
+            with transaction.atomic():
+                instance.delete(ignore_permission=True)
+                delete_dispatch.assert_not_called()
+            delete_dispatch.assert_called_once()
+            index_dispatch.assert_not_called()
+
+        manager_path, targets = delete_dispatch.call_args.args
+        self.assertTrue(manager_path.endswith(".Project"))
+        self.assertEqual(
+            targets,
+            (
+                {
+                    "index_name": "global",
+                    "document_id": f"project-{identification['id']}",
+                },
+            ),
+        )
 
 
 class SecondaryDatabaseCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
@@ -304,5 +575,116 @@ class SecondaryDatabaseCommitSafetyIntegrationTests(GeneralManagerTransactionTes
         self.assertFalse(
             self.SecondaryCommitRecord.objects.using("secondary")
             .filter(name="secondary rolled back")
+            .exists()
+        )
+
+    def test_search_marker_and_dispatch_wait_for_secondary_commit(self) -> None:
+        """Cross-database control-plane work starts after source commit."""
+        from unittest.mock import patch
+
+        with (
+            patch(
+                "general_manager.search.invalidation.get_search_config",
+                return_value=_TEST_SEARCH_CONFIG,
+            ),
+            patch(
+                "general_manager.search.invalidation.mark_search_index_dirty",
+                return_value=None,
+            ) as mark_dirty,
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update"
+            ) as dispatch,
+        ):
+            with transaction.atomic(using="secondary"):
+                self.SecondaryCommitManager.create(
+                    name="secondary search", ignore_permission=True
+                )
+                mark_dirty.assert_not_called()
+                dispatch.assert_not_called()
+
+            mark_dirty.assert_called_once_with(
+                self.SecondaryCommitManager,
+                "global",
+            )
+            dispatch.assert_called_once()
+
+    def test_unexpected_enqueue_failure_is_suppressed_after_secondary_commit(
+        self,
+    ) -> None:
+        """Secondary on-commit callbacks fence arbitrary broker exceptions."""
+        from unittest.mock import patch
+
+        with (
+            patch(
+                "general_manager.search.invalidation.get_search_config",
+                return_value=_TEST_SEARCH_CONFIG,
+            ),
+            patch(
+                "general_manager.search.invalidation.mark_search_index_dirty",
+                return_value=None,
+            ),
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update",
+                side_effect=UnexpectedBrokerFailure("broker unavailable"),
+            ),
+            patch(
+                "general_manager.search.invalidation.acknowledge_search_index_dirty"
+            ) as acknowledge,
+            self.assertLogs("general_manager.search.invalidation", level="WARNING"),
+        ):
+            created = self.SecondaryCommitManager.create(
+                name="secondary committed despite broker",
+                ignore_permission=True,
+            )
+
+        self.assertTrue(
+            self.SecondaryCommitRecord.objects.using("secondary")
+            .filter(
+                pk=created.identification["id"],
+                name="secondary committed despite broker",
+            )
+            .exists()
+        )
+        acknowledge.assert_not_called()
+
+    def test_secondary_metadata_failure_marks_only_after_source_commit(self) -> None:
+        """Metadata failures retain nondefault marker-only fallback semantics."""
+        from unittest.mock import patch
+
+        with (
+            patch(
+                "general_manager.search.invalidation.get_search_config",
+                return_value=_TEST_SEARCH_CONFIG,
+            ),
+            patch(
+                "general_manager.search.invalidation.deepcopy",
+                side_effect=UnexpectedSearchExtensionFailure(),
+            ),
+            patch(
+                "general_manager.search.invalidation.mark_search_index_dirty",
+                return_value=None,
+            ) as mark_dirty,
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update"
+            ) as dispatch,
+            self.assertLogs("general_manager.search.invalidation", level="WARNING"),
+        ):
+            with transaction.atomic(using="secondary"):
+                created = self.SecondaryCommitManager.create(
+                    name="secondary metadata fallback",
+                    ignore_permission=True,
+                )
+                mark_dirty.assert_not_called()
+                dispatch.assert_not_called()
+
+            mark_dirty.assert_called_once_with(
+                self.SecondaryCommitManager,
+                "global",
+            )
+            dispatch.assert_not_called()
+
+        self.assertTrue(
+            self.SecondaryCommitRecord.objects.using("secondary")
+            .filter(pk=created.identification["id"])
             .exists()
         )

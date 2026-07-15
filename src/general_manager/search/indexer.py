@@ -1,25 +1,14 @@
-"""Search indexer and signal integrations."""
+"""Pure search document serialization and backend indexing operations."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
-from django.dispatch import receiver
-
-from general_manager.cache.signals import post_data_change, pre_data_change
-from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.search.backend import (
-    SearchBackend,
-    SearchBackendError,
-    SearchDocument,
-)
+from general_manager.search.backend import SearchBackend, SearchDocument
 from general_manager.search.backend_registry import get_search_backend
-from general_manager.search.async_tasks import dispatch_index_update
 from general_manager.search.config import SearchConfigSpec
-from general_manager.search.models import SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
-from general_manager.search.reconciliation import mark_search_indexes_dirty
 from general_manager.search.registry import (
     collect_index_settings,
     get_index_config,
@@ -27,8 +16,6 @@ from general_manager.search.registry import (
     get_type_label,
 )
 from general_manager.search.utils import build_document_id, extract_value
-
-logger = get_logger("search.indexer")
 
 
 class MissingIndexConfigurationError(ValueError):
@@ -53,6 +40,42 @@ class IndexPayload:
 
     index_name: str
     documents: Sequence[SearchDocument]
+
+
+@dataclass(frozen=True)
+class SearchDeleteTarget:
+    """Immutable search deletion metadata captured while a manager is readable."""
+
+    manager_class: type[GeneralManager]
+    manager_path: str
+    index_name: str
+    document_id: str
+
+
+def capture_delete_targets(
+    instance: GeneralManager,
+) -> tuple[SearchDeleteTarget, ...]:
+    """Capture all configured document IDs before an instance is deleted."""
+    manager_class = instance.__class__
+    config = get_search_config(manager_class)
+    if config is None:
+        return ()
+    if config.document_id is not None:
+        document_id = config.document_id(instance)
+    else:
+        document_id = build_document_id(
+            get_type_label(manager_class), instance.identification
+        )
+    manager_path = f"{manager_class.__module__}.{manager_class.__name__}"
+    return tuple(
+        SearchDeleteTarget(
+            manager_class=manager_class,
+            manager_path=manager_path,
+            index_name=index_config.name,
+            document_id=document_id,
+        )
+        for index_config in config.indexes
+    )
 
 
 def _serialize_document(
@@ -206,6 +229,27 @@ class SearchIndexer:
             _ensure_index(self.backend, payload.index_name)
             self.backend.upsert(payload.index_name, payload.documents)
 
+    def index_instance_index(
+        self,
+        instance: GeneralManager,
+        index_name: str,
+    ) -> None:
+        """Index one instance into one named configured search index."""
+        config = get_search_config(instance.__class__)
+        if config is None:
+            return
+        if get_index_config(instance.__class__, index_name) is None:
+            raise MissingIndexConfigurationError(
+                instance.__class__.__name__, index_name
+            )
+        document = _serialize_document(
+            instance,
+            index_name=index_name,
+            config=config,
+        )
+        _ensure_index(self.backend, index_name)
+        self.backend.upsert(index_name, [document])
+
     def delete_instance(self, instance: GeneralManager) -> None:
         """
         Delete an instance's search document from all configured indexes.
@@ -230,17 +274,16 @@ class SearchIndexer:
         Raises:
             Exception: Backend `ensure_index` and `delete`, custom document id, and document id construction errors propagate.
         """
-        config = get_search_config(instance.__class__)
-        if config is None:
-            return
-        type_label = get_type_label(instance.__class__)
-        if config.document_id is not None:
-            doc_id = config.document_id(instance)
-        else:
-            doc_id = build_document_id(type_label, instance.identification)
-        for index_config in config.indexes:
-            _ensure_index(self.backend, index_config.name)
-            self.backend.delete(index_config.name, [doc_id])
+        self.delete_documents(capture_delete_targets(instance))
+
+    def delete_documents(self, targets: Sequence[SearchDeleteTarget]) -> None:
+        """Delete captured immutable document IDs, grouping work by index."""
+        ids_by_index: dict[str, list[str]] = {}
+        for target in targets:
+            ids_by_index.setdefault(target.index_name, []).append(target.document_id)
+        for index_name, document_ids in ids_by_index.items():
+            _ensure_index(self.backend, index_name)
+            self.backend.delete(index_name, document_ids)
 
     def reindex_manager(self, manager_class: type[GeneralManager]) -> None:
         """
@@ -344,95 +387,3 @@ class SearchIndexer:
         if stale_ids:
             self.backend.delete(index_config.name, stale_ids)
         return len(documents)
-
-
-@receiver(post_data_change)
-def _handle_search_post_change(
-    sender: type[GeneralManager] | GeneralManager,
-    instance: GeneralManager | None,
-    action: str | None = None,
-    **_: object,
-) -> None:
-    """
-    Dispatches an index update for a GeneralManager instance when it is created or updated.
-
-    If `instance` is provided and `action` is "create" or "update", schedules an index update for that instance using its identification and manager path. If dispatching fails due to backend, runtime, value, or type errors, a warning is logged.
-
-    Parameters:
-        sender: The manager class or instance that emitted the signal.
-        instance: The specific GeneralManager instance that changed; ignored when None.
-        action: The action that occurred (e.g., "create", "update"); only "create" and "update" trigger indexing.
-    """
-    if not instance or action not in {"create", "update"}:
-        return
-    manager_path = f"{instance.__class__.__module__}.{instance.__class__.__name__}"
-    try:
-        mark_search_indexes_dirty(
-            instance.__class__,
-            reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
-        )
-    except (SearchBackendError, RuntimeError, ValueError, TypeError) as exc:
-        logger.warning(
-            "search dirty marker failed",
-            context={"manager": instance.__class__.__name__, "action": action},
-            exc_info=exc,
-        )
-    try:
-        dispatch_index_update(
-            action="index",
-            manager_path=manager_path,
-            identification=instance.identification,
-            instance=instance,
-        )
-    except (SearchBackendError, RuntimeError, ValueError, TypeError) as exc:
-        logger.warning(
-            "search indexing failed",
-            context={"manager": instance.__class__.__name__, "action": action},
-            exc_info=exc,
-        )
-
-
-@receiver(pre_data_change)
-def _handle_search_pre_delete(
-    sender: type[GeneralManager] | GeneralManager,
-    instance: GeneralManager | None,
-    action: str | None = None,
-    **_: object,
-) -> None:
-    """
-    Dispatches a delete-index update for a manager instance when a pre-delete signal is received.
-
-    This receiver reacts to pre-delete notifications and enqueues a search backend delete update for the given instance. If dispatching fails due to backend or runtime errors, a warning is logged.
-
-    Parameters:
-        sender: The manager class or instance sending the signal.
-        instance: The manager instance being deleted; ignored if None.
-        action: The action string from the signal; only `"delete"` triggers dispatch.
-    """
-    if instance is None or action != "delete":
-        return
-    manager_path = f"{instance.__class__.__module__}.{instance.__class__.__name__}"
-    try:
-        mark_search_indexes_dirty(
-            instance.__class__,
-            reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
-        )
-    except (SearchBackendError, RuntimeError, ValueError, TypeError) as exc:
-        logger.warning(
-            "search delete dirty marker failed",
-            context={"manager": instance.__class__.__name__, "action": action},
-            exc_info=exc,
-        )
-    try:
-        dispatch_index_update(
-            action="delete",
-            manager_path=manager_path,
-            identification=instance.identification,
-            instance=instance,
-        )
-    except (SearchBackendError, RuntimeError, ValueError, TypeError) as exc:
-        logger.warning(
-            "search delete failed",
-            context={"manager": instance.__class__.__name__, "action": action},
-            exc_info=exc,
-        )
