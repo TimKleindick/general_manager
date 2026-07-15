@@ -147,7 +147,12 @@ async def dispatch_subscription_event(
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "failed to dispatch subscription event",
-                context={"group": target_group_name, "message": message},
+                context={
+                    "group": target_group_name,
+                    "event_type": message.get("type"),
+                    "action": message.get("action"),
+                    "manager": message.get("manager"),
+                },
                 exc_info=exc,
             )
         else:

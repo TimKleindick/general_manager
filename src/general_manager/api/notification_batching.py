@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from _thread import LockType
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -30,6 +32,8 @@ class _PendingNotification:
 @dataclass(slots=True)
 class _BatchState:
     targets: dict[NotificationKey, _PendingNotification] = field(default_factory=dict)
+    accepting: bool = True
+    lock: LockType = field(default_factory=threading.Lock, repr=False)
 
 
 _active_batch: ContextVar[_BatchState | None] = ContextVar(
@@ -49,15 +53,23 @@ def _queue_notification(
     state = _active_batch.get()
     if state is None:
         return False
-    if key in state.targets:
+    with state.lock:
+        if not state.accepting:
+            return False
+        if key in state.targets:
+            return True
+        state.targets[key] = _PendingNotification(
+            key,
+            group_send,
+            group,
+            dict(message),
+        )
         return True
-    state.targets[key] = _PendingNotification(
-        key,
-        group_send,
-        group,
-        dict(message),
-    )
-    return True
+
+
+def _close_batch(state: _BatchState) -> None:
+    with state.lock:
+        state.accepting = False
 
 
 async def _flush_notifications(state: _BatchState) -> None:
@@ -93,6 +105,7 @@ def bulk_data_change_notifications() -> Iterator[None]:
     try:
         yield
     except BaseException as body_error:
+        _close_batch(state)
         _active_batch.reset(token)
         try:
             _flush_sync(state)
@@ -103,5 +116,6 @@ def bulk_data_change_notifications() -> Iterator[None]:
             ) from None
         raise
     else:
+        _close_batch(state)
         _active_batch.reset(token)
         _flush_sync(state)
