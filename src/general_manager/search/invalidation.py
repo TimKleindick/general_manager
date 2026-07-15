@@ -70,6 +70,11 @@ def _positive_int_setting(name: str, default: int) -> int:
     return value
 
 
+def get_search_invalidation_max_targets() -> int:
+    """Return the validated per-event target ceiling shared by signal bridges."""
+    return _positive_int_setting("SEARCH_INVALIDATION_MAX_TARGETS", 1000)
+
+
 @dataclass(frozen=True)
 class SearchInvalidationTarget:
     """Immutable targeted owner/index work captured during a source mutation."""
@@ -313,7 +318,7 @@ def resolve_search_invalidation_phase(
 
     setting_error: Exception | None = None
     try:
-        max_targets = _positive_int_setting("SEARCH_INVALIDATION_MAX_TARGETS", 1000)
+        max_targets = get_search_invalidation_max_targets()
         _positive_int_setting("SEARCH_INVALIDATION_BATCH_SIZE", 100)
     except Exception as exc:  # noqa: BLE001 - settings backends are extensible
         max_targets = 0
