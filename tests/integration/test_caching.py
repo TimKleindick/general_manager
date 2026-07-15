@@ -10,6 +10,7 @@ from general_manager.cache.run_context import CalculationRunContext
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.utils.make_cache_key import make_cache_key
 from general_manager.manager import GeneralManager, Input
+from general_manager.api import bulk_data_change_notifications
 from django.db.models.fields import CharField, IntegerField, DateField, DateTimeField
 from typing import ClassVar
 from general_manager.measurement import MeasurementField, Measurement
@@ -629,6 +630,23 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         self.assertEqual(commercials2.budget_left, Measurement(1500, "EUR"))
         self.assert_cache_hit()
+
+    def test_bulk_notifications_preserve_dependency_cache_invalidation(self):
+        """Characterize immediate cache invalidation inside a notification batch."""
+        commercials = self.TestCommercials(project=self.project1)
+        self.assertEqual(commercials.budget_left, Measurement(800, "EUR"))
+
+        with bulk_data_change_notifications():
+            self.project1 = self.project1.update(
+                actual_costs=Measurement(600, "EUR"),
+                ignore_permission=True,
+            )
+
+            refreshed_commercials = self.TestCommercials(project=self.project1)
+            self.assertEqual(
+                refreshed_commercials.budget_left,
+                Measurement(400, "EUR"),
+            )
 
     def test_filter_dependency_invalidation(self):
         """
