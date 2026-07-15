@@ -179,7 +179,7 @@ def install_startup_hook_runner() -> None:
 
     def run_from_argv_with_startup_hooks(
         self: BaseCommand,
-        argv: list[str],
+        argv: Sequence[str],
     ) -> None:
         run_main = os.environ.get("RUN_MAIN") == "true"
         command = argv[1] if len(argv) > 1 else None
