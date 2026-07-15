@@ -28,6 +28,7 @@ from django.utils import timezone
 
 from general_manager.api.graphql import GraphQL
 from general_manager.cache.dependency_index import serialize_dependency_identifier
+from general_manager.cache.signals import pre_data_change
 from general_manager.interface.bundles.database import ORM_WRITABLE_CAPABILITIES
 from general_manager.interface.orm_interface import OrmInterfaceBase
 from general_manager.manager.general_manager import GeneralManager
@@ -1272,6 +1273,74 @@ def test_sqlite_atomic_check_rejects_application_blocks(
     monkeypatch.setattr(finalization, "connections", {database_alias: connection})
 
     assert finalization._has_unsafe_sqlite_outer_atomic(database_alias) is True
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_manager_upload_inside_sqlite_application_atomic_fails_closed(
+    django_user_model: type[models.Model],
+) -> None:
+    """The manager envelope must not hide an arbitrary outer transaction."""
+    user = django_user_model.objects.create_user(username="manager-nested-atomic")
+    intent, candidate = _uploaded_intent(user)
+
+    with transaction.atomic():
+        with pytest.raises(UploadStorageError):
+            FinalizationManager.create(
+                creator_id=user.pk,
+                avatar=candidate,
+                ignore_permission=True,
+            )
+
+    intent.refresh_from_db()
+    assert intent.state == UploadIntentState.UPLOADED.value
+    assert intent.final_key is None
+    assert FinalizationAdapter.materialize_calls == 0
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
+def test_interposed_sqlite_atomic_inside_manager_envelope_fails_closed(
+    django_user_model: type[models.Model],
+) -> None:
+    """An arbitrary atomic opened after the manager envelope remains visible."""
+    user = django_user_model.objects.create_user(username="interposed-atomic")
+    intent, candidate = _uploaded_intent(user)
+    failed_closed = False
+
+    class StopOuterMutation(RuntimeError):
+        pass
+
+    def open_interposed_atomic(sender: object, **kwargs: object) -> None:
+        nonlocal failed_closed
+        if sender is not FinalizationManager:
+            return
+        try:
+            with transaction.atomic():
+                FinalizationInterface.create(
+                    creator_id=user.pk,
+                    avatar=candidate,
+                )
+        except UploadStorageError:
+            failed_closed = True
+        raise StopOuterMutation
+
+    pre_data_change.connect(open_interposed_atomic, weak=False)
+    try:
+        with pytest.raises(StopOuterMutation):
+            FinalizationManager.create(
+                creator_id=user.pk,
+                avatar=candidate,
+                ignore_permission=True,
+            )
+    finally:
+        pre_data_change.disconnect(open_interposed_atomic)
+
+    assert failed_closed
+    intent.refresh_from_db()
+    assert intent.state == UploadIntentState.UPLOADED.value
+    assert intent.final_key is None
+    assert FinalizationAdapter.materialize_calls == 0
 
 
 @pytest.mark.django_db(transaction=True)

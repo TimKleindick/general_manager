@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.contrib.auth import get_user_model
-from django.db import models, transaction
+from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.db.models import NOT_PROVIDED
 
+from general_manager.cache.data_change_context import owns_data_change_transaction
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
@@ -65,6 +66,23 @@ def _without_save_with_history_savepoint() -> Iterator[None]:
         yield
     finally:
         _save_with_history_savepoint.reset(token)
+
+
+def _mutation_atomic(
+    database_alias: str | None,
+    *,
+    savepoint: bool = True,
+) -> AbstractContextManager[None]:
+    """Open a mutation boundary without nesting under its signal envelope."""
+    alias = database_alias or DEFAULT_DB_ALIAS
+    use_savepoint = savepoint and not owns_data_change_transaction(alias)
+    if database_alias:
+        if use_savepoint:
+            return transaction.atomic(using=database_alias)
+        return transaction.atomic(using=database_alias, savepoint=False)
+    if use_savepoint:
+        return transaction.atomic()
+    return transaction.atomic(savepoint=False)
 
 
 class OrmMutationCapability(BaseCapability):
@@ -174,19 +192,10 @@ class OrmMutationCapability(BaseCapability):
             database_alias = support.get_database_alias(interface_cls)
             if database_alias:
                 instance._state.db = database_alias
-            savepoint = _save_with_history_savepoint.get()
-            if database_alias:
-                atomic_context = (
-                    transaction.atomic(using=database_alias)
-                    if savepoint
-                    else transaction.atomic(using=database_alias, savepoint=False)
-                )
-            else:
-                atomic_context = (
-                    transaction.atomic()
-                    if savepoint
-                    else transaction.atomic(savepoint=False)
-                )
+            atomic_context = _mutation_atomic(
+                database_alias,
+                savepoint=_save_with_history_savepoint.get(),
+            )
             with atomic_context:
                 _assign_history_actor(
                     instance,
@@ -388,11 +397,7 @@ class OrmCreateCapability(BaseCapability):
             )
             support = get_support_capability(interface_cls)
             database_alias = support.get_database_alias(interface_cls)
-            atomic_context = (
-                transaction.atomic(using=database_alias)
-                if database_alias
-                else transaction.atomic()
-            )
+            atomic_context = _mutation_atomic(database_alias)
             with atomic_context:
                 with _without_save_with_history_savepoint():
                     pk = mutation.save_with_history(
@@ -538,11 +543,7 @@ class OrmUpdateCapability(BaseCapability):
                 interface_instance.__class__, instance, normalized_simple
             )
             database_alias = support.get_database_alias(interface_instance.__class__)
-            atomic_context = (
-                transaction.atomic(using=database_alias)
-                if database_alias
-                else transaction.atomic()
-            )
+            atomic_context = _mutation_atomic(database_alias)
             with atomic_context:
                 with _without_save_with_history_savepoint():
                     pk = mutation.save_with_history(
@@ -666,11 +667,7 @@ class OrmDeleteCapability(BaseCapability):
             if model_has_field(instance, "changed_by"):
                 object.__setattr__(instance, "changed_by_id", creator_id)
             call_update_change_reason(instance, history_comment_local)
-            atomic_context = (
-                transaction.atomic(using=database_alias)
-                if database_alias
-                else transaction.atomic()
-            )
+            atomic_context = _mutation_atomic(database_alias)
             with atomic_context:
                 if database_alias:
                     instance.delete(using=database_alias)

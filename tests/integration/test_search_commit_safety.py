@@ -6,8 +6,9 @@ from typing import ClassVar
 
 from django.contrib.auth.models import Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
-from django.db import connections, models, transaction
+from django.db import connection, connections, models, transaction
 from django.db.models import CharField
+from django.test.utils import CaptureQueriesContext
 
 from general_manager.cache.signals import post_data_change, pre_data_change
 from general_manager.interface import DatabaseInterface, ExistingModelInterface
@@ -167,6 +168,18 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
             )
 
         self.assertEqual(callbacks, [])
+
+    def test_manager_transaction_does_not_add_a_mutation_savepoint(self) -> None:
+        """The signal envelope is the only transaction boundary for a mutation."""
+        with CaptureQueriesContext(connection) as queries:
+            self.Project.create(name="single boundary", ignore_permission=True)
+
+        transaction_statements = tuple(
+            query["sql"]
+            for query in queries.captured_queries
+            if "SAVEPOINT" in query["sql"]
+        )
+        self.assertEqual(transaction_statements, ())
 
     def test_search_create_dispatches_only_after_outer_commit(self) -> None:
         """Direct create indexing must not escape a surrounding transaction."""
