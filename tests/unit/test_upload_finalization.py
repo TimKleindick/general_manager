@@ -1212,6 +1212,47 @@ def test_sqlite_application_atomic_fails_before_inspection_or_claim(
     assert FinalizationAdapter.materialize_calls == 0
 
 
+def test_sqlite_atomic_check_fails_closed_without_block_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_alias = "missing-atomic-blocks"
+    connection = SimpleNamespace(vendor="sqlite", in_atomic_block=True)
+    monkeypatch.setattr(finalization, "connections", {database_alias: connection})
+
+    assert finalization._has_unsafe_sqlite_outer_atomic(database_alias) is True
+
+
+def test_sqlite_atomic_check_allows_testcase_only_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_alias = "testcase-only-atomic-blocks"
+    connection = SimpleNamespace(
+        vendor="sqlite",
+        in_atomic_block=True,
+        atomic_blocks=[SimpleNamespace(_from_testcase=True)],
+    )
+    monkeypatch.setattr(finalization, "connections", {database_alias: connection})
+
+    assert finalization._has_unsafe_sqlite_outer_atomic(database_alias) is False
+
+
+def test_sqlite_atomic_check_rejects_application_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_alias = "application-atomic-blocks"
+    connection = SimpleNamespace(
+        vendor="sqlite",
+        in_atomic_block=True,
+        atomic_blocks=[
+            SimpleNamespace(_from_testcase=True),
+            SimpleNamespace(_from_testcase=False),
+        ],
+    )
+    monkeypatch.setattr(finalization, "connections", {database_alias: connection})
+
+    assert finalization._has_unsafe_sqlite_outer_atomic(database_alias) is True
+
+
 @pytest.mark.django_db(transaction=True)
 @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
 @pytest.mark.parametrize(
