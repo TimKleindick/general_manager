@@ -10,6 +10,7 @@ from typing import Callable, ParamSpec, TypeVar, cast, overload
 from django.db import DEFAULT_DB_ALIAS, transaction
 from django.dispatch import Signal
 
+from general_manager.cache.data_change_context import own_data_change_transaction
 from general_manager.logging import get_logger
 
 post_data_change = Signal()
@@ -128,7 +129,12 @@ def data_change(
                 if is_orm_backed
                 else nullcontext()
             )
-            with transaction_context:
+            ownership_context = (
+                own_data_change_transaction(database_alias)
+                if is_orm_backed
+                else nullcontext()
+            )
+            with transaction_context, ownership_context:
                 pre_data_change.send(
                     sender=sender,
                     instance=instance_before,

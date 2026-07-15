@@ -31,6 +31,9 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.utils import timezone
 
 from general_manager.cache.dependency_index import serialize_dependency_identifier
+from general_manager.cache.data_change_context import (
+    exclusively_owns_data_change_transaction,
+)
 from general_manager.uploads import services
 from general_manager.uploads.adapters import (
     ClaimedObject,
@@ -269,7 +272,10 @@ def prepare_upload_claims(
     if not settings.enabled:
         raise UploadStorageError
     database_alias = _database_alias(interface_cls)
-    if _has_unsafe_sqlite_outer_atomic(database_alias):
+    unsafe_outer_atomic = _has_unsafe_sqlite_outer_atomic(database_alias)
+    if unsafe_outer_atomic and not exclusively_owns_data_change_transaction(
+        database_alias
+    ):
         raise UploadStorageError
     if database_alias != services._normalized_database_alias(settings.intent_database):
         raise UploadBindingMismatchError
@@ -416,7 +422,18 @@ def run_upload_transaction(
     prepared: PreparedUploadClaims,
     operation: Callable[[], _T],
 ) -> _T:
-    """Run and, on SQLite only, safely retry the complete database mutation."""
+    """Reuse the signal envelope or safely retry a fresh upload transaction."""
+
+    if exclusively_owns_data_change_transaction(prepared.database_alias):
+        # The manager-level signal envelope owns the complete rollback boundary.
+        # A nested SQLite savepoint cannot be restarted safely after contention.
+        try:
+            _serialize_sqlite_claims(prepared.database_alias)
+            return operation()
+        except OperationalError as error:
+            if _is_sqlite_busy(error, prepared.database_alias):
+                raise UploadStorageError from None
+            raise
 
     deadline = time.monotonic() + _SQLITE_RETRY_DEADLINE_SECONDS
     for attempt in range(_SQLITE_RETRY_ATTEMPTS):
