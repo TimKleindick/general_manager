@@ -152,6 +152,27 @@ def _mark_worker_failure(
             )
 
 
+def _mark_worker_path_failure(manager_path: str, index_name: str) -> None:
+    """Best-effort redirty when worker manager resolution itself fails."""
+    from general_manager.search.reconciliation import (
+        mark_existing_search_index_dirty,
+    )
+
+    try:
+        restored = mark_existing_search_index_dirty(manager_path, index_name)
+    except Exception:
+        logger.exception(
+            "search worker failed to restore dirty state by path",
+            context={"manager_path": manager_path, "index": index_name},
+        )
+        return
+    if not restored:
+        logger.warning(
+            "search worker found no durable state to restore by path",
+            context={"manager_path": manager_path, "index": index_name},
+        )
+
+
 def _configured_index_names(manager_class: type[GeneralManager]) -> tuple[str, ...]:
     """Return configured index names for worker recovery metadata."""
     from general_manager.search.registry import get_search_config
@@ -208,6 +229,31 @@ def index_instance_task(
             indexer.index_instance_index(instance, index_name)
     except Exception:
         _mark_worker_failure(manager_class, affected_indexes)
+        raise
+
+
+@shared_task
+def index_manager_index_batch_task(
+    manager_path: str,
+    index_name: str,
+    identifications: Sequence[dict[str, object]],
+) -> int:
+    """Index a serialized identity batch for one exact manager/index pair."""
+    try:
+        manager_class = _resolve_manager_class(manager_path)
+    except Exception:
+        _mark_worker_path_failure(manager_path, index_name)
+        raise
+    try:
+        from general_manager.search.indexer import SearchIndexer
+
+        return SearchIndexer(get_search_backend()).index_manager_index_batch(
+            manager_class,
+            index_name,
+            identifications,
+        )
+    except Exception:
+        _mark_worker_failure(manager_class, (index_name,))
         raise
 
 
@@ -336,6 +382,29 @@ def dispatch_index_update(
         index_instance_task(manager_path, identification, index_name)
     else:
         index_instance_task(manager_path, identification)
+
+
+def dispatch_index_manager_batch(
+    manager_path: str,
+    index_name: str,
+    identifications: Sequence[Mapping[str, object]],
+) -> int:
+    """Dispatch one exact manager/index identity batch inline or via Celery."""
+    serialized_identifications = [
+        dict(identification) for identification in identifications
+    ]
+    if _async_enabled() and CELERY_AVAILABLE:
+        index_manager_index_batch_task.delay(
+            manager_path,
+            index_name,
+            serialized_identifications,
+        )
+        return len(serialized_identifications)
+    return index_manager_index_batch_task(
+        manager_path,
+        index_name,
+        serialized_identifications,
+    )
 
 
 def dispatch_delete_documents(

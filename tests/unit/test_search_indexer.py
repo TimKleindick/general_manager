@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import pytest
 from django.test import SimpleTestCase, TestCase
 
+import general_manager.search.indexer as indexer_module
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
@@ -343,6 +345,262 @@ def test_indexer_reindex_manager_index_limits_backend_writes() -> None:
 
     assert backend.search("global", "Alpha", filters={"status": "public"}).total == 1
     assert backend.search("private", "public", filters={"status": "public"}).total == 0
+
+
+class CompositeProjectInterface(ProjectInterface):
+    """Non-ORM test interface with a composite public identification."""
+
+    input_fields: ClassVar[dict[str, Input]] = {
+        "tenant": Input(str),
+        "id": Input(int),
+    }
+    constructed: ClassVar[list[dict[str, object]]] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        type(self).constructed.append(dict(kwargs))
+        self.identification = dict(kwargs)
+
+    def get_data(self, search_date=None):
+        return {
+            "name": f"{self.identification['tenant']}-{self.identification['id']}",
+            "status": "public",
+        }
+
+
+class CompositeProject(GeneralManager):
+    Interface = CompositeProjectInterface
+
+    class SearchConfig:
+        indexes: ClassVar[list[IndexConfig]] = [
+            IndexConfig(name="global", fields=["name"])
+        ]
+
+
+def test_index_manager_index_batch_deduplicates_canonical_identities_first_seen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical duplicate identities produce one document in first-seen order."""
+    GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
+    backend = Mock()
+    monkeypatch.setattr(indexer_module, "_ensure_index", Mock())
+
+    count = SearchIndexer(backend).index_manager_index_batch(
+        Project,
+        "global",
+        ({"id": 2}, {"id": 1}, {"id": 2}),
+    )
+
+    assert count == 2
+    documents = backend.upsert.call_args.args[1]
+    assert [document.identification for document in documents] == [
+        {"id": 2},
+        {"id": 1},
+    ]
+
+
+def test_index_manager_index_batch_only_writes_requested_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A nonempty batch ensures and upserts its exact named index once."""
+    GeneralmanagerConfig.initialize_general_manager_classes(
+        [MultiIndexProject], [MultiIndexProject]
+    )
+    backend = Mock()
+    ensure = Mock()
+    monkeypatch.setattr(indexer_module, "_ensure_index", ensure)
+
+    count = SearchIndexer(backend).index_manager_index_batch(
+        MultiIndexProject,
+        "private",
+        ({"id": 1}, {"id": 2}),
+    )
+
+    assert count == 2
+    ensure.assert_called_once_with(backend, "private")
+    backend.upsert.assert_called_once()
+    assert backend.upsert.call_args.args[0] == "private"
+    assert {document.index for document in backend.upsert.call_args.args[1]} == {
+        "private"
+    }
+
+
+def test_index_manager_index_batch_keeps_shared_index_manager_types_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shared physical index batch only serializes the passed manager type."""
+
+    class OtherProjectInterface(ProjectInterface):
+        pass
+
+    class OtherProject(GeneralManager):
+        Interface = OtherProjectInterface
+
+        class SearchConfig:
+            indexes: ClassVar[list[IndexConfig]] = [
+                IndexConfig(name="global", fields=["name"])
+            ]
+
+    GeneralmanagerConfig.initialize_general_manager_classes(
+        [Project, OtherProject], [Project, OtherProject]
+    )
+    backend = Mock()
+    monkeypatch.setattr(indexer_module, "_ensure_index", Mock())
+
+    SearchIndexer(backend).index_manager_index_batch(
+        OtherProject, "global", ({"id": 1},)
+    )
+
+    documents = backend.upsert.call_args.args[1]
+    assert [document.type for document in documents] == ["OtherProject"]
+    backend.list_document_ids.assert_not_called()
+    backend.delete.assert_not_called()
+
+
+def test_index_manager_index_batch_bulk_loads_standard_orm_ids_once_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Standard ORM ids use one manager filter and restore requested ordering."""
+    GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
+    backend = Mock()
+    filters: list[dict[str, object]] = []
+
+    def filter_projects(**kwargs: object) -> SimpleBucket:
+        filters.append(kwargs)
+        return SimpleBucket(Project, [Project(id=1), Project(id=2)])
+
+    monkeypatch.setattr(indexer_module, "OrmInterfaceBase", BaseTestInterface)
+    monkeypatch.setattr(Project, "filter", filter_projects)
+    monkeypatch.setattr(indexer_module, "_ensure_index", Mock())
+
+    SearchIndexer(backend).index_manager_index_batch(
+        Project, "global", ({"id": 2}, {"id": 1})
+    )
+
+    assert filters == [{"pk__in": [2, 1]}]
+    documents = backend.upsert.call_args.args[1]
+    assert [document.identification for document in documents] == [
+        {"id": 2},
+        {"id": 1},
+    ]
+
+
+def test_index_manager_index_batch_missing_orm_owner_has_no_partial_upsert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing bulk-loaded owners fail before any backend write."""
+    GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
+    backend = Mock()
+    monkeypatch.setattr(indexer_module, "OrmInterfaceBase", BaseTestInterface)
+    monkeypatch.setattr(
+        Project,
+        "filter",
+        lambda **_kwargs: SimpleBucket(Project, [Project(id=1)]),
+    )
+    ensure = Mock()
+    monkeypatch.setattr(indexer_module, "_ensure_index", ensure)
+
+    with pytest.raises(LookupError, match="Project"):
+        SearchIndexer(backend).index_manager_index_batch(
+            Project, "global", ({"id": 1}, {"id": 2})
+        )
+
+    ensure.assert_not_called()
+    backend.upsert.assert_not_called()
+
+
+def test_index_manager_index_batch_composite_identity_reconstructs_each_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Composite manager identities use bounded per-identification construction."""
+    GeneralmanagerConfig.initialize_general_manager_classes(
+        [CompositeProject], [CompositeProject]
+    )
+    CompositeProjectInterface.constructed = []
+    backend = Mock()
+    monkeypatch.setattr(indexer_module, "OrmInterfaceBase", BaseTestInterface)
+    monkeypatch.setattr(indexer_module, "_ensure_index", Mock())
+
+    count = SearchIndexer(backend).index_manager_index_batch(
+        CompositeProject,
+        "global",
+        (
+            {"tenant": "b", "id": 2},
+            {"id": 1, "tenant": "a"},
+            {"id": 2, "tenant": "b"},
+        ),
+    )
+
+    assert count == 2
+    assert CompositeProjectInterface.constructed == [
+        {"tenant": "b", "id": 2},
+        {"id": 1, "tenant": "a"},
+    ]
+
+
+def test_index_manager_index_batch_non_orm_reconstructs_each_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even simple-id non-ORM managers use per-identification construction."""
+    GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
+    backend = Mock()
+    constructed: list[dict[str, object]] = []
+    original_init = Project.__init__
+
+    def record_init(self: Project, **kwargs: object) -> None:
+        constructed.append(dict(kwargs))
+        original_init(self, **kwargs)
+
+    monkeypatch.setattr(Project, "__init__", record_init)
+    monkeypatch.setattr(indexer_module, "_ensure_index", Mock())
+
+    SearchIndexer(backend).index_manager_index_batch(
+        Project, "global", ({"id": 1}, {"id": 2})
+    )
+
+    assert constructed == [{"id": 1}, {"id": 2}]
+
+
+def test_index_manager_index_batch_empty_validates_without_backend_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty valid batch returns zero without querying or backend calls."""
+    GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
+    backend = Mock()
+    manager_filter = Mock()
+    monkeypatch.setattr(indexer_module, "OrmInterfaceBase", BaseTestInterface)
+    monkeypatch.setattr(Project, "filter", manager_filter)
+
+    assert SearchIndexer(backend).index_manager_index_batch(Project, "global", ()) == 0
+    manager_filter.assert_not_called()
+    backend.ensure_index.assert_not_called()
+    backend.upsert.assert_not_called()
+
+
+def test_index_manager_index_batch_rejects_unconfigured_index() -> None:
+    """A named batch must target an index configured for its manager."""
+    from general_manager.search.indexer import MissingIndexConfigurationError
+
+    GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
+
+    with pytest.raises(MissingIndexConfigurationError):
+        SearchIndexer(Mock()).index_manager_index_batch(Project, "missing", ())
+
+
+def test_index_manager_index_batch_rejects_manager_without_search_config() -> None:
+    """A manager without search configuration cannot accept a named batch."""
+    from general_manager.search.indexer import MissingIndexConfigurationError
+
+    class UnconfiguredProject(GeneralManager):
+        Interface = ProjectInterface
+
+    GeneralmanagerConfig.initialize_general_manager_classes(
+        [UnconfiguredProject], [UnconfiguredProject]
+    )
+
+    with pytest.raises(MissingIndexConfigurationError):
+        SearchIndexer(Mock()).index_manager_index_batch(
+            UnconfiguredProject, "global", ()
+        )
 
 
 class SearchIndexerSignalStateTests(TestCase):

@@ -503,6 +503,147 @@ def test_named_index_worker_failure_redirties_exact_pair(
     assert marked == [(Project, "global")]
 
 
+def test_index_manager_index_batch_task_passes_exact_payload_and_returns_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The batch worker resolves one manager and forwards exact batch metadata."""
+    from tests.unit.test_search_indexer import Project
+
+    calls: list[tuple[object, str, object]] = []
+    monkeypatch.setattr(async_tasks, "_resolve_manager_class", lambda _path: Project)
+    monkeypatch.setattr(async_tasks, "get_search_backend", lambda: object())
+    monkeypatch.setattr(
+        SearchIndexer,
+        "index_manager_index_batch",
+        lambda _self, manager, index_name, identifications: (
+            calls.append((manager, index_name, identifications)) or 2
+        ),
+        raising=False,
+    )
+
+    result = async_tasks.index_manager_index_batch_task(
+        "tests.Project", "global", [{"id": 1}, {"id": 2}]
+    )
+
+    assert result == 2
+    assert calls == [(Project, "global", [{"id": 1}, {"id": 2}])]
+
+
+def test_dispatch_index_manager_batch_async_copies_payload_and_returns_accepted_len(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async dispatch serializes list/dicts and reports broker-accepted item count."""
+    calls: list[tuple[object, ...]] = []
+
+    class BatchTask:
+        def delay(self, *args: object) -> None:
+            calls.append(args)
+
+    first = {"id": 1}
+    identifications = (first, {"id": 1})
+    monkeypatch.setattr(async_tasks, "CELERY_AVAILABLE", True)
+    monkeypatch.setattr(async_tasks, "_async_enabled", lambda: True)
+    monkeypatch.setattr(async_tasks, "index_manager_index_batch_task", BatchTask())
+
+    result = async_tasks.dispatch_index_manager_batch(
+        "tests.Project", "global", identifications
+    )
+    first["id"] = 99
+
+    assert result == 2
+    assert calls == [("tests.Project", "global", [{"id": 1}, {"id": 1}])]
+
+
+def test_dispatch_index_manager_batch_sync_returns_actual_unique_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inline dispatch returns the worker's actual deduplicated count."""
+    calls: list[tuple[object, ...]] = []
+
+    def task(*args: object) -> int:
+        calls.append(args)
+        return 1
+
+    monkeypatch.setattr(async_tasks, "CELERY_AVAILABLE", False)
+    monkeypatch.setattr(async_tasks, "index_manager_index_batch_task", task)
+
+    result = async_tasks.dispatch_index_manager_batch(
+        "tests.Project", "global", ({"id": 1}, {"id": 1})
+    )
+
+    assert result == 1
+    assert calls == [("tests.Project", "global", [{"id": 1}, {"id": 1}])]
+
+
+def test_index_manager_index_batch_worker_failure_redirties_exact_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch worker failures redirty their exact manager/index pair and re-raise."""
+    from tests.unit.test_search_indexer import Project
+
+    marked: list[tuple[object, str]] = []
+    monkeypatch.setattr(async_tasks, "_resolve_manager_class", lambda _path: Project)
+    monkeypatch.setattr(async_tasks, "get_search_backend", lambda: object())
+    monkeypatch.setattr(
+        SearchIndexer,
+        "index_manager_index_batch",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("backend down")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "general_manager.search.reconciliation.mark_search_index_dirty",
+        lambda manager_class, index_name: marked.append((manager_class, index_name)),
+    )
+
+    with pytest.raises(RuntimeError, match="backend down"):
+        async_tasks.index_manager_index_batch_task(
+            "tests.Project", "global", [{"id": 1}]
+        )
+
+    assert marked == [(Project, "global")]
+
+
+def test_index_manager_index_batch_worker_success_does_not_redirty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Successful batch workers do not touch reconciliation dirty state."""
+    from tests.unit.test_search_indexer import Project
+
+    marked: list[tuple[object, str]] = []
+    monkeypatch.setattr(async_tasks, "_resolve_manager_class", lambda _path: Project)
+    monkeypatch.setattr(async_tasks, "get_search_backend", lambda: object())
+    monkeypatch.setattr(
+        SearchIndexer,
+        "index_manager_index_batch",
+        lambda *_args: 1,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "general_manager.search.reconciliation.mark_search_index_dirty",
+        lambda manager_class, index_name: marked.append((manager_class, index_name)),
+    )
+
+    assert (
+        async_tasks.index_manager_index_batch_task(
+            "tests.Project", "global", [{"id": 1}]
+        )
+        == 1
+    )
+    assert marked == []
+
+
+def test_index_manager_index_batch_task_rejects_malformed_manager_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch workers preserve strict manager-path resolution behavior."""
+    monkeypatch.setattr(async_tasks, "import_string", lambda _path: object())
+
+    with pytest.raises(async_tasks.InvalidSearchManagerPathError):
+        async_tasks.index_manager_index_batch_task(
+            "tests.NotManager", "global", [{"id": 1}]
+        )
+
+
 def test_delete_worker_failure_redirties_every_captured_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -597,6 +738,102 @@ class SearchDeleteGenerationFenceTests(TestCase):
         )
         assert state.dirty_generation > newer_token.generation
         assert state.dirty_since is not None
+
+    def test_batch_import_failure_redirties_existing_path_pair(self) -> None:
+        """An accepted batch is recovered even when its manager import later fails."""
+        from general_manager.search.models import SearchIndexState
+
+        acknowledged = self._mark_and_ack()
+        clean_state = SearchIndexState.objects.get(
+            manager_path=self.manager_path,
+            index_name="global",
+        )
+        assert clean_state.dirty_since is None
+
+        with (
+            patch.object(
+                async_tasks,
+                "import_string",
+                side_effect=ImportError("manager module removed"),
+            ),
+            pytest.raises(ImportError, match="manager module removed"),
+        ):
+            async_tasks.index_manager_index_batch_task(
+                self.manager_path,
+                "global",
+                [{"id": 1}],
+            )
+
+        recovered = SearchIndexState.objects.get(
+            manager_path=self.manager_path,
+            index_name="global",
+        )
+        assert recovered.dirty_since is not None
+        assert recovered.dirty_reason == "data_changed"
+        assert recovered.dirty_generation > acknowledged.generation
+
+    def test_batch_import_failure_preserves_stronger_existing_dirty_reason(
+        self,
+    ) -> None:
+        """Path recovery advances generation without weakening pending work."""
+        from general_manager.search.models import (
+            SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED,
+            SearchIndexState,
+        )
+
+        state = SearchIndexState.objects.get(
+            manager_path=self.manager_path,
+            index_name="global",
+        )
+        state.mark_dirty(SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED)
+        original_dirty_since = state.dirty_since
+        original_generation = state.dirty_generation
+
+        with (
+            patch.object(
+                async_tasks,
+                "import_string",
+                side_effect=ImportError("manager module removed"),
+            ),
+            pytest.raises(ImportError, match="manager module removed"),
+        ):
+            async_tasks.index_manager_index_batch_task(
+                self.manager_path,
+                "global",
+                [{"id": 1}],
+            )
+
+        state.refresh_from_db()
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED
+        assert state.dirty_since == original_dirty_since
+        assert state.dirty_generation == original_generation + 1
+
+    def test_batch_import_failure_does_not_create_missing_path_state(self) -> None:
+        """Path-only recovery never invents schema state for an unknown pair."""
+        from general_manager.search.models import SearchIndexState
+
+        missing_path = "removed.module.Manager"
+        original_count = SearchIndexState.objects.count()
+
+        with (
+            patch.object(
+                async_tasks,
+                "import_string",
+                side_effect=ImportError("manager module removed"),
+            ),
+            pytest.raises(ImportError, match="manager module removed"),
+        ):
+            async_tasks.index_manager_index_batch_task(
+                missing_path,
+                "global",
+                [{"id": 1}],
+            )
+
+        assert SearchIndexState.objects.count() == original_count
+        assert not SearchIndexState.objects.filter(
+            manager_path=missing_path,
+            index_name="global",
+        ).exists()
 
     def test_skipped_old_delete_redirties_after_unrelated_pair_mutation(self) -> None:
         """Pair-wide generation changes retain fallback cleanup for stale A."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
+from general_manager.interface.orm_interface import OrmInterfaceBase
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.search.backend import SearchBackend, SearchDocument
 from general_manager.search.backend_registry import get_search_backend
@@ -15,7 +16,11 @@ from general_manager.search.registry import (
     get_search_config,
     get_type_label,
 )
-from general_manager.search.utils import build_document_id, extract_value
+from general_manager.search.utils import (
+    build_document_id,
+    extract_value,
+    normalize_identification,
+)
 
 
 class MissingIndexConfigurationError(ValueError):
@@ -31,6 +36,21 @@ class MissingIndexConfigurationError(ValueError):
         """
         super().__init__(
             f"Manager {manager_name} not configured for index '{index_name}'."
+        )
+
+
+class MissingBatchManagerError(LookupError):
+    """Raised when an ORM identity batch cannot load every requested owner."""
+
+    def __init__(
+        self,
+        manager_name: str,
+        identification: Mapping[str, object],
+    ) -> None:
+        """Build a missing-owner error with the exact requested identity."""
+        super().__init__(
+            f"Manager {manager_name} not found for identification "
+            f"{dict(identification)!r}."
         )
 
 
@@ -249,6 +269,80 @@ class SearchIndexer:
         )
         _ensure_index(self.backend, index_name)
         self.backend.upsert(index_name, [document])
+
+    def index_manager_index_batch(
+        self,
+        manager_class: type[GeneralManager],
+        index_name: str,
+        identifications: Sequence[Mapping[str, object]],
+    ) -> int:
+        """Index a bounded identity batch for one exact manager/index pair.
+
+        Identifications are copied and canonically deduplicated in first-seen
+        order. Standard single-id ORM managers are loaded with one public
+        ``filter(pk__in=...)`` call; all other manager shapes are reconstructed
+        individually. The backend write occurs only after every requested owner
+        has been resolved and serialized.
+        """
+        config = get_search_config(manager_class)
+        index_config = get_index_config(manager_class, index_name)
+        if config is None or index_config is None:
+            raise MissingIndexConfigurationError(manager_class.__name__, index_name)
+
+        unique_identifications: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for identification in identifications:
+            copied = dict(identification)
+            normalized = normalize_identification(copied)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            unique_identifications.append(copied)
+
+        if not unique_identifications:
+            return 0
+
+        interface = manager_class.Interface
+        input_fields = getattr(interface, "input_fields", None)
+        is_standard_orm_id = (
+            isinstance(interface, type)
+            and issubclass(interface, OrmInterfaceBase)
+            and isinstance(input_fields, Mapping)
+            and tuple(input_fields) == ("id",)
+        )
+        if is_standard_orm_id:
+            requested_ids = [item["id"] for item in unique_identifications]
+            loaded_by_identification = {
+                normalize_identification(instance.identification): instance
+                for instance in manager_class.filter(pk__in=requested_ids)
+            }
+            instances: list[GeneralManager] = []
+            for identification in unique_identifications:
+                instance = loaded_by_identification.get(
+                    normalize_identification(identification)
+                )
+                if instance is None:
+                    raise MissingBatchManagerError(
+                        manager_class.__name__, identification
+                    )
+                instances.append(instance)
+        else:
+            instances = [
+                manager_class(**identification)
+                for identification in unique_identifications
+            ]
+
+        documents = [
+            _serialize_document(
+                instance,
+                index_name=index_config.name,
+                config=config,
+            )
+            for instance in instances
+        ]
+        _ensure_index(self.backend, index_config.name)
+        self.backend.upsert(index_config.name, documents)
+        return len(documents)
 
     def delete_instance(self, instance: GeneralManager) -> None:
         """
