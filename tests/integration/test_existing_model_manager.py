@@ -461,6 +461,21 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
     databases: ClassVar[set[str]] = {"default", "secondary"}
 
     @classmethod
+    def _restore_secondary_connection(cls) -> None:
+        """Restore the connection handler state replaced by this test class."""
+        if hasattr(connections._connections, "secondary"):
+            connections["secondary"].close()
+            del connections["secondary"]
+        if cls._secondary_original_config is None:
+            connections.databases.pop("secondary", None)
+        else:
+            connections.databases["secondary"] = cls._secondary_original_config
+        if cls._secondary_had_cached_connection:
+            connections._connections.secondary = (  # type: ignore[attr-defined]
+                cls._secondary_original_connection
+            )
+
+    @classmethod
     def setUpClass(cls) -> None:
         alias = "secondary"
         cls._secondary_original_config = connections.databases.get(alias)
@@ -473,6 +488,7 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
             if cls._secondary_had_cached_connection
             else None
         )
+        cls.addClassCleanup(cls._restore_secondary_connection)
         if cls._secondary_had_cached_connection:
             del connections[alias]
         connections.databases[alias] = {
@@ -523,20 +539,7 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
                 editor.delete_model(Permission)
                 editor.delete_model(ContentType)
         finally:
-            try:
-                super().tearDownClass()
-            finally:
-                secondary.close()
-                if hasattr(connections._connections, "secondary"):
-                    del connections["secondary"]
-                if cls._secondary_original_config is None:
-                    connections.databases.pop("secondary", None)
-                else:
-                    connections.databases["secondary"] = cls._secondary_original_config
-                if cls._secondary_had_cached_connection:
-                    connections._connections.secondary = (  # type: ignore[attr-defined]
-                        cls._secondary_original_connection
-                    )
+            super().tearDownClass()
 
     def test_create_keeps_history_reason_and_rollback_on_configured_alias(
         self,

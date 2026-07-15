@@ -309,9 +309,7 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         _, kwargs = register_history.call_args
         self.assertEqual(kwargs["m2m_fields"], [])
         self.assertTrue(kwargs["use_base_model_db"])
-        self.assertEqual(
-            kwargs["records_class"].__name__, "DatabaseAwareHistoricalRecords"
-        )
+        self.assertIs(kwargs["records_class"], DatabaseAwareHistoricalRecords)
 
     def test_database_aware_history_marks_generated_history_model(self) -> None:
         class DatabaseAwareModel(models.Model):
