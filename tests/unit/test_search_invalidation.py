@@ -649,6 +649,178 @@ def test_update_owner_config_failure_falls_back_prior_rules_only() -> None:
     assert after.consumed_target_budget == 3
 
 
+def test_create_owner_config_failure_falls_back_static_exact_indexes() -> None:
+    """Create config failures retain exact owner/index dirty-only recovery."""
+    configure(
+        Owner,
+        SearchInvalidationRule(
+            source=Source,
+            resolve=lambda _event, owner: (owner(id=120),),
+        ),
+    )
+    GeneralManagerMeta.all_classes = [Owner]
+
+    with (
+        patch(
+            "general_manager.search.invalidation.get_search_config",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        plan = finalize_search_invalidation_capture(
+            resolve_search_invalidation_phase(change("create", "after", Source(id=1)))
+        )
+
+    assert plan.targets == ()
+    assert plan.dirty_fallbacks == (
+        SearchInvalidationPair(Owner, "global"),
+        SearchInvalidationPair(Owner, "private"),
+    )
+
+
+def test_delete_owner_config_failure_falls_back_static_exact_indexes() -> None:
+    """Delete config failures retain exact owner/index dirty-only recovery."""
+    configure(
+        Owner,
+        SearchInvalidationRule(
+            source=Source,
+            resolve=lambda _event, owner: (owner(id=121),),
+        ),
+    )
+    GeneralManagerMeta.all_classes = [Owner]
+
+    with (
+        patch(
+            "general_manager.search.invalidation.get_search_config",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        plan = finalize_search_invalidation_capture(
+            resolve_search_invalidation_phase(change("delete", "before", Source(id=1)))
+        )
+
+    assert plan.targets == ()
+    assert plan.dirty_fallbacks == (
+        SearchInvalidationPair(Owner, "global"),
+        SearchInvalidationPair(Owner, "private"),
+    )
+
+
+@pytest.mark.django_db
+def test_create_config_failure_falls_back_existing_durable_exact_indexes() -> None:
+    """Durable owner/index state recovers when static config is unavailable."""
+    from general_manager.search.models import SearchIndexState
+
+    Owner.SearchConfig = object()
+    GeneralManagerMeta.all_classes = [Owner]
+    owner_path = f"{Owner.__module__}.{Owner.__name__}"
+    SearchIndexState.objects.create(
+        manager_path=owner_path,
+        index_name="durable-only",
+        schema_fingerprint="known-schema",
+    )
+
+    with (
+        patch(
+            "general_manager.search.invalidation.get_search_config",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        plan = finalize_search_invalidation_capture(
+            resolve_search_invalidation_phase(change("create", "after", Source(id=1)))
+        )
+
+    assert plan.targets == ()
+    assert plan.dirty_fallbacks == (SearchInvalidationPair(Owner, "durable-only"),)
+
+
+@pytest.mark.django_db
+def test_partial_static_config_failure_uses_all_durable_exact_indexes() -> None:
+    """One unreadable static index makes the whole declaration unavailable."""
+    from general_manager.search.models import SearchIndexState
+
+    configure(
+        Owner,
+        SearchInvalidationRule(source=Source, resolve=None),
+        indexes=(INDEXES[0], ThrowingIndexName()),  # type: ignore[arg-type]
+    )
+    GeneralManagerMeta.all_classes = [Owner]
+    owner_path = f"{Owner.__module__}.{Owner.__name__}"
+    for index_name in ("global", "private"):
+        SearchIndexState.objects.create(
+            manager_path=owner_path,
+            index_name=index_name,
+            schema_fingerprint=f"{index_name}-schema",
+        )
+
+    with (
+        patch(
+            "general_manager.search.invalidation.get_search_config",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        plan = finalize_search_invalidation_capture(
+            resolve_search_invalidation_phase(change("create", "after", Source(id=1)))
+        )
+
+    assert plan.targets == ()
+    assert plan.dirty_fallbacks == (
+        SearchInvalidationPair(Owner, "global"),
+        SearchInvalidationPair(Owner, "private"),
+    )
+
+
+def test_update_before_config_failure_does_not_synthesize_fallback() -> None:
+    """Update recovery requires exact rules captured by an earlier phase."""
+    configure(
+        Owner,
+        SearchInvalidationRule(source=Source, resolve=None),
+    )
+    GeneralManagerMeta.all_classes = [Owner]
+
+    with (
+        patch(
+            "general_manager.search.invalidation.get_search_config",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        plan = finalize_search_invalidation_capture(
+            resolve_search_invalidation_phase(change("update", "before", Source(id=1)))
+        )
+
+    assert plan == SearchInvalidationPlan()
+
+
+def test_config_and_durable_fallback_failures_never_escape_mutation() -> None:
+    """Unavailable durable state leaves no fallback instead of failing writes."""
+    from general_manager.search.models import SearchIndexState
+
+    Owner.SearchConfig = object()
+    GeneralManagerMeta.all_classes = [Owner]
+
+    with (
+        patch(
+            "general_manager.search.invalidation.get_search_config",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch.object(
+            SearchIndexState.objects,
+            "filter",
+            side_effect=RuntimeError("state database unavailable"),
+        ),
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        plan = finalize_search_invalidation_capture(
+            resolve_search_invalidation_phase(change("create", "after", Source(id=1)))
+        )
+
+    assert plan == SearchInvalidationPlan()
+
+
 def test_fallback_does_not_consume_capacity_or_revisit_prior_rule() -> None:
     configure(
         Owner,

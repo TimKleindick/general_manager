@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
+from inspect import getattr_static
 from itertools import islice
 from types import MappingProxyType
 from typing import Literal, cast
@@ -202,6 +203,87 @@ def _safe_configured_index_names(
     return tuple(names)
 
 
+def _static_configured_index_names(
+    owner_class: type[GeneralManager],
+    *,
+    phase: str,
+) -> tuple[str, ...] | None:
+    """Recover all declared index names statically, or ``None`` if unsafe."""
+    missing = object()
+    try:
+        raw_config = getattr_static(owner_class, "SearchConfig", missing)
+        if raw_config is missing:
+            return None
+        raw_indexes = getattr_static(raw_config, "indexes", missing)
+        if raw_indexes is missing:
+            return None
+        indexes = tuple(raw_indexes)
+    except Exception as exc:  # noqa: BLE001 - static declarations are user-owned
+        logger.warning(
+            "related search invalidation static configuration failed",
+            context={"owner": _owner_path(owner_class), "phase": phase},
+            exc_info=exc,
+        )
+        return None
+
+    names: list[str] = []
+    for ordinal, index in enumerate(indexes):
+        try:
+            name = getattr_static(index, "name", None)
+        except Exception as exc:  # noqa: BLE001 - config objects are extensible
+            logger.warning(
+                "related search invalidation static index failed",
+                context={
+                    "owner": _owner_path(owner_class),
+                    "index": ordinal,
+                    "phase": phase,
+                },
+                exc_info=exc,
+            )
+            return None
+        if not isinstance(name, str):
+            logger.warning(
+                "related search invalidation static index invalid",
+                context={
+                    "owner": _owner_path(owner_class),
+                    "index": ordinal,
+                    "phase": phase,
+                },
+            )
+            return None
+        if name not in names:
+            names.append(name)
+    return tuple(names)
+
+
+def _config_failure_index_names(
+    owner_class: type[GeneralManager],
+    *,
+    phase: str,
+) -> tuple[str, ...]:
+    """Recover exact owner indexes statically, then from durable state."""
+    static_names = _static_configured_index_names(owner_class, phase=phase)
+    if static_names is not None:
+        return static_names
+    try:
+        from general_manager.search.models import SearchIndexState
+
+        return tuple(
+            dict.fromkeys(
+                SearchIndexState.objects.filter(manager_path=_owner_path(owner_class))
+                .order_by("pk")
+                .values_list("index_name", flat=True)
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - fallback must not escape mutation
+        logger.warning(
+            "related search invalidation durable configuration failed",
+            context={"owner": _owner_path(owner_class), "phase": phase},
+            exc_info=exc,
+        )
+        return ()
+
+
 def _source_class(source: type[GeneralManager] | str) -> type[GeneralManager]:
     """Lazily resolve and validate one rule source."""
     resolved = import_string(source) if isinstance(source, str) else source
@@ -342,9 +424,12 @@ def resolve_search_invalidation_phase(
                 context={"owner": owner_path, "phase": change.phase},
                 exc_info=exc,
             )
-            for prior_resolution in previous.rules if previous is not None else ():
-                if prior_resolution.key[0] != owner_path:
-                    continue
+            prior_resolutions = tuple(
+                prior_resolution
+                for prior_resolution in (previous.rules if previous is not None else ())
+                if prior_resolution.key[0] == owner_path
+            )
+            for prior_resolution in prior_resolutions:
                 resolved_rules.append(
                     _rule_fallback(
                         prior_resolution.key,
@@ -352,6 +437,19 @@ def resolve_search_invalidation_phase(
                         prior_resolution.index_names,
                     )
                 )
+            if not prior_resolutions and change.action in {"create", "delete"}:
+                index_names = _config_failure_index_names(
+                    owner_class,
+                    phase=change.phase,
+                )
+                if index_names:
+                    resolved_rules.append(
+                        _rule_fallback(
+                            (owner_path, -1),
+                            owner_class,
+                            index_names,
+                        )
+                    )
             continue
 
         configured_index_names = _safe_configured_index_names(
