@@ -6,7 +6,7 @@ import contextlib
 import os
 from types import SimpleNamespace
 from typing import Any, ClassVar
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import graphene
 from django.contrib.auth import get_user_model
@@ -234,6 +234,132 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
             second_event.data["onEmployeeChange"]["item"]["capabilities"]["canKeepName"]
         )
 
+    def test_detail_subscription_batches_updates_into_one_refresh(self) -> None:
+        employee = self.Employee.create(name="Alice", creator_id=self.user.id)
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription ($id: ID!) {
+                onEmployeeChange(id: $id) {
+                    action
+                    item {
+                        id
+                        name
+                        capabilities {
+                            canKeepName
+                        }
+                    }
+                }
+            }
+        """
+
+        async def run_subscription() -> tuple[object, object, object]:
+            generator = await schema.subscribe(
+                subscription,
+                variable_values={"id": employee.id},
+                context_value=context,
+            )
+            try:
+                snapshot = await generator.__anext__()
+
+                def update_batch() -> None:
+                    with bulk_data_change_notifications():
+                        employee.update(name="Bob", creator_id=self.user.id)
+                        employee.update(name="Carol", creator_id=self.user.id)
+
+                await asyncio.to_thread(update_batch)
+                refresh = await asyncio.wait_for(generator.__anext__(), timeout=1)
+
+                next_event = asyncio.create_task(generator.__anext__())
+                await asyncio.to_thread(
+                    lambda: employee.update(name="Dave", creator_id=self.user.id)
+                )
+                ordinary_update = await asyncio.wait_for(next_event, timeout=1)
+            finally:
+                await generator.aclose()
+            return snapshot, refresh, ordinary_update
+
+        snapshot_event, refresh_event, update_event = asyncio.run(run_subscription())
+
+        self.assertIsNone(snapshot_event.errors)
+        self.assertEqual(snapshot_event.data["onEmployeeChange"]["action"], "snapshot")
+
+        self.assertIsNone(refresh_event.errors)
+        refresh = refresh_event.data["onEmployeeChange"]
+        self.assertEqual(refresh["action"], "refresh")
+        self.assertEqual(refresh["item"]["name"], "Carol")
+        self.assertFalse(refresh["item"]["capabilities"]["canKeepName"])
+
+        self.assertIsNone(update_event.errors)
+        update = update_event.data["onEmployeeChange"]
+        self.assertEqual(update["action"], "update")
+        self.assertEqual(update["item"]["name"], "Dave")
+
+    def test_detail_subscription_joins_and_discards_refresh_groups(self) -> None:
+        employee = self.Employee.create(name="Alice", creator_id=self.user.id)
+        dependency_identification = {"id": 42}
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription ($id: ID!) {
+                onEmployeeChange(id: $id) {
+                    action
+                }
+            }
+        """
+        channel_layer = GraphQL._get_channel_layer(strict=True)
+        original_group_add = channel_layer.group_add
+        original_group_discard = channel_layer.group_discard
+
+        async def run_subscription() -> None:
+            with (
+                patch.object(
+                    GraphQL,
+                    "_resolve_subscription_dependencies",
+                    return_value=[
+                        (self.SoftEmployee, dependency_identification),
+                        (self.SoftEmployee, dependency_identification),
+                    ],
+                ),
+                patch.object(
+                    channel_layer,
+                    "group_add",
+                    new=AsyncMock(wraps=original_group_add),
+                ) as group_add,
+                patch.object(
+                    channel_layer,
+                    "group_discard",
+                    new=AsyncMock(wraps=original_group_discard),
+                ) as group_discard,
+            ):
+                generator = await schema.subscribe(
+                    subscription,
+                    variable_values={"id": employee.id},
+                    context_value=context,
+                )
+                try:
+                    await generator.__anext__()
+                finally:
+                    await generator.aclose()
+
+                expected_groups = {
+                    GraphQL._group_name(self.Employee, employee.identification),
+                    GraphQL._refresh_group_name(self.Employee),
+                    GraphQL._group_name(
+                        self.SoftEmployee,
+                        dependency_identification,
+                    ),
+                    GraphQL._refresh_group_name(self.SoftEmployee),
+                }
+                added_groups = {args.args[0] for args in group_add.await_args_list}
+                discarded_groups = {
+                    args.args[0] for args in group_discard.await_args_list
+                }
+                self.assertEqual(added_groups, expected_groups)
+                self.assertEqual(discarded_groups, expected_groups)
+
+        asyncio.run(run_subscription())
+
     def test_class_subscription_emits_create_without_initial_snapshot(self) -> None:
         schema = self._build_schema()
         context = SimpleNamespace(user=self.user)
@@ -273,6 +399,123 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         payload = event.data["onEmployeeClassChange"]
         self.assertEqual(payload["action"], "create")
         self.assertEqual(payload["item"]["name"], "Class Alice")
+
+    def test_class_subscription_batches_creates_into_one_refresh(self) -> None:
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        async def run_subscription() -> tuple[object, object]:
+            generator = await schema.subscribe(subscription, context_value=context)
+            if hasattr(generator, "errors"):
+                raise AssertionError(generator.errors)
+            try:
+                refresh_task = asyncio.create_task(generator.__anext__())
+                await asyncio.sleep(0.02)
+
+                def create_batch() -> None:
+                    with bulk_data_change_notifications():
+                        self.Employee.create(
+                            name="Batch One",
+                            creator_id=self.user.id,
+                        )
+                        self.Employee.create(
+                            name="Batch Two",
+                            creator_id=self.user.id,
+                        )
+
+                await asyncio.to_thread(create_batch)
+                refresh = await asyncio.wait_for(refresh_task, timeout=1)
+
+                next_event = asyncio.create_task(generator.__anext__())
+                await asyncio.to_thread(
+                    lambda: self.Employee.create(
+                        name="Ordinary",
+                        creator_id=self.user.id,
+                    )
+                )
+                ordinary_create = await asyncio.wait_for(next_event, timeout=1)
+            finally:
+                await generator.aclose()
+            return refresh, ordinary_create
+
+        refresh_event, create_event = asyncio.run(run_subscription())
+
+        self.assertIsNone(refresh_event.errors)
+        refresh = refresh_event.data["onEmployeeClassChange"]
+        self.assertEqual(refresh["action"], "refresh")
+        self.assertIsNone(refresh["item"])
+
+        self.assertIsNone(create_event.errors)
+        create = create_event.data["onEmployeeClassChange"]
+        self.assertEqual(create["action"], "create")
+        self.assertEqual(create["item"]["name"], "Ordinary")
+
+    def test_class_subscription_joins_and_discards_refresh_group(self) -> None:
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                }
+            }
+        """
+        channel_layer = GraphQL._get_channel_layer(strict=True)
+        original_group_add = channel_layer.group_add
+        original_group_discard = channel_layer.group_discard
+
+        async def run_subscription() -> None:
+            with (
+                patch.object(
+                    channel_layer,
+                    "group_add",
+                    new=AsyncMock(wraps=original_group_add),
+                ) as group_add,
+                patch.object(
+                    channel_layer,
+                    "group_discard",
+                    new=AsyncMock(wraps=original_group_discard),
+                ) as group_discard,
+            ):
+                generator = await schema.subscribe(subscription, context_value=context)
+                if hasattr(generator, "errors"):
+                    raise AssertionError(generator.errors)
+                next_event = asyncio.create_task(generator.__anext__())
+                try:
+                    await asyncio.sleep(0.02)
+                    await asyncio.to_thread(
+                        lambda: self.Employee.create(
+                            name="Cleanup",
+                            creator_id=self.user.id,
+                        )
+                    )
+                    await asyncio.wait_for(next_event, timeout=1)
+                finally:
+                    await generator.aclose()
+
+                expected_groups = {
+                    GraphQL._class_group_name(self.Employee),
+                    GraphQL._refresh_group_name(self.Employee),
+                }
+                added_groups = {args.args[0] for args in group_add.await_args_list}
+                discarded_groups = {
+                    args.args[0] for args in group_discard.await_args_list
+                }
+                self.assertEqual(added_groups, expected_groups)
+                self.assertEqual(discarded_groups, expected_groups)
+
+        asyncio.run(run_subscription())
 
     def test_class_subscription_suppresses_unreadable_events(self) -> None:
         schema = self._build_schema()
@@ -344,6 +587,13 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
             await queue.put(
                 {
                     "type": "gm.subscription.event",
+                    "manager": "OtherManager",
+                    "action": "refresh",
+                }
+            )
+            await queue.put(
+                {
+                    "type": "gm.subscription.event",
                     "manager": "Employee",
                     "action": 123,
                     "identification": employee.identification,
@@ -402,6 +652,14 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
                 raise AssertionError(generator.errors)
             try:
                 next_event = asyncio.create_task(generator.__anext__())
+                await asyncio.sleep(0.02)
+                self.assertFalse(next_event.done())
+                await asyncio.to_thread(
+                    lambda: employee.update(
+                        name="Hidden",
+                        creator_id=self.user.id,
+                    )
+                )
                 await asyncio.sleep(0.02)
                 self.assertFalse(next_event.done())
                 await asyncio.to_thread(

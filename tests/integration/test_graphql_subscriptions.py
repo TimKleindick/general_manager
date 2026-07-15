@@ -10,6 +10,7 @@ from django.db.models import CharField, FloatField
 from django.utils.crypto import get_random_string
 from typing import ClassVar
 
+from general_manager.api import bulk_data_change_notifications
 from general_manager.api.graphql import GraphQL
 from general_manager.api.property import graph_ql_property
 from general_manager.interface import CalculationInterface, DatabaseInterface
@@ -389,6 +390,88 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         self.assertEqual(update["item"]["configuredTax"]["unit"], "EUR")
         self.assertIn("configuredTax", self.TaxCalculation.access_log)
         self.assertNotIn("unusedTax", self.TaxCalculation.access_log)
+
+    def test_calculation_subscription_batches_dependency_refreshes(self) -> None:
+        employee = self.Employee.create(
+            name="Alice",
+            salary=Measurement(3000, "EUR"),
+            creator_id=self.user.id,
+        )
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription ($employeeId: ID!) {
+                onTaxCalculationChange(employeeId: $employeeId) {
+                    action
+                    item {
+                        configuredTax {
+                            value
+                            unit
+                        }
+                    }
+                }
+            }
+        """
+
+        async def run_subscription() -> tuple[object, object, object]:
+            generator = await schema.subscribe(
+                subscription,
+                variable_values={"employeeId": employee.id},
+                context_value=context,
+            )
+            if hasattr(generator, "errors"):
+                raise AssertionError(generator.errors)
+            try:
+                snapshot = await generator.__anext__()
+
+                def update_batch() -> None:
+                    with bulk_data_change_notifications():
+                        self.tax_rule.update(
+                            multiplier=0.25,
+                            creator_id=self.user.id,
+                            ignore_permission=True,
+                        )
+                        self.tax_rule.update(
+                            multiplier=0.3,
+                            creator_id=self.user.id,
+                            ignore_permission=True,
+                        )
+
+                await asyncio.to_thread(update_batch)
+                refresh = await asyncio.wait_for(generator.__anext__(), timeout=1)
+
+                next_event = asyncio.create_task(generator.__anext__())
+                await asyncio.to_thread(
+                    lambda: self.tax_rule.update(
+                        multiplier=0.35,
+                        creator_id=self.user.id,
+                        ignore_permission=True,
+                    )
+                )
+                ordinary_update = await asyncio.wait_for(next_event, timeout=1)
+            finally:
+                await generator.aclose()
+            return snapshot, refresh, ordinary_update
+
+        snapshot_event, refresh_event, update_event = asyncio.run(run_subscription())
+
+        self.assertIsNone(snapshot_event.errors)
+        self.assertAlmostEqual(
+            snapshot_event.data["onTaxCalculationChange"]["item"]["configuredTax"][
+                "value"
+            ],
+            600,
+        )
+
+        self.assertIsNone(refresh_event.errors)
+        refresh = refresh_event.data["onTaxCalculationChange"]
+        self.assertEqual(refresh["action"], "refresh")
+        self.assertAlmostEqual(refresh["item"]["configuredTax"]["value"], 900)
+
+        self.assertIsNone(update_event.errors)
+        update = update_event.data["onTaxCalculationChange"]
+        self.assertEqual(update["action"], "update")
+        self.assertAlmostEqual(update["item"]["configuredTax"]["value"], 1050)
 
     def test_calculation_subscription_handles_property_aliases(self) -> None:
         """
