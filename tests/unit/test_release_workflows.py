@@ -206,6 +206,10 @@ def test_quality_required_python_312_leg_validates_built_artifacts() -> None:
         'smoke_chat_eval_distribution.py" '
         '"$GITHUB_WORKSPACE/$WHEEL" "$GITHUB_WORKSPACE/$SDIST"'
     )
+    onboarding_smoke = (
+        f'{venv_python} "$GITHUB_WORKSPACE/tests/packaging/'
+        'smoke_readme_onboarding.py" "$GITHUB_WORKSPACE"'
+    )
     settings_smoke = (
         "env -u DJANGO_SETTINGS_MODULE "
         'PYTHONPATH="$GITHUB_WORKSPACE/tests/packaging" '
@@ -214,6 +218,7 @@ def test_quality_required_python_312_leg_validates_built_artifacts() -> None:
         "--fixture toy --dataset basic_queries --tier 999"
     )
     assert dynamic_smoke in commands
+    assert onboarding_smoke in commands
     assert settings_smoke in commands
     assert commands.index("python -m build") < commands.index("twine check dist/*")
     assert commands.index("twine check dist/*") < commands.index(
@@ -224,7 +229,10 @@ def test_quality_required_python_312_leg_validates_built_artifacts() -> None:
     )
     assert commands.index(
         'scripts/validate_distribution.py" installed'
-    ) < commands.index("smoke_chat_eval_distribution.py")
+    ) < commands.index("smoke_readme_onboarding.py")
+    assert commands.index("smoke_readme_onboarding.py") < commands.index(
+        "smoke_chat_eval_distribution.py"
+    )
     assert commands.index("smoke_chat_eval_distribution.py") < commands.index(
         "--settings chat_eval_smoke_settings"
     )

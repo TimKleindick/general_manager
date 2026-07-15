@@ -1,96 +1,188 @@
 # Quickstart
 
-This quickstart walks you through the minimum steps required to add GeneralManager to a Django project and expose a simple manager over GraphQL. It assumes Django ≥ 4.2 and Python ≥ 3.12.
+## What you will build
 
-## 1. Install the package
+In this guide you will start from an empty directory, create a new Django
+project, define one typed `Project` manager, persist an `Apollo` record, and
+retrieve it through GeneralManager's generated GraphQL schema.
+
+The walkthrough uses SQLite, Django's default for a new project. It should take
+about five minutes once Python 3.12 or newer is available.
+
+## 1. Create an isolated project
+
+Create and enter an empty working directory:
 
 ```bash
-pip install GeneralManager
+mkdir general-manager-demo
+cd general-manager-demo
+python -m venv .venv
 ```
 
-Add `general_manager` to `INSTALLED_APPS` in `settings.py` and configure the Django cache backend you use for dependency tracking.
+Activate the environment on macOS or Linux:
 
-## 2. Define a manager
+```bash
+source .venv/bin/activate
+```
 
-Create a manager that describes the fields you want to expose. Each manager defines an inner `Interface` class that handles persistence.
+On PowerShell instead, run:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Install the package, create the Django project in the current directory, and
+add a `projects` application:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install GeneralManager
+django-admin startproject gm_demo .
+python manage.py startapp projects
+```
+
+For production requirements and optional integrations, see
+[Installation](installation.md).
+
+## 2. Configure Django
+
+Append this block to `gm_demo/settings.py`:
 
 ```python
-# apps/materials/managers.py
-from django.db.models import CharField, TextField
+INSTALLED_APPS += [
+    "general_manager",
+    "projects.apps.ProjectsConfig",
+]
 
+AUTOCREATE_GRAPHQL = True
+GRAPHQL_URL = "graphql/"
+ALLOWED_HOSTS = ["127.0.0.1", "localhost", "testserver"]
+```
+
+Adding the two applications lets GeneralManager import `managers.py` from the
+installed `projects` application during Django startup. `AUTOCREATE_GRAPHQL`
+builds the schema and appends the configured `GRAPHQL_URL`; you do not need to
+edit `urls.py` for this quickstart.
+
+## 3. Define a manager
+
+Create `projects/managers.py` with this content:
+
+```python
+from typing import ClassVar
+
+from django.db.models import CharField
+
+from general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface
-from general_manager.manager import GeneralManager
+from general_manager.permission import AdditiveManagerPermission
 
-class Material(GeneralManager):
+
+class Project(GeneralManager):
     name: str
-    description: str | None
 
     class Interface(DatabaseInterface):
         name = CharField(max_length=100)
-        description = TextField(null=True, blank=True)
+
+    class Permission(AdditiveManagerPermission):
+        __read__: ClassVar[list[str]] = ["public"]
+        __create__: ClassVar[list[str]] = ["isAuthenticated"]
+        __update__: ClassVar[list[str]] = ["isAuthenticated"]
+        __delete__: ClassVar[list[str]] = ["isAuthenticated"]
 ```
 
-## 3. Apply database migrations
+`DatabaseInterface` generates and registers the backing Django model. The
+permission policy makes reads public only for this demo; create, update, and
+delete operations require an authenticated context. GeneralManager discovers
+this module automatically, so do not add a redundant import to
+`AppConfig.ready()`.
 
-Interfaces automatically derive a Django model. Include it in an application `models.py` (or import it in `apps.py`) so Django discovers the model, then run:
+## 4. Create the database
+
+Capture the generated model in a migration and initialize the database:
 
 ```bash
-python manage.py makemigrations
+python manage.py makemigrations projects
 python manage.py migrate
 ```
 
-## 4. Create permission rules
+Naming `projects` in `makemigrations` makes the intended generated-model
+migration explicit.
 
-Managers enforce access checks through the nested `Permission` class. Grant access based on attributes, user groups, or custom callables.
+## 5. Seed one record
 
-```python
-from general_manager.permission.manager_based_permission import AdditiveManagerPermission
+Create one project through the generated factory:
 
-class Material(GeneralManager):
-    ...
-
-    class Permission(AdditiveManagerPermission):
-        __read__ = ["public"]
-        __create__ = ["isAdmin"]
-        __update__ = ["isAdmin"]
-        __delete__ = ["isAdmin"]
+```bash
+python manage.py shell -c 'from projects.managers import Project; Project.Factory.create(name="Apollo")'
 ```
 
-## 5. Seed data
+`Project.Factory.create(name="Apollo")` is a convenient demo-seeding path. In
+application code, perform writes through the normal authenticated permission
+context.
 
-Use the manager API to populate the database. CRUD operations automatically record audit metadata.
+Start Django:
 
-```python
-material = Material.create(
-    creator_id=request.user.id,
-    history_comment="Initial load",
-    name="Steel",
-    description="High grade structural steel",
-)
+```bash
+python manage.py runserver
 ```
 
-## 6. Expose GraphQL schema
+## 6. Query generated GraphQL
 
-Add a URL route to serve the GraphQL schema by adding the following settings to your `settings.py`:
+In another terminal, retrieve the persisted record:
 
-```python
-# settings.py
-AUTOCREATE_GRAPHQL = True
-GRAPHQL_URL = "graphql/"
+```bash
+curl --get 'http://127.0.0.1:8000/graphql/' \
+  --data-urlencode 'query=query { projectList { items { name } } }'
 ```
 
-Run your server and test the following query:
+The GraphQL operation is:
 
 ```graphql
-query {
-  materialList {
-    name
-    description
-  }
-}
+query { projectList { items { name } } }
 ```
+
+Expected response:
+
+```json
+{"data":{"projectList":{"items":[{"name":"Apollo"}]}}}
+```
+
+List queries return a pagination object, which is why `projectList` contains an
+`items` field. The example uses a GET request so it is copyable without a CSRF
+token. GraphQL writes still require the normal authentication and CSRF handling
+for your application.
+
+## Troubleshooting
+
+### `No installed app with label 'projects'`
+
+Add `projects.apps.ProjectsConfig` to `INSTALLED_APPS`, then rerun the migration
+commands.
+
+### `No changes detected`
+
+Keep the manager in `projects/managers.py` and confirm that `general_manager` is
+installed and present in `INSTALLED_APPS`.
+
+### `Cannot query field 'projectList'`
+
+Set `AUTOCREATE_GRAPHQL = True`, restart Django, and confirm that
+`projects/managers.py` imports without errors.
+
+### Permission or empty-result surprises
+
+Keep public read access only for this demo. Use authenticated policies for
+application writes and restart the development server after permission changes.
 
 ## Next steps
 
-- Study the [architecture overview](concepts/architecture.md) to understand how buckets, managers, and interfaces cooperate.
-- Explore the [tutorials](howto/index.md) to learn how to add permissions, measurements, and computed fields.
+- Understand [managers, interfaces, and buckets](concepts/architecture.md).
+- Build an application policy with the [permission walkthrough](howto/permission_walkthrough.md).
+- Add [measurements and currency-aware fields](concepts/measurement/index.md).
+- Explore [generated GraphQL](concepts/graphql/index.md), including filters,
+  pagination, mutations, and security.
+- Configure [search](howto/search.md).
+- Model operations with [workflows](concepts/workflow.md).
+- Add optional [GraphQL file uploads](howto/graphql_file_uploads.md).
+- Configure optional [provider-based chat](concepts/chat_prompting.md).

@@ -97,6 +97,7 @@ jobs:
           /tmp/general-manager-quality-venv/bin/python -m pip install "$WHEEL"
           cd /tmp
           /tmp/general-manager-quality-venv/bin/python "$GITHUB_WORKSPACE/scripts/validate_distribution.py" installed
+          /tmp/general-manager-quality-venv/bin/python "$GITHUB_WORKSPACE/tests/packaging/smoke_readme_onboarding.py" "$GITHUB_WORKSPACE"
           /tmp/general-manager-quality-venv/bin/python "$GITHUB_WORKSPACE/tests/packaging/smoke_chat_eval_distribution.py" "$GITHUB_WORKSPACE/$WHEEL" "$GITHUB_WORKSPACE/$SDIST"
           env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$GITHUB_WORKSPACE/tests/packaging" /tmp/general-manager-quality-venv/bin/python -m general_manager.chat.evals --settings chat_eval_smoke_settings --provider builtins.object --fixture toy --dataset basic_queries --tier 999
 
