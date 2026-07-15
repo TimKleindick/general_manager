@@ -1679,18 +1679,35 @@ class GraphQL:
         ):
             return
 
-        dispatched = async_to_sync(_dispatch_subscription_event_fn)(
-            channel_layer,
-            (group_name, class_group_name),
-            message,
-        )
+        target_groups = (group_name, class_group_name)
+        try:
+            dispatched = async_to_sync(_dispatch_subscription_event_fn)(
+                channel_layer,
+                target_groups,
+                message,
+            )
+        except MemoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "failed to dispatch subscription event",
+                context={
+                    "manager": manager_class.__name__,
+                    "action": action,
+                    "target_groups": list(target_groups),
+                    "message": message,
+                },
+                exc_info=exc,
+            )
+            return
         if dispatched > 0:
             logger.debug(
                 "dispatched subscription event",
                 context={
                     "manager": manager_class.__name__,
                     "action": action,
-                    "groups": [group_name, class_group_name],
+                    "target_groups": list(target_groups),
+                    "successful_group_count": dispatched,
                 },
             )
 
