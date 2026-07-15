@@ -14,7 +14,11 @@ from general_manager.interface import DatabaseInterface, ExistingModelInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
-from general_manager.search.config import IndexConfig, SearchConfigSpec
+from general_manager.search.config import (
+    IndexConfig,
+    SearchConfigSpec,
+    SearchInvalidationRule,
+)
 from general_manager.search.indexer import SearchDeleteTarget
 from general_manager.search.models import SearchIndexState
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
@@ -607,6 +611,57 @@ class SecondaryDatabaseCommitSafetyIntegrationTests(GeneralManagerTransactionTes
                 "global",
             )
             dispatch.assert_called_once()
+
+    def test_related_resolution_is_synchronous_but_secondary_work_waits_for_commit(
+        self,
+    ) -> None:
+        """Related planning runs in-source while marker and dispatch wait."""
+        from unittest.mock import patch
+
+        phases: list[tuple[str, str]] = []
+
+        def resolve(change, owner):
+            phases.append((change.phase, change.database_alias))
+            return (owner(**change.instance.identification),)
+
+        class SearchConfig:
+            indexes = _TEST_SEARCH_CONFIG.indexes
+            invalidation_rules = (
+                SearchInvalidationRule(
+                    source=self.SecondaryCommitManager,
+                    resolve=resolve,
+                ),
+            )
+
+        self.SecondaryCommitManager.SearchConfig = SearchConfig
+        self.addCleanup(delattr, self.SecondaryCommitManager, "SearchConfig")
+        GeneralManagerMeta.all_classes = [self.SecondaryCommitManager]
+        with (
+            patch(
+                "general_manager.search.invalidation.mark_search_index_dirty",
+                return_value=None,
+            ) as mark_dirty,
+            patch(
+                "general_manager.search.invalidation.dispatch_index_update"
+            ) as dispatch,
+        ):
+            with transaction.atomic(using="secondary"):
+                created = self.SecondaryCommitManager.create(
+                    name="secondary related", ignore_permission=True
+                )
+                self.assertEqual(phases, [("after", "secondary")])
+                mark_dirty.assert_not_called()
+                dispatch.assert_not_called()
+
+            mark_dirty.assert_called_once_with(
+                self.SecondaryCommitManager,
+                "global",
+            )
+            dispatch.assert_called_once()
+            self.assertEqual(
+                dispatch.call_args.kwargs["identification"],
+                created.identification,
+            )
 
     def test_unexpected_enqueue_failure_is_suppressed_after_secondary_commit(
         self,
