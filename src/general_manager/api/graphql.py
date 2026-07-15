@@ -1364,7 +1364,7 @@ class GraphQL:
             """
             Stream subscription events for a specific manager instance identified by the provided arguments.
 
-            Yields an initial `SubscriptionEvent` with `action` set to `"snapshot"` containing the current manager instance, then yields `SubscriptionEvent`s for each subsequent action. For update events, `item` will be the re-instantiated manager instance or `None` if instantiation fails. The subscriber is registered on the manager's channel groups (including dependent managers' groups) and the channel subscriptions and background listener are cleaned up when the iterator is closed or cancelled.
+            Yields an initial `SubscriptionEvent` with `action` set to `"snapshot"` containing the current manager instance, then yields `SubscriptionEvent`s for each subsequent action. For subsequent events, `item` will be the re-instantiated manager instance or `None` if instantiation fails. The subscriber is registered on the manager's channel groups (including dependent managers' groups) and the channel subscriptions and background listener are cleaned up when the iterator is closed or cancelled.
 
             Parameters:
                 identification: Identification fields required to locate the manager instance (maps to the manager's identification signature).
@@ -1398,7 +1398,8 @@ class GraphQL:
                 cls._group_name(
                     generalManagerClass,
                     instance.identification,
-                )
+                ),
+                cls._refresh_group_name(generalManagerClass),
             }
             dependencies = cls._resolve_subscription_dependencies(
                 generalManagerClass,
@@ -1409,6 +1410,7 @@ class GraphQL:
                 group_names.add(
                     cls._group_name(dependency_class, dependency_identification)
                 )
+                group_names.add(cls._refresh_group_name(dependency_class))
 
             for group in group_names:
                 await channel_layer.group_add(group, channel_name)
@@ -1478,9 +1480,9 @@ class GraphQL:
             Stream future authorized change events for any instance of a manager class.
 
             Unlike single-entity subscriptions, class-wide subscriptions do not
-            yield an initial snapshot. Each channel event is hydrated and
-            checked against the request user's object-level read permission
-            before it is yielded.
+            yield an initial snapshot. Aggregate refresh events carry no item;
+            ordinary row events are hydrated and checked against the request
+            user's object-level read permission before they are yielded.
             """
             try:
                 channel_layer = cast(
@@ -1490,8 +1492,12 @@ class GraphQL:
                 raise GraphQLError(str(exc)) from exc
             channel_name = cast(str, await channel_layer.new_channel())
             queue: asyncio.Queue[GraphQLFieldMap] = asyncio.Queue()
-            group_name = cls._class_group_name(generalManagerClass)
-            await channel_layer.group_add(group_name, channel_name)
+            group_names = {
+                cls._class_group_name(generalManagerClass),
+                cls._refresh_group_name(generalManagerClass),
+            }
+            for group in group_names:
+                await channel_layer.group_add(group, channel_name)
             listener_task = asyncio.create_task(
                 cls._channel_message_listener(channel_layer, channel_name, queue)
             )
@@ -1503,10 +1509,14 @@ class GraphQL:
                         if message.get("manager") != generalManagerClass.__name__:
                             continue
                         action = message.get("action")
+                        if not isinstance(action, str):
+                            continue
+                        if action == "refresh":
+                            clear_capability_context(info)
+                            yield SubscriptionEvent(item=None, action=action)
+                            continue
                         identification = message.get("identification")
-                        if not isinstance(action, str) or not isinstance(
-                            identification, dict
-                        ):
+                        if not isinstance(identification, dict):
                             continue
                         identification_copy = deepcopy(identification)
                         try:
@@ -1525,7 +1535,8 @@ class GraphQL:
                     listener_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await listener_task
-                    await channel_layer.group_discard(group_name, channel_name)
+                    for group in group_names:
+                        await channel_layer.group_discard(group, channel_name)
 
             return event_stream()
 
