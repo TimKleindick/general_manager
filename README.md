@@ -11,8 +11,8 @@ applications. Define domain objects once, then use the same model through the
 Django ORM, generated GraphQL, permission policies, validation, calculations,
 search, and workflows.
 
-GeneralManager is pre-1.0. The `main` branch can be ahead of the latest PyPI
-release; use the [release history](https://github.com/TimKleindick/general_manager/releases)
+GeneralManager is pre-1.0. The `main` branch and latest PyPI release can differ;
+use the [release history](https://github.com/TimKleindick/general_manager/releases)
 to distinguish published behavior from current development.
 
 ## What GeneralManager provides

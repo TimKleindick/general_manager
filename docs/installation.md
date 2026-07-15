@@ -11,8 +11,8 @@ the [quickstart](quickstart.md).
 - A Django-supported database appropriate for your deployment; this repository's
   CI exercises SQLite, while the maintained production example uses PostgreSQL
 
-GeneralManager is pre-1.0, and the `main` branch may be ahead of the latest PyPI
-package. Use the [release history](https://github.com/TimKleindick/general_manager/releases)
+GeneralManager is pre-1.0, and the `main` branch and latest PyPI package can
+differ. Use the [release history](https://github.com/TimKleindick/general_manager/releases)
 to check which behavior has been published.
 
 ## Install the base package
