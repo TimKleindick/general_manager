@@ -26,7 +26,7 @@ def test_image_upload_dependencies_match_development_type_check_environment() ->
         "Pillow>=12.2.0"
     ]
     assert "-e .[file-upload-image]" in development
-    assert "django-types==0.21.0" in development
+    assert "django-types==0.24.0" in development
     assert "django-stubs" not in development
     assert 'pip install -e ".[file-upload-image]"' in quality_workflow
 

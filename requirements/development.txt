@@ -5,10 +5,10 @@ ipython==9.0.2
 pytest==9.0.3
 pytest_django==4.11.1
 pytest_cov==4.1.0
-django-types==0.21.0
+django-types==0.24.0
 celery-types==0.23.0
 types-PyYAML==6.0.12.20250915
-mypy==1.19.1
+mypy==1.20.2
 pre-commit==4.3.0
 prometheus-client==0.24.1  # Local metrics collection for development/tests.
 
