@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v0.63.1 (2026-07-15)
+
+### Bug Fixes
+
+- Make ORM mutations atomic
+  ([`74969ba`](https://github.com/TimKleindick/general_manager/commit/74969ba4eb2935f12cebc637be1df30c4cf42b78))
+
+- Preserve ORM mutation override compatibility
+  ([`672f5ae`](https://github.com/TimKleindick/general_manager/commit/672f5ae70fdba2a4b70112a929333f554b41f772))
+
+- Route ORM history to configured database
+  ([`23f4ce1`](https://github.com/TimKleindick/general_manager/commit/23f4ce11d0c57d8db6e0348d4fae75de65431f11))
+
+### Documentation
+
+- Align ORM history docstrings
+  ([`bb7fba6`](https://github.com/TimKleindick/general_manager/commit/bb7fba6ed9f9d425f2aa28d72b014c334208180b))
+
+- Document atomic ORM mutations
+  ([`80ab92a`](https://github.com/TimKleindick/general_manager/commit/80ab92ad7a2ff29972a82c0ee645b6f32e17c465))
+
+- Explain database-aware ORM history
+  ([`f98f97b`](https://github.com/TimKleindick/general_manager/commit/f98f97b73485c687937fc61db3508e38d69dfd2f))
+
+### Testing
+
+- Address ORM history review feedback
+  ([`eaceb04`](https://github.com/TimKleindick/general_manager/commit/eaceb04fd193fb7d7c2b513f5d269f2f2d4e081f))
+
+- Cover configured database m2m history
+  ([`c08f594`](https://github.com/TimKleindick/general_manager/commit/c08f59468b63b31f7354c8628c202765ac5cbd58))
+
+- Reproduce configured database history leak
+  ([`5730335`](https://github.com/TimKleindick/general_manager/commit/573033581c5674e138368da69ce5991a9307484d))
+
+- Reproduce non-atomic ORM mutations
+  ([`0803942`](https://github.com/TimKleindick/general_manager/commit/080394246da596f3e98ed51bd84d8cfbcf1801bc))
+
+
 ## v0.63.0 (2026-07-14)
 
 ### Bug Fixes
