@@ -64,6 +64,10 @@
       "general_manager.search.backend",
       "SearchBackend"
     ],
+    "SearchChange": [
+      "general_manager.search.config",
+      "SearchChange"
+    ],
     "SearchConfigProtocol": [
       "general_manager.search.config",
       "SearchConfigProtocol"
@@ -75,6 +79,10 @@
     "SearchIndexer": [
       "general_manager.search.indexer",
       "SearchIndexer"
+    ],
+    "SearchInvalidationRule": [
+      "general_manager.search.config",
+      "SearchInvalidationRule"
     ],
     "configure_search_backend": [
       "general_manager.search.backend_registry",
@@ -910,6 +918,10 @@
       "general_manager.search.backend",
       "SearchBackendNotImplementedError"
     ],
+    "SearchChange": [
+      "general_manager.search.config",
+      "SearchChange"
+    ],
     "SearchConfigProtocol": [
       "general_manager.search.config",
       "SearchConfigProtocol"
@@ -929,6 +941,10 @@
     "SearchIndexer": [
       "general_manager.search.indexer",
       "SearchIndexer"
+    ],
+    "SearchInvalidationRule": [
+      "general_manager.search.config",
+      "SearchInvalidationRule"
     ],
     "SearchResult": [
       "general_manager.search.backend",
