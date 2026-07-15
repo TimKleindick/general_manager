@@ -178,19 +178,23 @@ with bulk_data_change_notifications():
             project.update(status="archived")
 ```
 
-Keep `bulk_data_change_notifications()` outside `transaction.atomic()`. The
-transaction then commits before the notification context flushes. The context is
-not automatically transaction-aware, and it also flushes queued refreshes when
-the body exits exceptionally, after the nested transaction has rolled back and
-before re-raising the exception.
+Keep `bulk_data_change_notifications()` outside the true outermost database
+transaction. When the shown `transaction.atomic()` is outermost, it commits
+before the notification context flushes. With `ATOMIC_REQUESTS` or another
+enclosing atomic block, that block may only release a savepoint and the actual
+commit can occur after the refresh; place the notification context outside that
+enclosing boundary instead. The context is not transaction-aware, and it also
+flushes queued refreshes when its body exits exceptionally before re-raising the
+exception.
 
 During an explicit batch, row-level events are replaced by one `refresh` event
 for each affected manager class. A detail subscription receives refreshes for
 its own manager and for manager classes in its dependency groups, then
 rehydrates its own item. A class-wide subscription receives `action = refresh`
 with `item = null`; the event contains no row identification. This intentionally
-discloses that a change to the manager class occurred at batch-flush time, but
-not which rows changed, how many changed, or their original actions.
+discloses that some item changed during the explicit batch, and the client
+observes the aggregate refresh when the batch flushes. It does not disclose
+which rows changed, how many changed, or their original actions.
 
 Outside the context, ordinary row events and their timing are unchanged. The
 context batches only GraphQL and RemoteAPI notification delivery:
