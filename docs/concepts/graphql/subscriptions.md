@@ -161,6 +161,45 @@ task errors still propagate from the await.
 - Subscriptions require Django Channels. If `get_channel_layer()` returns `None`, the resolver raises a descriptive GraphQL error explaining that `CHANNEL_LAYERS` must be configured.
 - Managers are automatically decorated with `@data_change` and emit `pre_data_change` and `post_data_change` signals. GraphQL listens to `post_data_change` and forwards the event to the relevant instance channel group (`gm_subscriptions.<Manager>.<digest>`) and class channel group (`gm_subscriptions.<Manager>.__class__`).
 
+### Bulk notification refreshes
+
+Use the public notification context when many writes should produce one refresh
+per affected GraphQL manager class:
+
+```python
+from django.db import transaction
+
+from general_manager.api import bulk_data_change_notifications
+
+
+with bulk_data_change_notifications():
+    with transaction.atomic():
+        for project in projects:
+            project.update(status="archived")
+```
+
+Keep `bulk_data_change_notifications()` outside `transaction.atomic()`. The
+transaction then commits before the notification context flushes. The context is
+not automatically transaction-aware, and it also flushes queued refreshes when
+the body exits exceptionally, after the nested transaction has rolled back and
+before re-raising the exception.
+
+During an explicit batch, row-level events are replaced by one `refresh` event
+for each affected manager class. A detail subscription receives refreshes for
+its own manager and for manager classes in its dependency groups, then
+rehydrates its own item. A class-wide subscription receives `action = refresh`
+with `item = null`; the event contains no row identification. This intentionally
+discloses that a change to the manager class occurred at batch-flush time, but
+not which rows changed, how many changed, or their original actions.
+
+Outside the context, ordinary row events and their timing are unchanged. The
+context batches only GraphQL and RemoteAPI notification delivery:
+`post_data_change`, dependency-cache invalidation, and unrelated signal
+receivers still run immediately for every change. Batching is scoped to the
+current Python `ContextVar` state. Newly created tasks and `asyncio.to_thread()`
+normally copy that state; unrelated threads or execution contexts do not share
+the batch.
+
 ### Identification helpers
 
 The subscription arguments mirror the interface inputs. For nested managers, the schema accepts IDs (e.g. `employeeId`) so the server can reconstruct the full identification dictionary. This results in subscriptions that are consistent with query and mutation signatures.

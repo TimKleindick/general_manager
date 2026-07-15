@@ -388,6 +388,29 @@ channel-layer connections with `1011`. Missing `version` is accepted, multiple
 websocket messages are ignored, and client disconnect cleans up the
 channel-layer group subscription.
 
+For bulk writes, use the public notification context outside the transaction so
+the commit completes before refresh delivery:
+
+```python
+from django.db import transaction
+
+from general_manager.api import bulk_data_change_notifications
+
+
+with bulk_data_change_notifications():
+    with transaction.atomic():
+        for project in projects:
+            project.update(status="archived")
+```
+
+The context emits one invalidation per affected RemoteAPI resource with
+`action = "refresh"`, `identification = null`, and a UUID4 `event_id`. Clients
+should treat it as resource-wide invalidation and requery the resource over
+REST. The context is not transaction-aware by itself and flushes even when its
+body exits exceptionally; the nesting above ensures that flush happens after
+the transaction has committed or rolled back. Outside the context, immediate
+row-level events remain unchanged.
+
 ## Usage
 
 ```python
