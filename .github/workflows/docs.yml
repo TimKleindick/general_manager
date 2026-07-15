@@ -16,46 +16,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Setup Pages
-        if: ${{ github.event_name == 'push' }}
-        uses: actions/configure-pages@v5
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml', 'mkdocs.yml', 'requirements/*.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-          pip install mkdocs-material mkdocstrings[python] pymdown-extensions
-          pip install -r requirements/development.txt
-
-      - name: Build site
-        run: mkdocs build --strict
-
-      - name: Upload artifact
-        if: ${{ github.event_name == 'push' }}
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./site
+    name: Build MkDocs
+    uses: ./.github/workflows/docs-build.yml
+    with:
+      upload_pages_artifact: ${{ github.event_name == 'push' }}
 
   deploy:
     if: ${{ github.event_name == 'push' }}

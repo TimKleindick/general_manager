@@ -123,6 +123,10 @@ jobs:
     needs: artifact
     if: ${{ needs.artifact.outputs.released == 'true' }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.repository }}-release
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
 
@@ -130,7 +134,7 @@ jobs:
       - name: Checkout exact release commit over SSH
         uses: actions/checkout@v4
         with:
-          repository: TimKleindick/general_manager
+          repository: ${{ github.repository }}
           ssh-key: ${{ secrets.SSH_DEPLOY_KEY }}
           ssh-strict: true
           persist-credentials: true
@@ -139,7 +143,7 @@ jobs:
 
       - name: Configure release branch and SSH origin
         run: |
-          git remote set-url origin git@github.com:TimKleindick/general_manager.git
+          git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
           git fetch origin main
           git switch -C main "$GITHUB_SHA"
           git branch --set-upstream-to=origin/main main

@@ -100,6 +100,7 @@ def _wheel_members(wheel: Path) -> set[str]:
             for member in archive.infolist():
                 _member_parts(wheel, member.filename)
                 file_type = stat.S_IFMT(member.external_attr >> 16)
+                # Zero permits ZIPs that omit Unix external-attribute mode bits.
                 if file_type not in (0, stat.S_IFREG):
                     message = (
                         f"Non-regular wheel member in {wheel.name}: {member.filename}"
@@ -127,6 +128,7 @@ def _sdist_members(sdist: Path, expected_root: str) -> set[str]:
                     raise ValueError(message)
                 if member.isfile() and len(parts) > 1:
                     relative_parts = parts[1:]
+                    # Normalize src-layout sdist members to installed package paths.
                     if relative_parts[:1] == ("src",):
                         relative_parts = relative_parts[1:]
                     if relative_parts:
