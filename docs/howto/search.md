@@ -57,6 +57,70 @@ class Project(GeneralManager):
         ]
 ```
 
+### Invalidate fields owned by related managers
+
+When a project document contains customer or investment data, put the rule on
+`Project`, the manager that owns the document:
+
+```python
+from general_manager import GeneralManager, IndexConfig, SearchInvalidationRule
+from investments.managers import InvestNumber
+
+
+def affected_projects(change, owner_class):
+    return owner_class.filter(customer=change.instance)
+
+
+class Project(GeneralManager):
+    class SearchConfig:
+        indexes = (
+            IndexConfig(name="global", fields=("customer__name",)),
+        )
+        invalidation_rules = (
+            SearchInvalidationRule(
+                source="customers.managers.Customer",
+                resolve=affected_projects,
+                indexes=("global",),
+            ),
+            SearchInvalidationRule(
+                source=InvestNumber,
+                resolve=lambda change, owner: owner.filter(
+                    invest_numbers=change.instance
+                ),
+                relation="invest_numbers",
+                indexes=("global",),
+            ),
+        )
+```
+
+The resolver must return `Project` manager instances. Use a dotted source path
+to avoid import cycles when useful. Omit `indexes` to invalidate every project
+index. `resolve=None` does not discover individual projects; it marks the
+selected project/index pairs dirty for reconciliation.
+
+The optional `relation` enables exact M2M invalidation for related-manager
+operations. Both auto-created and custom through models work with forward and
+reverse `add()`, `remove()`, `clear()`, and `set()`. The owner must have exactly
+the standard `id` input, and each through foreign key must target its endpoint
+primary key. Django checks report violations as
+`general_manager.search.E007` through `E009`. Self-symmetrical relations,
+direct through-table writes, raw SQL, and bulk operations are not observed. Run
+`search_reconcile --once` after any such write.
+
+Bound each event and its task payloads in settings:
+
+```python
+GENERAL_MANAGER = {
+    **GENERAL_MANAGER,
+    "SEARCH_INVALIDATION_MAX_TARGETS": 1000,
+    "SEARCH_INVALIDATION_BATCH_SIZE": 100,
+}
+```
+
+Both settings must be positive integers. Resolver errors, invalid result types,
+or overflow discard that rule's targeted work and leave the exact pairs dirty;
+partial resolver output is never dispatched.
+
 ## Step 3: Create index settings and reindex data
 
 ```bash
@@ -224,3 +288,7 @@ extraction, and backend write/list/delete errors propagate to the caller.
 - Reindex after search schema changes.
 - Confirm filterable/sortable fields are configured.
 - Monitor indexing failures in logs and alert on task errors.
+- Run reconciliation periodically; it repairs dirty fallbacks and accepted task
+  failures.
+- Apply migration `0010_search_index_state_dirty_generation` before enabling
+  lifecycle invalidation workers.

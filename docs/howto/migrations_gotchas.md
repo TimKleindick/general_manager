@@ -88,6 +88,26 @@ PYTHONPATH=src python -m django makemigrations --check --dry-run --settings=test
 
 A clean check prints `No changes detected`.
 
+`0010_search_index_state_dirty_generation.py` depends on
+`0009_upload_cleanup_state.py` and adds the non-null
+`SearchIndexState.dirty_generation` positive-big-integer field with default
+`0`. Lifecycle invalidation increments this value on every dirty mark. Workers
+and reconciliation use it as a generation fence so stale work cannot clear a
+newer mutation. Apply this migration before deploying code or workers that
+dispatch commit-bound search invalidation; no data migration or manual backfill
+is required.
+
+After migrating, run one reconciliation sweep to initialize or repair the
+durable state before relying on incremental work:
+
+```bash
+python manage.py search_reconcile --once
+```
+
+Use `--force` after deployments that also performed direct M2M through-table,
+raw SQL, or bulk writes, because those write paths do not emit supported
+invalidation signals.
+
 ## Rolling back
 
 Because managers call `full_clean()` during operations, old migrations can fail if data violates new validation rules. Plan rollback steps by capturing export snapshots before applying schema changes.

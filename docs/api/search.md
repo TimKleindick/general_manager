@@ -39,8 +39,46 @@ callbacks receive a frozen `SearchChange` and the owner manager class. Resolved
 configurations normalize `invalidation_rules` to a tuple, defaulting to an empty
 tuple.
 
+`SearchChange` exposes `action` (`"create"`, `"update"`, or `"delete"`),
+`phase` (`"before"` or `"after"`), the source manager `instance`, and its
+`database_alias`. Create invokes resolvers after the mutation, update invokes
+them before and after, and delete invokes them before. Resolver results must be
+instances of the owner manager. The framework copies each result's
+identification before scheduling it. `resolve=None`, resolver errors, invalid
+targets, and bounded overflow mark the selected owner/index pairs dirty without
+dispatching partial targeted work.
+
+`GENERAL_MANAGER["SEARCH_INVALIDATION_MAX_TARGETS"]` is the per-event resolver
+ceiling and defaults to `1000`.
+`GENERAL_MANAGER["SEARCH_INVALIDATION_BATCH_SIZE"]` controls exact-index task
+chunks and defaults to `100`. Each must be a positive, non-boolean integer;
+invalid values force dirty fallback for the affected work. The standard
+GeneralManager setting lookup order also permits legacy prefixed and top-level
+settings.
+
+Relation bindings support auto-created and custom Django through models when
+the owner has exactly the `id` input and both through foreign keys target their
+endpoint primary keys. Startup checks use these IDs:
+
+- `general_manager.search.E000`: invalid declaration/configuration;
+- `E001`: source does not resolve to a manager;
+- `E002`: resolver is not callable;
+- `E003`: selected indexes are invalid;
+- `E004`/`E005`: owner/source is not ORM-backed;
+- `E006`: relation is not the expected owner M2M field;
+- `E007`: owner does not use exactly the standard `id` input;
+- `E008`: relation is self-symmetrical;
+- `E009`: a through foreign key does not target the endpoint primary key.
+
+The M2M bridge observes related-manager `add`, `remove`, `clear`, and `set`
+signals in forward and reverse directions. It does not observe direct through
+model writes, raw SQL, or bulk operations. These are unsupported and require
+explicit reconciliation.
+
 `SearchConfigSpec.document_id` is a callable that receives the manager instance
-being indexed and returns a stable document id string. `SearchConfigSpec.to_document`
+being indexed and returns a stable document id string. The same value is
+captured before deletion, so applications must keep it stable across updates and
+related invalidation. `SearchConfigSpec.to_document`
 receives the manager instance and returns a mapping of document field names to
 payload values. `SearchConfigSpec.indexes` is required when constructing the
 spec directly. `resolve_search_config()` copies `indexes`, `document_id`,
