@@ -1,8 +1,10 @@
 """Tests for data-change signal dispatch and dependency-cache cleanup."""
 
+from django.db import DEFAULT_DB_ALIAS
 from django.test import TestCase
 from django.dispatch import Signal
 from contextlib import contextmanager
+from typing import ClassVar
 from unittest.mock import patch
 
 from general_manager.cache import dependency_index
@@ -110,6 +112,18 @@ class NestedDataChangeDummy:
         return self
 
 
+class EventRecordingDummy:
+    """Non-ORM helper that records when its mutation body executes."""
+
+    events: ClassVar[list[str]] = []
+
+    @data_change
+    def update(self):
+        """Record the immediate mutation body."""
+        self.events.append("mutation")
+        return self
+
+
 class ClassMethodWrappedDummy:
     """Test helper for manually wrapping a classmethod object."""
 
@@ -163,6 +177,100 @@ class DataChangeSignalTests(TestCase):
         self.assertIs(post["instance"], result)
         self.assertEqual(post["action"], "create")
         self.assertEqual(post["old_relevant_values"], {})
+
+    def test_pre_and_post_receive_same_fresh_change_context_and_default_alias(self):
+        """One mutation shares a context across signals and uses the default DB."""
+        with (
+            capture_signal(pre_data_change) as pre_calls,
+            capture_signal(post_data_change) as post_calls,
+        ):
+            Dummy.create("foo")
+            Dummy.create("bar")
+
+        self.assertIs(pre_calls[0]["change_context"], post_calls[0]["change_context"])
+        self.assertIs(pre_calls[1]["change_context"], post_calls[1]["change_context"])
+        self.assertIsNot(pre_calls[0]["change_context"], pre_calls[1]["change_context"])
+        self.assertEqual(pre_calls[0]["database_alias"], DEFAULT_DB_ALIAS)
+        self.assertEqual(post_calls[0]["database_alias"], DEFAULT_DB_ALIAS)
+
+    def test_pre_receiver_can_share_state_with_post_through_change_context(self):
+        """Receivers can store per-mutation state in the mutable context mapping."""
+        observed: list[object] = []
+
+        def store_pre_state(sender, change_context, **kwargs):
+            del sender, kwargs
+            change_context["test"] = "captured"
+
+        def read_pre_state(sender, change_context, **kwargs):
+            del sender, kwargs
+            observed.append(change_context["test"])
+
+        pre_data_change.connect(store_pre_state, weak=False)
+        post_data_change.connect(read_pre_state, weak=False)
+
+        Dummy.create("foo")
+
+        self.assertEqual(observed, ["captured"])
+
+    def test_nested_mutations_receive_distinct_change_contexts(self):
+        """Nested wrappers do not accidentally share per-call signal state."""
+        with (
+            capture_signal(pre_data_change) as pre_calls,
+            capture_signal(post_data_change) as post_calls,
+        ):
+            NestedDataChangeDummy().outer()
+
+        contexts_by_action = {
+            call["action"]: call["change_context"] for call in pre_calls
+        }
+        self.assertIsNot(contexts_by_action["outer"], contexts_by_action["inner"])
+        for call in post_calls:
+            self.assertIs(call["change_context"], contexts_by_action[call["action"]])
+
+    def test_non_orm_mutation_is_immediate_without_database_atomic(self):
+        """Plain managers preserve synchronous pre/body/post execution."""
+        EventRecordingDummy.events = []
+
+        def record_pre(sender, **kwargs):
+            del sender, kwargs
+            EventRecordingDummy.events.append("pre")
+
+        def record_post(sender, **kwargs):
+            del sender, kwargs
+            EventRecordingDummy.events.append("post")
+
+        pre_data_change.connect(record_pre, weak=False)
+        post_data_change.connect(record_post, weak=False)
+        with patch("django.db.transaction.atomic") as atomic:
+            EventRecordingDummy().update()
+
+        atomic.assert_not_called()
+        self.assertEqual(EventRecordingDummy.events, ["pre", "mutation", "post"])
+
+    def test_orm_manager_uses_configured_alias_for_atomic_and_signals(self):
+        """ORM-backed managers use their public interface database alias."""
+        from general_manager.interface.orm_interface import OrmInterfaceBase
+
+        class SecondaryInterface(OrmInterfaceBase):
+            database = "secondary"
+
+        class SecondaryManager:
+            Interface = SecondaryInterface
+
+            @data_change
+            def update(self):
+                return self
+
+        with (
+            capture_signal(pre_data_change) as pre_calls,
+            capture_signal(post_data_change) as post_calls,
+            patch("django.db.transaction.atomic") as atomic,
+        ):
+            SecondaryManager().update()
+
+        atomic.assert_called_once_with(using="secondary")
+        self.assertEqual(pre_calls[0]["database_alias"], "secondary")
+        self.assertEqual(post_calls[0]["database_alias"], "secondary")
 
     def test_update_emits_pre_and_post(self):
         """Update operations emit pre-change and post-change signals."""
