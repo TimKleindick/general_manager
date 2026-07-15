@@ -16,6 +16,8 @@ from graphql import parse
 from graphql.language.ast import FragmentDefinitionNode, OperationDefinitionNode
 import unittest
 
+from general_manager.api import bulk_data_change_notifications
+from general_manager.api import graphql_subscriptions
 from general_manager.api.graphql import GraphQL
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
@@ -793,6 +795,63 @@ class GraphQLChannelLayerTests(unittest.TestCase):
             self.assertIs(layer, mock_layer)
 
 
+class GraphQLSubscriptionDispatchTests(unittest.IsolatedAsyncioTestCase):
+    """Test sequential subscription event dispatch."""
+
+    async def test_runtime_errors_log_per_target_and_count_successes(self) -> None:
+        """Ordinary send failures do not prevent later target attempts."""
+        sent: list[str] = []
+        failure_message = "dispatch failed"
+
+        async def group_send(group: str, _message: dict[str, object]) -> None:
+            sent.append(group)
+            if group != "successful":
+                raise RuntimeError(failure_message)
+
+        layer = SimpleNamespace(group_send=group_send)
+        message: dict[str, object] = {"action": "update"}
+
+        with patch.object(graphql_subscriptions, "logger") as mock_logger:
+            success_count = await graphql_subscriptions.dispatch_subscription_event(
+                layer,  # type: ignore[arg-type]
+                ("first-failure", "successful", "second-failure"),
+                message,
+            )
+
+        self.assertEqual(
+            sent,
+            ["first-failure", "successful", "second-failure"],
+        )
+        self.assertEqual(success_count, 1)
+        self.assertEqual(mock_logger.warning.call_count, 2)
+        self.assertEqual(
+            [
+                call.kwargs["context"]["group"]
+                for call in mock_logger.warning.call_args_list
+            ],
+            ["first-failure", "second-failure"],
+        )
+
+    async def test_memory_error_stops_dispatch_immediately(self) -> None:
+        """Memory exhaustion propagates without attempting later targets."""
+        sent: list[str] = []
+
+        async def group_send(group: str, _message: dict[str, object]) -> None:
+            sent.append(group)
+            raise MemoryError
+
+        layer = SimpleNamespace(group_send=group_send)
+
+        with self.assertRaises(MemoryError):
+            await graphql_subscriptions.dispatch_subscription_event(
+                layer,  # type: ignore[arg-type]
+                ("first", "second"),
+                {"action": "update"},
+            )
+
+        self.assertEqual(sent, ["first"])
+
+
 class GraphQLGroupNameTests(unittest.TestCase):
     """Test subscription group name generation."""
 
@@ -856,6 +915,17 @@ class GraphQLGroupNameTests(unittest.TestCase):
         name2 = GraphQL._class_group_name(TestManager)
         self.assertEqual(name1, name2)
         self.assertEqual(name1, "gm_subscriptions.TestManager.__class__")
+
+    def test_refresh_group_name_identifies_manager_refreshes(self) -> None:
+        """Verify _refresh_group_name produces the manager refresh group."""
+
+        class TestManager(GeneralManager):
+            pass
+
+        self.assertEqual(
+            GraphQL._refresh_group_name(TestManager),
+            "gm_subscriptions.TestManager.__refresh__",
+        )
 
 
 class GraphQLPrimePropertiesEdgeCaseTests(unittest.TestCase):
@@ -1303,8 +1373,8 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
                 sender=RegisteredManager, instance=instance, action="test"
             )
 
-    def test_handle_data_change_sends_to_instance_and_class_groups(self) -> None:
-        """Verify _handle_data_change sends a rich message to both groups."""
+    def test_handle_data_change_uses_one_bridge_for_both_groups(self) -> None:
+        """Verify one bridge sends the unchanged row payload to both groups."""
 
         class RegisteredManager(GeneralManager):
             identification: ClassVar[dict[str, int]] = {"id": 1}
@@ -1313,38 +1383,156 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
         GraphQL.manager_registry = {"RegisteredManager": RegisteredManager}
         instance = RegisteredManager()
 
-        mock_layer = MagicMock()
-        with patch(
-            "general_manager.api.graphql.GraphQL._get_channel_layer",
-            return_value=mock_layer,
+        sent: list[tuple[str, dict[str, object]]] = []
+
+        async def group_send(group: str, message: dict[str, object]) -> None:
+            sent.append((group, message))
+
+        layer = SimpleNamespace(group_send=group_send)
+        with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
+            patch(
+                "general_manager.api.graphql.async_to_sync",
+                side_effect=lambda async_fn: lambda *args: asyncio.run(async_fn(*args)),
+            ) as bridge,
         ):
-            with patch(
-                "general_manager.api.graphql.async_to_sync"
-            ) as mock_async_to_sync:
-                mock_send = MagicMock()
-                mock_async_to_sync.return_value = mock_send
+            GraphQL._handle_data_change(
+                sender=RegisteredManager, instance=instance, action="update"
+            )
 
+        bridge.assert_called_once_with(
+            graphql_subscriptions.dispatch_subscription_event
+        )
+        instance_group = GraphQL._group_name(RegisteredManager, instance.identification)
+        class_group = GraphQL._class_group_name(RegisteredManager)
+        self.assertEqual(
+            [group for group, _message in sent],
+            [instance_group, class_group],
+        )
+        self.assertEqual(
+            [message for _group, message in sent],
+            [
+                {
+                    "type": "gm.subscription.event",
+                    "action": "update",
+                    "manager": "RegisteredManager",
+                    "identification": {"id": 1},
+                },
+                {
+                    "type": "gm.subscription.event",
+                    "action": "update",
+                    "manager": "RegisteredManager",
+                    "identification": {"id": 1},
+                },
+            ],
+        )
+
+    def test_bulk_changes_queue_one_manager_refresh(self) -> None:
+        """Many changes for one manager flush one aggregate refresh event."""
+
+        class RegisteredManager(GeneralManager):
+            identification: ClassVar[dict[str, int]] = {"id": 1}
+            Interface = BaseTestInterface
+
+        GraphQL.manager_registry = {"RegisteredManager": RegisteredManager}
+        sent: list[tuple[str, dict[str, object]]] = []
+
+        async def group_send(group: str, message: dict[str, object]) -> None:
+            sent.append((group, message))
+
+        layer = SimpleNamespace(group_send=group_send)
+        with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
+            patch("general_manager.api.graphql.async_to_sync") as immediate_bridge,
+        ):
+            with bulk_data_change_notifications():
+                for _ in range(5):
+                    GraphQL._handle_data_change(
+                        sender=RegisteredManager,
+                        instance=RegisteredManager(),
+                        action="update",
+                    )
+                self.assertEqual(sent, [])
+                immediate_bridge.assert_not_called()
+
+        self.assertEqual(
+            sent,
+            [
+                (
+                    GraphQL._refresh_group_name(RegisteredManager),
+                    {
+                        "type": "gm.subscription.event",
+                        "action": "refresh",
+                        "manager": "RegisteredManager",
+                    },
+                )
+            ],
+        )
+
+    def test_bulk_changes_queue_distinct_manager_refreshes(self) -> None:
+        """A batch flushes one refresh target for each changed manager."""
+
+        class AlphaManager(GeneralManager):
+            identification: ClassVar[dict[str, int]] = {"id": 1}
+            Interface = BaseTestInterface
+
+        class BetaManager(GeneralManager):
+            identification: ClassVar[dict[str, int]] = {"id": 2}
+            Interface = BaseTestInterface
+
+        GraphQL.manager_registry = {
+            "AlphaManager": AlphaManager,
+            "BetaManager": BetaManager,
+        }
+        sent: list[tuple[str, dict[str, object]]] = []
+
+        async def group_send(group: str, message: dict[str, object]) -> None:
+            sent.append((group, message))
+
+        layer = SimpleNamespace(group_send=group_send)
+        with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
+            patch("general_manager.api.graphql.async_to_sync") as immediate_bridge,
+        ):
+            with bulk_data_change_notifications():
                 GraphQL._handle_data_change(
-                    sender=RegisteredManager, instance=instance, action="update"
+                    sender=BetaManager,
+                    instance=BetaManager(),
+                    action="delete",
                 )
-
-                # Verify group_send was wrapped with async_to_sync
-                mock_async_to_sync.assert_called_once_with(mock_layer.group_send)
-
-                self.assertEqual(mock_send.call_count, 2)
-                sent_groups = {call.args[0] for call in mock_send.call_args_list}
-                instance_group = GraphQL._group_name(
-                    RegisteredManager, instance.identification
+                GraphQL._handle_data_change(
+                    sender=AlphaManager,
+                    instance=AlphaManager(),
+                    action="create",
                 )
-                class_group = GraphQL._class_group_name(RegisteredManager)
-                self.assertEqual(sent_groups, {instance_group, class_group})
+                GraphQL._handle_data_change(
+                    sender=BetaManager,
+                    instance=BetaManager(),
+                    action="update",
+                )
+                immediate_bridge.assert_not_called()
 
-                for call in mock_send.call_args_list:
-                    message = call.args[1]
-                    self.assertEqual(message["type"], "gm.subscription.event")
-                    self.assertEqual(message["action"], "update")
-                    self.assertEqual(message["manager"], "RegisteredManager")
-                    self.assertEqual(message["identification"], {"id": 1})
+        self.assertEqual(
+            sent,
+            [
+                (
+                    GraphQL._refresh_group_name(AlphaManager),
+                    {
+                        "type": "gm.subscription.event",
+                        "action": "refresh",
+                        "manager": "AlphaManager",
+                    },
+                ),
+                (
+                    GraphQL._refresh_group_name(BetaManager),
+                    {
+                        "type": "gm.subscription.event",
+                        "action": "refresh",
+                        "manager": "BetaManager",
+                    },
+                ),
+            ],
+        )
 
 
 class GraphQLInstantiateManagerTests(GeneralManagerTransactionTestCase):

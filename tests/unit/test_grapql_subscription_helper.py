@@ -10,6 +10,7 @@ import unittest
 from graphql import parse
 from graphql.language.ast import FragmentDefinitionNode, OperationDefinitionNode
 
+from general_manager.api import graphql_subscriptions
 from general_manager.api.graphql import GraphQL, SubscriptionEvent
 from general_manager.manager.general_manager import GeneralManager
 from tests.utils.simple_manager_interface import BaseTestInterface
@@ -646,29 +647,33 @@ class GraphQLHandleDataChangeEdgeCasesTests(unittest.TestCase):
         GraphQL.manager_registry = {"TestManager": TestManager}
         instance = TestManager()
 
-        mock_layer = MagicMock()
-        with patch(
-            "general_manager.api.graphql.GraphQL._get_channel_layer",
-            return_value=mock_layer,
+        sent: list[str] = []
+
+        async def group_send(group: str, _message: dict[str, object]) -> None:
+            sent.append(group)
+
+        layer = SimpleNamespace(group_send=group_send)
+        with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
+            patch(
+                "general_manager.api.graphql.async_to_sync",
+                side_effect=lambda async_fn: lambda *args: asyncio.run(async_fn(*args)),
+            ) as bridge,
         ):
-            with patch("general_manager.api.graphql.async_to_sync") as mock_async:
-                mock_send = MagicMock()
-                mock_async.return_value = mock_send
+            GraphQL._handle_data_change(
+                sender=instance, instance=instance, action="test"
+            )
 
-                # Pass instance as both sender and instance
-                GraphQL._handle_data_change(
-                    sender=instance, instance=instance, action="test"
-                )
-
-                # Should send to the instance and class-level groups.
-                self.assertEqual(mock_send.call_count, 2)
-                self.assertEqual(
-                    {call.args[0] for call in mock_send.call_args_list},
-                    {
-                        GraphQL._group_name(TestManager, instance.identification),
-                        GraphQL._class_group_name(TestManager),
-                    },
-                )
+        bridge.assert_called_once_with(
+            graphql_subscriptions.dispatch_subscription_event
+        )
+        self.assertEqual(
+            sent,
+            [
+                GraphQL._group_name(TestManager, instance.identification),
+                GraphQL._class_group_name(TestManager),
+            ],
+        )
 
     def test_handle_data_change_with_subclass(self) -> None:
         """Verify _handle_data_change works with GeneralManager subclasses."""
@@ -683,20 +688,33 @@ class GraphQLHandleDataChangeEdgeCasesTests(unittest.TestCase):
         GraphQL.manager_registry = {"DerivedManager": DerivedManager}
         instance = DerivedManager()
 
-        mock_layer = MagicMock()
-        with patch(
-            "general_manager.api.graphql.GraphQL._get_channel_layer",
-            return_value=mock_layer,
+        sent: list[str] = []
+
+        async def group_send(group: str, _message: dict[str, object]) -> None:
+            sent.append(group)
+
+        layer = SimpleNamespace(group_send=group_send)
+        with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
+            patch(
+                "general_manager.api.graphql.async_to_sync",
+                side_effect=lambda async_fn: lambda *args: asyncio.run(async_fn(*args)),
+            ) as bridge,
         ):
-            with patch("general_manager.api.graphql.async_to_sync") as mock_async:
-                mock_send = MagicMock()
-                mock_async.return_value = mock_send
+            GraphQL._handle_data_change(
+                sender=DerivedManager, instance=instance, action="test"
+            )
 
-                GraphQL._handle_data_change(
-                    sender=DerivedManager, instance=instance, action="test"
-                )
-
-                self.assertEqual(mock_send.call_count, 2)
+        bridge.assert_called_once_with(
+            graphql_subscriptions.dispatch_subscription_event
+        )
+        self.assertEqual(
+            sent,
+            [
+                GraphQL._group_name(DerivedManager, instance.identification),
+                GraphQL._class_group_name(DerivedManager),
+            ],
+        )
 
     def test_handle_data_change_continues_when_instance_group_send_fails(
         self,
@@ -709,19 +727,27 @@ class GraphQLHandleDataChangeEdgeCasesTests(unittest.TestCase):
 
         GraphQL.manager_registry = {"TestManager": TestManager}
         instance = TestManager()
-        mock_layer = MagicMock()
+        instance_group = GraphQL._group_name(TestManager, instance.identification)
+        class_group = GraphQL._class_group_name(TestManager)
+        sent: list[str] = []
+        failure_message = "send failed"
+
+        async def group_send(group: str, _message: dict[str, object]) -> None:
+            sent.append(group)
+            if group == instance_group:
+                raise RuntimeError(failure_message)
+
+        layer = SimpleNamespace(group_send=group_send)
 
         with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
             patch(
-                "general_manager.api.graphql.GraphQL._get_channel_layer",
-                return_value=mock_layer,
-            ),
-            patch("general_manager.api.graphql.async_to_sync") as mock_async,
-            patch("general_manager.api.graphql.logger") as mock_logger,
+                "general_manager.api.graphql.async_to_sync",
+                side_effect=lambda async_fn: lambda *args: asyncio.run(async_fn(*args)),
+            ) as bridge,
+            patch.object(graphql_subscriptions, "logger") as dispatch_logger,
+            patch("general_manager.api.graphql.logger") as handler_logger,
         ):
-            mock_send = MagicMock(side_effect=[RuntimeError("send failed"), None])
-            mock_async.return_value = mock_send
-
             GraphQL._handle_data_change(
                 sender=TestManager,
                 instance=instance,
@@ -729,10 +755,55 @@ class GraphQLHandleDataChangeEdgeCasesTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            [call.args[0] for call in mock_send.call_args_list],
+            sent,
+            [instance_group, class_group],
+        )
+        bridge.assert_called_once_with(
+            graphql_subscriptions.dispatch_subscription_event
+        )
+        dispatch_logger.warning.assert_called_once()
+        handler_logger.debug.assert_called_once()
+
+    def test_handle_data_change_does_not_log_success_when_all_sends_fail(
+        self,
+    ) -> None:
+        """Verify the handler does not claim success when no group accepted it."""
+
+        class TestManager(GeneralManager):
+            identification: ClassVar = {"id": 1}
+            Interface = BaseTestInterface
+
+        GraphQL.manager_registry = {"TestManager": TestManager}
+        instance = TestManager()
+        sent: list[str] = []
+        failure_message = "send failed"
+
+        async def group_send(group: str, _message: dict[str, object]) -> None:
+            sent.append(group)
+            raise RuntimeError(failure_message)
+
+        layer = SimpleNamespace(group_send=group_send)
+        with (
+            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
+            patch(
+                "general_manager.api.graphql.async_to_sync",
+                side_effect=lambda async_fn: lambda *args: asyncio.run(async_fn(*args)),
+            ),
+            patch.object(graphql_subscriptions, "logger") as dispatch_logger,
+            patch("general_manager.api.graphql.logger") as handler_logger,
+        ):
+            GraphQL._handle_data_change(
+                sender=TestManager,
+                instance=instance,
+                action="test",
+            )
+
+        self.assertEqual(
+            sent,
             [
                 GraphQL._group_name(TestManager, instance.identification),
                 GraphQL._class_group_name(TestManager),
             ],
         )
-        mock_logger.warning.assert_called_once()
+        self.assertEqual(dispatch_logger.warning.call_count, 2)
+        handler_logger.debug.assert_not_called()

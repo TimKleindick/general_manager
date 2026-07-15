@@ -113,10 +113,13 @@ from general_manager.api.graphql_search import (
     create_filter_options as _create_filter_options_fn,
     normalize_filter_input as _normalize_filter_input_fn,
 )
+from general_manager.api.notification_batching import _queue_notification
 from general_manager.api.graphql_subscriptions import (
     get_channel_layer_safe as _get_channel_layer_fn,
     group_name as _group_name_fn,
     class_group_name as _class_group_name_fn,
+    refresh_group_name as _refresh_group_name_fn,
+    dispatch_subscription_event as _dispatch_subscription_event_fn,
     channel_listener as _channel_listener_fn,
     channel_message_listener as _channel_message_listener_fn,
     prime_graphql_properties as _prime_graphql_properties_fn,
@@ -280,6 +283,15 @@ class GraphQL:
         Returns the deterministic class-wide channel group name.
         """
         return _class_group_name_fn(manager_class)
+
+    @staticmethod
+    def _refresh_group_name(manager_class: type[GeneralManager]) -> str:
+        """
+        Compatibility wrapper for ``graphql_subscriptions.refresh_group_name(manager_class)``.
+
+        Returns the deterministic manager-wide refresh group name.
+        """
+        return _refresh_group_name_fn(manager_class)
 
     @staticmethod
     async def _channel_listener(
@@ -1595,14 +1607,15 @@ class GraphQL:
         Send a "gm.subscription.event" message to the channel group corresponding to a changed GeneralManager instance.
 
         If the provided instance is a registered GeneralManager and a channel
-        layer is configured, publish a message containing the given action to the
-        instance channel group and the class-wide channel group. Identification
-        comes from the provided `identification` mapping when supplied,
-        otherwise from the changed instance, and is deep-copied before dispatch.
-        If the instance is `None`, the manager type is not registered, or no
-        channel layer is available, the function returns without dispatching.
-        Group dispatch failures are logged and do not stop attempts for the
-        remaining target groups.
+        layer is configured, queue one manager-wide refresh while notification
+        batching is active. Outside a batch, publish the row-level message to
+        the instance and class-wide groups through one async bridge.
+        Identification comes from the provided `identification` mapping when
+        supplied, otherwise from the changed instance, and is deep-copied
+        before dispatch. If the instance is `None`, the manager type is not
+        registered, or no channel layer is available, the function returns
+        without dispatching. Ordinary group dispatch failures are logged and
+        do not stop attempts for remaining groups.
 
         Parameters:
             sender (type[GeneralManager] | GeneralManager): The signal sender; either a GeneralManager subclass or an instance.
@@ -1646,35 +1659,40 @@ class GraphQL:
         )
         group_name = cls._group_name(manager_class, event_identification)
         class_group_name = cls._class_group_name(manager_class)
-        message = {
+        message: dict[str, object] = {
             "type": "gm.subscription.event",
             "action": action,
             "manager": manager_class.__name__,
             "identification": event_identification,
         }
-        group_send = async_to_sync(channel_layer.group_send)
-        for target_group_name in (group_name, class_group_name):
-            try:
-                group_send(target_group_name, message)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "failed to dispatch subscription event",
-                    context={
-                        "manager": manager_class.__name__,
-                        "action": action,
-                        "group": target_group_name,
-                        "message": message,
-                    },
-                    exc_info=exc,
-                )
-        logger.debug(
-            "dispatched subscription event",
-            context={
-                "manager": manager_class.__name__,
-                "action": action,
-                "groups": [group_name, class_group_name],
-            },
+        refresh_group_name = cls._refresh_group_name(manager_class)
+        refresh_message: dict[str, object] = {
+            "type": "gm.subscription.event",
+            "action": "refresh",
+            "manager": manager_class.__name__,
+        }
+        if _queue_notification(
+            key=("graphql", refresh_group_name),
+            group_send=channel_layer.group_send,
+            group=refresh_group_name,
+            message=refresh_message,
+        ):
+            return
+
+        dispatched = async_to_sync(_dispatch_subscription_event_fn)(
+            channel_layer,
+            (group_name, class_group_name),
+            message,
         )
+        if dispatched > 0:
+            logger.debug(
+                "dispatched subscription event",
+                context={
+                    "manager": manager_class.__name__,
+                    "action": action,
+                    "groups": [group_name, class_group_name],
+                },
+            )
 
 
 post_data_change.connect(GraphQL._handle_data_change, weak=False)
