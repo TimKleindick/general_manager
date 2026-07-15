@@ -251,6 +251,25 @@ class MeasurementTypeTests(TestCase):
 
 
 class GraphQLTests(TestCase):
+    def test_public_bulk_data_change_notifications_is_importable(self):
+        """Bulk notification batching is exposed only through the API module."""
+        import general_manager
+        import general_manager._types.api as type_api
+        from general_manager._types.api import (
+            bulk_data_change_notifications as typed_bulk_notifications,
+        )
+        from general_manager.api import (
+            bulk_data_change_notifications as public_bulk_notifications,
+        )
+        from general_manager.api.notification_batching import (
+            bulk_data_change_notifications,
+        )
+
+        self.assertIs(public_bulk_notifications, bulk_data_change_notifications)
+        self.assertIs(typed_bulk_notifications, bulk_data_change_notifications)
+        self.assertIn("bulk_data_change_notifications", type_api.__all__)
+        self.assertNotIn("bulk_data_change_notifications", general_manager.__all__)
+
     def setUp(self):
         self.general_manager_class = MagicMock(spec=GeneralManagerMeta)
         self.general_manager_class.__name__ = "TestManager"

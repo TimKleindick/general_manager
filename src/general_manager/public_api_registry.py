@@ -92,6 +92,10 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
 
 API_EXPORTS: LazyExportMap = {
     "GraphQL": ("general_manager.api.graphql", "GraphQL"),
+    "bulk_data_change_notifications": (
+        "general_manager.api.notification_batching",
+        "bulk_data_change_notifications",
+    ),
     "PublicGraphQLError": (
         "general_manager.api.graphql_errors",
         "PublicGraphQLError",
