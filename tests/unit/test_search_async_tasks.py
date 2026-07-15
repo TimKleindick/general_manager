@@ -478,6 +478,51 @@ def test_dispatch_delete_documents_preserves_legacy_two_argument_enqueue(
     ]
 
 
+def test_dispatch_delete_documents_strict_async_requires_every_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lifecycle async deletes reject missing fences before broker enqueue."""
+    task = _DummyTask()
+    monkeypatch.setattr(async_tasks, "CELERY_AVAILABLE", True)
+    monkeypatch.setattr(async_tasks, "_async_enabled", lambda: True)
+    monkeypatch.setattr(async_tasks, "delete_documents_task", task)
+
+    with pytest.raises(async_tasks.MissingSearchDeleteGenerationFenceError):
+        async_tasks.dispatch_delete_documents(
+            "tests.Project",
+            [{"index_name": "global", "document_id": "one"}],
+            require_generation_fence=True,
+        )
+
+    assert task.calls == []
+
+
+def test_dispatch_delete_documents_strict_sync_keeps_unfenced_immediate_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inline lifecycle deletion may proceed when durable marking is unavailable."""
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(async_tasks, "CELERY_AVAILABLE", False)
+    monkeypatch.setattr(
+        async_tasks,
+        "delete_documents_task",
+        lambda *args: calls.append(args),
+    )
+
+    async_tasks.dispatch_delete_documents(
+        "tests.Project",
+        [{"index_name": "global", "document_id": "one"}],
+        require_generation_fence=True,
+    )
+
+    assert calls == [
+        (
+            "tests.Project",
+            [{"index_name": "global", "document_id": "one"}],
+        )
+    ]
+
+
 def test_named_index_worker_failure_redirties_exact_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

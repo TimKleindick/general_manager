@@ -178,7 +178,7 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
                 return_value=_TEST_SEARCH_CONFIG,
             ),
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as dispatch,
         ):
             with transaction.atomic():
@@ -186,11 +186,8 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
                 dispatch.assert_not_called()
 
             dispatch.assert_called_once()
-            self.assertEqual(dispatch.call_args.kwargs["index_name"], "global")
-            self.assertEqual(
-                dispatch.call_args.kwargs["instance"].identification,
-                dispatch.call_args.kwargs["identification"],
-            )
+            self.assertEqual(dispatch.call_args.args[1], "global")
+            self.assertEqual(len(dispatch.call_args.args[2]), 1)
 
     def test_search_create_dispatch_is_discarded_by_outer_rollback(self) -> None:
         """A rolled-back create has neither a row nor an indexing callback."""
@@ -202,7 +199,7 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
                 return_value=_TEST_SEARCH_CONFIG,
             ),
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as dispatch,
         ):
             with self.assertRaises(ExpectedRollback):
@@ -227,7 +224,7 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
                 return_value=_TEST_SEARCH_CONFIG,
             ),
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as dispatch,
         ):
             with transaction.atomic():
@@ -253,7 +250,7 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
                 return_value=_TEST_SEARCH_CONFIG,
             ),
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as dispatch,
         ):
             with transaction.atomic():
@@ -261,8 +258,8 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
                 dispatch.assert_not_called()
 
             dispatch.assert_called_once()
-            self.assertEqual(dispatch.call_args.kwargs["index_name"], "global")
-            self.assertEqual(dispatch.call_args.kwargs["action"], "index")
+            self.assertEqual(dispatch.call_args.args[1], "global")
+            self.assertEqual(len(dispatch.call_args.args[2]), 1)
 
     def test_unexpected_enqueue_failure_is_suppressed_after_default_commit(
         self,
@@ -277,7 +274,7 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
         self.addCleanup(delattr, self.Project, "SearchConfig")
         with (
             patch(
-                "general_manager.search.invalidation.dispatch_index_update",
+                "general_manager.search.invalidation.dispatch_index_manager_batch",
                 side_effect=UnexpectedBrokerFailure("broker unavailable"),
             ),
             patch(
@@ -353,7 +350,7 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
                 side_effect=UnexpectedSearchExtensionFailure(),
             ),
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as dispatch,
             patch(
                 "general_manager.search.invalidation.acknowledge_search_index_dirty"
@@ -395,7 +392,7 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
                 return_value=(target,),
             ),
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as index_dispatch,
             patch(
                 "general_manager.search.invalidation.dispatch_delete_documents"
@@ -596,7 +593,7 @@ class SecondaryDatabaseCommitSafetyIntegrationTests(GeneralManagerTransactionTes
                 return_value=None,
             ) as mark_dirty,
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as dispatch,
         ):
             with transaction.atomic(using="secondary"):
@@ -642,7 +639,7 @@ class SecondaryDatabaseCommitSafetyIntegrationTests(GeneralManagerTransactionTes
                 return_value=None,
             ) as mark_dirty,
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as dispatch,
         ):
             with transaction.atomic(using="secondary"):
@@ -659,7 +656,7 @@ class SecondaryDatabaseCommitSafetyIntegrationTests(GeneralManagerTransactionTes
             )
             dispatch.assert_called_once()
             self.assertEqual(
-                dispatch.call_args.kwargs["identification"],
+                dispatch.call_args.args[2][0],
                 created.identification,
             )
 
@@ -679,7 +676,7 @@ class SecondaryDatabaseCommitSafetyIntegrationTests(GeneralManagerTransactionTes
                 return_value=None,
             ),
             patch(
-                "general_manager.search.invalidation.dispatch_index_update",
+                "general_manager.search.invalidation.dispatch_index_manager_batch",
                 side_effect=UnexpectedBrokerFailure("broker unavailable"),
             ),
             patch(
@@ -720,7 +717,7 @@ class SecondaryDatabaseCommitSafetyIntegrationTests(GeneralManagerTransactionTes
                 return_value=None,
             ) as mark_dirty,
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as dispatch,
             self.assertLogs("general_manager.search.invalidation", level="WARNING"),
         ):

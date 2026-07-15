@@ -94,7 +94,7 @@ class SearchRelatedInvalidationIntegrationTests(GeneralManagerTransactionTestCas
 
         self._configure_project(resolve)
         with patch(
-            "general_manager.search.invalidation.dispatch_index_update"
+            "general_manager.search.invalidation.dispatch_index_manager_batch"
         ) as dispatch:
             with transaction.atomic():
                 self.Article.create(title="new", ignore_permission=True)
@@ -103,14 +103,14 @@ class SearchRelatedInvalidationIntegrationTests(GeneralManagerTransactionTestCas
 
             dispatch.assert_called_once()
             self.assertEqual(
-                dispatch.call_args.kwargs["manager_path"].split(".")[-1],
+                dispatch.call_args.args[0].split(".")[-1],
                 "Project",
             )
             self.assertEqual(
-                dispatch.call_args.kwargs["identification"],
+                dispatch.call_args.args[2][0],
                 project.identification,
             )
-            self.assertEqual(dispatch.call_args.kwargs["index_name"], "global")
+            self.assertEqual(dispatch.call_args.args[1], "global")
 
     def test_update_resolves_old_and_new_owner_targets(self) -> None:
         """Update unions the before and after resolver results."""
@@ -125,7 +125,7 @@ class SearchRelatedInvalidationIntegrationTests(GeneralManagerTransactionTestCas
 
         self._configure_project(resolve)
         with patch(
-            "general_manager.search.invalidation.dispatch_index_update"
+            "general_manager.search.invalidation.dispatch_index_manager_batch"
         ) as dispatch:
             with transaction.atomic():
                 article.update(title="new", ignore_permission=True)
@@ -133,7 +133,7 @@ class SearchRelatedInvalidationIntegrationTests(GeneralManagerTransactionTestCas
 
         self.assertEqual(phases, [("before", "old"), ("after", "new")])
         self.assertEqual(
-            [call.kwargs["identification"] for call in dispatch.call_args_list],
+            list(dispatch.call_args.args[2]),
             [old_project.identification, new_project.identification],
         )
 
@@ -167,7 +167,7 @@ class SearchRelatedInvalidationIntegrationTests(GeneralManagerTransactionTestCas
                 return_value=(target,),
             ),
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as upsert,
             patch(
                 "general_manager.search.invalidation.dispatch_delete_documents"
@@ -177,9 +177,7 @@ class SearchRelatedInvalidationIntegrationTests(GeneralManagerTransactionTestCas
 
         self.assertEqual(phases, [("before", "gone")])
         upsert.assert_called_once()
-        self.assertEqual(
-            upsert.call_args.kwargs["identification"], project.identification
-        )
+        self.assertEqual(upsert.call_args.args[2][0], project.identification)
         delete.assert_called_once()
 
     def test_outer_rollback_discards_related_work(self) -> None:
@@ -188,7 +186,7 @@ class SearchRelatedInvalidationIntegrationTests(GeneralManagerTransactionTestCas
         self._configure_project(lambda _change, _owner: (project,))
 
         with patch(
-            "general_manager.search.invalidation.dispatch_index_update"
+            "general_manager.search.invalidation.dispatch_index_manager_batch"
         ) as dispatch:
             with self.assertRaises(RelatedRollback):
                 with transaction.atomic():
@@ -204,7 +202,7 @@ class SearchRelatedInvalidationIntegrationTests(GeneralManagerTransactionTestCas
         self._configure_project(lambda _change, _owner: (project,))
 
         with patch(
-            "general_manager.search.invalidation.dispatch_index_update"
+            "general_manager.search.invalidation.dispatch_index_manager_batch"
         ) as dispatch:
             with transaction.atomic():
                 try:
@@ -229,7 +227,7 @@ class SearchRelatedInvalidationIntegrationTests(GeneralManagerTransactionTestCas
         self._configure_project(fail)
         with (
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as dispatch,
             self.assertLogs("general_manager.search.invalidation", level="WARNING"),
         ):

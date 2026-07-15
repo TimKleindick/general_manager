@@ -70,7 +70,8 @@ class SearchAsyncTaskIntegrationTests(GeneralManagerTransactionTestCase):
         Prepare the test environment by creating dummy async task handlers and patching the module-level async task objects and Celery availability.
 
         This sets self.index_task and self.delete_task to _DummyTask instances, replaces
-        general_manager.search.async_tasks.index_instance_task and delete_instance_task with those
+        general_manager.search.async_tasks.index_manager_index_batch_task and
+        delete_documents_task with those
         dummies, and forces general_manager.search.async_tasks.CELERY_AVAILABLE to True so that
         async dispatch code paths are exercised during tests.
         """
@@ -80,7 +81,7 @@ class SearchAsyncTaskIntegrationTests(GeneralManagerTransactionTestCase):
         self._patches = [
             patch("general_manager.search.async_tasks.CELERY_AVAILABLE", True),
             patch(
-                "general_manager.search.async_tasks.index_instance_task",
+                "general_manager.search.async_tasks.index_manager_index_batch_task",
                 self.index_task,
             ),
             patch(
@@ -113,9 +114,8 @@ class SearchAsyncTaskIntegrationTests(GeneralManagerTransactionTestCase):
             ignore_permission=True,
         )
         identification = dict(instance.identification)
-        assert len(self.index_task.calls[0]) == 3
-        assert self.index_task.calls[0][1] == identification
-        assert self.index_task.calls[0][2] == "global"
+        assert self.index_task.calls[0][1] == "global"
+        assert self.index_task.calls[0][2] == [identification]
         instance.delete()
         assert len(self.delete_task.calls) == 1
         delete_call = self.delete_task.calls[0]

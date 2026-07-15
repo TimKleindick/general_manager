@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
@@ -17,10 +17,16 @@ from general_manager.search.config import (
     SearchInvalidationRule,
 )
 from general_manager.search.invalidation import (
+    SearchInvalidationPlan,
     SearchInvalidationPair,
+    SearchInvalidationTarget,
+    SearchScheduledWork,
     finalize_search_invalidation_capture,
     resolve_search_invalidation_phase,
+    schedule_search_invalidation_work,
 )
+from general_manager.search.indexer import SearchDeleteTarget
+from general_manager.search.reconciliation import DirtySearchIndex
 from general_manager.search.registry import get_search_config as registry_search_config
 from tests.utils.simple_manager_interface import BaseTestInterface
 
@@ -59,6 +65,33 @@ class AfterPhaseFailure(RuntimeError):
 
 class DeclarationAccessFailure(RuntimeError):
     """Intentional malformed declaration accessor failure."""
+
+
+class SchedulerBackendFailure(RuntimeError):
+    """Intentional inline scheduler unit failure."""
+
+
+class SchedulerBrokerFailure(RuntimeError):
+    """Intentional async scheduler acceptance failure."""
+
+
+class SchedulerPreparationFailure(RuntimeError):
+    """Intentional hostile metadata preparation failure."""
+
+
+class HostileIdentification(Mapping[str, object]):
+    """Identification mapping that cannot be copied for dispatch."""
+
+    def __getitem__(self, key: str) -> object:
+        if key == "id":
+            return 1
+        raise KeyError(key)
+
+    def __iter__(self):
+        raise SchedulerPreparationFailure
+
+    def __len__(self) -> int:
+        return 1
 
 
 class ToggleIndexesRule:
@@ -640,3 +673,601 @@ def test_fallback_does_not_consume_capacity_or_revisit_prior_rule() -> None:
 
     assert target_ids(plan) == [40, 41]
     assert plan.dirty_fallbacks == (SearchInvalidationPair(Owner, "global"),)
+
+
+def scheduled_target(
+    owner_class: type[GeneralManager],
+    target_id: int,
+    *,
+    index_name: str = "global",
+    alias: str = "default",
+) -> SearchInvalidationTarget:
+    """Build one scheduler target with a stable canonical identity."""
+    owner_path = f"{owner_class.__module__}.{owner_class.__name__}"
+    return SearchInvalidationTarget(
+        owner_class=owner_class,
+        owner_path=owner_path,
+        identification={"id": target_id},
+        index_name=index_name,
+        database_alias=alias,
+        canonical_key=(owner_path, f"id:{target_id}", index_name, alias),
+    )
+
+
+def dirty_token(
+    owner_class: type[GeneralManager],
+    index_name: str,
+    state_id: int,
+) -> DirtySearchIndex:
+    """Build one acknowledgeable scheduler generation token."""
+    return DirtySearchIndex(
+        state_id=state_id,
+        manager_path=f"{owner_class.__module__}.{owner_class.__name__}",
+        index_name=index_name,
+        generation=state_id + 10,
+        acknowledgeable=True,
+    )
+
+
+def test_scheduler_groups_deduplicates_and_chunks_exact_pair_payloads() -> None:
+    """Unique owner identities produce one copied payload per bounded chunk."""
+    callbacks: list[object] = []
+    targets = tuple(
+        scheduled_target(Owner, target_id) for target_id in (1, 2, 2, 3, 4, 5)
+    )
+    token = dirty_token(Owner, "global", 1)
+
+    with (
+        patch(
+            "general_manager.search.invalidation.get_setting",
+            return_value=2,
+        ),
+        patch(
+            "general_manager.search.invalidation.transaction.on_commit",
+            side_effect=lambda callback, **_kwargs: callbacks.append(callback),
+        ) as on_commit,
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty",
+            return_value=token,
+        ) as mark_dirty,
+        patch(
+            "general_manager.search.invalidation.dispatch_index_manager_batch",
+            return_value=2,
+        ) as dispatch_batch,
+        patch(
+            "general_manager.search.invalidation.acknowledge_search_index_dirty"
+        ) as acknowledge,
+    ):
+        schedule_search_invalidation_work(
+            SearchScheduledWork(upserts=SearchInvalidationPlan(targets=targets)),
+            source_database_alias="default",
+        )
+
+        mark_dirty.assert_called_once_with(Owner, "global")
+        on_commit.assert_called_once()
+        dispatch_batch.assert_not_called()
+        assert len(callbacks) == 1
+        callbacks[0]()  # type: ignore[operator]
+
+    owner_path = f"{Owner.__module__}.{Owner.__name__}"
+    assert dispatch_batch.call_args_list == [
+        call(owner_path, "global", ({"id": 1}, {"id": 2})),
+        call(owner_path, "global", ({"id": 3}, {"id": 4})),
+        call(owner_path, "global", ({"id": 5},)),
+    ]
+    assert all(
+        type(identification) is dict
+        for dispatch_call in dispatch_batch.call_args_list
+        for identification in dispatch_call.args[2]
+    )
+    acknowledge.assert_called_once_with(token)
+
+
+def test_scheduler_requires_every_pair_unit_before_ack_and_continues() -> None:
+    """One failed chunk keeps its pair dirty without blocking another pair."""
+    targets = (
+        *(scheduled_target(Owner, target_id) for target_id in (1, 2, 3)),
+        scheduled_target(SecondOwner, 9),
+    )
+    owner_token = dirty_token(Owner, "global", 1)
+    second_token = dirty_token(SecondOwner, "global", 2)
+    tokens = iter((owner_token, second_token))
+    calls: list[tuple[str, tuple[dict[str, object], ...]]] = []
+
+    def dispatch(
+        manager_path: str,
+        _index_name: str,
+        identifications: tuple[dict[str, object], ...],
+    ) -> int:
+        calls.append((manager_path, identifications))
+        if manager_path.endswith(".Owner") and identifications == ({"id": 3},):
+            raise SchedulerBackendFailure
+        return len(identifications)
+
+    with (
+        patch("general_manager.search.invalidation.get_setting", return_value=2),
+        patch(
+            "general_manager.search.invalidation.transaction.on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty",
+            side_effect=lambda *_args: next(tokens),
+        ),
+        patch(
+            "general_manager.search.invalidation.dispatch_index_manager_batch",
+            side_effect=dispatch,
+        ),
+        patch(
+            "general_manager.search.invalidation.acknowledge_search_index_dirty"
+        ) as acknowledge,
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        schedule_search_invalidation_work(
+            SearchScheduledWork(upserts=SearchInvalidationPlan(targets=targets)),
+            source_database_alias="default",
+        )
+
+    assert [payload for _path, payload in calls] == [
+        ({"id": 1}, {"id": 2}),
+        ({"id": 3},),
+        ({"id": 9},),
+    ]
+    acknowledge.assert_called_once_with(second_token)
+
+
+def test_scheduler_fallback_wins_over_upsert_and_delete_for_same_pair() -> None:
+    """An exact dirty fallback suppresses every targeted lane for that pair."""
+    manager_path = f"{Owner.__module__}.{Owner.__name__}"
+    work = SearchScheduledWork(
+        upserts=SearchInvalidationPlan(
+            targets=(scheduled_target(Owner, 1),),
+            dirty_fallbacks=(SearchInvalidationPair(Owner, "global"),),
+        ),
+        deletes=(
+            SearchDeleteTarget(
+                manager_class=Owner,
+                manager_path=manager_path,
+                index_name="global",
+                document_id="owner:1",
+            ),
+        ),
+    )
+
+    with (
+        patch("general_manager.search.invalidation.get_setting", return_value=100),
+        patch(
+            "general_manager.search.invalidation.transaction.on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty",
+            return_value=dirty_token(Owner, "global", 1),
+        ) as mark_dirty,
+        patch(
+            "general_manager.search.invalidation.dispatch_index_manager_batch"
+        ) as dispatch_batch,
+        patch(
+            "general_manager.search.invalidation.dispatch_delete_documents"
+        ) as dispatch_delete,
+        patch(
+            "general_manager.search.invalidation.acknowledge_search_index_dirty"
+        ) as acknowledge,
+    ):
+        schedule_search_invalidation_work(work, source_database_alias="default")
+
+    mark_dirty.assert_called_once_with(Owner, "global")
+    dispatch_batch.assert_not_called()
+    dispatch_delete.assert_not_called()
+    acknowledge.assert_not_called()
+
+
+def test_scheduler_delete_is_a_separate_unit_and_shares_pair_ack() -> None:
+    """Related upserts never replace immutable source document deletion work."""
+    manager_path = f"{Owner.__module__}.{Owner.__name__}"
+    token = dirty_token(Owner, "global", 1)
+    work = SearchScheduledWork(
+        upserts=SearchInvalidationPlan(
+            targets=(scheduled_target(Owner, 2),),
+        ),
+        deletes=(
+            SearchDeleteTarget(
+                manager_class=Owner,
+                manager_path=manager_path,
+                index_name="global",
+                document_id="owner:1",
+            ),
+        ),
+    )
+
+    with (
+        patch("general_manager.search.invalidation.get_setting", return_value=100),
+        patch(
+            "general_manager.search.invalidation.transaction.on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty",
+            return_value=token,
+        ),
+        patch(
+            "general_manager.search.invalidation.dispatch_index_manager_batch"
+        ) as dispatch_batch,
+        patch(
+            "general_manager.search.invalidation.dispatch_delete_documents"
+        ) as dispatch_delete,
+        patch(
+            "general_manager.search.invalidation.acknowledge_search_index_dirty"
+        ) as acknowledge,
+    ):
+        schedule_search_invalidation_work(work, source_database_alias="default")
+
+    dispatch_batch.assert_called_once_with(
+        manager_path,
+        "global",
+        ({"id": 2},),
+    )
+    dispatch_delete.assert_called_once_with(
+        manager_path,
+        ({"index_name": "global", "document_id": "owner:1"},),
+        expected_generations={"global": token.generation},
+        require_generation_fence=True,
+    )
+    acknowledge.assert_called_once_with(token)
+
+
+def test_scheduler_invalid_batch_setting_becomes_marker_only_fallback() -> None:
+    """Invalid event settings never abort and submit no targeted work."""
+    manager_path = f"{Owner.__module__}.{Owner.__name__}"
+    work = SearchScheduledWork(
+        upserts=SearchInvalidationPlan(targets=(scheduled_target(Owner, 1),)),
+        deletes=(SearchDeleteTarget(Owner, manager_path, "global", "owner:1"),),
+    )
+
+    with (
+        patch(
+            "general_manager.search.invalidation.get_setting",
+            return_value=0,
+        ),
+        patch(
+            "general_manager.search.invalidation.transaction.on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty",
+            return_value=dirty_token(Owner, "global", 1),
+        ) as mark_dirty,
+        patch(
+            "general_manager.search.invalidation.dispatch_index_manager_batch"
+        ) as dispatch_batch,
+        patch(
+            "general_manager.search.invalidation.dispatch_delete_documents"
+        ) as dispatch_delete,
+        patch(
+            "general_manager.search.invalidation.acknowledge_search_index_dirty"
+        ) as acknowledge,
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        schedule_search_invalidation_work(work, source_database_alias="default")
+
+    mark_dirty.assert_called_once_with(Owner, "global")
+    dispatch_batch.assert_not_called()
+    dispatch_delete.assert_not_called()
+    acknowledge.assert_not_called()
+
+
+def test_scheduler_empty_work_has_no_marker_callback_or_dispatch() -> None:
+    """An empty lifecycle event is a complete scheduling no-op."""
+    with (
+        patch("general_manager.search.invalidation.get_setting") as get_setting,
+        patch("general_manager.search.invalidation.transaction.on_commit") as on_commit,
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty"
+        ) as mark_dirty,
+        patch(
+            "general_manager.search.invalidation.dispatch_index_manager_batch"
+        ) as dispatch_batch,
+        patch(
+            "general_manager.search.invalidation.dispatch_delete_documents"
+        ) as dispatch_delete,
+    ):
+        schedule_search_invalidation_work(
+            SearchScheduledWork(), source_database_alias="default"
+        )
+
+    get_setting.assert_not_called()
+    mark_dirty.assert_not_called()
+    on_commit.assert_not_called()
+    dispatch_batch.assert_not_called()
+    dispatch_delete.assert_not_called()
+
+
+def test_scheduler_nondefault_marks_and_dispatches_only_after_source_commit() -> None:
+    """Cross-database control-plane work begins inside the one source callback."""
+    callbacks: list[object] = []
+    events: list[str] = []
+
+    with (
+        patch("general_manager.search.invalidation.get_setting", return_value=100),
+        patch(
+            "general_manager.search.invalidation.transaction.on_commit",
+            side_effect=lambda callback, **_kwargs: callbacks.append(callback),
+        ) as on_commit,
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty",
+            side_effect=lambda *_args: (
+                events.append("mark") or dirty_token(Owner, "global", 1)
+            ),
+        ),
+        patch(
+            "general_manager.search.invalidation.dispatch_index_manager_batch",
+            side_effect=lambda *_args: events.append("dispatch") or 1,
+        ),
+        patch(
+            "general_manager.search.invalidation.acknowledge_search_index_dirty",
+            side_effect=lambda *_args: events.append("ack") or True,
+        ),
+    ):
+        schedule_search_invalidation_work(
+            SearchScheduledWork(
+                upserts=SearchInvalidationPlan(
+                    targets=(scheduled_target(Owner, 1, alias="secondary"),)
+                )
+            ),
+            source_database_alias="secondary",
+        )
+        assert events == []
+        assert len(callbacks) == 1
+        callbacks[0]()  # type: ignore[operator]
+
+    assert events == ["mark", "dispatch", "ack"]
+    assert on_commit.call_args.kwargs == {"using": "secondary"}
+
+
+def test_scheduler_async_ack_waits_for_every_broker_acceptance() -> None:
+    """The producer clears a pair only after every chunk delay returns normally."""
+    import general_manager.search.async_tasks as async_tasks
+
+    events: list[tuple[str, object]] = []
+    token = dirty_token(Owner, "global", 1)
+
+    class BatchTask:
+        def delay(self, *args: object) -> None:
+            events.append(("accepted", args[2]))
+
+    with (
+        patch.object(async_tasks, "CELERY_AVAILABLE", True),
+        patch.object(async_tasks, "_async_enabled", return_value=True),
+        patch.object(async_tasks, "index_manager_index_batch_task", BatchTask()),
+        patch("general_manager.search.invalidation.get_setting", return_value=2),
+        patch(
+            "general_manager.search.invalidation.transaction.on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty",
+            return_value=token,
+        ),
+        patch(
+            "general_manager.search.invalidation.acknowledge_search_index_dirty",
+            side_effect=lambda acknowledged: (
+                events.append(("ack", acknowledged)) or True
+            ),
+        ),
+    ):
+        schedule_search_invalidation_work(
+            SearchScheduledWork(
+                upserts=SearchInvalidationPlan(
+                    targets=tuple(
+                        scheduled_target(Owner, target_id) for target_id in (1, 2, 3)
+                    )
+                )
+            ),
+            source_database_alias="default",
+        )
+
+    assert events == [
+        ("accepted", [{"id": 1}, {"id": 2}]),
+        ("accepted", [{"id": 3}]),
+        ("ack", token),
+    ]
+
+
+def test_scheduler_async_enqueue_failure_keeps_pair_dirty_and_continues() -> None:
+    """A broker rejection leaves its token dirty while independent pairs enqueue."""
+    import general_manager.search.async_tasks as async_tasks
+
+    events: list[tuple[str, str]] = []
+    owner_token = dirty_token(Owner, "global", 1)
+    second_token = dirty_token(SecondOwner, "global", 2)
+    tokens = iter((owner_token, second_token))
+
+    class BatchTask:
+        def delay(
+            self,
+            manager_path: str,
+            _index_name: str,
+            identifications: object,
+        ) -> None:
+            events.append(("enqueue", manager_path))
+            if manager_path.endswith(".Owner") and identifications == [{"id": 3}]:
+                raise SchedulerBrokerFailure
+
+    with (
+        patch.object(async_tasks, "CELERY_AVAILABLE", True),
+        patch.object(async_tasks, "_async_enabled", return_value=True),
+        patch.object(async_tasks, "index_manager_index_batch_task", BatchTask()),
+        patch("general_manager.search.invalidation.get_setting", return_value=2),
+        patch(
+            "general_manager.search.invalidation.transaction.on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty",
+            side_effect=lambda *_args: next(tokens),
+        ),
+        patch(
+            "general_manager.search.invalidation.acknowledge_search_index_dirty",
+            side_effect=lambda token: events.append(("ack", token.manager_path))
+            or True,
+        ) as acknowledge,
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        schedule_search_invalidation_work(
+            SearchScheduledWork(
+                upserts=SearchInvalidationPlan(
+                    targets=(
+                        *(scheduled_target(Owner, value) for value in (1, 2, 3)),
+                        scheduled_target(SecondOwner, 9),
+                    )
+                )
+            ),
+            source_database_alias="default",
+        )
+
+    assert [event for event, _value in events].count("enqueue") == 3
+    acknowledge.assert_called_once_with(second_token)
+
+
+def test_scheduler_preparation_failure_marks_all_recoverable_pairs_only() -> None:
+    """Hostile metadata degrades the entire event without escaping the mutation."""
+    owner_path = f"{Owner.__module__}.{Owner.__name__}"
+    source_path = f"{Source.__module__}.{Source.__name__}"
+    hostile = SearchInvalidationTarget(
+        owner_class=Owner,
+        owner_path=owner_path,
+        identification=HostileIdentification(),
+        index_name="global",
+        database_alias="default",
+        canonical_key=(owner_path, "hostile", "global", "default"),
+    )
+    safe = scheduled_target(SecondOwner, 2, index_name="private")
+    work = SearchScheduledWork(
+        upserts=SearchInvalidationPlan(targets=(hostile, safe)),
+        deletes=(
+            SearchDeleteTarget(
+                manager_class=Source,
+                manager_path=source_path,
+                index_name="private",
+                document_id="source:1",
+            ),
+        ),
+    )
+
+    with (
+        patch("general_manager.search.invalidation.get_setting", return_value=100),
+        patch(
+            "general_manager.search.invalidation.transaction.on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty",
+            return_value=None,
+        ) as mark_dirty,
+        patch(
+            "general_manager.search.invalidation.dispatch_index_manager_batch"
+        ) as dispatch_batch,
+        patch(
+            "general_manager.search.invalidation.dispatch_delete_documents"
+        ) as dispatch_delete,
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        schedule_search_invalidation_work(work, source_database_alias="default")
+
+    assert mark_dirty.call_args_list == [
+        call(Owner, "global"),
+        call(SecondOwner, "private"),
+        call(Source, "private"),
+    ]
+    dispatch_batch.assert_not_called()
+    dispatch_delete.assert_not_called()
+
+
+def test_post_handler_cleans_internal_context_after_preparation_failure() -> None:
+    """Preparation degradation cannot leak internal objects to later receivers."""
+    import general_manager.search.invalidation as invalidation
+
+    class SearchConfig:
+        indexes = (INDEXES[0],)
+        invalidation_rules: tuple[object, ...] = ()
+
+    context: dict[str, object] = {
+        "public": "safe",
+        invalidation._RELATED_SEARCH_CHANGE_CONTEXT: invalidation.SearchInvalidationCapture(),
+    }
+    with (
+        patch.object(GeneralManagerMeta, "all_classes", []),
+        patch.object(invalidation, "get_search_config", return_value=SearchConfig),
+        patch.object(
+            invalidation,
+            "_prepare_scheduled_work",
+            side_effect=SchedulerPreparationFailure,
+        ),
+        patch.object(
+            invalidation.transaction,
+            "on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch.object(invalidation, "mark_search_index_dirty", return_value=None),
+        patch.object(invalidation, "dispatch_index_manager_batch") as dispatch,
+        patch.object(invalidation.logger, "warning"),
+    ):
+        invalidation._handle_search_post_change(
+            Owner,
+            Owner(id=1),
+            action="create",
+            change_context=context,
+        )
+
+    assert context == {"public": "safe"}
+    dispatch.assert_not_called()
+
+
+def test_async_delete_marker_failure_never_enqueues_unfenced_work() -> None:
+    """A missing lifecycle token triggers recovery marking, not a stale delete."""
+    import general_manager.search.async_tasks as async_tasks
+
+    manager_path = f"{Owner.__module__}.{Owner.__name__}"
+    work = SearchScheduledWork(
+        deletes=(
+            SearchDeleteTarget(
+                manager_class=Owner,
+                manager_path=manager_path,
+                index_name="global",
+                document_id="owner:1",
+            ),
+        )
+    )
+    recovery_token = dirty_token(Owner, "global", 4)
+
+    class DeleteTask:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object, ...]] = []
+
+        def delay(self, *args: object) -> None:
+            self.calls.append(args)
+
+    task = DeleteTask()
+    with (
+        patch.object(async_tasks, "CELERY_AVAILABLE", True),
+        patch.object(async_tasks, "_async_enabled", return_value=True),
+        patch.object(async_tasks, "delete_documents_task", task),
+        patch("general_manager.search.invalidation.get_setting", return_value=100),
+        patch(
+            "general_manager.search.invalidation.transaction.on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch(
+            "general_manager.search.invalidation.mark_search_index_dirty",
+            side_effect=(SchedulerBackendFailure, recovery_token),
+        ) as mark_dirty,
+        patch(
+            "general_manager.search.invalidation.acknowledge_search_index_dirty"
+        ) as acknowledge,
+        patch("general_manager.search.invalidation.logger.warning"),
+    ):
+        schedule_search_invalidation_work(work, source_database_alias="default")
+
+    assert mark_dirty.call_count == 2
+    assert task.calls == []
+    acknowledge.assert_not_called()

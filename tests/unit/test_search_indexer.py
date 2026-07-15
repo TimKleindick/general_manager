@@ -663,7 +663,7 @@ class SearchIndexerSignalStateTests(TestCase):
                 side_effect=RuntimeError("state store unavailable"),
             ),
             patch(
-                "general_manager.search.invalidation.dispatch_index_update"
+                "general_manager.search.invalidation.dispatch_index_manager_batch"
             ) as dispatch,
         ):
             with self.captureOnCommitCallbacks(execute=True):
