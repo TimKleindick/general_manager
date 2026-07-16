@@ -41,7 +41,10 @@ from general_manager.api.graphql_errors import (
     map_field_to_graphene_base_type,
     get_read_permission_filter,
 )
-from general_manager.api.graphql_relations import resolve_general_manager_type
+from general_manager.api.graphql_relations import (
+    get_graphql_manager_registry,
+    resolve_general_manager_type,
+)
 from general_manager.api.graphql_resolvers import (
     can_read_instance,
     get_backend_shape,
@@ -539,7 +542,10 @@ def get_filter_options(
         "endswith",
     ]
 
-    manager_type = resolve_general_manager_type(attribute_type)
+    manager_type = resolve_general_manager_type(
+        attribute_type,
+        get_graphql_manager_registry(),
+    )
     normalized_type = manager_type or (
         attribute_type if isinstance(attribute_type, type) else str
     )
@@ -618,7 +624,10 @@ def get_relation_filter_option(
     """
     if remaining_depth <= 0:
         return None
-    manager_type = resolve_general_manager_type(attribute_type)
+    manager_type = resolve_general_manager_type(
+        attribute_type,
+        get_graphql_manager_registry(),
+    )
     if manager_type is None:
         return None
 
@@ -705,7 +714,10 @@ def create_filter_options(
     filter_fields: dict[str, GrapheneFieldType] = {}
     for attr_name, attr_info in field_type.Interface.get_attribute_types().items():
         attr_type = attr_info["type"]
-        manager_type = resolve_general_manager_type(attr_type)
+        manager_type = resolve_general_manager_type(
+            attr_type,
+            get_graphql_manager_registry(),
+        )
         if manager_type is not None:
             relation_option = get_relation_filter_option(
                 manager_type,
@@ -832,7 +844,10 @@ def normalize_filter_input(
         attr_type = attr_info.get("type")
         relation_kind = attr_info.get("relation_kind")
         lookup = attr_info.get("filter_lookup", key)
-        manager_type = resolve_general_manager_type(attr_type)
+        manager_type = resolve_general_manager_type(
+            attr_type,
+            get_graphql_manager_registry(),
+        )
         if manager_type is None or relation_kind is None:
             filters[key] = value
             continue

@@ -1071,6 +1071,66 @@ class GraphQLSearchHelperCoverageTests(SimpleTestCase):
                 is None
             )
 
+    def test_string_manager_annotations_use_central_registry(self) -> None:
+        previous_registry = GraphQL.manager_registry
+        GraphQL.manager_registry = {"Project": Project}
+        self.addCleanup(setattr, GraphQL, "manager_registry", previous_registry)
+
+        class ParentInterface(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):
+                return {
+                    "project": {
+                        "type": "Project",
+                        "relation_kind": "direct",
+                        "filter_lookup": "project",
+                    }
+                }
+
+        class ParentManager:
+            __name__ = "NamedRelationParent"
+            Interface = ParentInterface
+
+        mapper = MagicMock(return_value=graphql_search_module.graphene.String())
+        scalar_options = list(
+            graphql_search_module.get_filter_options(
+                "Project",
+                "project",
+                mapper,
+            )
+        )
+        registry: dict[
+            str,
+            type[graphql_search_module.graphene.InputObjectType],
+        ] = {}
+        relation_option = graphql_search_module.get_relation_filter_option(
+            "Project",
+            "project",
+            {"relation_kind": "direct"},
+            registry,
+            mapper,
+            remaining_depth=1,
+        )
+        parent_filter_type = graphql_search_module.create_filter_options(
+            ParentManager,
+            registry,
+            mapper,
+            relation_depth=1,
+        )
+        normalized = graphql_search_module.normalize_filter_input(
+            ParentManager,
+            {"project": {"name": "Alpha"}},
+        )
+
+        assert scalar_options == [("project", None)]
+        assert relation_option is not None
+        assert parent_filter_type is not None
+        assert "project" in parent_filter_type._meta.fields
+        assert normalized == {
+            "filter": {"project__name": "Alpha"},
+            "exclude": {},
+        }
+
     def test_create_filter_options_skips_unfilterable_props_and_empty_types(
         self,
     ) -> None:
