@@ -18,8 +18,12 @@ class SecondaryManager(GeneralManager):
 def test_resolve_general_manager_type_handles_concrete_and_wrapped_managers() -> None:
     registry = {"PrimaryManager": PrimaryManager}
 
+    class PrimaryModel:
+        _general_manager_class = PrimaryManager
+
     for declared_type in (
         PrimaryManager,
+        PrimaryModel,
         list[PrimaryManager],
         tuple[PrimaryManager, ...],
         set[PrimaryManager],

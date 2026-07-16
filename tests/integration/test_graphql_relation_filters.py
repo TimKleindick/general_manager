@@ -27,7 +27,6 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
         class ChangeRequest(GeneralManager):
             title: str
             change_request_approval: ChangeRequestApproval
-            change_request_feasibility_list: Bucket[ChangeRequestFeasibility]
 
             class Interface(DatabaseInterface):
                 title = models.CharField(max_length=100)
@@ -202,11 +201,15 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertEqual(fields.count("changeRequestFeasibilityList"), 1)
         self.assertNotIn("changerequestfeasibilityList", fields)
 
-    def test_reverse_relation_graphql_page_uses_related_manager_type(self):
+    def test_automatic_reverse_relation_graphql_page_uses_related_manager_type(self):
+        relation_info = self.ChangeRequest.Interface.get_attribute_types()[
+            "change_request_feasibility_list"
+        ]
         relation_field = GraphQL.graphql_type_registry["ChangeRequest"]._meta.fields[
             "change_request_feasibility_list"
         ]
 
+        self.assertIs(relation_info["type"], self.ChangeRequestFeasibility)
         self.assertEqual(
             relation_field.type._meta.fields["items"].type.of_type.of_type,
             GraphQL.graphql_type_registry["ChangeRequestFeasibility"],

@@ -25,9 +25,10 @@ def resolve_general_manager_type(
 ) -> type[GeneralManager] | None:
     """Return the single manager target represented by ``declared_type``.
 
-    Concrete manager classes, supported collection annotations, optional
-    unions, and postponed string forms of those annotations are recognized.
-    Ambiguous annotations containing multiple manager targets return ``None``.
+    Concrete manager classes, interface model classes carrying a manager
+    back-reference, supported collection annotations, optional unions, and
+    postponed string forms of those annotations are recognized. Ambiguous
+    annotations containing multiple manager targets return ``None``.
     """
     registry = manager_registry or {}
     resolved = _collect_general_manager_types(declared_type, registry, set())
@@ -48,6 +49,10 @@ def _collect_general_manager_types(
 
     if safe_issubclass(declared_type, GeneralManager):
         return {declared_type}
+
+    related_manager_type = getattr(declared_type, "_general_manager_class", None)
+    if safe_issubclass(related_manager_type, GeneralManager):
+        return {related_manager_type}
 
     if isinstance(declared_type, ForwardRef):
         declared_type = declared_type.__forward_arg__
