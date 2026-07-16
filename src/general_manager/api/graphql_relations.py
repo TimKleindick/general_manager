@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Mapping
 from types import UnionType
 from typing import ForwardRef, Union, get_args, get_origin
@@ -25,8 +26,8 @@ def resolve_general_manager_type(
     """Return the single manager target represented by ``declared_type``.
 
     Concrete manager classes, supported collection annotations, optional
-    unions, and exact names in ``manager_registry`` are recognized. Ambiguous
-    annotations containing multiple manager targets return ``None``.
+    unions, and postponed string forms of those annotations are recognized.
+    Ambiguous annotations containing multiple manager targets return ``None``.
     """
     registry = manager_registry or {}
     resolved = _collect_general_manager_types(declared_type, registry, set())
@@ -52,7 +53,13 @@ def _collect_general_manager_types(
         declared_type = declared_type.__forward_arg__
     if isinstance(declared_type, str):
         manager_type = manager_registry.get(declared_type)
-        return {manager_type} if manager_type is not None else set()
+        if manager_type is not None:
+            return {manager_type}
+        return _collect_string_general_manager_types(
+            declared_type,
+            manager_registry,
+            set(),
+        )
 
     origin = get_origin(declared_type)
     if origin is None:
@@ -70,3 +77,96 @@ def _collect_general_manager_types(
             _collect_general_manager_types(argument, manager_registry, seen)
         )
     return manager_types
+
+
+_SUPPORTED_STRING_WRAPPERS = {
+    "Bucket",
+    "Optional",
+    "Union",
+    "list",
+    "set",
+    "tuple",
+}
+
+
+def _collect_string_general_manager_types(
+    annotation: str,
+    manager_registry: Mapping[str, type[GeneralManager]],
+    seen: set[str],
+) -> set[type[GeneralManager]]:
+    expression = annotation.strip()
+    if not expression or expression in seen:
+        return set()
+    seen.add(expression)
+
+    try:
+        node = ast.parse(expression, mode="eval").body
+    except (SyntaxError, ValueError):
+        return set()
+    return _collect_annotation_node_manager_types(node, manager_registry, seen)
+
+
+def _collect_annotation_node_manager_types(
+    node: ast.expr,
+    manager_registry: Mapping[str, type[GeneralManager]],
+    seen: set[str],
+) -> set[type[GeneralManager]]:
+    if isinstance(node, ast.Name):
+        manager_type = manager_registry.get(node.id)
+        return {manager_type} if manager_type is not None else set()
+
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            return _collect_string_general_manager_types(
+                node.value,
+                manager_registry,
+                seen,
+            )
+        return set()
+
+    if isinstance(node, ast.Subscript):
+        wrapper_name = _annotation_node_name(node.value)
+        if wrapper_name is None or wrapper_name.rsplit(".", 1)[-1] not in (
+            _SUPPORTED_STRING_WRAPPERS
+        ):
+            return set()
+        return _collect_annotation_node_manager_types(
+            node.slice,
+            manager_registry,
+            seen,
+        )
+
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _collect_annotation_node_manager_types(
+            node.left,
+            manager_registry,
+            seen,
+        ) | _collect_annotation_node_manager_types(
+            node.right,
+            manager_registry,
+            seen,
+        )
+
+    if isinstance(node, ast.Tuple):
+        manager_types: set[type[GeneralManager]] = set()
+        for element in node.elts:
+            manager_types.update(
+                _collect_annotation_node_manager_types(
+                    element,
+                    manager_registry,
+                    seen,
+                )
+            )
+        return manager_types
+
+    return set()
+
+
+def _annotation_node_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent_name = _annotation_node_name(node.value)
+        if parent_name is not None:
+            return f"{parent_name}.{node.attr}"
+    return None

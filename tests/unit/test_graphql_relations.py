@@ -24,6 +24,7 @@ def test_resolve_general_manager_type_handles_concrete_and_wrapped_managers() ->
         Bucket[PrimaryManager],
         PrimaryManager | None,
         "PrimaryManager",
+        "Bucket[PrimaryManager]",
     ):
         assert resolve_general_manager_type(declared_type, registry) is PrimaryManager
 
@@ -37,6 +38,7 @@ def test_resolve_general_manager_type_rejects_non_manager_and_unresolved_types()
         str,
         list[str],
         dict[str, PrimaryManager],
+        "dict[str, PrimaryManager]",
         "MissingManager",
     ):
         assert resolve_general_manager_type(declared_type, registry) is None
@@ -44,3 +46,14 @@ def test_resolve_general_manager_type_rejects_non_manager_and_unresolved_types()
 
 def test_resolve_general_manager_type_rejects_ambiguous_manager_union() -> None:
     assert resolve_general_manager_type(PrimaryManager | SecondaryManager, {}) is None
+    registry = {
+        "PrimaryManager": PrimaryManager,
+        "SecondaryManager": SecondaryManager,
+    }
+    assert (
+        resolve_general_manager_type(
+            "PrimaryManager | SecondaryManager",
+            registry,
+        )
+        is None
+    )
