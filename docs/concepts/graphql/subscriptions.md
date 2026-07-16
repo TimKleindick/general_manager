@@ -166,6 +166,13 @@ task errors still propagate from the await.
 Use the public notification context when many writes should produce one refresh
 per affected GraphQL manager class:
 
+The [bulk notification how-to](../../howto/bulk_data_change_notifications.md)
+walks through transaction placement, and the
+[cookbook recipe](../../examples/bulk_data_change_notifications.md) shows the
+smallest reusable pattern. See the
+[API reference](../../api/graphql.md#bulk-notification-context) for the exact
+signature and failure behavior.
+
 ```python
 from django.db import transaction
 

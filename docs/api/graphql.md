@@ -31,8 +31,9 @@ messages at GeneralManager mutation boundaries; use `PublicGraphQLError` for an
 application code or Django `ValidationError` for validation details.
 
 Stable imports from `general_manager.api` include `GraphQL`,
-`MeasurementType`, `MeasurementScalar`, `PublicGraphQLError`, and the file-upload
-contracts documented below. Stable imports from
+`MeasurementType`, `MeasurementScalar`, `PublicGraphQLError`,
+`bulk_data_change_notifications`, and the file-upload contracts documented
+below. Stable imports from
 `general_manager.api.graphql` are limited to the compatibility exports `GraphQL`,
 `MeasurementType`, `MeasurementScalar`, and `BigIntScalar`. The implementation keeps lower-level helpers,
 constants, pagination types, permission-plan adapters, and exception mappers in
@@ -41,6 +42,25 @@ are not stable import paths. Some internal types may still appear in generated
 reference pages or type-checker-visible implementation annotations when they are
 part of generated GraphQL plumbing; that visibility does not make them public
 import targets.
+
+## Bulk notification context
+
+::: general_manager.api.notification_batching.bulk_data_change_notifications
+
+`bulk_data_change_notifications()` accepts no arguments and yields `None` to the
+`with` body. It returns a context manager, not a notification result. The
+context deduplicates targets and flushes one `refresh` event per affected
+GraphQL manager class or RemoteAPI resource after the body exits. Individual
+ordinary channel-layer send failures are logged and do not abort the remaining
+flushes; `MemoryError` and other non-ordinary flush failures propagate.
+
+The context is not transaction-aware. Put it outside the true outermost
+`transaction.atomic()` block so refresh delivery follows the completed commit
+or rollback. Body exceptions are re-raised after the queued notifications are
+flushed; if flushing also raises, both failures are reported in a
+`BaseExceptionGroup`. The stable import is available from `general_manager.api`
+in 0.64.0 and later; the notification batching module is an implementation
+location rather than a separate package-level compatibility promise.
 
 ## File uploads
 

@@ -131,6 +131,7 @@ nav:
       - howto/add_permission_rule.md
       - howto/permission_walkthrough.md
       - howto/expose_via_graphql.md
+      - howto/bulk_data_change_notifications.md
       - howto/run_chat_evals.md
       - howto/orm_atomic_writes.md
       - howto/write_validation_rules.md
@@ -153,6 +154,7 @@ nav:
       - examples/project_volume_curve.md
       - examples/derivatives_groups.md
       - examples/graphql_queries.md
+      - examples/bulk_data_change_notifications.md
       - examples/graphql_error_handling.md
       - examples/graphql_file_upload.md
       - examples/rule_validation.md
