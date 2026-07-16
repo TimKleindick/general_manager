@@ -522,6 +522,13 @@ def handle_graph_ql(
         "creating graphql interfaces and mutations",
         context={"pending": len(pending_graphql_interfaces)},
     )
+    GraphQL.manager_registry.update(
+        {
+            general_manager_class.__name__: general_manager_class
+            for general_manager_class in pending_graphql_interfaces
+            if getattr(general_manager_class, "Interface", None) is not None
+        }
+    )
     for general_manager_class in pending_graphql_interfaces:
         GraphQL.create_graphql_interface(general_manager_class)
         GraphQL.create_graphql_mutation(general_manager_class)

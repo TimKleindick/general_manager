@@ -1184,6 +1184,22 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertIn("Alice", human_names)
         self.assertIn("Bob", human_names)
 
+    def test_many_to_many_graphql_pages_use_related_manager_types(self):
+        from general_manager.api.graphql import GraphQL
+
+        expected_types = {
+            ("TestFamily", "humans_list"): "TestHuman",
+            ("TestHuman", "families_list"): "TestFamily",
+        }
+        for (manager_name, field_name), related_name in expected_types.items():
+            relation_field = GraphQL.graphql_type_registry[manager_name]._meta.fields[
+                field_name
+            ]
+            self.assertEqual(
+                relation_field.type._meta.fields["items"].type.of_type.of_type,
+                GraphQL.graphql_type_registry[related_name],
+            )
+
     def test_multiple_many_to_many_fields_to_same_manager_stay_independent(self):
         """
         Verify direct M2M buckets scope reads to their own relation field.

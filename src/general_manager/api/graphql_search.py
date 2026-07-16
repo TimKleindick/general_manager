@@ -41,6 +41,7 @@ from general_manager.api.graphql_errors import (
     map_field_to_graphene_base_type,
     get_read_permission_filter,
 )
+from general_manager.api.graphql_relations import resolve_general_manager_type
 from general_manager.api.graphql_resolvers import (
     can_read_instance,
     get_backend_shape,
@@ -538,9 +539,12 @@ def get_filter_options(
         "endswith",
     ]
 
-    normalized_type = attribute_type if isinstance(attribute_type, type) else str
+    manager_type = resolve_general_manager_type(attribute_type)
+    normalized_type = manager_type or (
+        attribute_type if isinstance(attribute_type, type) else str
+    )
 
-    if safe_issubclass(normalized_type, GeneralManager):
+    if manager_type is not None:
         yield attribute_name, None
     elif attribute_name == "id":
         yield attribute_name, graphene.ID()
@@ -591,7 +595,7 @@ def get_filter_options(
 
 
 def get_relation_filter_option(
-    attribute_type: type,
+    attribute_type: object,
     attribute_name: str,
     attr_info: Mapping[str, object],
     graphql_filter_type_registry: dict[str, type[graphene.InputObjectType]],
@@ -614,7 +618,8 @@ def get_relation_filter_option(
     """
     if remaining_depth <= 0:
         return None
-    if not safe_issubclass(attribute_type, GeneralManager):
+    manager_type = resolve_general_manager_type(attribute_type)
+    if manager_type is None:
         return None
 
     relation_kind = attr_info.get("relation_kind")
@@ -622,7 +627,7 @@ def get_relation_filter_option(
         return None
 
     nested_type = create_filter_options(
-        attribute_type,
+        manager_type,
         graphql_filter_type_registry,
         map_field_to_graphene_read,
         relation_depth=remaining_depth - 1,
@@ -633,7 +638,7 @@ def get_relation_filter_option(
 
     if relation_kind == "collection":
         relation_type_name = (
-            f"{attribute_type.__name__}{attribute_name.title().replace('_', '')}"
+            f"{manager_type.__name__}{attribute_name.title().replace('_', '')}"
             f"RelationFilterTypeDepth{remaining_depth - 1}"
         )
         if relation_type_name not in graphql_filter_type_registry:
@@ -700,9 +705,10 @@ def create_filter_options(
     filter_fields: dict[str, GrapheneFieldType] = {}
     for attr_name, attr_info in field_type.Interface.get_attribute_types().items():
         attr_type = attr_info["type"]
-        if safe_issubclass(attr_type, GeneralManager):
+        manager_type = resolve_general_manager_type(attr_type)
+        if manager_type is not None:
             relation_option = get_relation_filter_option(
-                attr_type,
+                manager_type,
                 attr_name,
                 attr_info,
                 graphql_filter_type_registry,
@@ -826,12 +832,13 @@ def normalize_filter_input(
         attr_type = attr_info.get("type")
         relation_kind = attr_info.get("relation_kind")
         lookup = attr_info.get("filter_lookup", key)
-        if not safe_issubclass(attr_type, GeneralManager) or relation_kind is None:
+        manager_type = resolve_general_manager_type(attr_type)
+        if manager_type is None or relation_kind is None:
             filters[key] = value
             continue
 
         if relation_kind == "direct":
-            nested = normalize_filter_input(attr_type, value)
+            nested = normalize_filter_input(manager_type, value)
             for nested_key, nested_value in nested["filter"].items():
                 filters[f"{lookup}__{nested_key}"] = nested_value
             for nested_key, nested_value in nested["exclude"].items():
@@ -842,13 +849,13 @@ def normalize_filter_input(
             any_value = value.get("any")
             none_value = value.get("none")
             if isinstance(any_value, dict):
-                nested = normalize_filter_input(attr_type, any_value)
+                nested = normalize_filter_input(manager_type, any_value)
                 for nested_key, nested_value in nested["filter"].items():
                     filters[f"{lookup}__{nested_key}"] = nested_value
                 for nested_key, nested_value in nested["exclude"].items():
                     excludes[f"{lookup}__{nested_key}"] = nested_value
             if isinstance(none_value, dict):
-                nested = normalize_filter_input(attr_type, none_value)
+                nested = normalize_filter_input(manager_type, none_value)
                 for nested_key, nested_value in nested["filter"].items():
                     excludes[f"{lookup}__{nested_key}"] = nested_value
                 for nested_key, nested_value in nested["exclude"].items():
