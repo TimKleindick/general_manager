@@ -12,7 +12,7 @@ import tempfile
 import time
 from threading import Barrier, Event
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
@@ -68,6 +68,11 @@ class FinalizationStorage(FileSystemStorage):
 
 _STORAGE_ROOT = tempfile.mkdtemp(prefix="gm-finalization-tests-")
 _STORAGE = FinalizationStorage(location=_STORAGE_ROOT)
+
+sqlite_only = pytest.mark.skipif(
+    connection.vendor != "sqlite",
+    reason="exercises SQLite-specific locking or transaction behavior",
+)
 
 
 def _detect_octet_stream(_inspection: FileInspection) -> str:
@@ -1194,6 +1199,7 @@ def test_malformed_old_object_version_is_never_passed_to_destructive_cleanup(
     assert _STORAGE.exists(old_key)
 
 
+@sqlite_only
 @pytest.mark.django_db(transaction=True)
 @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
 def test_sqlite_application_atomic_fails_before_inspection_or_claim(
@@ -1210,6 +1216,31 @@ def test_sqlite_application_atomic_fails_before_inspection_or_claim(
     assert intent.state == UploadIntentState.UPLOADED.value
     assert intent.final_key is None
     assert FinalizationAdapter.materialize_calls == 0
+
+
+def _sqlite_only_mark(test: object) -> Any:
+    marks = [mark for mark in getattr(test, "pytestmark", ()) if mark.name == "skipif"]
+    assert len(marks) == 1
+    return marks[0]
+
+
+def test_sqlite_application_atomic_test_is_backend_scoped() -> None:
+    mark = _sqlite_only_mark(
+        test_sqlite_application_atomic_fails_before_inspection_or_claim,
+    )
+    assert mark.args == (connection.vendor != "sqlite",)
+    assert (
+        mark.kwargs["reason"]
+        == "exercises SQLite-specific locking or transaction behavior"
+    )
+    assert all(
+        candidate.name != "skipif"
+        for candidate in getattr(
+            test_sqlite_atomic_check_fails_closed_without_block_metadata,
+            "pytestmark",
+            (),
+        )
+    )
 
 
 def test_sqlite_atomic_check_fails_closed_without_block_metadata(
