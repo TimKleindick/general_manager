@@ -90,6 +90,7 @@ alias for the interface and a database-aware history tracker:
 
 ```python
 # models.py
+from django.conf import settings
 from django.db import models
 
 from general_manager.interface.utils.history import DatabaseAwareHistoricalRecords
@@ -97,7 +98,7 @@ from general_manager.interface.utils.history import DatabaseAwareHistoricalRecor
 
 class LegacyContract(models.Model):
     title = models.CharField(max_length=120)
-    reviewers = models.ManyToManyField("auth.User", blank=True)
+    reviewers = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True)
     history = DatabaseAwareHistoricalRecords(m2m_fields=["reviewers"])
 
 
@@ -117,6 +118,12 @@ With an `archive` entry in `DATABASES`, this directly usable write commits the
 row, audit reason, and relation table together on that alias:
 
 ```python
+from django.contrib.auth import get_user_model
+
+users = get_user_model().objects.using("archive")
+reviewer = users.get(pk=41)  # Pre-existing user on the archive database.
+lead_reviewer = users.get(pk=42)  # Pre-existing user on the archive database.
+
 contract = Contract.create(
     title="Supply agreement",
     reviewers_id_list=[reviewer.id],
