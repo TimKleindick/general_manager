@@ -86,7 +86,10 @@ def _collect_general_manager_types(
 
 _SUPPORTED_STRING_WRAPPERS = {
     "Bucket",
+    "List",
     "Optional",
+    "Set",
+    "Tuple",
     "Union",
     "list",
     "set",
