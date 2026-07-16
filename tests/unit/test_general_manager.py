@@ -1128,9 +1128,13 @@ class GeneralManagerTestCase(TestCase):
                 DummyInterface, "create", return_value={"id": "new_id"}
             ) as mock_create,
         ):
-            new_manager = self.manager.create(creator_id=1, name="New Manager")
+            new_manager = self.manager.create(
+                creator_id=self.user.pk, name="New Manager"
+            )
             mock_create.assert_called_once_with(
-                creator_id=1, history_comment=None, name="New Manager"
+                creator_id=self.user.pk,
+                history_comment=None,
+                name="New Manager",
             )
             self.assertIsInstance(new_manager, GeneralManager)
             self.assertEqual(len(self.pre_list), 1)
@@ -1154,9 +1158,13 @@ class GeneralManagerTestCase(TestCase):
                 DummyInterface, "update", return_value={"id": "new_id"}
             ) as mock_create,
         ):
-            new_manager = manager_obj.update(creator_id=1, name="New Manager")
+            new_manager = manager_obj.update(
+                creator_id=self.user.pk, name="New Manager"
+            )
             mock_create.assert_called_once_with(
-                creator_id=1, history_comment=None, name="New Manager"
+                creator_id=self.user.pk,
+                history_comment=None,
+                name="New Manager",
             )
             self.assertIs(new_manager, manager_obj)
             self.assertEqual(len(self.pre_list), 1)
@@ -1176,8 +1184,11 @@ class GeneralManagerTestCase(TestCase):
                 DummyInterface, "delete", return_value={"id": "new_id"}
             ) as mock_delete,
         ):
-            new_manager = manager_obj.delete(creator_id=1)
-            mock_delete.assert_called_once_with(creator_id=1, history_comment=None)
+            new_manager = manager_obj.delete(creator_id=self.user.pk)
+            mock_delete.assert_called_once_with(
+                creator_id=self.user.pk,
+                history_comment=None,
+            )
             self.assertIsNone(new_manager)
             self.assertEqual(len(self.pre_list), 1)
             self.assertEqual(self.pre_list[0]["action"], "delete")
@@ -1195,8 +1206,11 @@ class GeneralManagerTestCase(TestCase):
         with patch.object(
             DummyInterface, "delete", return_value={"id": "new_id"}
         ) as mock_delete:
-            result = manager_obj.delete(creator_id=1)
-            mock_delete.assert_called_once_with(creator_id=1, history_comment=None)
+            result = manager_obj.delete(creator_id=self.user.pk)
+            mock_delete.assert_called_once_with(
+                creator_id=self.user.pk,
+                history_comment=None,
+            )
             self.assertIsNone(result)
 
     def test_valid_manager_descriptor_read_skips_validity_helper(self):
