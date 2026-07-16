@@ -1,7 +1,10 @@
 """Unit tests for general_manager.utils.testing module updates."""
 
-from typing import Callable, ClassVar
+from contextlib import nullcontext
+from typing import Callable, ClassVar, cast
+from unittest.mock import MagicMock, Mock, patch
 
+from django.apps import apps as global_apps
 from django.test import SimpleTestCase
 
 from general_manager.interface.base_interface import InterfaceBase
@@ -13,6 +16,8 @@ from general_manager.interface.infrastructure.startup_hooks import (
     clear_startup_hooks,
     register_startup_hook,
 )
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 
 
 class TestingUtilityDependencyOrderingTests(SimpleTestCase):
@@ -393,3 +398,145 @@ class TestingUtilityDependencyOrderingTests(SimpleTestCase):
             testing_module.run_registered_startup_hooks = original
 
         self.assertEqual(calls, [[object]])
+
+
+class GeneralManagerTransactionTestCaseTeardownTests(SimpleTestCase):
+    """Tests for dependency-safe dynamic model teardown."""
+
+    @staticmethod
+    def _model(name: str, table: str) -> type:
+        """Build the minimal model surface used at the mocked schema boundary."""
+
+        class ModelMeta:
+            db_table = table
+            app_label = "general_manager"
+            local_many_to_many: ClassVar[tuple[object, ...]] = ()
+
+        return type(name, (), {"_meta": ModelMeta, "history": None})
+
+    @staticmethod
+    def _manager(model: type) -> type:
+        """Build the minimal manager/interface surface used by the harness."""
+
+        interface = type("Interface", (), {"_model": model})
+        return type("Manager", (), {"Interface": interface})
+
+    def test_teardown_drops_created_models_in_reverse_creation_order(self) -> None:
+        """Dependent models are deleted before the models they reference."""
+        from general_manager.utils import testing as testing_module
+
+        parent_model = self._model("ParentModel", "parent_table")
+        child_model = self._model("ChildModel", "child_table")
+        parent_manager = self._manager(parent_model)
+        child_manager = self._manager(child_model)
+
+        class FakeTestCase(testing_module.GeneralManagerTransactionTestCase):
+            general_manager_classes: ClassVar[list[type[GeneralManager]]] = [
+                cast(type[GeneralManager], parent_manager),
+                cast(type[GeneralManager], child_manager),
+            ]
+
+        FakeTestCase._gm_created_models = [parent_model, child_model]
+        FakeTestCase._gm_created_tables = {"parent_table", "child_table"}
+
+        editor = Mock()
+        mocked_connection = MagicMock()
+        mocked_connection.introspection.table_names.return_value = [
+            "parent_table",
+            "child_table",
+        ]
+        mocked_connection.constraint_checks_disabled.return_value = nullcontext()
+        mocked_connection.schema_editor.return_value.__enter__.return_value = editor
+
+        with (
+            patch.object(testing_module, "connection", mocked_connection),
+            patch.object(testing_module, "_default_graphql_url_clear"),
+            patch.object(testing_module, "_default_remote_api_url_clear"),
+            patch.object(global_apps, "clear_cache"),
+            patch.object(testing_module.GraphQLTransactionTestCase, "tearDownClass"),
+        ):
+            FakeTestCase.tearDownClass()
+
+        self.assertEqual(
+            [call.args[0] for call in editor.delete_model.call_args_list],
+            [child_model, parent_model],
+        )
+        mocked_connection.constraint_checks_disabled.assert_called_once_with()
+
+    def test_teardown_runs_global_cleanup_when_model_deletion_raises(self) -> None:
+        """A DDL failure does not leak dynamic model or manager state."""
+        from general_manager.utils import testing as testing_module
+
+        created_model = self._model("FailureModel", "failure_table")
+        manager = self._manager(created_model)
+
+        class FakeTestCase(testing_module.GeneralManagerTransactionTestCase):
+            general_manager_classes: ClassVar[list[type[GeneralManager]]] = [
+                cast(type[GeneralManager], manager)
+            ]
+
+        FakeTestCase._gm_created_models = [created_model]
+        FakeTestCase._gm_created_tables = {"failure_table"}
+
+        editor = Mock()
+        ddl_error = RuntimeError("database refused model deletion")
+        editor.delete_model.side_effect = ddl_error
+        mocked_connection = MagicMock()
+        mocked_connection.introspection.table_names.return_value = ["failure_table"]
+        mocked_connection.schema_editor.return_value.__enter__.return_value = editor
+
+        app_config = global_apps.get_app_config("general_manager")
+        all_models = global_apps.all_models["general_manager"]
+        with (
+            patch.object(testing_module, "connection", mocked_connection),
+            patch.object(testing_module, "_default_graphql_url_clear") as graphql_clear,
+            patch.object(
+                testing_module, "_default_remote_api_url_clear"
+            ) as remote_clear,
+            patch.object(
+                testing_module.GraphQLTransactionTestCase, "tearDownClass"
+            ) as base_teardown,
+            patch.object(global_apps, "clear_cache") as clear_cache,
+            patch.object(
+                GeneralManagerMeta,
+                "all_classes",
+                [manager, object],
+            ),
+            patch.object(
+                GeneralManagerMeta,
+                "pending_graphql_interfaces",
+                [manager, object],
+            ),
+            patch.object(
+                GeneralManagerMeta,
+                "pending_attribute_initialization",
+                [manager, object],
+            ),
+            patch.dict(all_models, {"failuremodel": created_model}),
+            patch.dict(app_config.models, {"failuremodel": created_model}),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                FakeTestCase.tearDownClass()
+
+            self.assertIs(raised.exception, ddl_error)
+            self.assertNotIn("failuremodel", all_models)
+            self.assertNotIn("failuremodel", app_config.models)
+            self.assertNotIn(manager, GeneralManagerMeta.all_classes)
+            self.assertNotIn(
+                manager,
+                GeneralManagerMeta.pending_graphql_interfaces,
+            )
+            self.assertNotIn(
+                manager,
+                GeneralManagerMeta.pending_attribute_initialization,
+            )
+            self.assertIs(
+                global_apps.get_containing_app_config,
+                testing_module._original_get_app,
+            )
+            self.assertEqual(FakeTestCase._gm_created_models, [])
+            self.assertEqual(FakeTestCase._gm_created_tables, set())
+            graphql_clear.assert_called_once_with()
+            remote_clear.assert_called_once_with()
+            clear_cache.assert_called_once_with()
+            base_teardown.assert_called_once_with()

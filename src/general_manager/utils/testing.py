@@ -256,7 +256,7 @@ class GMTestCaseMeta(type):
         """
         Constructs a test case class whose setUpClass is augmented to initialize GeneralManager and GraphQL test state.
 
-        The augmented setUpClass resets GraphQL internal registries and schema/type state, optionally installs an AppConfig fallback resolver, ensures database tables for the test's managed models (including history and related HistoricalChanges models) exist and records created tables on cls._gm_created_tables, initializes GeneralManager classes and GraphQL registrations (including startup hook runner and system checks), runs any user-defined setUpClass, and then invokes the base GraphQLTransactionTestCase.setUpClass.
+        The augmented setUpClass resets GraphQL internal registries and schema/type state, optionally installs an AppConfig fallback resolver, ensures database tables for the test's managed models (including history and related HistoricalChanges models) exist, records owned tables, and preserves model creation order for teardown. It then initializes GeneralManager classes and GraphQL registrations (including the startup hook runner and system checks), runs any user-defined setUpClass, and invokes the base GraphQLTransactionTestCase.setUpClass.
 
         Parameters:
             mcs (type[GMTestCaseMeta]): Metaclass constructing the new class.
@@ -278,7 +278,7 @@ class GMTestCaseMeta(type):
             """
             Prepare the class-level test environment for GeneralManager GraphQL tests.
 
-            Resets GraphQL registries and schema/type state; optionally installs a fallback AppConfig lookup if configured; creates any missing database tables for models referenced by the test's GeneralManager interfaces (including their history models and models related via HistoricalChanges) and records created table names on cls._gm_created_tables; initializes GeneralManager classes and their GraphQL registrations (including installing the startup hook runner and registering system checks); clears the default GraphQL URL pattern; executes any user-defined setUpClass for the test class; and finally invokes the base GraphQLTransactionTestCase.setUpClass.
+            Resets GraphQL registries and schema/type state; optionally installs a fallback AppConfig lookup if configured; creates any missing database tables for models referenced by the test's GeneralManager interfaces (including their history models and models related via HistoricalChanges); records owned table names and model creation order; initializes GeneralManager classes and their GraphQL registrations (including installing the startup hook runner and registering system checks); clears the default GraphQL URL pattern; executes any user-defined setUpClass for the test class; and finally invokes the base GraphQLTransactionTestCase.setUpClass.
             """
             GraphQL.reset_registry()
 
@@ -290,6 +290,7 @@ class GMTestCaseMeta(type):
                 ).get_containing_app_config = handler
 
             cls._gm_created_tables = set()
+            cls._gm_created_models = []
             # 1) user-defined setUpClass (if any)
             if user_setup:
                 if isinstance(user_setup, classmethod):
@@ -317,6 +318,7 @@ class GMTestCaseMeta(type):
                     model_table = model_class._meta.db_table
                     if model_table not in known_tables:
                         editor.create_model(model_class)
+                        cls._gm_created_models.append(model_class)
                         known_tables.add(model_table)
                     history_model = getattr(model_class, "history", None)
                     if history_model:
@@ -325,6 +327,7 @@ class GMTestCaseMeta(type):
                         history_table = history_model_class._meta.db_table
                         if history_table not in known_tables:
                             editor.create_model(history_model_class)
+                            cls._gm_created_models.append(history_model_class)
                             known_tables.add(history_table)
                         for related_model in _get_historical_changes_related_models(
                             history_model_class
@@ -332,6 +335,7 @@ class GMTestCaseMeta(type):
                             related_table = related_model._meta.db_table
                             if related_table not in known_tables:
                                 editor.create_model(related_model)
+                                cls._gm_created_models.append(related_model)
                                 known_tables.add(related_table)
             post_tables = set(connection.introspection.table_names())
             cls._gm_created_tables.update(post_tables - preexisting_tables)
@@ -442,6 +446,7 @@ class GeneralManagerTransactionTestCase(
     general_manager_classes: ClassVar[list[type[GeneralManager]]] = []
     fallback_app: str | None = "general_manager"
     _gm_created_tables: ClassVar[set[str]] = set()
+    _gm_created_models: ClassVar[list[type[models.Model]]] = []
 
     def setUp(self) -> None:
         """
@@ -457,137 +462,113 @@ class GeneralManagerTransactionTestCase(
         self._run_registered_startup_hooks()
 
     @classmethod
+    def _drop_created_test_models(cls) -> None:
+        """Drop owned dynamic models in reverse schema creation order."""
+        created_tables = set(getattr(cls, "_gm_created_tables", set()))
+        tables_to_remove = created_tables.intersection(
+            connection.introspection.table_names()
+        )
+        with connection.constraint_checks_disabled():
+            with connection.schema_editor() as editor:
+                for model in reversed(getattr(cls, "_gm_created_models", [])):
+                    model_table = model._meta.db_table
+                    if model_table not in tables_to_remove:
+                        continue
+                    editor.delete_model(model)
+                    tables_to_remove.discard(model_table)
+                    for field in model._meta.local_many_to_many:
+                        m2m_field = cast(_ManyToManyField, field)
+                        through_model = m2m_field.remote_field.through
+                        if getattr(through_model._meta, "auto_created", False):
+                            tables_to_remove.discard(through_model._meta.db_table)
+
+    @classmethod
+    def _unregister_created_test_models(cls) -> None:
+        """Remove owned dynamic models from Django's global app registry."""
+        created_tables = set(getattr(cls, "_gm_created_tables", set()))
+        registered_models: list[type[models.Model]] = []
+        for model in getattr(cls, "_gm_created_models", []):
+            registered_models.append(model)
+            for field in model._meta.local_many_to_many:
+                m2m_field = cast(_ManyToManyField, field)
+                through_model = m2m_field.remote_field.through
+                if getattr(through_model._meta, "auto_created", False):
+                    registered_models.append(through_model)
+
+        for model in registered_models:
+            if model._meta.db_table not in created_tables:
+                continue
+            app_label = model._meta.app_label
+            model_key = model.__name__.lower()
+            global_apps.all_models[app_label].pop(model_key, None)
+            with suppress(LookupError):
+                global_apps.get_app_config(app_label).models.pop(model_key, None)
+
+    @classmethod
     def tearDownClass(cls) -> None:
         """
         Tear down test-class state for GeneralManager tests by removing created database tables, unregistering their models, restoring patched global state, and clearing metaclass registries.
 
         Performs the following cleanup actions for the test class:
         - Removes the GraphQL URL pattern added during setup.
-        - Drops database tables that were created for the test, including automatically created many-to-many through tables, history tables, and history-related models.
+        - Drops database tables in reverse model creation order while database constraint checks are disabled, including automatically created many-to-many through tables, history tables, and history-related models.
         - Unregisters those models (including through and history models) from Django's app registry and clears the app registry cache.
         - Removes the test's GeneralManager classes from metaclass registries used for initialization and GraphQL registration.
         - Restores the original app-config lookup function.
-        - Resets the test-class created-table tracking.
+        - Resets the test-class created-table and created-model tracking.
+
+        Cleanup actions continue after an error, including the superclass teardown,
+        and the first cleanup error is re-raised after all actions have run.
         """
-        # remove GraphQL URL pattern added during setUpClass
-        _default_graphql_url_clear()
-        _default_remote_api_url_clear()
 
-        # drop generated tables and unregister models from Django's app registry
-        created_tables: set[str] = set(getattr(cls, "_gm_created_tables", set()))
-        tables_to_remove = {
-            table
-            for table in created_tables
-            if table in connection.introspection.table_names()
-        }
-        with connection.schema_editor() as editor:
-            for manager_class in cls.general_manager_classes:
-                interface = getattr(manager_class, "Interface", None)
-                model = getattr(interface, "_model", None)
-                if not model:
-                    continue
-                model = cast(type[models.Model], model)
-                auto_through_models: set[type[models.Model]] = set()
-                for field in model._meta.local_many_to_many:
-                    m2m_field = cast(_ManyToManyField, field)
-                    through_model = m2m_field.remote_field.through
-                    if getattr(through_model._meta, "auto_created", False):
-                        auto_through_models.add(through_model)
-                model_table = model._meta.db_table
-                if model_table in tables_to_remove:
-                    editor.delete_model(model)
-                    tables_to_remove.discard(model_table)
-                    for through in auto_through_models:
-                        tables_to_remove.discard(through._meta.db_table)
-                history_model = getattr(model, "history", None)
-                related_history_models: list[type[models.Model]] = []
-                if history_model:
-                    history_descriptor = cast(_HistoryDescriptor, history_model)
-                    history_model_class = history_descriptor.model
-                    related_history_models = _get_historical_changes_related_models(
-                        history_model_class
-                    )
-                if history_model:
-                    history_descriptor = cast(_HistoryDescriptor, history_model)
-                    history_table = history_descriptor.model._meta.db_table
-                    if history_table in tables_to_remove:
-                        editor.delete_model(history_descriptor.model)
-                        tables_to_remove.discard(history_table)
-                    for related_history_model in related_history_models:
-                        related_history_table = related_history_model._meta.db_table
-                        if related_history_table in tables_to_remove:
-                            editor.delete_model(related_history_model)
-                            tables_to_remove.discard(related_history_table)
-                for through in auto_through_models:
-                    through_table = through._meta.db_table
-                    if through_table in tables_to_remove:
-                        editor.delete_model(through)
-                        tables_to_remove.discard(through_table)
+        def clear_metaclass_registries() -> None:
+            GeneralManagerMeta.all_classes = [
+                gm
+                for gm in GeneralManagerMeta.all_classes
+                if gm not in cls.general_manager_classes
+            ]
+            GeneralManagerMeta.pending_graphql_interfaces = [
+                gm
+                for gm in GeneralManagerMeta.pending_graphql_interfaces
+                if gm not in cls.general_manager_classes
+            ]
+            GeneralManagerMeta.pending_attribute_initialization = [
+                gm
+                for gm in GeneralManagerMeta.pending_attribute_initialization
+                if gm not in cls.general_manager_classes
+            ]
 
-                app_label = model._meta.app_label
-                model_key = model.__name__.lower()
-                app_config = None
-                with suppress(LookupError):
-                    app_config = global_apps.get_app_config(app_label)
-                if model_table in created_tables:
-                    global_apps.all_models[app_label].pop(model_key, None)
-                    if app_config is not None:
-                        app_config.models.pop(model_key, None)
-                if (
-                    history_model
-                    and cast(_HistoryDescriptor, history_model).model._meta.db_table
-                    in created_tables
-                ):
-                    history_descriptor = cast(_HistoryDescriptor, history_model)
-                    hist_key = history_descriptor.model.__name__.lower()
-                    global_apps.all_models[app_label].pop(hist_key, None)
-                    if app_config is not None:
-                        app_config.models.pop(hist_key, None)
-                for related_history_model in related_history_models:
-                    table = related_history_model._meta.db_table
-                    if table in created_tables:
-                        label = related_history_model._meta.app_label
-                        key = related_history_model.__name__.lower()
-                        global_apps.all_models[label].pop(key, None)
-                        with suppress(LookupError):
-                            global_apps.get_app_config(label).models.pop(key, None)
-                for through in auto_through_models:
-                    through_label = through._meta.app_label
-                    through_key = through.__name__.lower()
-                    if through._meta.db_table in created_tables:
-                        global_apps.all_models[through_label].pop(through_key, None)
-                        with suppress(LookupError):
-                            global_apps.get_app_config(through_label).models.pop(
-                                through_key, None
-                            )
+        def restore_fallback_app_lookup() -> None:
+            cast(
+                _MutableDjangoApps,
+                global_apps,
+            ).get_containing_app_config = _original_get_app
 
-        global_apps.clear_cache()
-        cls._gm_created_tables = set()
+        def reset_created_state() -> None:
+            cls._gm_created_models = []
+            cls._gm_created_tables = set()
 
-        # remove classes from metaclass registries
-        GeneralManagerMeta.all_classes = [
-            gm
-            for gm in GeneralManagerMeta.all_classes
-            if gm not in cls.general_manager_classes
-        ]
-        GeneralManagerMeta.pending_graphql_interfaces = [
-            gm
-            for gm in GeneralManagerMeta.pending_graphql_interfaces
-            if gm not in cls.general_manager_classes
-        ]
-        GeneralManagerMeta.pending_attribute_initialization = [
-            gm
-            for gm in GeneralManagerMeta.pending_attribute_initialization
-            if gm not in cls.general_manager_classes
-        ]
+        cleanup_error: Exception | None = None
+        cleanup_actions: tuple[Callable[[], None], ...] = (
+            _default_graphql_url_clear,
+            _default_remote_api_url_clear,
+            cls._drop_created_test_models,
+            cls._unregister_created_test_models,
+            global_apps.clear_cache,
+            clear_metaclass_registries,
+            restore_fallback_app_lookup,
+            reset_created_state,
+            super().tearDownClass,
+        )
+        for cleanup_action in cleanup_actions:
+            try:
+                cleanup_action()
+            except Exception as error:  # noqa: BLE001 - teardown must keep running.
+                if cleanup_error is None:
+                    cleanup_error = error
 
-        # reset fallback app lookup
-        cast(
-            _MutableDjangoApps,
-            global_apps,
-        ).get_containing_app_config = _original_get_app
-
-        super().tearDownClass()
+        if cleanup_error is not None:
+            raise cleanup_error
 
     @classmethod
     def _run_registered_startup_hooks(cls) -> None:
