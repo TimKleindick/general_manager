@@ -36,5 +36,5 @@ section above.
 - [ ] The change is focused and does not include unrelated cleanup.
 - [ ] Commits follow the Conventional Commits format.
 - [ ] Relevant tests were added or updated, and `python -m pytest` passes.
-- [ ] `ruff check`, `ruff format`, and `mypy --strict` pass.
+- [ ] `ruff check`, `ruff format --check`, and `mypy --strict` pass.
 - [ ] User-facing documentation is updated where behavior changed.
