@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import ForwardRef
+
 from general_manager.api.graphql_relations import resolve_general_manager_type
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.manager.general_manager import GeneralManager
@@ -25,6 +27,10 @@ def test_resolve_general_manager_type_handles_concrete_and_wrapped_managers() ->
         PrimaryManager | None,
         "PrimaryManager",
         "Bucket[PrimaryManager]",
+        "Bucket['PrimaryManager']",
+        "tuple[PrimaryManager, ...]",
+        "typing.Optional[PrimaryManager]",
+        ForwardRef("Bucket[PrimaryManager]"),
     ):
         assert resolve_general_manager_type(declared_type, registry) is PrimaryManager
 
@@ -38,8 +44,13 @@ def test_resolve_general_manager_type_rejects_non_manager_and_unresolved_types()
         str,
         list[str],
         dict[str, PrimaryManager],
+        "",
+        "Bucket[",
+        "Bucket[42]",
+        "Bucket[lambda: PrimaryManager]",
         "dict[str, PrimaryManager]",
         "MissingManager",
+        "typing().Bucket[PrimaryManager]",
     ):
         assert resolve_general_manager_type(declared_type, registry) is None
 
