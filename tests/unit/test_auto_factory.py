@@ -1,4 +1,4 @@
-from django.test import TransactionTestCase
+from django.test import SimpleTestCase, TransactionTestCase
 from django.db import models, connection, connections
 from django.core.exceptions import ValidationError
 from factory.django import DjangoModelFactory
@@ -1054,8 +1054,8 @@ class FactoriesHelpersTestCase(TransactionTestCase):
         """
         super().tearDownClass()
         with connection.schema_editor() as schema:
-            schema.delete_model(DummyModel)
             schema.delete_model(DummyModel2)
+            schema.delete_model(DummyModel)
 
     def test_get_field_value_for_short_char_field(self):
         """
@@ -1152,3 +1152,21 @@ class FactoriesHelpersTestCase(TransactionTestCase):
 
         self.assertIn("test_field", str(error))
         self.assertIn("bad_type", str(error))
+
+
+class FactoriesHelpersTeardownTests(SimpleTestCase):
+    """Regression tests for portable dynamic-model schema teardown."""
+
+    def test_dependent_model_is_deleted_before_referenced_model(self) -> None:
+        """Drop foreign-key and M2M owners before their referenced table."""
+        with (
+            patch.object(TransactionTestCase, "tearDownClass"),
+            patch.object(connection, "schema_editor") as schema_editor,
+        ):
+            FactoriesHelpersTestCase.tearDownClass()
+
+        editor = schema_editor.return_value.__enter__.return_value
+        self.assertEqual(
+            [call.args[0] for call in editor.delete_model.call_args_list],
+            [DummyModel2, DummyModel],
+        )
