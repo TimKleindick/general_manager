@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.64.1 (2026-07-16)
+
+### Bug Fixes
+
+- Preserve GraphQL manager relation types
+  ([`3f75888`](https://github.com/TimKleindick/general_manager/commit/3f7588867fc83c3f5ee47fe9cf061b06ebef56c2))
+
+- Resolve named GraphQL relations consistently
+  ([`76ba333`](https://github.com/TimKleindick/general_manager/commit/76ba33397a27a5f76c7cd434283950b974373d9e))
+
+
 ## v0.64.0 (2026-07-15)
 
 ### Bug Fixes
