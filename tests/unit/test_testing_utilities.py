@@ -1,6 +1,7 @@
 """Unit tests for general_manager.utils.testing module updates."""
 
 from contextlib import nullcontext
+from types import SimpleNamespace
 from typing import Callable, ClassVar, cast
 from unittest.mock import MagicMock, Mock, patch
 
@@ -540,3 +541,41 @@ class GeneralManagerTransactionTestCaseTeardownTests(SimpleTestCase):
             remote_clear.assert_called_once_with()
             clear_cache.assert_called_once_with()
             base_teardown.assert_called_once_with()
+
+    def test_teardown_restores_graphene_cursor_on_disallowed_secondary(self) -> None:
+        """Graphene instrumentation must not replace Django's database guard."""
+        from graphene_django.debug.sql.tracking import wrap_cursor
+        from django.db import connections
+
+        from general_manager.utils import testing as testing_module
+
+        class FakeTestCase(testing_module.GeneralManagerTransactionTestCase):
+            general_manager_classes: ClassVar[list[type[GeneralManager]]] = []
+
+        disallowed_cursor = Mock()
+        disallowed_cursor.wrapped = Mock()
+        secondary = SimpleNamespace(
+            alias="secondary",
+            cursor=disallowed_cursor,
+        )
+        wrap_cursor(secondary, Mock())
+
+        def assert_guard_is_restored() -> None:
+            self.assertIs(secondary.cursor, disallowed_cursor)
+
+        with (
+            patch.object(connections, "all", return_value=[secondary]),
+            patch.object(testing_module, "_default_graphql_url_clear"),
+            patch.object(testing_module, "_default_remote_api_url_clear"),
+            patch.object(FakeTestCase, "_drop_created_test_models"),
+            patch.object(FakeTestCase, "_unregister_created_test_models"),
+            patch.object(global_apps, "clear_cache"),
+            patch.object(
+                testing_module.GraphQLTransactionTestCase,
+                "tearDownClass",
+                side_effect=assert_guard_is_restored,
+            ),
+        ):
+            FakeTestCase.tearDownClass()
+
+        self.assertIs(secondary.cursor, disallowed_cursor)

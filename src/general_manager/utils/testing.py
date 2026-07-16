@@ -8,11 +8,12 @@ from django.apps import AppConfig, apps as global_apps
 from django.conf import settings
 from django.core.cache import caches
 from django.core.cache.backends.locmem import LocMemCache
-from django.db import connection, models
+from django.db import connection, connections, models
 from django.test import TransactionTestCase
 from django.test import override_settings
 from unittest.mock import ANY
 
+from graphene_django.debug.sql.tracking import unwrap_cursor
 from simple_history.models import HistoricalChanges
 
 from general_manager.api.graphql import GraphQL
@@ -144,6 +145,12 @@ def _default_remote_api_url_clear() -> None:
     clear_remote_api_urls()
     clear_remote_invalidation_routes()
     clear_file_upload_urls()
+
+
+def _restore_graphene_cursor_wrappers() -> None:
+    """Remove Graphene SQL instrumentation from every configured connection."""
+    for database_connection in connections.all():
+        unwrap_cursor(database_connection)
 
 
 def _get_historical_changes_related_models(
@@ -516,6 +523,7 @@ class GeneralManagerTransactionTestCase(
         - Removes the test's GeneralManager classes from metaclass registries used for initialization and GraphQL registration.
         - Restores the original app-config lookup function.
         - Resets the test-class created-table and created-model tracking.
+        - Removes Graphene cursor instrumentation before Django restores database guards.
 
         Cleanup actions continue after an error, including the superclass teardown,
         and the first cleanup error is re-raised after all actions have run.
@@ -558,6 +566,7 @@ class GeneralManagerTransactionTestCase(
             clear_metaclass_registries,
             restore_fallback_app_lookup,
             reset_created_state,
+            _restore_graphene_cursor_wrappers,
             super().tearDownClass,
         )
         for cleanup_action in cleanup_actions:
