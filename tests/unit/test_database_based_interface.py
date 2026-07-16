@@ -1,5 +1,6 @@
 # type: ignore
 
+from dataclasses import dataclass
 from typing import ClassVar, cast
 from uuid import UUID
 
@@ -1095,6 +1096,126 @@ class WritableInterfaceTestModel(models.Model):
         app_label = "general_manager"
 
 
+_REGISTRY_ENTRY_ABSENT = object()
+
+
+@dataclass(frozen=True)
+class _RegistryEntrySnapshot:
+    registry: dict[str, type[models.Model]]
+    model_name: str
+    previous_model: object
+
+
+@dataclass(frozen=True)
+class _RegistryEntryInstallation:
+    snapshot: _RegistryEntrySnapshot
+    installed_model: type[models.Model]
+
+
+def _snapshot_writable_interface_test_models() -> tuple[_RegistryEntrySnapshot, ...]:
+    """Capture live and history registry entries before history registration."""
+    live_model_name = WritableInterfaceTestModel._meta.model_name
+    history_descriptor = getattr(WritableInterfaceTestModel, "history", None)
+    if history_descriptor is None:
+        history_model_name = f"historical{live_model_name}"
+    else:
+        history_model_name = history_descriptor.model._meta.model_name
+    app_models = cast(
+        dict[str, type[models.Model]],
+        apps.get_app_config("general_manager").models,
+    )
+    all_models = cast(
+        dict[str, type[models.Model]],
+        apps.all_models.setdefault("general_manager", {}),
+    )
+
+    return tuple(
+        _RegistryEntrySnapshot(
+            registry=registry,
+            model_name=model_name,
+            previous_model=registry.get(model_name, _REGISTRY_ENTRY_ABSENT),
+        )
+        for registry in (app_models, all_models)
+        for model_name in (live_model_name, history_model_name)
+    )
+
+
+def _install_writable_interface_test_models(
+    snapshots: tuple[_RegistryEntrySnapshot, ...] | None = None,
+) -> tuple[_RegistryEntryInstallation, ...]:
+    """Install the reusable models using a pre-registration registry snapshot."""
+    if snapshots is None:
+        snapshots = _snapshot_writable_interface_test_models()
+
+    history_model = cast(
+        type[models.Model],
+        WritableInterfaceTestModel.history.model,  # type: ignore[attr-defined]
+    )
+    models_by_name = {
+        WritableInterfaceTestModel._meta.model_name: WritableInterfaceTestModel,
+        history_model._meta.model_name: history_model,
+    }
+    installations = tuple(
+        _RegistryEntryInstallation(
+            snapshot=snapshot,
+            installed_model=models_by_name[snapshot.model_name],
+        )
+        for snapshot in snapshots
+    )
+
+    for installation in installations:
+        installation.snapshot.registry[installation.snapshot.model_name] = (
+            installation.installed_model
+        )
+
+    apps.clear_cache()
+    return installations
+
+
+def _capture_writable_interface_test_model_installations(
+    snapshots: tuple[_RegistryEntrySnapshot, ...],
+) -> tuple[_RegistryEntryInstallation, ...]:
+    """Record the exact objects occupying snapshotted keys after a failure."""
+    installations: list[_RegistryEntryInstallation] = []
+    for snapshot in snapshots:
+        current_model = snapshot.registry.get(
+            snapshot.model_name,
+            _REGISTRY_ENTRY_ABSENT,
+        )
+        if current_model is _REGISTRY_ENTRY_ABSENT:
+            if snapshot.previous_model is _REGISTRY_ENTRY_ABSENT:
+                continue
+            current_model = snapshot.previous_model
+        installations.append(
+            _RegistryEntryInstallation(
+                snapshot=snapshot,
+                installed_model=cast(type[models.Model], current_model),
+            )
+        )
+    return tuple(installations)
+
+
+def _restore_writable_interface_test_models(
+    installations: tuple[_RegistryEntryInstallation, ...],
+) -> None:
+    """Restore the exact registry entries replaced by the install helper."""
+    try:
+        for installation in installations:
+            snapshot = installation.snapshot
+            if snapshot.previous_model is _REGISTRY_ENTRY_ABSENT:
+                if (
+                    snapshot.registry.get(snapshot.model_name)
+                    is installation.installed_model
+                ):
+                    del snapshot.registry[snapshot.model_name]
+            else:
+                snapshot.registry[snapshot.model_name] = cast(
+                    type[models.Model], snapshot.previous_model
+                )
+    finally:
+        apps.clear_cache()
+
+
 class HistoryOnlyAuditModel(GeneralManagerModel):
     __module__ = "general_manager.models"
     name = models.CharField(max_length=100)
@@ -1103,50 +1224,463 @@ class HistoryOnlyAuditModel(GeneralManagerModel):
         app_label = "general_manager"
 
 
-class OrmWritableInterfaceTestCase(TransactionTestCase):
-    @classmethod
-    def setUpClass(cls):
-        """
-        Prepare the test database by registering WritableInterfaceTestModel with simple_history, ensuring it is present in the 'general_manager' app registry, and creating its database tables (including the history table).
+def test_writable_model_registry_install_and_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both reusable writable models are installed and prior entries are restored."""
+    from simple_history import register
 
-        This runs once for the test class to set up the model schema required by writable-interface tests.
-        """
-        super().setUpClass()
-        from simple_history import register
-
-        register(WritableInterfaceTestModel)
-
-        if (
-            WritableInterfaceTestModel._meta.model_name
-            not in apps.get_app_config("general_manager").models
+    registry_before_registration = _snapshot_writable_interface_test_models()
+    try:
+        if not hasattr(
+            WritableInterfaceTestModel._meta,
+            "simple_history_manager_attribute",
         ):
-            apps.register_model("general_manager", WritableInterfaceTestModel)
+            register(WritableInterfaceTestModel)
 
-        with connection.schema_editor() as schema:
-            schema.create_model(WritableInterfaceTestModel)
-            schema.create_model(WritableInterfaceTestModel.history.model)  # type: ignore[attr-defined]
+        history_model = WritableInterfaceTestModel.history.model  # type: ignore[attr-defined]
+        live_key = WritableInterfaceTestModel._meta.model_name
+        history_key = history_model._meta.model_name
+        app_models = apps.get_app_config("general_manager").models
+        all_models = apps.all_models["general_manager"]
+
+        with monkeypatch.context() as registry_state:
+            registry_state.setitem(app_models, live_key, HistoryOnlyAuditModel)
+            registry_state.setitem(app_models, history_key, PersonModel)
+
+            installations = _install_writable_interface_test_models()
+
+            assert app_models[live_key] is WritableInterfaceTestModel
+            assert app_models[history_key] is history_model
+            assert all_models[live_key] is WritableInterfaceTestModel
+            assert all_models[history_key] is history_model
+
+            _restore_writable_interface_test_models(installations)
+
+            assert app_models[live_key] is HistoryOnlyAuditModel
+            assert app_models[history_key] is PersonModel
+            assert all_models[live_key] is HistoryOnlyAuditModel
+            assert all_models[history_key] is PersonModel
+
+        with monkeypatch.context() as registry_state:
+            registry_state.delitem(app_models, live_key, raising=False)
+            registry_state.delitem(app_models, history_key, raising=False)
+
+            installations = _install_writable_interface_test_models()
+
+            assert app_models[live_key] is WritableInterfaceTestModel
+            assert app_models[history_key] is history_model
+            assert all_models[live_key] is WritableInterfaceTestModel
+            assert all_models[history_key] is history_model
+
+            registry_state.setitem(app_models, live_key, HistoryOnlyAuditModel)
+            _restore_writable_interface_test_models(installations)
+
+            assert app_models[live_key] is HistoryOnlyAuditModel
+            assert history_key not in app_models
+            assert all_models[live_key] is HistoryOnlyAuditModel
+            assert history_key not in all_models
+    finally:
+        registration_installations = (
+            _capture_writable_interface_test_model_installations(
+                registry_before_registration
+            )
+        )
+        _restore_writable_interface_test_models(registration_installations)
+
+    for snapshot in registry_before_registration:
+        if snapshot.previous_model is _REGISTRY_ENTRY_ABSENT:
+            assert snapshot.model_name not in snapshot.registry
+        else:
+            assert snapshot.registry[snapshot.model_name] is snapshot.previous_model
+
+
+def _fake_writable_interface_models(*, history_registered: bool) -> tuple[type, type]:
+    """Build the minimal reusable model surface for lifecycle failure tests."""
+    live_meta = SimpleNamespace(
+        model_name="writableinterfacetestmodel",
+        auto_created=False,
+        swapped=False,
+        _expire_cache=MagicMock(),
+    )
+    history_meta = SimpleNamespace(
+        model_name="historicalwritableinterfacetestmodel",
+        auto_created=False,
+        swapped=False,
+        _expire_cache=MagicMock(),
+    )
+    live_model = type("FakeWritableInterfaceTestModel", (), {"_meta": live_meta})
+    history_model = type(
+        "FakeHistoricalWritableInterfaceTestModel",
+        (),
+        {"_meta": history_meta},
+    )
+    if history_registered:
+        live_meta.simple_history_manager_attribute = "history"
+        live_model.history = SimpleNamespace(model=history_model)
+    return live_model, history_model
+
+
+def test_writable_model_registry_lifecycle_restores_pre_registration_absence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """History registration during setup does not become permanent registry state."""
+    live_model, history_model = _fake_writable_interface_models(
+        history_registered=False
+    )
+    live_key = live_model._meta.model_name
+    history_key = history_model._meta.model_name
+    app_models = apps.get_app_config("general_manager").models
+    all_models = apps.all_models["general_manager"]
+    schema = MagicMock()
+    schema_editor = MagicMock()
+    schema_editor.return_value.__enter__.return_value = schema
+
+    def register_model(model: type) -> None:
+        model._meta.simple_history_manager_attribute = "history"
+        model.history = SimpleNamespace(model=history_model)
+        app_models[history_key] = history_model
+        all_models[history_key] = history_model
+
+    try:
+        with monkeypatch.context() as lifecycle_state:
+            lifecycle_state.setitem(globals(), "WritableInterfaceTestModel", live_model)
+            lifecycle_state.setitem(app_models, live_key, PersonModel)
+            lifecycle_state.setitem(all_models, live_key, PersonModel)
+            lifecycle_state.delitem(app_models, history_key, raising=False)
+            lifecycle_state.delitem(all_models, history_key, raising=False)
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_registry_snapshots",
+                (),
+                raising=False,
+            )
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_registry_installations",
+                (),
+                raising=False,
+            )
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_created_models",
+                [],
+                raising=False,
+            )
+
+            with (
+                patch("simple_history.register", side_effect=register_model),
+                patch.object(connection, "schema_editor", schema_editor),
+                patch.object(TransactionTestCase, "setUpClass"),
+                patch.object(TransactionTestCase, "tearDownClass"),
+            ):
+                OrmWritableInterfaceTestCase.setUpClass()
+                OrmWritableInterfaceTestCase.tearDownClass()
+
+            assert app_models[live_key] is PersonModel
+            assert all_models[live_key] is PersonModel
+            assert history_key not in app_models
+            assert history_key not in all_models
+    finally:
+        apps.clear_cache()
+
+
+def test_writable_model_registry_setup_restores_partial_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A register failure restores entries captured before registration began."""
+    live_model, history_model = _fake_writable_interface_models(
+        history_registered=False
+    )
+    live_key = live_model._meta.model_name
+    history_key = history_model._meta.model_name
+    app_models = apps.get_app_config("general_manager").models
+    all_models = apps.all_models["general_manager"]
+    registration_error = RuntimeError("history registration failed")
+    schema = MagicMock()
+    schema_editor = MagicMock()
+    schema_editor.return_value.__enter__.return_value = schema
+
+    def register_model(model: type) -> None:
+        app_models[history_key] = history_model
+        all_models[history_key] = history_model
+        raise registration_error
+
+    try:
+        with monkeypatch.context() as lifecycle_state:
+            lifecycle_state.setitem(globals(), "WritableInterfaceTestModel", live_model)
+            lifecycle_state.setitem(app_models, live_key, PersonModel)
+            lifecycle_state.setitem(all_models, live_key, PersonModel)
+            lifecycle_state.delitem(app_models, history_key, raising=False)
+            lifecycle_state.delitem(all_models, history_key, raising=False)
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_registry_snapshots",
+                (),
+                raising=False,
+            )
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_registry_installations",
+                (),
+                raising=False,
+            )
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_created_models",
+                [],
+                raising=False,
+            )
+
+            with (
+                patch("simple_history.register", side_effect=register_model),
+                patch.object(connection, "schema_editor", schema_editor),
+                patch.object(TransactionTestCase, "setUpClass"),
+                patch.object(TransactionTestCase, "tearDownClass") as base_teardown,
+            ):
+                with pytest.raises(RuntimeError) as raised:
+                    OrmWritableInterfaceTestCase.setUpClass()
+
+            assert raised.value is registration_error
+            assert app_models[live_key] is PersonModel
+            assert all_models[live_key] is PersonModel
+            assert history_key not in app_models
+            assert history_key not in all_models
+            base_teardown.assert_called_once_with()
+    finally:
+        apps.clear_cache()
+
+
+def test_writable_model_registry_setup_cleans_partial_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed history-table create removes the live table and setup state."""
+    live_model, history_model = _fake_writable_interface_models(history_registered=True)
+    live_key = live_model._meta.model_name
+    history_key = history_model._meta.model_name
+    app_models = apps.get_app_config("general_manager").models
+    all_models = apps.all_models["general_manager"]
+    setup_error = RuntimeError("history table create failed")
+    cleanup_error = RuntimeError("base teardown failed")
+    schema = MagicMock()
+    schema.create_model.side_effect = [None, setup_error]
+    schema_editor = MagicMock()
+    schema_editor.return_value.__enter__.return_value = schema
+
+    try:
+        with monkeypatch.context() as lifecycle_state:
+            lifecycle_state.setitem(globals(), "WritableInterfaceTestModel", live_model)
+            lifecycle_state.setitem(app_models, live_key, PersonModel)
+            lifecycle_state.setitem(all_models, live_key, PersonModel)
+            lifecycle_state.delitem(app_models, history_key, raising=False)
+            lifecycle_state.delitem(all_models, history_key, raising=False)
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_registry_snapshots",
+                (),
+                raising=False,
+            )
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_registry_installations",
+                (),
+                raising=False,
+            )
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_created_models",
+                [],
+                raising=False,
+            )
+
+            with (
+                patch.object(connection, "schema_editor", schema_editor),
+                patch.object(TransactionTestCase, "setUpClass") as base_setup,
+                patch.object(
+                    TransactionTestCase,
+                    "tearDownClass",
+                    side_effect=cleanup_error,
+                ) as base_teardown,
+            ):
+                with pytest.raises(RuntimeError) as raised:
+                    OrmWritableInterfaceTestCase.setUpClass()
+
+            assert raised.value is setup_error
+            assert [item.args[0] for item in schema.delete_model.call_args_list] == [
+                live_model
+            ]
+            assert app_models[live_key] is PersonModel
+            assert all_models[live_key] is PersonModel
+            assert history_key not in app_models
+            assert history_key not in all_models
+            base_setup.assert_called_once_with()
+            base_teardown.assert_called_once_with()
+    finally:
+        apps.clear_cache()
+
+
+def test_writable_model_registry_teardown_continues_after_history_delete_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A history drop failure does not skip the live drop or later cleanup."""
+    live_model, history_model = _fake_writable_interface_models(history_registered=True)
+    live_key = live_model._meta.model_name
+    history_key = history_model._meta.model_name
+    app_models = apps.get_app_config("general_manager").models
+    all_models = apps.all_models["general_manager"]
+    teardown_error = RuntimeError("history table delete failed")
+    schema = MagicMock()
+    schema_editor = MagicMock()
+    schema_editor.return_value.__enter__.return_value = schema
+
+    try:
+        with monkeypatch.context() as lifecycle_state:
+            lifecycle_state.setitem(globals(), "WritableInterfaceTestModel", live_model)
+            lifecycle_state.setitem(app_models, live_key, PersonModel)
+            lifecycle_state.setitem(all_models, live_key, PersonModel)
+            lifecycle_state.delitem(app_models, history_key, raising=False)
+            lifecycle_state.delitem(all_models, history_key, raising=False)
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_registry_snapshots",
+                (),
+                raising=False,
+            )
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_registry_installations",
+                (),
+                raising=False,
+            )
+            lifecycle_state.setattr(
+                OrmWritableInterfaceTestCase,
+                "_created_models",
+                [],
+                raising=False,
+            )
+
+            with (
+                patch.object(connection, "schema_editor", schema_editor),
+                patch.object(TransactionTestCase, "setUpClass"),
+                patch.object(TransactionTestCase, "tearDownClass") as base_teardown,
+            ):
+                OrmWritableInterfaceTestCase.setUpClass()
+                schema.delete_model.side_effect = [teardown_error, None]
+
+                with pytest.raises(RuntimeError) as raised:
+                    OrmWritableInterfaceTestCase.tearDownClass()
+
+            assert raised.value is teardown_error
+            assert [item.args[0] for item in schema.delete_model.call_args_list] == [
+                history_model,
+                live_model,
+            ]
+            assert app_models[live_key] is PersonModel
+            assert all_models[live_key] is PersonModel
+            assert history_key not in app_models
+            assert history_key not in all_models
+            base_teardown.assert_called_once_with()
+    finally:
+        apps.clear_cache()
+
+
+class _WritableInterfaceModelLifecycle:
+    """Share failure-safe setup and teardown for the reused writable models."""
+
+    _registry_snapshots: ClassVar[tuple[_RegistryEntrySnapshot, ...]]
+    _registry_installations: ClassVar[tuple[_RegistryEntryInstallation, ...]]
+    _created_models: ClassVar[list[type[models.Model]]]
 
     @classmethod
-    def tearDownClass(cls):
-        """
-        Remove the WritableInterfaceTestModel and its history model from the database and app registry.
+    def _drop_created_models(cls) -> Exception | None:
+        """Attempt every owned model drop in reverse creation order."""
+        cleanup_error: Exception | None = None
+        try:
+            with connection.schema_editor() as schema:
+                for model in reversed(cls._created_models):
+                    try:
+                        schema.delete_model(model)
+                    except Exception as error:  # noqa: BLE001 - keep dropping.
+                        if cleanup_error is None:
+                            cleanup_error = error
+        except Exception as error:  # noqa: BLE001 - preserve first failure.
+            if cleanup_error is None:
+                cleanup_error = error
+        return cleanup_error
 
-        Deletes the database tables for the model and its history model, removes their entries from the "general_manager" app registry, and invokes the superclass teardown.
-        """
-        with connection.schema_editor() as schema:
-            history_model = WritableInterfaceTestModel.history.model  # type: ignore[attr-defined]
-            schema.delete_model(history_model)
-            schema.delete_model(WritableInterfaceTestModel)
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Install registry entries and create live/history tables safely."""
+        super().setUpClass()
+        cls._registry_snapshots = ()
+        cls._registry_installations = ()
+        cls._created_models = []
+        try:
+            from simple_history import register
 
-        app_config = apps.get_app_config("general_manager")
-        model_key = WritableInterfaceTestModel._meta.model_name
-        history_key = WritableInterfaceTestModel.history.model._meta.model_name  # type: ignore[attr-defined]
-        apps.all_models["general_manager"].pop(model_key, None)
-        apps.all_models["general_manager"].pop(history_key, None)
-        app_config.models.pop(model_key, None)
-        app_config.models.pop(history_key, None)
-        super().tearDownClass()
+            cls._registry_snapshots = _snapshot_writable_interface_test_models()
+            if not hasattr(
+                WritableInterfaceTestModel._meta,
+                "simple_history_manager_attribute",
+            ):
+                register(WritableInterfaceTestModel)
 
+            cls._registry_installations = _install_writable_interface_test_models(
+                cls._registry_snapshots
+            )
+            history_model = cast(
+                type[models.Model],
+                WritableInterfaceTestModel.history.model,  # type: ignore[attr-defined]
+            )
+            with connection.schema_editor() as schema:
+                for model in (WritableInterfaceTestModel, history_model):
+                    schema.create_model(model)
+                    cls._created_models.append(model)
+        except Exception as setup_error:
+            cleanup_errors: list[Exception] = []
+            if cleanup_error := cls._drop_created_models():
+                cleanup_errors.append(cleanup_error)
+            try:
+                if not cls._registry_installations:
+                    cls._registry_installations = (
+                        _capture_writable_interface_test_model_installations(
+                            cls._registry_snapshots
+                        )
+                    )
+                _restore_writable_interface_test_models(cls._registry_installations)
+            except Exception as cleanup_error:  # noqa: BLE001 - setup error wins.
+                cleanup_errors.append(cleanup_error)
+            try:
+                super().tearDownClass()
+            except Exception as cleanup_error:  # noqa: BLE001 - setup error wins.
+                cleanup_errors.append(cleanup_error)
+            for cleanup_error in cleanup_errors:
+                setup_error.add_note(f"Cleanup also failed: {cleanup_error!r}")
+            raise
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Drop both tables and run all cleanup while preserving first failure."""
+        cleanup_error = cls._drop_created_models()
+        try:
+            _restore_writable_interface_test_models(cls._registry_installations)
+        except Exception as error:  # noqa: BLE001 - teardown must keep running.
+            if cleanup_error is None:
+                cleanup_error = error
+        try:
+            super().tearDownClass()
+        except Exception as error:  # noqa: BLE001 - preserve first failure.
+            if cleanup_error is None:
+                cleanup_error = error
+
+        if cleanup_error is not None:
+            raise cleanup_error
+
+
+class OrmWritableInterfaceTestCase(
+    _WritableInterfaceModelLifecycle,
+    TransactionTestCase,
+):
     def setUp(self):
         """
         Create two test users and register a writable test interface class for WritableInterfaceTestModel.
@@ -1566,52 +2100,13 @@ class OrmWritableInterfaceTestCase(TransactionTestCase):
         self.assertEqual(instance._history_user, self.user1)
 
 
-class PayloadNormalizerTestCase(TransactionTestCase):
+class PayloadNormalizerTestCase(
+    _WritableInterfaceModelLifecycle,
+    TransactionTestCase,
+):
     """
     Comprehensive tests for PayloadNormalizer utility class.
     """
-
-    @classmethod
-    def setUpClass(cls):
-        """
-        Ensure WritableInterfaceTestModel is registered and its tables exist for PayloadNormalizer tests.
-        """
-        super().setUpClass()
-        from simple_history import register
-
-        if not hasattr(
-            WritableInterfaceTestModel._meta, "simple_history_manager_attribute"
-        ):
-            register(WritableInterfaceTestModel)
-
-        if (
-            WritableInterfaceTestModel._meta.model_name
-            not in apps.get_app_config("general_manager").models
-        ):
-            apps.register_model("general_manager", WritableInterfaceTestModel)
-
-        with connection.schema_editor() as schema:
-            schema.create_model(WritableInterfaceTestModel)
-            schema.create_model(WritableInterfaceTestModel.history.model)  # type: ignore[attr-defined]
-
-    @classmethod
-    def tearDownClass(cls):
-        """
-        Drop WritableInterfaceTestModel tables and remove them from the registry.
-        """
-        with connection.schema_editor() as schema:
-            history_model = WritableInterfaceTestModel.history.model  # type: ignore[attr-defined]
-            schema.delete_model(history_model)
-            schema.delete_model(WritableInterfaceTestModel)
-
-        app_config = apps.get_app_config("general_manager")
-        model_key = WritableInterfaceTestModel._meta.model_name
-        history_key = WritableInterfaceTestModel.history.model._meta.model_name  # type: ignore[attr-defined]
-        apps.all_models["general_manager"].pop(model_key, None)
-        apps.all_models["general_manager"].pop(history_key, None)
-        app_config.models.pop(model_key, None)
-        app_config.models.pop(history_key, None)
-        super().tearDownClass()
 
     def setUp(self):
         """Set up test models and normalizer."""
