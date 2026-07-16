@@ -348,12 +348,15 @@ class GraphQLTests(TestCase):
         field = GraphQL._map_field_to_graphene_read(list[str], "labels")
         self.assertIsInstance(field, graphene.String)
 
-    def test_map_field_to_graphene_resolves_annotated_manager_relations(self):
+    def test_map_field_to_graphene_resolves_manager_relations(self):
         class RelatedManager(GeneralManager):
             pass
 
         class RelatedManagerType(graphene.ObjectType):
             name = graphene.String()
+
+        class RelatedModel:
+            _general_manager_class = RelatedManager
 
         GraphQL.manager_registry["RelatedManager"] = RelatedManager
         GraphQL.graphql_type_registry["RelatedManager"] = RelatedManagerType
@@ -365,6 +368,7 @@ class GraphQLTests(TestCase):
             for declared_type in (
                 list[RelatedManager],
                 Bucket[RelatedManager],
+                RelatedModel,
                 "RelatedManager",
                 "Bucket[RelatedManager]",
             ):
