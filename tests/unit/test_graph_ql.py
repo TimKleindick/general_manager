@@ -366,6 +366,7 @@ class GraphQLTests(TestCase):
                 list[RelatedManager],
                 Bucket[RelatedManager],
                 "RelatedManager",
+                "Bucket[RelatedManager]",
             ):
                 field = GraphQL._map_field_to_graphene_read(
                     declared_type,
