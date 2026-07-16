@@ -348,22 +348,27 @@ class MeasurementFieldConstraintTests(TransactionTestCase):
             fields=["container", "volume"],
             name="uniq_container_volume",
         )
+        volume_field = MeasurementField(base_unit="liter")
 
         class Size(models.Model):
             container = models.ForeignKey(Container, on_delete=models.CASCADE)
-            volume = MeasurementField(base_unit="liter")
+            volume = volume_field
 
             class Meta:
                 app_label = "tests"
-                constraints = (constraint,)
 
-        constraint = Size._meta.constraints[0]
+        # Exercise the logical-field remapping before schema creation, then keep
+        # the remapped constraint out of the initial CREATE TABLE statement.
+        Size._meta.constraints.append(constraint)
+        volume_field._remap_constraints_to_value_field(Size)
+        remapped_constraint = Size._meta.constraints.pop()
 
         try:
             with connection.schema_editor() as editor:
                 editor.create_model(Container)
                 editor.create_model(Size)
-                editor.add_constraint(Size, constraint)
+                Size._meta.constraints.append(remapped_constraint)
+                editor.add_constraint(Size, remapped_constraint)
 
             with connection.cursor() as cursor:
                 constraints = connection.introspection.get_constraints(

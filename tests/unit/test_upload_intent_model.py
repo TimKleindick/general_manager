@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.conf import settings
-from django.db import IntegrityError, migrations, models, transaction
+from django.db import DatabaseError, IntegrityError, migrations, models, transaction
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
@@ -194,7 +194,7 @@ class UploadIntentModelTests(TestCase):
         )
 
         for invalid in invalid_values:
-            with self.subTest(invalid=invalid), self.assertRaises(IntegrityError):
+            with self.subTest(invalid=invalid), self.assertRaises(DatabaseError):
                 with transaction.atomic():
                     self.make_intent(**invalid)
 

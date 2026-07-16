@@ -2205,7 +2205,10 @@ def test_file_content_inspection_rejects_unverified_or_mismatched_detection() ->
 def test_target_helpers_reject_invalid_ids_and_return_missing_rows() -> None:
     with pytest.raises(UploadStorageChangedError):
         finalization._parse_target_pk(None, FinalizationRecord)
-    assert finalization._locked_target(FinalizationRecord, 999_999, "default") is None
+    with transaction.atomic():
+        assert (
+            finalization._locked_target(FinalizationRecord, 999_999, "default") is None
+        )
 
 
 @pytest.mark.django_db(transaction=True)
