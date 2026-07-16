@@ -37,6 +37,19 @@ def _database_config(environ: Mapping[str, str]) -> dict[str, object]:
     }
 
 
+def _database_configs(
+    environ: Mapping[str, str],
+) -> dict[str, dict[str, object]]:
+    default = _database_config(environ)
+    secondary = default.copy()
+    if default["ENGINE"] != "django.db.backends.sqlite3":
+        secondary["NAME"] = environ.get(
+            "GENERAL_MANAGER_TEST_SECONDARY_DATABASE_NAME",
+            f"{default['NAME']}_secondary",
+        )
+    return {"default": default, "secondary": secondary}
+
+
 SECRET_KEY = get_random_string(50)
 DEBUG = True
 
@@ -50,7 +63,7 @@ INSTALLED_APPS = [
     "general_manager",  # falls du pip install -e . genutzt hast
 ]
 
-DATABASES = {"default": _database_config(os.environ)}
+DATABASES = _database_configs(os.environ)
 
 # Alle weiteren von deinem Code abgefragten Settings
 AUTOCREATE_GRAPHQL = True

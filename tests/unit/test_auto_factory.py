@@ -1,5 +1,3 @@
-from collections.abc import Iterator
-from contextlib import contextmanager
 from django.test import TransactionTestCase
 from django.db import models, connection, connections
 from django.core.exceptions import ValidationError
@@ -84,8 +82,8 @@ class DummyModel3(models.Model):
 
 
 class AutoFactoryTestCase(TransactionTestCase):
-    databases: ClassVar[set[str]] = {"default"}
-    database_alias = "factory_alias"
+    databases: ClassVar[set[str]] = {"default", "secondary"}
+    database_alias = "secondary"
 
     @classmethod
     def setUpClass(cls):
@@ -114,42 +112,6 @@ class AutoFactoryTestCase(TransactionTestCase):
             schema.delete_model(DummyModel3)
             schema.delete_model(DummyModel2)
             schema.delete_model(DummyModel)
-
-    @contextmanager
-    def _temporary_database_alias(self, alias: str) -> Iterator[Any]:
-        original_database_config = connections.databases.get(alias)
-        had_cached_connection = hasattr(connections._connections, alias)
-        original_connection = (
-            getattr(connections._connections, alias) if had_cached_connection else None
-        )
-        if had_cached_connection:
-            delattr(connections._connections, alias)
-
-        connections.databases[alias] = {
-            **connections.databases["default"],
-            "NAME": ":memory:",
-        }
-        alias_connection = connections[alias]
-        # The alias is created only for this test, so opt it out of Django's
-        # default disallowed-database wrappers and restore prior state below.
-        for method_name, _ in self._disallowed_connection_methods:
-            method = getattr(alias_connection, method_name)
-            wrapped = getattr(method, "wrapped", None)
-            if wrapped is not None:
-                setattr(alias_connection, method_name, wrapped)
-        alias_connection.connect()
-        try:
-            yield alias_connection
-        finally:
-            alias_connection.close()
-            if hasattr(connections._connections, alias):
-                delattr(connections._connections, alias)
-            if original_database_config is None:
-                connections.databases.pop(alias, None)
-            else:
-                connections.databases[alias] = original_database_config
-            if had_cached_connection:
-                setattr(connections._connections, alias, original_connection)
 
     def setUp(self) -> None:
         """
@@ -408,30 +370,30 @@ class AutoFactoryTestCase(TransactionTestCase):
             },
         )
 
-        with self._temporary_database_alias(alias) as alias_connection:
-            alias_tables_created = False
-            try:
+        alias_connection = connections[alias]
+        alias_tables_created = False
+        try:
+            with alias_connection.schema_editor() as schema:
+                schema.create_model(DummyModel)
+                schema.create_model(DummyModel2)
+                alias_tables_created = True
+
+            existing = DummyModel.objects.using(alias).create(
+                name="Alias Existing",
+                value=1,
+            )
+
+            instance = factory_class.create(description="Uses alias relation")
+
+            self.assertEqual(instance._state.db, alias)
+            self.assertEqual(instance.dummy_model_id, existing.pk)
+            self.assertEqual(DummyModel.objects.count(), 0)
+            self.assertEqual(DummyModel2.objects.using(alias).count(), 1)
+        finally:
+            if alias_tables_created:
                 with alias_connection.schema_editor() as schema:
-                    schema.create_model(DummyModel)
-                    schema.create_model(DummyModel2)
-                    alias_tables_created = True
-
-                existing = DummyModel.objects.using(alias).create(
-                    name="Alias Existing",
-                    value=1,
-                )
-
-                instance = factory_class.create(description="Uses alias relation")
-
-                self.assertEqual(instance._state.db, alias)
-                self.assertEqual(instance.dummy_model_id, existing.pk)
-                self.assertEqual(DummyModel.objects.count(), 0)
-                self.assertEqual(DummyModel2.objects.using(alias).count(), 1)
-            finally:
-                if alias_tables_created:
-                    with alias_connection.schema_editor() as schema:
-                        schema.delete_model(DummyModel2)
-                        schema.delete_model(DummyModel)
+                    schema.delete_model(DummyModel2)
+                    schema.delete_model(DummyModel)
 
     def test_generate_instance_filters_one_to_one_links_on_interface_database_alias(
         self,
@@ -452,37 +414,37 @@ class AutoFactoryTestCase(TransactionTestCase):
             },
         )
 
-        with self._temporary_database_alias(alias) as alias_connection:
-            alias_tables_created = False
-            try:
+        alias_connection = connections[alias]
+        alias_tables_created = False
+        try:
+            with alias_connection.schema_editor() as schema:
+                schema.create_model(DummyModel)
+                schema.create_model(DummyModel3)
+                alias_tables_created = True
+
+            linked = DummyModel.objects.using(alias).create(
+                name="Already linked",
+                value=1,
+            )
+            available = DummyModel.objects.using(alias).create(
+                name="Available",
+                value=2,
+            )
+            DummyModel3.objects.using(alias).create(
+                description="Existing link",
+                dummy_model=linked,
+            )
+
+            instance = factory_class.create(description="Uses available relation")
+
+            self.assertEqual(instance._state.db, alias)
+            self.assertEqual(instance.dummy_model_id, available.pk)
+            self.assertEqual(DummyModel3.objects.using(alias).count(), 2)
+        finally:
+            if alias_tables_created:
                 with alias_connection.schema_editor() as schema:
-                    schema.create_model(DummyModel)
-                    schema.create_model(DummyModel3)
-                    alias_tables_created = True
-
-                linked = DummyModel.objects.using(alias).create(
-                    name="Already linked",
-                    value=1,
-                )
-                available = DummyModel.objects.using(alias).create(
-                    name="Available",
-                    value=2,
-                )
-                DummyModel3.objects.using(alias).create(
-                    description="Existing link",
-                    dummy_model=linked,
-                )
-
-                instance = factory_class.create(description="Uses available relation")
-
-                self.assertEqual(instance._state.db, alias)
-                self.assertEqual(instance.dummy_model_id, available.pk)
-                self.assertEqual(DummyModel3.objects.using(alias).count(), 2)
-            finally:
-                if alias_tables_created:
-                    with alias_connection.schema_editor() as schema:
-                        schema.delete_model(DummyModel3)
-                        schema.delete_model(DummyModel)
+                    schema.delete_model(DummyModel3)
+                    schema.delete_model(DummyModel)
 
     def test_related_factory_modes_do_not_leak_between_generated_factories(self):
         original_modes = dict(AutoFactory._related_factory_modes)
@@ -833,27 +795,7 @@ class AutoFactoryTestCase(TransactionTestCase):
         self,
     ):
         alias = self.database_alias
-        original_database_config = connections.databases.get(alias)
-        had_cached_connection = hasattr(connections._connections, alias)
-        original_connection = (
-            getattr(connections._connections, alias) if had_cached_connection else None
-        )
-        if had_cached_connection:
-            delattr(connections._connections, alias)
-
-        connections.databases[alias] = {
-            **connections.databases["default"],
-            "NAME": ":memory:",
-        }
         alias_connection = connections[alias]
-        # The alias is overridden only for this test, so opt it out of Django's
-        # default disallowed-database wrappers and restore prior state below.
-        for method_name, _ in self._disallowed_connection_methods:
-            method = getattr(alias_connection, method_name)
-            wrapped = getattr(method, "wrapped", None)
-            if wrapped is not None:
-                setattr(alias_connection, method_name, wrapped)
-        alias_connection.connect()
 
         class AliasInterface(DummyInterface):
             @classmethod
@@ -891,20 +833,9 @@ class AutoFactoryTestCase(TransactionTestCase):
                 0,
             )
         finally:
-            try:
-                if alias_table_created:
-                    with alias_connection.schema_editor() as schema:
-                        schema.delete_model(DummyModel)
-            finally:
-                alias_connection.close()
-                if hasattr(connections._connections, alias):
-                    delattr(connections._connections, alias)
-                if original_database_config is None:
-                    connections.databases.pop(alias, None)
-                else:
-                    connections.databases[alias] = original_database_config
-                if had_cached_connection:
-                    setattr(connections._connections, alias, original_connection)
+            if alias_table_created:
+                with alias_connection.schema_editor() as schema:
+                    schema.delete_model(DummyModel)
 
     def test_generate_instance_with_generate_function_for_one_entry(self):
         """
