@@ -22,6 +22,7 @@ from general_manager.api.graphql_mutations import (
     _normalize_mutation_kwargs_for_manager,
 )
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
+from general_manager.bucket.base_bucket import Bucket
 from general_manager.measurement.measurement import Measurement
 from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
 from general_manager.manager.input import Input
@@ -346,6 +347,44 @@ class GraphQLTests(TestCase):
         field = GraphQL._map_field_to_graphene_read(list[str], "labels")
         self.assertIsInstance(field, graphene.String)
 
+    def test_map_field_to_graphene_resolves_annotated_manager_relations(self):
+        class RelatedManager(GeneralManager):
+            pass
+
+        class RelatedManagerType(graphene.ObjectType):
+            name = graphene.String()
+
+        GraphQL.manager_registry["RelatedManager"] = RelatedManager
+        GraphQL.graphql_type_registry["RelatedManager"] = RelatedManagerType
+
+        with (
+            patch.object(GraphQL, "_create_filter_options", return_value=None),
+            patch.object(GraphQL, "_sort_by_options", return_value=None),
+        ):
+            for declared_type in (
+                list[RelatedManager],
+                Bucket[RelatedManager],
+                "RelatedManager",
+            ):
+                field = GraphQL._map_field_to_graphene_read(
+                    declared_type,
+                    "related_manager_list",
+                    {"relation_kind": "collection"},
+                )
+                self.assertIsInstance(field, graphene.Field)
+                self.assertEqual(
+                    field.type._meta.fields["items"].type.of_type.of_type,
+                    RelatedManagerType,
+                )
+
+        direct_field = GraphQL._map_field_to_graphene_read(
+            RelatedManager | None,
+            "related_manager",
+            {"relation_kind": "direct"},
+        )
+        self.assertIsInstance(direct_field, graphene.Field)
+        self.assertIs(direct_field.type, RelatedManagerType)
+
     def test_map_field_to_graphene_handles_any_type(self):
         field = GraphQL._map_field_to_graphene_read(Any, "metadata")
         self.assertIsInstance(field, graphene.String)
@@ -575,7 +614,7 @@ class GraphQLTests(TestCase):
             return isinstance(candidate, type) and issubclass(candidate, parent)
 
         with patch(
-            "general_manager.api.graphql_search.safe_issubclass",
+            "general_manager.api.graphql_relations.safe_issubclass",
             side_effect=relation_safe_issubclass,
         ):
             filter_type = GraphQL._create_filter_options(DummyManager)
@@ -608,7 +647,7 @@ class GraphQLTests(TestCase):
                     return {
                         "id": {"type": int},
                         "child_list": {
-                            "type": ChildManager,
+                            "type": Bucket[ChildManager],
                             "relation_kind": "collection",
                             "filter_lookup": "child",
                         },
@@ -622,7 +661,7 @@ class GraphQLTests(TestCase):
             return isinstance(candidate, type) and issubclass(candidate, parent)
 
         with patch(
-            "general_manager.api.graphql_search.safe_issubclass",
+            "general_manager.api.graphql_relations.safe_issubclass",
             side_effect=relation_safe_issubclass,
         ):
             filter_type = GraphQL._create_filter_options(ParentManager)
@@ -672,7 +711,7 @@ class GraphQLTests(TestCase):
             return isinstance(candidate, type) and issubclass(candidate, parent)
 
         with patch(
-            "general_manager.api.graphql_search.safe_issubclass",
+            "general_manager.api.graphql_relations.safe_issubclass",
             side_effect=relation_safe_issubclass,
         ):
             normalized = GraphQL._normalize_filter_input(
@@ -727,7 +766,7 @@ class GraphQLTests(TestCase):
             return isinstance(candidate, type) and issubclass(candidate, parent)
 
         with patch(
-            "general_manager.api.graphql_search.safe_issubclass",
+            "general_manager.api.graphql_relations.safe_issubclass",
             side_effect=relation_safe_issubclass,
         ):
             normalized = GraphQL._normalize_filter_input(
@@ -831,6 +870,39 @@ class GraphQLDirectiveRegistrationTests(TestCase):
         schema = GraphQL.get_schema()
         self.assertIsNotNone(schema)
         return schema  # type: ignore[return-value]
+
+    def test_bootstrap_registers_manager_names_before_building_interfaces(self):
+        class FirstManager(GeneralManager):
+            pass
+
+        class SecondManager(GeneralManager):
+            pass
+
+        FirstManager.Interface = object()
+        SecondManager.Interface = object()
+        GraphQL._query_fields = {"ping": graphene.String()}
+
+        def assert_all_managers_registered(_manager):
+            self.assertIs(GraphQL.manager_registry["FirstManager"], FirstManager)
+            self.assertIs(GraphQL.manager_registry["SecondManager"], SecondManager)
+
+        with (
+            patch.object(
+                gm_bootstrap.GraphQL,
+                "create_graphql_interface",
+                side_effect=assert_all_managers_registered,
+            ),
+            patch.object(gm_bootstrap.GraphQL, "create_graphql_mutation"),
+            patch.object(gm_bootstrap.GraphQL, "register_file_upload_mutation"),
+            patch.object(gm_bootstrap.GraphQL, "register_search_query"),
+            patch.object(
+                gm_bootstrap.GraphQL,
+                "register_current_user_capabilities",
+            ),
+            patch("general_manager.uploads.urls.add_file_upload_urls"),
+            patch("general_manager.bootstrap.add_graphql_url"),
+        ):
+            gm_bootstrap.handle_graph_ql([FirstManager, SecondManager])
 
     def test_build_schema_directives_uses_specified_directives_by_default(self) -> None:
         directives = gm_bootstrap._build_schema_directives()
@@ -1360,6 +1432,46 @@ class TestGrapQlMutation(TestCase):
         self.assertIn("manager_list", fields)
         self.assertIsInstance(fields["manager"], graphene.ID)
         self.assertIsInstance(fields["manager_list"], graphene.List)
+
+    def test_create_write_fields_resolves_annotated_manager_relations(self):
+        class RelatedManager(GeneralManager):
+            pass
+
+        class DummyInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {
+                    "manager": {
+                        "type": RelatedManager | None,
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                    "manager_list": {
+                        "type": Bucket[RelatedManager],
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                }
+
+        fields = GraphQL.create_write_fields(DummyInterface)
+
+        self.assertIsInstance(fields["manager"], graphene.ID)
+        self.assertIsInstance(fields["manager_list"], graphene.List)
+
+        class DummyManager:
+            Interface = DummyInterface
+
+        self.assertEqual(
+            _normalize_mutation_kwargs_for_manager(
+                DummyManager,
+                {"manager": "1", "manager_list": ["2"]},
+            ),
+            {"manager_id": "1", "manager_id_list": ["2"]},
+        )
 
     def test_generate_create_mutation_class(self):
         """

@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+from general_manager.api.graphql_relations import resolve_general_manager_type
+from general_manager.bucket.base_bucket import Bucket
+from general_manager.manager.general_manager import GeneralManager
+
+
+class PrimaryManager(GeneralManager):
+    pass
+
+
+class SecondaryManager(GeneralManager):
+    pass
+
+
+def test_resolve_general_manager_type_handles_concrete_and_wrapped_managers() -> None:
+    registry = {"PrimaryManager": PrimaryManager}
+
+    for declared_type in (
+        PrimaryManager,
+        list[PrimaryManager],
+        tuple[PrimaryManager, ...],
+        set[PrimaryManager],
+        Bucket[PrimaryManager],
+        PrimaryManager | None,
+        "PrimaryManager",
+    ):
+        assert resolve_general_manager_type(declared_type, registry) is PrimaryManager
+
+
+def test_resolve_general_manager_type_rejects_non_manager_and_unresolved_types() -> (
+    None
+):
+    registry = {"PrimaryManager": PrimaryManager}
+
+    for declared_type in (
+        str,
+        list[str],
+        dict[str, PrimaryManager],
+        "MissingManager",
+    ):
+        assert resolve_general_manager_type(declared_type, registry) is None
+
+
+def test_resolve_general_manager_type_rejects_ambiguous_manager_union() -> None:
+    assert resolve_general_manager_type(PrimaryManager | SecondaryManager, {}) is None

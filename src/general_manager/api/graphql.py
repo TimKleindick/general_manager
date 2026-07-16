@@ -101,6 +101,7 @@ from general_manager.api.graphql_resolvers import (
     create_list_resolver as _create_list_resolver_fn,
     create_resolver as _create_resolver_fn,
 )
+from general_manager.api.graphql_relations import resolve_general_manager_type
 from general_manager.api.graphql_search import (
     register_search_query as _register_search_query_fn,
     create_search_union as _create_search_union_fn,
@@ -546,8 +547,13 @@ class GraphQL:
         # Map Attribute Types to Graphene Fields
         for field_name, field_info in interface_cls.get_attribute_types().items():
             field_type = field_info["type"]
-            fields[field_name] = cls._map_field_to_graphene_read(
+            resolved_manager_type = resolve_general_manager_type(
                 field_type,
+                cls.manager_registry,
+            )
+            resolved_field_type = resolved_manager_type or field_type
+            fields[field_name] = cls._map_field_to_graphene_read(
+                resolved_field_type,
                 field_name,
                 field_info,
             )
@@ -576,7 +582,10 @@ class GraphQL:
 
                 fields[resolver_name] = resolve_stored_file
             else:
-                fields[resolver_name] = cls._create_resolver(field_name, field_type)
+                fields[resolver_name] = cls._create_resolver(
+                    field_name,
+                    resolved_field_type,
+                )
 
         # handle GraphQLProperty attributes
         for (
@@ -594,9 +603,13 @@ class GraphQL:
 
             if origin in (list, tuple, set):
                 element = type_args[0] if type_args else object
-                if isinstance(element, type) and issubclass(element, GeneralManager):
+                manager_type = resolve_general_manager_type(
+                    element,
+                    cls.manager_registry,
+                )
+                if manager_type is not None:
                     graphene_field = graphene.List(
-                        lambda elem=element: GraphQL.graphql_type_registry[
+                        lambda elem=manager_type: GraphQL.graphql_type_registry[
                             elem.__name__
                         ]
                     )
@@ -605,12 +618,21 @@ class GraphQL:
                         element if isinstance(element, type) else str
                     )
                     graphene_field = graphene.List(base_type)
-                resolved_type = element if isinstance(element, type) else str
+                resolved_type = manager_type or (
+                    element if isinstance(element, type) else str
+                )
             else:
                 resolved_type = (
                     cast(type[object], type_args[0])
                     if type_args
                     else cast(type[object], raw_hint)
+                )
+                resolved_type = (
+                    resolve_general_manager_type(
+                        resolved_type,
+                        cls.manager_registry,
+                    )
+                    or resolved_type
                 )
                 graphene_field = cls._map_field_to_graphene_read(
                     resolved_type, attr_name
@@ -821,7 +843,7 @@ class GraphQL:
             field_info,
         ) in generalManagerClass.Interface.get_attribute_types().items():
             field_type = field_info["type"]
-            if safe_issubclass(field_type, GeneralManager):
+            if resolve_general_manager_type(field_type, GraphQL.manager_registry):
                 continue
             else:
                 sort_options.append(field_name)
@@ -970,7 +992,7 @@ class GraphQL:
 
     @staticmethod
     def _map_field_to_graphene_read(
-        field_type: type,
+        field_type: object,
         field_name: str,
         field_info: Mapping[str, object] | None = None,
     ) -> object:
@@ -998,6 +1020,13 @@ class GraphQL:
         Returns:
             object: Graphene field or type configured for the attribute.
         """
+        manager_type = resolve_general_manager_type(
+            field_type,
+            GraphQL.manager_registry,
+        )
+        if manager_type is not None:
+            field_type = manager_type
+
         if safe_issubclass(field_type, Measurement):
             return graphene.Field(MeasurementType, target_unit=graphene.String())
         elif safe_issubclass(field_type, GeneralManager):
@@ -1032,8 +1061,9 @@ class GraphQL:
                 return graphene.Field(StoredFile)
             if orm_field_kind == "image":
                 return graphene.Field(StoredImage)
+            scalar_type = cast(type, field_type)
             return GraphQL._map_field_to_graphene_base_type(
-                field_type,
+                scalar_type,
                 field_info,
             )()
 
@@ -1191,7 +1221,10 @@ class GraphQL:
             input_field_name,
             input_field,
         ) in generalManagerClass.Interface.input_fields.items():
-            if safe_issubclass(input_field.type, GeneralManager):
+            if resolve_general_manager_type(
+                input_field.type,
+                cls.manager_registry,
+            ):
                 key = f"{input_field_name}_id"
                 identification_fields[key] = graphene.Argument(
                     graphene.ID, required=input_field.required

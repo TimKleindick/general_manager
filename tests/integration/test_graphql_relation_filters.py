@@ -202,6 +202,16 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertEqual(fields.count("changeRequestFeasibilityList"), 1)
         self.assertNotIn("changerequestfeasibilityList", fields)
 
+    def test_reverse_relation_graphql_page_uses_related_manager_type(self):
+        relation_field = GraphQL.graphql_type_registry["ChangeRequest"]._meta.fields[
+            "change_request_feasibility_list"
+        ]
+
+        self.assertEqual(
+            relation_field.type._meta.fields["items"].type.of_type.of_type,
+            GraphQL.graphql_type_registry["ChangeRequestFeasibility"],
+        )
+
     def test_reverse_one_to_one_has_only_canonical_singular_graphql_field(self):
         query = """
         query {

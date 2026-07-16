@@ -21,11 +21,11 @@ from django.db import models
 from django.core.exceptions import FieldDoesNotExist
 
 from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
+from general_manager.api.graphql_relations import resolve_general_manager_type
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.uploads.errors import UploadError, stable_upload_error
 from general_manager.uploads.graphql_types import UploadToken
 from general_manager.uploads.types import UploadOperation
-from general_manager.utils.type_checks import safe_issubclass
 from general_manager.utils.format_string import snake_to_camel
 from general_manager.api.graphql_errors import (
     MissingManagerIdentifierError,
@@ -172,7 +172,7 @@ def _normalize_mutation_kwargs_for_manager(
             base_key = key.removesuffix("_list")
             type_info = attribute_types.get(key)
             relation_type = type_info["type"] if type_info is not None else None
-            if safe_issubclass(relation_type, GeneralManager):
+            if resolve_general_manager_type(relation_type) is not None:
                 normalized.setdefault(f"{base_key}_id_list", normalized[key])
                 normalized.pop(key, None)
                 continue
@@ -180,7 +180,7 @@ def _normalize_mutation_kwargs_for_manager(
         if not key.endswith("_id"):
             type_info = attribute_types.get(key)
             relation_type = type_info["type"] if type_info is not None else None
-            if safe_issubclass(relation_type, GeneralManager):
+            if resolve_general_manager_type(relation_type) is not None:
                 normalized.setdefault(f"{key}_id", normalized[key])
                 normalized.pop(key, None)
 
@@ -200,16 +200,16 @@ def _graphql_mutation_field_name(
     if field_name.endswith("_id_list"):
         relation_name = f"{field_name.removesuffix('_id_list')}_list"
         relation_info = attribute_types.get(relation_name)
-        if relation_info is not None and safe_issubclass(
-            relation_info["type"], GeneralManager
+        if relation_info is not None and resolve_general_manager_type(
+            relation_info["type"]
         ):
             return snake_to_camel(relation_name)
 
     if field_name.endswith("_id"):
         relation_name = field_name.removesuffix("_id")
         relation_info = attribute_types.get(relation_name)
-        if relation_info is not None and safe_issubclass(
-            relation_info["type"], GeneralManager
+        if relation_info is not None and resolve_general_manager_type(
+            relation_info["type"]
         ):
             return snake_to_camel(relation_name)
 
@@ -231,7 +231,7 @@ def _is_direct_relation_raw_id_alias(
         relation_info = attribute_types.get(relation_name)
         if relation_info is None:
             return False
-        return safe_issubclass(relation_info["type"], GeneralManager)
+        return resolve_general_manager_type(relation_info["type"]) is not None
 
     if not name.endswith("_id"):
         return False
@@ -307,7 +307,7 @@ def create_write_fields(
         fld: object
         if info.get("orm_field_kind") in {"file", "image"}:
             fld = UploadToken(required=req, default_value=default)
-        elif safe_issubclass(typ, GeneralManager):
+        elif resolve_general_manager_type(typ) is not None:
             if name.endswith("_list"):
                 fld = graphene.List(graphene.ID, required=req, default_value=default)
             else:
