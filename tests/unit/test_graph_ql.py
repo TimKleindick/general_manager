@@ -19,6 +19,7 @@ from general_manager.api.graphql import (
     get_read_permission_filter,
 )
 from general_manager.api.graphql_mutations import (
+    _graphql_mutation_field_name,
     _normalize_mutation_kwargs_for_manager,
 )
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
@@ -400,6 +401,27 @@ class GraphQLTests(TestCase):
         mock_instance.labels = ["a", "b"]
         resolver = GraphQL._create_resolver("labels", list[str])
         self.assertEqual(resolver(mock_instance, self.info), ["a", "b"])
+
+    def test_create_resolver_resolves_named_manager_relation(self):
+        class RelatedManager(GeneralManager):
+            pass
+
+        previous_registry = GraphQL.manager_registry
+        GraphQL.manager_registry = {"RelatedManager": RelatedManager}
+        self.addCleanup(setattr, GraphQL, "manager_registry", previous_registry)
+        sentinel = object()
+
+        with patch(
+            "general_manager.api.graphql_resolvers.create_list_resolver",
+            return_value=sentinel,
+        ) as create_list_resolver:
+            resolver = GraphQL._create_resolver(
+                "related_manager_list",
+                "RelatedManager",
+            )
+
+        self.assertIs(resolver, sentinel)
+        self.assertIs(create_list_resolver.call_args.args[1], RelatedManager)
 
     def test_create_resolver_handles_any_type(self):
         mock_instance = MagicMock()
@@ -1471,6 +1493,70 @@ class TestGrapQlMutation(TestCase):
                 {"manager": "1", "manager_list": ["2"]},
             ),
             {"manager_id": "1", "manager_id_list": ["2"]},
+        )
+
+    def test_mutation_helpers_resolve_named_manager_relations(self):
+        class RelatedManager(GeneralManager):
+            pass
+
+        def field_info(
+            field_type,
+            *,
+            relation_kind=None,
+        ):
+            return {
+                "type": field_type,
+                "is_required": False,
+                "is_derived": False,
+                "default": None,
+                "is_editable": True,
+                "relation_kind": relation_kind,
+            }
+
+        class DummyInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {
+                    "manager": field_info(
+                        "RelatedManager",
+                        relation_kind="direct",
+                    ),
+                    "manager_id": field_info(int),
+                    "manager_list": field_info(
+                        "RelatedManager",
+                        relation_kind="collection",
+                    ),
+                    "manager_id_list": field_info(int),
+                }
+
+        class DummyManager:
+            Interface = DummyInterface
+
+        previous_registry = GraphQL.manager_registry
+        GraphQL.manager_registry = {"RelatedManager": RelatedManager}
+        self.addCleanup(setattr, GraphQL, "manager_registry", previous_registry)
+
+        fields = GraphQL.create_write_fields(DummyInterface)
+        normalized = _normalize_mutation_kwargs_for_manager(
+            DummyManager,
+            {"manager": "1", "manager_list": ["2"]},
+        )
+
+        self.assertIsInstance(fields["manager"], graphene.ID)
+        self.assertIsInstance(fields["manager_list"], graphene.List)
+        self.assertNotIn("manager_id", fields)
+        self.assertNotIn("manager_id_list", fields)
+        self.assertEqual(
+            normalized,
+            {"manager_id": "1", "manager_id_list": ["2"]},
+        )
+        self.assertEqual(
+            _graphql_mutation_field_name(DummyManager, "manager_id"),
+            "manager",
+        )
+        self.assertEqual(
+            _graphql_mutation_field_name(DummyManager, "manager_id_list"),
+            "managerList",
         )
 
     def test_generate_create_mutation_class(self):

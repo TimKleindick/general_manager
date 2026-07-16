@@ -21,7 +21,10 @@ from django.db import models
 from django.core.exceptions import FieldDoesNotExist
 
 from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
-from general_manager.api.graphql_relations import resolve_general_manager_type
+from general_manager.api.graphql_relations import (
+    get_graphql_manager_registry,
+    resolve_general_manager_type,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.uploads.errors import UploadError, stable_upload_error
 from general_manager.uploads.graphql_types import UploadToken
@@ -166,13 +169,20 @@ def _normalize_mutation_kwargs_for_manager(
 
     attribute_types = interface_cls.get_attribute_types()
     normalized = dict(kwargs)
+    manager_registry = get_graphql_manager_registry()
 
     for key in list(kwargs.keys()):
         if key.endswith("_list") and not key.endswith("_id_list"):
             base_key = key.removesuffix("_list")
             type_info = attribute_types.get(key)
             relation_type = type_info["type"] if type_info is not None else None
-            if resolve_general_manager_type(relation_type) is not None:
+            if (
+                resolve_general_manager_type(
+                    relation_type,
+                    manager_registry,
+                )
+                is not None
+            ):
                 normalized.setdefault(f"{base_key}_id_list", normalized[key])
                 normalized.pop(key, None)
                 continue
@@ -180,7 +190,13 @@ def _normalize_mutation_kwargs_for_manager(
         if not key.endswith("_id"):
             type_info = attribute_types.get(key)
             relation_type = type_info["type"] if type_info is not None else None
-            if resolve_general_manager_type(relation_type) is not None:
+            if (
+                resolve_general_manager_type(
+                    relation_type,
+                    manager_registry,
+                )
+                is not None
+            ):
                 normalized.setdefault(f"{key}_id", normalized[key])
                 normalized.pop(key, None)
 
@@ -196,12 +212,14 @@ def _graphql_mutation_field_name(
         return snake_to_camel(field_name)
 
     attribute_types = interface_cls.get_attribute_types()
+    manager_registry = get_graphql_manager_registry()
 
     if field_name.endswith("_id_list"):
         relation_name = f"{field_name.removesuffix('_id_list')}_list"
         relation_info = attribute_types.get(relation_name)
         if relation_info is not None and resolve_general_manager_type(
-            relation_info["type"]
+            relation_info["type"],
+            manager_registry,
         ):
             return snake_to_camel(relation_name)
 
@@ -209,7 +227,8 @@ def _graphql_mutation_field_name(
         relation_name = field_name.removesuffix("_id")
         relation_info = attribute_types.get(relation_name)
         if relation_info is not None and resolve_general_manager_type(
-            relation_info["type"]
+            relation_info["type"],
+            manager_registry,
         ):
             return snake_to_camel(relation_name)
 
@@ -224,6 +243,7 @@ def _graphql_mutation_field_name(
 def _is_direct_relation_raw_id_alias(
     name: str,
     attribute_types: dict[str, AttributeTypedDict],
+    manager_registry: dict[str, type[GeneralManager]],
 ) -> bool:
     """Return true when ``name`` is a raw relation id alias with a canonical field."""
     if name.endswith("_id_list"):
@@ -231,7 +251,13 @@ def _is_direct_relation_raw_id_alias(
         relation_info = attribute_types.get(relation_name)
         if relation_info is None:
             return False
-        return resolve_general_manager_type(relation_info["type"]) is not None
+        return (
+            resolve_general_manager_type(
+                relation_info["type"],
+                manager_registry,
+            )
+            is not None
+        )
 
     if not name.endswith("_id"):
         return False
@@ -292,12 +318,17 @@ def create_write_fields(
     """
     fields: GrapheneFieldMap = {}
     attribute_types = interface_cls.get_attribute_types()
+    manager_registry = get_graphql_manager_registry()
     for name, info in attribute_types.items():
         if name in ["changed_by", "created_at", "updated_at"]:
             continue
         if info["is_derived"]:
             continue
-        if _is_direct_relation_raw_id_alias(name, attribute_types):
+        if _is_direct_relation_raw_id_alias(
+            name,
+            attribute_types,
+            manager_registry,
+        ):
             continue
 
         typ = info["type"]
@@ -307,7 +338,13 @@ def create_write_fields(
         fld: object
         if info.get("orm_field_kind") in {"file", "image"}:
             fld = UploadToken(required=req, default_value=default)
-        elif resolve_general_manager_type(typ) is not None:
+        elif (
+            resolve_general_manager_type(
+                typ,
+                manager_registry,
+            )
+            is not None
+        ):
             if name.endswith("_list"):
                 fld = graphene.List(graphene.ID, required=req, default_value=default)
             else:

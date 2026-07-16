@@ -11,6 +11,13 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.type_checks import safe_issubclass
 
 
+def get_graphql_manager_registry() -> dict[str, type[GeneralManager]]:
+    """Return the live GraphQL manager registry without an import-time cycle."""
+    from general_manager.api.graphql import GraphQL
+
+    return GraphQL.manager_registry
+
+
 def resolve_general_manager_type(
     declared_type: object,
     manager_registry: Mapping[str, type[GeneralManager]] | None = None,

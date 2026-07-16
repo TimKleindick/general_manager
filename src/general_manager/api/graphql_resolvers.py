@@ -24,7 +24,10 @@ from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
 from general_manager.api.graphql_errors import get_read_permission_filter
-from general_manager.api.graphql_relations import resolve_general_manager_type
+from general_manager.api.graphql_relations import (
+    get_graphql_manager_registry,
+    resolve_general_manager_type,
+)
 from general_manager.api.graphql_prefetch import (
     collect_selected_graphql_property_names,
     plan_dependency_cache_prefetches,
@@ -846,7 +849,10 @@ def create_resolver(
     :class:`~general_manager.measurement.Measurement` fields, and
     :func:`create_normal_resolver` for everything else.
     """
-    manager_field_type = resolve_general_manager_type(field_type)
+    manager_field_type = resolve_general_manager_type(
+        field_type,
+        get_graphql_manager_registry(),
+    )
     if field_name.endswith("_list") and manager_field_type is not None:
         return create_list_resolver(
             lambda self, _include_inactive: cast(
