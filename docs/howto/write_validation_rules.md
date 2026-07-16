@@ -17,6 +17,7 @@ from general_manager.rule import Rule
 class Booking(GeneralManager):
     starts_at: object
     ends_at: object
+    code: str | None
 
     class Interface(DatabaseInterface):
         class Meta:
@@ -43,7 +44,7 @@ referenced value is `None`; skipped rules contribute no validation error. Use
 ```python
 required_code = Rule(
     lambda booking: booking.code is not None,
-    custom_error_message="A booking code is required.",
+    custom_error_message="A booking code is required; received {code}.",
     ignore_if_none=False,
 )
 ```
@@ -51,9 +52,13 @@ required_code = Rule(
 ## Test both the result and message
 
 ```python
+from types import SimpleNamespace
+
+booking = SimpleNamespace(code=None)
+
 assert required_code.evaluate(booking) is False
 assert required_code.get_error_message() == {
-    "code": "A booking code is required."
+    "code": "A booking code is required; received None."
 }
 ```
 
