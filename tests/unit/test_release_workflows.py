@@ -169,6 +169,7 @@ def test_quality_release_database_job_covers_full_supported_matrix() -> None:
     assert test_step["env"] == {
         "GENERAL_MANAGER_TEST_DATABASE": "${{ matrix.database.selector }}",
         "GENERAL_MANAGER_TEST_DATABASE_NAME": "general_manager",
+        "GENERAL_MANAGER_TEST_SECONDARY_DATABASE_NAME": "general_manager_secondary",
         "GENERAL_MANAGER_TEST_DATABASE_USER": "${{ matrix.database.user }}",
         "GENERAL_MANAGER_TEST_DATABASE_PASSWORD": "general_manager",
         "GENERAL_MANAGER_TEST_DATABASE_HOST": "127.0.0.1",
