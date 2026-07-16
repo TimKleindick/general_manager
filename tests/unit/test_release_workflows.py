@@ -51,7 +51,12 @@ def test_quality_workflow_has_reusable_least_privilege_triggers() -> None:
         "workflow_dispatch",
     }
     assert workflow["permissions"] == {"contents": "read"}
-    assert set(workflow["jobs"]) == {"test", "lint-and-mypy", "docs"}
+    assert set(workflow["jobs"]) == {
+        "test",
+        "database-backends",
+        "lint-and-mypy",
+        "docs",
+    }
 
 
 def test_quality_test_job_preserves_supported_matrix_and_test_services() -> None:
@@ -90,6 +95,85 @@ def test_quality_test_job_preserves_supported_matrix_and_test_services() -> None
         "flags": "unittests",
         "version": "v11.2.7",
         "fail_ci_if_error": "false",
+    }
+
+
+def test_quality_release_database_job_covers_full_supported_matrix() -> None:
+    job = load_workflow("quality.yml")["jobs"]["database-backends"]
+
+    assert job["if"] == "${{ github.event_name == 'push' }}"
+    assert job["strategy"] == {
+        "fail-fast": "false",
+        "matrix": {
+            "python-version": ["3.12", "3.13", "3.14"],
+            "database": [
+                {
+                    "name": "PostgreSQL 18",
+                    "selector": "postgresql",
+                    "image": "postgres:18",
+                    "port": "5432",
+                    "user": "postgres",
+                    "driver": "psycopg[binary]>=3.3,<4",
+                    "health-command": ("pg_isready -U postgres -d general_manager"),
+                },
+                {
+                    "name": "MariaDB 11.8 LTS",
+                    "selector": "mariadb",
+                    "image": "mariadb:11.8",
+                    "port": "3306",
+                    "user": "root",
+                    "driver": "mysqlclient>=2.2,<3",
+                    "health-command": ("healthcheck.sh --connect --innodb_initialized"),
+                },
+            ],
+        },
+    }
+    assert job["services"]["database"] == {
+        "image": "${{ matrix.database.image }}",
+        "ports": [
+            "${{ matrix.database.port }}:${{ matrix.database.port }}",
+        ],
+        "env": {
+            "POSTGRES_DB": "general_manager",
+            "POSTGRES_USER": "postgres",
+            "POSTGRES_PASSWORD": "general_manager",
+            "MARIADB_DATABASE": "general_manager",
+            "MARIADB_ROOT_PASSWORD": "general_manager",
+        },
+        "options": (
+            '--health-cmd="${{ matrix.database.health-command }}" '
+            "--health-interval=5s --health-timeout=5s --health-retries=20"
+        ),
+    }
+    assert job["services"]["meilisearch"] == {
+        "image": "getmeili/meilisearch:v1.30.0",
+        "ports": ["7700:7700"],
+        "env": {"MEILI_NO_ANALYTICS": "true"},
+        "options": (
+            '--health-cmd="wget -qO- http://127.0.0.1:7700/health" '
+            "--health-interval=5s --health-timeout=5s --health-retries=10"
+        ),
+    }
+
+    commands = run_commands(job)
+    assert 'pip install -e ".[file-upload-image]"' in commands
+    assert 'pip install "${{ matrix.database.driver }}"' in commands
+    assert 'python -m pytest -m "not perf"' in commands
+    assert action_step(job, "actions/setup-python@v5")["with"] == {
+        "python-version": "${{ matrix.python-version }}"
+    }
+
+    test_step = next(
+        step for step in job["steps"] if step.get("name") == "Run backend test suite"
+    )
+    assert test_step["env"] == {
+        "GENERAL_MANAGER_TEST_DATABASE": "${{ matrix.database.selector }}",
+        "GENERAL_MANAGER_TEST_DATABASE_NAME": "general_manager",
+        "GENERAL_MANAGER_TEST_DATABASE_USER": "${{ matrix.database.user }}",
+        "GENERAL_MANAGER_TEST_DATABASE_PASSWORD": "general_manager",
+        "GENERAL_MANAGER_TEST_DATABASE_HOST": "127.0.0.1",
+        "GENERAL_MANAGER_TEST_DATABASE_PORT": "${{ matrix.database.port }}",
+        "MEILISEARCH_URL": "http://127.0.0.1:7700",
     }
 
 
