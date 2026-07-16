@@ -103,6 +103,11 @@ class ChatPendingConfirmation(models.Model):
     payload: Any = models.JSONField(default=dict)
     expires_at: Any = models.DateTimeField()
     resolved_at: Any = models.DateTimeField(null=True, blank=True)
+    unresolved_marker: Any = models.BooleanField(
+        null=True,
+        default=True,
+        editable=False,
+    )
     created_at: Any = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -113,10 +118,23 @@ class ChatPendingConfirmation(models.Model):
         ]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
-                fields=["conversation", "confirmation_id"],
-                condition=models.Q(resolved_at__isnull=True),
+                fields=["conversation", "confirmation_id", "unresolved_marker"],
                 name="gm_chat_pending_conv_conf_uniq",
-            )
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        resolved_at__isnull=True,
+                        unresolved_marker=True,
+                        unresolved_marker__isnull=False,
+                    )
+                    | models.Q(
+                        resolved_at__isnull=False,
+                        unresolved_marker__isnull=True,
+                    )
+                ),
+                name="gm_chat_pending_resolution_state",
+            ),
         ]
 
     @classmethod
@@ -161,7 +179,8 @@ class ChatPendingConfirmation(models.Model):
             if pending is None:
                 return None
             pending.resolved_at = current_time
-            pending.save(update_fields=["resolved_at"])
+            pending.unresolved_marker = None
+            pending.save(update_fields=["resolved_at", "unresolved_marker"])
             return pending
 
 
@@ -283,7 +302,7 @@ def create_pending_confirmation(
             confirmation_id=confirmation_id,
             resolved_at__isnull=True,
             expires_at__lte=current_time,
-        ).update(resolved_at=current_time)
+        ).update(resolved_at=current_time, unresolved_marker=None)
         unresolved_duplicate_exists = ChatPendingConfirmation.objects.filter(
             conversation=conversation,
             confirmation_id=confirmation_id,
