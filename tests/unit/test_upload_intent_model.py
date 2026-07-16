@@ -46,6 +46,21 @@ def _intent_data(**overrides: Any) -> dict[str, Any]:
     return data
 
 
+def _sqlite_subprocess_environment(settings_module: str) -> dict[str, str]:
+    return {
+        **os.environ,
+        "DJANGO_SETTINGS_MODULE": settings_module,
+        "GENERAL_MANAGER_TEST_DATABASE": "sqlite",
+        "PYTHONPATH": os.pathsep.join(
+            (
+                os.path.join(os.getcwd(), "src"),
+                os.getcwd(),
+                os.environ.get("PYTHONPATH", ""),
+            )
+        ),
+    }
+
+
 def test_upload_tokens_are_nondeterministic_and_store_sha256_digests() -> None:
     """Issue independent high-entropy tokens and deterministic SHA-256 digests."""
     first_token, first_digest = issue_upload_token()
@@ -304,6 +319,8 @@ class UploadIntentSwappableUserMigrationTests(SimpleTestCase):
             from django.db import connection, models
             from general_manager.uploads.models import UploadIntent, UploadQuotaLock
 
+            assert connection.vendor == "sqlite", connection.settings_dict
+
             call_command("migrate", run_syncdb=True, verbosity=0, interactive=False)
 
             upload_intent = UploadIntent
@@ -355,21 +372,10 @@ class UploadIntentSwappableUserMigrationTests(SimpleTestCase):
             ) in foreign_keys
             """
         )
-        env = {
-            **os.environ,
-            "DJANGO_SETTINGS_MODULE": "tests.swappable_user_settings",
-            "PYTHONPATH": os.pathsep.join(
-                (
-                    os.path.join(os.getcwd(), "src"),
-                    os.getcwd(),
-                    os.environ.get("PYTHONPATH", ""),
-                )
-            ),
-        }
         result = subprocess.run(  # noqa: S603
             [sys.executable, "-c", script],
             cwd=os.getcwd(),
-            env=env,
+            env=_sqlite_subprocess_environment("tests.swappable_user_settings"),
             capture_output=True,
             text=True,
             check=False,
@@ -377,3 +383,10 @@ class UploadIntentSwappableUserMigrationTests(SimpleTestCase):
 
         if result.returncode != 0:
             self.fail(result.stderr or result.stdout or "custom user migration failed")
+
+
+def test_swappable_user_migration_subprocess_environment_forces_sqlite() -> None:
+    child_env = _sqlite_subprocess_environment("tests.swappable_user_settings")
+
+    assert child_env["DJANGO_SETTINGS_MODULE"] == "tests.swappable_user_settings"
+    assert child_env["GENERAL_MANAGER_TEST_DATABASE"] == "sqlite"

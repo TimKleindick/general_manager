@@ -13,7 +13,7 @@ import textwrap
 from threading import Barrier
 import traceback
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest.mock import patch
 from urllib.parse import quote
 from uuid import UUID
@@ -27,6 +27,7 @@ from django.core.files.storage import FileSystemStorage
 from django.db import (
     OperationalError,
     close_old_connections,
+    connection,
     connections,
     models,
     transaction,
@@ -84,6 +85,20 @@ from general_manager.uploads.types import (
 _STORAGE = FileSystemStorage(
     location=f"{tempfile.gettempdir()}/general-manager-upload-service-tests"
 )
+
+sqlite_only = pytest.mark.skipif(
+    connection.vendor != "sqlite",
+    reason="exercises SQLite-specific locking or transaction behavior",
+)
+
+
+def _sqlite_subprocess_environment(settings_module: str) -> dict[str, str]:
+    return {
+        **os.environ,
+        "DJANGO_SETTINGS_MODULE": settings_module,
+        "GENERAL_MANAGER_TEST_DATABASE": "sqlite",
+        "PYTHONPATH": os.pathsep.join((os.path.join(os.getcwd(), "src"), os.getcwd())),
+    }
 
 
 class NonAtomicIncrementCache(BaseCache):
@@ -1210,6 +1225,7 @@ class BeginFileUploadTests(TestCase):
         assert lock_model.objects.count() == 1
         assert lock_model.objects.get(pk=1).generation == first_generation + 1
 
+    @sqlite_only
     def test_sqlite_busy_retry_exhaustion_is_sanitized(self) -> None:
         with (
             patch(
@@ -1226,6 +1242,7 @@ class BeginFileUploadTests(TestCase):
         assert "storage-password-must-not-escape" not in str(captured.value)
         assert UploadIntent.objects.count() == 0
 
+    @sqlite_only
     def test_sqlite_busy_retry_starts_a_fresh_atomic_admission(self) -> None:
         from general_manager.uploads import services
 
@@ -1248,6 +1265,7 @@ class BeginFileUploadTests(TestCase):
         assert atomic_states == [True, True]
         assert UploadIntent.objects.count() == 1
 
+    @sqlite_only
     def test_sqlite_admission_fails_before_side_effects_in_application_atomic(
         self,
     ) -> None:
@@ -1271,6 +1289,7 @@ class BeginFileUploadTests(TestCase):
         assert hook_calls == 0
         assert UploadIntent.objects.count() == 0
 
+    @sqlite_only
     def test_sqlite_atomic_detection_excludes_testcase_and_detects_atomic_requests_blocks(
         self,
     ) -> None:
@@ -1289,6 +1308,7 @@ class BeginFileUploadTests(TestCase):
         with patch.object(services, "connections", {"default": connection}):
             assert services._sqlite_has_application_atomic_block("default") is True
 
+    @sqlite_only
     @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": False}})
     def test_disabled_sqlite_admission_still_fails_before_atomic_side_effects(
         self,
@@ -1421,6 +1441,9 @@ class SQLiteUploadQuotaIntegrationTests(SimpleTestCase):
 
             django.setup()
 
+            from django.db import connection
+            assert connection.vendor == "sqlite", connection.settings_dict
+
             from django.contrib.auth import get_user_model
             from django.core.cache import cache
             from django.core.management import call_command
@@ -1487,6 +1510,9 @@ class SQLiteUploadQuotaIntegrationTests(SimpleTestCase):
             import django
 
             django.setup()
+
+            from django.db import connection
+            assert connection.vendor == "sqlite", connection.settings_dict
 
             from django.contrib.auth import get_user_model
             from django.core.cache import cache
@@ -1566,13 +1592,7 @@ class SQLiteUploadQuotaIntegrationTests(SimpleTestCase):
             result = subprocess.run(  # noqa: S603
                 [sys.executable, "-c", script, database_path],
                 cwd=os.getcwd(),
-                env={
-                    **os.environ,
-                    "DJANGO_SETTINGS_MODULE": "tests.test_settings",
-                    "PYTHONPATH": os.pathsep.join(
-                        (os.path.join(os.getcwd(), "src"), os.getcwd())
-                    ),
-                },
+                env=_sqlite_subprocess_environment("tests.test_settings"),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -1580,3 +1600,43 @@ class SQLiteUploadQuotaIntegrationTests(SimpleTestCase):
 
         if result.returncode != 0:
             self.fail(result.stderr or result.stdout or "SQLite quota check failed")
+
+
+def _sqlite_only_mark(test: object) -> Any:
+    marks = [mark for mark in getattr(test, "pytestmark", ()) if mark.name == "skipif"]
+    assert len(marks) == 1
+    return marks[0]
+
+
+def test_sqlite_connection_specific_begin_tests_are_backend_scoped() -> None:
+    sqlite_specific = (
+        "test_sqlite_busy_retry_exhaustion_is_sanitized",
+        "test_sqlite_busy_retry_starts_a_fresh_atomic_admission",
+        "test_sqlite_admission_fails_before_side_effects_in_application_atomic",
+        "test_sqlite_atomic_detection_excludes_testcase_and_detects_atomic_requests_blocks",
+        "test_disabled_sqlite_admission_still_fails_before_atomic_side_effects",
+    )
+
+    for name in sqlite_specific:
+        mark = _sqlite_only_mark(getattr(BeginFileUploadTests, name))
+        assert mark.args == (connection.vendor != "sqlite",), name
+        assert (
+            mark.kwargs["reason"]
+            == "exercises SQLite-specific locking or transaction behavior"
+        )
+
+    assert all(
+        mark.name != "skipif"
+        for mark in getattr(
+            BeginFileUploadTests.test_sqlite_atomic_detection_fails_closed_without_atomic_block_internals,
+            "pytestmark",
+            (),
+        )
+    )
+
+
+def test_sqlite_quota_subprocess_environment_forces_sqlite() -> None:
+    child_env = _sqlite_subprocess_environment("tests.test_settings")
+
+    assert child_env["DJANGO_SETTINGS_MODULE"] == "tests.test_settings"
+    assert child_env["GENERAL_MANAGER_TEST_DATABASE"] == "sqlite"
