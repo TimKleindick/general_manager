@@ -2,6 +2,36 @@
 
 <!-- version list -->
 
+## v0.64.2 (2026-07-16)
+
+### Bug Fixes
+
+- Resolve generated GraphQL relation types
+  ([`ea4bf10`](https://github.com/TimKleindick/general_manager/commit/ea4bf100bac9e675a8d5ab05ffd9b7141357c1bf))
+
+- Resolve postponed GraphQL relation annotations
+  ([`6e7f052`](https://github.com/TimKleindick/general_manager/commit/6e7f0521c16be8014bb6d145c9ea1edc7f4456d1))
+
+- Support typing collection relation wrappers
+  ([`3adf9a2`](https://github.com/TimKleindick/general_manager/commit/3adf9a20c08d6cae0e52ad39a53487efeb6b9298))
+
+### Documentation
+
+- Address API audit review feedback
+  ([`24b9714`](https://github.com/TimKleindick/general_manager/commit/24b97141332256ae6c31baadc4c1eaf1fda1de2f))
+
+- Cover seven-day public API changes
+  ([`feffdba`](https://github.com/TimKleindick/general_manager/commit/feffdba65fdf6bdb232463aa7c2037c6a0399b9b))
+
+- Fix existing model write example
+  ([`5035d56`](https://github.com/TimKleindick/general_manager/commit/5035d56e3261d6c9bb4d026e659c739c15ee5796))
+
+### Testing
+
+- Cover postponed GraphQL relation parsing
+  ([`cabe0bc`](https://github.com/TimKleindick/general_manager/commit/cabe0bceef8edcf099777a3ce4186ae177849107))
+
+
 ## v0.64.1 (2026-07-16)
 
 ### Bug Fixes
