@@ -5,7 +5,7 @@ from io import StringIO
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, models, transaction
 from django.test import TestCase
 from django.test.utils import override_settings
 from django.utils import timezone
@@ -22,6 +22,21 @@ from general_manager.chat.models import (
 
 
 class ChatPersistenceTests(TestCase):
+    def test_pending_confirmation_uniqueness_uses_portable_marker(self) -> None:
+        constraint = next(
+            constraint
+            for constraint in ChatPendingConfirmation._meta.constraints
+            if constraint.name == "gm_chat_pending_conv_conf_uniq"
+        )
+
+        assert isinstance(constraint, models.UniqueConstraint)
+        assert constraint.fields == (
+            "conversation",
+            "confirmation_id",
+            "unresolved_marker",
+        )
+        assert constraint.condition is None
+
     def test_for_actor_reuses_anonymous_session_conversation(self) -> None:
         first = ChatConversation.for_actor(user=None, session_key="anon-1")
         second = ChatConversation.for_actor(user=None, session_key="anon-1")
@@ -173,10 +188,12 @@ class ChatPersistenceTests(TestCase):
 
         assert claimed is not None
         assert claimed.pk == first.pk
+        assert claimed.unresolved_marker is None
         assert second.pk != first.pk
         assert second.conversation_id == conversation.pk
         assert second.confirmation_id == "tool-repeat"
         assert second.resolved_at is None
+        assert second.unresolved_marker is True
 
     def test_expired_pending_confirmation_id_can_repeat_within_conversation(
         self,
@@ -200,9 +217,11 @@ class ChatPersistenceTests(TestCase):
 
         expired.refresh_from_db()
         assert expired.resolved_at is not None
+        assert expired.unresolved_marker is None
         assert replacement.pk != expired.pk
         assert replacement.confirmation_id == "tool-repeat"
         assert replacement.resolved_at is None
+        assert replacement.unresolved_marker is True
 
     def test_claim_for_conversation_marks_pending_resolved_before_returning(
         self,
@@ -226,8 +245,35 @@ class ChatPersistenceTests(TestCase):
         assert claimed is not None
         assert claimed.pk == pending.pk
         assert claimed.resolved_at == now
+        assert claimed.unresolved_marker is None
         pending.refresh_from_db()
         assert pending.resolved_at == now
+        assert pending.unresolved_marker is None
+
+    def test_pending_confirmation_rejects_inconsistent_resolution_state(self) -> None:
+        conversation = ChatConversation.for_actor(
+            user=None,
+            session_key="resolution-state",
+        )
+        pending = create_pending_confirmation(
+            conversation,
+            confirmation_id="tool-resolution-state",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            timeout_seconds=30,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ChatPendingConfirmation.objects.filter(pk=pending.pk).update(
+                    resolved_at=timezone.now(),
+                )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ChatPendingConfirmation.objects.filter(pk=pending.pk).update(
+                    unresolved_marker=None,
+                )
 
     def test_claim_for_conversation_returns_none_after_first_claim(self) -> None:
         conversation = ChatConversation.for_actor(user=None, session_key="claim-2")
@@ -282,8 +328,10 @@ class ChatPersistenceTests(TestCase):
         assert claimed is not None
         assert claimed.pk == expired.pk
         assert claimed.resolved_at == now
+        assert claimed.unresolved_marker is None
         expired.refresh_from_db()
         assert expired.resolved_at == now
+        assert expired.unresolved_marker is None
         assert (
             ChatPendingConfirmation.claim_for_conversation(
                 conversation=conversation,
