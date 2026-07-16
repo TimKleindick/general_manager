@@ -33,7 +33,10 @@ def test_resolve_general_manager_type_handles_concrete_and_wrapped_managers() ->
         "Bucket[PrimaryManager]",
         "Bucket['PrimaryManager']",
         "tuple[PrimaryManager, ...]",
+        "typing.List[PrimaryManager]",
         "typing.Optional[PrimaryManager]",
+        "typing.Set[PrimaryManager]",
+        "typing.Tuple[PrimaryManager, ...]",
         ForwardRef("Bucket[PrimaryManager]"),
     ):
         assert resolve_general_manager_type(declared_type, registry) is PrimaryManager
