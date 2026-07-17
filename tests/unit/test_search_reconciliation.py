@@ -8,6 +8,7 @@ from unittest.mock import patch
 from django.test import TestCase
 from django.utils import timezone
 
+import general_manager.search.reconciliation as reconciliation
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
@@ -94,6 +95,23 @@ class SearchReconciliationDiscoveryTests(TestCase):
     def test_manager_import_path_is_stable(self) -> None:
         """Build a stable import path for a manager class."""
         assert manager_import_path(ReconcileProject).endswith(".ReconcileProject")
+
+    def test_manager_or_path_uses_canonical_helper_for_manager_classes(self) -> None:
+        """Normalize manager classes without changing configured dotted paths."""
+        with patch.object(
+            reconciliation,
+            "manager_import_path",
+            return_value="canonical.ReconcileProject",
+        ) as canonical_path:
+            assert (
+                reconciliation._manager_or_path(ReconcileProject)
+                == "canonical.ReconcileProject"
+            )
+            assert reconciliation._manager_or_path("configured.Source") == (
+                "configured.Source"
+            )
+
+        canonical_path.assert_called_once_with(ReconcileProject)
 
     def test_iter_search_index_targets_includes_fingerprint(self) -> None:
         """Discover search targets with their schema fingerprints."""
