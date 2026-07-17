@@ -5,6 +5,10 @@ Factories make it easy to seed development databases or create fixtures for end-
 ## Step 1: Define factories
 Factories are automatically generated based on the manager's interface. But you can customise generation by defining a nested `Factory` class.
 
+When one factory should create an object pointing back to it, see
+[Create Related Objects with Factories](factory_related_objects.md) for
+`RelatedFactory` and per-call child overrides.
+
 ```python
 from datetime import date
 from general_manager.factory import (

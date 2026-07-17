@@ -144,6 +144,7 @@ nav:
       - howto/create_custom_interface_type.md
       - howto/create_custom_capability.md
       - howto/factory_bulk_generate.md
+      - howto/factory_related_objects.md
       - howto/testing_guides.md
       - howto/audit_logger_analysis.md
       - howto/migrations_gotchas.md
