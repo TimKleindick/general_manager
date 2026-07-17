@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import timedelta
 from typing import Any, ClassVar, cast
 
@@ -136,6 +137,51 @@ class ChatPendingConfirmation(models.Model):
                 name="gm_chat_pending_resolution_state",
             ),
         ]
+
+    def save(
+        self,
+        *args: Any,
+        force_insert: bool = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: Iterable[str] | None = None,
+    ) -> None:
+        """Keep the internal uniqueness marker aligned with resolution state."""
+        if args:
+            parse_save_params = getattr(
+                cast(Any, self),
+                "_parse_save_params",
+                None,
+            )
+            if parse_save_params is None:
+                cast(Any, super().save)(
+                    *args,
+                    force_insert=force_insert,
+                    force_update=force_update,
+                    using=using,
+                    update_fields=update_fields,
+                )
+                return
+            force_insert, force_update, using, update_fields = parse_save_params(
+                *args,
+                method_name="save",
+                force_insert=force_insert,
+                force_update=force_update,
+                using=using,
+                update_fields=update_fields,
+            )
+        if update_fields is not None:
+            update_fields = set(update_fields)
+        if update_fields is None or "resolved_at" in update_fields:
+            self.unresolved_marker = True if self.resolved_at is None else None
+            if update_fields is not None:
+                update_fields.add("unresolved_marker")
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=update_fields,
+        )
 
     @classmethod
     def active_for_conversation(

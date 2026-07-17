@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import timedelta
 from io import StringIO
+from unittest import skipIf
 
+from django import VERSION as DJANGO_VERSION
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import IntegrityError, models, transaction
@@ -274,6 +276,85 @@ class ChatPersistenceTests(TestCase):
                 ChatPendingConfirmation.objects.filter(pk=pending.pk).update(
                     unresolved_marker=None,
                 )
+
+    def test_pending_confirmation_create_derives_resolved_marker(self) -> None:
+        conversation = ChatConversation.for_actor(
+            user=None,
+            session_key="resolved-create",
+        )
+        resolved_at = timezone.now()
+
+        pending = ChatPendingConfirmation.objects.create(
+            conversation=conversation,
+            confirmation_id="tool-resolved-create",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            expires_at=resolved_at + timedelta(seconds=30),
+            resolved_at=resolved_at,
+        )
+
+        pending.refresh_from_db()
+        assert pending.resolved_at == resolved_at
+        assert pending.unresolved_marker is None
+
+    def test_pending_confirmation_save_updates_resolved_marker(self) -> None:
+        conversation = ChatConversation.for_actor(
+            user=None,
+            session_key="resolved-save",
+        )
+        pending = create_pending_confirmation(
+            conversation,
+            confirmation_id="tool-resolved-save",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            timeout_seconds=30,
+        )
+        resolved_at = timezone.now()
+
+        pending.resolved_at = resolved_at
+        pending.save(update_fields=["resolved_at"])
+
+        pending.refresh_from_db()
+        assert pending.resolved_at == resolved_at
+        assert pending.unresolved_marker is None
+
+    @skipIf(
+        DJANGO_VERSION >= (6, 0),
+        "Django 6 removed positional arguments from Model.save()",
+    )
+    def test_pending_confirmation_save_updates_marker_with_positional_fields(
+        self,
+    ) -> None:
+        conversation = ChatConversation.for_actor(
+            user=None,
+            session_key="resolved-save-positional",
+        )
+        pending = create_pending_confirmation(
+            conversation,
+            confirmation_id="tool-resolved-save-positional",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            timeout_seconds=30,
+        )
+        resolved_at = timezone.now()
+
+        pending.resolved_at = resolved_at
+        with self.assertWarns(DeprecationWarning):
+            pending.save(False, False, None, ["resolved_at"])
+
+        pending.refresh_from_db()
+        assert pending.resolved_at == resolved_at
+        assert pending.unresolved_marker is None
+
+    @skipIf(
+        DJANGO_VERSION < (6, 0),
+        "Django 5 still accepts deprecated positional arguments to Model.save()",
+    )
+    def test_pending_confirmation_save_rejects_positional_fields(self) -> None:
+        pending = ChatPendingConfirmation()
+
+        with self.assertRaises(TypeError):
+            pending.save(False)
 
     def test_claim_for_conversation_returns_none_after_first_claim(self) -> None:
         conversation = ChatConversation.for_actor(user=None, session_key="claim-2")
