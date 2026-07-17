@@ -290,5 +290,5 @@ extraction, and backend write/list/delete errors propagate to the caller.
 - Monitor indexing failures in logs and alert on task errors.
 - Run reconciliation periodically; it repairs dirty fallbacks and accepted task
   failures.
-- Apply migration `0010_search_index_state_dirty_generation` before enabling
+- Apply migration `0011_search_index_state_dirty_generation` before enabling
   lifecycle invalidation workers.

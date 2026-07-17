@@ -5,7 +5,10 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("general_manager", "0009_upload_cleanup_state"),
+        (
+            "general_manager",
+            "0010_chat_pending_confirmation_portable_uniqueness",
+        ),
     ]
 
     operations = [

@@ -88,8 +88,8 @@ PYTHONPATH=src python -m django makemigrations --check --dry-run --settings=test
 
 A clean check prints `No changes detected`.
 
-`0010_search_index_state_dirty_generation.py` depends on
-`0009_upload_cleanup_state.py` and adds the non-null
+`0011_search_index_state_dirty_generation.py` depends on
+`0010_chat_pending_confirmation_portable_uniqueness.py` and adds the non-null
 `SearchIndexState.dirty_generation` positive-big-integer field with default
 `0`. Lifecycle invalidation increments this value on every dirty mark. Workers
 and reconciliation use it as a generation fence so stale work cannot clear a
