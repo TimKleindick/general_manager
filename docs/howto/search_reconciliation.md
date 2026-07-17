@@ -191,7 +191,7 @@ sufficient.
 `SearchIndexState` is the durable row behind reconciliation. It is unique per
 `manager_path` and `index_name`, stores the current `schema_fingerprint`, and
 uses dirty fields plus claim fields to coordinate workers. Migration
-`0010_search_index_state_dirty_generation` adds the generation fence required by
+`0011_search_index_state_dirty_generation` adds the generation fence required by
 the lifecycle handoff. `mark_dirty(reason)`
 preserves the first `dirty_since` timestamp while replacing `dirty_reason` with
 the provided string and incrementing `dirty_generation`; pass one of
