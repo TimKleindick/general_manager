@@ -33,6 +33,43 @@ query ProjectWithDerivatives($id: Int!) {
 }
 ```
 
+## Query a manager relation
+
+For a manager declaration such as `owner: User | None` and
+`reviewer_list: Bucket[User]`, generated GraphQL exposes an object field and a
+paginated relation-list field. Query both fields directly:
+
+```graphql
+query ProjectRelations($projectId: ID!) {
+  project(id: $projectId) {
+    owner { id name }
+    reviewerList(page: 1, pageSize: 20) {
+      items { id name }
+      pageInfo { totalCount currentPage totalPages pageSize }
+    }
+  }
+}
+```
+
+Nested relation filters use the same resolved manager type. A direct relation
+uses a nested object, while a collection relation uses `any` or `none`:
+
+```graphql
+query ProjectsWithRelatedUsers {
+  projectList(filter: {
+    owner: { name: "Alice" }
+    reviewerList: { any: { name: "Alice" } }
+  }) {
+    items { id name owner { id name } }
+  }
+}
+```
+
+For the Python annotation forms and the generated mutation/subscription
+contracts, see the [GraphQL concept guide](../concepts/graphql/schema_autogen.md#relation-annotation-compatibility),
+the [task guide](../howto/expose_via_graphql.md#declare-manager-relations), and
+the [API reference](../api/graphql.md#relation-annotation-compatibility).
+
 ## Custom mutation with Measurement input
 
 ```graphql
