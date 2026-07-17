@@ -24,6 +24,7 @@ from general_manager.uploads.tokens import (
     verify_upload_token,
 )
 from general_manager.uploads.types import UploadIntentState, UploadOperation
+from tests.utils.database import sqlite_subprocess_environment
 
 
 def _intent_data(**overrides: Any) -> dict[str, Any]:
@@ -44,21 +45,6 @@ def _intent_data(**overrides: Any) -> dict[str, Any]:
     }
     data.update(overrides)
     return data
-
-
-def _sqlite_subprocess_environment(settings_module: str) -> dict[str, str]:
-    return {
-        **os.environ,
-        "DJANGO_SETTINGS_MODULE": settings_module,
-        "GENERAL_MANAGER_TEST_DATABASE": "sqlite",
-        "PYTHONPATH": os.pathsep.join(
-            (
-                os.path.join(os.getcwd(), "src"),
-                os.getcwd(),
-                os.environ.get("PYTHONPATH", ""),
-            )
-        ),
-    }
 
 
 def test_upload_tokens_are_nondeterministic_and_store_sha256_digests() -> None:
@@ -375,7 +361,7 @@ class UploadIntentSwappableUserMigrationTests(SimpleTestCase):
         result = subprocess.run(  # noqa: S603
             [sys.executable, "-c", script],
             cwd=os.getcwd(),
-            env=_sqlite_subprocess_environment("tests.swappable_user_settings"),
+            env=sqlite_subprocess_environment("tests.swappable_user_settings"),
             capture_output=True,
             text=True,
             check=False,
@@ -386,7 +372,7 @@ class UploadIntentSwappableUserMigrationTests(SimpleTestCase):
 
 
 def test_swappable_user_migration_subprocess_environment_forces_sqlite() -> None:
-    child_env = _sqlite_subprocess_environment("tests.swappable_user_settings")
+    child_env = sqlite_subprocess_environment("tests.swappable_user_settings")
 
     assert child_env["DJANGO_SETTINGS_MODULE"] == "tests.swappable_user_settings"
     assert child_env["GENERAL_MANAGER_TEST_DATABASE"] == "sqlite"

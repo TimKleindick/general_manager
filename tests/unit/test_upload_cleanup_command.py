@@ -11,7 +11,6 @@ import sys
 import tempfile
 import textwrap
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
@@ -28,21 +27,11 @@ from general_manager.uploads.finalization import run_upload_cleanup
 from general_manager.uploads.errors import UploadObjectMissingError
 from general_manager.uploads.models import UploadIntent
 from general_manager.uploads.types import ObjectVersion, UploadIntentState
-
-
-sqlite_only = pytest.mark.skipif(
-    connection.vendor != "sqlite",
-    reason="exercises SQLite-specific locking or transaction behavior",
+from tests.utils.database import (
+    sqlite_only,
+    sqlite_only_mark,
+    sqlite_subprocess_environment,
 )
-
-
-def _sqlite_subprocess_environment(settings_module: str) -> dict[str, str]:
-    return {
-        **os.environ,
-        "DJANGO_SETTINGS_MODULE": settings_module,
-        "GENERAL_MANAGER_TEST_DATABASE": "sqlite",
-        "PYTHONPATH": os.pathsep.join((os.path.join(os.getcwd(), "src"), os.getcwd())),
-    }
 
 
 def _intent(
@@ -722,7 +711,7 @@ class SQLiteUploadCleanupIntegrationTests(SimpleTestCase):
             result = subprocess.run(  # noqa: S603
                 [sys.executable, "-c", script, database_path],
                 cwd=os.getcwd(),
-                env=_sqlite_subprocess_environment("tests.test_settings"),
+                env=sqlite_subprocess_environment("tests.test_settings"),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -731,18 +720,12 @@ class SQLiteUploadCleanupIntegrationTests(SimpleTestCase):
             self.fail(result.stderr or result.stdout or "SQLite cleanup check failed")
 
 
-def _sqlite_only_mark(test: object) -> Any:
-    marks = [mark for mark in getattr(test, "pytestmark", ()) if mark.name == "skipif"]
-    assert len(marks) == 1
-    return marks[0]
-
-
 def test_sqlite_cleanup_contention_tests_are_backend_scoped() -> None:
     for test in (
         test_finalizing_selection_retries_sqlite_worker_contention,
         test_terminal_claim_retries_sqlite_worker_contention,
     ):
-        mark = _sqlite_only_mark(test)
+        mark = sqlite_only_mark(test)
         assert mark.args == (connection.vendor != "sqlite",)
         assert (
             mark.kwargs["reason"]
@@ -759,11 +742,33 @@ def test_sqlite_cleanup_contention_tests_are_backend_scoped() -> None:
     )
 
 
-def test_sqlite_cleanup_subprocess_environment_forces_sqlite() -> None:
-    child_env = _sqlite_subprocess_environment("tests.test_settings")
+def test_sqlite_cleanup_subprocess_environment_forces_sqlite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing_path = os.path.join(os.getcwd(), "existing-pythonpath")
+    monkeypatch.setenv("PYTHONPATH", existing_path)
+    child_env = sqlite_subprocess_environment("tests.test_settings")
 
     assert child_env["DJANGO_SETTINGS_MODULE"] == "tests.test_settings"
     assert child_env["GENERAL_MANAGER_TEST_DATABASE"] == "sqlite"
+    assert child_env["PYTHONPATH"].split(os.pathsep) == [
+        os.path.join(os.getcwd(), "src"),
+        os.getcwd(),
+        existing_path,
+    ]
+
+
+def test_sqlite_subprocess_environment_omits_empty_pythonpath(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+
+    child_env = sqlite_subprocess_environment("tests.test_settings")
+
+    assert child_env["PYTHONPATH"].split(os.pathsep) == [
+        os.path.join(os.getcwd(), "src"),
+        os.getcwd(),
+    ]
 
 
 @pytest.mark.django_db(transaction=True)
