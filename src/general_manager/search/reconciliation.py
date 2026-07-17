@@ -180,10 +180,11 @@ def build_search_schema_fingerprint(
             {
                 "source": _manager_or_path(rule.source),
                 "resolver": _callable_path(rule.resolve),
-                "indexes": list(rule.indexes) if rule.indexes is not None else None,
+                "index": index_config.name,
                 "relation": rule.relation,
             }
             for rule in config.invalidation_rules
+            if rule.indexes is None or index_config.name in rule.indexes
         ]
         if config
         else [],

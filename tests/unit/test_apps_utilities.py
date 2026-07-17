@@ -185,6 +185,10 @@ class AppsUtilitiesTests(SimpleTestCase):
                         side_effect=lambda: call_order.append("register_upload_checks"),
                     ),
                     patch(
+                        "general_manager.search.checks.register_search_checks",
+                        side_effect=lambda: call_order.append("register_search_checks"),
+                    ),
+                    patch(
                         "general_manager.apps._autoload_app_managers_modules",
                         side_effect=lambda *_args, **_kwargs: call_order.append(
                             "autoload"
@@ -266,6 +270,7 @@ class AppsUtilitiesTests(SimpleTestCase):
             "install_runner",
             "register_checks",
             "register_upload_checks",
+            "register_search_checks",
             "autoload",
             "initialize",
             "configure_audit",
@@ -311,6 +316,12 @@ class AppsUtilitiesTests(SimpleTestCase):
                             ),
                         ),
                         patch(
+                            "general_manager.search.checks.register_search_checks",
+                            side_effect=lambda: call_order.append(
+                                "register_search_checks"
+                            ),
+                        ),
+                        patch(
                             "general_manager.apps._autoload_app_managers_modules",
                             side_effect=lambda *_args, **_kwargs: call_order.append(
                                 "autoload"
@@ -347,6 +358,12 @@ class AppsUtilitiesTests(SimpleTestCase):
                                     "general_manager.search.invalidation.configure_search_invalidation",
                                     side_effect=lambda: call_order.append(
                                         "configure_search_invalidation"
+                                    ),
+                                ),
+                                patch(
+                                    "general_manager.search.m2m_invalidation.configure_search_m2m_invalidation",
+                                    side_effect=lambda: call_order.append(
+                                        "configure_search_m2m_invalidation"
                                     ),
                                 ),
                                 patch(
@@ -408,12 +425,14 @@ class AppsUtilitiesTests(SimpleTestCase):
             "install_runner",
             "register_checks",
             "register_upload_checks",
+            "register_search_checks",
             "autoload",
             "initialize",
             "remote_api",
             "configure_audit",
             "configure_search",
             "configure_search_invalidation",
+            "configure_search_m2m_invalidation",
             "configure_workflow_engine",
             "configure_event_registry",
             "configure_signal_bridge",

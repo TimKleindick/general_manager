@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from importlib import import_module
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.apps import apps
 from django.contrib.auth.models import Group, Permission, User
@@ -37,6 +37,24 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
     databases: ClassVar[set[str]] = {"default", "secondary"}
 
     @classmethod
+    def _restore_secondary_connection(cls) -> None:
+        """Restore the connection handler state replaced by this test class."""
+        if cls._secondary_connection_restored:
+            return
+        cls._secondary_connection_restored = True
+        if hasattr(connections._connections, "secondary"):
+            connections["secondary"].close()
+            del connections["secondary"]
+        if cls._secondary_original_config is None:
+            connections.databases.pop("secondary", None)
+        else:
+            connections.databases["secondary"] = cls._secondary_original_config
+        if cls._secondary_had_cached_connection:
+            connections._connections.secondary = (  # type: ignore[attr-defined]
+                cls._secondary_original_connection
+            )
+
+    @classmethod
     def setUpClass(cls) -> None:
         """Create isolated ORM-backed endpoints and both through styles."""
         cls._secondary_original_config = connections.databases.get("secondary")
@@ -49,6 +67,8 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
             if cls._secondary_had_cached_connection
             else None
         )
+        cls._secondary_connection_restored = False
+        cls.addClassCleanup(cls._restore_secondary_connection)
         if cls._secondary_had_cached_connection:
             del connections["secondary"]
         connections.databases["secondary"] = {
@@ -233,17 +253,6 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
                 else:
                     setattr(cls._manager_module, name, prior)
             super().tearDownClass()
-            if hasattr(connections._connections, "secondary"):
-                connections["secondary"].close()
-                del connections["secondary"]
-            if cls._secondary_original_config is None:
-                connections.databases.pop("secondary", None)
-            else:
-                connections.databases["secondary"] = cls._secondary_original_config
-            if cls._secondary_had_cached_connection:
-                connections._connections.secondary = (  # type: ignore[attr-defined]
-                    cls._secondary_original_connection
-                )
 
     def setUp(self) -> None:
         """Create two owners and sources through the ORM endpoints."""
@@ -253,6 +262,87 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
         self.auto_owner_a = self.AutoOwnerModel.objects.create(name="auto-a")
         self.auto_owner_b = self.AutoOwnerModel.objects.create(name="auto-b")
         self.custom_owner = self.CustomOwnerModel.objects.create(name="custom")
+
+    def test_secondary_connection_cleanup_is_idempotent(self) -> None:
+        """Repeated cleanup leaves the restored cached connection untouched."""
+
+        class CleanupProbe(type(self)):
+            pass
+
+        current_connection = MagicMock()
+        original_connection = MagicMock()
+        original_config = object()
+        cached_connections = MagicMock()
+        cached_connections.secondary = current_connection
+        fake_connections = MagicMock()
+        fake_connections._connections = cached_connections
+        fake_connections.databases = {"secondary": object()}
+        fake_connections.__getitem__.side_effect = lambda alias: getattr(
+            cached_connections, alias
+        )
+        fake_connections.__delitem__.side_effect = lambda alias: delattr(
+            cached_connections, alias
+        )
+        CleanupProbe._secondary_connection_restored = False
+        CleanupProbe._secondary_original_config = original_config
+        CleanupProbe._secondary_had_cached_connection = True
+        CleanupProbe._secondary_original_connection = original_connection
+
+        with patch(f"{__name__}.connections", fake_connections):
+            CleanupProbe._restore_secondary_connection()
+            restored_config = fake_connections.databases["secondary"]
+            restored_connection = cached_connections.secondary
+
+            CleanupProbe._restore_secondary_connection()
+
+        current_connection.close.assert_called_once_with()
+        original_connection.close.assert_not_called()
+        assert fake_connections.databases["secondary"] is restored_config
+        assert cached_connections.secondary is restored_connection
+        assert restored_config is original_config
+        assert restored_connection is original_connection
+
+    def test_secondary_connection_cleanup_survives_setup_failure(self) -> None:
+        """Class cleanup restores secondary state when setup fails after mutation."""
+
+        class SetupFailureProbe(type(self)):
+            pass
+
+        original_connection = MagicMock()
+        original_config = object()
+        cached_connections = MagicMock()
+        cached_connections.secondary = original_connection
+        fake_connections = MagicMock()
+        fake_connections._connections = cached_connections
+        fake_connections.databases = {
+            "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"},
+            "secondary": original_config,
+        }
+        fake_connections.__getitem__.side_effect = lambda alias: getattr(
+            cached_connections, alias
+        )
+        fake_connections.__delitem__.side_effect = lambda alias: delattr(
+            cached_connections, alias
+        )
+
+        with (
+            patch(f"{__name__}.connections", fake_connections),
+            patch.object(
+                TransactionTestCase,
+                "setUpClass",
+                side_effect=RuntimeError("setup failed"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "setup failed"),
+        ):
+            SetupFailureProbe.setUpClass()
+
+        with patch(f"{__name__}.connections", fake_connections):
+            SetupFailureProbe.doClassCleanups()
+            SetupFailureProbe._restore_secondary_connection()
+
+        original_connection.close.assert_not_called()
+        assert fake_connections.databases["secondary"] is original_config
+        assert cached_connections.secondary is original_connection
 
     def test_compiler_binds_exact_auto_and_custom_through_fields(self) -> None:
         """Startup compilation records the real Django through metadata."""

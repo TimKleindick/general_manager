@@ -8,6 +8,7 @@ from unittest.mock import call, patch
 
 import pytest
 
+import general_manager.search.invalidation as invalidation
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
@@ -1512,3 +1513,218 @@ def test_async_delete_marker_failure_never_enqueues_unfenced_work() -> None:
     assert mark_dirty.call_count == 2
     assert task.calls == []
     acknowledge.assert_not_called()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("action", ["create", "update"])
+def test_post_change_persistent_config_failure_redirties_existing_fallback(
+    action: str,
+) -> None:
+    """Direct fallback scheduling redirties existing state without live config."""
+    from general_manager.search.models import SearchIndexState
+
+    configure(Owner, indexes=(INDEXES[0],))
+    manager_path = f"{Owner.__module__}.{Owner.__name__}"
+    state = SearchIndexState.objects.create(
+        manager_path=manager_path,
+        index_name="global",
+        schema_fingerprint="known-schema",
+    )
+    original_generation = state.dirty_generation
+
+    def fail_config(_manager: type[GeneralManager]) -> None:
+        raise DeclarationAccessFailure
+
+    with (
+        patch.object(GeneralManagerMeta, "all_classes", []),
+        patch.object(invalidation, "get_search_config", side_effect=fail_config),
+        patch(
+            "general_manager.search.reconciliation.get_search_config",
+            side_effect=fail_config,
+        ),
+        patch.object(invalidation, "get_setting", return_value=100),
+        patch.object(
+            invalidation.transaction,
+            "on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch.object(invalidation, "dispatch_index_manager_batch") as dispatch,
+        patch.object(invalidation.logger, "warning"),
+    ):
+        invalidation._handle_search_post_change(
+            Owner,
+            Owner(id=1),
+            action=action,
+            change_context={},
+        )
+
+    state.refresh_from_db()
+    assert state.dirty_since is not None
+    assert state.dirty_generation == original_generation + 1
+    assert state.schema_fingerprint == "known-schema"
+    dispatch.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_captured_async_delete_persistent_config_failure_remains_dirty() -> None:
+    """An unfenced captured delete is withheld while durable recovery remains."""
+    import general_manager.search.async_tasks as async_tasks
+    from general_manager.search.models import SearchIndexState
+
+    manager_path = f"{Owner.__module__}.{Owner.__name__}"
+    state = SearchIndexState.objects.create(
+        manager_path=manager_path,
+        index_name="global",
+        schema_fingerprint="known-schema",
+    )
+    original_generation = state.dirty_generation
+    target = SearchDeleteTarget(
+        manager_class=Owner,
+        manager_path=manager_path,
+        index_name="global",
+        document_id="owner:1",
+    )
+
+    class DeleteTask:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object, ...]] = []
+
+        def delay(self, *args: object) -> None:
+            self.calls.append(args)
+
+    def fail_config(_manager: type[GeneralManager]) -> None:
+        raise DeclarationAccessFailure
+
+    task = DeleteTask()
+    context: dict[str, object] = {}
+    with (
+        patch.object(GeneralManagerMeta, "all_classes", []),
+        patch.object(async_tasks, "CELERY_AVAILABLE", True),
+        patch.object(async_tasks, "_async_enabled", return_value=True),
+        patch.object(async_tasks, "delete_documents_task", task),
+        patch.object(invalidation, "capture_delete_targets", return_value=(target,)),
+        patch.object(invalidation, "get_search_config", side_effect=fail_config),
+        patch(
+            "general_manager.search.reconciliation.get_search_config",
+            side_effect=fail_config,
+        ),
+        patch.object(invalidation, "get_setting", return_value=100),
+        patch.object(
+            invalidation.transaction,
+            "on_commit",
+            side_effect=lambda callback, **_kwargs: callback(),
+        ),
+        patch.object(invalidation.logger, "warning"),
+    ):
+        invalidation._handle_search_pre_change(
+            Owner,
+            Owner(id=1),
+            action="delete",
+            change_context=context,
+        )
+        invalidation._handle_search_post_change(
+            Owner,
+            None,
+            action="delete",
+            change_context=context,
+        )
+
+    state.refresh_from_db()
+    assert state.dirty_since is not None
+    assert state.dirty_generation > original_generation
+    assert state.schema_fingerprint == "known-schema"
+    assert task.calls == []
+
+
+def test_direct_work_contains_search_config_failure() -> None:
+    """Direct invalidation recovers exact dirty pairs when config access fails."""
+    with (
+        patch.object(
+            invalidation,
+            "_index_names",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch.object(
+            invalidation,
+            "_config_failure_index_names",
+            return_value=("global", "private"),
+        ),
+        patch.object(invalidation.logger, "warning") as warning,
+    ):
+        plan, deletes = invalidation._direct_work(
+            Owner,
+            Owner(id=1),
+            "update",
+            {},
+            "default",
+        )
+
+    assert plan.dirty_fallbacks == (
+        SearchInvalidationPair(Owner, "global"),
+        SearchInvalidationPair(Owner, "private"),
+    )
+    assert deletes == ()
+    warning.assert_called_once()
+
+
+def test_direct_delete_config_failure_preserves_captured_targets() -> None:
+    """Delete work survives a later search-configuration failure."""
+    manager_path = f"{Owner.__module__}.{Owner.__name__}"
+    target = SearchDeleteTarget(
+        manager_class=Owner,
+        manager_path=manager_path,
+        index_name="global",
+        document_id="owner:1",
+    )
+    context = {
+        invalidation._DIRECT_SEARCH_CHANGE_CONTEXT: (
+            invalidation._PendingDirectSearchChange(
+                action="delete",
+                delete_targets=(target,),
+            )
+        )
+    }
+
+    with patch.object(
+        invalidation,
+        "_index_names",
+        side_effect=DeclarationAccessFailure,
+    ):
+        plan, deletes = invalidation._direct_work(
+            Owner,
+            None,
+            "delete",
+            context,
+            "default",
+        )
+
+    assert plan == SearchInvalidationPlan()
+    assert deletes == (target,)
+
+
+def test_direct_work_contains_config_failure_recovery_failure() -> None:
+    """Failure of both config paths cannot escape the business mutation."""
+    with (
+        patch.object(
+            invalidation,
+            "_index_names",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch.object(
+            invalidation,
+            "_config_failure_index_names",
+            side_effect=DeclarationAccessFailure,
+        ),
+        patch.object(invalidation.logger, "warning") as warning,
+    ):
+        plan, deletes = invalidation._direct_work(
+            Owner,
+            Owner(id=1),
+            "create",
+            {},
+            "default",
+        )
+
+    assert plan == SearchInvalidationPlan()
+    assert deletes == ()
+    assert warning.call_count == 2
