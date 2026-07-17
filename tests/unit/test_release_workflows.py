@@ -98,6 +98,86 @@ def test_quality_test_job_preserves_supported_matrix_and_test_services() -> None
     }
 
 
+def test_database_backend_runner_preserves_services_and_test_contract() -> None:
+    workflow = load_workflow("database-backend-tests.yml")
+
+    assert workflow["on"] == {
+        "workflow_call": {
+            "inputs": {
+                "python-version": {"required": "true", "type": "string"},
+                "database-label": {"required": "true", "type": "string"},
+                "database-selector": {"required": "true", "type": "string"},
+                "database-image": {"required": "true", "type": "string"},
+                "database-port": {"required": "true", "type": "number"},
+                "database-user": {"required": "true", "type": "string"},
+                "database-driver": {"required": "true", "type": "string"},
+                "database-health-command": {
+                    "required": "true",
+                    "type": "string",
+                },
+            }
+        }
+    }
+    assert workflow["permissions"] == {"contents": "read"}
+    assert set(workflow["jobs"]) == {"backend-test"}
+
+    job = workflow["jobs"]["backend-test"]
+    assert job["name"] == "Backend test"
+    assert job["runs-on"] == "ubuntu-latest"
+    assert job["services"]["database"] == {
+        "image": "${{ inputs.database-image }}",
+        "ports": ["${{ inputs.database-port }}:${{ inputs.database-port }}"],
+        "env": {
+            "POSTGRES_DB": "general_manager",
+            "POSTGRES_USER": "postgres",
+            "POSTGRES_PASSWORD": "general_manager",
+            "MARIADB_DATABASE": "general_manager",
+            "MARIADB_ROOT_PASSWORD": "general_manager",
+        },
+        "options": (
+            '--health-cmd="${{ inputs.database-health-command }}" '
+            "--health-interval=5s --health-timeout=5s --health-retries=20"
+        ),
+    }
+    assert job["services"]["meilisearch"] == {
+        "image": "getmeili/meilisearch:v1.30.0",
+        "ports": ["7700:7700"],
+        "env": {"MEILI_NO_ANALYTICS": "true"},
+        "options": (
+            '--health-cmd="wget -qO- http://127.0.0.1:7700/health" '
+            "--health-interval=5s --health-timeout=5s --health-retries=10"
+        ),
+    }
+
+    assert action_step(job, "actions/checkout@v4")["with"] == {
+        "persist-credentials": "false"
+    }
+    assert action_step(job, "actions/setup-python@v5")["with"] == {
+        "python-version": "${{ inputs.python-version }}"
+    }
+    commands = run_commands(job)
+    assert 'pip install -e ".[file-upload-image]"' in commands
+    assert "pip install pytest pytest-django meilisearch==0.40.0" in commands
+    assert 'pip install "${{ inputs.database-driver }}"' in commands
+
+    test_step = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Run ${{ inputs.database-label }} backend test suite"
+    )
+    assert test_step["run"] == 'python -m pytest -m "not perf"'
+    assert test_step["env"] == {
+        "GENERAL_MANAGER_TEST_DATABASE": "${{ inputs.database-selector }}",
+        "GENERAL_MANAGER_TEST_DATABASE_NAME": "general_manager",
+        "GENERAL_MANAGER_TEST_SECONDARY_DATABASE_NAME": "general_manager_secondary",
+        "GENERAL_MANAGER_TEST_DATABASE_USER": "${{ inputs.database-user }}",
+        "GENERAL_MANAGER_TEST_DATABASE_PASSWORD": "general_manager",
+        "GENERAL_MANAGER_TEST_DATABASE_HOST": "127.0.0.1",
+        "GENERAL_MANAGER_TEST_DATABASE_PORT": "${{ inputs.database-port }}",
+        "MEILISEARCH_URL": "http://127.0.0.1:7700",
+    }
+
+
 def test_quality_release_database_job_covers_full_supported_matrix() -> None:
     job = load_workflow("quality.yml")["jobs"]["database-backends"]
 
