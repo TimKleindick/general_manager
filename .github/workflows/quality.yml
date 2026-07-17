@@ -101,10 +101,42 @@ jobs:
           /tmp/general-manager-quality-venv/bin/python "$GITHUB_WORKSPACE/tests/packaging/smoke_chat_eval_distribution.py" "$GITHUB_WORKSPACE/$WHEEL" "$GITHUB_WORKSPACE/$SDIST"
           env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$GITHUB_WORKSPACE/tests/packaging" /tmp/general-manager-quality-venv/bin/python -m general_manager.chat.evals --settings chat_eval_smoke_settings --provider builtins.object --fixture toy --dataset basic_queries --tier 999
 
-  database-backends:
-    name: 🗄️ ${{ matrix.database.name }} / Python ${{ matrix.python-version }}
+  database-pr-gates:
+    name: 🗄️ PR ${{ matrix.database.name }} / Python ${{ matrix.python-version }}
+    if: ${{ github.event_name == 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.14"]
+        database:
+          - name: PostgreSQL 18
+            selector: postgresql
+            image: postgres:18
+            port: 5432
+            user: postgres
+            driver: psycopg[binary]>=3.3,<4
+            health-command: pg_isready -U postgres -d general_manager
+          - name: MariaDB 11.8 LTS
+            selector: mariadb
+            image: mariadb:11.8
+            port: 3306
+            user: root
+            driver: mysqlclient>=2.2,<3
+            health-command: healthcheck.sh --connect --innodb_initialized
+    uses: ./.github/workflows/database-backend-tests.yml
+    with:
+      python-version: ${{ matrix.python-version }}
+      database-label: ${{ matrix.database.name }}
+      database-selector: ${{ matrix.database.selector }}
+      database-image: ${{ matrix.database.image }}
+      database-port: ${{ matrix.database.port }}
+      database-user: ${{ matrix.database.user }}
+      database-driver: ${{ matrix.database.driver }}
+      database-health-command: ${{ matrix.database.health-command }}
+
+  database-release:
+    name: 🗄️ Release ${{ matrix.database.name }} / Python ${{ matrix.python-version }}
     if: ${{ github.event_name == 'push' }}
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -124,63 +156,16 @@ jobs:
             user: root
             driver: mysqlclient>=2.2,<3
             health-command: healthcheck.sh --connect --innodb_initialized
-    services:
-      database:
-        image: ${{ matrix.database.image }}
-        ports:
-          - "${{ matrix.database.port }}:${{ matrix.database.port }}"
-        env:
-          POSTGRES_DB: general_manager
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: general_manager
-          MARIADB_DATABASE: general_manager
-          MARIADB_ROOT_PASSWORD: general_manager
-        options: >-
-          --health-cmd="${{ matrix.database.health-command }}"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=20
-      meilisearch:
-        image: getmeili/meilisearch:v1.30.0
-        ports:
-          - 7700:7700
-        env:
-          MEILI_NO_ANALYTICS: "true"
-        options: >-
-          --health-cmd="wget -qO- http://127.0.0.1:7700/health"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install package, test dependencies, and database driver
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[file-upload-image]"
-          pip install pytest pytest-django meilisearch==0.40.0
-          pip install "${{ matrix.database.driver }}"
-
-      - name: Run backend test suite
-        env:
-          GENERAL_MANAGER_TEST_DATABASE: ${{ matrix.database.selector }}
-          GENERAL_MANAGER_TEST_DATABASE_NAME: general_manager
-          GENERAL_MANAGER_TEST_SECONDARY_DATABASE_NAME: general_manager_secondary
-          GENERAL_MANAGER_TEST_DATABASE_USER: ${{ matrix.database.user }}
-          GENERAL_MANAGER_TEST_DATABASE_PASSWORD: general_manager
-          GENERAL_MANAGER_TEST_DATABASE_HOST: 127.0.0.1
-          GENERAL_MANAGER_TEST_DATABASE_PORT: ${{ matrix.database.port }}
-          MEILISEARCH_URL: http://127.0.0.1:7700
-        run: python -m pytest -m "not perf"
+    uses: ./.github/workflows/database-backend-tests.yml
+    with:
+      python-version: ${{ matrix.python-version }}
+      database-label: ${{ matrix.database.name }}
+      database-selector: ${{ matrix.database.selector }}
+      database-image: ${{ matrix.database.image }}
+      database-port: ${{ matrix.database.port }}
+      database-user: ${{ matrix.database.user }}
+      database-driver: ${{ matrix.database.driver }}
+      database-health-command: ${{ matrix.database.health-command }}
 
   lint-and-mypy:
     name: lint-and-mypy

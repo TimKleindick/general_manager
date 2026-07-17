@@ -10,6 +10,26 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
+DATABASE_MATRIX = [
+    {
+        "name": "PostgreSQL 18",
+        "selector": "postgresql",
+        "image": "postgres:18",
+        "port": "5432",
+        "user": "postgres",
+        "driver": "psycopg[binary]>=3.3,<4",
+        "health-command": "pg_isready -U postgres -d general_manager",
+    },
+    {
+        "name": "MariaDB 11.8 LTS",
+        "selector": "mariadb",
+        "image": "mariadb:11.8",
+        "port": "3306",
+        "user": "root",
+        "driver": "mysqlclient>=2.2,<3",
+        "health-command": "healthcheck.sh --connect --innodb_initialized",
+    },
+]
 
 
 def load_workflow(name: str) -> dict[str, Any]:
@@ -42,6 +62,21 @@ def step_by_id(job: Mapping[str, Any], step_id: str) -> dict[str, Any]:
     return next(step for step in steps if step.get("id") == step_id)
 
 
+def assert_database_backend_caller(job: Mapping[str, Any]) -> None:
+    """Assert a job calls the reusable database workflow with matrix inputs."""
+    assert job["uses"] == "./.github/workflows/database-backend-tests.yml"
+    assert job["with"] == {
+        "python-version": "${{ matrix.python-version }}",
+        "database-label": "${{ matrix.database.name }}",
+        "database-selector": "${{ matrix.database.selector }}",
+        "database-image": "${{ matrix.database.image }}",
+        "database-port": "${{ matrix.database.port }}",
+        "database-user": "${{ matrix.database.user }}",
+        "database-driver": "${{ matrix.database.driver }}",
+        "database-health-command": "${{ matrix.database.health-command }}",
+    }
+
+
 def test_quality_workflow_has_reusable_least_privilege_triggers() -> None:
     workflow = load_workflow("quality.yml")
 
@@ -53,7 +88,8 @@ def test_quality_workflow_has_reusable_least_privilege_triggers() -> None:
     assert workflow["permissions"] == {"contents": "read"}
     assert set(workflow["jobs"]) == {
         "test",
-        "database-backends",
+        "database-pr-gates",
+        "database-release",
         "lint-and-mypy",
         "docs",
     }
@@ -178,84 +214,38 @@ def test_database_backend_runner_preserves_services_and_test_contract() -> None:
     }
 
 
-def test_quality_release_database_job_covers_full_supported_matrix() -> None:
-    job = load_workflow("quality.yml")["jobs"]["database-backends"]
+def test_quality_pr_database_caller_gates_pull_requests() -> None:
+    job = load_workflow("quality.yml")["jobs"]["database-pr-gates"]
 
+    assert job["name"] == (
+        "🗄️ PR ${{ matrix.database.name }} / Python ${{ matrix.python-version }}"
+    )
+    assert job["if"] == "${{ github.event_name == 'pull_request' }}"
+    assert job["strategy"] == {
+        "fail-fast": "false",
+        "matrix": {
+            "python-version": ["3.14"],
+            "database": DATABASE_MATRIX,
+        },
+    }
+    assert_database_backend_caller(job)
+
+
+def test_quality_release_database_caller_covers_full_supported_matrix() -> None:
+    job = load_workflow("quality.yml")["jobs"]["database-release"]
+
+    assert job["name"] == (
+        "🗄️ Release ${{ matrix.database.name }} / Python ${{ matrix.python-version }}"
+    )
     assert job["if"] == "${{ github.event_name == 'push' }}"
     assert job["strategy"] == {
         "fail-fast": "false",
         "matrix": {
             "python-version": ["3.12", "3.13", "3.14"],
-            "database": [
-                {
-                    "name": "PostgreSQL 18",
-                    "selector": "postgresql",
-                    "image": "postgres:18",
-                    "port": "5432",
-                    "user": "postgres",
-                    "driver": "psycopg[binary]>=3.3,<4",
-                    "health-command": ("pg_isready -U postgres -d general_manager"),
-                },
-                {
-                    "name": "MariaDB 11.8 LTS",
-                    "selector": "mariadb",
-                    "image": "mariadb:11.8",
-                    "port": "3306",
-                    "user": "root",
-                    "driver": "mysqlclient>=2.2,<3",
-                    "health-command": ("healthcheck.sh --connect --innodb_initialized"),
-                },
-            ],
+            "database": DATABASE_MATRIX,
         },
     }
-    assert job["services"]["database"] == {
-        "image": "${{ matrix.database.image }}",
-        "ports": [
-            "${{ matrix.database.port }}:${{ matrix.database.port }}",
-        ],
-        "env": {
-            "POSTGRES_DB": "general_manager",
-            "POSTGRES_USER": "postgres",
-            "POSTGRES_PASSWORD": "general_manager",
-            "MARIADB_DATABASE": "general_manager",
-            "MARIADB_ROOT_PASSWORD": "general_manager",
-        },
-        "options": (
-            '--health-cmd="${{ matrix.database.health-command }}" '
-            "--health-interval=5s --health-timeout=5s --health-retries=20"
-        ),
-    }
-    assert job["services"]["meilisearch"] == {
-        "image": "getmeili/meilisearch:v1.30.0",
-        "ports": ["7700:7700"],
-        "env": {"MEILI_NO_ANALYTICS": "true"},
-        "options": (
-            '--health-cmd="wget -qO- http://127.0.0.1:7700/health" '
-            "--health-interval=5s --health-timeout=5s --health-retries=10"
-        ),
-    }
-
-    commands = run_commands(job)
-    assert 'pip install -e ".[file-upload-image]"' in commands
-    assert 'pip install "${{ matrix.database.driver }}"' in commands
-    assert 'python -m pytest -m "not perf"' in commands
-    assert action_step(job, "actions/setup-python@v5")["with"] == {
-        "python-version": "${{ matrix.python-version }}"
-    }
-
-    test_step = next(
-        step for step in job["steps"] if step.get("name") == "Run backend test suite"
-    )
-    assert test_step["env"] == {
-        "GENERAL_MANAGER_TEST_DATABASE": "${{ matrix.database.selector }}",
-        "GENERAL_MANAGER_TEST_DATABASE_NAME": "general_manager",
-        "GENERAL_MANAGER_TEST_SECONDARY_DATABASE_NAME": "general_manager_secondary",
-        "GENERAL_MANAGER_TEST_DATABASE_USER": "${{ matrix.database.user }}",
-        "GENERAL_MANAGER_TEST_DATABASE_PASSWORD": "general_manager",
-        "GENERAL_MANAGER_TEST_DATABASE_HOST": "127.0.0.1",
-        "GENERAL_MANAGER_TEST_DATABASE_PORT": "${{ matrix.database.port }}",
-        "MEILISEARCH_URL": "http://127.0.0.1:7700",
-    }
+    assert_database_backend_caller(job)
 
 
 def test_quality_lint_job_runs_all_static_quality_gates() -> None:
