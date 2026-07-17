@@ -10,6 +10,8 @@ The reverse relationship must be declared explicitly. GeneralManager can
 generate values for fields on a manager's own model, but it does not infer that
 creating a `Project` should also create a `ProjectTeam`.
 
+In `your_app/managers.py`, define the managers and their nested factories:
+
 ```python
 import factory
 from django.db.models import CASCADE, CharField, ForeignKey, PositiveIntegerField
@@ -32,7 +34,7 @@ class Project(GeneralManager):
         name = CharField(max_length=120)
 
         class Factory:
-            team = factory.RelatedFactory('your_app.managers.ProjectTeam.Factory', factory_related_name='project')
+            team = factory.RelatedFactory('your_app.factories.ProjectTeamFactory', factory_related_name='project')
 
 
 class ProjectTeam(GeneralManager):
@@ -52,6 +54,21 @@ class ProjectTeam(GeneralManager):
             project_team_role = factory.LazyFunction(lambda: ProjectTeamRole.get(id=5))
 ```
 
+Then expose the nested related factory through an importable module-level name
+in `your_app/factories.py`:
+
+```python
+from your_app.managers import ProjectTeam
+
+ProjectTeamFactory = ProjectTeam.Factory
+```
+
+factory-boy splits a string factory path at its final dot, imports the module
+on the left, and reads the attribute on the right. The alias exists because
+`your_app.factories.ProjectTeamFactory` follows that contract;
+`your_app.managers.ProjectTeam.Factory` would incorrectly treat
+`your_app.managers.ProjectTeam` as an importable module.
+
 `team` is the declaration name on `Project.Factory`. After the project is
 saved, `RelatedFactory` calls `ProjectTeam.Factory` and passes that saved
 project through the `project` field named by `factory_related_name`.
@@ -62,13 +79,20 @@ declaration such as `project_team_role_id`: AutoFactory generates defaults from
 model field names, so an `_id` declaration does not replace generation for the
 `project_team_role` field.
 
+The fixed default expects role `5` to exist. Seed that lookup row in fixture
+setup before creating projects:
+
+```python
+ProjectTeamRole.Factory.create(id=5, name="Default team member")
+```
+
 ## Override values for one call
 
 Use factory-boy's double-underscore syntax to forward values into the related
 factory:
 
 ```python
-role = ProjectTeamRole.get(id=8)
+role = ProjectTeamRole.Factory.create(id=8, name="Project lead")
 project = Project.Factory.create(team__project_team_role=role)
 ```
 
