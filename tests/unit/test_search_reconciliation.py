@@ -134,11 +134,6 @@ class SearchReconciliationDiscoveryTests(TestCase):
             SearchInvalidationRule(
                 source=ReconcileProject,
                 resolve=_resolve_reconcile_project,
-                indexes=("global",),
-            ),
-            SearchInvalidationRule(
-                source=ReconcileProject,
-                resolve=_resolve_reconcile_project,
                 relation="tags",
             ),
         ]
@@ -168,6 +163,59 @@ class SearchReconciliationDiscoveryTests(TestCase):
                 changed = build_search_schema_fingerprint(ReconcileProject, index)
 
             assert original != changed
+
+    def test_fingerprint_ignores_rules_scoped_to_another_index(self) -> None:
+        """Each index fingerprints only invalidation rules that apply to it."""
+        global_index = ReconcileProject.SearchConfig.indexes[0]
+        private_index = IndexConfig(name="private", fields=["name"])
+        unrestricted = SearchInvalidationRule(
+            source=ReconcileProject,
+            resolve=_resolve_reconcile_project,
+        )
+        global_rule = SearchInvalidationRule(
+            source="example.GlobalSource",
+            indexes=("global",),
+        )
+        private_rule = SearchInvalidationRule(
+            source="example.PrivateSource",
+            indexes=("private",),
+        )
+        changed_private_rule = SearchInvalidationRule(
+            source="example.ChangedPrivateSource",
+            indexes=("private",),
+        )
+
+        with patch.object(
+            ReconcileProject.SearchConfig,
+            "invalidation_rules",
+            (unrestricted, global_rule, private_rule),
+            create=True,
+        ):
+            original_global = build_search_schema_fingerprint(
+                ReconcileProject,
+                global_index,
+            )
+            original_private = build_search_schema_fingerprint(
+                ReconcileProject,
+                private_index,
+            )
+        with patch.object(
+            ReconcileProject.SearchConfig,
+            "invalidation_rules",
+            (unrestricted, global_rule, changed_private_rule),
+            create=True,
+        ):
+            changed_global = build_search_schema_fingerprint(
+                ReconcileProject,
+                global_index,
+            )
+            changed_private = build_search_schema_fingerprint(
+                ReconcileProject,
+                private_index,
+            )
+
+        assert changed_global == original_global
+        assert changed_private != original_private
 
     def test_ensure_states_marks_missing_targets_dirty_for_initialization(self) -> None:
         """Create missing state rows as dirty initialization work."""

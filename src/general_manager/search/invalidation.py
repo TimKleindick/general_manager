@@ -27,6 +27,7 @@ from general_manager.search.config import IndexConfig, SearchChange
 from general_manager.search.reconciliation import (
     DirtySearchIndex,
     acknowledge_search_index_dirty,
+    mark_existing_search_index_dirty,
     mark_search_index_dirty,
 )
 from general_manager.search.registry import get_search_config
@@ -625,6 +626,21 @@ def _mark_pairs(
                 },
                 exc_info=exc,
             )
+            try:
+                mark_existing_search_index_dirty(
+                    _owner_path(pair.owner_class),
+                    pair.index_name,
+                )
+            except Exception as recovery_exc:  # noqa: BLE001 - recovery is best-effort
+                logger.warning(
+                    "search existing dirty marker failed",
+                    context={
+                        "manager": pair.owner_class.__name__,
+                        "index": pair.index_name,
+                        "action": action,
+                    },
+                    exc_info=recovery_exc,
+                )
             continue
         if token is not None:
             tokens.append((pair, token))
@@ -1073,7 +1089,30 @@ def _direct_work(
             context={"manager": manager_class.__name__, "action": action},
             exc_info=exc,
         )
-        return SearchInvalidationPlan(), ()
+        if action == "delete":
+            pending = change_context.get(_DIRECT_SEARCH_CHANGE_CONTEXT)
+            if (
+                isinstance(pending, _PendingDirectSearchChange)
+                and pending.action == "delete"
+                and pending.delete_targets
+            ):
+                return SearchInvalidationPlan(), pending.delete_targets
+        try:
+            fallback_names = _config_failure_index_names(
+                manager_class,
+                phase="after",
+            )
+        except Exception as recovery_exc:  # noqa: BLE001 - recovery is best-effort
+            logger.warning(
+                "search configuration recovery failed",
+                context={"manager": manager_class.__name__, "action": action},
+                exc_info=recovery_exc,
+            )
+            return SearchInvalidationPlan(), ()
+        fallback_pairs = tuple(
+            SearchInvalidationPair(manager_class, name) for name in fallback_names
+        )
+        return SearchInvalidationPlan(dirty_fallbacks=fallback_pairs), ()
     if not index_names:
         return SearchInvalidationPlan(), ()
     pairs = tuple(SearchInvalidationPair(manager_class, name) for name in index_names)

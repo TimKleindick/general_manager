@@ -453,6 +453,9 @@ def test_app_ready_registers_search_checks() -> None:
         patch("general_manager.apps.configure_audit_logger_from_settings"),
         patch("general_manager.apps.configure_search_backend_from_settings"),
         patch("general_manager.search.invalidation.configure_search_invalidation"),
+        patch(
+            "general_manager.search.m2m_invalidation.configure_search_m2m_invalidation"
+        ),
         patch("general_manager.apps.configure_workflow_engine_from_settings"),
         patch("general_manager.apps.configure_event_registry_from_settings"),
         patch("general_manager.apps.configure_workflow_signal_bridge_from_settings"),

@@ -181,6 +181,27 @@ def _mark_worker_path_failure(manager_path: str, index_name: str) -> None:
         )
 
 
+def _mark_all_worker_path_failures(manager_path: str) -> None:
+    """Best-effort redirty every durable pair for an unresolved manager path."""
+    from general_manager.search.models import SearchIndexState
+
+    try:
+        index_names = tuple(
+            SearchIndexState.objects.filter(manager_path=manager_path).values_list(
+                "index_name",
+                flat=True,
+            )
+        )
+    except Exception:
+        logger.exception(
+            "search worker failed to discover dirty state by path",
+            context={"manager_path": manager_path},
+        )
+        return
+    for index_name in index_names:
+        _mark_worker_path_failure(manager_path, index_name)
+
+
 def _configured_index_names(manager_class: type[GeneralManager]) -> tuple[str, ...]:
     """Return configured index names for worker recovery metadata."""
     from general_manager.search.registry import get_search_config
@@ -220,12 +241,22 @@ def index_instance_task(
     the active Celery serializer when queued. Import, construction, backend
     lookup, and indexing errors propagate to the Celery worker or direct caller.
     """
-    manager_class = _resolve_manager_class(manager_path)
-    affected_indexes = (
-        (index_name,)
-        if index_name is not None
-        else _configured_index_names(manager_class)
-    )
+    try:
+        manager_class = _resolve_manager_class(manager_path)
+    except Exception:
+        if index_name is None:
+            _mark_all_worker_path_failures(manager_path)
+        else:
+            _mark_worker_path_failure(manager_path, index_name)
+        raise
+    if index_name is None:
+        try:
+            affected_indexes = _configured_index_names(manager_class)
+        except Exception:
+            _mark_all_worker_path_failures(manager_path)
+            raise
+    else:
+        affected_indexes = (index_name,)
     try:
         instance = manager_class(**identification)
         from general_manager.search.indexer import SearchIndexer
@@ -277,11 +308,24 @@ def delete_instance_task(
     the active Celery serializer when queued. Import, construction, backend
     lookup, and deletion errors propagate to the Celery worker or direct caller.
     """
-    manager_class = _resolve_manager_class(manager_path)
-    instance = manager_class(**identification)
-    from general_manager.search.indexer import SearchIndexer
+    try:
+        manager_class = _resolve_manager_class(manager_path)
+    except Exception:
+        _mark_all_worker_path_failures(manager_path)
+        raise
+    try:
+        affected_indexes = _configured_index_names(manager_class)
+    except Exception:
+        _mark_all_worker_path_failures(manager_path)
+        raise
+    try:
+        instance = manager_class(**identification)
+        from general_manager.search.indexer import SearchIndexer
 
-    SearchIndexer(get_search_backend()).delete_instance(instance)
+        SearchIndexer(get_search_backend()).delete_instance(instance)
+    except Exception:
+        _mark_worker_failure(manager_class, affected_indexes)
+        raise
 
 
 @shared_task

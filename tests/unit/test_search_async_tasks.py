@@ -548,6 +548,34 @@ def test_named_index_worker_failure_redirties_exact_pair(
     assert marked == [(Project, "global")]
 
 
+def test_delete_instance_worker_failure_redirties_configured_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy delete failures restore every index affected after resolution."""
+    from tests.unit.test_search_indexer import Project
+
+    marked: list[tuple[object, str]] = []
+    monkeypatch.setattr(async_tasks, "_resolve_manager_class", lambda _path: Project)
+    monkeypatch.setattr(
+        async_tasks, "_configured_index_names", lambda _manager: ("global",)
+    )
+    monkeypatch.setattr(async_tasks, "get_search_backend", lambda: object())
+    monkeypatch.setattr(
+        SearchIndexer,
+        "delete_instance",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("backend down")),
+    )
+    monkeypatch.setattr(
+        "general_manager.search.reconciliation.mark_search_index_dirty",
+        lambda manager_class, index_name: marked.append((manager_class, index_name)),
+    )
+
+    with pytest.raises(RuntimeError, match="backend down"):
+        async_tasks.delete_instance_task("tests.Project", {"id": 1})
+
+    assert marked == [(Project, "global")]
+
+
 def test_index_manager_index_batch_task_passes_exact_payload_and_returns_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -762,6 +790,102 @@ class SearchDeleteGenerationFenceTests(TestCase):
         assert acknowledge_search_index_dirty(token) is True
         return token
 
+    def _mark_private_and_ack(self):
+        """Create and acknowledge a second durable index pair."""
+        from general_manager.search.models import SearchIndexState
+        from general_manager.search.reconciliation import (
+            DirtySearchIndex,
+            acknowledge_search_index_dirty,
+        )
+
+        state = SearchIndexState.objects.create(
+            manager_path=self.manager_path,
+            index_name="private",
+            schema_fingerprint="private-schema",
+        )
+        state.mark_dirty("data_changed")
+        token = DirtySearchIndex(
+            state_id=state.pk,
+            manager_path=self.manager_path,
+            index_name="private",
+            generation=state.dirty_generation,
+            acknowledgeable=True,
+        )
+        assert acknowledge_search_index_dirty(token) is True
+        return token
+
+    def test_all_indexes_config_discovery_failure_redirties_existing_pairs(
+        self,
+    ) -> None:
+        """All-index work recovers durable pairs when config discovery fails."""
+        from general_manager.search.models import SearchIndexState
+
+        global_token = self._mark_and_ack()
+        private_token = self._mark_private_and_ack()
+        discovery_error = RuntimeError("configured indexes unavailable")
+
+        with (
+            patch.object(
+                async_tasks,
+                "_resolve_manager_class",
+                return_value=self.Project,
+            ),
+            patch.object(
+                async_tasks,
+                "_configured_index_names",
+                side_effect=discovery_error,
+            ),
+            pytest.raises(RuntimeError) as raised,
+        ):
+            async_tasks.index_instance_task(
+                self.manager_path,
+                {"id": 1},
+                index_name=None,
+            )
+
+        assert raised.value is discovery_error
+        recovered = {
+            state.index_name: state
+            for state in SearchIndexState.objects.filter(manager_path=self.manager_path)
+        }
+        assert recovered["global"].dirty_since is not None
+        assert recovered["private"].dirty_since is not None
+        assert recovered["global"].dirty_generation == global_token.generation + 1
+        assert recovered["private"].dirty_generation == private_token.generation + 1
+
+    def test_delete_config_discovery_failure_redirties_existing_pairs(self) -> None:
+        """Legacy delete work recovers durable pairs when config discovery fails."""
+        from general_manager.search.models import SearchIndexState
+
+        global_token = self._mark_and_ack()
+        private_token = self._mark_private_and_ack()
+        discovery_error = RuntimeError("configured indexes unavailable")
+
+        with (
+            patch.object(
+                async_tasks,
+                "_resolve_manager_class",
+                return_value=self.Project,
+            ),
+            patch.object(
+                async_tasks,
+                "_configured_index_names",
+                side_effect=discovery_error,
+            ),
+            pytest.raises(RuntimeError) as raised,
+        ):
+            async_tasks.delete_instance_task(self.manager_path, {"id": 1})
+
+        assert raised.value is discovery_error
+        recovered = {
+            state.index_name: state
+            for state in SearchIndexState.objects.filter(manager_path=self.manager_path)
+        }
+        assert recovered["global"].dirty_since is not None
+        assert recovered["private"].dirty_since is not None
+        assert recovered["global"].dirty_generation == global_token.generation + 1
+        assert recovered["private"].dirty_generation == private_token.generation + 1
+
     def test_old_delete_skips_newer_recreated_generation(self) -> None:
         """A redelivered old delete cannot remove a newer recreated document."""
         from general_manager.search.models import SearchIndexState
@@ -816,6 +940,127 @@ class SearchDeleteGenerationFenceTests(TestCase):
         assert recovered.dirty_since is not None
         assert recovered.dirty_reason == "data_changed"
         assert recovered.dirty_generation > acknowledged.generation
+
+    def test_named_index_import_failure_redirties_existing_path_pair(self) -> None:
+        """Legacy exact-index work recovers when its manager stops importing."""
+        from general_manager.search.models import SearchIndexState
+
+        acknowledged = self._mark_and_ack()
+
+        with (
+            patch.object(
+                async_tasks,
+                "import_string",
+                side_effect=ImportError("manager module removed"),
+            ),
+            pytest.raises(ImportError, match="manager module removed"),
+        ):
+            async_tasks.index_instance_task(
+                self.manager_path,
+                {"id": 1},
+                "global",
+            )
+
+        recovered = SearchIndexState.objects.get(
+            manager_path=self.manager_path,
+            index_name="global",
+        )
+        assert recovered.dirty_since is not None
+        assert recovered.dirty_generation == acknowledged.generation + 1
+
+    def test_all_indexes_import_failure_redirties_all_existing_path_pairs(
+        self,
+    ) -> None:
+        """Legacy all-index work recovers every durable pair by manager path."""
+        from general_manager.search.models import SearchIndexState
+        from general_manager.search.reconciliation import (
+            DirtySearchIndex,
+            acknowledge_search_index_dirty,
+        )
+
+        global_token = self._mark_and_ack()
+        private_state = SearchIndexState.objects.create(
+            manager_path=self.manager_path,
+            index_name="private",
+            schema_fingerprint="private-schema",
+        )
+        private_state.mark_dirty("data_changed")
+        private_token = DirtySearchIndex(
+            state_id=private_state.pk,
+            manager_path=self.manager_path,
+            index_name="private",
+            generation=private_state.dirty_generation,
+            acknowledgeable=True,
+        )
+        assert acknowledge_search_index_dirty(private_token) is True
+
+        with (
+            patch.object(
+                async_tasks,
+                "import_string",
+                side_effect=ImportError("manager module removed"),
+            ),
+            pytest.raises(ImportError, match="manager module removed"),
+        ):
+            async_tasks.index_instance_task(
+                self.manager_path,
+                {"id": 1},
+                index_name=None,
+            )
+
+        recovered = {
+            state.index_name: state
+            for state in SearchIndexState.objects.filter(manager_path=self.manager_path)
+        }
+        assert recovered["global"].dirty_since is not None
+        assert recovered["private"].dirty_since is not None
+        assert recovered["global"].dirty_generation == global_token.generation + 1
+        assert recovered["private"].dirty_generation == private_token.generation + 1
+
+    def test_delete_instance_import_failure_redirties_all_existing_path_pairs(
+        self,
+    ) -> None:
+        """Legacy delete work recovers every durable pair by manager path."""
+        from general_manager.search.models import SearchIndexState
+        from general_manager.search.reconciliation import (
+            DirtySearchIndex,
+            acknowledge_search_index_dirty,
+        )
+
+        global_token = self._mark_and_ack()
+        private_state = SearchIndexState.objects.create(
+            manager_path=self.manager_path,
+            index_name="private",
+            schema_fingerprint="private-schema",
+        )
+        private_state.mark_dirty("data_changed")
+        private_token = DirtySearchIndex(
+            state_id=private_state.pk,
+            manager_path=self.manager_path,
+            index_name="private",
+            generation=private_state.dirty_generation,
+            acknowledgeable=True,
+        )
+        assert acknowledge_search_index_dirty(private_token) is True
+
+        with (
+            patch.object(
+                async_tasks,
+                "import_string",
+                side_effect=ImportError("manager module removed"),
+            ),
+            pytest.raises(ImportError, match="manager module removed"),
+        ):
+            async_tasks.delete_instance_task(self.manager_path, {"id": 1})
+
+        recovered = {
+            state.index_name: state
+            for state in SearchIndexState.objects.filter(manager_path=self.manager_path)
+        }
+        assert recovered["global"].dirty_since is not None
+        assert recovered["private"].dirty_since is not None
+        assert recovered["global"].dirty_generation == global_token.generation + 1
+        assert recovered["private"].dirty_generation == private_token.generation + 1
 
     def test_delete_import_failure_redirties_every_existing_path_pair(self) -> None:
         """An accepted delete is recovered by path for every captured index."""
