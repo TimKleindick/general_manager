@@ -2,6 +2,34 @@
 
 <!-- version list -->
 
+## v0.64.3 (2026-07-17)
+
+### Bug Fixes
+
+- Preserve generated relation type hints
+  ([`468588e`](https://github.com/TimKleindick/general_manager/commit/468588e116211652f49843510b71a30c9f39cc2b))
+
+### Documentation
+
+- Add pull request template
+  ([`2545dc7`](https://github.com/TimKleindick/general_manager/commit/2545dc75dcc2a7e247e0704f05a74737aaa40a1f))
+
+- Clarify release channel wording
+  ([`4ba1d23`](https://github.com/TimKleindick/general_manager/commit/4ba1d2325b915e43bb34d3aa78067c252d79e02f))
+
+- Document bulk notification API
+  ([`22d430d`](https://github.com/TimKleindick/general_manager/commit/22d430dbcc96a7bf59bac555f7a515b38ed14b65))
+
+- Refresh installation guidance
+  ([`2a4c3b5`](https://github.com/TimKleindick/general_manager/commit/2a4c3b599627175c033455c58eafe9fbcfb8a7c2))
+
+- Rewrite readme onboarding
+  ([`69ea587`](https://github.com/TimKleindick/general_manager/commit/69ea5873fc7e2a4ca87d97987a0b24004cfb418d))
+
+- Use non-mutating Ruff format check
+  ([`fb6e949`](https://github.com/TimKleindick/general_manager/commit/fb6e949e08fdee408c7b605572c145983cb47297))
+
+
 ## v0.64.2 (2026-07-16)
 
 ### Bug Fixes
