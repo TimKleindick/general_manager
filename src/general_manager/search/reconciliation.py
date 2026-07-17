@@ -132,7 +132,7 @@ def _manager_or_path(value: type[GeneralManager] | str) -> str:
     """Return a stable manager import path while preserving dotted strings."""
     if isinstance(value, str):
         return value
-    return f"{value.__module__}.{value.__name__}"
+    return manager_import_path(value)
 
 
 def _index_payload(index_config: IndexConfig) -> dict[str, object]:
