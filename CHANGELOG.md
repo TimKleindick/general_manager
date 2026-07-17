@@ -2,6 +2,74 @@
 
 <!-- version list -->
 
+## v0.64.4 (2026-07-17)
+
+### Bug Fixes
+
+- Enforce pending confirmation uniqueness portably
+  ([`1ffa84c`](https://github.com/TimKleindick/general_manager/commit/1ffa84cc00f53e36f54d8a031251ab3937d870e1))
+
+- Harden test database cleanup
+  ([`ad376d7`](https://github.com/TimKleindick/general_manager/commit/ad376d79f59a7b7e81a07ba99c19a0903ca6f94e))
+
+- Synchronize pending confirmation resolution state
+  ([`348032e`](https://github.com/TimKleindick/general_manager/commit/348032e2df808e2298610aa060581a453176c7fc))
+
+### Continuous Integration
+
+- Extract reusable database backend tests
+  ([`b427a34`](https://github.com/TimKleindick/general_manager/commit/b427a34146f36e19e81a4106d194f01ce99630fd))
+
+- Gate pull requests on database backends
+  ([`87802a3`](https://github.com/TimKleindick/general_manager/commit/87802a30d3130c4540289ad988ec36c2ae4067a6))
+
+- Test release database backend matrix
+  ([`936d09a`](https://github.com/TimKleindick/general_manager/commit/936d09a1e8f78b1756e0cabfa29999a14eb61513))
+
+### Documentation
+
+- Declare tested database backend support
+  ([`7b6e1db`](https://github.com/TimKleindick/general_manager/commit/7b6e1db81f9fcdcf56157ad4a9faa58ebe2db4e0))
+
+- Design pull request database gates
+  ([`d9af665`](https://github.com/TimKleindick/general_manager/commit/d9af665fdec865a67a2832f43a01df85fdfc1036))
+
+- Design release database backend matrix
+  ([`5e3d40f`](https://github.com/TimKleindick/general_manager/commit/5e3d40fe5e19e6cc1210c469f4a3af0ae71dafb2))
+
+- Plan pull request database gates
+  ([`e60f7ca`](https://github.com/TimKleindick/general_manager/commit/e60f7ca9e1d8be8a8c8cf75f99725e12de4584ac))
+
+### Testing
+
+- Cover pending confirmation migration upgrade
+  ([`571f795`](https://github.com/TimKleindick/general_manager/commit/571f795b91d5a9cccf7cfca9ea45b075ae917659))
+
+- Isolate configured secondary database
+  ([`269a544`](https://github.com/TimKleindick/general_manager/commit/269a544922263aa6f5fc784b8f03af4fa2ae9aa9))
+
+- Isolate sqlite-specific upload checks
+  ([`cd86035`](https://github.com/TimKleindick/general_manager/commit/cd8603548f30b26e8ebdf49935579d0e24a1fa66))
+
+- Make dynamic model teardown backend safe
+  ([`d953bb0`](https://github.com/TimKleindick/general_manager/commit/d953bb03159ce5a2a9a2e1fc3d25862222942748))
+
+- Order dynamic model teardown dependencies
+  ([`533ad13`](https://github.com/TimKleindick/general_manager/commit/533ad13cf0a90a55c00b61809ec99b37a1cd12e5))
+
+- Remove backend-specific test assumptions
+  ([`4a9a81f`](https://github.com/TimKleindick/general_manager/commit/4a9a81f45a3a796a7eb9ddb10d758e5688c9d5a6))
+
+- Restore dynamic history model registry
+  ([`7a46a3c`](https://github.com/TimKleindick/general_manager/commit/7a46a3c5f09bf285392fc4ec1c21c8ce1164ab1d))
+
+- Support selectable database backends
+  ([`10e4414`](https://github.com/TimKleindick/general_manager/commit/10e44147669456e3e765f42801d5f89dc18a894f))
+
+- Use backend-aware secondary database
+  ([`5310e04`](https://github.com/TimKleindick/general_manager/commit/5310e04460e2434bee4381948934fa573dfedd8a))
+
+
 ## v0.64.3 (2026-07-17)
 
 ### Bug Fixes
