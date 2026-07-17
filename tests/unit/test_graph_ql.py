@@ -72,6 +72,18 @@ class GraphQLPropertyTests(TestCase):
         prop = GraphQLProperty(mock_getter)
         self.assertEqual(prop.graphql_type_hint, str)
 
+    def test_graphql_property_reads_dynamic_annotation_from_original_resolver(self):
+        """Generated relation annotations survive wrapper metadata changes."""
+
+        def generated_relation(_instance):
+            return None
+
+        generated_relation.__annotations__ = {"return": GeneralManager}
+        prop = GraphQLProperty(generated_relation)
+        prop.fget.__annotations__ = {}
+
+        self.assertIs(prop.graphql_type_hint, GeneralManager)
+
     def test_graphql_property_uses_cached_resolver_after_set_name(self):
         """Descriptor access should not redo cached resolver lookup after setup."""
         calls = []
