@@ -18,6 +18,33 @@ Single-valued manager relations are exposed as object fields. Relation fields
 whose Python-side name ends with `_list` are exposed as paginated list fields
 with filtering, grouping, sorting, and pagination arguments.
 
+### Relation annotation compatibility
+
+Before mapping a relation, schema generation resolves its annotation to one
+registered `GeneralManager` class. The resolver accepts:
+
+- a concrete manager class such as `User`;
+- a generated or existing Django model class that carries the manager
+  back-reference;
+- `Bucket[User]`, `list[User]`, `tuple[User, ...]`, or `set[User]`; and
+- optional and union forms such as `User | None`, `Optional[User]`, and their
+  postponed string equivalents, including `"Bucket[User]"` and
+  `"typing.List[User]"`.
+
+This lets annotations remain useful with `from __future__ import annotations`
+and with manager classes declared in a different order. A postponed annotation
+must name a manager that GeneralManager registers during startup. An ambiguous
+union containing more than one manager target is not treated as a manager
+relation, so use one manager target per generated relation field.
+
+The same resolution controls generated object fields, relation-list fields,
+relation filters, sort options, mutation inputs, and subscription identifiers.
+For a task-oriented declaration pattern, see [Expose managers via
+GraphQL](../../howto/expose_via_graphql.md#declare-manager-relations); the
+[GraphQL query cookbook](../../examples/graphql_queries.md#query-a-manager-relation)
+shows the resulting schema, and the [GraphQL API reference](../../api/graphql.md#relation-annotation-compatibility)
+records the compatibility note for 0.64.1 and 0.64.2.
+
 ## Mutations
 
 Create, update, and delete mutations are added automatically when the interface

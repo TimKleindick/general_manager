@@ -2,6 +2,43 @@
 
 Managers with an `Interface` are registered during GeneralManager startup and receive generated query, mutation, and subscription fields based on their interface capabilities.
 
+## Declare manager relations
+
+Annotate related fields with the manager class that should appear in generated
+GraphQL. GeneralManager also recognizes collection wrappers, optional values,
+and postponed annotations, so this pattern works when `from __future__ import
+annotations` is enabled:
+
+```python
+from __future__ import annotations
+
+from general_manager import GeneralManager
+from general_manager.bucket import Bucket
+
+
+class User(GeneralManager):
+    name: str
+
+
+class Project(GeneralManager):
+    owner: User | None
+    reviewer_list: Bucket[User]
+```
+
+When the schema is built, `owner` becomes a single `User` object field and
+`reviewer_list` becomes a paginated relation-list field. The same manager target
+is used for nested relation filters, mutation relation inputs, and subscription
+identifiers. `list[User]`, `tuple[User, ...]`, `set[User]`, `Optional[User]`,
+`"User"`, and `"Bucket[User]"` are also supported. Keep one manager target in a
+relation annotation; a union such as `User | Team` is ambiguous and does not
+produce manager-relation behavior.
+
+For existing or generated Django models, GeneralManager uses the model's
+manager back-reference to recover the corresponding manager type. Register
+manager modules during startup as described in the [installation
+guide](../installation.md), and then use the generated field names in queries,
+mutations, and subscriptions.
+
 ## Filter by identifier
 
 Identifier equality filters (`id`, `id_Exact`, and `id_In`) use the GraphQL

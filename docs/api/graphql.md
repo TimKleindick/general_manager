@@ -62,6 +62,38 @@ flushed; if flushing also raises, both failures are reported in a
 in 0.64.0 and later; the notification batching module is an implementation
 location rather than a separate package-level compatibility promise.
 
+## Relation annotation compatibility
+
+Generated GraphQL relation fields resolve annotations to one registered
+`GeneralManager` class before generating the schema. The supported annotation
+shapes are:
+
+- a manager class, a generated/existing Django model class with its manager
+  back-reference, or a named postponed reference such as `"User"`;
+- `Bucket[User]`, `list[User]`, `tuple[User, ...]`, `set[User]`, and their
+  `typing` spellings; and
+- `User | None`, `Optional[User]`, and equivalent postponed string forms such
+  as `"Bucket[User]"` or `"typing.List[User]"`.
+
+The resolved type is used for object fields, paginated relation-list fields,
+nested relation filters, mutation relation inputs, sort options, and
+subscription identifiers. If a postponed name is not registered, or a union
+contains more than one manager target, the annotation is not recognized as a
+manager relation and the generated schema does not provide manager-relation
+behavior for that field. The resolver returns the single manager target when
+recognized and otherwise no manager target; it does not raise a framework
+exception for an unresolved or ambiguous annotation.
+
+The helper that performs this resolution is an implementation detail, not a
+stable import. Applications should declare manager annotations and consume the
+generated schema rather than importing the helper directly.
+
+This compatibility behavior is covered by the 0.64.1 and 0.64.2 GraphQL
+relation fixes. The [concept guide](../concepts/graphql/schema_autogen.md#relation-annotation-compatibility)
+explains the model, the [task guide](../howto/expose_via_graphql.md#declare-manager-relations)
+shows declaration patterns, and the [cookbook recipe](../examples/graphql_queries.md#query-a-manager-relation)
+shows directly usable queries.
+
 ## File uploads
 
 Use the lazy stable imports from `general_manager.api`; modules under
