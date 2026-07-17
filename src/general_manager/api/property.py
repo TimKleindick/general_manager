@@ -214,9 +214,10 @@ class GraphQLProperty(property):
         return self._cached_fget
 
     def _try_resolve_type_hint(self) -> None:
-        """Resolve and cache the wrapped resolver's return type hint.
+        """Resolve and cache the original resolver's return type hint.
 
-        Resolution uses the resolver module globals and owner class namespace.
+        Resolution uses the original resolver rather than the property wrapper,
+        along with its module globals and the owner class namespace.
         It runs on first `graphql_type_hint` access, not during descriptor
         construction. `AttributeError`, `KeyError`, `NameError`, `TypeError`,
         and `ValueError` from `typing.get_type_hints` are swallowed and cached
@@ -227,7 +228,8 @@ class GraphQLProperty(property):
             return
 
         try:
-            mod = sys.modules.get(self.fget.__module__)
+            resolver = getattr(self._raw_fget, "__wrapped__", self._raw_fget)
+            mod = sys.modules.get(resolver.__module__)
             globalns = vars(mod) if mod else {}
 
             localns: dict[str, object] = {}
@@ -235,7 +237,7 @@ class GraphQLProperty(property):
                 localns = dict(self._owner.__dict__)
                 localns[self._owner.__name__] = self._owner
 
-            hints = get_type_hints(self.fget, globalns=globalns, localns=localns)
+            hints = get_type_hints(resolver, globalns=globalns, localns=localns)
             self._graphql_type_hint = hints.get("return", None)
         except (AttributeError, KeyError, NameError, TypeError, ValueError):
             self._graphql_type_hint = None
