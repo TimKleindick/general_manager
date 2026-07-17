@@ -13,7 +13,7 @@ import textwrap
 from threading import Barrier
 import traceback
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import ClassVar
 from unittest.mock import patch
 from urllib.parse import quote
 from uuid import UUID
@@ -80,25 +80,16 @@ from general_manager.uploads.types import (
     UploadOperation,
     UploadTransport,
 )
+from tests.utils.database import (
+    sqlite_only,
+    sqlite_only_mark,
+    sqlite_subprocess_environment,
+)
 
 
 _STORAGE = FileSystemStorage(
     location=f"{tempfile.gettempdir()}/general-manager-upload-service-tests"
 )
-
-sqlite_only = pytest.mark.skipif(
-    connection.vendor != "sqlite",
-    reason="exercises SQLite-specific locking or transaction behavior",
-)
-
-
-def _sqlite_subprocess_environment(settings_module: str) -> dict[str, str]:
-    return {
-        **os.environ,
-        "DJANGO_SETTINGS_MODULE": settings_module,
-        "GENERAL_MANAGER_TEST_DATABASE": "sqlite",
-        "PYTHONPATH": os.pathsep.join((os.path.join(os.getcwd(), "src"), os.getcwd())),
-    }
 
 
 class NonAtomicIncrementCache(BaseCache):
@@ -1592,7 +1583,7 @@ class SQLiteUploadQuotaIntegrationTests(SimpleTestCase):
             result = subprocess.run(  # noqa: S603
                 [sys.executable, "-c", script, database_path],
                 cwd=os.getcwd(),
-                env=_sqlite_subprocess_environment("tests.test_settings"),
+                env=sqlite_subprocess_environment("tests.test_settings"),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -1600,12 +1591,6 @@ class SQLiteUploadQuotaIntegrationTests(SimpleTestCase):
 
         if result.returncode != 0:
             self.fail(result.stderr or result.stdout or "SQLite quota check failed")
-
-
-def _sqlite_only_mark(test: object) -> Any:
-    marks = [mark for mark in getattr(test, "pytestmark", ()) if mark.name == "skipif"]
-    assert len(marks) == 1
-    return marks[0]
 
 
 def test_sqlite_connection_specific_begin_tests_are_backend_scoped() -> None:
@@ -1618,7 +1603,7 @@ def test_sqlite_connection_specific_begin_tests_are_backend_scoped() -> None:
     )
 
     for name in sqlite_specific:
-        mark = _sqlite_only_mark(getattr(BeginFileUploadTests, name))
+        mark = sqlite_only_mark(getattr(BeginFileUploadTests, name))
         assert mark.args == (connection.vendor != "sqlite",), name
         assert (
             mark.kwargs["reason"]
@@ -1636,7 +1621,7 @@ def test_sqlite_connection_specific_begin_tests_are_backend_scoped() -> None:
 
 
 def test_sqlite_quota_subprocess_environment_forces_sqlite() -> None:
-    child_env = _sqlite_subprocess_environment("tests.test_settings")
+    child_env = sqlite_subprocess_environment("tests.test_settings")
 
     assert child_env["DJANGO_SETTINGS_MODULE"] == "tests.test_settings"
     assert child_env["GENERAL_MANAGER_TEST_DATABASE"] == "sqlite"

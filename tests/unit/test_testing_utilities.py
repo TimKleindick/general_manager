@@ -402,7 +402,7 @@ class TestingUtilityDependencyOrderingTests(SimpleTestCase):
 
 
 class GeneralManagerTransactionTestCaseTeardownTests(SimpleTestCase):
-    """Tests for dependency-safe dynamic model teardown."""
+    """Tests for failure-safe dynamic model setup and teardown."""
 
     @staticmethod
     def _model(name: str, table: str) -> type:
@@ -468,22 +468,26 @@ class GeneralManagerTransactionTestCaseTeardownTests(SimpleTestCase):
         """A DDL failure does not leak dynamic model or manager state."""
         from general_manager.utils import testing as testing_module
 
-        created_model = self._model("FailureModel", "failure_table")
-        manager = self._manager(created_model)
+        later_model = self._model("LaterModel", "later_table")
+        failure_model = self._model("FailureModel", "failure_table")
+        manager = self._manager(failure_model)
 
         class FakeTestCase(testing_module.GeneralManagerTransactionTestCase):
             general_manager_classes: ClassVar[list[type[GeneralManager]]] = [
                 cast(type[GeneralManager], manager)
             ]
 
-        FakeTestCase._gm_created_models = [created_model]
-        FakeTestCase._gm_created_tables = {"failure_table"}
+        FakeTestCase._gm_created_models = [later_model, failure_model]
+        FakeTestCase._gm_created_tables = {"later_table", "failure_table"}
 
         editor = Mock()
         ddl_error = RuntimeError("database refused model deletion")
-        editor.delete_model.side_effect = ddl_error
+        editor.delete_model.side_effect = [ddl_error, None]
         mocked_connection = MagicMock()
-        mocked_connection.introspection.table_names.return_value = ["failure_table"]
+        mocked_connection.introspection.table_names.return_value = [
+            "later_table",
+            "failure_table",
+        ]
         mocked_connection.schema_editor.return_value.__enter__.return_value = editor
 
         app_config = global_apps.get_app_config("general_manager")
@@ -513,8 +517,8 @@ class GeneralManagerTransactionTestCaseTeardownTests(SimpleTestCase):
                 "pending_attribute_initialization",
                 [manager, object],
             ),
-            patch.dict(all_models, {"failuremodel": created_model}),
-            patch.dict(app_config.models, {"failuremodel": created_model}),
+            patch.dict(all_models, {"failuremodel": failure_model}),
+            patch.dict(app_config.models, {"failuremodel": failure_model}),
         ):
             with self.assertRaises(RuntimeError) as raised:
                 FakeTestCase.tearDownClass()
@@ -541,6 +545,92 @@ class GeneralManagerTransactionTestCaseTeardownTests(SimpleTestCase):
             remote_clear.assert_called_once_with()
             clear_cache.assert_called_once_with()
             base_teardown.assert_called_once_with()
+            self.assertEqual(
+                [call.args[0] for call in editor.delete_model.call_args_list],
+                [failure_model, later_model],
+            )
+
+    def test_setup_failure_rolls_back_tracked_models_and_global_state(self) -> None:
+        """The first setup error survives comprehensive best-effort cleanup."""
+        from general_manager.utils import testing as testing_module
+
+        first_model = self._model("FirstModel", "first_table")
+        second_model = self._model("SecondModel", "second_table")
+        failing_model = self._model("FailingModel", "failing_table")
+        managers = [
+            self._manager(first_model),
+            self._manager(second_model),
+            self._manager(failing_model),
+        ]
+
+        class FakeTestCase(testing_module.GeneralManagerTransactionTestCase):
+            general_manager_classes: ClassVar[list[type[GeneralManager]]] = cast(
+                list[type[GeneralManager]],
+                managers,
+            )
+
+        setup_error = RuntimeError("database refused model creation")
+        cleanup_error = RuntimeError("database refused first rollback")
+        editor = Mock()
+        editor.create_model.side_effect = [None, None, setup_error]
+        editor.delete_model.side_effect = [cleanup_error, None]
+        mocked_connection = MagicMock()
+        mocked_connection.introspection.table_names.side_effect = [
+            [],
+            ["first_table", "second_table"],
+        ]
+        mocked_connection.constraint_checks_disabled.return_value = nullcontext()
+        mocked_connection.schema_editor.return_value.__enter__.return_value = editor
+
+        with (
+            patch.object(testing_module, "connection", mocked_connection),
+            patch.object(testing_module.GraphQL, "reset_registry") as reset_registry,
+            patch.object(
+                testing_module,
+                "_default_graphql_url_clear",
+            ) as graphql_clear,
+            patch.object(
+                testing_module,
+                "_default_remote_api_url_clear",
+            ) as remote_clear,
+            patch.object(global_apps, "clear_cache") as clear_cache,
+            patch.object(GeneralManagerMeta, "all_classes", list(managers)),
+            patch.object(
+                GeneralManagerMeta,
+                "pending_graphql_interfaces",
+                list(managers),
+            ),
+            patch.object(
+                GeneralManagerMeta,
+                "pending_attribute_initialization",
+                list(managers),
+            ),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                FakeTestCase.setUpClass()
+
+            self.assertIs(raised.exception, setup_error)
+            self.assertEqual(
+                [call.args[0] for call in editor.create_model.call_args_list],
+                [first_model, second_model, failing_model],
+            )
+            self.assertEqual(
+                [call.args[0] for call in editor.delete_model.call_args_list],
+                [second_model, first_model],
+            )
+            self.assertEqual(FakeTestCase._gm_created_models, [])
+            self.assertEqual(FakeTestCase._gm_created_tables, set())
+            self.assertEqual(GeneralManagerMeta.all_classes, [])
+            self.assertEqual(GeneralManagerMeta.pending_graphql_interfaces, [])
+            self.assertEqual(GeneralManagerMeta.pending_attribute_initialization, [])
+            self.assertIs(
+                global_apps.get_containing_app_config,
+                testing_module._original_get_app,
+            )
+            self.assertGreaterEqual(reset_registry.call_count, 2)
+            self.assertGreaterEqual(graphql_clear.call_count, 2)
+            self.assertGreaterEqual(remote_clear.call_count, 2)
+            clear_cache.assert_called_once_with()
 
     def test_teardown_restores_graphene_cursor_on_disallowed_secondary(self) -> None:
         """Graphene instrumentation must not replace Django's database guard."""

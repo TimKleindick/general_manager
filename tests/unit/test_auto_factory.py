@@ -10,7 +10,9 @@ from general_manager.factory.auto_factory import (
 )
 from types import SimpleNamespace
 from typing import Any, ClassVar, Iterable
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+
+from tests.utils.database import create_test_models, drop_test_models
 
 
 class DummyInterface:
@@ -371,13 +373,11 @@ class AutoFactoryTestCase(TransactionTestCase):
         )
 
         alias_connection = connections[alias]
-        alias_tables_created = False
+        alias_models_created = create_test_models(
+            alias_connection,
+            (DummyModel, DummyModel2),
+        )
         try:
-            with alias_connection.schema_editor() as schema:
-                schema.create_model(DummyModel)
-                schema.create_model(DummyModel2)
-                alias_tables_created = True
-
             existing = DummyModel.objects.using(alias).create(
                 name="Alias Existing",
                 value=1,
@@ -390,10 +390,9 @@ class AutoFactoryTestCase(TransactionTestCase):
             self.assertEqual(DummyModel.objects.count(), 0)
             self.assertEqual(DummyModel2.objects.using(alias).count(), 1)
         finally:
-            if alias_tables_created:
+            if alias_models_created:
                 with alias_connection.schema_editor() as schema:
-                    schema.delete_model(DummyModel2)
-                    schema.delete_model(DummyModel)
+                    drop_test_models(schema, reversed(alias_models_created))
 
     def test_generate_instance_filters_one_to_one_links_on_interface_database_alias(
         self,
@@ -415,13 +414,11 @@ class AutoFactoryTestCase(TransactionTestCase):
         )
 
         alias_connection = connections[alias]
-        alias_tables_created = False
+        alias_models_created = create_test_models(
+            alias_connection,
+            (DummyModel, DummyModel3),
+        )
         try:
-            with alias_connection.schema_editor() as schema:
-                schema.create_model(DummyModel)
-                schema.create_model(DummyModel3)
-                alias_tables_created = True
-
             linked = DummyModel.objects.using(alias).create(
                 name="Already linked",
                 value=1,
@@ -441,10 +438,9 @@ class AutoFactoryTestCase(TransactionTestCase):
             self.assertEqual(instance.dummy_model_id, available.pk)
             self.assertEqual(DummyModel3.objects.using(alias).count(), 2)
         finally:
-            if alias_tables_created:
+            if alias_models_created:
                 with alias_connection.schema_editor() as schema:
-                    schema.delete_model(DummyModel3)
-                    schema.delete_model(DummyModel)
+                    drop_test_models(schema, reversed(alias_models_created))
 
     def test_related_factory_modes_do_not_leak_between_generated_factories(self):
         original_modes = dict(AutoFactory._related_factory_modes)
@@ -1054,8 +1050,7 @@ class FactoriesHelpersTestCase(TransactionTestCase):
         """
         super().tearDownClass()
         with connection.schema_editor() as schema:
-            schema.delete_model(DummyModel2)
-            schema.delete_model(DummyModel)
+            drop_test_models(schema, (DummyModel2, DummyModel))
 
     def test_get_field_value_for_short_char_field(self):
         """
@@ -1168,5 +1163,60 @@ class FactoriesHelpersTeardownTests(SimpleTestCase):
         editor = schema_editor.return_value.__enter__.return_value
         self.assertEqual(
             [call.args[0] for call in editor.delete_model.call_args_list],
+            [DummyModel2, DummyModel],
+        )
+
+    def test_model_deletion_preserves_first_error_and_attempts_later_models(
+        self,
+    ) -> None:
+        """A failed dependent drop must not prevent the referenced drop."""
+        deletion_error = RuntimeError("dependent table could not be dropped")
+        with (
+            patch.object(TransactionTestCase, "tearDownClass"),
+            patch.object(connection, "schema_editor") as schema_editor,
+        ):
+            editor = schema_editor.return_value.__enter__.return_value
+            editor.delete_model.side_effect = [deletion_error, None]
+
+            with self.assertRaises(RuntimeError) as raised:
+                FactoriesHelpersTestCase.tearDownClass()
+
+        self.assertIs(raised.exception, deletion_error)
+        self.assertEqual(
+            [call.args[0] for call in editor.delete_model.call_args_list],
+            [DummyModel2, DummyModel],
+        )
+
+    def test_partial_model_creation_rolls_back_and_preserves_setup_error(
+        self,
+    ) -> None:
+        """Track each successful create and roll it back in reverse order."""
+        setup_error = RuntimeError("third table could not be created")
+        cleanup_error = RuntimeError("second table could not be rolled back")
+        create_context = MagicMock()
+        cleanup_context = MagicMock()
+        create_editor = create_context.__enter__.return_value
+        cleanup_editor = cleanup_context.__enter__.return_value
+        create_editor.create_model.side_effect = [None, None, setup_error]
+        cleanup_editor.delete_model.side_effect = [cleanup_error, None]
+        database_connection = MagicMock()
+        database_connection.schema_editor.side_effect = [
+            create_context,
+            cleanup_context,
+        ]
+
+        with self.assertRaises(RuntimeError) as raised:
+            create_test_models(
+                database_connection,
+                (DummyModel, DummyModel2, DummyModel3),
+            )
+
+        self.assertIs(raised.exception, setup_error)
+        self.assertEqual(
+            [call.args[0] for call in create_editor.create_model.call_args_list],
+            [DummyModel, DummyModel2, DummyModel3],
+        )
+        self.assertEqual(
+            [call.args[0] for call in cleanup_editor.delete_model.call_args_list],
             [DummyModel2, DummyModel],
         )

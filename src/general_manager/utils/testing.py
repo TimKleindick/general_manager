@@ -250,8 +250,11 @@ def run_registered_startup_hooks(
 
 class GMTestCaseMeta(type):
     """
-    Metaclass that wraps setUpClass: first calls user-defined setup,
-    then performs GM environment initialization, then super().setUpClass().
+    Metaclass that wraps setUpClass in its actual execution order.
+
+    User-defined setup runs first, followed by URL clearing, dynamic table
+    creation, GeneralManager/schema initialization, and the base GraphQL test
+    case setup.
     """
 
     def __new__(
@@ -263,7 +266,7 @@ class GMTestCaseMeta(type):
         """
         Constructs a test case class whose setUpClass is augmented to initialize GeneralManager and GraphQL test state.
 
-        The augmented setUpClass resets GraphQL internal registries and schema/type state, optionally installs an AppConfig fallback resolver, ensures database tables for the test's managed models (including history and related HistoricalChanges models) exist, records owned tables, and preserves model creation order for teardown. It then initializes GeneralManager classes and GraphQL registrations (including the startup hook runner and system checks), runs any user-defined setUpClass, and invokes the base GraphQLTransactionTestCase.setUpClass.
+        The augmented setUpClass runs any user-defined setup first, clears generated URL state, creates and tracks missing database tables for the test's managed models (including history and related HistoricalChanges models), initializes GeneralManager classes and GraphQL registrations, and finally invokes GraphQLTransactionTestCase.setUpClass.
 
         Parameters:
             mcs (type[GMTestCaseMeta]): Metaclass constructing the new class.
@@ -285,7 +288,7 @@ class GMTestCaseMeta(type):
             """
             Prepare the class-level test environment for GeneralManager GraphQL tests.
 
-            Resets GraphQL registries and schema/type state; optionally installs a fallback AppConfig lookup if configured; creates any missing database tables for models referenced by the test's GeneralManager interfaces (including their history models and models related via HistoricalChanges); records owned table names and model creation order; initializes GeneralManager classes and their GraphQL registrations (including installing the startup hook runner and registering system checks); clears the default GraphQL URL pattern; executes any user-defined setUpClass for the test class; and finally invokes the base GraphQLTransactionTestCase.setUpClass.
+            Executes user-defined setup before clearing generated URL state and creating missing managed-model tables. It then initializes GeneralManager and GraphQL schema state and finally invokes the base GraphQLTransactionTestCase.setUpClass. If setup fails, every successfully tracked table and related global test state is cleaned up before the original failure is re-raised.
             """
             GraphQL.reset_registry()
 
@@ -298,64 +301,78 @@ class GMTestCaseMeta(type):
 
             cls._gm_created_tables = set()
             cls._gm_created_models = []
-            # 1) user-defined setUpClass (if any)
-            if user_setup:
-                if isinstance(user_setup, classmethod):
-                    cast(_ClassSetUpDescriptor, user_setup).__func__(cls)
-                else:
-                    cast(
-                        Callable[[type["GeneralManagerTransactionTestCase"]], None],
-                        user_setup,
-                    )(cls)
-            # 2) clear URL patterns
-            _default_graphql_url_clear()
-            _default_remote_api_url_clear()
-            # 3) register models & create tables
-            preexisting_tables = set(connection.introspection.table_names())
-            known_tables = set(preexisting_tables)
-            with connection.schema_editor() as editor:
-                for manager_class in cls.general_manager_classes:
-                    if not hasattr(manager_class, "Interface") or not hasattr(
-                        manager_class.Interface, "_model"
-                    ):
-                        continue
-                    model_class = cast(
-                        type[models.Model], manager_class.Interface._model
-                    )
-                    model_table = model_class._meta.db_table
-                    if model_table not in known_tables:
-                        editor.create_model(model_class)
-                        cls._gm_created_models.append(model_class)
-                        known_tables.add(model_table)
-                    history_model = getattr(model_class, "history", None)
-                    if history_model:
-                        history_descriptor = cast(_HistoryDescriptor, history_model)
-                        history_model_class = history_descriptor.model
-                        history_table = history_model_class._meta.db_table
-                        if history_table not in known_tables:
-                            editor.create_model(history_model_class)
-                            cls._gm_created_models.append(history_model_class)
-                            known_tables.add(history_table)
-                        for related_model in _get_historical_changes_related_models(
-                            history_model_class
+            try:
+                # 1) user-defined setUpClass (if any)
+                if user_setup:
+                    if isinstance(user_setup, classmethod):
+                        cast(_ClassSetUpDescriptor, user_setup).__func__(cls)
+                    else:
+                        cast(
+                            Callable[[type["GeneralManagerTransactionTestCase"]], None],
+                            user_setup,
+                        )(cls)
+                # 2) clear URL patterns
+                _default_graphql_url_clear()
+                _default_remote_api_url_clear()
+                # 3) register models & create tables
+                preexisting_tables = set(connection.introspection.table_names())
+                known_tables = set(preexisting_tables)
+
+                def record_created_model(model: type[models.Model]) -> None:
+                    cls._gm_created_models.append(model)
+                    cls._gm_created_tables.add(model._meta.db_table)
+                    for field in model._meta.local_many_to_many:
+                        m2m_field = cast(_ManyToManyField, field)
+                        through_model = m2m_field.remote_field.through
+                        if getattr(through_model._meta, "auto_created", False):
+                            cls._gm_created_tables.add(through_model._meta.db_table)
+
+                with connection.schema_editor() as editor:
+                    for manager_class in cls.general_manager_classes:
+                        if not hasattr(manager_class, "Interface") or not hasattr(
+                            manager_class.Interface, "_model"
                         ):
-                            related_table = related_model._meta.db_table
-                            if related_table not in known_tables:
-                                editor.create_model(related_model)
-                                cls._gm_created_models.append(related_model)
-                                known_tables.add(related_table)
-            post_tables = set(connection.introspection.table_names())
-            cls._gm_created_tables.update(post_tables - preexisting_tables)
-            # 4) GM & GraphQL initialization
-            GeneralmanagerConfig.initialize_general_manager_classes(
-                cls.general_manager_classes, cls.general_manager_classes
-            )
-            GeneralmanagerConfig.handle_remote_api(cls.general_manager_classes)
-            GeneralmanagerConfig.install_startup_hook_runner()
-            GeneralmanagerConfig.register_system_checks()
-            GeneralmanagerConfig.handle_graph_ql(cls.general_manager_classes)
-            # 5) GraphQLTransactionTestCase.setUpClass
-            base_setup.__func__(cls)
+                            continue
+                        model_class = cast(
+                            type[models.Model], manager_class.Interface._model
+                        )
+                        model_table = model_class._meta.db_table
+                        if model_table not in known_tables:
+                            editor.create_model(model_class)
+                            record_created_model(model_class)
+                            known_tables.add(model_table)
+                        history_model = getattr(model_class, "history", None)
+                        if history_model:
+                            history_descriptor = cast(_HistoryDescriptor, history_model)
+                            history_model_class = history_descriptor.model
+                            history_table = history_model_class._meta.db_table
+                            if history_table not in known_tables:
+                                editor.create_model(history_model_class)
+                                record_created_model(history_model_class)
+                                known_tables.add(history_table)
+                            for related_model in _get_historical_changes_related_models(
+                                history_model_class
+                            ):
+                                related_table = related_model._meta.db_table
+                                if related_table not in known_tables:
+                                    editor.create_model(related_model)
+                                    record_created_model(related_model)
+                                    known_tables.add(related_table)
+                post_tables = set(connection.introspection.table_names())
+                cls._gm_created_tables.update(post_tables - preexisting_tables)
+                # 4) GM & GraphQL initialization
+                GeneralmanagerConfig.initialize_general_manager_classes(
+                    cls.general_manager_classes, cls.general_manager_classes
+                )
+                GeneralmanagerConfig.handle_remote_api(cls.general_manager_classes)
+                GeneralmanagerConfig.install_startup_hook_runner()
+                GeneralmanagerConfig.register_system_checks()
+                GeneralmanagerConfig.handle_graph_ql(cls.general_manager_classes)
+                # 5) GraphQLTransactionTestCase.setUpClass
+                base_setup.__func__(cls)
+            except Exception:
+                cls._cleanup_failed_class_setup()
+                raise
 
         attrs["setUpClass"] = classmethod(wrapped_setUpClass)
         return super().__new__(mcs, name, bases, attrs)
@@ -455,6 +472,58 @@ class GeneralManagerTransactionTestCase(
     _gm_created_tables: ClassVar[set[str]] = set()
     _gm_created_models: ClassVar[list[type[models.Model]]] = []
 
+    @classmethod
+    def _clear_test_manager_registries(cls) -> None:
+        """Remove this test class's managers from mutable setup registries."""
+        GeneralManagerMeta.all_classes = [
+            manager
+            for manager in GeneralManagerMeta.all_classes
+            if manager not in cls.general_manager_classes
+        ]
+        GeneralManagerMeta.pending_graphql_interfaces = [
+            manager
+            for manager in GeneralManagerMeta.pending_graphql_interfaces
+            if manager not in cls.general_manager_classes
+        ]
+        GeneralManagerMeta.pending_attribute_initialization = [
+            manager
+            for manager in GeneralManagerMeta.pending_attribute_initialization
+            if manager not in cls.general_manager_classes
+        ]
+
+    @classmethod
+    def _restore_fallback_app_lookup(cls) -> None:
+        """Restore Django's original app-config lookup after test setup."""
+        cast(
+            _MutableDjangoApps,
+            global_apps,
+        ).get_containing_app_config = _original_get_app
+
+    @classmethod
+    def _reset_created_test_state(cls) -> None:
+        """Forget dynamic schema state after cleanup has attempted it."""
+        cls._gm_created_models = []
+        cls._gm_created_tables = set()
+
+    @classmethod
+    def _cleanup_failed_class_setup(cls) -> None:
+        """Best-effort rollback for a failed class-level test setup."""
+        cleanup_actions: tuple[Callable[[], None], ...] = (
+            _default_graphql_url_clear,
+            _default_remote_api_url_clear,
+            cls._drop_created_test_models,
+            cls._unregister_created_test_models,
+            global_apps.clear_cache,
+            cls._clear_test_manager_registries,
+            cls._restore_fallback_app_lookup,
+            cls._reset_created_test_state,
+            _restore_graphene_cursor_wrappers,
+            GraphQL.reset_registry,
+        )
+        for cleanup_action in cleanup_actions:
+            with suppress(Exception):
+                cleanup_action()
+
     def setUp(self) -> None:
         """
         Install a LoggingCache as the Django default cache for the test and clear its operation log.
@@ -477,17 +546,25 @@ class GeneralManagerTransactionTestCase(
         )
         with connection.constraint_checks_disabled():
             with connection.schema_editor() as editor:
+                deletion_error: Exception | None = None
                 for model in reversed(getattr(cls, "_gm_created_models", [])):
                     model_table = model._meta.db_table
                     if model_table not in tables_to_remove:
                         continue
-                    editor.delete_model(model)
+                    try:
+                        editor.delete_model(model)
+                    except Exception as error:  # noqa: BLE001 - keep dropping.
+                        if deletion_error is None:
+                            deletion_error = error
+                        continue
                     tables_to_remove.discard(model_table)
                     for field in model._meta.local_many_to_many:
                         m2m_field = cast(_ManyToManyField, field)
                         through_model = m2m_field.remote_field.through
                         if getattr(through_model._meta, "auto_created", False):
                             tables_to_remove.discard(through_model._meta.db_table)
+                if deletion_error is not None:
+                    raise deletion_error
 
     @classmethod
     def _unregister_created_test_models(cls) -> None:
@@ -529,33 +606,6 @@ class GeneralManagerTransactionTestCase(
         and the first cleanup error is re-raised after all actions have run.
         """
 
-        def clear_metaclass_registries() -> None:
-            GeneralManagerMeta.all_classes = [
-                gm
-                for gm in GeneralManagerMeta.all_classes
-                if gm not in cls.general_manager_classes
-            ]
-            GeneralManagerMeta.pending_graphql_interfaces = [
-                gm
-                for gm in GeneralManagerMeta.pending_graphql_interfaces
-                if gm not in cls.general_manager_classes
-            ]
-            GeneralManagerMeta.pending_attribute_initialization = [
-                gm
-                for gm in GeneralManagerMeta.pending_attribute_initialization
-                if gm not in cls.general_manager_classes
-            ]
-
-        def restore_fallback_app_lookup() -> None:
-            cast(
-                _MutableDjangoApps,
-                global_apps,
-            ).get_containing_app_config = _original_get_app
-
-        def reset_created_state() -> None:
-            cls._gm_created_models = []
-            cls._gm_created_tables = set()
-
         cleanup_error: Exception | None = None
         cleanup_actions: tuple[Callable[[], None], ...] = (
             _default_graphql_url_clear,
@@ -563,9 +613,9 @@ class GeneralManagerTransactionTestCase(
             cls._drop_created_test_models,
             cls._unregister_created_test_models,
             global_apps.clear_cache,
-            clear_metaclass_registries,
-            restore_fallback_app_lookup,
-            reset_created_state,
+            cls._clear_test_manager_registries,
+            cls._restore_fallback_app_lookup,
+            cls._reset_created_test_state,
             _restore_graphene_cursor_wrappers,
             super().tearDownClass,
         )

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import sys
+from contextlib import suppress
 from datetime import timedelta
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth.models import User
 from django.db import connections, models
+from django.test import SimpleTestCase
 from django.utils import timezone
 
 from general_manager.interface import ExistingModelInterface
@@ -16,6 +19,7 @@ from general_manager.interface.capabilities.orm.mutations import (
 )
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+from tests.utils.database import create_test_models, drop_test_models
 
 
 class AlwaysPassRule:
@@ -458,6 +462,7 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
 
 class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     databases: ClassVar[set[str]] = {"default", "secondary"}
+    _secondary_created_models: ClassVar[list[type[models.Model]]] = []
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -479,23 +484,42 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
         cls.MultiDatabaseOwnersHistory = MultiDatabaseRecord.history.model.owners.model
         cls.MultiDatabaseManager = MultiDatabaseManager
         cls.general_manager_classes = [MultiDatabaseManager]
-        super().setUpClass()
-        secondary = connections["secondary"]
-        with secondary.schema_editor() as editor:
-            editor.create_model(cls.MultiDatabaseRecord)
-            editor.create_model(cls.MultiDatabaseRecord.history.model)
-            editor.create_model(cls.MultiDatabaseOwnersHistory)
+        superclass_setup_complete = False
+        try:
+            super().setUpClass()
+            superclass_setup_complete = True
+            cls._secondary_created_models = create_test_models(
+                connections["secondary"],
+                (
+                    cls.MultiDatabaseRecord,
+                    cls.MultiDatabaseRecord.history.model,
+                    cls.MultiDatabaseOwnersHistory,
+                ),
+            )
+        except Exception:
+            if superclass_setup_complete:
+                with suppress(Exception):
+                    super().tearDownClass()
+            raise
 
     @classmethod
     def tearDownClass(cls) -> None:
-        secondary = connections["secondary"]
+        cleanup_error: Exception | None = None
         try:
-            with secondary.schema_editor() as editor:
-                editor.delete_model(cls.MultiDatabaseOwnersHistory)
-                editor.delete_model(cls.MultiDatabaseRecord.history.model)
-                editor.delete_model(cls.MultiDatabaseRecord)
-        finally:
+            with connections["secondary"].schema_editor() as editor:
+                drop_test_models(editor, reversed(cls._secondary_created_models))
+        except Exception as error:  # noqa: BLE001 - superclass cleanup must run.
+            cleanup_error = error
+
+        cls._secondary_created_models = []
+        try:
             super().tearDownClass()
+        except Exception as error:  # noqa: BLE001 - preserve the first failure.
+            if cleanup_error is None:
+                cleanup_error = error
+
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def test_create_keeps_history_reason_and_rollback_on_configured_alias(
         self,
@@ -746,3 +770,43 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
         self.assertFalse(
             self.MultiDatabaseOwnersHistory.objects.using("default").exists()
         )
+
+
+class ExistingModelMultiDatabaseCleanupTests(SimpleTestCase):
+    """Regression tests for secondary schema cleanup failures."""
+
+    def test_teardown_attempts_every_drop_and_preserves_first_error(self) -> None:
+        first_model = type("FirstSecondaryModel", (), {})
+        second_model = type("SecondSecondaryModel", (), {})
+        third_model = type("ThirdSecondaryModel", (), {})
+        deletion_error = RuntimeError("first secondary drop failed")
+        secondary = MagicMock()
+        editor = secondary.schema_editor.return_value.__enter__.return_value
+        editor.delete_model.side_effect = [deletion_error, None, None]
+
+        with (
+            patch.object(
+                sys.modules[__name__],
+                "connections",
+                {"secondary": secondary},
+            ),
+            patch.object(
+                ExistingModelMultiDatabaseIntegrationTest,
+                "_secondary_created_models",
+                [third_model, second_model, first_model],
+                create=True,
+            ),
+            patch.object(
+                GeneralManagerTransactionTestCase,
+                "tearDownClass",
+            ) as superclass_teardown,
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                ExistingModelMultiDatabaseIntegrationTest.tearDownClass()
+
+        self.assertIs(raised.exception, deletion_error)
+        self.assertEqual(
+            [call.args[0] for call in editor.delete_model.call_args_list],
+            [first_model, second_model, third_model],
+        )
+        superclass_teardown.assert_called_once_with()
