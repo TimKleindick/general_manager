@@ -2,6 +2,73 @@
 
 <!-- version list -->
 
+## v0.65.0 (2026-07-18)
+
+### Bug Fixes
+
+- Defer search lifecycle dispatch until commit
+  ([`7400688`](https://github.com/TimKleindick/general_manager/commit/7400688d0298fc89581118f38aa5c936e49f9414))
+
+- Fence search reconciliation generations
+  ([`8610800`](https://github.com/TimKleindick/general_manager/commit/86108005ca0255854259d38cee62fd493ed866ec))
+
+- Keep transaction ownership context-local
+  ([`dee3e2c`](https://github.com/TimKleindick/general_manager/commit/dee3e2c82e61a3926885bd305d0125fc97ca7aae))
+
+- Linearize search migration ordering
+  ([`ad67ea4`](https://github.com/TimKleindick/general_manager/commit/ad67ea4cab178271dd7d294f6b2f9903e8fbbe10))
+
+- Preserve commit-safe ORM mutation behavior
+  ([`b08483c`](https://github.com/TimKleindick/general_manager/commit/b08483c008a6ac73752ef91df2c26c12cf3bc966))
+
+- Preserve search invalidation recovery
+  ([`f8e0b84`](https://github.com/TimKleindick/general_manager/commit/f8e0b84c1131d19fbf5333402b8b1537fc2c819e))
+
+- Preserve update invalidation fallback
+  ([`b95c837`](https://github.com/TimKleindick/general_manager/commit/b95c83770a7570ded3487f2d3f09d4c3cf206bf0))
+
+- Recover search invalidation failures
+  ([`1cb0bfb`](https://github.com/TimKleindick/general_manager/commit/1cb0bfbd70271acc8e65c22b89fd30ec27a126f5))
+
+- Wrap ORM data changes in commit-safe signals
+  ([`964258d`](https://github.com/TimKleindick/general_manager/commit/964258d27613514ae1043b4af5426c7f677df484))
+
+### Documentation
+
+- Document related search invalidation
+  ([`e16099f`](https://github.com/TimKleindick/general_manager/commit/e16099fe2ef3b57853fe353307c751dd3cf31e27))
+
+### Features
+
+- Add declarative search invalidation rules
+  ([`f86dec2`](https://github.com/TimKleindick/general_manager/commit/f86dec224f2eeb6c0ab5b7b1c9d84de2c0169bc0))
+
+- Add exact-index search batch tasks
+  ([`9b78857`](https://github.com/TimKleindick/general_manager/commit/9b78857a632893a2574cacc7d97330c44deaa9de))
+
+- Bridge many-to-many search invalidation
+  ([`2430828`](https://github.com/TimKleindick/general_manager/commit/243082831cecec24182be9d2722e1972e7926f96))
+
+- Dispatch bounded search invalidation batches
+  ([`d92012d`](https://github.com/TimKleindick/general_manager/commit/d92012d4049b307b9c7af0b192e58e01090a7dd6))
+
+- Resolve related search invalidation targets
+  ([`13a75ff`](https://github.com/TimKleindick/general_manager/commit/13a75ff402244d10c5b34c3fb6b06d2035b64e89))
+
+### Refactoring
+
+- Reuse canonical manager import path
+  ([`a2125a1`](https://github.com/TimKleindick/general_manager/commit/a2125a1aa9df41ba43fb12cdfcbce8b7c003eaf5))
+
+### Testing
+
+- Preserve configured secondary database aliases
+  ([`54f452e`](https://github.com/TimKleindick/general_manager/commit/54f452e8009a85f48a30c8391ff5a56d3741b271))
+
+- Scope sqlite upload transaction cases
+  ([`ace6893`](https://github.com/TimKleindick/general_manager/commit/ace6893b589d8103dc3d336eaa053cf003ad27b0))
+
+
 ## v0.64.4 (2026-07-17)
 
 ### Bug Fixes
