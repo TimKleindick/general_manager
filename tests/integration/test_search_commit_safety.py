@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import ClassVar
 
-from django.contrib.auth.models import Group, Permission, User
-from django.contrib.contenttypes.models import ContentType
 from django.db import connection, connections, models, transaction
 from django.db.models import CharField
 from django.test.utils import CaptureQueriesContext
@@ -23,6 +22,7 @@ from general_manager.search.config import (
 from general_manager.search.indexer import SearchDeleteTarget
 from general_manager.search.models import SearchIndexState
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+from tests.utils.database import create_test_models, drop_test_models
 
 
 class PostReceiverFailure(RuntimeError):
@@ -434,43 +434,12 @@ class SecondaryDatabaseCommitSafetyIntegrationTests(GeneralManagerTransactionTes
     """Exercise data-change transaction boundaries on a configured DB alias."""
 
     databases: ClassVar[set[str]] = {"default", "secondary"}
-
-    @classmethod
-    def _restore_secondary_connection(cls) -> None:
-        """Restore the connection handler state replaced by this test class."""
-        if hasattr(connections._connections, "secondary"):
-            connections["secondary"].close()
-            del connections["secondary"]
-        if cls._secondary_original_config is None:
-            connections.databases.pop("secondary", None)
-        else:
-            connections.databases["secondary"] = cls._secondary_original_config
-        if cls._secondary_had_cached_connection:
-            connections._connections.secondary = (  # type: ignore[attr-defined]
-                cls._secondary_original_connection
-            )
+    _secondary_created_models: ClassVar[list[type[models.Model]]] = []
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Configure an isolated in-memory secondary database and manager."""
+        """Configure a manager on the secondary database."""
         alias = "secondary"
-        cls._secondary_original_config = connections.databases.get(alias)
-        cls._secondary_had_cached_connection = hasattr(
-            connections._connections,
-            alias,
-        )
-        cls._secondary_original_connection = (
-            getattr(connections._connections, alias)
-            if cls._secondary_had_cached_connection
-            else None
-        )
-        cls.addClassCleanup(cls._restore_secondary_connection)
-        if cls._secondary_had_cached_connection:
-            del connections[alias]
-        connections.databases[alias] = {
-            **connections.databases["default"],
-            "NAME": ":memory:",
-        }
 
         class SecondaryCommitRecord(models.Model):
             name = models.CharField(max_length=200)
@@ -488,32 +457,42 @@ class SecondaryDatabaseCommitSafetyIntegrationTests(GeneralManagerTransactionTes
         cls.SecondaryCommitRecord = SecondaryCommitRecord
         cls.SecondaryCommitManager = SecondaryCommitManager
         cls.general_manager_classes = [SecondaryCommitManager]
-        super().setUpClass()
-
-        secondary = connections[alias]
-        secondary.connect()
-        with secondary.schema_editor() as editor:
-            editor.create_model(ContentType)
-            editor.create_model(Permission)
-            editor.create_model(Group)
-            editor.create_model(User)
-            editor.create_model(SecondaryCommitRecord)
-            editor.create_model(SecondaryCommitRecord.history.model)
+        cls._secondary_created_models = []
+        superclass_setup_complete = False
+        try:
+            super().setUpClass()
+            superclass_setup_complete = True
+            secondary = connections[alias]
+            secondary.connect()
+            cls._secondary_created_models = create_test_models(
+                secondary,
+                (SecondaryCommitRecord, SecondaryCommitRecord.history.model),
+            )
+        except Exception:
+            if superclass_setup_complete:
+                with suppress(Exception):
+                    super().tearDownClass()
+            raise
 
     @classmethod
     def tearDownClass(cls) -> None:
-        """Drop secondary schemas before the connection is restored."""
-        secondary = connections["secondary"]
+        """Drop dynamic secondary models and preserve the first cleanup error."""
+        cleanup_error: Exception | None = None
         try:
-            with secondary.schema_editor() as editor:
-                editor.delete_model(cls.SecondaryCommitRecord.history.model)
-                editor.delete_model(cls.SecondaryCommitRecord)
-                editor.delete_model(User)
-                editor.delete_model(Group)
-                editor.delete_model(Permission)
-                editor.delete_model(ContentType)
-        finally:
+            with connections["secondary"].schema_editor() as editor:
+                drop_test_models(editor, reversed(cls._secondary_created_models))
+        except Exception as error:  # noqa: BLE001 - superclass cleanup must run.
+            cleanup_error = error
+        cls._secondary_created_models = []
+
+        try:
             super().tearDownClass()
+        except Exception as error:  # noqa: BLE001 - preserve the first failure.
+            if cleanup_error is None:
+                cleanup_error = error
+
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def _connect_receiver(self, signal, receiver: object) -> None:
         """Connect one strong signal receiver and disconnect it during cleanup."""
