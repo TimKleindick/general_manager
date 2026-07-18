@@ -1216,14 +1216,18 @@ def test_sqlite_application_atomic_fails_before_inspection_or_claim(
 
 
 def test_sqlite_application_atomic_test_is_backend_scoped() -> None:
-    mark = sqlite_only_mark(
+    for test in (
         test_sqlite_application_atomic_fails_before_inspection_or_claim,
-    )
-    assert mark.args == (connection.vendor != "sqlite",)
-    assert (
-        mark.kwargs["reason"]
-        == "exercises SQLite-specific locking or transaction behavior"
-    )
+        test_manager_upload_inside_sqlite_application_atomic_fails_closed,
+        test_interposed_sqlite_atomic_inside_manager_envelope_fails_closed,
+    ):
+        mark = sqlite_only_mark(test)
+        assert mark.args == (connection.vendor != "sqlite",)
+        assert (
+            mark.kwargs["reason"]
+            == "exercises SQLite-specific locking or transaction behavior"
+        )
+
     assert all(
         candidate.name != "skipif"
         for candidate in getattr(
@@ -1275,6 +1279,7 @@ def test_sqlite_atomic_check_rejects_application_blocks(
     assert finalization._has_unsafe_sqlite_outer_atomic(database_alias) is True
 
 
+@sqlite_only
 @pytest.mark.django_db(transaction=True)
 @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
 def test_manager_upload_inside_sqlite_application_atomic_fails_closed(
@@ -1298,6 +1303,7 @@ def test_manager_upload_inside_sqlite_application_atomic_fails_closed(
     assert FinalizationAdapter.materialize_calls == 0
 
 
+@sqlite_only
 @pytest.mark.django_db(transaction=True)
 @override_settings(GENERAL_MANAGER={"FILE_UPLOADS": {"ENABLED": True}})
 def test_interposed_sqlite_atomic_inside_manager_envelope_fails_closed(
