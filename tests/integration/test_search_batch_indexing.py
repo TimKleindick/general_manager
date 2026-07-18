@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import ClassVar
 from unittest.mock import Mock
 
 from django.apps import apps
-from django.contrib.auth.models import Group, Permission, User
-from django.contrib.contenttypes.models import ContentType
 from django.db import connections, models
 from django.test import TransactionTestCase
 
@@ -18,54 +17,27 @@ from general_manager.search.indexer import (
     MissingBatchManagerError,
     SearchIndexer,
 )
+from tests.utils.database import create_test_models, drop_test_models
 
 
 class SearchBatchIndexingDatabaseRoutingTests(TransactionTestCase):
     """Exercise the exact-index batch path through a real secondary ORM alias."""
 
     databases: ClassVar[set[str]] = {"default", "secondary"}
-
-    @classmethod
-    def _restore_secondary_connection(cls) -> None:
-        """Restore the connection handler state replaced by this test class."""
-        if hasattr(connections._connections, "secondary"):
-            connections["secondary"].close()
-            del connections["secondary"]
-        if cls._secondary_original_config is None:
-            connections.databases.pop("secondary", None)
-        else:
-            connections.databases["secondary"] = cls._secondary_original_config
-        if cls._secondary_had_cached_connection:
-            connections._connections.secondary = (  # type: ignore[attr-defined]
-                cls._secondary_original_connection
-            )
+    _registered_models: ClassVar[list[type[models.Model]]] = []
+    _secondary_created_models: ClassVar[list[type[models.Model]]] = []
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Configure an isolated secondary database and real ORM manager."""
+        """Configure a real ORM manager on the secondary database."""
         alias = "secondary"
-        cls._secondary_original_config = connections.databases.get(alias)
-        cls._secondary_had_cached_connection = hasattr(
-            connections._connections,
-            alias,
-        )
-        cls._secondary_original_connection = (
-            getattr(connections._connections, alias)
-            if cls._secondary_had_cached_connection
-            else None
-        )
-        cls.addClassCleanup(cls._restore_secondary_connection)
-        if cls._secondary_had_cached_connection:
-            del connections[alias]
-        connections.databases[alias] = {
-            **connections.databases["default"],
-            "NAME": ":memory:",
-        }
         super().setUpClass()
         cls._original_all_classes = list(GeneralManagerMeta.all_classes)
         cls._original_pending_graphql = list(
             GeneralManagerMeta.pending_graphql_interfaces
         )
+        cls._registered_models = []
+        cls._secondary_created_models = []
 
         class SearchBatchOwnerInterface(DatabaseInterface):
             name = models.CharField(max_length=64)
@@ -108,6 +80,12 @@ class SearchBatchIndexingDatabaseRoutingTests(TransactionTestCase):
         cls.SearchBatchManager = SearchBatchOwner
         cls.CustomPrimaryKeyRecord = CustomPrimaryKeyRecord
         cls.CustomPrimaryKeyManager = CustomPrimaryKeyOwner
+        cls._registered_models = [
+            cls.SearchBatchRecord,
+            cls.SearchBatchRecord.history.model,
+            cls.CustomPrimaryKeyRecord,
+            cls.CustomPrimaryKeyRecord.history.model,
+        ]
         GeneralManagerMeta.all_classes = [SearchBatchOwner, CustomPrimaryKeyOwner]
         GeneralmanagerConfig.initialize_general_manager_classes(
             [SearchBatchOwner, CustomPrimaryKeyOwner],
@@ -116,36 +94,29 @@ class SearchBatchIndexingDatabaseRoutingTests(TransactionTestCase):
 
         secondary = connections[alias]
         secondary.connect()
-        with secondary.schema_editor() as editor:
-            editor.create_model(ContentType)
-            editor.create_model(Permission)
-            editor.create_model(Group)
-            editor.create_model(User)
-            editor.create_model(cls.SearchBatchRecord)
-            editor.create_model(cls.CustomPrimaryKeyRecord)
+        try:
+            cls._secondary_created_models = create_test_models(
+                secondary,
+                (cls.SearchBatchRecord, cls.CustomPrimaryKeyRecord),
+            )
+        except Exception:
+            with suppress(Exception):
+                cls.tearDownClass()
+            raise
 
     @classmethod
     def tearDownClass(cls) -> None:
-        """Remove the secondary table before restoring global test state."""
+        """Drop dynamic models and restore global test state."""
+        cleanup_error: Exception | None = None
         try:
             with connections["secondary"].schema_editor() as editor:
-                editor.delete_model(cls.CustomPrimaryKeyRecord)
-                editor.delete_model(cls.SearchBatchRecord)
-                editor.delete_model(User)
-                editor.delete_model(Group)
-                editor.delete_model(Permission)
-                editor.delete_model(ContentType)
-        finally:
-            model = cls.SearchBatchRecord
-            history_model = model.history.model
-            custom_model = cls.CustomPrimaryKeyRecord
-            custom_history_model = custom_model.history.model
-            for registered_model in (
-                model,
-                history_model,
-                custom_model,
-                custom_history_model,
-            ):
+                drop_test_models(editor, reversed(cls._secondary_created_models))
+        except Exception as error:  # noqa: BLE001 - cleanup must continue.
+            cleanup_error = error
+        cls._secondary_created_models = []
+
+        try:
+            for registered_model in cls._registered_models:
                 app_label = registered_model._meta.app_label
                 model_key = registered_model.__name__.lower()
                 apps.all_models[app_label].pop(model_key, None)
@@ -155,7 +126,19 @@ class SearchBatchIndexingDatabaseRoutingTests(TransactionTestCase):
             GeneralManagerMeta.pending_graphql_interfaces = (
                 cls._original_pending_graphql
             )
+        except Exception as error:  # noqa: BLE001 - superclass cleanup must run.
+            if cleanup_error is None:
+                cleanup_error = error
+        cls._registered_models = []
+
+        try:
             super().tearDownClass()
+        except Exception as error:  # noqa: BLE001 - preserve the first failure.
+            if cleanup_error is None:
+                cleanup_error = error
+
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def setUp(self) -> None:
         """Create three owners directly on the configured secondary alias."""

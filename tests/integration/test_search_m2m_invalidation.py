@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from importlib import import_module
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 from django.apps import apps
-from django.contrib.auth.models import Group, Permission, User
-from django.contrib.contenttypes.models import ContentType
 from django.db import connections, models, transaction
 from django.db.models.signals import m2m_changed
-from django.test import TransactionTestCase
+from django.test import SimpleTestCase, TransactionTestCase
 
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
@@ -21,10 +20,12 @@ from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.indexer import SearchIndexer
 from general_manager.search.m2m_invalidation import (
+    M2MInvalidationBinding,
     _dispatch_uid,
     compile_m2m_invalidation_bindings,
     configure_search_m2m_invalidation,
 )
+from tests.utils.database import create_test_models, drop_test_models
 
 
 class M2MRollback(RuntimeError):
@@ -35,47 +36,17 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
     """Exercise auto/custom through signals and commit-safe scheduling."""
 
     databases: ClassVar[set[str]] = {"default", "secondary"}
-
-    @classmethod
-    def _restore_secondary_connection(cls) -> None:
-        """Restore the connection handler state replaced by this test class."""
-        if cls._secondary_connection_restored:
-            return
-        cls._secondary_connection_restored = True
-        if hasattr(connections._connections, "secondary"):
-            connections["secondary"].close()
-            del connections["secondary"]
-        if cls._secondary_original_config is None:
-            connections.databases.pop("secondary", None)
-        else:
-            connections.databases["secondary"] = cls._secondary_original_config
-        if cls._secondary_had_cached_connection:
-            connections._connections.secondary = (  # type: ignore[attr-defined]
-                cls._secondary_original_connection
-            )
+    bindings: ClassVar[tuple[M2MInvalidationBinding, ...]] = ()
+    _created_models_by_alias: ClassVar[dict[str, list[type[models.Model]]]] = {}
+    _registered_models: ClassVar[list[type[models.Model]]] = []
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Create isolated ORM-backed endpoints and both through styles."""
-        cls._secondary_original_config = connections.databases.get("secondary")
-        cls._secondary_had_cached_connection = hasattr(
-            connections._connections,
-            "secondary",
-        )
-        cls._secondary_original_connection = (
-            connections._connections.secondary
-            if cls._secondary_had_cached_connection
-            else None
-        )
-        cls._secondary_connection_restored = False
-        cls.addClassCleanup(cls._restore_secondary_connection)
-        if cls._secondary_had_cached_connection:
-            del connections["secondary"]
-        connections.databases["secondary"] = {
-            **connections.databases["default"],
-            "NAME": ":memory:",
-        }
+        """Create ORM-backed endpoints and both through styles."""
         super().setUpClass()
+        cls.bindings = ()
+        cls._created_models_by_alias = {}
+        cls._registered_models = []
         cls._original_all_classes = list(GeneralManagerMeta.all_classes)
         cls._original_pending_attributes = list(
             GeneralManagerMeta.pending_attribute_initialization
@@ -179,61 +150,68 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
         }
         for manager in cls.general_manager_classes:
             setattr(manager_module, manager.__name__, manager)
-        for alias in ("default", "secondary"):
-            database = connections[alias]
-            database.connect()
-            with database.schema_editor() as editor:
-                if alias == "secondary":
-                    editor.create_model(ContentType)
-                    editor.create_model(Permission)
-                    editor.create_model(Group)
-                    editor.create_model(User)
-                editor.create_model(cls.SourceModel)
-                editor.create_model(cls.SourceModel.history.model)
-                editor.create_model(cls.AutoOwnerModel)
-                editor.create_model(cls.AutoOwnerModel.history.model)
-                editor.create_model(cls.CustomOwnerModel)
-                editor.create_model(cls.CustomOwnerModel.history.model)
-                editor.create_model(M2MSearchMembership)
-        cls.bindings = configure_search_m2m_invalidation()
+        cls._registered_models = [
+            cls.Membership,
+            cls.CustomOwnerModel,
+            cls.CustomOwnerModel.history.model,
+            cls.AutoOwnerModel,
+            cls.AutoOwnerModel.sources.through,
+            cls.AutoOwnerModel.history.model,
+            cls.SourceModel,
+            cls.SourceModel.history.model,
+        ]
+        schema_models = (
+            cls.SourceModel,
+            cls.SourceModel.history.model,
+            cls.AutoOwnerModel,
+            cls.AutoOwnerModel.history.model,
+            cls.CustomOwnerModel,
+            cls.CustomOwnerModel.history.model,
+            cls.Membership,
+        )
+        try:
+            for alias in ("default", "secondary"):
+                database = connections[alias]
+                database.connect()
+                cls._created_models_by_alias[alias] = create_test_models(
+                    database,
+                    schema_models,
+                )
+            cls.bindings = configure_search_m2m_invalidation()
+        except Exception:
+            with suppress(Exception):
+                cls.tearDownClass()
+            raise
 
     @classmethod
     def tearDownClass(cls) -> None:
         """Drop dynamic tables, receivers, models, and manager registries."""
-        try:
-            for binding in cls.bindings:
+        cleanup_error: Exception | None = None
+        for binding in cls.bindings:
+            try:
                 m2m_changed.disconnect(
                     sender=binding.through_model,
                     dispatch_uid=_dispatch_uid(binding),
                 )
-            for alias in ("secondary", "default"):
+            except Exception as error:  # noqa: BLE001 - cleanup must continue.
+                if cleanup_error is None:
+                    cleanup_error = error
+
+        for alias in ("secondary", "default"):
+            created_models = cls._created_models_by_alias.get(alias, ())
+            if not created_models:
+                continue
+            try:
                 with connections[alias].schema_editor() as editor:
-                    editor.delete_model(cls.Membership)
-                    editor.delete_model(cls.CustomOwnerModel.history.model)
-                    editor.delete_model(cls.CustomOwnerModel)
-                    editor.delete_model(cls.AutoOwnerModel.history.model)
-                    editor.delete_model(cls.AutoOwnerModel)
-                    editor.delete_model(cls.SourceModel.history.model)
-                    editor.delete_model(cls.SourceModel)
-                    if alias == "secondary":
-                        editor.delete_model(User)
-                        editor.delete_model(Group)
-                        editor.delete_model(Permission)
-                        editor.delete_model(ContentType)
-        finally:
-            auto_through = cls.AutoOwnerModel.sources.through
-            dynamic_models = (
-                cls.Membership,
-                cls.CustomOwnerModel,
-                cls.CustomOwnerModel.history.model,
-                cls.AutoOwnerModel,
-                auto_through,
-                cls.AutoOwnerModel.history.model,
-                cls.SourceModel,
-                cls.SourceModel.history.model,
-            )
+                    drop_test_models(editor, reversed(created_models))
+            except Exception as error:  # noqa: BLE001 - cleanup must continue.
+                if cleanup_error is None:
+                    cleanup_error = error
+        cls._created_models_by_alias = {}
+
+        try:
             app_config = apps.get_app_config("general_manager")
-            for model in dynamic_models:
+            for model in cls._registered_models:
                 model_name = model._meta.model_name
                 if apps.all_models["general_manager"].get(model_name) is model:
                     apps.all_models["general_manager"].pop(model_name, None)
@@ -249,10 +227,23 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
             )
             for name, prior in cls._prior_manager_exports.items():
                 if prior is None:
-                    delattr(cls._manager_module, name)
+                    if hasattr(cls._manager_module, name):
+                        delattr(cls._manager_module, name)
                 else:
                     setattr(cls._manager_module, name, prior)
+        except Exception as error:  # noqa: BLE001 - superclass cleanup must run.
+            if cleanup_error is None:
+                cleanup_error = error
+        cls._registered_models = []
+
+        try:
             super().tearDownClass()
+        except Exception as error:  # noqa: BLE001 - preserve the first failure.
+            if cleanup_error is None:
+                cleanup_error = error
+
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def setUp(self) -> None:
         """Create two owners and sources through the ORM endpoints."""
@@ -262,87 +253,6 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
         self.auto_owner_a = self.AutoOwnerModel.objects.create(name="auto-a")
         self.auto_owner_b = self.AutoOwnerModel.objects.create(name="auto-b")
         self.custom_owner = self.CustomOwnerModel.objects.create(name="custom")
-
-    def test_secondary_connection_cleanup_is_idempotent(self) -> None:
-        """Repeated cleanup leaves the restored cached connection untouched."""
-
-        class CleanupProbe(type(self)):
-            pass
-
-        current_connection = MagicMock()
-        original_connection = MagicMock()
-        original_config = object()
-        cached_connections = MagicMock()
-        cached_connections.secondary = current_connection
-        fake_connections = MagicMock()
-        fake_connections._connections = cached_connections
-        fake_connections.databases = {"secondary": object()}
-        fake_connections.__getitem__.side_effect = lambda alias: getattr(
-            cached_connections, alias
-        )
-        fake_connections.__delitem__.side_effect = lambda alias: delattr(
-            cached_connections, alias
-        )
-        CleanupProbe._secondary_connection_restored = False
-        CleanupProbe._secondary_original_config = original_config
-        CleanupProbe._secondary_had_cached_connection = True
-        CleanupProbe._secondary_original_connection = original_connection
-
-        with patch(f"{__name__}.connections", fake_connections):
-            CleanupProbe._restore_secondary_connection()
-            restored_config = fake_connections.databases["secondary"]
-            restored_connection = cached_connections.secondary
-
-            CleanupProbe._restore_secondary_connection()
-
-        current_connection.close.assert_called_once_with()
-        original_connection.close.assert_not_called()
-        assert fake_connections.databases["secondary"] is restored_config
-        assert cached_connections.secondary is restored_connection
-        assert restored_config is original_config
-        assert restored_connection is original_connection
-
-    def test_secondary_connection_cleanup_survives_setup_failure(self) -> None:
-        """Class cleanup restores secondary state when setup fails after mutation."""
-
-        class SetupFailureProbe(type(self)):
-            pass
-
-        original_connection = MagicMock()
-        original_config = object()
-        cached_connections = MagicMock()
-        cached_connections.secondary = original_connection
-        fake_connections = MagicMock()
-        fake_connections._connections = cached_connections
-        fake_connections.databases = {
-            "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"},
-            "secondary": original_config,
-        }
-        fake_connections.__getitem__.side_effect = lambda alias: getattr(
-            cached_connections, alias
-        )
-        fake_connections.__delitem__.side_effect = lambda alias: delattr(
-            cached_connections, alias
-        )
-
-        with (
-            patch(f"{__name__}.connections", fake_connections),
-            patch.object(
-                TransactionTestCase,
-                "setUpClass",
-                side_effect=RuntimeError("setup failed"),
-            ),
-            self.assertRaisesRegex(RuntimeError, "setup failed"),
-        ):
-            SetupFailureProbe.setUpClass()
-
-        with patch(f"{__name__}.connections", fake_connections):
-            SetupFailureProbe.doClassCleanups()
-            SetupFailureProbe._restore_secondary_connection()
-
-        original_connection.close.assert_not_called()
-        assert fake_connections.databases["secondary"] is original_config
-        assert cached_connections.secondary is original_connection
 
     def test_compiler_binds_exact_auto_and_custom_through_fields(self) -> None:
         """Startup compilation records the real Django through metadata."""
@@ -554,3 +464,85 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
             )
 
         dispatch.assert_not_called()
+
+
+class SearchM2MInvalidationLifecycleTests(SimpleTestCase):
+    """Regression tests for two-alias dynamic schema cleanup."""
+
+    def test_teardown_cleans_both_aliases_and_restores_registries(self) -> None:
+        """Later cleanup runs while the first alias error remains authoritative."""
+        first_model = type("FirstM2MModel", (), {})
+        second_model = type("SecondM2MModel", (), {})
+        created_models = [first_model, second_model]
+        registered_model = MagicMock()
+        registered_model._meta.model_name = "registered_model"
+        registered_models = {"registered_model": registered_model}
+        fake_apps = MagicMock()
+        fake_apps.all_models = {"general_manager": registered_models}
+        fake_apps.get_app_config.return_value.models = registered_models.copy()
+        secondary_error = RuntimeError("secondary membership drop failed")
+        default_error = RuntimeError("default membership drop failed")
+        secondary = MagicMock()
+        default = MagicMock()
+        original_all_classes = [object()]
+        original_pending_attributes = [object()]
+        original_pending_graphql = [object()]
+
+        class CleanupProbe(SearchM2MInvalidationIntegrationTests):
+            bindings = ()
+            _created_models_by_alias: ClassVar[dict[str, list[type]]] = {
+                "default": created_models,
+                "secondary": created_models,
+            }
+            _registered_models: ClassVar[list[object]] = [registered_model]
+            _prior_manager_exports: ClassVar[dict[str, object]] = {}
+            _original_all_classes = original_all_classes
+            _original_pending_attributes = original_pending_attributes
+            _original_pending_graphql = original_pending_graphql
+
+        with (
+            patch(f"{__name__}.apps", fake_apps),
+            patch(
+                f"{__name__}.connections",
+                {"default": default, "secondary": secondary},
+            ),
+            patch(
+                f"{__name__}.drop_test_models",
+                side_effect=(secondary_error, default_error),
+            ) as drop_models,
+            patch.object(GeneralManagerMeta, "all_classes", [object()]),
+            patch.object(
+                GeneralManagerMeta,
+                "pending_attribute_initialization",
+                [object()],
+            ),
+            patch.object(
+                GeneralManagerMeta,
+                "pending_graphql_interfaces",
+                [object()],
+            ),
+            patch.object(TransactionTestCase, "tearDownClass") as superclass_teardown,
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                CleanupProbe.tearDownClass()
+
+            self.assertIs(raised.exception, secondary_error)
+            self.assertEqual(
+                [list(call.args[1]) for call in drop_models.call_args_list],
+                [[second_model, first_model], [second_model, first_model]],
+            )
+            secondary.schema_editor.assert_called_once_with()
+            default.schema_editor.assert_called_once_with()
+            self.assertEqual(fake_apps.all_models["general_manager"], {})
+            self.assertEqual(fake_apps.get_app_config.return_value.models, {})
+            self.assertIs(GeneralManagerMeta.all_classes, original_all_classes)
+            self.assertIs(
+                GeneralManagerMeta.pending_attribute_initialization,
+                original_pending_attributes,
+            )
+            self.assertIs(
+                GeneralManagerMeta.pending_graphql_interfaces,
+                original_pending_graphql,
+            )
+            fake_apps.clear_cache.assert_called_once_with()
+            superclass_teardown.assert_called_once_with()
