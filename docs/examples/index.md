@@ -18,5 +18,6 @@ The cookbook collects self-contained snippets that demonstrate how to solve doma
 - [Request interface end-to-end](request_interface_end_to_end.md)
 - [Remote manager interface end-to-end](remote_manager_interface_end_to_end.md)
 - [Startup hooks with custom ordering](startup_hooks.md)
+- [Related search invalidation](search_invalidation.md)
 
 Contributions are welcome—add your own recipes as your project evolves.
