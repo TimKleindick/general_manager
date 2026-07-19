@@ -167,6 +167,7 @@ nav:
       - examples/startup_hooks.md
       - examples/remote_manager_interface_end_to_end.md
       - examples/request_interface_end_to_end.md
+      - examples/search_invalidation.md
   - API-Reference:
       - api/core.md
       - api/chat.md
