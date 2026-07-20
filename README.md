@@ -55,15 +55,12 @@ and [interface concepts](https://timkleindick.github.io/general_manager/concepts
 
 ## Compatibility
 
-- Python 3.12 or newer
-- Django 5.2.15 or newer
-- CI exercises Python 3.12, 3.13, and 3.14 on SQLite
+- Python 3.12 or later
+- Django 5.2.15 or later
 
-GeneralManager builds on Django's database layer, but this project only claims
-backend support covered by its tests or maintained examples. SQLite,
-PostgreSQL, and MariaDB are exercised by CI and are fully supported. Other
-Django-supported backends may work, but are not currently claimed as supported
-by GeneralManager.
+CI tests Python 3.12, 3.13, and 3.14 against SQLite, PostgreSQL and MariaDB.
+
+Other database backends supported by Django may also work, but are not officially supported unless covered by GeneralManager’s test suite or maintained examples.
 
 ## Five-minute setup
 
