@@ -19,6 +19,7 @@ from general_manager.as_of import (
     as_of,
 )
 from general_manager.cache.cache_decorator import cached
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface import DatabaseInterface, RemoteManagerInterface
 from general_manager.interface.requests import (
     RequestNotFoundError,
@@ -402,6 +403,79 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
 
         planner.assert_not_called()
         transport.assert_not_called()
+
+    def test_precreated_remote_reads_fail_before_any_request_side_effect(self) -> None:
+        interface_cls = self.RemoteProject.Interface
+        project_id = self.project.id
+        bucket = self.RemoteProject.all()
+        request_plan = bucket.request_plan
+        self.assertIsNotNone(request_plan)
+        manager = self.RemoteProject(id=project_id)
+        interface = manager._interface
+        interface.set_request_payload_cache(
+            {"id": project_id, "name": "Cached", "status": "active"}
+        )
+        query_capability = interface_cls.require_capability("query")
+
+        with (
+            patch.object(
+                interface_cls,
+                "get_query_operation",
+                wraps=interface_cls.get_query_operation,
+            ) as planner,
+            patch.object(DependencyTracker, "track") as dependency,
+            patch(
+                "general_manager.interface.capabilities.request.with_observability"
+            ) as observability,
+            patch.object(interface_cls, "execute_request_plan") as transport,
+            as_of("2022-01-01"),
+        ):
+            operations = (
+                lambda: query_capability.validate_lookups(interface_cls),
+                lambda: query_capability.build_bucket(interface_cls),
+                lambda: query_capability.execute_plan(interface_cls, request_plan),
+                lambda: list(bucket),
+                interface.get_data,
+            )
+            for operation in operations:
+                with self.subTest(operation=operation):
+                    with self.assertRaises(HistoricalReadNotSupportedError):
+                        operation()
+
+        planner.assert_not_called()
+        dependency.assert_not_called()
+        observability.assert_not_called()
+        transport.assert_not_called()
+
+    def test_direct_request_plan_execution_uses_historical_read_and_mutation_guards(
+        self,
+    ) -> None:
+        interface_cls = self.RemoteProject.Interface
+        query_plan = self.RemoteProject.all().request_plan
+        self.assertIsNotNone(query_plan)
+        mutation_plan = RequestPlan(
+            operation_name="create",
+            action="create",
+            method="POST",
+            path="/internal/gm/projects",
+        )
+        request_transport = interface_cls.transport
+        self.assertIsNotNone(request_transport)
+
+        with (
+            patch.object(interface_cls, "get_query_operation") as query_operation,
+            patch.object(interface_cls, "get_mutation_operation") as mutation_operation,
+            patch.object(request_transport, "execute") as execute,
+            as_of("2022-01-01"),
+        ):
+            with self.assertRaises(HistoricalReadNotSupportedError):
+                interface_cls.execute_request_plan(query_plan)
+            with self.assertRaises(HistoricalMutationError):
+                interface_cls.execute_request_plan(mutation_plan)
+
+        query_operation.assert_not_called()
+        mutation_operation.assert_not_called()
+        execute.assert_not_called()
 
     def test_protocol_version_mismatch_fails_explicitly(self) -> None:
         transport = DjangoClientTransport()

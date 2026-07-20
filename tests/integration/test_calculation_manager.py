@@ -48,11 +48,17 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                 type(self).salary_rate_calls += 1
                 return float(self.salary.quantity.magnitude / 100)
 
+        tax_possible_value_calls: list[object] = []
+
+        def tax_employee_possible_values():
+            tax_possible_value_calls.append(object())
+            return Employee.all()
+
         class TaxCalculation(GeneralManager):
             employee: Employee
 
             class Interface(CalculationInterface):
-                employee = Input(Employee, possible_values=lambda: Employee.all())
+                employee = Input(Employee, possible_values=tax_employee_possible_values)
 
             @graph_ql_property(sortable=True)
             def calculated_tax(self) -> Measurement:
@@ -104,6 +110,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
         cls.Employee = Employee
         cls.TaxCalculation = TaxCalculation
+        cls.tax_possible_value_calls = tax_possible_value_calls
         cls.Bonus = Bonus
         cls.BonusCalculation = BonusCalculation
         cls.RequestScopedCalculation = RequestScopedCalculation
@@ -218,7 +225,9 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                 return_value=snapshot + timedelta(seconds=10),
             ),
             as_of(snapshot),
+            CalculationRunContext(),
         ):
+            self.tax_possible_value_calls.clear()
             all_bucket = self.TaxCalculation.all()
             filtered_bucket = self.TaxCalculation.filter(employee_id=first_id)
             excluded_bucket = self.TaxCalculation.exclude(employee_id=second_id)
@@ -247,6 +256,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                 filtered_calculations[0].calculated_tax,
                 Measurement(600, "EUR"),
             )
+            self.assertEqual(len(self.tax_possible_value_calls), 1)
 
     def test_group_by_manager_input(self):
         first_employee = self.Employee.create(
