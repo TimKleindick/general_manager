@@ -226,9 +226,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
     def _ensure_as_of_compatible(self) -> None:
         """Reject use in a historical context other than the bound snapshot."""
         active = current_as_of_date()
-        if active is None:
-            return
         effective = self._effective_search_date
+        if active is None:
+            if effective is not None:
+                raise HistoricalContextConflictError
+            return
         if effective is None or not _represents_same_instant(effective, active):
             raise HistoricalContextConflictError
 

@@ -508,9 +508,6 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     def _ensure_as_of_compatible(self) -> None:
         """Reject reads when this manager is bound to another snapshot."""
         active = current_as_of_date()
-        if active is None:
-            return
-
         effective = self.__dict__.get(
             "_effective_search_date", _EFFECTIVE_SEARCH_DATE_MISSING
         )
@@ -526,6 +523,12 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             else:
                 effective = None
             self._effective_search_date = cast(datetime | None, effective)
+
+        behavior = getattr(self.Interface, "_as_of_behavior", "unsupported")
+        if active is None:
+            if behavior == "transparent" and isinstance(effective, datetime):
+                raise HistoricalContextConflictError
+            return
 
         if not isinstance(effective, datetime) or not _represents_same_instant(
             effective, active

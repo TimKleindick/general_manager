@@ -834,6 +834,8 @@ class GeneralManagerTestCase(TestCase):
         restored = pickle.loads(pickle.dumps(manager))  # noqa: S301
 
         self.assertEqual(restored._effective_search_date, search_date)
+        with self.assertRaises(HistoricalContextConflictError):
+            restored._ensure_manager_state_valid()
         with as_of(search_date):
             restored._ensure_manager_state_valid()
 
