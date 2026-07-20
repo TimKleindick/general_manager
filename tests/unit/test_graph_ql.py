@@ -31,7 +31,11 @@ from general_manager.api.graphql_mutations import (
     _graphql_mutation_field_name,
     _normalize_mutation_kwargs_for_manager,
 )
-from general_manager.api.graphql_view import GeneralManagerGraphQLView
+from general_manager.api.graphql_view import (
+    GeneralManagerGraphQLView,
+    _close_awaitable,
+    _has_declared_async_mutation_resolver,
+)
 from general_manager.api.graphql_as_of import (
     build_as_of_directive,
     extract_as_of_search_date,
@@ -252,6 +256,73 @@ class GraphQLAsOfExecutionTests(unittest.TestCase):
                 variables=None,
                 operation_name="Current",
             )
+        )
+
+    def test_unselected_operation_has_no_historical_date(self) -> None:
+        self.assertIsNone(
+            extract_as_of_search_date(
+                query='query Historical @asOf(date: "2022-01-01") { ping }',
+                variables=None,
+                operation_name="Missing",
+            )
+        )
+
+    def test_as_of_requires_the_schema_directive_definition(self) -> None:
+        schema = GraphQLSchema(
+            query=GraphQLObjectType(
+                "Query",
+                {"ping": GraphQLField(GraphQLString)},
+            )
+        )
+
+        with self.assertRaises(GraphQLError) as raised:
+            extract_as_of_search_date(
+                query='query Q @asOf(date: "2022-01-01") { ping }',
+                variables=None,
+                operation_name="Q",
+                schema=schema,
+            )
+
+        self.assertEqual(
+            raised.exception.extensions["code"],
+            "GRAPHQL_VALIDATION_FAILED",
+        )
+
+    def test_as_of_rejects_schema_definition_without_date_argument(self) -> None:
+        schema = GraphQLSchema(
+            query=GraphQLObjectType(
+                "Query",
+                {"ping": GraphQLField(GraphQLString)},
+            ),
+            directives=[
+                *specified_directives,
+                GraphQLDirective(name="asOf", locations=[DirectiveLocation.QUERY]),
+            ],
+        )
+
+        with self.assertRaises(GraphQLError) as raised:
+            extract_as_of_search_date(
+                query='query Q @asOf(date: "2022-01-01") { ping }',
+                variables=None,
+                operation_name="Q",
+                schema=schema,
+            )
+
+        self.assertEqual(raised.exception.extensions["code"], "BAD_USER_INPUT")
+
+    def test_unrelated_schema_validation_error_is_preserved(self) -> None:
+        with self.assertRaises(GraphQLError) as raised:
+            extract_as_of_search_date(
+                query='query Q @asOf(date: "epoch") { missing }',
+                variables=None,
+                operation_name="Q",
+                schema=self._coercion_schema(),
+            )
+
+        self.assertIn("missing", raised.exception.message)
+        self.assertNotEqual(
+            raised.exception.extensions.get("code"),
+            "BAD_USER_INPUT",
         )
 
     def test_rejects_bad_as_of_inputs_with_stable_codes(self) -> None:
@@ -633,6 +704,129 @@ class GraphQLAsOfExecutionTests(unittest.TestCase):
         )
         self.assertEqual(events, [])
         atomic_mock.assert_not_called()
+
+    def test_nested_mutation_awaitables_are_closed_without_running_them(self) -> None:
+        events: list[str] = []
+
+        class ClosableAwaitable:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def __await__(self):
+                yield
+
+            def close(self) -> None:
+                self.closed = True
+
+        class CancellableAwaitable:
+            def __init__(self) -> None:
+                self.cancelled = False
+
+            def __await__(self):
+                yield
+
+            def cancel(self) -> None:
+                self.cancelled = True
+
+        async def nested_coroutine() -> None:
+            events.append("nested body")
+
+        async def outer_coroutine(payload: object) -> None:
+            events.append(f"outer body: {payload!r}")
+
+        closable = ClosableAwaitable()
+        cancellable = CancellableAwaitable()
+        nested = nested_coroutine()
+        payload: dict[str, object] = {
+            "nested": [nested, (closable,), {cancellable}],
+        }
+        payload["cycle"] = payload
+        outer = outer_coroutine(payload)
+
+        _close_awaitable(outer)
+
+        self.assertEqual(events, [])
+        self.assertIsNone(outer.cr_frame)
+        self.assertIsNone(nested.cr_frame)
+        self.assertTrue(closable.closed)
+        self.assertTrue(cancellable.cancelled)
+
+    def test_declared_async_mutation_is_found_through_fragment_graph(self) -> None:
+        async def resolve_async(_root: object, _info: object) -> str:
+            return "changed"
+
+        query_type = GraphQLObjectType(
+            "Query",
+            {"ping": GraphQLField(GraphQLString)},
+        )
+        mutation_type = GraphQLObjectType(
+            "Mutation",
+            {
+                "asyncField": GraphQLField(
+                    GraphQLString,
+                    resolve=resolve_async,
+                )
+            },
+        )
+        schema = GraphQLSchema(query=query_type, mutation=mutation_type)
+        query = """
+            mutation Q {
+                ... on Mutation { ...Loop }
+            }
+            fragment Loop on Mutation {
+                ...Loop
+                missingField
+                ...Missing
+                asyncField
+            }
+        """
+
+        self.assertTrue(_has_declared_async_mutation_resolver(schema, query, "Q"))
+        self.assertFalse(
+            _has_declared_async_mutation_resolver(schema, "mutation {", None)
+        )
+
+    def test_dynamic_atomic_mutation_awaitable_is_closed_and_rolled_back(self) -> None:
+        events: list[str] = []
+
+        async def dynamic_result() -> object:
+            events.append("mutation body")
+            return SimpleNamespace(data="changed", errors=None)
+
+        view = self._view()
+        result = dynamic_result()
+        atomic = MagicMock()
+        rollback = MagicMock()
+
+        with (
+            patch.object(view, "execute_graphql_request", return_value=result),
+            patch(
+                "general_manager.api.graphql_view.graphene_settings.ATOMIC_MUTATIONS",
+                True,
+            ),
+            patch("general_manager.api.graphql_view.transaction.atomic", atomic),
+            patch(
+                "general_manager.api.graphql_view.transaction.set_rollback",
+                rollback,
+            ),
+        ):
+            completed = view._execute_and_complete(
+                SimpleNamespace(GET={}, method="POST"),
+                {"query": "mutation Q { ping }"},
+                "mutation Q { ping }",
+                None,
+                "Q",
+                False,
+            )
+
+        self.assertEqual(events, [])
+        self.assertIsNone(result.cr_frame)
+        self.assertEqual(
+            completed.errors[0].extensions["code"],
+            "GRAPHQL_VALIDATION_FAILED",
+        )
+        atomic.assert_called_once_with(using="default", savepoint=False)
+        rollback.assert_called_once_with(True, using="default")
 
     def test_generated_mutation_preserves_historical_forbidden_error(self) -> None:
         class DummyManager:
