@@ -15,6 +15,7 @@ from general_manager.manager.input import Input
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.as_of import as_of
 
 
 class DummyCalculationInterface(CalculationInterface):
@@ -66,6 +67,19 @@ class TestCalculationInterface(TestCase):
         """
         with self.assertRaises(NotImplementedError):
             self.interface.get_data()
+
+    def test_calculation_interface_is_transparent_to_as_of_context(self):
+        self.assertEqual(CalculationInterface.as_of_policy, "transparent")
+
+        class CalculationManager(GeneralManager):
+            pass
+
+        CalculationManager.Interface = DummyCalculationInterface  # type: ignore[assignment]
+
+        with as_of("2022-01-01") as active:
+            manager = CalculationManager("test", 1)
+            self.assertEqual(manager._effective_search_date, active)
+            manager._ensure_manager_state_valid()
 
     def test_get_attribute_types(self):
         """

@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from django.test import TestCase, override_settings
 from general_manager.bootstrap import (
@@ -24,6 +24,13 @@ from general_manager.cache.run_context import CalculationRunContext
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.contrib.auth import get_user_model
 from django.utils.crypto import get_random_string
+from general_manager.api.property import GraphQLProperty
+from general_manager.as_of import (
+    HistoricalContextConflictError,
+    HistoricalReadNotSupportedError,
+    as_of,
+    normalize_search_date,
+)
 
 
 class DummyInterface:
@@ -151,6 +158,150 @@ class GeneralManagerTestCase(TestCase):
         TemporaryManager.Interface = DummyInterface  # type: ignore
         TemporaryManager.Permission = ManagerBasedPermission  # type: ignore
         return TemporaryManager
+
+    def _historical_manager_class(self):
+        manager_class = self._temporary_manager_class()
+
+        class HistoricalInterface:
+            as_of_policy = "historical"
+
+            def __init__(self, id, *, search_date=None):
+                self.identification = {"id": id}
+                self._search_date = (
+                    normalize_search_date(search_date)
+                    if search_date is not None
+                    else None
+                )
+
+            @classmethod
+            def _from_trusted_orm_instance(cls, instance, *, search_date=None):
+                return cls(instance.pk, search_date=search_date)
+
+        manager_class.Interface = HistoricalInterface  # type: ignore[assignment]
+        return manager_class
+
+    def test_unsupported_construction_fails_before_interface_work(self):
+        manager_class = self._temporary_manager_class()
+
+        with (
+            as_of("2022-01-01"),
+            patch.object(
+                DummyInterface,
+                "__init__",
+                side_effect=AssertionError("interface work must not run"),
+            ),
+            self.assertRaisesRegex(
+                HistoricalReadNotSupportedError,
+                "DummyInterface does not support historical reads",
+            ),
+        ):
+            manager_class("dummy_id")
+
+    def test_current_manager_cannot_be_read_inside_as_of_context(self):
+        manager_class = self._historical_manager_class()
+        manager = manager_class(1)
+
+        with (
+            as_of("2022-01-01"),
+            self.assertRaises(HistoricalContextConflictError),
+        ):
+            manager._ensure_manager_state_valid()
+
+    def test_historical_manager_allows_outside_and_equal_context_only(self):
+        manager_class = self._historical_manager_class()
+        manager = manager_class(1, search_date=normalize_search_date("2022-01-01"))
+
+        manager._ensure_manager_state_valid()
+        with as_of(manager._effective_search_date.astimezone(UTC)):
+            manager._ensure_manager_state_valid()
+        with (
+            as_of("2023-01-01"),
+            self.assertRaises(HistoricalContextConflictError),
+        ):
+            manager._ensure_manager_state_valid()
+
+    def test_trusted_hydration_binds_effective_search_date(self):
+        manager_class = self._historical_manager_class()
+        search_date = normalize_search_date("2022-01-01")
+
+        manager = manager_class._from_trusted_orm_instance(
+            Mock(pk=1), search_date=search_date
+        )
+
+        self.assertEqual(manager._effective_search_date, search_date)
+
+    def test_unsupported_trusted_hydration_fails_before_interface_work(self):
+        manager_class = self._temporary_manager_class()
+        hydrate = Mock()
+
+        class UnsupportedTrustedInterface:
+            @classmethod
+            def _from_trusted_orm_instance(cls, instance, *, search_date=None):
+                return hydrate(instance, search_date=search_date)
+
+        manager_class.Interface = UnsupportedTrustedInterface  # type: ignore[assignment]
+
+        with (
+            as_of("2022-01-01"),
+            self.assertRaisesRegex(
+                HistoricalReadNotSupportedError,
+                "UnsupportedTrustedInterface does not support historical reads",
+            ),
+        ):
+            manager_class._from_trusted_orm_instance(Mock(pk=1))
+        hydrate.assert_not_called()
+
+    def test_reload_preserves_historical_effective_search_date(self):
+        manager_class = self._historical_manager_class()
+        search_date = normalize_search_date("2022-01-01")
+        manager = manager_class(1, search_date=search_date)
+
+        manager._reload_interface_state()
+
+        self.assertEqual(manager._interface._search_date, search_date)
+        self.assertEqual(manager._effective_search_date, search_date)
+
+    def test_reload_recovers_legacy_historical_binding_from_interface(self):
+        manager_class = self._historical_manager_class()
+        search_date = normalize_search_date("2022-01-01")
+        manager = manager_class(1, search_date=search_date)
+        del manager._effective_search_date
+
+        manager._reload_interface_state()
+
+        self.assertEqual(manager._interface._search_date, search_date)
+        self.assertEqual(manager._effective_search_date, search_date)
+
+    def test_generated_field_rejects_cached_current_value_inside_as_of(self):
+        manager_class = self._historical_manager_class()
+        manager_class._attributes = {"name": "current"}
+        GeneralManagerMeta.create_at_properties_for_attributes(["name"], manager_class)
+        manager = manager_class(1)
+        self.assertEqual(manager.name, "current")
+
+        with (
+            as_of("2022-01-01"),
+            self.assertRaises(HistoricalContextConflictError),
+        ):
+            _ = manager.name
+
+    def test_graphql_property_rejects_cached_value_inside_as_of(self):
+        manager_class = self._historical_manager_class()
+        manager = manager_class(1)
+
+        def resolver(_manager: GeneralManager) -> str:
+            return "computed"
+
+        graphql_property = GraphQLProperty(resolver)
+        cached_resolver = Mock(return_value="cached")
+        graphql_property._cached_fget = cached_resolver
+
+        with (
+            as_of("2022-01-01"),
+            self.assertRaises(HistoricalContextConflictError),
+        ):
+            graphql_property.__get__(manager, manager_class)
+        cached_resolver.assert_not_called()
 
     def test_class_dependency_tracking_reads_name_without_metaclass_lookup(self):
         manager_class = self._temporary_manager_class()

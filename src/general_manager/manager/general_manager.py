@@ -7,6 +7,12 @@ from json.encoder import encode_basestring_ascii
 from typing import TYPE_CHECKING, ClassVar, Iterator, Protocol, Self, Type, cast
 
 from general_manager.api.property import GraphQLProperty
+from general_manager.as_of import (
+    HistoricalContextConflictError,
+    _represents_same_instant,
+    current_as_of_date,
+    ensure_as_of_read_supported,
+)
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
@@ -107,6 +113,18 @@ class TrustedOrmRow(Protocol):
 
 
 type _IdentificationDependencyCache = tuple[type[object], object, str]
+_EFFECTIVE_SEARCH_DATE_MISSING = object()
+
+
+def _effective_search_date_for_interface(interface: object) -> datetime | None:
+    """Return the snapshot instant represented by an interface instance."""
+    policy = getattr(interface.__class__, "as_of_policy", "unsupported")
+    if policy == "historical":
+        search_date = getattr(interface, "_search_date", None)
+        return search_date if isinstance(search_date, datetime) else None
+    if policy == "transparent":
+        return current_as_of_date()
+    return None
 
 
 class GeneralManager(metaclass=GeneralManagerMeta):
@@ -120,6 +138,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     _identification_dependency_cache: _IdentificationDependencyCache | None
     _manager_state_valid: bool
     _manager_state_reason: str | None
+    _effective_search_date: datetime | None
 
     @classmethod
     def _track_identification_dependency(
@@ -189,7 +208,11 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             *args: Positional arguments forwarded to the Interface constructor.
             **kwargs: Keyword arguments forwarded to the Interface constructor.
         """
+        ensure_as_of_read_supported(self.Interface)
         self._interface = self.Interface(*args, **kwargs)
+        self._effective_search_date = _effective_search_date_for_interface(
+            self._interface
+        )
         self.__id: dict[str, object] = self._interface.identification
         self._attribute_value_cache = {}
         self._identification_dependency_cache = None
@@ -229,6 +252,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             TrustedOrmHydrationNotSupportedError: If the Interface does not
                 expose a callable trusted ORM hydration hook.
         """
+        ensure_as_of_read_supported(cls.Interface)
         hydrate = getattr(cls.Interface, "_from_trusted_orm_instance", None)
         if not callable(hydrate):
             raise TrustedOrmHydrationNotSupportedError(cls.Interface.__name__)
@@ -260,6 +284,9 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
         manager = cls.__new__(cls)
         manager._interface = hydrate(instance, search_date=search_date)
+        manager._effective_search_date = _effective_search_date_for_interface(
+            manager._interface
+        )
         manager.__id = manager._interface.identification
         manager._attribute_value_cache = {}
         manager._identification_dependency_cache = None
@@ -386,7 +413,31 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         ``_manager_state_valid`` is set to ``True`` and
         ``_manager_state_reason`` is cleared.
         """
-        self._interface = self.Interface(**self.__id)
+        previous_effective = self.__dict__.get(
+            "_effective_search_date", _EFFECTIVE_SEARCH_DATE_MISSING
+        )
+        policy = getattr(self.Interface, "as_of_policy", "unsupported")
+        if (
+            policy == "historical"
+            and previous_effective is _EFFECTIVE_SEARCH_DATE_MISSING
+        ):
+            legacy_search_date = getattr(self._interface, "_search_date", None)
+            previous_effective = (
+                legacy_search_date if isinstance(legacy_search_date, datetime) else None
+            )
+        interface_kwargs = dict(self.__id)
+        if policy == "historical" and isinstance(previous_effective, datetime):
+            interface_kwargs["search_date"] = previous_effective
+        self._interface = self.Interface(**interface_kwargs)
+        if (
+            policy == "transparent"
+            and previous_effective is not _EFFECTIVE_SEARCH_DATE_MISSING
+        ):
+            self._effective_search_date = cast(datetime | None, previous_effective)
+        else:
+            self._effective_search_date = _effective_search_date_for_interface(
+                self._interface
+            )
         self._attribute_value_cache = {}
         self._manager_state_valid = True
         self._manager_state_reason = None
@@ -410,6 +461,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         ``InvalidManagerStateError`` with this class name, the stored invalidation
         reason or ``"manager state is invalid"``, and the optional attribute name.
         """
+        self._ensure_as_of_compatible()
         if self._manager_state_valid:
             return
         raise InvalidManagerStateError(
@@ -417,6 +469,33 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             self._manager_state_reason or "manager state is invalid",
             attribute_name,
         )
+
+    def _ensure_as_of_compatible(self) -> None:
+        """Reject reads when this manager is bound to another snapshot."""
+        active = current_as_of_date()
+        if active is None:
+            return
+
+        effective = self.__dict__.get(
+            "_effective_search_date", _EFFECTIVE_SEARCH_DATE_MISSING
+        )
+        if effective is _EFFECTIVE_SEARCH_DATE_MISSING:
+            interface = self.__dict__.get("_interface")
+            if (
+                interface is not None
+                and getattr(interface.__class__, "as_of_policy", "unsupported")
+                == "historical"
+            ):
+                candidate = getattr(interface, "_search_date", None)
+                effective = candidate if isinstance(candidate, datetime) else None
+            else:
+                effective = None
+            self._effective_search_date = cast(datetime | None, effective)
+
+        if not isinstance(effective, datetime) or not _represents_same_instant(
+            effective, active
+        ):
+            raise HistoricalContextConflictError
 
     def _ensure_manager_not_invalidated(self) -> None:
         """Raise when a caller attempts to mutate an invalidated manager."""

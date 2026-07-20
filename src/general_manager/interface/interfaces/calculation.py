@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.manager.input import Input
@@ -41,6 +41,7 @@ class CalculationInterface(InterfaceBase):
     """
 
     _interface_type: ClassVar[str] = "calculation"
+    as_of_policy: ClassVar[Literal["transparent"]] = "transparent"
     input_fields: ClassVar[dict[str, Input[type[object]]]]
     _resolved_input_values: dict[str, object]
 
