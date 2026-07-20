@@ -188,6 +188,10 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         self.assertIsNone(data["asOf"])
 
     def test_manager_input_can_be_filtered_by_nested_id_via_graphql(self) -> None:
+        # Isolate relation filtering from calculation permission row-gating.
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+
         query = """
         query($employeeId: ID!) {
             optionalInputCalculationList(

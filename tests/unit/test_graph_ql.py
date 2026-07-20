@@ -664,6 +664,47 @@ class GraphQLTests(TestCase):
         self.assertIn("id", related_type._meta.fields)
         self.assertIn("name__icontains", related_type._meta.fields)
 
+    def test_create_filter_options_infers_direct_relation_for_manager_input(self):
+        class RelatedManager:
+            __name__ = "ManagerInputRelatedManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"id": {"type": int}, "name": {"type": str}}
+
+        class CalculationManager:
+            __name__ = "ManagerInputCalculationManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {
+                    "project": Input(RelatedManager),
+                }
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"project": {"type": RelatedManager}}
+
+        GraphQL.graphql_filter_type_registry.clear()
+
+        def relation_safe_issubclass(candidate, parent):
+            if parent is GeneralManager and candidate is RelatedManager:
+                return True
+            return isinstance(candidate, type) and issubclass(candidate, parent)
+
+        with patch(
+            "general_manager.api.graphql_relations.safe_issubclass",
+            side_effect=relation_safe_issubclass,
+        ):
+            filter_type = GraphQL._create_filter_options(CalculationManager)
+
+        self.assertIsNotNone(filter_type)
+        self.assertIn("project", filter_type._meta.fields)
+        project_type = filter_type._meta.fields["project"].type
+        self.assertIn("id", project_type._meta.fields)
+
     def test_create_filter_options_exposes_collection_any_none_filter(self):
         class ChildManager:
             __name__ = "ChildManager"
@@ -770,6 +811,48 @@ class GraphQLTests(TestCase):
                 },
                 "exclude": {},
             },
+        )
+
+    def test_normalize_manager_input_infers_direct_relation(self):
+        class RelatedManager:
+            __name__ = "NormalizeManagerInputRelatedManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {"id": Input(int)}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"id": {"type": int}}
+
+        class CalculationManager:
+            __name__ = "NormalizeManagerInputCalculationManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {
+                    "project": Input(RelatedManager),
+                }
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"project": {"type": RelatedManager}}
+
+        def relation_safe_issubclass(candidate, parent):
+            if parent is GeneralManager and candidate is RelatedManager:
+                return True
+            return isinstance(candidate, type) and issubclass(candidate, parent)
+
+        with patch(
+            "general_manager.api.graphql_relations.safe_issubclass",
+            side_effect=relation_safe_issubclass,
+        ):
+            normalized = GraphQL._normalize_filter_input(
+                CalculationManager,
+                {"project": {"id": 1}},
+            )
+
+        self.assertEqual(
+            normalized,
+            {"filter": {"project__id": 1}, "exclude": {}},
         )
 
     def test_normalize_relation_filter_input_flattens_none_to_exclude(self):
