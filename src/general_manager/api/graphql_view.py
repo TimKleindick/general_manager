@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import inspect
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -16,19 +16,20 @@ from graphql import (
     GraphQLError,
     GraphQLSchema,
     OperationType,
-    VariablesInAllowedPositionRule,
     get_operation_ast,
     parse,
     validate,
 )
 from graphql.execution.collect_fields import collect_fields
 from graphql.execution.values import get_variable_values
+from graphql.validation import ASTValidationRule
 
 if TYPE_CHECKING:
     MUTATION_ERRORS_FLAG: str
 
     class _GrapheneSettings(Protocol):
         ATOMIC_MUTATIONS: bool
+        MAX_VALIDATION_ERRORS: int | None
 
     graphene_settings: _GrapheneSettings
 
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
     class GraphQLView:
         batch: bool
         schema: _GrapheneSchema
+        validation_rules: Collection[type[ASTValidationRule]] | None
 
         @classmethod
         def as_view(cls, **initkwargs: object) -> object: ...
@@ -160,9 +162,13 @@ def _has_declared_async_mutation_resolver(
     query: object,
     operation_name: str | None,
     variables: object,
+    validation_rules: Collection[type[ASTValidationRule]] | None = None,
+    max_validation_errors: int | None = None,
 ) -> bool:
     """Return whether a selected mutation declares an async root resolver."""
-    if not isinstance(query, str):
+    if not isinstance(query, str) or (
+        variables is not None and not isinstance(variables, Mapping)
+    ):
         return False
     try:
         document = parse(query)
@@ -176,6 +182,13 @@ def _has_declared_async_mutation_resolver(
         or mutation_type is None
     ):
         return False
+    if validate(
+        schema,
+        document,
+        validation_rules,
+        max_validation_errors,
+    ):
+        return False
 
     fragments = {
         definition.name.value: definition
@@ -183,9 +196,7 @@ def _has_declared_async_mutation_resolver(
         if isinstance(definition, FragmentDefinitionNode)
     }
     variable_inputs = (
-        dict(cast(Mapping[str, object], variables))
-        if isinstance(variables, Mapping)
-        else {}
+        dict(cast(Mapping[str, object], variables)) if variables is not None else {}
     )
     variable_values = get_variable_values(
         schema,
@@ -193,12 +204,6 @@ def _has_declared_async_mutation_resolver(
         variable_inputs,
     )
     if isinstance(variable_values, list):
-        return False
-    if validate(
-        schema,
-        document,
-        rules=(VariablesInAllowedPositionRule,),
-    ):
         return False
     try:
         collected_fields = collect_fields(
@@ -326,6 +331,8 @@ class GeneralManagerGraphQLView(GraphQLView):
                     query,
                     operation_name,
                     variables,
+                    self.validation_rules,
+                    graphene_settings.MAX_VALIDATION_ERRORS,
                 ):
                     execution_result = ExecutionResult(
                         data=None,

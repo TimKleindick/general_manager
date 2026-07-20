@@ -76,6 +76,7 @@ from graphql import (
     specified_directives,
 )
 from graphql.language import StringValueNode
+from graphql.validation import ASTValidationRule
 
 
 class GraphQLAsOfExecutionTests(unittest.TestCase):
@@ -769,21 +770,156 @@ class GraphQLAsOfExecutionTests(unittest.TestCase):
             },
         )
         schema = GraphQLSchema(query=query_type, mutation=mutation_type)
-        query = """
+        valid_query = """
             mutation Q {
-                ... on Mutation { ...Loop }
+                ... on Mutation { ...AsyncPart }
             }
-            fragment Loop on Mutation {
-                ...Loop
-                missingField
-                ...Missing
+            fragment AsyncPart on Mutation {
                 asyncField
             }
         """
+        invalid_query = """
+            mutation Q { ...Loop }
+            fragment Loop on Mutation { asyncField ...Loop }
+        """
 
-        self.assertTrue(_has_declared_async_mutation_resolver(schema, query, "Q", {}))
+        self.assertTrue(
+            _has_declared_async_mutation_resolver(schema, valid_query, "Q", {})
+        )
+        self.assertFalse(
+            _has_declared_async_mutation_resolver(schema, invalid_query, "Q", {})
+        )
         self.assertFalse(
             _has_declared_async_mutation_resolver(schema, "mutation {", None, {})
+        )
+
+    def test_async_mutation_preflight_defers_standard_validation_errors(self) -> None:
+        events: list[str] = []
+
+        class AsyncMutation(graphene.Mutation):
+            Output = graphene.String
+
+            @staticmethod
+            async def mutate(_root: object, _info: object) -> str:
+                events.append("mutation body")
+                return "changed"
+
+        class Mutation(graphene.ObjectType):
+            async_mutation = AsyncMutation.Field()
+
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        view = GeneralManagerGraphQLView(
+            schema=graphene.Schema(query=Query, mutation=Mutation)
+        )
+        view.json_encode = lambda _request, payload, **_kwargs: payload
+        cases = (
+            ("mutation Q { asyncMutation unknownField }", "Cannot query field"),
+            ("mutation Q { asyncMutation ...Missing }", "Unknown fragment"),
+            (
+                "mutation Q { ...Loop } "
+                "fragment Loop on Mutation { asyncMutation ...Loop }",
+                "Cannot spread fragment",
+            ),
+            (
+                "mutation Q($run: Boolean!, $run: Boolean!) { "
+                "asyncMutation @include(if: $run) }",
+                "There can be only one variable named",
+            ),
+        )
+
+        for query, expected_message in cases:
+            with self.subTest(query=query):
+                payload, status = view.get_response(
+                    SimpleNamespace(GET={}, method="POST"),
+                    {"query": query, "variables": {"run": True}},
+                )
+            self.assertEqual(status, 400)
+            self.assertIn(expected_message, payload["errors"][0]["message"])
+            self.assertNotEqual(
+                payload["errors"][0].get("extensions", {}).get("code"),
+                "GRAPHQL_VALIDATION_FAILED",
+            )
+        self.assertEqual(events, [])
+
+    def test_async_mutation_preflight_defers_custom_validation_rules(self) -> None:
+        events: list[str] = []
+
+        class RejectMutationRule(ASTValidationRule):
+            def enter_operation_definition(self, node: object, *_args: object) -> None:
+                self.report_error(GraphQLError("custom validation rejection", [node]))
+
+        class AsyncMutation(graphene.Mutation):
+            Output = graphene.String
+
+            @staticmethod
+            async def mutate(_root: object, _info: object) -> str:
+                events.append("mutation body")
+                return "changed"
+
+        class Mutation(graphene.ObjectType):
+            async_mutation = AsyncMutation.Field()
+
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        view = GeneralManagerGraphQLView(
+            schema=graphene.Schema(query=Query, mutation=Mutation),
+            validation_rules=(RejectMutationRule,),
+        )
+        view.json_encode = lambda _request, payload, **_kwargs: payload
+
+        payload, status = view.get_response(
+            SimpleNamespace(GET={}, method="POST"),
+            {"query": "mutation Q { asyncMutation }"},
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["errors"][0]["message"], "custom validation rejection")
+        self.assertNotEqual(
+            payload["errors"][0].get("extensions", {}).get("code"),
+            "GRAPHQL_VALIDATION_FAILED",
+        )
+        self.assertEqual(events, [])
+
+    def test_non_mapping_mutation_variables_use_normal_graphql_error(self) -> None:
+        class AsyncMutation(graphene.Mutation):
+            Output = graphene.String
+
+            @staticmethod
+            async def mutate(_root: object, _info: object) -> str:
+                return "changed"
+
+        class Mutation(graphene.ObjectType):
+            async_mutation = AsyncMutation.Field()
+
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        view = GeneralManagerGraphQLView(
+            schema=graphene.Schema(query=Query, mutation=Mutation)
+        )
+        view.json_encode = lambda _request, payload, **_kwargs: payload
+        query = "mutation Q($run: Boolean! = true) { asyncMutation @include(if: $run) }"
+
+        payload, status = view.get_response(
+            SimpleNamespace(GET={}, method="POST"),
+            {"query": query, "variables": []},
+        )
+
+        self.assertEqual(status, 400)
+        self.assertNotEqual(
+            payload["errors"][0].get("extensions", {}).get("code"),
+            "GRAPHQL_VALIDATION_FAILED",
+        )
+        self.assertFalse(
+            _has_declared_async_mutation_resolver(
+                view.schema.graphql_schema,
+                query,
+                "Q",
+                [],
+            )
         )
 
     def test_async_mutation_preflight_honors_field_and_fragment_inclusion(self) -> None:
