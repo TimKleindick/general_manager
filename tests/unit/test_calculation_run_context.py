@@ -3,7 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from general_manager.api import as_of, current_as_of_date
+from general_manager.api import as_of
+from general_manager.as_of import as_of_cache_fingerprint
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.dependency_index import Dependency
@@ -427,11 +428,30 @@ def test_public_storage_helpers_isolate_sequential_as_of_namespaces() -> None:
 def test_historical_storage_applies_one_run_namespace_transform() -> None:
     with CalculationRunContext() as ctx, as_of("2022-01-01"):
         ctx.set(("cache", "key"), "value")
-        fingerprint = current_as_of_date().isoformat()
+        fingerprint = as_of_cache_fingerprint()
+        assert fingerprint is not None
 
         assert ctx._values == {
             ("as_of", fingerprint, ("cache", "key")): "value",
         }
+
+
+def test_equivalent_offset_instants_share_run_cache_namespace() -> None:
+    calls = 0
+
+    def loader() -> str:
+        nonlocal calls
+        calls += 1
+        return "loaded"
+
+    with CalculationRunContext() as ctx:
+        with as_of("2022-01-01T01:00:00+01:00"):
+            first = ctx.get_or_set("key", loader)
+        with as_of("2022-01-01T00:00:00+00:00"):
+            second = ctx.get_or_set("key", loader)
+
+    assert first == second == "loaded"
+    assert calls == 1
 
 
 def test_prefix_deletion_only_discards_active_as_of_namespace() -> None:

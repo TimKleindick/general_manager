@@ -83,10 +83,15 @@ def current_as_of_date() -> datetime | None:
     return _AS_OF_DATE.get()
 
 
+def search_date_cache_fingerprint(search_date: datetime) -> str:
+    """Return one canonical cache identity for a historical instant."""
+    return search_date.astimezone(UTC).isoformat()
+
+
 def as_of_cache_fingerprint() -> str | None:
     """Return the active historical datetime's cache namespace value."""
     active = current_as_of_date()
-    return None if active is None else active.isoformat()
+    return None if active is None else search_date_cache_fingerprint(active)
 
 
 def reject_historical_mutation() -> None:

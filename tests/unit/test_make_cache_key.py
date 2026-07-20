@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from general_manager.api import as_of, current_as_of_date
-from general_manager.as_of import normalize_search_date
+from general_manager.api import as_of
+from general_manager.as_of import as_of_cache_fingerprint, normalize_search_date
 from general_manager.utils.json_encoder import CustomJSONEncoder
 from general_manager.utils import make_cache_key as make_cache_key_module
 from general_manager.utils.make_cache_key import make_cache_key
@@ -51,6 +51,17 @@ class TestMakeCacheKey(SimpleTestCase):
         self.assertEqual(date_a_key, equivalent_date_a_key)
         self.assertNotEqual(date_a_key, date_b_key)
 
+    def test_equivalent_offset_instants_share_generic_cache_identity(self):
+        def sample_function(value):
+            return value
+
+        with as_of("2022-01-01T01:00:00+01:00"):
+            offset_key = make_cache_key(sample_function, (1,), {})
+        with as_of("2022-01-01T00:00:00+00:00"):
+            utc_key = make_cache_key(sample_function, (1,), {})
+
+        self.assertEqual(offset_key, utc_key)
+
     def test_manager_fast_path_namespaces_ambient_historical_snapshots(self):
         CacheKeyManager = self._historical_manager_class()
 
@@ -65,7 +76,7 @@ class TestMakeCacheKey(SimpleTestCase):
                 "module": sample_function.__module__,
                 "qualname": sample_function.__qualname__,
                 "args": {"manager": date_a_manager},
-                "as_of": current_as_of_date().isoformat(),
+                "as_of": as_of_cache_fingerprint(),
             }
             date_a_generic_key = hashlib.sha256(
                 json.dumps(
@@ -92,6 +103,27 @@ class TestMakeCacheKey(SimpleTestCase):
         self.assertEqual(date_a_key, date_a_generic_key)
         self.assertEqual(date_a_key, equivalent_date_a_key)
         self.assertNotEqual(date_a_key, date_b_key)
+
+    def test_equivalent_offset_instants_share_optimized_manager_cache_identity(self):
+        CacheKeyManager = self._historical_manager_class()
+
+        def sample_function(manager):
+            return manager
+
+        with as_of("2022-01-01T01:00:00+01:00"):
+            offset_key = make_cache_key(
+                sample_function,
+                (CacheKeyManager(1),),
+                {},
+            )
+        with as_of("2022-01-01T00:00:00+00:00"):
+            utc_key = make_cache_key(
+                sample_function,
+                (CacheKeyManager(1),),
+                {},
+            )
+
+        self.assertEqual(offset_key, utc_key)
 
     def test_explicit_historical_manager_outside_context_changes_cache_identity(self):
         CacheKeyManager = self._historical_manager_class()
@@ -123,6 +155,42 @@ class TestMakeCacheKey(SimpleTestCase):
         self.assertEqual(
             historical_key,
             hashlib.sha256(generic_raw, usedforsecurity=False).hexdigest(),
+        )
+
+    def test_equivalent_explicit_manager_instants_share_cache_identity(self):
+        CacheKeyManager = self._historical_manager_class()
+
+        def sample_function(manager):
+            return manager
+
+        offset_manager = CacheKeyManager(
+            1,
+            search_date="2022-01-01T01:00:00+01:00",
+        )
+        utc_manager = CacheKeyManager(
+            1,
+            search_date="2022-01-01T00:00:00+00:00",
+        )
+
+        self.assertEqual(
+            make_cache_key(sample_function, (offset_manager,), {}),
+            make_cache_key(sample_function, (utc_manager,), {}),
+        )
+
+    def test_manager_fragment_cache_does_not_grow_per_snapshot_timestamp(self):
+        CacheKeyManager = self._historical_manager_class()
+
+        def sample_function(manager):
+            return manager
+
+        make_cache_key_module._single_manager_arg_cache_key_parts.cache_clear()
+        for minute in range(100):
+            with as_of(f"2022-01-01T00:{minute % 60:02d}:00+00:00"):
+                make_cache_key(sample_function, (CacheKeyManager(1),), {})
+
+        self.assertEqual(
+            make_cache_key_module._single_manager_arg_cache_key_parts.cache_info().currsize,
+            1,
         )
 
     def test_make_cache_key(self):

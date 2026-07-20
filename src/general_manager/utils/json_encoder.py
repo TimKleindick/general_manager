@@ -3,6 +3,7 @@
 from datetime import date, datetime, time
 import json
 
+from general_manager.as_of import search_date_cache_fingerprint
 from general_manager.manager.general_manager import GeneralManager
 
 
@@ -33,7 +34,7 @@ class CustomJSONEncoder(json.JSONEncoder):
             manager_value = f"{manager_class_name}(**{o.identification})"
             search_date = o.__dict__.get("_effective_search_date")
             if isinstance(search_date, datetime):
-                manager_value += f"@as_of({search_date.isoformat()})"
+                manager_value += f"@as_of({search_date_cache_fingerprint(search_date)})"
             return manager_value
         try:
             return super().default(o)

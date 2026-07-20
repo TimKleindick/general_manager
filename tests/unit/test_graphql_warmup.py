@@ -352,6 +352,23 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
         self.assertIsNone(current_as_of_date())
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
+    def test_historical_recipe_reuses_key_inside_equivalent_offset_context(
+        self,
+    ) -> None:
+        """Equivalent outer context offsets retain one warm-up identity."""
+        with as_of("2022-01-01T01:00:00+01:00"):
+            warm_up_graphql_properties([WarmUpObject])
+        recipe_keys = graphql_warmup_recipe_keys()
+        cache_key = recipe_keys[0]
+
+        with as_of("2022-01-01T00:00:00+00:00") as outer:
+            self.assertTrue(warm_up_graphql_recipe(cache_key))
+            self.assertIs(current_as_of_date(), outer)
+
+        self.assertEqual(graphql_warmup_recipe_keys(), recipe_keys)
+        self.assertIsNone(current_as_of_date())
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_historical_recipe_restores_context_after_executor_error(self) -> None:
         """A failed historical reconstruction cannot leak its snapshot."""
         with as_of("2022-01-01"):
