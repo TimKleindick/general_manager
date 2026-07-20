@@ -22,6 +22,12 @@ from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 
 from general_manager.logging import get_logger
 from general_manager.measurement.measurement import Measurement
+from general_manager.as_of import (
+    HistoricalContextConflictError,
+    HistoricalMutationError,
+    HistoricalReadNotSupportedError,
+    InvalidSearchDateError,
+)
 
 if TYPE_CHECKING:
 
@@ -142,6 +148,22 @@ class PublicGraphQLError(GraphQLError):
 
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message, extensions={"code": code})
+
+
+_HISTORICAL_ERROR_CODES = {
+    InvalidSearchDateError: "BAD_USER_INPUT",
+    HistoricalContextConflictError: "HISTORICAL_CONTEXT_CONFLICT",
+    HistoricalMutationError: "HISTORICAL_MUTATION_FORBIDDEN",
+    HistoricalReadNotSupportedError: "HISTORICAL_READ_NOT_SUPPORTED",
+}
+
+
+def historical_graphql_error(error: Exception) -> PublicGraphQLError | None:
+    """Map a historical-context exception to a stable public GraphQL error."""
+    for error_type, code in _HISTORICAL_ERROR_CODES.items():
+        if isinstance(error, error_type):
+            return PublicGraphQLError(_safe_exception_message(error), code=code)
+    return None
 
 
 class InvalidMeasurementValueError(TypeError):

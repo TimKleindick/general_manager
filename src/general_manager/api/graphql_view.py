@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import time
+import inspect
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Protocol
+from contextlib import nullcontext
+from typing import TYPE_CHECKING, Protocol, cast
+
+from asgiref.sync import async_to_sync
+from graphql import ExecutionResult, GraphQLError
 
 if TYPE_CHECKING:
     MUTATION_ERRORS_FLAG: str
@@ -51,6 +56,12 @@ else:
     from graphene_django.views import GraphQLView
 
 from general_manager.cache.run_context import ensure_calculation_run_context
+from general_manager.as_of import HistoricalContextConflictError, as_of
+from general_manager.api.graphql_as_of import extract_as_of_search_date
+from general_manager.api.graphql_errors import (
+    PublicGraphQLError,
+    historical_graphql_error,
+)
 from general_manager.metrics.graphql import (
     GraphQLRequestStatus,
     GraphQLResolverTimingMiddleware,
@@ -69,8 +80,16 @@ logger = get_logger("graphql.metrics")
 class _GraphQLExecutionResult(Protocol):
     """GraphQL execution result attributes used by the view wrapper."""
 
-    data: object
-    errors: Sequence[Exception] | None
+    @property
+    def data(self) -> object: ...
+
+    @property
+    def errors(self) -> Sequence[Exception] | None: ...
+
+
+async def _await_execution_result(result: object) -> object:
+    """Await an async GraphQL execution while its request contexts are active."""
+    return await result  # type: ignore[misc]
 
 
 class GeneralManagerGraphQLView(GraphQLView):
@@ -146,10 +165,44 @@ class GeneralManagerGraphQLView(GraphQLView):
         )
 
         start = time.perf_counter()
-        with ensure_calculation_run_context():
-            execution_result = self.execute_graphql_request(
-                request, data, query, variables, operation_name, show_graphiql
+        execution_result: _GraphQLExecutionResult | None
+        try:
+            search_date = extract_as_of_search_date(
+                query=query,
+                variables=variables,
+                operation_name=operation_name,
             )
+        except PublicGraphQLError as error:
+            execution_result = ExecutionResult(data=None, errors=[error])
+        except GraphQLError:
+            # Preserve Graphene-Django's normal syntax-error execution path.
+            with ensure_calculation_run_context():
+                execution_result = self.execute_graphql_request(
+                    request, data, query, variables, operation_name, show_graphiql
+                )
+        else:
+            execution_context = (
+                nullcontext() if search_date is None else as_of(search_date)
+            )
+            try:
+                with execution_context, ensure_calculation_run_context():
+                    execution_result = self.execute_graphql_request(
+                        request,
+                        data,
+                        query,
+                        variables,
+                        operation_name,
+                        show_graphiql,
+                    )
+                    if inspect.isawaitable(execution_result):
+                        execution_result = cast(
+                            _GraphQLExecutionResult | None,
+                            async_to_sync(_await_execution_result)(execution_result),
+                        )
+            except HistoricalContextConflictError as error:
+                public_error = historical_graphql_error(error)
+                assert public_error is not None
+                execution_result = ExecutionResult(data=None, errors=[public_error])
         duration = time.perf_counter() - start
 
         if getattr(request, MUTATION_ERRORS_FLAG, False) is True:
@@ -189,6 +242,31 @@ class GeneralManagerGraphQLView(GraphQLView):
             )
 
         return result, status_code
+
+    def format_error(self, error: Exception) -> Mapping[str, object]:
+        """Format historical failures with stable public codes."""
+        if isinstance(error, GraphQLError) and isinstance(
+            error.original_error, Exception
+        ):
+            public_error = historical_graphql_error(error.original_error)
+            if public_error is not None:
+                logger.error(
+                    "graphql historical error",
+                    context={
+                        "error": type(error.original_error).__name__,
+                        "message": str(error.original_error),
+                    },
+                    exc_info=error.original_error,
+                )
+                return GraphQLError(
+                    public_error.message,
+                    nodes=error.nodes,
+                    source=error.source,
+                    positions=error.positions,
+                    path=error.path,
+                    extensions=public_error.extensions,
+                ).formatted
+        return super().format_error(error)
 
     def _record_metrics(
         self,
