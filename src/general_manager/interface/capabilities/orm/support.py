@@ -327,11 +327,11 @@ class OrmReadCapability(BaseCapability):
         """
 
         interface_cls = interface_instance.__class__
-        model_cls = interface_cls._model
         search_date = interface_instance._search_date
         _ensure_ambient_history_supported(interface_cls, search_date)
 
         def _perform() -> models.Model:
+            model_cls = interface_cls._model
             support = get_support_capability(interface_cls)
             only_active = not is_soft_delete_enabled(interface_cls)
             manager = support.get_manager(
