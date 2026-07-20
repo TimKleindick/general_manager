@@ -29,8 +29,13 @@ class HistoricalContextConflictError(RuntimeError):
 class HistoricalMutationError(RuntimeError):
     """Raised when a mutation is attempted in historical context."""
 
-    def __init__(self) -> None:
-        super().__init__("Mutations are not allowed in historical context.")
+    def __init__(self, active: datetime | None = None) -> None:
+        message = (
+            f"Mutations are not allowed in an as_of context ({active.isoformat()})."
+            if active is not None
+            else "Mutations are not allowed in historical context."
+        )
+        super().__init__(message)
 
 
 class HistoricalReadNotSupportedError(RuntimeError):
@@ -76,6 +81,13 @@ def normalize_search_date(value: SearchDateInput) -> datetime:
 def current_as_of_date() -> datetime | None:
     """Return the historical date active for the current operation."""
     return _AS_OF_DATE.get()
+
+
+def reject_historical_mutation() -> None:
+    """Reject mutations while an operation-scoped historical date is active."""
+    active = current_as_of_date()
+    if active is not None:
+        raise HistoricalMutationError(active)
 
 
 def ensure_as_of_read_supported(interface_cls: type[object]) -> None:

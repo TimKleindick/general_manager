@@ -4,6 +4,7 @@ import asyncio
 import json
 from urllib.parse import parse_qsl, urlencode, urlsplit
 from typing import Any, ClassVar
+from unittest.mock import patch
 
 from asgiref.testing import ApplicationCommunicator
 from asgiref.sync import sync_to_async
@@ -12,6 +13,7 @@ from django.http import HttpResponse
 from django.test import Client, override_settings
 
 from general_manager.api import RemoteInvalidationClient
+from general_manager.as_of import HistoricalMutationError, as_of
 from general_manager.cache.cache_decorator import cached
 from general_manager.interface import DatabaseInterface, RemoteManagerInterface
 from general_manager.interface.requests import (
@@ -340,6 +342,29 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
         created.delete(ignore_permission=True)
         response = self.client.get(f"/internal/gm/projects/{deleted_id}")
         self.assertEqual(response.status_code, 404)
+
+    def test_historical_context_rejects_direct_remote_interface_mutations(self) -> None:
+        interface = self.RemoteProject(id=self.project.id)._interface
+        interface._request_payload_cache = {
+            "id": self.project.id,
+            "name": "Alpha",
+            "status": "active",
+        }
+
+        with (
+            patch.object(
+                self.RemoteProject.Interface, "execute_request_plan"
+            ) as request,
+            as_of("2022-01-01"),
+        ):
+            with self.assertRaises(HistoricalMutationError):
+                self.RemoteProject.Interface.create(name="Blocked", status="active")
+            with self.assertRaises(HistoricalMutationError):
+                interface.update(status="inactive")
+            with self.assertRaises(HistoricalMutationError):
+                interface.delete()
+
+        request.assert_not_called()
 
     def test_protocol_version_mismatch_fails_explicitly(self) -> None:
         transport = DjangoClientTransport()

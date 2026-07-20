@@ -13,6 +13,7 @@ from general_manager.as_of import (
     as_of,
     current_as_of_date,
     ensure_as_of_read_supported,
+    reject_historical_mutation,
 )
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.cache_tracker import DependencyTracker
@@ -582,6 +583,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         Raises:
             PermissionError: Propagated if the permission check fails.
         """
+        reject_historical_mutation()
         if not ignore_permission:
             cls.Permission.check_create_permission(kwargs, cls, creator_id)
         identification = cls.Interface.create(
@@ -622,6 +624,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         Raises:
             PermissionError: If the permission check fails when `ignore_permission` is False.
         """
+        reject_historical_mutation()
         self._ensure_manager_not_invalidated()
         if not ignore_permission:
             self.Permission.check_update_permission(kwargs, self, creator_id)
@@ -666,6 +669,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         Raises:
             PermissionError: If permission validation fails.
         """
+        reject_historical_mutation()
         self._ensure_manager_not_invalidated()
         if not ignore_permission:
             self.Permission.check_delete_permission(self, creator_id)
