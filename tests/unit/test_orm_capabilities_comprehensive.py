@@ -672,6 +672,68 @@ class TestOrmReadCapability:
         manager.get.assert_called_once_with(pk=1)
 
     @pytest.mark.parametrize(
+        "capability_error",
+        [
+            NotImplementedError("missing history capability"),
+            TypeError("broken history capability"),
+        ],
+    )
+    def test_explicit_get_data_normalizes_history_capability_lookup_errors(
+        self,
+        capability_error,
+    ):
+        capability = OrmReadCapability()
+
+        class DoesNotExist(Exception):
+            pass
+
+        class Model:
+            history = object()
+
+        Model.DoesNotExist = DoesNotExist
+        search_date = timezone.now() - timedelta(days=1)
+
+        class InterfaceInstance:
+            _model = Model
+            historical_lookup_buffer_seconds = 0
+
+            def __init__(self) -> None:
+                self.pk = 1
+                self._search_date = search_date
+
+        manager = Mock()
+        manager.get.return_value = object()
+        support = Mock()
+        support.get_manager.return_value = manager
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support._history_capability_for",
+                side_effect=capability_error,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=1),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+        ):
+            with pytest.raises(HistoryNotSupportedError) as exc_info:
+                capability.get_data(InterfaceInstance())
+
+        assert exc_info.value.__cause__ is capability_error
+
+    @pytest.mark.parametrize(
         ("model_attrs", "capability_error"),
         [
             ({}, None),

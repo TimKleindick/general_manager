@@ -129,6 +129,22 @@ def _effective_search_date_for_interface(interface: object) -> datetime | None:
     return None
 
 
+def _legacy_effective_search_date(manager: GeneralManager) -> datetime | None:
+    """Recover a manager snapshot from current or legacy instance state."""
+    effective = manager.__dict__.get("_effective_search_date")
+    if isinstance(effective, datetime):
+        return effective
+    interface = manager.__dict__.get("_interface")
+    if (
+        interface is not None
+        and getattr(interface.__class__, "_as_of_behavior", "unsupported")
+        == "historical"
+    ):
+        search_date = getattr(interface, "_search_date", None)
+        return search_date if isinstance(search_date, datetime) else None
+    return None
+
+
 def _reconstruct_general_manager(
     manager_class: type["GeneralManager"],
     identification_values: tuple[object, ...],
@@ -366,18 +382,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         """Provide snapshot-preserving pickling support for this manager."""
-        effective = self.__dict__.get("_effective_search_date")
-        if not isinstance(effective, datetime):
-            interface = self.__dict__.get("_interface")
-            if (
-                interface is not None
-                and getattr(interface.__class__, "_as_of_behavior", "unsupported")
-                == "historical"
-            ):
-                candidate = getattr(interface, "_search_date", None)
-                effective = candidate if isinstance(candidate, datetime) else None
-            else:
-                effective = None
+        effective = _legacy_effective_search_date(self)
         return (
             _reconstruct_general_manager,
             (self.__class__, tuple(self.__id.values()), effective),
@@ -462,10 +467,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             behavior == "historical"
             and previous_effective is _EFFECTIVE_SEARCH_DATE_MISSING
         ):
-            legacy_search_date = getattr(self._interface, "_search_date", None)
-            previous_effective = (
-                legacy_search_date if isinstance(legacy_search_date, datetime) else None
-            )
+            previous_effective = _legacy_effective_search_date(self)
         interface_kwargs = dict(self.__id)
         if behavior == "historical" and isinstance(previous_effective, datetime):
             interface_kwargs["search_date"] = previous_effective
@@ -512,17 +514,8 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             "_effective_search_date", _EFFECTIVE_SEARCH_DATE_MISSING
         )
         if effective is _EFFECTIVE_SEARCH_DATE_MISSING:
-            interface = self.__dict__.get("_interface")
-            if (
-                interface is not None
-                and getattr(interface.__class__, "_as_of_behavior", "unsupported")
-                == "historical"
-            ):
-                candidate = getattr(interface, "_search_date", None)
-                effective = candidate if isinstance(candidate, datetime) else None
-            else:
-                effective = None
-            self._effective_search_date = cast(datetime | None, effective)
+            effective = _legacy_effective_search_date(self)
+            self._effective_search_date = effective
 
         behavior = getattr(self.Interface, "_as_of_behavior", "unsupported")
         if active is None:
