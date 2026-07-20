@@ -13,6 +13,10 @@ from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
     run_registered_startup_hooks,
 )
+from general_manager.as_of import as_of
+from django.utils import timezone
+from unittest.mock import patch
+from datetime import timedelta
 
 
 class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
@@ -62,6 +66,25 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
         country = self.TestCountry.filter(code="DE").first()
         self.assertIsNotNone(country)
         self.assertEqual(country.name, "Germany")  # type: ignore
+
+    def test_ambient_as_of_reads_read_only_history(self):
+        country = self.TestCountry.filter(code="DE").first()
+        country_id = country.id
+        snapshot = timezone.now()
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            self.assertEqual(self.TestCountry(country_id).name, "Germany")
+            self.assertEqual(self.TestCountry.get(id=country_id).name, "Germany")
+            self.assertEqual(
+                self.TestCountry.filter(id=country_id).first().name,
+                "Germany",
+            )
 
 
 class ReadOnlyWithComplexData(GeneralManagerTransactionTestCase):

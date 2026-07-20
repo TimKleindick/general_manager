@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Hashable
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Type, cast
 
@@ -12,6 +12,12 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, connections, models
 from django.db.models import Subquery
 from django.utils import timezone
+from general_manager.as_of import (
+    HistoricalReadNotSupportedError,
+    InvalidSearchDateError,
+    current_as_of_date,
+    resolve_search_date,
+)
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
@@ -208,10 +214,26 @@ class OrmPersistenceSupportCapability(BaseCapability):
                 )
             related_id_field = f"{related_attr}_id"
             related_ids_query = queryset.values_list(related_id_field, flat=True)
-            if (
-                not hasattr(target_model, "history")
-                or interface_instance._search_date is None
-            ):
+            if not hasattr(target_model, "history"):
+                if (
+                    interface_instance._search_date is not None
+                    and current_as_of_date() is not None
+                ):
+                    from .history import HistoryNotSupportedError
+
+                    history_unavailable = HistoryNotSupportedError(
+                        target_model.__name__
+                    )
+                    raise HistoricalReadNotSupportedError(
+                        target_model.__name__
+                    ) from history_unavailable
+                return cast(
+                    models.QuerySet[models.Model],
+                    django_target_model._default_manager.filter(
+                        pk__in=Subquery(related_ids_query)
+                    ),
+                )
+            if interface_instance._search_date is None:
                 return cast(
                     models.QuerySet[models.Model],
                     django_target_model._default_manager.filter(
@@ -277,20 +299,45 @@ class OrmReadCapability(BaseCapability):
                 if search_date <= timezone.now() - timedelta(
                     seconds=interface_cls.historical_lookup_buffer_seconds
                 ):
+                    from .history import HistoryNotSupportedError
+
+                    if current_as_of_date() is not None and not hasattr(
+                        model_cls, "history"
+                    ):
+                        history_unavailable = HistoryNotSupportedError(
+                            interface_cls.__name__
+                        )
+                        raise HistoricalReadNotSupportedError(
+                            interface_cls.__name__
+                        ) from history_unavailable
                     historical: models.Model | None
-                    history_handler = _history_capability_for(interface_cls)
-                    if instance is not None:
-                        historical = history_handler.get_historical_record(
-                            interface_cls,
-                            instance,
-                            search_date,
-                        )
-                    else:
-                        historical = history_handler.get_historical_record_by_pk(
-                            interface_cls,
-                            pk,
-                            search_date,
-                        )
+                    try:
+                        history_handler = _history_capability_for(interface_cls)
+                    except (NotImplementedError, TypeError) as error:
+                        if current_as_of_date() is not None:
+                            raise HistoricalReadNotSupportedError(
+                                interface_cls.__name__
+                            ) from error
+                        raise
+                    try:
+                        if instance is not None:
+                            historical = history_handler.get_historical_record(
+                                interface_cls,
+                                instance,
+                                search_date,
+                            )
+                        else:
+                            historical = history_handler.get_historical_record_by_pk(
+                                interface_cls,
+                                pk,
+                                search_date,
+                            )
+                    except HistoryNotSupportedError as error:
+                        if current_as_of_date() is not None:
+                            raise HistoricalReadNotSupportedError(
+                                interface_cls.__name__
+                            ) from error
+                        raise
                     if historical is not None:
                         return historical
                     if missing_error is not None:
@@ -773,17 +820,13 @@ class OrmQueryCapability(BaseCapability):
         """
         payload = dict(kwargs)
         include_inactive = bool(payload.pop("include_inactive", False))
-        search_date = payload.pop("search_date", None)
-        if search_date is not None:
-            self._ensure_search_date_input(search_date)
-        if isinstance(search_date, date) and not isinstance(search_date, datetime):
-            search_date = datetime.combine(search_date, time.min)
-        normalize_date = getattr(interface_cls, "normalize_search_date", None)
-        if callable(normalize_date):
-            search_date = normalize_date(search_date)
+        raw_search_date = payload.pop("search_date", None)
+        try:
+            search_date = resolve_search_date(cast(Any, raw_search_date))
+        except InvalidSearchDateError as error:
+            raise SearchDateInputError from error
         if search_date is not None:
             self._ensure_search_date_normalized(search_date)
-            search_date = cast(datetime, search_date)
         support = get_support_capability(interface_cls)
         normalizer = support.get_payload_normalizer(interface_cls)
         translated_payload = _translate_reverse_filter_aliases(
@@ -905,12 +948,26 @@ class OrmQueryCapability(BaseCapability):
 
             try:
                 history_handler = _history_capability_for(interface_cls)
-            except NotImplementedError as error:
-                raise HistoryNotSupportedError(interface_cls.__name__) from error
-            queryset_base = history_handler.get_historical_queryset(
-                interface_cls,
-                search_date,
-            )
+            except (NotImplementedError, TypeError) as error:
+                if current_as_of_date() is not None:
+                    raise HistoricalReadNotSupportedError(
+                        interface_cls.__name__
+                    ) from error
+                if isinstance(error, TypeError):
+                    raise
+                history_error = HistoryNotSupportedError(interface_cls.__name__)
+                raise history_error from error
+            try:
+                queryset_base = history_handler.get_historical_queryset(
+                    interface_cls,
+                    search_date,
+                )
+            except HistoryNotSupportedError as error:
+                if current_as_of_date() is not None:
+                    raise HistoricalReadNotSupportedError(
+                        interface_cls.__name__
+                    ) from error
+                raise
             historical = True
         queryset = (
             queryset_base.exclude(**normalized_kwargs)

@@ -15,6 +15,7 @@ from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.cache.signals import pre_data_change
+from general_manager.as_of import HistoricalContextConflictError, as_of
 
 from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
@@ -842,6 +843,140 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 search_date=search_date,
             )
             self.assertEqual(len(empty_bucket), 0)
+
+    def test_ambient_as_of_applies_to_constructor_and_query_operations(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="Ambient Base",
+                ignore_permission=True,
+            )
+        snapshot = base_time + timedelta(minutes=30)
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            human.update(name="Ambient Updated", ignore_permission=True)
+
+        human_id = human.identification["id"]
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            self.assertEqual(self.TestHuman(human_id).name, "Ambient Base")
+            self.assertEqual(self.TestHuman.get(id=human_id).name, "Ambient Base")
+            self.assertEqual(
+                self.TestHuman.filter(id=human_id).first().name, "Ambient Base"
+            )
+            hydrated = self.TestHuman.filter(id=human_id).first()
+            self.assertEqual(hydrated._effective_search_date, snapshot)
+            self.assertEqual(hydrated._interface._search_date, snapshot)
+            self.assertEqual(
+                self.TestHuman.exclude(id=-1).get(id=human_id).name, "Ambient Base"
+            )
+            self.assertEqual(self.TestHuman.all().get(id=human_id).name, "Ambient Base")
+            self.assertEqual(
+                self.TestHuman(human_id, search_date=snapshot).name,
+                "Ambient Base",
+            )
+            with self.assertRaises(HistoricalContextConflictError):
+                self.TestHuman(human_id, search_date=snapshot + timedelta(days=1))
+
+    def test_ambient_as_of_propagates_through_forward_and_reverse_relations(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            request = self.ChangeRequest.create(
+                creator_id=None,
+                title="Old request",
+                ignore_permission=True,
+            )
+            feasibility = self.ChangeRequestFeasibility.create(
+                creator_id=None,
+                score=7,
+                change_request=request,
+                ignore_permission=True,
+            )
+        snapshot = base_time + timedelta(minutes=30)
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            request.update(title="New request", ignore_permission=True)
+            feasibility.update(score=9, ignore_permission=True)
+        request_id = request.identification["id"]
+        feasibility_id = feasibility.identification["id"]
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            historical_feasibility = self.ChangeRequestFeasibility.get(
+                id=feasibility_id
+            )
+            self.assertEqual(historical_feasibility.change_request.title, "Old request")
+            historical_request = self.ChangeRequest.get(id=request_id)
+            related = historical_request.change_request_feasibility_list.get(
+                id=feasibility_id
+            )
+            self.assertEqual(related.score, 7)
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=snapshot + timedelta(seconds=10),
+        ):
+            explicit_feasibility = self.ChangeRequestFeasibility.get(
+                id=feasibility_id,
+                search_date=snapshot,
+            )
+            self.assertEqual(explicit_feasibility.change_request.title, "Old request")
+            explicit_request = self.ChangeRequest.get(
+                id=request_id,
+                search_date=snapshot,
+            )
+            self.assertEqual(
+                explicit_request.change_request_feasibility_list.get(
+                    id=feasibility_id
+                ).score,
+                7,
+            )
+
+    def test_ambient_as_of_propagates_through_many_to_many_relations(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="Old member",
+                ignore_permission=True,
+            )
+            family = self.TestFamily.create(
+                creator_id=None,
+                name="Historical family",
+                humans=[human],
+                ignore_permission=True,
+            )
+        snapshot = base_time + timedelta(minutes=30)
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            human.update(name="New member", ignore_permission=True)
+        family_id = family.identification["id"]
+        human_id = human.identification["id"]
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            historical_family = self.TestFamily.get(id=family_id)
+            historical_human = historical_family.humans_list.get(id=human_id)
+            self.assertEqual(historical_human.name, "Old member")
 
     def test_first_and_last_operations(self):
         """
