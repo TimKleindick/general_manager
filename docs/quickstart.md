@@ -153,6 +153,28 @@ List queries return a pagination object, which is why `projectList` contains an
 token. GraphQL writes still require the normal authentication and CSRF handling
 for your application.
 
+After a record has changed and history exists, read one consistent historical
+snapshot in Python:
+
+```python
+from general_manager.api import as_of
+from projects.managers import Project
+
+with as_of(search_date="2022-01-01"):
+    historical_projects = Project.all()
+```
+
+The equivalent GraphQL operation applies the date to the complete query:
+
+```graphql
+query @asOf(date: "2022-01-01T00:00:00Z") {
+  projectList { items { name } }
+}
+```
+
+As-of contexts are read-only. Create, update, and delete operations are rejected
+while the snapshot is active.
+
 ## Troubleshooting
 
 ### `No installed app with label 'projects'`

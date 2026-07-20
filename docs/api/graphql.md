@@ -43,6 +43,62 @@ reference pages or type-checker-visible implementation annotations when they are
 part of generated GraphQL plumbing; that visibility does not make them public
 import targets.
 
+## Historical queries with `@asOf`
+
+GeneralManager registers the built-in query directive
+`@asOf(date: DateTime!)`. Use either a literal:
+
+```graphql
+query HistoricalProjects @asOf(date: "2022-01-01T00:00:00Z") {
+  projectList {
+    items {
+      id
+      name
+    }
+  }
+}
+```
+
+or a variable:
+
+```graphql
+query HistoricalProjects($date: DateTime!) @asOf(date: $date) {
+  projectList {
+    items {
+      id
+      name
+    }
+  }
+}
+```
+
+```json
+{"date":"2022-01-01T00:00:00Z"}
+```
+
+The directive belongs to the selected query operation, not individual fields.
+When a document contains multiple operations, `operationName` therefore chooses
+which operation and snapshot execute. The date applies to every resolver,
+nested relation, calculation, and cache access in that operation. A resolver
+that reaches a request-backed or otherwise unsupported interface fails closed
+instead of mixing current data into the response.
+
+`@asOf` is query-only and accepts exactly one non-null `date`. It cannot be
+placed on mutations or subscriptions. The synchronous GeneralManager GraphQL
+endpoint also rejects mutation root resolvers declared with `async def` before
+their body starts, because they cannot retain the endpoint's atomic mutation
+scope; use synchronous mutation resolvers there.
+
+Each item in a batched GraphQL request has an independent historical context.
+Its date is restored after success or failure, so one batch item cannot leak a
+snapshot into the next. Historical failures use stable public extension codes:
+
+- invalid or unresolved dates: `BAD_USER_INPUT`;
+- conflicting snapshots: `HISTORICAL_CONTEXT_CONFLICT`;
+- attempted historical mutations: `HISTORICAL_MUTATION_FORBIDDEN`;
+- unsupported historical reads: `HISTORICAL_READ_NOT_SUPPORTED`; and
+- invalid directive placement or shape: `GRAPHQL_VALIDATION_FAILED`.
+
 ## Bulk notification context
 
 ::: general_manager.api.notification_batching.bulk_data_change_notifications
