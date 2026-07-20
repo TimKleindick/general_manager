@@ -781,10 +781,184 @@ class GraphQLAsOfExecutionTests(unittest.TestCase):
             }
         """
 
-        self.assertTrue(_has_declared_async_mutation_resolver(schema, query, "Q"))
+        self.assertTrue(_has_declared_async_mutation_resolver(schema, query, "Q", {}))
         self.assertFalse(
-            _has_declared_async_mutation_resolver(schema, "mutation {", None)
+            _has_declared_async_mutation_resolver(schema, "mutation {", None, {})
         )
+
+    def test_async_mutation_preflight_honors_field_and_fragment_inclusion(self) -> None:
+        async def resolve_async(_root: object, _info: object) -> str:
+            return "changed"
+
+        schema = GraphQLSchema(
+            query=GraphQLObjectType(
+                "Query",
+                {"ping": GraphQLField(GraphQLString)},
+            ),
+            mutation=GraphQLObjectType(
+                "Mutation",
+                {"asyncField": GraphQLField(GraphQLString, resolve=resolve_async)},
+            ),
+        )
+        cases = (
+            (
+                "mutation Q { alias: asyncField @skip(if: true) }",
+                {},
+                False,
+            ),
+            (
+                "mutation Q($run: Boolean!) { asyncField @include(if: $run) }",
+                {"run": False},
+                False,
+            ),
+            (
+                "mutation Q($run: Boolean!) { asyncField @include(if: $run) }",
+                {"run": True},
+                True,
+            ),
+            (
+                "mutation Q { ... on Mutation @skip(if: true) { asyncField } }",
+                {},
+                False,
+            ),
+            (
+                (
+                    "mutation Q { ...AsyncPart @include(if: false) } "
+                    "fragment AsyncPart on Mutation { asyncField }"
+                ),
+                {},
+                False,
+            ),
+        )
+
+        for query, variables, expected in cases:
+            with self.subTest(query=query):
+                self.assertEqual(
+                    _has_declared_async_mutation_resolver(
+                        schema,
+                        query,
+                        "Q",
+                        variables,
+                    ),
+                    expected,
+                )
+
+    def test_http_async_mutation_inclusion_matches_graphql_execution(self) -> None:
+        events: list[str] = []
+
+        class AsyncMutation(graphene.Mutation):
+            Output = graphene.String
+
+            @staticmethod
+            async def mutate(_root: object, _info: object) -> str:
+                events.append("mutation body")
+                return "changed"
+
+        class Mutation(graphene.ObjectType):
+            async_mutation = AsyncMutation.Field()
+
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        view = GeneralManagerGraphQLView(
+            schema=graphene.Schema(query=Query, mutation=Mutation)
+        )
+        view.json_encode = lambda _request, payload, **_kwargs: payload
+        cases = (
+            (
+                "mutation Q { alias: asyncMutation @skip(if: true) }",
+                {},
+                200,
+            ),
+            (
+                "mutation Q($run: Boolean!) { asyncMutation @include(if: $run) }",
+                {"run": False},
+                200,
+            ),
+            (
+                "mutation Q($run: Boolean!) { asyncMutation @include(if: $run) }",
+                {"run": True},
+                400,
+            ),
+            (
+                ("mutation Q { ... on Mutation @skip(if: true) { asyncMutation } }"),
+                {},
+                200,
+            ),
+            (
+                (
+                    "mutation Q { ...AsyncPart @include(if: false) } "
+                    "fragment AsyncPart on Mutation { asyncMutation }"
+                ),
+                {},
+                200,
+            ),
+        )
+
+        for query, variables, expected_status in cases:
+            with self.subTest(query=query, variables=variables):
+                payload, status = view.get_response(
+                    SimpleNamespace(GET={}, method="POST"),
+                    {"query": query, "variables": variables},
+                )
+            self.assertEqual(status, expected_status)
+            if expected_status == 200:
+                self.assertEqual(payload["data"], {})
+            else:
+                self.assertEqual(
+                    payload["errors"][0]["extensions"]["code"],
+                    "GRAPHQL_VALIDATION_FAILED",
+                )
+        self.assertEqual(events, [])
+
+    def test_invalid_inclusion_variables_remain_normal_graphql_errors(self) -> None:
+        class AsyncMutation(graphene.Mutation):
+            Output = graphene.String
+
+            @staticmethod
+            async def mutate(_root: object, _info: object) -> str:
+                return "changed"
+
+        class Mutation(graphene.ObjectType):
+            async_mutation = AsyncMutation.Field()
+
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        view = GeneralManagerGraphQLView(
+            schema=graphene.Schema(query=Query, mutation=Mutation)
+        )
+        view.json_encode = lambda _request, payload, **_kwargs: payload
+        cases = (
+            (
+                "mutation Q($run: Boolean!) { asyncMutation @include(if: $run) }",
+                {},
+            ),
+            (
+                "mutation Q($run: Boolean!) { ... on Mutation "
+                "@include(if: $run) { asyncMutation } }",
+                {"run": "invalid"},
+            ),
+            (
+                "mutation Q($run: Boolean!) { ...AsyncPart @include(if: $run) } "
+                "fragment AsyncPart on Mutation { asyncMutation }",
+                {},
+            ),
+        )
+
+        for query, variables in cases:
+            with self.subTest(query=query, variables=variables):
+                payload, status = view.get_response(
+                    SimpleNamespace(GET={}, method="POST"),
+                    {"query": query, "variables": variables},
+                )
+            self.assertEqual(status, 400)
+            error = payload["errors"][0]
+            self.assertIn("$run", error["message"])
+            self.assertNotEqual(
+                error.get("extensions", {}).get("code"),
+                "GRAPHQL_VALIDATION_FAILED",
+            )
 
     def test_dynamic_atomic_mutation_awaitable_is_closed_and_rolled_back(self) -> None:
         events: list[str] = []

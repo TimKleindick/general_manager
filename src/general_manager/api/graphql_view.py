@@ -12,17 +12,17 @@ from asgiref.sync import async_to_sync
 from django.db import connection, transaction
 from graphql import (
     ExecutionResult,
-    FieldNode,
     FragmentDefinitionNode,
-    FragmentSpreadNode,
     GraphQLError,
     GraphQLSchema,
-    InlineFragmentNode,
     OperationType,
+    VariablesInAllowedPositionRule,
     get_operation_ast,
     parse,
+    validate,
 )
-from graphql.language.ast import SelectionNode
+from graphql.execution.collect_fields import collect_fields
+from graphql.execution.values import get_variable_values
 
 if TYPE_CHECKING:
     MUTATION_ERRORS_FLAG: str
@@ -159,6 +159,7 @@ def _has_declared_async_mutation_resolver(
     schema: GraphQLSchema,
     query: object,
     operation_name: str | None,
+    variables: object,
 ) -> bool:
     """Return whether a selected mutation declares an async root resolver."""
     if not isinstance(query, str):
@@ -181,33 +182,44 @@ def _has_declared_async_mutation_resolver(
         for definition in document.definitions
         if isinstance(definition, FragmentDefinitionNode)
     }
-    visited_fragments: set[str] = set()
-
-    def selections_are_async(selections: Sequence[SelectionNode]) -> bool:
-        for selection in selections:
-            if isinstance(selection, FieldNode):
-                field = mutation_type.fields.get(selection.name.value)
-                resolver = None if field is None else field.resolve
-                if resolver is not None and inspect.iscoroutinefunction(
-                    inspect.unwrap(resolver)
-                ):
-                    return True
-            elif isinstance(selection, InlineFragmentNode):
-                if selections_are_async(selection.selection_set.selections):
-                    return True
-            elif isinstance(selection, FragmentSpreadNode):
-                fragment_name = selection.name.value
-                if fragment_name in visited_fragments:
-                    continue
-                visited_fragments.add(fragment_name)
-                fragment = fragments.get(fragment_name)
-                if fragment is not None and selections_are_async(
-                    fragment.selection_set.selections
-                ):
-                    return True
+    variable_inputs = (
+        dict(cast(Mapping[str, object], variables))
+        if isinstance(variables, Mapping)
+        else {}
+    )
+    variable_values = get_variable_values(
+        schema,
+        operation.variable_definitions or (),
+        variable_inputs,
+    )
+    if isinstance(variable_values, list):
+        return False
+    if validate(
+        schema,
+        document,
+        rules=(VariablesInAllowedPositionRule,),
+    ):
+        return False
+    try:
+        collected_fields = collect_fields(
+            schema,
+            fragments,
+            variable_values,
+            mutation_type,
+            operation.selection_set,
+        )
+    except GraphQLError:
         return False
 
-    return selections_are_async(operation.selection_set.selections)
+    for field_nodes in collected_fields.values():
+        for field_node in field_nodes:
+            field = mutation_type.fields.get(field_node.name.value)
+            resolver = None if field is None else field.resolve
+            if resolver is not None and inspect.iscoroutinefunction(
+                inspect.unwrap(resolver)
+            ):
+                return True
+    return False
 
 
 class GeneralManagerGraphQLView(GraphQLView):
@@ -313,6 +325,7 @@ class GeneralManagerGraphQLView(GraphQLView):
                     self.schema.graphql_schema,
                     query,
                     operation_name,
+                    variables,
                 ):
                     execution_result = ExecutionResult(
                         data=None,
