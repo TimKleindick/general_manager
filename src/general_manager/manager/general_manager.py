@@ -10,6 +10,7 @@ from general_manager.api.property import GraphQLProperty
 from general_manager.as_of import (
     HistoricalContextConflictError,
     _represents_same_instant,
+    as_of,
     current_as_of_date,
     ensure_as_of_read_supported,
 )
@@ -125,6 +126,24 @@ def _effective_search_date_for_interface(interface: object) -> datetime | None:
     if behavior == "transparent":
         return current_as_of_date()
     return None
+
+
+def _reconstruct_general_manager(
+    manager_class: type["GeneralManager"],
+    identification_values: tuple[object, ...],
+    effective_search_date: datetime | None,
+) -> "GeneralManager":
+    """Reconstruct a manager with the backing snapshot encoded by its pickle."""
+    behavior = getattr(manager_class.Interface, "_as_of_behavior", "unsupported")
+    if effective_search_date is not None and behavior == "historical":
+        return manager_class(
+            *identification_values,
+            search_date=effective_search_date,
+        )
+    if effective_search_date is not None and behavior == "transparent":
+        with as_of(effective_search_date):
+            return manager_class(*identification_values)
+    return manager_class(*identification_values)
 
 
 class GeneralManager(metaclass=GeneralManagerMeta):
@@ -337,14 +356,24 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             return object.__getattribute__(self, attribute_name)
         raise AttributeError(attribute_name)
 
-    def __reduce__(self) -> str | tuple[type[Self], tuple[object, ...]]:
-        """
-        Provide pickling support for the manager instance.
-
-        Returns:
-            Reconstruction data consisting of the class and identification values.
-        """
-        return (self.__class__, tuple(self.__id.values()))
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        """Provide snapshot-preserving pickling support for this manager."""
+        effective = self.__dict__.get("_effective_search_date")
+        if not isinstance(effective, datetime):
+            interface = self.__dict__.get("_interface")
+            if (
+                interface is not None
+                and getattr(interface.__class__, "_as_of_behavior", "unsupported")
+                == "historical"
+            ):
+                candidate = getattr(interface, "_search_date", None)
+                effective = candidate if isinstance(candidate, datetime) else None
+            else:
+                effective = None
+        return (
+            _reconstruct_general_manager,
+            (self.__class__, tuple(self.__id.values()), effective),
+        )
 
     def __or__(
         self,
@@ -413,10 +442,14 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         ``_manager_state_valid`` is set to ``True`` and
         ``_manager_state_reason`` is cleared.
         """
+        ensure_as_of_read_supported(self.Interface)
+        behavior = getattr(self.Interface, "_as_of_behavior", "unsupported")
+        if behavior == "historical":
+            self._ensure_as_of_compatible()
+
         previous_effective = self.__dict__.get(
             "_effective_search_date", _EFFECTIVE_SEARCH_DATE_MISSING
         )
-        behavior = getattr(self.Interface, "_as_of_behavior", "unsupported")
         if (
             behavior == "historical"
             and previous_effective is _EFFECTIVE_SEARCH_DATE_MISSING
