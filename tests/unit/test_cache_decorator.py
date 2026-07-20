@@ -15,6 +15,7 @@ from general_manager.cache.dependency_index import (
 )
 from general_manager.cache.dependency_publish import CachePublishAborted
 from general_manager.cache.run_context import CalculationRunContext
+from general_manager.api import as_of, current_as_of_date
 from general_manager.utils.make_cache_key import make_cache_key
 import pickle
 import threading
@@ -1276,6 +1277,27 @@ class TestCacheDecoratorScopes(SimpleTestCase):
             self.assertEqual(sample(3), 6)
 
         self.assertEqual(sample(3), 6)
+        self.assertEqual(calls, 2)
+
+    def test_run_scope_isolated_by_sequential_as_of_contexts(self):
+        calls = 0
+
+        @cached(cache="run")
+        def sample():
+            nonlocal calls
+            calls += 1
+            return current_as_of_date()
+
+        with CalculationRunContext():
+            with as_of("2022-01-01"):
+                date_a = sample()
+            with as_of("2022-01-02"):
+                date_b = sample()
+            with as_of("2022-01-01"):
+                repeated_date_a = sample()
+
+        self.assertNotEqual(date_a, date_b)
+        self.assertEqual(repeated_date_a, date_a)
         self.assertEqual(calls, 2)
 
     def test_run_scope_uses_active_context_without_context_manager(self):

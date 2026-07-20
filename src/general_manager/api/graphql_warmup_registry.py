@@ -16,7 +16,7 @@ from django.core.cache import cache as django_cache
 GraphQLWarmUpCacheScope = Literal["dependency", "timeout"]
 GraphQLWarmUpIdentification = dict[str, object]
 
-RECIPE_VERSION = 1
+RECIPE_VERSION = 2
 KEY_PREFIX = "general_manager:graphql_warmup"
 RECIPE_INDEX_KEY = f"{KEY_PREFIX}:recipes"
 TIMEOUT_RECIPE_INDEX_KEY = f"{KEY_PREFIX}:timeout_recipes"
@@ -62,6 +62,7 @@ class GraphQLWarmUpRecipe:
     values without validation; due checks compare them with normal Python
     datetime rules and may raise `TypeError` if callers mix naive and aware
     values. Timeout recipes with `refresh_at=None` are not considered due.
+    `search_date` retains the manager snapshot that the executor must re-enter.
     """
 
     cache_key: str
@@ -71,6 +72,7 @@ class GraphQLWarmUpRecipe:
     cache: GraphQLWarmUpCacheScope
     timeout: int | None
     refresh_at: datetime | None
+    search_date: datetime | None = None
     version: int = RECIPE_VERSION
 
 

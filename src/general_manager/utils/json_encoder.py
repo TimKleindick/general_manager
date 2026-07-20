@@ -10,10 +10,11 @@ class CustomJSONEncoder(json.JSONEncoder):
     """JSON encoder for values commonly found in GeneralManager payloads.
 
     Dates, datetimes, and times are emitted with `isoformat()`.
-    `GeneralManager` instances are represented as
-    `<ClassName>(**<identification>)`. Values supported by the standard JSON
-    encoder keep the normal `json.JSONEncoder` behavior. Unsupported values fall
-    back to `str(value)` instead of raising `TypeError`.
+    Current `GeneralManager` instances are represented as
+    `<ClassName>(**<identification>)`; snapshot-bound instances append an
+    `@as_of(<isoformat>)` suffix. Values supported by the standard JSON encoder
+    keep the normal `json.JSONEncoder` behavior. Unsupported values fall back to
+    `str(value)` instead of raising `TypeError`.
     """
 
     def default(self, o: object) -> object:
@@ -29,7 +30,11 @@ class CustomJSONEncoder(json.JSONEncoder):
         if isinstance(o, GeneralManager):
             # Bypass GeneralManagerMeta.__getattribute__ descriptor initialization.
             manager_class_name = type.__getattribute__(o.__class__, "__name__")
-            return f"{manager_class_name}(**{o.identification})"
+            manager_value = f"{manager_class_name}(**{o.identification})"
+            search_date = o.__dict__.get("_effective_search_date")
+            if isinstance(search_date, datetime):
+                manager_value += f"@as_of({search_date.isoformat()})"
+            return manager_value
         try:
             return super().default(o)
         except TypeError:

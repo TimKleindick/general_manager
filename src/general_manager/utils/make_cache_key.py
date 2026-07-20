@@ -6,8 +6,10 @@ import inspect
 import json
 from json.encoder import encode_basestring_ascii
 from hashlib import sha256
+from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
+from general_manager.as_of import as_of_cache_fingerprint
 from general_manager.utils.json_encoder import CustomJSONEncoder
 
 if TYPE_CHECKING:
@@ -58,12 +60,20 @@ def _single_manager_arg_cache_key_parts(
     parameter_name: str,
     module: str,
     qualname: str,
+    active_fingerprint: str | None,
 ) -> tuple[bytes, bytes]:
     prefix = (f'{{"args": {{{encode_basestring_ascii(parameter_name)}: ').encode()
-    suffix = (
-        f'}}, "module": {encode_basestring_ascii(module)}, '
-        f'"qualname": {encode_basestring_ascii(qualname)}}}'
-    ).encode()
+    if active_fingerprint is None:
+        suffix = (
+            f'}}, "module": {encode_basestring_ascii(module)}, '
+            f'"qualname": {encode_basestring_ascii(qualname)}}}'
+        ).encode()
+    else:
+        suffix = (
+            f'}}, "as_of": {encode_basestring_ascii(active_fingerprint)}, '
+            f'"module": {encode_basestring_ascii(module)}, '
+            f'"qualname": {encode_basestring_ascii(qualname)}}}'
+        ).encode()
     return prefix, suffix
 
 
@@ -74,12 +84,17 @@ def _single_manager_arg_cache_key_from_repr(
     qualname: str,
     manager_class_name: str,
     identification_repr: str,
+    manager_fingerprint: str | None,
+    active_fingerprint: str | None,
 ) -> str:
     manager_value = f"{manager_class_name}(**{identification_repr})"
+    if manager_fingerprint is not None:
+        manager_value += f"@as_of({manager_fingerprint})"
     prefix, suffix = _single_manager_arg_cache_key_parts(
         parameter_name,
         module,
         qualname,
+        active_fingerprint,
     )
     hash_builder = sha256(usedforsecurity=False)
     hash_builder.update(prefix)
@@ -99,13 +114,26 @@ def _single_manager_arg_cache_key(
     manager = cast("GeneralManager", value)
     manager_class_name = type.__getattribute__(manager.__class__, "__name__")
     identification_repr = f"{manager.identification}"
+    search_date = manager.__dict__.get("_effective_search_date")
+    manager_fingerprint = (
+        search_date.isoformat() if isinstance(search_date, datetime) else None
+    )
     return _single_manager_arg_cache_key_from_repr(
         parameter_name,
         func.__module__,
         func.__qualname__,
         manager_class_name,
         identification_repr,
+        manager_fingerprint,
+        as_of_cache_fingerprint(),
     )
+
+
+def _add_as_of_fingerprint(payload: dict[str, object]) -> None:
+    """Add the active historical namespace without changing current payloads."""
+    fingerprint = as_of_cache_fingerprint()
+    if fingerprint is not None:
+        payload["as_of"] = fingerprint
 
 
 def make_cache_key(
@@ -119,8 +147,10 @@ def make_cache_key(
     with `dict(...)` even when they are falsey. The function module, qualified
     name, and normalized bound arguments are encoded as JSON with sorted keys and
     `CustomJSONEncoder`, then hashed with SHA-256 using `usedforsecurity=False`.
-    Positional and keyword forms of the same call produce the same key after
-    `inspect.Signature.bind_partial()` and default application.
+    An active historical snapshot adds its ISO datetime as an `as_of` payload
+    field; current payload bytes remain unchanged. Positional and keyword forms
+    of the same call produce the same key after `inspect.Signature.bind_partial()`
+    and default application.
 
     Raises:
         TypeError: If `args` and `kwargs` cannot bind to `func`'s signature, or
@@ -138,11 +168,12 @@ def make_cache_key(
                 )
                 if single_manager_key is not None:
                     return single_manager_key
-            payload = {
+            payload: dict[str, object] = {
                 "module": func.__module__,
                 "qualname": func.__qualname__,
                 "args": dict(zip(positional_names, args, strict=True)),
             }
+            _add_as_of_fingerprint(payload)
             raw = json.dumps(payload, sort_keys=True, cls=CustomJSONEncoder).encode()
             return sha256(raw, usedforsecurity=False).hexdigest()
 
@@ -155,5 +186,6 @@ def make_cache_key(
         "qualname": func.__qualname__,
         "args": bound.arguments,
     }
+    _add_as_of_fingerprint(payload)
     raw = json.dumps(payload, sort_keys=True, cls=CustomJSONEncoder).encode()
     return sha256(raw, usedforsecurity=False).hexdigest()
