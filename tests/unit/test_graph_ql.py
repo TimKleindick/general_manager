@@ -1,9 +1,15 @@
 # type: ignore
 
 import json
+import asyncio
+import unittest
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from inspect import signature
+from threading import Barrier
+from types import SimpleNamespace
 import graphene
 from django.test import TestCase, override_settings
 from django.db.models import NOT_PROVIDED
@@ -23,6 +29,15 @@ from general_manager.api.graphql_mutations import (
     _normalize_mutation_kwargs_for_manager,
 )
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
+from general_manager.api.graphql_as_of import extract_as_of_search_date
+from general_manager.as_of import (
+    HistoricalContextConflictError,
+    HistoricalMutationError,
+    HistoricalReadNotSupportedError,
+    InvalidSearchDateError,
+    as_of,
+    current_as_of_date,
+)
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.measurement.measurement import Measurement
 from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
@@ -42,8 +57,380 @@ from graphql import (
     DirectiveLocation,
     GraphQLError,
     GraphQLDirective,
+    parse,
     specified_directives,
 )
+
+
+class GraphQLAsOfExecutionTests(unittest.TestCase):
+    def test_extracts_selected_operation_variable_and_ignores_other_operation(
+        self,
+    ) -> None:
+        query = """
+            query Current { ping }
+            query Historical($date: DateTime!) @asOf(date: $date) { ping }
+        """
+
+        self.assertEqual(
+            extract_as_of_search_date(
+                query=query,
+                variables={"date": "2022-01-01T00:00:00Z"},
+                operation_name="Historical",
+            ),
+            datetime(2022, 1, 1, tzinfo=UTC),
+        )
+        self.assertIsNone(
+            extract_as_of_search_date(
+                query=query,
+                variables={"date": "2022-01-01T00:00:00Z"},
+                operation_name="Current",
+            )
+        )
+
+    def test_extracts_literal_and_absent_directive(self) -> None:
+        self.assertEqual(
+            extract_as_of_search_date(
+                query='query Historical @asOf(date: "2022-01-01T00:00:00Z") { ping }',
+                variables=None,
+                operation_name="Historical",
+            ),
+            datetime(2022, 1, 1, tzinfo=UTC),
+        )
+        self.assertIsNone(
+            extract_as_of_search_date(
+                query="query Current { ping }",
+                variables=None,
+                operation_name="Current",
+            )
+        )
+
+    def test_rejects_bad_as_of_inputs_with_stable_codes(self) -> None:
+        cases = (
+            (
+                "query Q @asOf { ping }",
+                None,
+                "GRAPHQL_VALIDATION_FAILED",
+            ),
+            (
+                'query Q @asOf(date: "2022-01-01", date: "2023-01-01") { ping }',
+                None,
+                "GRAPHQL_VALIDATION_FAILED",
+            ),
+            (
+                "query Q($date: DateTime!) @asOf(date: $date) { ping }",
+                {},
+                "BAD_USER_INPUT",
+            ),
+            (
+                'query Q @asOf(date: "not-a-date") { ping }',
+                None,
+                "BAD_USER_INPUT",
+            ),
+            (
+                'query Q @asOf(date: "2022-01-01") @asOf(date: "2023-01-01") { ping }',
+                None,
+                "HISTORICAL_CONTEXT_CONFLICT",
+            ),
+            (
+                'mutation Q @asOf(date: "2022-01-01") { ping }',
+                None,
+                "GRAPHQL_VALIDATION_FAILED",
+            ),
+            (
+                'subscription Q @asOf(date: "2022-01-01") { ping }',
+                None,
+                "GRAPHQL_VALIDATION_FAILED",
+            ),
+        )
+
+        for query, variables, code in cases:
+            with self.subTest(query=query), self.assertRaises(GraphQLError) as raised:
+                extract_as_of_search_date(
+                    query=query,
+                    variables=variables,
+                    operation_name="Q",
+                )
+            self.assertEqual(raised.exception.extensions["code"], code)
+
+    def test_view_nests_as_of_outside_calculation_context(self) -> None:
+        events: list[str] = []
+
+        @contextmanager
+        def recording_as_of(_date: object):
+            events.append("as_of enter")
+            try:
+                yield
+            finally:
+                events.append("as_of exit")
+
+        @contextmanager
+        def recording_calculation():
+            events.append("calculation enter")
+            try:
+                yield
+            finally:
+                events.append("calculation exit")
+
+        view = self._view()
+        with (
+            patch("general_manager.api.graphql_view.as_of", recording_as_of),
+            patch(
+                "general_manager.api.graphql_view.ensure_calculation_run_context",
+                recording_calculation,
+            ),
+            patch.object(
+                view,
+                "execute_graphql_request",
+                side_effect=lambda *_args: events.append("execute"),
+            ),
+        ):
+            view.get_response(
+                SimpleNamespace(GET={}, method="POST"),
+                {"query": 'query Q @asOf(date: "2022-01-01") { ping }'},
+            )
+
+        self.assertEqual(
+            events,
+            [
+                "as_of enter",
+                "calculation enter",
+                "execute",
+                "calculation exit",
+                "as_of exit",
+            ],
+        )
+
+    def test_view_does_not_execute_invalid_as_of_or_enter_plain_query(self) -> None:
+        view = self._view()
+        request = SimpleNamespace(GET={}, method="POST")
+        with (
+            patch("general_manager.api.graphql_view.as_of") as as_of_mock,
+            patch.object(view, "execute_graphql_request") as execute,
+        ):
+            view.get_response(request, {"query": "query Q @asOf { ping }"})
+            execute.assert_not_called()
+            as_of_mock.assert_not_called()
+
+        with patch("general_manager.api.graphql_view.as_of") as as_of_mock:
+            view.get_response(request, {"query": "query Q { ping }"})
+            as_of_mock.assert_not_called()
+
+    def test_view_rejects_directive_on_mutation_and_subscription_before_execution(
+        self,
+    ) -> None:
+        view = self._view()
+        request = SimpleNamespace(GET={}, method="POST")
+        for operation in ("mutation", "subscription"):
+            with (
+                self.subTest(operation=operation),
+                patch.object(view, "execute_graphql_request") as execute,
+            ):
+                payload, status = view.get_response(
+                    request,
+                    {"query": (f'{operation} Q @asOf(date: "2022-01-01") {{ ping }}')},
+                )
+            self.assertEqual(status, 400)
+            self.assertEqual(
+                payload["errors"][0]["extensions"]["code"],
+                "GRAPHQL_VALIDATION_FAILED",
+            )
+            execute.assert_not_called()
+
+    def test_batch_items_are_isolated_and_cleanup_after_resolver_error(self) -> None:
+        view = self._view()
+        request = SimpleNamespace(GET={}, method="POST")
+        seen: list[datetime | None] = []
+        call_count = 0
+
+        def execute(*_args: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            seen.append(current_as_of_date())
+            if call_count == 2:
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "data": {"ping": None},
+                        "errors": [GraphQLError("resolver failed", path=["ping"])],
+                    },
+                )()
+            return type("Result", (), {"data": {"ping": "pong"}, "errors": None})()
+
+        with patch.object(view, "execute_graphql_request", execute):
+            for date_value in ("2022-01-01T00:00:00Z", "2023-01-01T00:00:00Z"):
+                view.get_response(
+                    request,
+                    {
+                        "query": (
+                            "query Q($date: DateTime!) @asOf(date: $date) { ping }"
+                        ),
+                        "variables": {"date": date_value},
+                    },
+                )
+                self.assertIsNone(current_as_of_date())
+
+        self.assertEqual(
+            seen,
+            [
+                datetime(2022, 1, 1, tzinfo=UTC),
+                datetime(2023, 1, 1, tzinfo=UTC),
+            ],
+        )
+
+    def test_context_conflict_is_a_public_error_before_execution(self) -> None:
+        view = self._view()
+        request = SimpleNamespace(GET={}, method="POST")
+        with (
+            as_of("2021-01-01"),
+            patch.object(view, "execute_graphql_request") as execute,
+        ):
+            payload, status = view.get_response(
+                request,
+                {"query": 'query Q @asOf(date: "2022-01-01") { ping }'},
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(
+            payload["errors"][0]["extensions"]["code"],
+            "HISTORICAL_CONTEXT_CONFLICT",
+        )
+        execute.assert_not_called()
+
+    def test_concurrent_requests_keep_independent_dates(self) -> None:
+        view = self._view()
+        barrier = Barrier(2)
+
+        def execute(*_args: object) -> object:
+            barrier.wait()
+            active = current_as_of_date()
+            return type("Result", (), {"data": {"active": active}, "errors": None})()
+
+        def run(date_value: str) -> datetime | None:
+            payload, _status = view.get_response(
+                SimpleNamespace(GET={}, method="POST"),
+                {
+                    "query": "query Q($date: DateTime!) @asOf(date: $date) { ping }",
+                    "variables": {"date": date_value},
+                },
+            )
+            return payload["data"]["active"]
+
+        with (
+            patch.object(view, "execute_graphql_request", execute),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            results = list(
+                executor.map(
+                    run,
+                    ["2022-01-01T00:00:00Z", "2023-01-01T00:00:00Z"],
+                )
+            )
+
+        self.assertCountEqual(
+            results,
+            [
+                datetime(2022, 1, 1, tzinfo=UTC),
+                datetime(2023, 1, 1, tzinfo=UTC),
+            ],
+        )
+        self.assertIsNone(current_as_of_date())
+
+    def test_context_is_restored_before_response_formatting_failure(self) -> None:
+        view = self._view()
+        execution_result = type(
+            "Result", (), {"data": {"ping": "pong"}, "errors": None}
+        )()
+        with (
+            patch.object(
+                view, "execute_graphql_request", return_value=execution_result
+            ),
+            patch.object(
+                view, "json_encode", side_effect=RuntimeError("encoding failed")
+            ),
+            self.assertRaisesRegex(RuntimeError, "encoding failed"),
+        ):
+            view.get_response(
+                SimpleNamespace(GET={}, method="POST"),
+                {"query": 'query Q @asOf(date: "2022-01-01") { ping }'},
+            )
+
+        self.assertIsNone(current_as_of_date())
+
+    def test_async_execution_keeps_context_until_awaited_and_cleans_up(self) -> None:
+        view = self._view()
+        seen: list[datetime | None] = []
+
+        async def execute(*_args: object) -> object:
+            await asyncio.sleep(0)
+            seen.append(current_as_of_date())
+            return type("Result", (), {"data": {"ping": "pong"}, "errors": None})()
+
+        with patch.object(view, "execute_graphql_request", execute):
+            view.get_response(
+                SimpleNamespace(GET={}, method="POST"),
+                {"query": 'query Q @asOf(date: "2022-01-01T00:00:00Z") { ping }'},
+            )
+
+        self.assertEqual(seen, [datetime(2022, 1, 1, tzinfo=UTC)])
+        self.assertIsNone(current_as_of_date())
+
+    def test_historical_resolver_error_has_public_code_path_and_location(self) -> None:
+        view = self._view()
+        source = "query Q { ping }"
+        node = next(iter(parse(source).definitions)).selection_set.selections[0]
+        error = GraphQLError(
+            "wrapped",
+            nodes=[node],
+            path=["ping"],
+            original_error=HistoricalMutationError(),
+        )
+
+        formatted = view.format_error(error)
+
+        self.assertEqual(
+            formatted["message"], "Mutations are not allowed in historical context."
+        )
+        self.assertEqual(
+            formatted["extensions"]["code"], "HISTORICAL_MUTATION_FORBIDDEN"
+        )
+        self.assertEqual(formatted["path"], ["ping"])
+        self.assertEqual(formatted["locations"], [{"line": 1, "column": 11}])
+
+    def test_all_historical_resolver_errors_have_stable_public_codes(self) -> None:
+        view = self._view()
+        cases = (
+            (InvalidSearchDateError("bad"), "BAD_USER_INPUT"),
+            (
+                HistoricalContextConflictError(),
+                "HISTORICAL_CONTEXT_CONFLICT",
+            ),
+            (HistoricalMutationError(), "HISTORICAL_MUTATION_FORBIDDEN"),
+            (
+                HistoricalReadNotSupportedError(),
+                "HISTORICAL_READ_NOT_SUPPORTED",
+            ),
+        )
+
+        for original_error, code in cases:
+            with self.subTest(code=code):
+                formatted = view.format_error(
+                    GraphQLError("wrapped", original_error=original_error)
+                )
+            self.assertEqual(formatted["extensions"]["code"], code)
+
+    @staticmethod
+    def _view() -> GeneralManagerGraphQLView:
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+            @staticmethod
+            def resolve_ping(_root: object, _info: object) -> str:
+                return "pong"
+
+        view = GeneralManagerGraphQLView(schema=graphene.Schema(query=Query))
+        view.json_encode = lambda _request, payload, **_kwargs: payload
+        return view
 
 
 class GraphQLPropertyTests(TestCase):
