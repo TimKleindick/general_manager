@@ -12,8 +12,10 @@ from uuid import UUID
 from django.apps import apps
 from django.db import models
 from django.utils import timezone
+from simple_history.models import HistoricalChanges
 
 from general_manager.cache.run_context import CalculationRunContext
+from general_manager.as_of import HistoricalReadNotSupportedError, as_of
 from general_manager.interface.capabilities.orm import (
     HistoryNotSupportedError,
     OrmCreateCapability,
@@ -171,6 +173,43 @@ class TestOrmPersistenceSupportCapability:
             mock_build.assert_called_once()
             assert result1 == {"field1": "descriptor1"}
             assert result2 == result1
+
+    def test_ambient_historical_many_to_many_without_target_history_fails_closed(
+        self,
+    ):
+        capability = OrmPersistenceSupportCapability()
+        search_date = timezone.now() - timedelta(days=1)
+        target_model = type("TargetModel", (), {"_default_manager": Mock()})
+        target_field = SimpleNamespace(related_model=target_model)
+        through_relation = SimpleNamespace(
+            related_model=target_model,
+            name="target",
+        )
+        historical_through = type(
+            "HistoricalThrough",
+            (HistoricalChanges,),
+            {"_meta": SimpleNamespace(get_fields=lambda: [through_relation])},
+        )
+        queryset = Mock(model=historical_through)
+        manager = Mock()
+        manager.all.return_value = queryset
+        source_model = Mock()
+        source_model._meta.get_field.return_value = target_field
+
+        class InterfaceInstance:
+            _model = source_model
+
+            def __init__(self) -> None:
+                self._instance = SimpleNamespace(members=manager)
+                self._search_date = search_date
+
+        with as_of(search_date):
+            with pytest.raises(HistoricalReadNotSupportedError):
+                capability.resolve_many_to_many(
+                    InterfaceInstance(),
+                    "members",
+                    "members",
+                )
 
 
 class TestOrmReadCapability:
@@ -375,6 +414,53 @@ class TestOrmReadCapability:
             mock_instance,
             mock_instance._search_date,
         )
+
+    def test_ambient_get_data_without_model_history_fails_closed(self):
+        capability = OrmReadCapability()
+
+        class DoesNotExist(Exception):
+            pass
+
+        class Model:
+            pass
+
+        Model.DoesNotExist = DoesNotExist
+        search_date = timezone.now() - timedelta(days=1)
+
+        class InterfaceInstance:
+            _model = Model
+            historical_lookup_buffer_seconds = 0
+
+            def __init__(self) -> None:
+                self.pk = 1
+                self._search_date = search_date
+
+        manager = Mock()
+        manager.get.side_effect = DoesNotExist("missing")
+        support = Mock()
+        support.get_manager.return_value = manager
+
+        with (
+            as_of(search_date),
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=10),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+        ):
+            with pytest.raises(HistoricalReadNotSupportedError):
+                capability.get_data(InterfaceInstance())
 
     def test_get_attribute_types_returns_field_metadata(self):
         """Test that get_attribute_types returns field descriptors as metadata."""
@@ -1543,6 +1629,44 @@ class TestOrmQueryCapability:
                                 interface_cls,
                                 search_date=search_date,
                             )
+
+    def test_ambient_filter_without_history_fails_closed(self):
+        capability = OrmQueryCapability()
+        interface_cls = type("MockInterface", (), {})
+        interface_cls._parent_class = Mock()
+        interface_cls._model = Mock()
+        interface_cls.historical_lookup_buffer_seconds = 0
+        support = Mock()
+        support.get_queryset.return_value = Mock()
+        support.get_database_alias.return_value = None
+        normalizer = Mock()
+        normalizer.normalize_filter_kwargs.return_value = {}
+        support.get_payload_normalizer.return_value = normalizer
+        search_date = timezone.now() - timedelta(days=1)
+
+        with (
+            as_of(search_date),
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support._history_capability_for",
+                side_effect=NotImplementedError("missing history"),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=10),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+        ):
+            with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+                capability.filter(interface_cls)
+
+        assert isinstance(exc_info.value.__cause__, NotImplementedError)
 
 
 class TestOrmValidationCapability:

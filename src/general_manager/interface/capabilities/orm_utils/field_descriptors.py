@@ -472,6 +472,7 @@ class _FieldDescriptorBuilder:
         if general_manager_class:
             accessor = _general_manager_many_accessor(
                 accessor_name=accessor_name,
+                field_name=getattr(field, "name", accessor_name),
                 related_model=related_model,
                 general_manager_class=general_manager_class,
                 source_model=self.model,
@@ -820,18 +821,29 @@ def _general_manager_accessor(
     """
     manager_type = cast("type[GeneralManager]", manager_class)
 
-    def raw_id_manager(raw_id: object, database_alias: object) -> object:
+    def build_manager(raw_id: object, search_date: datetime | None) -> object:
+        if search_date is None:
+            return manager_type(raw_id)
+        return manager_type(raw_id, search_date=search_date)
+
+    def raw_id_manager(
+        raw_id: object,
+        database_alias: object,
+        search_date: datetime | None,
+    ) -> object:
         from general_manager.cache.run_context import current_calculation_run_context
 
+        if search_date is not None:
+            return build_manager(raw_id, search_date)
         context = current_calculation_run_context()
         if context is None:
-            return manager_type(raw_id)
+            return build_manager(raw_id, search_date)
 
         cache_key = (manager_type, raw_id, database_alias)
         try:
             cached = context.get_orm_relation_manager(cast(Hashable, cache_key))
         except TypeError:
-            return manager_type(raw_id)
+            return build_manager(raw_id, search_date)
         if isinstance(cached, manager_type):
             track_own = getattr(
                 cached,
@@ -842,7 +854,7 @@ def _general_manager_accessor(
                 track_own()
             return cached
 
-        manager = manager_type(raw_id)
+        manager = build_manager(raw_id, search_date)
         context.set_orm_relation_manager(cast(Hashable, cache_key), manager)
         return manager
 
@@ -860,6 +872,7 @@ def _general_manager_accessor(
             The related manager instance, or `None` if the related object is `None`.
         """
         if raw_id_name is not None:
+            search_date = getattr(self, "_search_date", None)
             raw_id = getattr(self._instance, raw_id_name, None)
             if raw_id is None:
                 return None
@@ -868,9 +881,11 @@ def _general_manager_accessor(
             fields_cache = getattr(state, "fields_cache", {})
             related = fields_cache.get(field_name, _MISSING_RELATED)
             if related is _MISSING_RELATED:
-                return raw_id_manager(raw_id, database_alias)
+                return raw_id_manager(raw_id, database_alias, search_date)
             if related is None:
                 return None
+            if search_date is not None:
+                return manager_type(raw_id, search_date=search_date)
             trusted_hydrate = getattr(manager_type, "_from_trusted_orm_instance", None)
             if callable(trusted_hydrate):
                 return trusted_hydrate(related)
@@ -882,6 +897,9 @@ def _general_manager_accessor(
             return None
         if related is None:
             return None
+        search_date = getattr(self, "_search_date", None)
+        if search_date is not None:
+            return manager_type(related.pk, search_date=search_date)
         trusted_hydrate = getattr(manager_type, "_from_trusted_orm_instance", None)
         if callable(trusted_hydrate):
             return trusted_hydrate(related)
@@ -893,6 +911,7 @@ def _general_manager_accessor(
 def _general_manager_many_accessor(
     *,
     accessor_name: str,
+    field_name: str | None = None,
     related_model: type[models.Model],
     general_manager_class: type[object],
     source_model: type[models.Model],
@@ -944,6 +963,24 @@ def _general_manager_many_accessor(
             A manager or queryset containing related model instances whose foreign-key fields equal this interface instance's primary key.
         """
         manager_cls = cast("type[GeneralManager]", general_manager_class)
+        search_date = getattr(self, "_search_date", None)
+        if relation_filter_name is not None and search_date is not None:
+            from general_manager.bucket.database_bucket import DatabaseBucket
+            from general_manager.interface.capabilities.orm.support import (
+                get_support_capability,
+            )
+
+            queryset = get_support_capability(self.__class__).resolve_many_to_many(
+                self,
+                accessor_name,
+                field_name or accessor_name,
+            )
+            return DatabaseBucket(
+                queryset,
+                manager_cls,
+                {relation_filter_name: [self.pk]},
+                search_date=search_date,
+            )
         if relation_filter_name is not None:
             filter_kwargs = {relation_filter_name: self.pk}
             prefetched_bucket = _prefetched_general_manager_many_bucket(
@@ -963,6 +1000,8 @@ def _general_manager_many_accessor(
                 related_model=related_model,
                 source_model=source_model,
             )
+        if search_date is not None:
+            filter_kwargs["search_date"] = search_date
         return manager_cls.filter(**filter_kwargs)
 
     return getter
@@ -1021,6 +1060,8 @@ def _prefetched_general_manager_many_bucket(
 ) -> object | None:
     """Return a bucket backed by a run-scoped prefetched M2M relation."""
     source_instance = getattr(interface_instance, "_instance", None)
+    if getattr(interface_instance, "_search_date", None) is not None:
+        return None
     if not isinstance(source_instance, source_model):
         return None
     source_identity = _orm_row_identity(source_instance)

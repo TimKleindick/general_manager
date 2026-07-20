@@ -3,13 +3,21 @@
 from __future__ import annotations
 from collections.abc import Callable, Hashable, Mapping
 from datetime import date, datetime
-from typing import Generator, TypeVar, cast
+from typing import TYPE_CHECKING, Generator, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, FieldError
 from django.db import models
 from django.db.models.sql.query import Query
 
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.as_of import (
+    HistoricalContextConflictError,
+    SearchDateInput,
+    _represents_same_instant,
+    current_as_of_date,
+    normalize_search_date,
+    resolve_search_date,
+)
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import (
     Dependency,
@@ -18,6 +26,9 @@ from general_manager.cache.dependency_index import (
 from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.filter_parser import create_filter_function
+
+if TYPE_CHECKING:
+    from general_manager.bucket.group_bucket import GroupBucket
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
 LookupValue = object
@@ -183,6 +194,13 @@ def _restore_database_bucket_from_primary_keys(
     sort_keys: tuple[str, ...] | None,
     sort_reverse: bool,
 ) -> DatabaseBucket[GeneralManagerType]:
+    active = current_as_of_date()
+    if active is not None:
+        if search_date is None:
+            raise HistoricalContextConflictError
+        normalized = normalize_search_date(cast(SearchDateInput, search_date))
+        if not _represents_same_instant(normalized, active):
+            raise HistoricalContextConflictError
     _ensure_unique_primary_keys(primary_keys)
     manager = model._default_manager
     if database_alias is not None:
@@ -262,6 +280,18 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         )
         self._trusted_query_signature: Hashable | None = None
 
+    def _ensure_as_of_compatible(self) -> None:
+        """Reject use of a bucket that represents another effective instant."""
+        active = current_as_of_date()
+        if active is None:
+            return
+        search_date = self._search_date
+        if search_date is None:
+            raise HistoricalContextConflictError
+        normalized = normalize_search_date(cast(SearchDateInput, search_date))
+        if not _represents_same_instant(normalized, active):
+            raise HistoricalContextConflictError
+
     def _set_trusted_query_signature(self, signature: Hashable | None) -> None:
         """Set an internal non-SQL signature for framework-built querysets."""
         self._trusted_query_signature = signature
@@ -269,7 +299,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def _copy_for_run_context_reuse(self) -> DatabaseBucket[GeneralManagerType]:
         """Return an unexposed bucket copy that reuses the same trusted queryset."""
-
+        self._ensure_as_of_compatible()
         bucket = self.__class__(
             self._data,
             self._manager_class,
@@ -341,6 +371,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         the original model default manager on the original database alias by
         filtering those primary keys and preserving the snapshot order.
         """
+        self._ensure_as_of_compatible()
         self._track_effective_dependencies()
         primary_keys = tuple(self._data.values_list("pk", flat=True))
         _ensure_unique_primary_keys(primary_keys)
@@ -360,6 +391,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         )
 
     def _build_manager_from_primary_key(self, pk: object) -> GeneralManagerType:
+        self._ensure_as_of_compatible()
         if self._search_date is None:
             return self._manager_class(pk)
         return self._manager_class(pk, search_date=self._search_date)
@@ -384,6 +416,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self,
         instance: models.Model,
     ) -> GeneralManagerType:
+        self._ensure_as_of_compatible()
         interface_hydrate = getattr(
             self._manager_class.Interface, "_from_trusted_orm_instance", None
         )
@@ -444,6 +477,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             tuple[Hashable, ...] | None: Cache key components for equivalent
             queryset results, or ``None`` when reuse should be bypassed.
         """
+        self._ensure_as_of_compatible()
         if self._query_signature_cache is not _QUERY_SIGNATURE_NOT_COMPUTED:
             return cast(tuple[Hashable, ...] | None, self._query_signature_cache)
         if not self._run_scoped_cacheable:
@@ -521,6 +555,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             tuple[object, ...] | None: Cached or newly materialized primary keys,
             or ``None`` when run-scoped reuse is unavailable.
         """
+        self._ensure_as_of_compatible()
         context = current_calculation_run_context()
         if context is None:
             return None
@@ -551,6 +586,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Load or reuse a bounded model-row snapshot for trusted hydration.
         """
+        self._ensure_as_of_compatible()
         context = current_calculation_run_context()
         if context is None:
             return None
@@ -581,6 +617,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             tuple[object, ...] | None: Cached primary keys for this bucket, or
             ``None`` when no snapshot exists.
         """
+        self._ensure_as_of_compatible()
         context = current_calculation_run_context()
         if context is None:
             return None
@@ -594,6 +631,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def _peek_run_scoped_rows(self) -> tuple[models.Model, ...] | None:
         """Return cached model rows without evaluating the ORM."""
+        self._ensure_as_of_compatible()
         context = current_calculation_run_context()
         if context is None:
             return None
@@ -633,6 +671,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def _get_run_scoped_managers(self) -> tuple[GeneralManagerType, ...] | None:
         """Load or reuse manager wrappers for a trusted row snapshot."""
+        self._ensure_as_of_compatible()
         if not self._can_cache_run_scoped_managers():
             return None
         context = current_calculation_run_context()
@@ -759,6 +798,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Yields:
             GeneralManagerType: Manager instance for each primary key in the queryset.
         """
+        self._ensure_as_of_compatible()
         self._track_effective_dependencies()
         managers = self._get_run_scoped_managers()
         if managers is not None:
@@ -795,7 +835,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             DatabaseBucketManagerMismatchError: If `other` is a DatabaseBucket but uses a different manager class.
             DatabaseBucketSearchDateMismatchError: If both buckets target the same manager but have different search dates.
         """
+        self._ensure_as_of_compatible()
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
+            other._ensure_as_of_compatible()
             return self.__or__(
                 self._manager_class.filter(
                     id__in=[other.identification["id"]],
@@ -804,6 +846,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             )
         if not isinstance(other, self.__class__):
             raise DatabaseBucketTypeMismatchError(self.__class__, type(other))
+        other._ensure_as_of_compatible()
         if self._manager_class != other._manager_class:
             raise DatabaseBucketManagerMismatchError(
                 self._manager_class, other._manager_class
@@ -941,10 +984,23 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             InvalidQueryAnnotationTypeError: If a query-annotation callback returns a non-QuerySet.
             QuerysetFilteringError: If Django raises `FieldError`, `TypeError`, or `ValueError` while applying ORM filters.
         """
-        search_date = cast(
-            datetime | date | None,
-            kwargs.pop("search_date", self._search_date),
+        self._ensure_as_of_compatible()
+        explicit_search_date = kwargs.pop("search_date", None)
+        search_date_input = cast(
+            SearchDateInput | None,
+            explicit_search_date
+            if explicit_search_date is not None
+            else self._search_date,
         )
+        search_date = resolve_search_date(search_date_input)
+        if self._search_date is not None and (
+            search_date is None
+            or not _represents_same_instant(
+                normalize_search_date(cast(SearchDateInput, self._search_date)),
+                search_date,
+            )
+        ):
+            raise HistoricalContextConflictError
         annotations, orm_kwargs, python_filters = self.__parse_filter_definitions(
             **kwargs
         )
@@ -1007,10 +1063,23 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             InvalidQueryAnnotationTypeError: If an annotation callable is applied and does not return a Django QuerySet.
             QuerysetFilteringError: If Django raises `FieldError`, `TypeError`, or `ValueError` while applying ORM excludes.
         """
-        search_date = cast(
-            datetime | date | None,
-            kwargs.pop("search_date", self._search_date),
+        self._ensure_as_of_compatible()
+        explicit_search_date = kwargs.pop("search_date", None)
+        search_date_input = cast(
+            SearchDateInput | None,
+            explicit_search_date
+            if explicit_search_date is not None
+            else self._search_date,
         )
+        search_date = resolve_search_date(search_date_input)
+        if self._search_date is not None and (
+            search_date is None
+            or not _represents_same_instant(
+                normalize_search_date(cast(SearchDateInput, self._search_date)),
+                search_date,
+            )
+        ):
+            raise HistoricalContextConflictError
         annotations, orm_kwargs, python_filters = self.__parse_filter_definitions(
             **kwargs
         )
@@ -1062,6 +1131,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             GeneralManagerType | None: First manager instance if available.
         """
+        self._ensure_as_of_compatible()
         self._track_effective_dependencies()
         rows = self._peek_run_scoped_rows()
         if rows is not None:
@@ -1104,6 +1174,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             GeneralManagerType | None: Last manager instance if available.
         """
+        self._ensure_as_of_compatible()
         self._track_effective_dependencies()
         rows = self._peek_run_scoped_rows()
         if rows is not None:
@@ -1130,6 +1201,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             int: Number of represented rows.
         """
+        self._ensure_as_of_compatible()
         self._track_effective_dependencies()
         if self._can_materialize_count_snapshot():
             rows = self._get_run_scoped_rows()
@@ -1150,6 +1222,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             DatabaseBucket[GeneralManagerType]: Bucket encapsulating `self._data.all()`.
         """
+        self._ensure_as_of_compatible()
         bucket = self.__class__(
             self._data.all(),
             self._manager_class,
@@ -1182,6 +1255,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             models.ObjectDoesNotExist: Propagated from the underlying queryset when no row matches.
             models.MultipleObjectsReturned: Propagated when multiple rows satisfy the lookup.
         """
+        self._ensure_as_of_compatible()
         self._track_effective_dependencies()
         rows = self._peek_run_scoped_rows()
         if rows is not None:
@@ -1223,6 +1297,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             GeneralManagerType | DatabaseBucket[GeneralManagerType]: Manager instance for single indices or bucket wrapping the sliced queryset.
         """
+        self._ensure_as_of_compatible()
         if isinstance(item, slice):
             return self.__class__(
                 self._data[item],
@@ -1255,6 +1330,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         active run-context snapshot first, then cache a queryset ``exists()``
         result for equivalent trusted querysets in the same calculation run.
         """
+        self._ensure_as_of_compatible()
         self._track_effective_dependencies()
         rows = self._peek_run_scoped_rows()
         if rows is not None:
@@ -1292,6 +1368,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             str: Human-readable description of the queryset and manager class.
         """
+        self._ensure_as_of_compatible()
         return f"{self._manager_class.__name__}Bucket {self._data} ({len(self._data)} items)"
 
     def __repr__(self) -> str:
@@ -1301,7 +1378,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             str: Detailed description including queryset, manager class, filters, and excludes.
         """
+        self._ensure_as_of_compatible()
         return f"DatabaseBucket ({self._data}, manager_class={self._manager_class.__name__}, filters={self.filters}, excludes={self.excludes})"
+
+    def group_by(self, *group_by_keys: str) -> GroupBucket[GeneralManagerType]:
+        """Group only when this bucket matches the active historical instant."""
+        self._ensure_as_of_compatible()
+        return super().group_by(*group_by_keys)
 
     def __contains__(self, item: GeneralManagerType | models.Model) -> bool:
         """
@@ -1320,6 +1403,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         from general_manager.manager.general_manager import GeneralManager
 
+        self._ensure_as_of_compatible()
         self._track_effective_dependencies()
         if isinstance(item, GeneralManager):
             pk = item.identification.get("id", None)
@@ -1354,6 +1438,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             InvalidQueryAnnotationTypeError: If a property query annotation callable returns a non-QuerySet value.
             QuerysetOrderingError: If the ORM rejects the constructed ordering (e.g., invalid field or incompatible ordering expression).
         """
+        self._ensure_as_of_compatible()
         if isinstance(key, str):
             key = (key,)
         properties = self._manager_class.Interface.get_graph_ql_properties()

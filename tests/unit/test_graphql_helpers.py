@@ -46,6 +46,8 @@ from general_manager.api.graphql_resolvers import (
     parse_input,
     resolve_instance_check_reasons,
     selection_includes_path,
+    create_list_resolver,
+    create_normal_resolver,
 )
 from tests.utils.simple_manager_interface import BaseTestInterface, SimpleBucket
 
@@ -168,6 +170,51 @@ def _selection_info(query: str) -> object:
 
 
 class GraphQLHelperTests(SimpleTestCase):
+    def test_normal_resolver_validates_parent_before_permission(self) -> None:
+        parent = mock.Mock()
+        parent._ensure_as_of_compatible.side_effect = RuntimeError("stale parent")
+        resolver = create_normal_resolver("name")
+
+        with (
+            mock.patch(
+                "general_manager.api.graphql_resolvers.check_read_permission"
+            ) as permission,
+            pytest.raises(RuntimeError, match="stale parent"),
+        ):
+            resolver(parent, _Info())
+
+        permission.assert_not_called()
+
+    def test_list_resolver_validates_parent_before_base_getter(self) -> None:
+        parent = mock.Mock()
+        parent._ensure_as_of_compatible.side_effect = RuntimeError("stale parent")
+        base_getter = mock.Mock()
+        resolver = create_list_resolver(base_getter, _DummyManager)
+
+        with pytest.raises(RuntimeError, match="stale parent"):
+            resolver(parent, _Info())
+
+        base_getter.assert_not_called()
+
+    def test_list_resolver_validates_base_bucket_before_permissions(self) -> None:
+        parent = mock.Mock()
+        bucket = mock.Mock()
+        bucket._manager_class = _DummyManager
+        bucket._ensure_as_of_compatible.side_effect = RuntimeError("stale bucket")
+        resolver = create_list_resolver(
+            lambda _parent, _inactive: bucket, _DummyManager
+        )
+
+        with (
+            mock.patch(
+                "general_manager.api.graphql_resolvers.apply_permission_filters"
+            ) as permissions,
+            pytest.raises(RuntimeError, match="stale bucket"),
+        ):
+            resolver(parent, _Info())
+
+        permissions.assert_not_called()
+
     def setUp(self) -> None:
         """
         Initialize GeneralmanagerConfig with the test dummy manager classes used by the test case.

@@ -1,6 +1,6 @@
 # type: ignore
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -23,6 +23,7 @@ from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.api.property import graph_ql_property
+from general_manager.as_of import HistoricalContextConflictError, as_of
 
 
 # Dummy interface class to satisfy GeneralManager requirements
@@ -273,6 +274,35 @@ class DatabaseBucketTestCase(TestCase):
         # __len__ and count()
         self.assertEqual(len(self.bucket), 3)
         self.assertEqual(self.bucket.count(), 3)
+
+    def test_live_bucket_created_before_as_of_rejects_before_evaluation(self):
+        snapshot = datetime(2024, 1, 1, tzinfo=UTC)
+
+        with as_of(snapshot), patch.object(self.bucket._data, "count") as count:
+            with self.assertRaises(HistoricalContextConflictError):
+                self.bucket.count()
+
+        count.assert_not_called()
+
+    def test_bucket_from_different_as_of_rejects_before_evaluation(self):
+        first = datetime(2024, 1, 1, tzinfo=UTC)
+        second = datetime(2024, 2, 1, tzinfo=UTC)
+        bucket = DatabaseBucket(User.objects.all(), UserManager, search_date=first)
+
+        with as_of(second), patch.object(bucket._data, "exists") as exists:
+            with self.assertRaises(HistoricalContextConflictError):
+                bool(bucket)
+
+        exists.assert_not_called()
+
+    def test_derived_filter_rejects_conflicting_reserved_search_date(self):
+        snapshot = datetime(2024, 1, 1, tzinfo=UTC)
+        conflicting = datetime(2024, 2, 1, tzinfo=UTC)
+        bucket = DatabaseBucket(User.objects.all(), UserManager, search_date=snapshot)
+
+        with as_of(snapshot):
+            with self.assertRaises(HistoricalContextConflictError):
+                bucket.filter(search_date=conflicting)
 
     def test_build_manager_dispatches_model_instances_and_primary_keys(self):
         with (

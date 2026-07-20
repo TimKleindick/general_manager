@@ -60,6 +60,13 @@ Resolver = Callable[..., object]
 logger = get_logger("api.graphql")
 
 
+def _ensure_as_of_compatible(value: object) -> None:
+    """Validate manager or bucket snapshot compatibility when supported."""
+    ensure = getattr(value, "_ensure_as_of_compatible", None)
+    if callable(ensure):
+        ensure()
+
+
 class PageInfoPayload(TypedDict):
     total_count: int
     page_size: int | None
@@ -583,6 +590,7 @@ def create_measurement_resolver(field_name: str) -> Resolver:
         info: GraphQLResolveInfo,
         target_unit: str | None = None,
     ) -> dict[str, object] | None:
+        _ensure_as_of_compatible(self)
         if not check_read_permission(self, info, field_name):
             return None
         result = getattr(self, field_name)
@@ -607,6 +615,7 @@ def create_normal_resolver(field_name: str) -> Resolver:
     """
 
     def resolver(self: GeneralManager, info: GraphQLResolveInfo) -> object:
+        _ensure_as_of_compatible(self)
         if not check_read_permission(self, info, field_name):
             return None
         return getattr(self, field_name)
@@ -683,12 +692,14 @@ def create_list_resolver(
         group_by: list[str] | None = None,
         include_inactive: bool = False,
     ) -> ListResolverPayload:
+        _ensure_as_of_compatible(self)
         base_queryset = base_getter(self, include_inactive)
         if base_queryset is None:
             if include_inactive:
                 base_queryset = fallback_manager_class.filter(include_inactive=True)
             else:
                 base_queryset = fallback_manager_class.all()
+        _ensure_as_of_compatible(base_queryset)
         manager_class = getattr(base_queryset, "_manager_class", None)
         if not (
             isinstance(manager_class, type)

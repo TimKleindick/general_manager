@@ -19,6 +19,7 @@ from general_manager.interface.capabilities.orm.mutations import (
 )
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+from general_manager.as_of import as_of
 from tests.utils.database import create_test_models, drop_test_models
 
 
@@ -402,6 +403,32 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(dict(historical_view)["notes"], "historical")
         owners = list(historical_view.owners_list)
         self.assertEqual(owners[0].pk, self.user1.pk)
+
+    def test_ambient_as_of_reads_existing_model_history(self) -> None:
+        customer_id = self.customer_a.identification["id"]
+        snapshot = timezone.now()
+        self.customer_a.update(
+            creator_id=self.user1.pk,
+            name="Renamed Acme",
+            ignore_permission=True,
+        )
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            self.assertEqual(self.CustomerManager(customer_id).name, "Acme Corp")
+            self.assertEqual(
+                self.CustomerManager.get(id=customer_id).name,
+                "Acme Corp",
+            )
+            self.assertEqual(
+                self.CustomerManager.filter(id=customer_id).first().name,
+                "Acme Corp",
+            )
 
     def test_filter_exclude_and_all(self) -> None:
         """

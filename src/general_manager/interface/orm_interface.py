@@ -6,8 +6,11 @@ from datetime import datetime
 from typing import ClassVar, Generic, Literal, Type, TypeVar, cast
 
 from django.db import models
-from django.utils import timezone
-
+from general_manager.as_of import (
+    SearchDateInput,
+    normalize_search_date,
+    resolve_search_date,
+)
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.configuration import CapabilityConfigEntry
@@ -63,7 +66,7 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
     def __init__(
         self,
         *args: object,
-        search_date: datetime | None = None,
+        search_date: SearchDateInput | None = None,
         **kwargs: object,
     ) -> None:
         """Initialize the ORM-backed interface for a primary key.
@@ -92,7 +95,7 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
         """
         super().__init__(*args, **kwargs)
         self.pk = self.identification["id"]
-        self._search_date = self.normalize_search_date(search_date)
+        self._search_date = resolve_search_date(search_date)
         self._instance = cast(HistoryModelT, self.get_data())
 
     @classmethod
@@ -100,7 +103,7 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
         cls,
         instance: HistoryModelT,
         *,
-        search_date: datetime | None = None,
+        search_date: SearchDateInput | None = None,
     ) -> "OrmInterfaceBase[HistoryModelT]":
         """
         Build an interface from an ORM-loaded row without public input validation.
@@ -124,12 +127,12 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
         identification = {"id": pk}
         interface.identification = identification
         interface.pk = pk
-        interface._search_date = cls.normalize_search_date(search_date)
+        interface._search_date = resolve_search_date(search_date)
         interface._instance = instance
         return interface
 
     @staticmethod
-    def normalize_search_date(search_date: datetime | None) -> datetime | None:
+    def normalize_search_date(search_date: SearchDateInput | None) -> datetime | None:
         """Return ``search_date`` as a timezone-aware datetime.
 
         Naive values are converted with Django's current timezone. Aware values
@@ -141,9 +144,9 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
         Returns:
             The timezone-aware datetime, existing aware datetime, or ``None``.
         """
-        if search_date is not None and timezone.is_naive(search_date):
-            search_date = timezone.make_aware(search_date)
-        return search_date
+        if search_date is None:
+            return None
+        return normalize_search_date(search_date)
 
     @staticmethod
     def _default_base_model_class() -> type[GeneralManagerBasisModel]:
