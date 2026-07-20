@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from general_manager.api import as_of, current_as_of_date
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.dependency_index import Dependency
@@ -392,6 +393,98 @@ def test_discard_prefix_removes_matching_tuple_keys_only() -> None:
         assert ctx.get(("orm_instance", "Human", 2, "default")) == "bob"
         assert ctx.get(("other", "Human", 1)) == "other"
         assert ctx.get("plain") == "value"
+
+
+def test_public_storage_helpers_isolate_sequential_as_of_namespaces() -> None:
+    calls = 0
+
+    def loader() -> str:
+        nonlocal calls
+        calls += 1
+        return f"loaded-{calls}"
+
+    with CalculationRunContext() as ctx:
+        with as_of("2022-01-01"):
+            ctx.set("direct", "date-a")
+            assert ctx.get_or_set("loaded", loader) == "loaded-1"
+            assert ctx.has("direct")
+            assert "direct" in ctx
+
+        with as_of("2022-01-02"):
+            assert ctx.get("direct") is None
+            assert not ctx.has("direct")
+            assert "direct" not in ctx
+            ctx.set("direct", "date-b")
+            assert ctx.get_or_set("loaded", loader) == "loaded-2"
+
+        with as_of("2022-01-01"):
+            assert ctx.get("direct") == "date-a"
+            assert ctx.get_or_set("loaded", loader) == "loaded-1"
+
+    assert calls == 2
+
+
+def test_historical_storage_applies_one_run_namespace_transform() -> None:
+    with CalculationRunContext() as ctx, as_of("2022-01-01"):
+        ctx.set(("cache", "key"), "value")
+        fingerprint = current_as_of_date().isoformat()
+
+        assert ctx._values == {
+            ("as_of", fingerprint, ("cache", "key")): "value",
+        }
+
+
+def test_prefix_deletion_only_discards_active_as_of_namespace() -> None:
+    prefix = ("orm_instance", "Human")
+
+    with CalculationRunContext() as ctx:
+        with as_of("2022-01-01"):
+            ctx.set((*prefix, 1), "date-a")
+        with as_of("2022-01-02"):
+            ctx.set((*prefix, 1), "date-b")
+        with as_of("2022-01-01"):
+            ctx.discard_prefix(prefix)
+            assert ctx.get((*prefix, 1)) is None
+        with as_of("2022-01-02"):
+            assert ctx.get((*prefix, 1)) == "date-b"
+
+
+def test_index_and_group_helpers_isolate_sequential_as_of_namespaces() -> None:
+    index_calls = 0
+    group_calls = 0
+
+    def index_loader() -> list[str]:
+        nonlocal index_calls
+        index_calls += 1
+        return [f"index-{index_calls}"]
+
+    def group_loader() -> list[str]:
+        nonlocal group_calls
+        group_calls += 1
+        return [f"group-{group_calls}"]
+
+    with CalculationRunContext() as ctx:
+        results = []
+        for search_date in ("2022-01-01", "2022-01-02", "2022-01-01"):
+            with as_of(search_date):
+                indexed = ctx.index(
+                    key="shared",
+                    loader=index_loader,
+                    index_by=lambda value: value,
+                )
+                grouped = ctx.group_by(
+                    key="shared",
+                    loader=group_loader,
+                    group_by=lambda value: value,
+                )
+                results.append((indexed, grouped))
+
+    assert index_calls == 2
+    assert group_calls == 2
+    assert results[0][0] is results[2][0]
+    assert results[0][1] is results[2][1]
+    assert results[0][0] != results[1][0]
+    assert results[0][1] != results[1][1]
 
 
 def test_orm_bucket_result_helpers_store_and_clear_entries() -> None:

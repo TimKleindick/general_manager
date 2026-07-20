@@ -2,12 +2,14 @@
 
 from dataclasses import replace
 from datetime import timedelta
+from typing import ClassVar
 from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
 from django.utils import timezone
 
+from general_manager.api import as_of, current_as_of_date
 from general_manager.api.graphql import GraphQL
 from general_manager.api.graphql_warmup import (
     enqueue_graphql_recipe_warmup,
@@ -31,11 +33,14 @@ class WarmUpObject:
     """Timeout-backed warm-up manager used by executor tests."""
 
     calls = 0
+    seen_search_dates: ClassVar[list[object]] = []
 
     def __init__(self, id: int) -> None:
         """Store identification for recipe reconstruction."""
         self.identification = {"id": id}
         self.id = id
+        self._effective_search_date = current_as_of_date()
+        type(self).seen_search_dates.append(current_as_of_date())
 
     def __str__(self) -> str:
         """Return a deterministic representation for cache-key generation."""
@@ -50,6 +55,7 @@ class WarmUpObject:
     def score(self) -> int:
         """Return a computed score and count evaluations."""
         type(self).calls += 1
+        type(self).seen_search_dates.append(current_as_of_date())
         return self.id * 10
 
     class Interface:
@@ -278,6 +284,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
         """Reset cache state and evaluation counters before each test."""
         cache.clear()
         WarmUpObject.calls = 0
+        WarmUpObject.seen_search_dates = []
         DependencyWarmUpObject.calls = 0
         AlternateWarmUpObject.calls = 0
 
@@ -316,6 +323,46 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
         self.assertTrue(warmed)
         self.assertEqual(WarmUpObject.calls, 1)
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
+    def test_historical_recipe_reenters_snapshot_and_preserves_cache_key(self) -> None:
+        """Background warm-up reconstructs and refreshes inside its snapshot."""
+        with as_of("2022-01-01"):
+            warm_up_graphql_properties([WarmUpObject])
+        cache_key = graphql_warmup_recipe_keys()[0]
+        recipe = get_graphql_warmup_recipe(cache_key)
+        assert recipe is not None
+        snapshot = recipe.search_date
+        WarmUpObject.calls = 0
+        WarmUpObject.seen_search_dates = []
+
+        warmed = warm_up_graphql_recipe(cache_key)
+
+        self.assertTrue(warmed)
+        self.assertEqual(WarmUpObject.calls, 1)
+        self.assertIsNotNone(snapshot)
+        self.assertTrue(WarmUpObject.seen_search_dates)
+        self.assertTrue(
+            all(value == snapshot for value in WarmUpObject.seen_search_dates)
+        )
+        refreshed = get_graphql_warmup_recipe(cache_key)
+        assert refreshed is not None
+        self.assertEqual(refreshed.cache_key, cache_key)
+        self.assertEqual(refreshed.search_date, snapshot)
+        self.assertIsNone(current_as_of_date())
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
+    def test_historical_recipe_restores_context_after_executor_error(self) -> None:
+        """A failed historical reconstruction cannot leak its snapshot."""
+        with as_of("2022-01-01"):
+            warm_up_graphql_properties([WarmUpObject])
+        cache_key = graphql_warmup_recipe_keys()[0]
+        recipe = get_graphql_warmup_recipe(cache_key)
+        assert recipe is not None
+        register_graphql_warmup_recipe(replace(recipe, manager_path="missing.Manager"))
+
+        self.assertFalse(warm_up_graphql_recipe(cache_key))
+        self.assertIsNone(current_as_of_date())
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_refresh_due_timeout_recipes_updates_refresh_schedule(self) -> None:

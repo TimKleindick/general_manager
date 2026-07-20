@@ -104,6 +104,36 @@ class GraphQLWarmUpRegistryTests(SimpleTestCase):
         self.assertEqual(get_graphql_warmup_recipe("abc"), recipe)
         self.assertEqual(graphql_warmup_recipe_keys(), ("abc",))
 
+    def test_round_trips_current_and_historical_recipe_search_dates(self) -> None:
+        """Recipe persistence retains the snapshot needed by a future worker."""
+        snapshot = datetime(2022, 1, 1, tzinfo=UTC)
+        current = GraphQLWarmUpRecipe(
+            cache_key="current",
+            manager_path="tests.unit.test_graphql_warmup_registry.Manager",
+            property_name="score",
+            identification={"id": 1},
+            cache="dependency",
+            timeout=None,
+            refresh_at=None,
+            search_date=None,
+        )
+        historical = GraphQLWarmUpRecipe(
+            cache_key="historical",
+            manager_path="tests.unit.test_graphql_warmup_registry.Manager",
+            property_name="score",
+            identification={"id": 1},
+            cache="dependency",
+            timeout=None,
+            refresh_at=None,
+            search_date=snapshot,
+        )
+
+        register_graphql_warmup_recipe(current)
+        register_graphql_warmup_recipe(historical)
+
+        self.assertEqual(get_graphql_warmup_recipe("current"), current)
+        self.assertEqual(get_graphql_warmup_recipe("historical"), historical)
+
     def test_due_timeout_recipes_filter_by_refresh_at(self) -> None:
         """Due timeout lookup returns only recipes whose refresh time has arrived."""
         now = datetime(2026, 6, 19, tzinfo=UTC)
@@ -187,7 +217,7 @@ class GraphQLWarmUpRegistryTests(SimpleTestCase):
             cache="dependency",
             timeout=None,
             refresh_at=None,
-            version=0,
+            version=1,
         )
 
         register_graphql_warmup_recipe(recipe)

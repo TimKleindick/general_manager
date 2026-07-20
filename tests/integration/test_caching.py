@@ -1,4 +1,5 @@
 import copy
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
 from django.utils import timezone
@@ -10,7 +11,7 @@ from general_manager.cache.run_context import CalculationRunContext
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.utils.make_cache_key import make_cache_key
 from general_manager.manager import GeneralManager, Input
-from general_manager.api import bulk_data_change_notifications
+from general_manager.api import as_of, bulk_data_change_notifications
 from django.db.models.fields import CharField, IntegerField, DateField, DateTimeField
 from typing import ClassVar
 from general_manager.measurement import MeasurementField, Measurement
@@ -69,6 +70,8 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         class TestCommercials(GeneralManager):
             project: TestProjectForCommercials
+            historical_dependency_calls: ClassVar[int] = 0
+            historical_timeout_calls: ClassVar[int] = 0
 
             class Interface(CalculationInterface):
                 project = Input(
@@ -101,6 +104,18 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 Return the associated project name for deterministic calculation sorting.
                 """
+                return self.project.name
+
+            @graph_ql_property(cache="dependency")
+            def historical_dependency_project_name(self) -> str:
+                """Return the project name through the dependency cache."""
+                type(self).historical_dependency_calls += 1
+                return self.project.name
+
+            @graph_ql_property(cache="timeout", timeout=300)
+            def historical_timeout_project_name(self) -> str:
+                """Return the project name through the timeout cache."""
+                type(self).historical_timeout_calls += 1
                 return self.project.name
 
             @graph_ql_property(cache="dependency")
@@ -536,6 +551,78 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         enqueue.assert_called_once()
         self.assertIn(cache_key, enqueue.call_args.args[0])
+
+    def test_calculation_caches_isolate_current_and_historical_snapshots(self):
+        """Timeout and dependency caches never cross snapshot namespaces."""
+        self.project1 = self.project1.update(
+            name="Middle Project",
+            ignore_permission=True,
+        )
+        self.project1 = self.project1.update(
+            name="Current Project",
+            ignore_permission=True,
+        )
+        history = self.project1._interface._instance.history
+        initial_snapshot = (
+            history.filter(name="Test Project")
+            .latest(
+                "history_date",
+                "history_id",
+            )
+            .history_date
+        )
+        middle_snapshot = (
+            history.filter(name="Middle Project")
+            .latest(
+                "history_date",
+                "history_id",
+            )
+            .history_date
+        )
+        self.TestCommercials.historical_dependency_calls = 0
+        self.TestCommercials.historical_timeout_calls = 0
+
+        def read_names(search_date=None):
+            execution_context = (
+                nullcontext() if search_date is None else as_of(search_date)
+            )
+            with execution_context:
+                project = self.TestProject(self.project1.identification["id"])
+                commercials = self.TestCommercials(project=project)
+                dependency_name = commercials.historical_dependency_project_name
+                timeout_name = commercials.historical_timeout_project_name
+                self.assertEqual(
+                    commercials.historical_dependency_project_name,
+                    dependency_name,
+                )
+                self.assertEqual(
+                    commercials.historical_timeout_project_name,
+                    timeout_name,
+                )
+                return dependency_name, timeout_name
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=middle_snapshot + timedelta(seconds=10),
+        ):
+            self.assertEqual(
+                read_names(),
+                ("Current Project", "Current Project"),
+            )
+            self.assertEqual(
+                read_names(initial_snapshot),
+                ("Test Project", "Test Project"),
+            )
+            self.assertEqual(
+                read_names(middle_snapshot),
+                ("Middle Project", "Middle Project"),
+            )
+            self.assertEqual(
+                read_names(initial_snapshot),
+                ("Test Project", "Test Project"),
+            )
+        self.assertEqual(self.TestCommercials.historical_dependency_calls, 3)
+        self.assertEqual(self.TestCommercials.historical_timeout_calls, 3)
 
     def test_budget_left(self):
         """

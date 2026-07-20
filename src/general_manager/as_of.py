@@ -83,6 +83,12 @@ def current_as_of_date() -> datetime | None:
     return _AS_OF_DATE.get()
 
 
+def as_of_cache_fingerprint() -> str | None:
+    """Return the active historical datetime's cache namespace value."""
+    active = current_as_of_date()
+    return None if active is None else active.isoformat()
+
+
 def reject_historical_mutation() -> None:
     """Reject mutations while an operation-scoped historical date is active."""
     active = current_as_of_date()

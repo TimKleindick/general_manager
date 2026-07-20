@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
+from general_manager.api import as_of, current_as_of_date
+from general_manager.as_of import normalize_search_date
 from general_manager.utils.json_encoder import CustomJSONEncoder
 from general_manager.utils import make_cache_key as make_cache_key_module
 from general_manager.utils.make_cache_key import make_cache_key
@@ -14,6 +16,115 @@ from general_manager.manager.meta import GeneralManagerMeta
 
 
 class TestMakeCacheKey(SimpleTestCase):
+    @staticmethod
+    def _historical_manager_class():
+        from general_manager.manager.general_manager import GeneralManager
+
+        class CacheKeyInterface:
+            _as_of_behavior = "historical"
+
+            def __init__(self, manager_id, search_date=None):
+                self.identification = {"id": manager_id}
+                self._search_date = (
+                    None if search_date is None else normalize_search_date(search_date)
+                )
+
+        class CacheKeyManager(GeneralManager):
+            pass
+
+        CacheKeyManager.Interface = CacheKeyInterface
+        return CacheKeyManager
+
+    def test_make_cache_key_namespaces_ambient_historical_snapshots(self):
+        def sample_function(value):
+            return value
+
+        current_key = make_cache_key(sample_function, (1,), {})
+        with as_of("2022-01-01"):
+            date_a_key = make_cache_key(sample_function, (1,), {})
+        with as_of(datetime(2022, 1, 1)):
+            equivalent_date_a_key = make_cache_key(sample_function, (1,), {})
+        with as_of("2022-01-02"):
+            date_b_key = make_cache_key(sample_function, (1,), {})
+
+        self.assertNotEqual(current_key, date_a_key)
+        self.assertEqual(date_a_key, equivalent_date_a_key)
+        self.assertNotEqual(date_a_key, date_b_key)
+
+    def test_manager_fast_path_namespaces_ambient_historical_snapshots(self):
+        CacheKeyManager = self._historical_manager_class()
+
+        def sample_function(manager):
+            return manager
+
+        current_key = make_cache_key(sample_function, (CacheKeyManager(1),), {})
+        with as_of("2022-01-01"):
+            date_a_manager = CacheKeyManager(1)
+            date_a_key = make_cache_key(sample_function, (date_a_manager,), {})
+            date_a_payload = {
+                "module": sample_function.__module__,
+                "qualname": sample_function.__qualname__,
+                "args": {"manager": date_a_manager},
+                "as_of": current_as_of_date().isoformat(),
+            }
+            date_a_generic_key = hashlib.sha256(
+                json.dumps(
+                    date_a_payload,
+                    sort_keys=True,
+                    cls=CustomJSONEncoder,
+                ).encode(),
+                usedforsecurity=False,
+            ).hexdigest()
+        with as_of(datetime(2022, 1, 1)):
+            equivalent_date_a_key = make_cache_key(
+                sample_function,
+                (CacheKeyManager(1),),
+                {},
+            )
+        with as_of("2022-01-02"):
+            date_b_key = make_cache_key(
+                sample_function,
+                (CacheKeyManager(1),),
+                {},
+            )
+
+        self.assertNotEqual(current_key, date_a_key)
+        self.assertEqual(date_a_key, date_a_generic_key)
+        self.assertEqual(date_a_key, equivalent_date_a_key)
+        self.assertNotEqual(date_a_key, date_b_key)
+
+    def test_explicit_historical_manager_outside_context_changes_cache_identity(self):
+        CacheKeyManager = self._historical_manager_class()
+
+        def sample_function(manager):
+            return manager
+
+        current_manager = CacheKeyManager(1)
+        historical_manager = CacheKeyManager(1, search_date="2022-01-01")
+
+        current_key = make_cache_key(sample_function, (current_manager,), {})
+        historical_key = make_cache_key(
+            sample_function,
+            (historical_manager,),
+            {},
+        )
+        payload = {
+            "module": sample_function.__module__,
+            "qualname": sample_function.__qualname__,
+            "args": {"manager": historical_manager},
+        }
+        generic_raw = json.dumps(
+            payload,
+            sort_keys=True,
+            cls=CustomJSONEncoder,
+        ).encode()
+
+        self.assertNotEqual(current_key, historical_key)
+        self.assertEqual(
+            historical_key,
+            hashlib.sha256(generic_raw, usedforsecurity=False).hexdigest(),
+        )
+
     def test_make_cache_key(self):
         def sample_function(x, y):
             """

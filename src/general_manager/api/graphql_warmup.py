@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Protocol, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
 from django.core.cache import cache as django_cache
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
+from general_manager.as_of import as_of
 from general_manager.api.property import GraphQLProperty
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.conf import get_setting
@@ -281,23 +283,13 @@ def warm_up_graphql_recipe(cache_key: str) -> bool:
         return False
     warmed = False
     try:
-        manager_class = cast(_GraphQLWarmUpFactory, import_string(recipe.manager_path))
-        instance = manager_class(**recipe.identification)
-        interface_cls = getattr(manager_class, "Interface", None)
-        raw_getter = getattr(interface_cls, "get_graph_ql_properties", None)
-        if callable(raw_getter):
-            get_properties = cast(Callable[[], Mapping[str, object]], raw_getter)
-            prop = get_properties().get(recipe.property_name)
-            if isinstance(prop, GraphQLProperty):
-                if recipe.cache == "timeout":
-                    warmed = _refresh_timeout_recipe(instance, prop, recipe)
-                else:
-                    with CalculationRunContext():
-                        getattr(instance, recipe.property_name)
-                    register_graphql_warmup_recipe(
-                        _recipe_for(instance, prop, recipe.property_name)
-                    )
-                    warmed = True
+        execution_context = (
+            nullcontext()
+            if recipe.search_date is None
+            else as_of(search_date=recipe.search_date)
+        )
+        with execution_context:
+            warmed = _execute_graphql_warmup_recipe(recipe)
     except Exception:
         logger.exception(
             "graphql warm-up recipe failed",
@@ -306,6 +298,26 @@ def warm_up_graphql_recipe(cache_key: str) -> bool:
     finally:
         release_graphql_warmup_recipe_lock(lock)
     return warmed
+
+
+def _execute_graphql_warmup_recipe(recipe: GraphQLWarmUpRecipe) -> bool:
+    """Reconstruct and evaluate one recipe inside its execution context."""
+    manager_class = cast(_GraphQLWarmUpFactory, import_string(recipe.manager_path))
+    instance = manager_class(**recipe.identification)
+    interface_cls = getattr(manager_class, "Interface", None)
+    raw_getter = getattr(interface_cls, "get_graph_ql_properties", None)
+    if not callable(raw_getter):
+        return False
+    get_properties = cast(Callable[[], Mapping[str, object]], raw_getter)
+    prop = get_properties().get(recipe.property_name)
+    if not isinstance(prop, GraphQLProperty):
+        return False
+    if recipe.cache == "timeout":
+        return _refresh_timeout_recipe(instance, prop, recipe)
+    with CalculationRunContext():
+        getattr(instance, recipe.property_name)
+    register_graphql_warmup_recipe(_recipe_for(instance, prop, recipe.property_name))
+    return True
 
 
 def refresh_due_graphql_warmup_recipes(limit: int | None = None) -> int:
@@ -458,6 +470,7 @@ def _recipe_for(
         refresh_at = timezone.now() + timedelta(
             seconds=timeout * _timeout_refresh_ratio()
         )
+    effective_search_date = getattr(instance, "_effective_search_date", None)
     return GraphQLWarmUpRecipe(
         cache_key=cache_key,
         manager_path=_manager_path(cast(_ClassImportSurface, instance.__class__)) or "",
@@ -466,6 +479,11 @@ def _recipe_for(
         cache="timeout" if prop.cache == "timeout" else "dependency",
         timeout=timeout,
         refresh_at=refresh_at,
+        search_date=(
+            effective_search_date
+            if isinstance(effective_search_date, datetime)
+            else None
+        ),
     )
 
 

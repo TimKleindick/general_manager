@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Optional, TypeVar, cast
 
+from general_manager.as_of import as_of_cache_fingerprint
 from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
@@ -63,13 +64,15 @@ class CalculationRunContext:
 
     Entering the context makes it available through
     `current_calculation_run_context()`. Clean exits flush buffered
-    dependency-cache publications; exceptional exits discard them. In all cases
-    the active context token is reset and run-local values, dependency hits, and
-    pending publications are cleared before exit returns. Active context lookup
-    uses Python `contextvars`, so visibility follows normal context-variable
-    propagation for async tasks and does not automatically cross unrelated
-    threads. Nested `CalculationRunContext` instances replace the active context
-    for their nested block and restore the previous context on exit.
+    dependency-cache publications; exceptional exits discard them. Run-local
+    values are namespaced by an active historical snapshot, allowing one run to
+    execute sequential snapshots safely. In all cases the active context token
+    is reset and run-local values, dependency hits, and pending publications are
+    cleared before exit returns. Active context lookup uses Python `contextvars`,
+    so visibility follows normal context-variable propagation for async tasks and
+    does not automatically cross unrelated threads. Nested
+    `CalculationRunContext` instances replace the active context for their nested
+    block and restore the previous context on exit.
     """
 
     def __init__(
@@ -96,6 +99,14 @@ class CalculationRunContext:
         ] = {}
         self._dependency_cache_publish_batch_size = dependency_cache_publish_batch_size
         self._tokens: list[Token[CalculationRunContext | None]] = []
+
+    @staticmethod
+    def _scoped_key(key: Hashable) -> Hashable:
+        """Namespace a run value by the active historical snapshot."""
+        fingerprint = as_of_cache_fingerprint()
+        if fingerprint is None:
+            return key
+        return ("as_of", fingerprint, key)
 
     def __enter__(self) -> "CalculationRunContext":
         """Activate this context and return it for the `with` block."""
@@ -156,20 +167,21 @@ class CalculationRunContext:
         synchronous callable; coroutine objects are stored as ordinary return
         values if a loader returns one.
         """
+        scoped_key = self._scoped_key(key)
         try:
-            return cast(T, self._values[key])
+            return cast(T, self._values[scoped_key])
         except KeyError:
             value = loader()
-            self._values[key] = value
+            self._values[scoped_key] = value
             return value
 
     def get(self, key: Hashable, default: object = None) -> object:
         """Return the stored value for key, or default when key is absent."""
-        return self._values.get(key, default)
+        return self._values.get(self._scoped_key(key), default)
 
     def set(self, key: Hashable, value: object) -> None:
         """Store a value for the active run."""
-        self._values[key] = value
+        self._values[self._scoped_key(key)] = value
 
     def set_dependency_cache_hits(
         self,
@@ -295,8 +307,19 @@ class CalculationRunContext:
 
     def discard_prefix(self, prefix: tuple[Hashable, ...]) -> None:
         """Discard cached tuple keys whose leading items equal `prefix`."""
+        fingerprint = as_of_cache_fingerprint()
         for key in list(self._values):
-            if isinstance(key, tuple) and key[: len(prefix)] == prefix:
+            if fingerprint is None:
+                matches = isinstance(key, tuple) and key[: len(prefix)] == prefix
+            else:
+                matches = (
+                    isinstance(key, tuple)
+                    and key[:2] == ("as_of", fingerprint)
+                    and len(key) == 3
+                    and isinstance(key[2], tuple)
+                    and key[2][: len(prefix)] == prefix
+                )
+            if matches:
                 del self._values[key]
 
     def get_orm_bucket_result(self, key: Hashable) -> object:
@@ -575,7 +598,7 @@ class CalculationRunContext:
 
     def has(self, key: Hashable) -> bool:
         """Return whether key has a value in the active run."""
-        return key in self._values
+        return self._scoped_key(key) in self._values
 
     def __contains__(self, key: Hashable) -> bool:
         """Return whether key has a value in the active run."""
