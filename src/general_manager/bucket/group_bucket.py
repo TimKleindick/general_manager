@@ -223,6 +223,9 @@ class GroupBucket(Generic[GeneralManagerType]):
             ValueError: If a group-by key is not a valid manager attribute.
         """
         self._manager_class = manager_class
+        self._basis_data: Bucket[GeneralManagerType] = data
+        self._effective_search_date = getattr(data, "_effective_search_date", None)
+        self._ensure_as_of_compatible()
         self.filters: GroupLookup = {}
         self.excludes: GroupLookup = {}
         self.__check_group_by_arguments(group_by_keys)
@@ -230,7 +233,12 @@ class GroupBucket(Generic[GeneralManagerType]):
         self._data: list[GroupManager[GeneralManagerType]] = (
             self.__build_grouped_manager(data)
         )
-        self._basis_data: Bucket[GeneralManagerType] = data
+
+    def _ensure_as_of_compatible(self) -> None:
+        """Delegate historical compatibility checks to the originating bucket."""
+        ensure = getattr(self._basis_data, "_ensure_as_of_compatible", None)
+        if callable(ensure):
+            ensure()
 
     def __eq__(self, other: object) -> bool:
         """
@@ -244,8 +252,10 @@ class GroupBucket(Generic[GeneralManagerType]):
                 the same manager class and grouping-key tuple. Group order is
                 not part of equality.
         """
+        self._ensure_as_of_compatible()
         if not isinstance(other, self.__class__):
             return False
+        other._ensure_as_of_compatible()
         return (
             set(self._data) == set(other._data)
             and self._manager_class == other._manager_class
@@ -322,8 +332,10 @@ class GroupBucket(Generic[GeneralManagerType]):
             GroupBucketManagerMismatchError: If `other` tracks a different manager class.
             GroupBucketKeysMismatchError: If `other` uses different grouping keys.
         """
+        self._ensure_as_of_compatible()
         if not isinstance(other, self.__class__):
             raise GroupBucketTypeMismatchError(self.__class__, type(other))
+        other._ensure_as_of_compatible()
         if self._manager_class != other._manager_class:
             raise GroupBucketManagerMismatchError(
                 self._manager_class, other._manager_class
@@ -348,6 +360,7 @@ class GroupBucket(Generic[GeneralManagerType]):
                 basis_data))``, allowing unpickling to rebuild groups from the
                 stored basis bucket.
         """
+        self._ensure_as_of_compatible()
         return (
             self.__class__,
             (self._manager_class, self._group_by_keys, self._basis_data),
@@ -360,6 +373,7 @@ class GroupBucket(Generic[GeneralManagerType]):
         Yields:
             GroupManager[GeneralManagerType]: Individual group manager instances.
         """
+        self._ensure_as_of_compatible()
         yield from self._data
 
     def filter(self, **kwargs: object) -> GroupBucket[GeneralManagerType]:
@@ -372,6 +386,7 @@ class GroupBucket(Generic[GeneralManagerType]):
         Returns:
             GroupBucket[GeneralManagerType]: Grouped bucket containing only matching records.
         """
+        self._ensure_as_of_compatible()
         new_basis_data = self._basis_data.filter(**kwargs)
         return GroupBucket(
             self._manager_class,
@@ -389,6 +404,7 @@ class GroupBucket(Generic[GeneralManagerType]):
         Returns:
             GroupBucket[GeneralManagerType]: Grouped bucket built from the filtered base data.
         """
+        self._ensure_as_of_compatible()
         new_basis_data = self._basis_data.exclude(**kwargs)
         return GroupBucket(
             self._manager_class,
@@ -436,6 +452,7 @@ class GroupBucket(Generic[GeneralManagerType]):
         Returns:
             GroupBucket[GeneralManagerType]: This instance.
         """
+        self._ensure_as_of_compatible()
         return self
 
     def get(self, **kwargs: object) -> GroupManager[GeneralManagerType]:
@@ -472,6 +489,7 @@ class GroupBucket(Generic[GeneralManagerType]):
             EmptyGroupBucketSliceError: If the slice selects no groups.
             InvalidGroupBucketIndexError: If `item` is not an int or slice.
         """
+        self._ensure_as_of_compatible()
         if isinstance(item, int):
             return self._data[item]
         elif isinstance(item, slice):
@@ -523,6 +541,7 @@ class GroupBucket(Generic[GeneralManagerType]):
         Returns:
             GroupBucket[GeneralManagerType]: Sorted grouping bucket.
         """
+        self._ensure_as_of_compatible()
         if isinstance(key, str):
             key = (key,)
         if reverse:
@@ -552,6 +571,7 @@ class GroupBucket(Generic[GeneralManagerType]):
         Returns:
             GroupBucket[GeneralManagerType]: New bucket grouped by the combined key set.
         """
+        self._ensure_as_of_compatible()
         return GroupBucket(
             self._manager_class,
             tuple([*self._group_by_keys, *group_by_keys]),
@@ -565,6 +585,7 @@ class GroupBucket(Generic[GeneralManagerType]):
         Returns:
             GroupBucket[GeneralManagerType]: Empty grouping bucket with identical manager class and grouping keys.
         """
+        self._ensure_as_of_compatible()
         return GroupBucket(
             self._manager_class, self._group_by_keys, self._basis_data.none()
         )

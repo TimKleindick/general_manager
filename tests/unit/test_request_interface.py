@@ -7,6 +7,7 @@ from typing import Any, ClassVar
 from django.test import SimpleTestCase
 
 from general_manager.bucket.request_bucket import RequestBucket
+from general_manager.as_of import HistoricalReadNotSupportedError, as_of
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.bundles import REQUEST_CAPABILITIES
 from general_manager.interface.capabilities.request import RequestQueryCapability
@@ -194,6 +195,28 @@ def _trusted_pickle_loads(data: bytes) -> Any:
 
 
 class TestRequestInterface(SimpleTestCase):
+    def test_request_query_capability_direct_paths_fail_closed_in_as_of(self) -> None:
+        capability = RemoteProject.Interface.require_capability("query")
+        self.assertIsInstance(capability, RequestQueryCapability)
+        bucket = RemoteProject.all()
+        plan = bucket.request_plan
+        self.assertIsNotNone(plan)
+        RemoteProject.Interface.calls.clear()
+
+        with as_of("2022-01-01"):
+            operations = (
+                lambda: capability.validate_lookups(RemoteProject.Interface),
+                lambda: capability.build_bucket(RemoteProject.Interface),
+                lambda: capability.execute_plan(RemoteProject.Interface, plan),
+                lambda: list(bucket),
+            )
+            for operation in operations:
+                with self.subTest(operation=operation):
+                    with self.assertRaises(HistoricalReadNotSupportedError):
+                        operation()
+
+        self.assertEqual(RemoteProject.Interface.calls, [])
+
     def test_apply_request_lookup_in_rejects_string_collections(self) -> None:
         self.assertFalse(apply_request_lookup("A", "in", "AB"))
         self.assertFalse(apply_request_lookup(65, "in", b"ABC"))

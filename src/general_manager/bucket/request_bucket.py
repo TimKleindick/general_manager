@@ -6,6 +6,7 @@ from collections.abc import Generator, Hashable, Mapping
 from typing import TYPE_CHECKING, Protocol, cast
 
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
+from general_manager.as_of import ensure_as_of_read_supported
 from general_manager.bucket.indexing import freeze_bucket_index_value
 from general_manager.interface.requests import (
     RequestLocalPredicate,
@@ -462,6 +463,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
         return self._operation_name
 
     def _ensure_items(self) -> tuple[GeneralManagerType, ...]:
+        ensure_as_of_read_supported(self._interface_cls)
         if self._data:
             self._materialized = True
             return self._data

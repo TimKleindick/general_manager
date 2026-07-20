@@ -231,11 +231,12 @@ class RequestReadCapability(BaseCapability):
             NotImplementedError: If the interface does not declare a `detail` query operation.
             RequestSingleResponseRequiredError: If the detail response does not contain exactly one item.
         """
+        interface_cls = type(interface_instance)
+        ensure_as_of_read_supported(interface_cls)
         cached_payload = getattr(interface_instance, "_request_payload_cache", None)
         if cached_payload is not None:
             return cast(RequestPayload, cached_payload)
 
-        interface_cls = type(interface_instance)
         try:
             operation = interface_cls.get_query_operation("detail")
         except UnknownRequestOperationError as error:
@@ -543,6 +544,7 @@ class RequestQueryCapability(BaseCapability):
         filters, unsupported excludes, invalid values, unsupported locations,
         missing local fallback, or fragment conflicts.
         """
+        ensure_as_of_read_supported(interface_cls)
         self._build_request_plan(
             interface_cls,
             operation_name=operation_name,
@@ -580,6 +582,7 @@ class RequestQueryCapability(BaseCapability):
         Request execution is deferred until the returned `RequestBucket` is
         materialized.
         """
+        ensure_as_of_read_supported(interface_cls)
         filter_map = self._copy_lookup_map(filters)
         exclude_map = self._copy_lookup_map(excludes)
         request_plan = self._build_request_plan(
@@ -628,6 +631,7 @@ class RequestQueryCapability(BaseCapability):
         param keys, path param keys, header keys, body keys, and local predicate
         lookup keys.
         """
+        ensure_as_of_read_supported(interface_cls)
         payload_snapshot = {
             "service": interface_cls._parent_class.__name__,
             "operation": request_plan.operation_name,

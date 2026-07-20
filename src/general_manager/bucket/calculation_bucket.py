@@ -278,6 +278,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             tuple[object, ...]: Reconstruction data representing the class, arguments, and state.
         """
+        self._ensure_as_of_compatible()
         return (
             self.__class__,
             (
@@ -464,6 +465,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             str: Debug string listing filters, excludes, sort key, and ordering.
         """
+        self._ensure_as_of_compatible()
         return f"{self.__class__.__name__}({self._manager_class.__name__}, {self.filter_definitions}, {self.exclude_definitions}, {self.sort_key}, {self.reverse})"
 
     @staticmethod

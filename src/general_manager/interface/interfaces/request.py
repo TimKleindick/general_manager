@@ -6,7 +6,10 @@ from collections.abc import Mapping
 from typing import ClassVar, Protocol, TYPE_CHECKING, cast
 
 from general_manager.bucket.base_bucket import Bucket
-from general_manager.as_of import ensure_as_of_read_supported
+from general_manager.as_of import (
+    ensure_as_of_read_supported,
+    reject_historical_mutation,
+)
 from general_manager.manager.input import Input
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.bundles.request import (
@@ -386,6 +389,11 @@ class RequestInterface(InterfaceBase):
             UnknownRequestOperationError: If a non-mutation plan targets an
                 undeclared query operation.
         """
+
+        if plan.action in {"create", "update", "delete"}:
+            reject_historical_mutation()
+        else:
+            ensure_as_of_read_supported(cls)
 
         transport = cls.transport
         if transport is None:

@@ -79,7 +79,7 @@ class TestCalculationBucket(TestCase):
     ):
         snapshot = datetime(2022, 1, 1, tzinfo=UTC)
 
-        with as_of(snapshot):
+        with as_of(datetime.fromisoformat("2022-01-01T01:00:00+01:00")):
             bucket = CalculationBucket(DummyGeneralManager)
         derived = bucket.filter(dummy=1).exclude(dummy=2).sort("dummy").all()
 
@@ -107,6 +107,75 @@ class TestCalculationBucket(TestCase):
                 lambda: bucket.get_possible_values(
                     "dummy", Input(int, possible_values=[1]), {}
                 ),
+                lambda: repr(bucket),
+                bucket.__reduce__,
+            )
+            for operation in operations:
+                with self.subTest(operation=operation):
+                    with self.assertRaises(HistoricalContextConflictError):
+                        operation()
+
+    def test_group_bucket_preserves_calculation_snapshot_at_all_boundaries(
+        self, _mock_parse
+    ):
+        _mock_parse.return_value = {}
+
+        class GroupInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "value": Input(int, possible_values=[1, 2]),
+            }
+
+        class GroupManager:
+            Interface = GroupInterface
+
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+                self.identification = dict(kwargs)
+
+        GroupInterface._parent_class = GroupManager
+        snapshot = datetime(2022, 1, 1, tzinfo=UTC)
+        live_group = CalculationBucket(GroupManager).group_by("value")
+
+        with as_of(snapshot):
+            with self.assertRaises(HistoricalContextConflictError):
+                list(live_group)
+
+        with as_of(snapshot):
+            group = CalculationBucket(GroupManager).group_by("value")
+        self.assertEqual(group._effective_search_date, snapshot)
+
+        derived = group.filter(value=1)
+        self.assertEqual(derived._effective_search_date, snapshot)
+        with as_of(datetime.fromisoformat("2022-01-01T01:00:00+01:00")):
+            self.assertEqual(len(list(group)), 2)
+            self.assertEqual(group.count(), 2)
+            self.assertIs(group.all(), group)
+            self.assertIsNotNone(group.first())
+            self.assertIsNotNone(group.last())
+            self.assertIsNotNone(group[0])
+            self.assertEqual(len(group.sort("value")), 2)
+            self.assertEqual(len(group.group_by("value")), 2)
+            self.assertIsInstance(group.__reduce__(), tuple)
+
+        with as_of("2022-01-02"):
+            operations = (
+                lambda: list(group),
+                group.all,
+                group.first,
+                group.last,
+                group.count,
+                lambda: group[0],
+                lambda: len(group),
+                lambda: group == group,
+                lambda: group | group,
+                lambda: GroupManager(value=1) in group,
+                lambda: group.filter(value=1),
+                lambda: group.exclude(value=1),
+                lambda: group.get(value=1),
+                lambda: group.sort("value"),
+                lambda: group.group_by("value"),
+                group.none,
+                group.__reduce__,
             )
             for operation in operations:
                 with self.subTest(operation=operation):

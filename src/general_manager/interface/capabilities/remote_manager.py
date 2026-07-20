@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from general_manager.bucket.request_bucket import RequestBucket
 from general_manager.bucket.base_bucket import GeneralManagerType
+from general_manager.as_of import ensure_as_of_read_supported
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.interface.capabilities.request import RequestQueryCapability
@@ -103,6 +104,7 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
             RequestConfigurationError: If operation lookup/configuration fails
                 before a request plan can be built.
         """
+        ensure_as_of_read_supported(interface_cls)
         self._build_request_plan(
             interface_cls,
             operation_name=operation_name,
@@ -152,6 +154,7 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
             RequestConfigurationError: If operation lookup/configuration fails
                 before a request plan can be built.
         """
+        ensure_as_of_read_supported(interface_cls)
         filter_map = self._copy_lookup_map(filters)
         exclude_map = self._copy_lookup_map(excludes)
         request_plan = self._build_request_plan(
