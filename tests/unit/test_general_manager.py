@@ -787,6 +787,45 @@ class GeneralManagerTestCase(TestCase):
         ):
             restored._ensure_manager_state_valid()
 
+    def test_current_manager_pickle_rejects_active_context_before_construction(self):
+        payload = pickle.dumps(PickleHistoricalManager(1))
+
+        with (
+            as_of("2022-01-01"),
+            patch.object(
+                PickleHistoricalInterface,
+                "__init__",
+                side_effect=AssertionError("interface work must not run"),
+            ),
+            self.assertRaises(HistoricalContextConflictError),
+        ):
+            pickle.loads(payload)  # noqa: S301
+
+    def test_historical_manager_pickle_accepts_equal_ambient_context(self):
+        search_date = normalize_search_date("2022-01-01")
+        payload = pickle.dumps(PickleHistoricalManager(1, search_date=search_date))
+
+        with as_of(search_date):
+            restored = pickle.loads(payload)  # noqa: S301
+
+        self.assertEqual(restored._interface._search_date, search_date)
+        self.assertEqual(restored._effective_search_date, search_date)
+
+    def test_historical_manager_pickle_rejects_conflict_before_construction(self):
+        search_date = normalize_search_date("2022-01-01")
+        payload = pickle.dumps(PickleHistoricalManager(1, search_date=search_date))
+
+        with (
+            as_of("2023-01-01"),
+            patch.object(
+                PickleHistoricalInterface,
+                "__init__",
+                side_effect=AssertionError("interface work must not run"),
+            ),
+            self.assertRaises(HistoricalContextConflictError),
+        ):
+            pickle.loads(payload)  # noqa: S301
+
     def test_transparent_historical_manager_pickle_round_trip_restores_scope(self):
         with as_of("2022-01-01") as search_date:
             manager = PickleTransparentManager(1)
@@ -796,6 +835,20 @@ class GeneralManagerTestCase(TestCase):
         self.assertEqual(restored._effective_search_date, search_date)
         with as_of(search_date):
             restored._ensure_manager_state_valid()
+
+    def test_current_transparent_pickle_does_not_rebind_to_active_context(self):
+        payload = pickle.dumps(PickleTransparentManager(1))
+
+        with (
+            as_of("2022-01-01"),
+            patch.object(
+                PickleTransparentInterface,
+                "__init__",
+                side_effect=AssertionError("interface work must not run"),
+            ),
+            self.assertRaises(HistoricalContextConflictError),
+        ):
+            pickle.loads(payload)  # noqa: S301
 
     def test_or_operator(self):
         # Test the __or__ operator
