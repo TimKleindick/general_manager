@@ -114,10 +114,16 @@ def _guard_mutation_callable(
 
 
 def _guard_declared_mutation(cls: type[object], name: str) -> None:
-    """Guard a mutation declared directly on an InterfaceBase subclass."""
+    """Guard a mutation declared by an interface or inherited from a mixin."""
     descriptor = cls.__dict__.get(name)
     if descriptor is None:
-        return
+        owner = next(
+            (base for base in cls.__mro__[1:] if name in base.__dict__),
+            None,
+        )
+        if owner is None or issubclass(owner, InterfaceBase):
+            return
+        descriptor = owner.__dict__[name]
     if isinstance(descriptor, classmethod):
         guarded = _guard_mutation_callable(descriptor.__func__)
         setattr(cls, name, classmethod(guarded))
