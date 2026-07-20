@@ -12,6 +12,7 @@ from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.utils.make_cache_key import make_cache_key
 from general_manager.manager import GeneralManager, Input
 from general_manager.api import as_of, bulk_data_change_notifications
+from general_manager.as_of import HistoricalContextConflictError
 from django.db.models.fields import CharField, IntegerField, DateField, DateTimeField
 from typing import ClassVar
 from general_manager.measurement import MeasurementField, Measurement
@@ -623,6 +624,50 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             )
         self.assertEqual(self.TestCommercials.historical_dependency_calls, 3)
         self.assertEqual(self.TestCommercials.historical_timeout_calls, 3)
+
+    def test_bound_historical_calculation_cannot_cache_after_context_exit(self):
+        """A stale transparent calculation cannot cache live data as historical."""
+        self.project1 = self.project1.update(
+            name="Current Project",
+            ignore_permission=True,
+        )
+        history = self.project1._interface._instance.history
+        snapshot = (
+            history.filter(name="Test Project")
+            .latest("history_date", "history_id")
+            .history_date
+        )
+        self.TestCommercials.historical_dependency_calls = 0
+        self.TestCommercials.historical_timeout_calls = 0
+
+        with as_of(snapshot):
+            historical_project = self.TestProject(self.project1.identification["id"])
+            commercials = self.TestCommercials(project=historical_project)
+
+        with self.assertRaises(HistoricalContextConflictError):
+            _ = commercials.historical_dependency_project_name
+        with self.assertRaises(HistoricalContextConflictError):
+            _ = commercials.historical_timeout_project_name
+        self.assertEqual(self.TestCommercials.historical_dependency_calls, 0)
+        self.assertEqual(self.TestCommercials.historical_timeout_calls, 0)
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            self.assertEqual(
+                commercials.historical_dependency_project_name,
+                "Test Project",
+            )
+            self.assertEqual(
+                commercials.historical_timeout_project_name,
+                "Test Project",
+            )
+        self.assertEqual(self.TestCommercials.historical_dependency_calls, 1)
+        self.assertEqual(self.TestCommercials.historical_timeout_calls, 1)
 
     def test_budget_left(self):
         """

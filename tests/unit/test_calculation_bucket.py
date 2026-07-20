@@ -1,4 +1,6 @@
 # type: ignore
+import pickle
+
 from django.test import TestCase
 from datetime import date, datetime, UTC
 from types import SimpleNamespace
@@ -81,7 +83,7 @@ class TestCalculationBucket(TestCase):
 
         with as_of(datetime.fromisoformat("2022-01-01T01:00:00+01:00")):
             bucket = CalculationBucket(DummyGeneralManager)
-        derived = bucket.filter(dummy=1).exclude(dummy=2).sort("dummy").all()
+            derived = bucket.filter(dummy=1).exclude(dummy=2).sort("dummy").all()
 
         self.assertEqual(bucket._effective_search_date, snapshot)
         self.assertEqual(derived._effective_search_date, snapshot)
@@ -115,6 +117,26 @@ class TestCalculationBucket(TestCase):
                     with self.assertRaises(HistoricalContextConflictError):
                         operation()
 
+    def test_historical_bucket_requires_matching_context_after_pickle_round_trip(
+        self, _mock_parse
+    ):
+        with as_of("2022-01-01") as snapshot:
+            bucket = CalculationBucket(DummyGeneralManager)
+            bucket._data = [{"dummy": 1}]
+            payload = pickle.dumps(bucket)
+
+        restored = pickle.loads(payload)  # noqa: S301
+
+        with self.assertRaises(HistoricalContextConflictError):
+            list(bucket)
+        with self.assertRaises(HistoricalContextConflictError):
+            list(restored)
+        with as_of(snapshot):
+            self.assertEqual(
+                [manager.identification for manager in restored],
+                [{"dummy": 1}],
+            )
+
     def test_group_bucket_preserves_calculation_snapshot_at_all_boundaries(
         self, _mock_parse
     ):
@@ -144,7 +166,10 @@ class TestCalculationBucket(TestCase):
             group = CalculationBucket(GroupManager).group_by("value")
         self.assertEqual(group._effective_search_date, snapshot)
 
-        derived = group.filter(value=1)
+        with self.assertRaises(HistoricalContextConflictError):
+            group.filter(value=1)
+        with as_of(snapshot):
+            derived = group.filter(value=1)
         self.assertEqual(derived._effective_search_date, snapshot)
         with as_of(datetime.fromisoformat("2022-01-01T01:00:00+01:00")):
             self.assertEqual(len(list(group)), 2)
