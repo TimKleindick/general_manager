@@ -15,7 +15,11 @@ from django.utils import timezone
 from simple_history.models import HistoricalChanges
 
 from general_manager.cache.run_context import CalculationRunContext
-from general_manager.as_of import HistoricalReadNotSupportedError, as_of
+from general_manager.as_of import (
+    HistoricalReadNotSupportedError,
+    InvalidSearchDateError,
+    as_of,
+)
 from general_manager.interface.capabilities.orm import (
     HistoryNotSupportedError,
     OrmCreateCapability,
@@ -36,6 +40,7 @@ from general_manager.interface.capabilities.orm.mutations import (
 )
 from general_manager.interface.capabilities.orm.support import (
     AmbiguousReverseFilterAliasError,
+    SearchDateInputError,
     _build_reverse_filter_alias_map,
     _connection_has_application_atomic_block,
     _resolve_filter_segment,
@@ -204,12 +209,54 @@ class TestOrmPersistenceSupportCapability:
                 self._search_date = search_date
 
         with as_of(search_date):
-            with pytest.raises(HistoricalReadNotSupportedError):
+            with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
                 capability.resolve_many_to_many(
                     InterfaceInstance(),
                     "members",
                     "members",
                 )
+        assert isinstance(exc_info.value.__cause__, HistoryNotSupportedError)
+
+        with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+            capability.resolve_many_to_many(
+                InterfaceInstance(),
+                "members",
+                "members",
+            )
+        assert isinstance(exc_info.value.__cause__, HistoryNotSupportedError)
+
+    def test_historical_many_to_many_without_through_history_fails_closed(self):
+        capability = OrmPersistenceSupportCapability()
+        search_date = timezone.now() - timedelta(days=1)
+        target_model = type("TargetModel", (), {"history": Mock()})
+        queryset = Mock(model=target_model)
+        manager = Mock()
+        manager.all.return_value = queryset
+        source_model = Mock()
+
+        class InterfaceInstance:
+            _model = source_model
+
+            def __init__(self) -> None:
+                self._instance = SimpleNamespace(members=manager)
+                self._search_date = search_date
+
+        with as_of(search_date):
+            with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+                capability.resolve_many_to_many(
+                    InterfaceInstance(),
+                    "members",
+                    "members",
+                )
+        assert isinstance(exc_info.value.__cause__, HistoryNotSupportedError)
+
+        with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+            capability.resolve_many_to_many(
+                InterfaceInstance(),
+                "members",
+                "members",
+            )
+        assert isinstance(exc_info.value.__cause__, HistoryNotSupportedError)
 
 
 class TestOrmReadCapability:
@@ -1667,6 +1714,19 @@ class TestOrmQueryCapability:
                 capability.filter(interface_cls)
 
         assert isinstance(exc_info.value.__cause__, NotImplementedError)
+
+    def test_invalid_explicit_search_date_preserves_query_error_contract(self):
+        capability = OrmQueryCapability()
+        interface_cls = Mock()
+
+        with patch(
+            "general_manager.interface.capabilities.orm.with_observability",
+            side_effect=lambda *_args, **kwargs: kwargs["func"](),
+        ):
+            with pytest.raises(SearchDateInputError) as exc_info:
+                capability.filter(interface_cls, search_date=object())
+
+        assert isinstance(exc_info.value.__cause__, InvalidSearchDateError)
 
 
 class TestOrmValidationCapability:

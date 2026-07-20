@@ -67,6 +67,13 @@ class OrmLifecycleCapability(BaseCapability):
                 them.
         """
         model_fields, meta_class = self._collect_model_fields(interface)
+        m2m_history_fields = tuple(
+            field_name
+            for field_name, field in model_fields.items()
+            if isinstance(field, models.ManyToManyField)
+        )
+        if m2m_history_fields:
+            model_fields["_history_m2m_fields"] = m2m_history_fields
         model_fields["__module__"] = attrs.get("__module__")
         meta_class, use_soft_delete, rules = self._apply_meta_configuration(meta_class)
         if meta_class:

@@ -565,7 +565,17 @@ historical `search_date`, it returns the target history queryset as of that date
 otherwise it returns live target rows filtered by related ids. Missing target
 relation metadata returns an empty queryset rather than raising. Invalid
 many-to-many accessor names raise `AttributeError`, and invalid interface model
-field names raise Django's `FieldDoesNotExist`.
+field names raise Django's `FieldDoesNotExist`. A dated relation read fails with
+`HistoricalReadNotSupportedError` (chained from `HistoryNotSupportedError`) when
+either membership history or target-row history is unavailable; it never falls
+back to current relation data.
+
+Generated `DatabaseInterface` models register declared many-to-many fields with
+django-simple-history. Deployments must provision the resulting
+`Historical<Model>_<field>` through tables using the project's normal Django
+schema and migration workflow. Membership history is reliable only for changes
+recorded after that schema is rolled out: pre-rollout membership cannot be
+reconstructed or backfilled from scalar history alone.
 
 `OrmReadCapability.get_data(interface_instance)` returns the live model row for
 `pk` or, when `search_date` is older than the interface
@@ -586,8 +596,10 @@ model history queryset scoped to a manager-like object's primary key and raises
 `HistoryNotSupportedError` when the model has no history manager or the manager
 cannot be identified; it applies any configured database alias before returning
 the filtered queryset. `get_historical_queryset(interface_cls, search_date)`
-applies any configured database alias, delegates to `history.as_of(search_date)`,
-and raises `HistoryNotSupportedError` when history is unavailable.
+applies any configured database alias and selects the latest non-deletion
+history row per object at or before `search_date`, using `history_id` to break
+same-timestamp ties. It raises `HistoryNotSupportedError` when history is
+unavailable.
 `get_historical_record_by_pk()` filters
 `id=pk, history_date__lte=search_date` and returns `None` when `search_date` is
 `None`, history is unavailable, or no row matches.

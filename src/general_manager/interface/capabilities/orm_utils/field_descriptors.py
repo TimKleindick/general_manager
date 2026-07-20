@@ -6,7 +6,17 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 import re
-from typing import TYPE_CHECKING, Callable, Hashable, Iterable, Literal, Protocol, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Hashable,
+    Iterable,
+    Literal,
+    NoReturn,
+    Protocol,
+    cast,
+)
 from uuid import UUID
 
 from django.apps import apps
@@ -473,6 +483,7 @@ class _FieldDescriptorBuilder:
             accessor = _general_manager_many_accessor(
                 accessor_name=accessor_name,
                 field_name=getattr(field, "name", accessor_name),
+                is_many_to_many=is_many_to_many,
                 related_model=related_model,
                 general_manager_class=general_manager_class,
                 source_model=self.model,
@@ -912,6 +923,7 @@ def _general_manager_many_accessor(
     *,
     accessor_name: str,
     field_name: str | None = None,
+    is_many_to_many: bool = False,
     related_model: type[models.Model],
     general_manager_class: type[object],
     source_model: type[models.Model],
@@ -964,21 +976,32 @@ def _general_manager_many_accessor(
         """
         manager_cls = cast("type[GeneralManager]", general_manager_class)
         search_date = getattr(self, "_search_date", None)
-        if relation_filter_name is not None and search_date is not None:
+        if is_many_to_many and search_date is not None:
             from general_manager.bucket.database_bucket import DatabaseBucket
-            from general_manager.interface.capabilities.orm.support import (
-                get_support_capability,
-            )
 
-            queryset = get_support_capability(self.__class__).resolve_many_to_many(
-                self,
-                accessor_name,
-                field_name or accessor_name,
-            )
+            if relation_filter_name is None:
+                queryset = _historical_reverse_many_to_many_queryset(
+                    self,
+                    source_model=source_model,
+                    target_model=related_model,
+                    target_manager_cls=manager_cls,
+                    relation_field_name=relation_field_name,
+                    search_date=search_date,
+                )
+            else:
+                from general_manager.interface.capabilities.orm.support import (
+                    get_support_capability,
+                )
+
+                queryset = get_support_capability(self.__class__).resolve_many_to_many(
+                    self,
+                    accessor_name,
+                    field_name or accessor_name,
+                )
             return DatabaseBucket(
                 queryset,
                 manager_cls,
-                {relation_filter_name: [self.pk]},
+                {(relation_filter_name or field_name or accessor_name): [self.pk]},
                 search_date=search_date,
             )
         if relation_filter_name is not None:
@@ -1005,6 +1028,100 @@ def _general_manager_many_accessor(
         return manager_cls.filter(**filter_kwargs)
 
     return getter
+
+
+def _historical_reverse_many_to_many_queryset(
+    interface_instance: OrmInterfaceInstance,
+    *,
+    source_model: type[models.Model],
+    target_model: type[models.Model],
+    target_manager_cls: type["GeneralManager"],
+    relation_field_name: str | None,
+    search_date: datetime,
+) -> models.QuerySet[models.Model]:
+    """Resolve reverse M2M membership from the target's historical snapshots."""
+    from general_manager.as_of import HistoricalReadNotSupportedError
+    from general_manager.interface.capabilities.orm.history import (
+        HistoryNotSupportedError,
+    )
+    from general_manager.interface.capabilities.orm.support import (
+        get_support_capability,
+    )
+
+    def fail_closed() -> NoReturn:
+        interface_name = target_manager_cls.Interface.__name__
+        history_error = HistoryNotSupportedError(interface_name)
+        raise HistoricalReadNotSupportedError(interface_name) from history_error
+
+    if relation_field_name is None or not hasattr(target_model, "history"):
+        fail_closed()
+    history_manager = cast(Any, target_model).history
+    history_model = getattr(history_manager, "model", None)
+    historical_relation = getattr(history_model, relation_field_name, None)
+    historical_through_model = getattr(historical_relation, "model", None)
+    if not (
+        isinstance(history_model, type)
+        and issubclass(history_model, models.Model)
+        and isinstance(historical_through_model, type)
+        and issubclass(historical_through_model, models.Model)
+    ):
+        fail_closed()
+
+    source_field = None
+    target_field = None
+    history_field = None
+    for relation in historical_through_model._meta.get_fields():
+        related_model = getattr(relation, "related_model", None)
+        if related_model is source_model:
+            source_field = relation
+        elif related_model is target_model:
+            target_field = relation
+        elif related_model is history_model:
+            history_field = relation
+    if source_field is None or target_field is None or history_field is None:
+        fail_closed()
+
+    target_interface = cast(Any, target_manager_cls.Interface)
+    target_support = get_support_capability(target_interface)
+    database_alias = target_support.get_database_alias(target_interface)
+    if database_alias:
+        history_manager = history_manager.using(database_alias)
+    target_pk = target_model._meta.pk
+    if target_pk is None:
+        fail_closed()
+    latest_history_id = (
+        history_manager.filter(
+            history_date__lte=search_date,
+            **{target_pk.name: models.OuterRef(target_pk.name)},
+        )
+        .order_by("-history_date", "-history_id")
+        .values("history_id")[:1]
+    )
+    latest_history = history_manager.filter(
+        history_id=models.Subquery(latest_history_id)
+    ).exclude(history_type="-")
+    through_manager = historical_through_model._default_manager
+    if database_alias:
+        through_manager = through_manager.db_manager(database_alias)
+    memberships = through_manager.filter(
+        **{
+            getattr(source_field, "attname", f"{source_field.name}_id"): (
+                interface_instance.pk
+            ),
+            f"{getattr(history_field, 'attname', f'{history_field.name}_id')}__in": (
+                models.Subquery(latest_history.values("history_id"))
+            ),
+        }
+    )
+    target_ids = memberships.values(
+        getattr(target_field, "attname", f"{target_field.name}_id")
+    )
+    return cast(
+        models.QuerySet[models.Model],
+        latest_history.filter(
+            **{f"{target_pk.name}__in": models.Subquery(target_ids)}
+        ).as_instances(),
+    )
 
 
 def _orm_row_identity(row: object) -> tuple[Hashable, Hashable | None] | None:
