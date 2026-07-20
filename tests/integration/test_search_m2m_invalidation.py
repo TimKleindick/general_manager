@@ -136,6 +136,9 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
         cls.SourceModel = M2MSearchSource.Interface._model
         cls.AutoOwnerModel = M2MSearchAutoOwner.Interface._model
         cls.CustomOwnerModel = M2MSearchCustomOwner.Interface._model
+        cls.AutoOwnerM2MHistoryModel = cls.AutoOwnerModel.history.model.__dict__[
+            "sources"
+        ].model
         cls.general_manager_classes = [
             M2MSearchSource,
             M2MSearchAutoOwner,
@@ -157,6 +160,7 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
             cls.AutoOwnerModel,
             cls.AutoOwnerModel.sources.through,
             cls.AutoOwnerModel.history.model,
+            cls.AutoOwnerM2MHistoryModel,
             cls.SourceModel,
             cls.SourceModel.history.model,
         ]
@@ -165,6 +169,7 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
             cls.SourceModel.history.model,
             cls.AutoOwnerModel,
             cls.AutoOwnerModel.history.model,
+            cls.AutoOwnerM2MHistoryModel,
             cls.CustomOwnerModel,
             cls.CustomOwnerModel.history.model,
             cls.Membership,

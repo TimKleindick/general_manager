@@ -67,11 +67,7 @@ class OrmLifecycleCapability(BaseCapability):
                 them.
         """
         model_fields, meta_class = self._collect_model_fields(interface)
-        m2m_history_fields = tuple(
-            field_name
-            for field_name, field in model_fields.items()
-            if isinstance(field, models.ManyToManyField)
-        )
+        m2m_history_fields = self._m2m_history_field_names(model_fields)
         if m2m_history_fields:
             model_fields["_history_m2m_fields"] = m2m_history_fields
         model_fields["__module__"] = attrs.get("__module__")
@@ -103,6 +99,18 @@ class OrmLifecycleCapability(BaseCapability):
         )
 
         return attrs, interface_cls, model
+
+    @staticmethod
+    def _m2m_history_field_names(
+        model_fields: dict[str, object],
+    ) -> tuple[str, ...]:
+        """Return M2M fields whose through models can be tracked immediately."""
+        return tuple(
+            field_name
+            for field_name, field in model_fields.items()
+            if isinstance(field, models.ManyToManyField)
+            and not isinstance(getattr(field.remote_field, "through", None), str)
+        )
 
     def post_create(
         self,
