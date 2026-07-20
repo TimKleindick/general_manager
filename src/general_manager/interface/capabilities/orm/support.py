@@ -326,15 +326,18 @@ class OrmReadCapability(BaseCapability):
             model.DoesNotExist: If no matching live instance or historical record exists.
         """
 
+        interface_cls = interface_instance.__class__
+        model_cls = interface_cls._model
+        search_date = interface_instance._search_date
+        _ensure_ambient_history_supported(interface_cls, search_date)
+
         def _perform() -> models.Model:
-            interface_cls = interface_instance.__class__
             support = get_support_capability(interface_cls)
             only_active = not is_soft_delete_enabled(interface_cls)
             manager = support.get_manager(
                 interface_cls,
                 only_active=only_active,
             )
-            model_cls = interface_cls._model
             pk = interface_instance.pk
             instance: models.Model | None
             missing_error: Exception | None = None
@@ -343,7 +346,6 @@ class OrmReadCapability(BaseCapability):
             except model_cls.DoesNotExist as error:
                 instance = None
                 missing_error = error
-            search_date = interface_instance._search_date
             if search_date is not None:
                 if search_date <= timezone.now() - timedelta(
                     seconds=interface_cls.historical_lookup_buffer_seconds
@@ -402,7 +404,6 @@ class OrmReadCapability(BaseCapability):
         if context is None:
             read_func = _perform
         else:
-            interface_cls = interface_instance.__class__
             support = get_support_capability(interface_cls)
             database_alias = (
                 support.get_database_alias(interface_cls) or DEFAULT_DB_ALIAS
@@ -930,6 +931,7 @@ class OrmQueryCapability(BaseCapability):
         exclude: bool = False,
         search_date: datetime | None = None,
     ) -> DatabaseBucket["GeneralManager"]:
+        _ensure_ambient_history_supported(interface_cls, search_date)
         context = current_calculation_run_context()
         cache_signature: Hashable | None = None
         if context is not None:
@@ -1168,6 +1170,25 @@ def _history_capability_for(
             expected_type=OrmHistoryCapability,
         ),
     )
+
+
+def _ensure_ambient_history_supported(
+    interface_cls: OrmInterfaceClass,
+    search_date: datetime | None,
+) -> None:
+    """Fail closed before an ambient historical read can use a live source."""
+    if current_as_of_date() is None or search_date is None:
+        return
+
+    from .history import HistoryNotSupportedError
+
+    if not hasattr(interface_cls._model, "history"):
+        error = HistoryNotSupportedError(interface_cls.__name__)
+        raise HistoricalReadNotSupportedError(interface_cls.__name__) from error
+    try:
+        _history_capability_for(interface_cls)
+    except (NotImplementedError, TypeError) as error:
+        raise HistoricalReadNotSupportedError(interface_cls.__name__) from error
 
 
 def _orm_instance_cache_key(

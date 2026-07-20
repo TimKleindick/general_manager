@@ -18,9 +18,11 @@ from general_manager.cache.signals import pre_data_change
 from general_manager.as_of import (
     HistoricalContextConflictError,
     HistoricalMutationError,
+    HistoricalReadNotSupportedError,
     as_of,
     normalize_search_date,
 )
+from general_manager.interface.capabilities.orm import HistoryNotSupportedError
 
 from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
@@ -984,6 +986,91 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             )
             with self.assertRaises(HistoricalContextConflictError):
                 self.TestHuman(human_id, search_date=snapshot + timedelta(days=1))
+
+    def test_recent_ambient_operations_without_model_history_fail_without_live_queries(
+        self,
+    ):
+        snapshot = timezone.now()
+        human_id = self.test_human1.identification["id"]
+        operations = {
+            "constructor": lambda: self.TestHuman(human_id),
+            "get": lambda: self.TestHuman.get(id=human_id),
+            "filter": lambda: self.TestHuman.filter(id=human_id),
+            "exclude": lambda: self.TestHuman.exclude(id=-1),
+            "all": self.TestHuman.all,
+        }
+        interface_cls = self.TestHuman.Interface
+        model_cls = interface_cls._model
+        history_descriptor = model_cls.__dict__["history"]
+
+        delattr(model_cls, "history")
+        try:
+            with (
+                patch(
+                    "general_manager.interface.capabilities.orm.support.timezone.now",
+                    return_value=snapshot + timedelta(seconds=1),
+                ),
+                patch.object(
+                    interface_cls,
+                    "historical_lookup_buffer_seconds",
+                    30,
+                ),
+                as_of(snapshot),
+            ):
+                for operation_name, operation in operations.items():
+                    with self.subTest(operation=operation_name):
+                        with (
+                            self.assertNumQueries(0),
+                            self.assertRaises(
+                                HistoricalReadNotSupportedError
+                            ) as exc_info,
+                        ):
+                            operation()
+                        self.assertIsInstance(
+                            exc_info.exception.__cause__,
+                            HistoryNotSupportedError,
+                        )
+        finally:
+            model_cls.history = history_descriptor
+
+    def test_recent_ambient_operations_with_broken_history_capability_fail_closed(
+        self,
+    ):
+        snapshot = timezone.now()
+        human_id = self.test_human1.identification["id"]
+        operations = {
+            "constructor": lambda: self.TestHuman(human_id),
+            "get": lambda: self.TestHuman.get(id=human_id),
+            "filter": lambda: self.TestHuman.filter(id=human_id),
+            "exclude": lambda: self.TestHuman.exclude(id=-1),
+            "all": self.TestHuman.all,
+        }
+        capability_error = TypeError("broken history capability")
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=snapshot + timedelta(seconds=1),
+            ),
+            patch.object(
+                self.TestHuman.Interface,
+                "historical_lookup_buffer_seconds",
+                30,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support._history_capability_for",
+                side_effect=capability_error,
+            ),
+            as_of(snapshot),
+        ):
+            for operation_name, operation in operations.items():
+                with self.subTest(operation=operation_name):
+                    with (
+                        self.assertNumQueries(0),
+                        self.assertRaises(HistoricalReadNotSupportedError) as exc_info,
+                    ):
+                        operation()
+                    self.assertIs(exc_info.exception.__cause__, capability_error)
 
     def test_constructor_breaks_tied_history_dates_by_greatest_history_id(self):
         tied_time = timezone.now() - timedelta(days=10)
