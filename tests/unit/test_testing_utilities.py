@@ -32,6 +32,29 @@ class TestingUtilityDependencyOrderingTests(SimpleTestCase):
         """Clear startup hooks after each test."""
         clear_startup_hooks()
 
+    def test_graphene_cursor_cleanup_preserves_django_database_guard(self) -> None:
+        """Cursor cleanup removes Graphene beneath Django's test guard."""
+        from general_manager.utils import testing as testing_module
+
+        plain_cursor = Mock(name="plain_cursor")
+        graphene_cursor = Mock(name="graphene_cursor")
+        database_guard = SimpleNamespace(wrapped=graphene_cursor)
+        database_connection = SimpleNamespace(
+            cursor=database_guard,
+            _graphene_cursor=plain_cursor,
+        )
+
+        with patch.object(
+            testing_module.connections,
+            "all",
+            return_value=[database_connection],
+        ):
+            testing_module._restore_graphene_cursor_wrappers()
+
+        self.assertIs(database_connection.cursor, database_guard)
+        self.assertIs(database_guard.wrapped, plain_cursor)
+        self.assertFalse(hasattr(database_connection, "_graphene_cursor"))
+
     def test_run_hooks_orders_by_dependency(self) -> None:
         """Verify _run_registered_startup_hooks executes in dependency order."""
         from general_manager.utils.testing import GeneralManagerTransactionTestCase

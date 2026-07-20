@@ -84,6 +84,19 @@ class _CacheConnections(Protocol):
     default: object
 
 
+class _GrapheneCursorConnection(Protocol):
+    """Connection attributes used to restore Graphene cursor instrumentation."""
+
+    cursor: Callable[..., object]
+    _graphene_cursor: Callable[..., object]
+
+
+class _DatabaseFailureCursor(Protocol):
+    """Django test database guard wrapped-callable surface."""
+
+    wrapped: Callable[..., object]
+
+
 class _MutableDjangoApps(Protocol):
     """Mutable Django app-registry hooks patched by the test harness."""
 
@@ -150,6 +163,18 @@ def _default_remote_api_url_clear() -> None:
 def _restore_graphene_cursor_wrappers() -> None:
     """Remove Graphene SQL instrumentation from every configured connection."""
     for database_connection in connections.all():
+        current_cursor = database_connection.cursor
+        if hasattr(database_connection, "_graphene_cursor") and hasattr(
+            current_cursor, "wrapped"
+        ):
+            guarded_cursor = cast(_DatabaseFailureCursor, current_cursor)
+            graphene_connection = cast(
+                _GrapheneCursorConnection,
+                database_connection,
+            )
+            guarded_cursor.wrapped = graphene_connection._graphene_cursor
+            del graphene_connection._graphene_cursor
+            continue
         unwrap_cursor(database_connection)
 
 
