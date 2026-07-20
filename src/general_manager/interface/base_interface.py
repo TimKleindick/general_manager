@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 from abc import ABC
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
+from functools import wraps
 import inspect
 from types import MappingProxyType
 from typing import (
@@ -82,6 +83,52 @@ _SINGLE_INPUT_VALUE_CACHE_MISS = object()
 _OBSERVABILITY_HOOK_MISSING = object()
 _RUN_SCOPED_SCALAR_INPUT_TYPES = (str, int, bool)
 _FORMATLESS_IDENTIFICATION_VALUE_TYPES = {str, int, float, bool, type(None)}
+_HISTORICAL_MUTATION_GUARD_MARKER = "_general_manager_historical_mutation_guard"
+
+
+def _guard_mutation_callable(
+    mutation: Callable[..., object],
+) -> Callable[..., object]:
+    """Wrap an interface mutation with the historical-context guard once."""
+    if getattr(mutation, _HISTORICAL_MUTATION_GUARD_MARKER, False):
+        return mutation
+
+    if inspect.iscoroutinefunction(mutation):
+
+        @wraps(mutation)
+        async def async_guarded(*args: object, **kwargs: object) -> object:
+            reject_historical_mutation()
+            awaitable = cast(Awaitable[object], mutation(*args, **kwargs))
+            return await awaitable
+
+        setattr(async_guarded, _HISTORICAL_MUTATION_GUARD_MARKER, True)
+        return async_guarded
+
+    @wraps(mutation)
+    def sync_guarded(*args: object, **kwargs: object) -> object:
+        reject_historical_mutation()
+        return mutation(*args, **kwargs)
+
+    setattr(sync_guarded, _HISTORICAL_MUTATION_GUARD_MARKER, True)
+    return sync_guarded
+
+
+def _guard_declared_mutation(cls: type[object], name: str) -> None:
+    """Guard a mutation declared directly on an InterfaceBase subclass."""
+    descriptor = cls.__dict__.get(name)
+    if descriptor is None:
+        return
+    if isinstance(descriptor, classmethod):
+        guarded = _guard_mutation_callable(descriptor.__func__)
+        setattr(cls, name, classmethod(guarded))
+        return
+    if isinstance(descriptor, staticmethod):
+        guarded = _guard_mutation_callable(descriptor.__func__)
+        setattr(cls, name, staticmethod(guarded))
+        return
+    if callable(descriptor):
+        guarded = _guard_mutation_callable(descriptor)
+        setattr(cls, name, guarded)
 
 
 class AttributeTypedDict(TypedDict):
@@ -279,6 +326,8 @@ class InterfaceBase(ABC):
         This method resets per-subclass capability registries and configuration to a clean default, merges configured capability overrides into the class's capability_overrides mapping, and clears the flag that marks configured capabilities as applied. Keyword arguments are forwarded to the superclass implementation.
         """
         super().__init_subclass__(**kwargs)
+        for mutation_name in ("create", "update", "delete"):
+            _guard_declared_mutation(cls, mutation_name)
         cls._input_parsing_plan = None
         cls._input_dependency_order = None
         cls._capabilities = frozenset()

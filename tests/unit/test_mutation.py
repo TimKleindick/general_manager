@@ -1,3 +1,5 @@
+import asyncio
+import inspect
 from typing import Optional, List, ClassVar
 from unittest import mock
 
@@ -10,6 +12,7 @@ from general_manager.api.graphql_mutations import _normalize_mutation_kwargs_for
 from general_manager.api.graphql_errors import PublicGraphQLError
 from general_manager.api.mutation import _sequence_argument, graph_ql_mutation
 from general_manager.api.graphql import GraphQL
+from general_manager.as_of import HistoricalMutationError, as_of
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.interface.base_interface import InterfaceBase
@@ -185,6 +188,70 @@ class RegionInputInterface(DummyInterface):
 
     def __init__(self, *args, **kwargs):
         InterfaceBase.__init__(self, *args, **kwargs)
+
+
+class HistoricalMutationOverrideGuardTests(TestCase):
+    def test_sync_mutation_overrides_are_guarded_without_changing_binding(self) -> None:
+        calls: list[tuple[str, object]] = []
+
+        class CustomInterface(DummyInterface):
+            @classmethod
+            def create(cls, value: str) -> str:
+                calls.append(("create", cls))
+                return value
+
+            def update(self, value: str) -> str:
+                calls.append(("update", self))
+                return value
+
+            def delete(self) -> str:
+                calls.append(("delete", self))
+                return "deleted"
+
+        interface = CustomInterface()
+
+        self.assertEqual(CustomInterface.create("outside"), "outside")
+        self.assertEqual(interface.update("outside"), "outside")
+        self.assertEqual(interface.delete(), "deleted")
+        self.assertEqual(
+            [name for name, _target in calls], ["create", "update", "delete"]
+        )
+        self.assertIs(calls[0][1], CustomInterface)
+        self.assertIs(calls[1][1], interface)
+        self.assertEqual(CustomInterface.create.__name__, "create")
+        self.assertTrue(hasattr(CustomInterface.create, "__wrapped__"))
+        self.assertFalse(hasattr(CustomInterface.create.__wrapped__, "__wrapped__"))
+
+        calls.clear()
+        with as_of("2022-01-01"):
+            with self.assertRaises(HistoricalMutationError):
+                CustomInterface.create("blocked")
+            with self.assertRaises(HistoricalMutationError):
+                interface.update("blocked")
+            with self.assertRaises(HistoricalMutationError):
+                interface.delete()
+
+        self.assertEqual(calls, [])
+
+    def test_async_mutation_override_is_guarded_and_remains_async(self) -> None:
+        calls: list[str] = []
+
+        class AsyncInterface(DummyInterface):
+            @classmethod
+            async def create(cls, value: str) -> str:
+                _ = cls
+                calls.append(value)
+                return value
+
+        async def exercise() -> None:
+            self.assertEqual(await AsyncInterface.create("outside"), "outside")
+            with as_of("2022-01-01"):
+                with self.assertRaises(HistoricalMutationError):
+                    await AsyncInterface.create("blocked")
+
+        self.assertTrue(inspect.iscoroutinefunction(AsyncInterface.create))
+        asyncio.run(exercise())
+        self.assertEqual(calls, ["outside"])
 
 
 class MutationDecoratorTests(TestCase):
