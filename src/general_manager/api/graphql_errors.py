@@ -156,13 +156,19 @@ _HISTORICAL_ERROR_CODES = {
     HistoricalMutationError: "HISTORICAL_MUTATION_FORBIDDEN",
     HistoricalReadNotSupportedError: "HISTORICAL_READ_NOT_SUPPORTED",
 }
+_INVALID_SEARCH_DATE_PUBLIC_MESSAGE = "Invalid historical search date."
 
 
 def historical_graphql_error(error: Exception) -> PublicGraphQLError | None:
     """Map a historical-context exception to a stable public GraphQL error."""
     for error_type, code in _HISTORICAL_ERROR_CODES.items():
         if isinstance(error, error_type):
-            return PublicGraphQLError(_safe_exception_message(error), code=code)
+            message = (
+                _INVALID_SEARCH_DATE_PUBLIC_MESSAGE
+                if isinstance(error, InvalidSearchDateError)
+                else _safe_exception_message(error)
+            )
+            return PublicGraphQLError(message, code=code)
     return None
 
 

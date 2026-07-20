@@ -2,12 +2,14 @@
 
 import json
 import asyncio
+import subprocess
+import sys
 import unittest
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from datetime import UTC, date, datetime
-from inspect import CORO_CLOSED, getcoroutinestate, signature
+from inspect import signature
 from threading import Barrier
 from types import SimpleNamespace
 import graphene
@@ -154,6 +156,49 @@ class GraphQLAsOfExecutionTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("errors", payload)
         as_of_mock.assert_not_called()
+
+    def test_unrelated_invalid_variables_remain_normal_graphene_errors(self) -> None:
+        class Query(graphene.ObjectType):
+            echo = graphene.Int(value=graphene.Int(required=True))
+
+            @staticmethod
+            def resolve_echo(_root: object, _info: object, value: int) -> int:
+                return value
+
+        schema = graphene.Schema(query=Query, types=(graphene.DateTime,))
+        gm_bootstrap._attach_as_of_directive(schema)
+        view = GeneralManagerGraphQLView(schema=schema)
+        view.json_encode = lambda _request, payload, **_kwargs: payload
+        cases = (
+            (
+                (
+                    'query Q($count: Int!) @asOf(date: "2022-01-01T00:00:00Z") '
+                    "{ echo(value: $count) }"
+                ),
+                {},
+            ),
+            (
+                (
+                    "query Q($date: DateTime!, $count: Int!) "
+                    "@asOf(date: $date) { echo(value: $count) }"
+                ),
+                {"date": "2022-01-01T00:00:00Z", "count": "wrong"},
+            ),
+        )
+
+        for query, variables in cases:
+            with self.subTest(query=query):
+                payload, status = view.get_response(
+                    SimpleNamespace(GET={}, method="POST"),
+                    {"query": query, "variables": variables},
+                )
+            self.assertEqual(status, 400)
+            error = payload["errors"][0]
+            self.assertIn("$count", error["message"])
+            self.assertNotEqual(
+                error.get("extensions", {}).get("code"),
+                "BAD_USER_INPUT",
+            )
 
     def test_invalid_date_error_does_not_reflect_unbounded_input(self) -> None:
         invalid = "secret-" * 10_000
@@ -589,84 +634,6 @@ class GraphQLAsOfExecutionTests(unittest.TestCase):
         self.assertEqual(events, [])
         atomic_mock.assert_not_called()
 
-    def test_dynamic_mutation_awaitables_are_closed_without_running(self) -> None:
-        created: list[object] = []
-
-        class DynamicMutation(graphene.Mutation):
-            Output = graphene.String
-
-            @staticmethod
-            def mutate(_root: object, _info: object) -> object:
-                async def mutation_body() -> str:
-                    return "changed"
-
-                result = mutation_body()
-                created.append(result)
-                return result
-
-        class Mutation(graphene.ObjectType):
-            dynamic_mutation = DynamicMutation.Field()
-
-        class Query(graphene.ObjectType):
-            ping = graphene.String()
-
-        view = GeneralManagerGraphQLView(
-            schema=graphene.Schema(query=Query, mutation=Mutation)
-        )
-        view.json_encode = lambda _request, payload, **_kwargs: payload
-
-        payload, status = view.get_response(
-            SimpleNamespace(GET={}, method="POST"),
-            {"query": "mutation Q { dynamicMutation }"},
-        )
-
-        self.assertEqual(status, 400)
-        self.assertEqual(
-            payload["errors"][0]["extensions"]["code"],
-            "GRAPHQL_VALIDATION_FAILED",
-        )
-        self.assertEqual(len(created), 1)
-        self.assertEqual(
-            getcoroutinestate(created[0]),
-            CORO_CLOSED,
-        )
-
-    def test_sync_mutation_retains_graphene_atomic_execution(self) -> None:
-        events: list[str] = []
-
-        class SyncMutation(graphene.Mutation):
-            Output = graphene.String
-
-            @staticmethod
-            def mutate(_root: object, _info: object) -> str:
-                events.append("mutation body")
-                return "changed"
-
-        class Mutation(graphene.ObjectType):
-            sync_mutation = SyncMutation.Field()
-
-        class Query(graphene.ObjectType):
-            ping = graphene.String()
-
-        view = GeneralManagerGraphQLView(
-            schema=graphene.Schema(query=Query, mutation=Mutation)
-        )
-        view.json_encode = lambda _request, payload, **_kwargs: payload
-
-        with (
-            patch("graphene_django.views.graphene_settings.ATOMIC_MUTATIONS", True),
-            patch("graphene_django.views.transaction.atomic") as atomic_mock,
-        ):
-            payload, status = view.get_response(
-                SimpleNamespace(GET={}, method="POST"),
-                {"query": "mutation Q { syncMutation }"},
-            )
-
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["data"], {"syncMutation": "changed"})
-        self.assertEqual(events, ["mutation body"])
-        atomic_mock.assert_called_once_with()
-
     def test_generated_mutation_preserves_historical_forbidden_error(self) -> None:
         class DummyManager:
             class Interface(InterfaceBase):
@@ -740,6 +707,16 @@ class GraphQLAsOfExecutionTests(unittest.TestCase):
                 )
             self.assertEqual(formatted["extensions"]["code"], code)
 
+    def test_invalid_search_date_mapping_uses_fixed_bounded_message(self) -> None:
+        invalid = InvalidSearchDateError("secret-" * 10_000)
+
+        formatted = self._view().format_error(
+            GraphQLError("wrapped", original_error=invalid)
+        )
+
+        self.assertEqual(formatted["message"], "Invalid historical search date.")
+        self.assertNotIn("secret", formatted["message"])
+
     @staticmethod
     def _view() -> GeneralManagerGraphQLView:
         class Query(graphene.ObjectType):
@@ -785,6 +762,18 @@ class GraphQLAsOfExecutionTests(unittest.TestCase):
             types=[date_time],
             directives=[*specified_directives, build_as_of_directive(date_time)],
         )
+
+
+class GraphQLAtomicMutationTests(unittest.TestCase):
+    def test_dynamic_rollback_and_sync_commit_in_isolated_database_probe(self) -> None:
+        result = subprocess.run(  # noqa: S603 - trusted interpreter and test probe
+            [sys.executable, "tests/utils/graphql_atomic_probe.py"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
 
 
 class GraphQLPropertyTests(TestCase):
