@@ -568,7 +568,21 @@ many-to-many accessor names raise `AttributeError`, and invalid interface model
 field names raise Django's `FieldDoesNotExist`. A dated relation read fails with
 `HistoricalReadNotSupportedError` (chained from `HistoryNotSupportedError`) when
 either membership history or target-row history is unavailable; it never falls
-back to current relation data.
+back to current relation data. This remains true inside the scalar historical
+lookup buffer: a source row may be hydrated from the live table, but its
+many-to-many membership is resolved from the source history row at the effective
+date. Equal `history_date` values are broken by greatest `history_id` for both
+source and related rows.
+
+Historical through-table columns are resolved from the concrete
+`ManyToManyField` source and reverse field metadata, including explicit
+`through_fields`; this preserves direction for asymmetric self-relations and
+custom through models with multiple foreign keys to the same model. Configured
+database aliases are applied independently to source membership and target
+history queries. When both querysets use the same alias, membership remains a
+lazy SQL subquery. A cross-alias relation instead materializes the membership ID
+list before querying target history because Django cannot execute a correct
+cross-database subquery.
 
 Generated `DatabaseInterface` models register declared many-to-many fields with
 django-simple-history. Deployments must provision the resulting
@@ -590,8 +604,9 @@ primary key from `instance.pk`, then `instance.id`, then
 `instance.identification["id"]`; it prefers `instance.history` when present,
 otherwise falls back to `interface_cls._model.history`. When `search_date` is
 provided it filters with `history_date__lte=search_date`, orders by
-`history_date`, applies any configured database alias, and returns the latest
-historical model row or `None`. `get_history_queryset_for_manager()` returns the
+`history_date` and `history_id`, applies any configured database alias, and
+returns the latest historical model row or `None`.
+`get_history_queryset_for_manager()` returns the
 model history queryset scoped to a manager-like object's primary key and raises
 `HistoryNotSupportedError` when the model has no history manager or the manager
 cannot be identified; it applies any configured database alias before returning

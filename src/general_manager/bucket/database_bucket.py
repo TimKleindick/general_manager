@@ -292,6 +292,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if not _represents_same_instant(normalized, active):
             raise HistoricalContextConflictError
 
+    def __eq__(self, other: object) -> bool:
+        """Compare buckets only after validating their effective dates."""
+        self._ensure_as_of_compatible()
+        if isinstance(other, DatabaseBucket):
+            other._ensure_as_of_compatible()
+        return super().__eq__(other)
+
     def _set_trusted_query_signature(self, signature: Hashable | None) -> None:
         """Set an internal non-SQL signature for framework-built querysets."""
         self._trusted_query_signature = signature

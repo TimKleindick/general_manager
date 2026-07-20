@@ -165,6 +165,17 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                     self.initialized_by_interface = True
                     super().__init__(*args, **kwargs)
 
+        class TestNetworkNode(GeneralManager):
+            name: str
+
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=50)
+                follows = models.ManyToManyField(
+                    "self",
+                    symmetrical=False,
+                    related_name="followers",
+                )
+
         cls.TestCountry = TestCountry
         cls.TestHuman = TestHuman
         cls.TestFamily = TestFamily
@@ -175,6 +186,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         cls.ChangeRequestFeasibility = ChangeRequestFeasibility
         cls.ChangeRequestReview = ChangeRequestReview
         cls.CustomInitRecord = CustomInitRecord
+        cls.TestNetworkNode = TestNetworkNode
         cls.general_manager_classes = [
             TestCountry,
             TestHuman,
@@ -186,6 +198,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             ChangeRequestFeasibility,
             ChangeRequestReview,
             CustomInitRecord,
+            TestNetworkNode,
         ]
 
     def setUp(self):
@@ -262,6 +275,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.ChangeRequestFeasibility.Interface._model._meta.model.objects.all().delete()
         self.ChangeRequestReview.Interface._model._meta.model.objects.all().delete()
         self.CustomInitRecord.Interface._model._meta.model.objects.all().delete()
+        self.TestNetworkNode.Interface._model._meta.model.objects.all().delete()
         super().tearDown()
 
     def test_iter(self):
@@ -944,6 +958,55 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             with self.assertRaises(HistoricalContextConflictError):
                 self.TestHuman(human_id, search_date=snapshot + timedelta(days=1))
 
+    def test_constructor_breaks_tied_history_dates_by_greatest_history_id(self):
+        tied_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=tied_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="First tied value",
+                ignore_permission=True,
+            )
+            human.update(name="Second tied value", ignore_permission=True)
+        human_id = human.identification["id"]
+        tied_rows = list(
+            self.TestHuman.Interface._model.history.filter(id=human_id).order_by(
+                "history_id"
+            )
+        )
+        self.assertGreaterEqual(len(tied_rows), 2)
+        self.assertEqual(tied_rows[-1].name, "Second tied value")
+
+        snapshot = tied_time + timedelta(minutes=1)
+        with patch(
+            "django.utils.timezone.now", return_value=snapshot + timedelta(seconds=10)
+        ):
+            historical = self.TestHuman(human_id, search_date=snapshot)
+
+        self.assertEqual(historical.name, "Second tied value")
+
+    def test_missing_live_row_breaks_tied_history_dates_by_greatest_history_id(self):
+        tied_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=tied_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="First missing tied value",
+                ignore_permission=True,
+            )
+            human.update(name="Second missing tied value", ignore_permission=True)
+        human_id = human.identification["id"]
+        snapshot = tied_time + timedelta(minutes=1)
+        with patch(
+            "django.utils.timezone.now", return_value=tied_time + timedelta(hours=1)
+        ):
+            human.delete(creator_id=None, ignore_permission=True)
+
+        with patch(
+            "django.utils.timezone.now", return_value=snapshot + timedelta(seconds=10)
+        ):
+            historical = self.TestHuman(human_id, search_date=snapshot)
+
+        self.assertEqual(historical.name, "Second missing tied value")
+
     def test_ambient_as_of_propagates_through_forward_and_reverse_relations(self):
         base_time = timezone.now() - timedelta(days=10)
         with patch("django.utils.timezone.now", return_value=base_time):
@@ -1152,6 +1215,168 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         ):
             assert_historical_humans(
                 self.TestFamily.get(id=family_id, search_date=snapshot)
+            )
+
+    def test_historical_forward_many_to_many_breaks_target_history_ties(self):
+        tied_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=tied_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="First related tie",
+                ignore_permission=True,
+            )
+            human.update(name="Second related tie", ignore_permission=True)
+            family = self.TestFamily.create(
+                creator_id=None,
+                name="Tied target family",
+                humans=[human],
+                ignore_permission=True,
+            )
+        snapshot = tied_time + timedelta(minutes=1)
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+            self.assertNumQueries(2),
+        ):
+            related = self.TestFamily.get(
+                id=family.identification["id"]
+            ).humans_list.get(id=human.identification["id"])
+
+        self.assertEqual(related.name, "Second related tie")
+
+    def test_near_buffer_as_of_preserves_forward_many_to_many_membership(self):
+        snapshot = timezone.now()
+        with patch(
+            "django.utils.timezone.now", return_value=snapshot - timedelta(seconds=2)
+        ):
+            old_human = self.TestHuman.create(
+                creator_id=None,
+                name="Near-buffer old member",
+                ignore_permission=True,
+            )
+            added_human = self.TestHuman.create(
+                creator_id=None,
+                name="Near-buffer added member",
+                ignore_permission=True,
+            )
+            family = self.TestFamily.create(
+                creator_id=None,
+                name="Near-buffer family",
+                humans=[old_human],
+                ignore_permission=True,
+            )
+        with patch(
+            "django.utils.timezone.now", return_value=snapshot + timedelta(seconds=1)
+        ):
+            family.update(humans=[added_human], ignore_permission=True)
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=2),
+            ),
+            as_of(snapshot),
+        ):
+            humans = self.TestFamily.get(id=family.identification["id"]).humans_list
+            self.assertEqual(
+                {human.id for human in humans},
+                {old_human.identification["id"]},
+            )
+
+    def test_near_buffer_as_of_preserves_reverse_many_to_many_membership(self):
+        snapshot = timezone.now()
+        with patch(
+            "django.utils.timezone.now", return_value=snapshot - timedelta(seconds=2)
+        ):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="Near-buffer reverse member",
+                ignore_permission=True,
+            )
+            old_family = self.TestFamily.create(
+                creator_id=None,
+                name="Near-buffer old family",
+                humans=[human],
+                ignore_permission=True,
+            )
+            added_family = self.TestFamily.create(
+                creator_id=None,
+                name="Near-buffer added family",
+                humans=[],
+                ignore_permission=True,
+            )
+        with patch(
+            "django.utils.timezone.now", return_value=snapshot + timedelta(seconds=1)
+        ):
+            old_family.update(humans=[], ignore_permission=True)
+            added_family.update(humans=[human], ignore_permission=True)
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=2),
+            ),
+            as_of(snapshot),
+        ):
+            families = self.TestHuman.get(id=human.identification["id"]).families_list
+            self.assertEqual(
+                {family.id for family in families},
+                {old_family.identification["id"]},
+            )
+
+    def test_asymmetric_self_many_to_many_preserves_directional_snapshot(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            source = self.TestNetworkNode.create(
+                creator_id=None,
+                name="Source node",
+                ignore_permission=True,
+            )
+            old_target = self.TestNetworkNode.create(
+                creator_id=None,
+                name="Old target name",
+                ignore_permission=True,
+            )
+            added_target = self.TestNetworkNode.create(
+                creator_id=None,
+                name="Added target",
+                ignore_permission=True,
+            )
+            source.update(follows=[old_target], ignore_permission=True)
+        snapshot = base_time + timedelta(minutes=1)
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            old_target.update(name="New target name", ignore_permission=True)
+            source.update(follows=[added_target], ignore_permission=True)
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            historical_source = self.TestNetworkNode.get(id=source.identification["id"])
+            historical_targets = historical_source.follows_list
+            self.assertEqual(
+                {node.id for node in historical_targets},
+                {old_target.identification["id"]},
+            )
+            self.assertEqual(
+                historical_targets.get(id=old_target.identification["id"]).name,
+                "Old target name",
+            )
+            historical_target = self.TestNetworkNode.get(
+                id=old_target.identification["id"]
+            )
+            self.assertEqual(
+                {node.id for node in historical_target.followers_list},
+                {source.identification["id"]},
             )
 
     def test_first_and_last_operations(self):

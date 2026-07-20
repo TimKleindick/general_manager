@@ -199,8 +199,23 @@ class OrmPersistenceSupportCapability(BaseCapability):
             isinstance(model_cls, type) and issubclass(model_cls, HistoricalChanges)
         ):
             historical_record = getattr(interface_instance._instance, "_history", None)
+            if historical_record is None and hasattr(
+                interface_cls, "require_capability"
+            ):
+                historical_record = _history_capability_for(
+                    interface_cls
+                ).get_historical_record(
+                    interface_cls,
+                    interface_instance._instance,
+                    search_date,
+                )
             historical_manager = getattr(historical_record, field_call, None)
             if historical_manager is not None:
+                source_database_alias = get_support_capability(
+                    interface_cls
+                ).get_database_alias(interface_cls)
+                if source_database_alias:
+                    historical_manager = historical_manager.using(source_database_alias)
                 historical_queryset = historical_manager.all()
                 historical_model_cls = getattr(historical_queryset, "model", None)
                 if isinstance(historical_model_cls, type) and issubclass(
@@ -219,18 +234,22 @@ class OrmPersistenceSupportCapability(BaseCapability):
                 interface_cls.__name__
             ) from history_unavailable
         if isinstance(model_cls, type) and issubclass(model_cls, HistoricalChanges):
-            historical_model_cls = cast(type[models.Model], model_cls)
             target_field = interface_cls._model._meta.get_field(field_name)
             target_model = getattr(target_field, "related_model", None)
             if target_model is None:
                 return cast(models.QuerySet[models.Model], manager.none())
             django_target_model = cast(Type[models.Model], target_model)
-            related_attr = None
-            for rel_field in historical_model_cls._meta.get_fields():
-                related_model = getattr(rel_field, "related_model", None)
-                if related_model == target_model:
-                    related_attr = rel_field.name
-                    break
+            if not hasattr(target_model, "history") and search_date is not None:
+                from .history import HistoryNotSupportedError
+
+                history_unavailable = HistoryNotSupportedError(target_model.__name__)
+                raise HistoricalReadNotSupportedError(
+                    target_model.__name__
+                ) from history_unavailable
+            reverse_field_name = getattr(target_field, "m2m_reverse_field_name", None)
+            related_attr = (
+                reverse_field_name() if callable(reverse_field_name) else None
+            )
             if related_attr is None:
                 return cast(
                     models.QuerySet[models.Model],
@@ -239,15 +258,6 @@ class OrmPersistenceSupportCapability(BaseCapability):
             related_id_field = f"{related_attr}_id"
             related_ids_query = queryset.values_list(related_id_field, flat=True)
             if not hasattr(target_model, "history"):
-                if search_date is not None:
-                    from .history import HistoryNotSupportedError
-
-                    history_unavailable = HistoryNotSupportedError(
-                        target_model.__name__
-                    )
-                    raise HistoricalReadNotSupportedError(
-                        target_model.__name__
-                    ) from history_unavailable
                 return cast(
                     models.QuerySet[models.Model],
                     django_target_model._default_manager.filter(
@@ -269,18 +279,30 @@ class OrmPersistenceSupportCapability(BaseCapability):
                     django_target_model._default_manager.none(),
                 )
 
-            related_ids = list(related_ids_query)
-            if not related_ids:
-                return cast(
-                    models.QuerySet[models.Model],
-                    django_target_model._default_manager.none(),
-                )
-            return cast(
-                models.QuerySet[models.Model],
-                target_history_model.history.as_of(search_date).filter(
-                    **{f"{target_pk.name}__in": related_ids}
-                ),
+            from .history import latest_historical_instances
+
+            target_manager_cls = getattr(
+                django_target_model, "_general_manager_class", None
             )
+            target_interface = getattr(target_manager_cls, "Interface", None)
+            database_alias = None
+            if isinstance(target_interface, type):
+                target_support = get_support_capability(target_interface)
+                database_alias = target_support.get_database_alias(target_interface)
+            history_manager = target_history_model.history
+            if database_alias:
+                history_manager = history_manager.using(database_alias)
+            target_queryset = latest_historical_instances(
+                django_target_model,
+                history_manager,
+                search_date,
+            )
+            related_ids: object
+            if related_ids_query.db == target_queryset.db:
+                related_ids = Subquery(related_ids_query)
+            else:
+                related_ids = list(related_ids_query)
+            return target_queryset.filter(**{f"{target_pk.name}__in": related_ids})
 
         return cast(models.QuerySet[models.Model], queryset)
 
