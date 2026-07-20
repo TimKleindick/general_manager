@@ -702,8 +702,64 @@ class GraphQLTests(TestCase):
 
         self.assertIsNotNone(filter_type)
         self.assertIn("project", filter_type._meta.fields)
+        self.assertNotIn("project__id", filter_type._meta.fields)
         project_type = filter_type._meta.fields["project"].type
         self.assertIn("id", project_type._meta.fields)
+
+    def test_manager_input_explicit_relation_metadata_remains_authoritative(self):
+        class RelatedManager:
+            __name__ = "ExplicitManagerInputRelatedManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {"id": Input(int)}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"id": {"type": int}}
+
+        class CalculationManager:
+            __name__ = "ExplicitManagerInputCalculationManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {
+                    "project": Input(RelatedManager),
+                }
+
+                @staticmethod
+                def get_attribute_types():
+                    return {
+                        "project": {
+                            "type": RelatedManager,
+                            "relation_kind": "collection",
+                            "filter_lookup": "projects",
+                        },
+                    }
+
+        GraphQL.graphql_filter_type_registry.clear()
+
+        def relation_safe_issubclass(candidate, parent):
+            if parent is GeneralManager and candidate is RelatedManager:
+                return True
+            return isinstance(candidate, type) and issubclass(candidate, parent)
+
+        with patch(
+            "general_manager.api.graphql_relations.safe_issubclass",
+            side_effect=relation_safe_issubclass,
+        ):
+            filter_type = GraphQL._create_filter_options(CalculationManager)
+            normalized = GraphQL._normalize_filter_input(
+                CalculationManager,
+                {"project": {"any": {"id": 1}}},
+            )
+
+        self.assertIsNotNone(filter_type)
+        project_type = filter_type._meta.fields["project"].type
+        self.assertIn("any", project_type._meta.fields)
+        self.assertIn("none", project_type._meta.fields)
+        self.assertEqual(
+            normalized,
+            {"filter": {"projects__id": 1}, "exclude": {}},
+        )
 
     def test_create_filter_options_exposes_collection_any_none_filter(self):
         class ChildManager:
