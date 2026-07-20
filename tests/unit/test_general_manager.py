@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+import pickle
 
 from django.test import TestCase, override_settings
 from general_manager.bootstrap import (
@@ -90,6 +91,37 @@ class DummyInterface:
         Returns a fixed identification dictionary with a dummy ID.
         """
         return {"id": "dummy_id"}
+
+
+class PickleHistoricalInterface:
+    _as_of_behavior = "historical"
+
+    def __init__(self, id, *, search_date=None):
+        self.identification = {"id": id}
+        self._search_date = (
+            normalize_search_date(search_date) if search_date is not None else None
+        )
+
+
+class PickleHistoricalManager(GeneralManager):
+    pass
+
+
+PickleHistoricalManager.Interface = PickleHistoricalInterface  # type: ignore[assignment]
+
+
+class PickleTransparentInterface:
+    _as_of_behavior = "transparent"
+
+    def __init__(self, id):
+        self.identification = {"id": id}
+
+
+class PickleTransparentManager(GeneralManager):
+    pass
+
+
+PickleTransparentManager.Interface = PickleTransparentInterface  # type: ignore[assignment]
 
 
 class GeneralManagerTestCase(TestCase):
@@ -271,6 +303,55 @@ class GeneralManagerTestCase(TestCase):
 
         self.assertEqual(manager._interface._search_date, search_date)
         self.assertEqual(manager._effective_search_date, search_date)
+
+    def test_historical_reload_conflict_fails_before_interface_construction(self):
+        manager_class = self._historical_manager_class()
+        manager = manager_class(1, search_date=normalize_search_date("2022-01-01"))
+
+        with (
+            as_of("2023-01-01"),
+            patch.object(
+                manager_class.Interface,
+                "__init__",
+                side_effect=AssertionError("interface work must not run"),
+            ),
+            self.assertRaises(HistoricalContextConflictError),
+        ):
+            manager._reload_interface_state()
+
+    def test_historical_reload_allows_equal_context(self):
+        manager_class = self._historical_manager_class()
+        search_date = normalize_search_date("2022-01-01")
+        manager = manager_class(1, search_date=search_date)
+
+        with (
+            as_of(search_date),
+            patch.object(
+                manager_class.Interface,
+                "__init__",
+                autospec=True,
+                wraps=manager_class.Interface.__init__,
+            ) as constructor,
+        ):
+            manager._reload_interface_state()
+
+        constructor.assert_called_once()
+        self.assertEqual(manager._effective_search_date, search_date)
+
+    def test_unsupported_reload_fails_before_interface_construction(self):
+        manager_class = self._temporary_manager_class()
+        manager = manager_class("dummy_id")
+
+        with (
+            as_of("2022-01-01"),
+            patch.object(
+                DummyInterface,
+                "__init__",
+                side_effect=AssertionError("interface work must not run"),
+            ),
+            self.assertRaises(HistoricalReadNotSupportedError),
+        ):
+            manager._reload_interface_state()
 
     def test_generated_field_rejects_cached_current_value_inside_as_of(self):
         manager_class = self._historical_manager_class()
@@ -669,14 +750,52 @@ class GeneralManagerTestCase(TestCase):
         self.assertEqual(str(manager), "GeneralManager(**{'id': 'dummy_id'})")
         self.assertEqual(repr(manager), "GeneralManager(**{'id': 'dummy_id'})")
 
-    def test_reduce(self):
-        # Test the __reduce__ method
-        """
-        Tests that the __reduce__ method returns the correct tuple for object serialization.
-        """
-        manager = self.manager()
-        reduced = manager.__reduce__()
-        self.assertEqual(reduced, (self.manager, ("dummy_id",)))
+    def test_current_manager_pickle_round_trip_remains_current(self):
+        manager = PickleHistoricalManager(1)
+
+        restored = pickle.loads(pickle.dumps(manager))  # noqa: S301
+
+        self.assertEqual(restored.identification, {"id": 1})
+        self.assertIsNone(restored._effective_search_date)
+        self.assertIsNone(restored._interface._search_date)
+
+    def test_legacy_manager_pickle_payload_still_reconstructs(self):
+        class LegacyManagerPayload:
+            def __reduce__(self):
+                return (PickleHistoricalManager, (1,))
+
+        restored = pickle.loads(pickle.dumps(LegacyManagerPayload()))  # noqa: S301
+
+        self.assertIsInstance(restored, PickleHistoricalManager)
+        self.assertEqual(restored.identification, {"id": 1})
+        self.assertIsNone(restored._effective_search_date)
+
+    def test_historical_manager_pickle_round_trip_reloads_historical_interface(self):
+        search_date = normalize_search_date("2022-01-01")
+        manager = PickleHistoricalManager(1, search_date=search_date)
+
+        restored = pickle.loads(pickle.dumps(manager))  # noqa: S301
+
+        self.assertEqual(restored._effective_search_date, search_date)
+        self.assertEqual(restored._interface._search_date, search_date)
+        restored._ensure_manager_state_valid()
+        with as_of(search_date):
+            restored._ensure_manager_state_valid()
+        with (
+            as_of("2023-01-01"),
+            self.assertRaises(HistoricalContextConflictError),
+        ):
+            restored._ensure_manager_state_valid()
+
+    def test_transparent_historical_manager_pickle_round_trip_restores_scope(self):
+        with as_of("2022-01-01") as search_date:
+            manager = PickleTransparentManager(1)
+
+        restored = pickle.loads(pickle.dumps(manager))  # noqa: S301
+
+        self.assertEqual(restored._effective_search_date, search_date)
+        with as_of(search_date):
+            restored._ensure_manager_state_valid()
 
     def test_or_operator(self):
         # Test the __or__ operator
