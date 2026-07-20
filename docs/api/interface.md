@@ -1,5 +1,33 @@
 # Interface API
 
+## Historical execution context
+
+Use `general_manager.api.as_of(search_date)` to establish an operation-scoped
+historical date. `search_date` accepts an ISO date or datetime string (including
+a trailing `Z`), a `date`, or a naive or timezone-aware `datetime`. Date-only
+and naive values are made timezone-aware with Django's current timezone as soon
+as the context is entered; aware datetimes retain their timezone.
+
+```python
+from general_manager.api import as_of, current_as_of_date
+
+with as_of("2022-01-01") as search_date:
+    assert current_as_of_date() == search_date
+```
+
+`current_as_of_date()` returns the active aware datetime, or `None` outside an
+as-of context. Nesting is idempotent when both values normalize to the same
+datetime. A different nested date, or a different explicit date resolved while
+a context is active, raises `HistoricalContextConflictError` without changing
+the outer context. The previous value is restored when the context exits,
+including when its body raises an exception.
+
+Invalid or unsupported inputs raise `InvalidSearchDateError`. The public error
+types `HistoricalMutationError` and `HistoricalReadNotSupportedError` are
+available for integrations that reject mutations or reads while handling a
+historical operation; this context API does not itself apply interface, GraphQL,
+or cache policies.
+
 ::: general_manager.interface.base_interface.InterfaceBase
 
 `InterfaceBase` is the capability-driven base for custom interfaces. Subclasses
