@@ -7,6 +7,9 @@ from general_manager.interface.base_interface import (
     MissingInputArgumentsError,
     UnexpectedInputArgumentsError,
 )
+from general_manager.interface.orm_interface import OrmInterfaceBase
+from general_manager.interface.interfaces.existing_model import ExistingModelInterface
+from general_manager.interface.interfaces.read_only import ReadOnlyInterface
 from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.capabilities.configuration import (
     InterfaceCapabilityConfig,
@@ -195,6 +198,36 @@ class DummyInterface(InterfaceBase):
 
 
 class InterfaceBaseTests(SimpleTestCase):
+    def test_as_of_policy_defaults_to_unsupported(self):
+        self.assertEqual(InterfaceBase.as_of_policy, "unsupported")
+
+    def test_orm_interfaces_have_historical_as_of_policy(self):
+        self.assertEqual(OrmInterfaceBase.as_of_policy, "historical")
+        self.assertEqual(ExistingModelInterface.as_of_policy, "historical")
+        self.assertEqual(ReadOnlyInterface.as_of_policy, "historical")
+
+    def test_query_methods_reject_as_of_before_capability_lookup(self):
+        from general_manager.as_of import HistoricalReadNotSupportedError, as_of
+
+        class UnsupportedInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {}
+
+        for operation, kwargs in (
+            (UnsupportedInterface.filter, {"id": 1}),
+            (UnsupportedInterface.exclude, {"id": 1}),
+            (UnsupportedInterface.all, {}),
+        ):
+            with (
+                as_of("2022-01-01"),
+                patch.object(
+                    UnsupportedInterface,
+                    "require_capability",
+                    side_effect=AssertionError("capability lookup must not run"),
+                ),
+                self.assertRaises(HistoricalReadNotSupportedError),
+            ):
+                operation(**kwargs)
+
     def test_valid_input_kwargs(self):
         # Normal case: all inputs provided as kwargs
         """

@@ -36,8 +36,13 @@ class HistoricalMutationError(RuntimeError):
 class HistoricalReadNotSupportedError(RuntimeError):
     """Raised when a read does not support historical context."""
 
-    def __init__(self) -> None:
-        super().__init__("This read does not support historical context.")
+    def __init__(self, interface_name: str | None = None) -> None:
+        message = (
+            f"{interface_name} does not support historical reads."
+            if interface_name is not None
+            else "This read does not support historical context."
+        )
+        super().__init__(message)
 
 
 _AS_OF_DATE: ContextVar[datetime | None] = ContextVar("as_of_date", default=None)
@@ -71,6 +76,17 @@ def normalize_search_date(value: SearchDateInput) -> datetime:
 def current_as_of_date() -> datetime | None:
     """Return the historical date active for the current operation."""
     return _AS_OF_DATE.get()
+
+
+def ensure_as_of_read_supported(interface_cls: type[object]) -> None:
+    """Reject historical reads for interfaces without an as-of policy."""
+    if current_as_of_date() is None:
+        return
+    if getattr(interface_cls, "as_of_policy", "unsupported") not in {
+        "historical",
+        "transparent",
+    }:
+        raise HistoricalReadNotSupportedError(interface_cls.__name__)
 
 
 def _represents_same_instant(left: datetime, right: datetime) -> bool:

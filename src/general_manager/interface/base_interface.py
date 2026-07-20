@@ -24,6 +24,7 @@ from django.db.models import Model
 from django.dispatch import receiver
 
 from general_manager.conf import get_setting
+from general_manager.as_of import ensure_as_of_read_supported
 from general_manager.utils.args_to_kwargs import args_to_kwargs
 from general_manager.api.property import GraphQLProperty
 from general_manager.interface.capabilities.base import Capability, CapabilityName
@@ -253,6 +254,9 @@ class InterfaceBase(ABC):
 
     _parent_class: ClassVar[Type["GeneralManager"]]
     _interface_type: ClassVar[str]
+    as_of_policy: ClassVar[Literal["unsupported", "historical", "transparent"]] = (
+        "unsupported"
+    )
     input_fields: ClassVar[dict[str, "Input[type[object]]"]]
     _input_parsing_plan: ClassVar[_InputParsingPlan | None] = None
     _input_dependency_order: ClassVar[tuple[str, ...] | None] = None
@@ -1305,6 +1309,7 @@ class InterfaceBase(ABC):
         Raises:
             NotImplementedError: If the interface's query capability does not implement filtering.
         """
+        ensure_as_of_read_supported(cls)
         handler = cls.require_capability("query")
         if hasattr(handler, "filter"):
             filter_handler = cast(
@@ -1328,6 +1333,7 @@ class InterfaceBase(ABC):
         Raises:
             NotImplementedError: If the interface's query capability does not implement an `exclude` operation.
         """
+        ensure_as_of_read_supported(cls)
         handler = cls.require_capability("query")
         if hasattr(handler, "exclude"):
             exclude_handler = cast(
@@ -1348,6 +1354,7 @@ class InterfaceBase(ABC):
         Raises:
             NotImplementedError: If the configured query capability does not implement `all`.
         """
+        ensure_as_of_read_supported(cls)
         handler = cls.require_capability("query")
         if hasattr(handler, "all"):
             all_handler = cast(Callable[..., "Bucket[GeneralManager]"], handler.all)

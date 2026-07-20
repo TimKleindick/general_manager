@@ -552,6 +552,14 @@ class GeneralManagerMeta(type):
                     if instance is None:
                         return self._class.Interface.get_field_type(self._attr_name)
                     try:
+                        ensure_as_of_compatible = object.__getattribute__(
+                            instance, "_ensure_as_of_compatible"
+                        )
+                    except AttributeError:
+                        pass
+                    else:
+                        ensure_as_of_compatible()
+                    try:
                         manager_state_valid = instance._manager_state_valid
                     except AttributeError:
                         manager_state_valid = True

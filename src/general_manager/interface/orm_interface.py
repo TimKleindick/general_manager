@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import ClassVar, Generic, Type, TypeVar, cast
+from typing import ClassVar, Generic, Literal, Type, TypeVar, cast
 
 from django.db import models
 from django.utils import timezone
@@ -44,6 +44,7 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
     """
 
     _interface_type: ClassVar[str] = "database"
+    as_of_policy: ClassVar[Literal["historical"]] = "historical"
     lifecycle_capability_name: ClassVar[CapabilityName | None] = "orm_lifecycle"
     configured_capabilities: ClassVar[tuple[CapabilityConfigEntry, ...]]
     database: ClassVar[str | None] = None

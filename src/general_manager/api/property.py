@@ -142,6 +142,11 @@ class GraphQLProperty(property):
         @wraps(fget)
         def resolver(instance: object) -> object:
             """Resolve the property through the selected cached wrapper."""
+            ensure_as_of_compatible = getattr(
+                instance, "_ensure_as_of_compatible", None
+            )
+            if callable(ensure_as_of_compatible):
+                ensure_as_of_compatible()
             cached_fget = self._cached_fget
             if cached_fget is None:
                 cached_fget = self._get_cached_fget()

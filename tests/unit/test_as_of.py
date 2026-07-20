@@ -262,6 +262,36 @@ def test_historical_policy_errors_have_concise_messages() -> None:
     )
 
 
+def test_ensure_as_of_read_supported_is_inactive_without_context() -> None:
+    class UnsupportedInterface:
+        as_of_policy = "unsupported"
+
+    as_of_module.ensure_as_of_read_supported(UnsupportedInterface)
+
+
+@pytest.mark.parametrize("policy", ["historical", "transparent"])
+def test_ensure_as_of_read_supported_accepts_supported_policy(policy: str) -> None:
+    class SupportedInterface:
+        as_of_policy = policy
+
+    with as_of_module.as_of("2022-01-01"):
+        as_of_module.ensure_as_of_read_supported(SupportedInterface)
+
+
+def test_ensure_as_of_read_supported_names_unsupported_interface() -> None:
+    class UnsupportedInterface:
+        as_of_policy = "unsupported"
+
+    with (
+        as_of_module.as_of("2022-01-01"),
+        pytest.raises(
+            as_of_module.HistoricalReadNotSupportedError,
+            match="UnsupportedInterface does not support historical reads",
+        ),
+    ):
+        as_of_module.ensure_as_of_read_supported(UnsupportedInterface)
+
+
 def test_as_of_api_is_available_from_stable_public_module() -> None:
     public_api = import_module("general_manager.api")
     expected_exports = {
