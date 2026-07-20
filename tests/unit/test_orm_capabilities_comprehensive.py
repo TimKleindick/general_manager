@@ -509,6 +509,256 @@ class TestOrmReadCapability:
             with pytest.raises(HistoricalReadNotSupportedError):
                 capability.get_data(InterfaceInstance())
 
+    def test_recent_ambient_get_data_without_model_history_fails_before_live_read(
+        self,
+    ):
+        capability = OrmReadCapability()
+
+        class DoesNotExist(Exception):
+            pass
+
+        class Model:
+            pass
+
+        Model.DoesNotExist = DoesNotExist
+        search_date = timezone.now()
+
+        class InterfaceInstance:
+            _model = Model
+            historical_lookup_buffer_seconds = 30
+
+            def __init__(self) -> None:
+                self.pk = 1
+                self._search_date = search_date
+
+        manager = Mock()
+        manager.get.return_value = object()
+        support = Mock()
+        support.get_manager.return_value = manager
+
+        with (
+            as_of(search_date),
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=1),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+        ):
+            with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+                capability.get_data(InterfaceInstance())
+
+        assert isinstance(exc_info.value.__cause__, HistoryNotSupportedError)
+        support.get_manager.assert_not_called()
+        manager.get.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "capability_error",
+        [
+            NotImplementedError("missing history capability"),
+            TypeError("broken history capability"),
+        ],
+    )
+    def test_recent_ambient_get_data_with_unusable_history_capability_fails_closed(
+        self,
+        capability_error,
+    ):
+        capability = OrmReadCapability()
+
+        class DoesNotExist(Exception):
+            pass
+
+        class Model:
+            history = object()
+
+        Model.DoesNotExist = DoesNotExist
+        search_date = timezone.now()
+
+        class InterfaceInstance:
+            _model = Model
+            historical_lookup_buffer_seconds = 30
+
+            def __init__(self) -> None:
+                self.pk = 1
+                self._search_date = search_date
+
+        support = Mock()
+
+        with (
+            as_of(search_date),
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support._history_capability_for",
+                side_effect=capability_error,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=1),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+        ):
+            with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+                capability.get_data(InterfaceInstance())
+
+        assert exc_info.value.__cause__ is capability_error
+        support.get_manager.assert_not_called()
+
+    def test_recent_explicit_get_data_without_history_preserves_live_fallback(self):
+        capability = OrmReadCapability()
+
+        class DoesNotExist(Exception):
+            pass
+
+        class Model:
+            pass
+
+        Model.DoesNotExist = DoesNotExist
+        search_date = timezone.now()
+
+        class InterfaceInstance:
+            _model = Model
+            historical_lookup_buffer_seconds = 30
+
+            def __init__(self) -> None:
+                self.pk = 1
+                self._search_date = search_date
+
+        live_instance = object()
+        manager = Mock()
+        manager.get.return_value = live_instance
+        support = Mock()
+        support.get_manager.return_value = manager
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=1),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+        ):
+            assert capability.get_data(InterfaceInstance()) is live_instance
+
+        manager.get.assert_called_once_with(pk=1)
+
+    @pytest.mark.parametrize(
+        ("model_attrs", "capability_error"),
+        [
+            ({}, None),
+            (
+                {"history": object()},
+                NotImplementedError("missing history capability"),
+            ),
+            ({"history": object()}, TypeError("broken history capability")),
+        ],
+        ids=("no-model-history", "missing-capability", "broken-capability"),
+    )
+    def test_recent_ambient_get_data_rejects_live_run_cache_hit(
+        self,
+        model_attrs,
+        capability_error,
+    ):
+        capability = OrmReadCapability()
+
+        class DoesNotExist(Exception):
+            pass
+
+        model_attrs = {**model_attrs, "DoesNotExist": DoesNotExist}
+        Model = type("Model", (), model_attrs)
+        search_date = timezone.now()
+
+        class InterfaceInstance:
+            _model = Model
+            database = None
+            historical_lookup_buffer_seconds = 30
+
+            def __init__(self) -> None:
+                self.pk = 1
+                self._search_date = search_date
+
+        live_instance = object()
+        manager = Mock()
+        manager.get.return_value = live_instance
+        support = Mock()
+        support.get_database_alias.return_value = None
+        support.get_manager.return_value = manager
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ) as get_support,
+            patch(
+                "general_manager.interface.capabilities.orm.support._history_capability_for",
+                side_effect=capability_error,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support._connection_has_application_atomic_block",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=1),
+            ),
+            patch(
+                "general_manager.cache.run_context.as_of_cache_fingerprint",
+                return_value=None,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+            CalculationRunContext(),
+        ):
+            explicit = InterfaceInstance()
+            assert capability.get_data(explicit) is live_instance
+            support_calls_after_warmup = get_support.call_count
+
+            with as_of(search_date):
+                with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+                    capability.get_data(InterfaceInstance())
+
+        if capability_error is None:
+            assert isinstance(exc_info.value.__cause__, HistoryNotSupportedError)
+        else:
+            assert exc_info.value.__cause__ is capability_error
+        manager.get.assert_called_once_with(pk=1)
+        assert get_support.call_count == support_calls_after_warmup
+
     def test_get_attribute_types_returns_field_metadata(self):
         """Test that get_attribute_types returns field descriptors as metadata."""
         capability = OrmReadCapability()
@@ -1720,6 +1970,249 @@ class TestOrmQueryCapability:
                 capability.filter(interface_cls)
 
         assert isinstance(exc_info.value.__cause__, NotImplementedError)
+
+    @pytest.mark.parametrize(
+        ("operation", "kwargs"),
+        [
+            ("filter", {"id": 1}),  # GeneralManager.get(...)
+            ("filter", {"name": "historical"}),
+            ("exclude", {"name": "live"}),
+            ("filter", {}),  # GeneralManager.all()
+        ],
+        ids=("get", "filter", "exclude", "all"),
+    )
+    def test_recent_ambient_queries_without_model_history_fail_before_live_source(
+        self,
+        operation,
+        kwargs,
+    ):
+        capability = OrmQueryCapability()
+
+        class Model:
+            _meta = SimpleNamespace()
+
+        interface_cls = type(
+            "MockInterface",
+            (),
+            {
+                "_model": Model,
+                "_parent_class": Mock(),
+                "historical_lookup_buffer_seconds": 30,
+            },
+        )
+        support = Mock()
+        normalizer = Mock()
+        normalizer.normalize_filter_kwargs.return_value = dict(kwargs)
+        support.get_payload_normalizer.return_value = normalizer
+        search_date = timezone.now()
+
+        with (
+            as_of(search_date),
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=1),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **call_kwargs: call_kwargs["func"](),
+            ),
+        ):
+            with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+                getattr(capability, operation)(interface_cls, **kwargs)
+
+        assert isinstance(exc_info.value.__cause__, HistoryNotSupportedError)
+        support.get_queryset.assert_not_called()
+        support.get_manager.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "capability_error",
+        [
+            NotImplementedError("missing history capability"),
+            TypeError("broken history capability"),
+        ],
+    )
+    def test_recent_ambient_query_with_unusable_history_capability_fails_closed(
+        self,
+        capability_error,
+    ):
+        capability = OrmQueryCapability()
+
+        class Model:
+            history = object()
+            _meta = SimpleNamespace()
+
+        interface_cls = type(
+            "MockInterface",
+            (),
+            {
+                "_model": Model,
+                "_parent_class": Mock(),
+                "historical_lookup_buffer_seconds": 30,
+            },
+        )
+        support = Mock()
+        normalizer = Mock()
+        normalizer.normalize_filter_kwargs.return_value = {}
+        support.get_payload_normalizer.return_value = normalizer
+        search_date = timezone.now()
+
+        with (
+            as_of(search_date),
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support._history_capability_for",
+                side_effect=capability_error,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=1),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **call_kwargs: call_kwargs["func"](),
+            ),
+        ):
+            with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+                capability.filter(interface_cls)
+
+        assert exc_info.value.__cause__ is capability_error
+        support.get_queryset.assert_not_called()
+
+    def test_recent_explicit_query_without_history_preserves_live_fallback(self):
+        capability = OrmQueryCapability()
+
+        class Model:
+            _meta = SimpleNamespace()
+
+        interface_cls = type(
+            "MockInterface",
+            (),
+            {
+                "_model": Model,
+                "_parent_class": Mock(),
+                "historical_lookup_buffer_seconds": 30,
+            },
+        )
+        live_queryset = Mock()
+        filtered_queryset = Mock()
+        live_queryset.filter.return_value = filtered_queryset
+        live_queryset.db = "default"
+        filtered_queryset.db = "default"
+        support = Mock()
+        support.get_queryset.return_value = live_queryset
+        support.get_database_alias.return_value = None
+        normalizer = Mock()
+        normalizer.normalize_filter_kwargs.return_value = {"id": 1}
+        support.get_payload_normalizer.return_value = normalizer
+        search_date = timezone.now()
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=1),
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.DatabaseBucket"
+            ) as bucket_cls,
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **call_kwargs: call_kwargs["func"](),
+            ),
+        ):
+            capability.filter(interface_cls, id=1, search_date=search_date)
+
+        live_queryset.filter.assert_called_once_with(id=1)
+        bucket_cls.assert_called_once()
+
+    def test_recent_ambient_query_rejects_before_live_run_bucket_cache_lookup(self):
+        capability = OrmQueryCapability()
+
+        class Model:
+            _meta = SimpleNamespace()
+
+        interface_cls = type(
+            "MockInterface",
+            (),
+            {
+                "_model": Model,
+                "_parent_class": Mock(),
+                "database": None,
+                "historical_lookup_buffer_seconds": 30,
+            },
+        )
+        live_queryset = Mock()
+        filtered_queryset = Mock()
+        live_queryset.filter.return_value = filtered_queryset
+        live_queryset.db = "default"
+        filtered_queryset.db = "default"
+        support = OrmPersistenceSupportCapability()
+        support.get_queryset = Mock(return_value=live_queryset)
+        normalizer = Mock()
+        normalizer.normalize_filter_kwargs.return_value = {"id": 1}
+        support.get_payload_normalizer = Mock(return_value=normalizer)
+        search_date = timezone.now()
+
+        class FakeBucket:
+            @staticmethod
+            def _freeze_trusted_signature_payload(payload):
+                return tuple(sorted(payload.items()))
+
+            def __init__(self, *_args, **_kwargs) -> None:
+                pass
+
+            def _set_trusted_query_signature(self, _signature) -> None:
+                pass
+
+            def _copy_for_run_context_reuse(self):
+                return self
+
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.timezone.now",
+                return_value=search_date + timedelta(seconds=1),
+            ),
+            patch(
+                "general_manager.cache.run_context.as_of_cache_fingerprint",
+                return_value=None,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.DatabaseBucket",
+                new=FakeBucket,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+            CalculationRunContext(),
+        ):
+            capability.filter(interface_cls, id=1, search_date=search_date)
+            live_reads_after_warmup = support.get_queryset.call_count
+
+            with as_of(search_date):
+                with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+                    capability.filter(interface_cls, id=1)
+
+        assert isinstance(exc_info.value.__cause__, HistoryNotSupportedError)
+        assert support.get_queryset.call_count == live_reads_after_warmup
 
     def test_invalid_explicit_search_date_preserves_query_error_contract(self):
         capability = OrmQueryCapability()
