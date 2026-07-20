@@ -166,6 +166,18 @@
       "general_manager.api.property",
       "GraphQLPropertyWarmUpConfigurationError"
     ],
+    "HistoricalContextConflictError": [
+      "general_manager.as_of",
+      "HistoricalContextConflictError"
+    ],
+    "HistoricalMutationError": [
+      "general_manager.as_of",
+      "HistoricalMutationError"
+    ],
+    "HistoricalReadNotSupportedError": [
+      "general_manager.as_of",
+      "HistoricalReadNotSupportedError"
+    ],
     "InvalidFileTypeError": [
       "general_manager.uploads.errors",
       "InvalidFileTypeError"
@@ -173,6 +185,10 @@
     "InvalidImageError": [
       "general_manager.uploads.errors",
       "InvalidImageError"
+    ],
+    "InvalidSearchDateError": [
+      "general_manager.as_of",
+      "InvalidSearchDateError"
     ],
     "InvalidUploadChecksumError": [
       "general_manager.uploads.errors",
@@ -338,9 +354,17 @@
       "general_manager.uploads.types",
       "UploadTransport"
     ],
+    "as_of": [
+      "general_manager.as_of",
+      "as_of"
+    ],
     "bulk_data_change_notifications": [
       "general_manager.api.notification_batching",
       "bulk_data_change_notifications"
+    ],
+    "current_as_of_date": [
+      "general_manager.as_of",
+      "current_as_of_date"
     ],
     "graph_ql_mutation": [
       "general_manager.api.mutation",
