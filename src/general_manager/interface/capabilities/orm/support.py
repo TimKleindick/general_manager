@@ -174,7 +174,7 @@ class OrmPersistenceSupportCapability(BaseCapability):
         - Locates the corresponding related attribute on the historical model and collects related IDs.
         - If the target model has no history support or the interface instance has no search date, returns the live target model queryset filtered by those IDs.
         - If the target model supports history and a search date is present, returns the historical snapshot queryset as of that date filtered by those IDs.
-        If the target field or related attribute cannot be resolved, an empty queryset for the appropriate model is returned. If the through/model is not historical, the original related manager's queryset is returned.
+        If the target field or related attribute cannot be resolved, an empty queryset for the appropriate model is returned. Historical reads fail closed when either the through relation or target model has no usable history; live reads return the original related manager's queryset.
 
         Parameters:
             interface_instance (OrmInterfaceBase): The interface wrapper containing the model instance and optional search date.
@@ -194,6 +194,30 @@ class OrmPersistenceSupportCapability(BaseCapability):
         queryset = manager.all()
         model_cls = getattr(queryset, "model", None)
         interface_cls = interface_instance.__class__
+        search_date = interface_instance._search_date
+        if search_date is not None and not (
+            isinstance(model_cls, type) and issubclass(model_cls, HistoricalChanges)
+        ):
+            historical_record = getattr(interface_instance._instance, "_history", None)
+            historical_manager = getattr(historical_record, field_call, None)
+            if historical_manager is not None:
+                historical_queryset = historical_manager.all()
+                historical_model_cls = getattr(historical_queryset, "model", None)
+                if isinstance(historical_model_cls, type) and issubclass(
+                    historical_model_cls, HistoricalChanges
+                ):
+                    manager = historical_manager
+                    queryset = historical_queryset
+                    model_cls = historical_model_cls
+        if search_date is not None and not (
+            isinstance(model_cls, type) and issubclass(model_cls, HistoricalChanges)
+        ):
+            from .history import HistoryNotSupportedError
+
+            history_unavailable = HistoryNotSupportedError(interface_cls.__name__)
+            raise HistoricalReadNotSupportedError(
+                interface_cls.__name__
+            ) from history_unavailable
         if isinstance(model_cls, type) and issubclass(model_cls, HistoricalChanges):
             historical_model_cls = cast(type[models.Model], model_cls)
             target_field = interface_cls._model._meta.get_field(field_name)
@@ -215,10 +239,7 @@ class OrmPersistenceSupportCapability(BaseCapability):
             related_id_field = f"{related_attr}_id"
             related_ids_query = queryset.values_list(related_id_field, flat=True)
             if not hasattr(target_model, "history"):
-                if (
-                    interface_instance._search_date is not None
-                    and current_as_of_date() is not None
-                ):
+                if search_date is not None:
                     from .history import HistoryNotSupportedError
 
                     history_unavailable = HistoryNotSupportedError(
@@ -233,7 +254,7 @@ class OrmPersistenceSupportCapability(BaseCapability):
                         pk__in=Subquery(related_ids_query)
                     ),
                 )
-            if interface_instance._search_date is None:
+            if search_date is None:
                 return cast(
                     models.QuerySet[models.Model],
                     django_target_model._default_manager.filter(
@@ -241,6 +262,12 @@ class OrmPersistenceSupportCapability(BaseCapability):
                     ),
                 )
             target_history_model = cast("Type[SupportsHistory]", target_model)
+            target_pk = django_target_model._meta.pk
+            if target_pk is None:
+                return cast(
+                    models.QuerySet[models.Model],
+                    django_target_model._default_manager.none(),
+                )
 
             related_ids = list(related_ids_query)
             if not related_ids:
@@ -250,9 +277,9 @@ class OrmPersistenceSupportCapability(BaseCapability):
                 )
             return cast(
                 models.QuerySet[models.Model],
-                target_history_model.history.as_of(
-                    interface_instance._search_date
-                ).filter(pk__in=related_ids),
+                target_history_model.history.as_of(search_date).filter(
+                    **{f"{target_pk.name}__in": related_ids}
+                ),
             )
 
         return cast(models.QuerySet[models.Model], queryset)

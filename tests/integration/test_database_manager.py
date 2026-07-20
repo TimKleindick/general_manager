@@ -1,7 +1,7 @@
 # type: ignore
 
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from django.db import models, transaction
 from django.core.exceptions import ValidationError, FieldError
 from django.contrib.auth.models import User
@@ -15,7 +15,11 @@ from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.cache.signals import pre_data_change
-from general_manager.as_of import HistoricalContextConflictError, as_of
+from general_manager.as_of import (
+    HistoricalContextConflictError,
+    as_of,
+    normalize_search_date,
+)
 
 from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
@@ -298,6 +302,61 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         self.assertEqual(manager.identification, {"id": row.pk})
         self.assertIsNotNone(manager._interface._search_date.tzinfo)
+
+    def test_trusted_orm_hydration_accepts_iso_string_search_date(self):
+        row = self.TestHuman.Interface._model.objects.get(
+            pk=self.test_human1.identification["id"]
+        )
+
+        manager = self.TestHuman._from_trusted_orm_instance(
+            row,
+            search_date="2026-01-01T12:30:00+00:00",
+        )
+
+        self.assertEqual(
+            manager._effective_search_date,
+            normalize_search_date("2026-01-01T12:30:00+00:00"),
+        )
+
+    def test_trusted_orm_hydration_accepts_date_search_date(self):
+        row = self.TestHuman.Interface._model.objects.get(
+            pk=self.test_human1.identification["id"]
+        )
+        search_date = date(2026, 1, 1)
+
+        manager = self.TestHuman._from_trusted_orm_instance(
+            row,
+            search_date=search_date,
+        )
+
+        self.assertEqual(
+            manager._effective_search_date,
+            normalize_search_date(search_date),
+        )
+
+    def test_trusted_orm_hydration_inherits_ambient_search_date(self):
+        row = self.TestHuman.Interface._model.objects.get(
+            pk=self.test_human1.identification["id"]
+        )
+        snapshot = normalize_search_date("2026-01-01T12:30:00+00:00")
+
+        with as_of(snapshot):
+            manager = self.TestHuman._from_trusted_orm_instance(row)
+
+        self.assertEqual(manager._effective_search_date, snapshot)
+        self.assertEqual(manager._interface._search_date, snapshot)
+
+    def test_trusted_orm_hydration_rejects_conflicting_ambient_search_date(self):
+        row = self.TestHuman.Interface._model.objects.get(
+            pk=self.test_human1.identification["id"]
+        )
+        snapshot = normalize_search_date("2026-01-01T12:30:00+00:00")
+
+        with as_of(snapshot), self.assertRaises(HistoricalContextConflictError):
+            self.TestHuman._from_trusted_orm_instance(
+                row,
+                search_date="2026-01-02T12:30:00+00:00",
+            )
 
     def test_public_constructor_still_rejects_invalid_external_input(self):
         with self.assertRaises(ValueError):
@@ -977,6 +1036,123 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             historical_family = self.TestFamily.get(id=family_id)
             historical_human = historical_family.humans_list.get(id=human_id)
             self.assertEqual(historical_human.name, "Old member")
+
+    def test_historical_reverse_many_to_many_preserves_membership_and_date(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="Historical member",
+                ignore_permission=True,
+            )
+            old_family = self.TestFamily.create(
+                creator_id=None,
+                name="Old family name",
+                humans=[human],
+                ignore_permission=True,
+            )
+            added_family = self.TestFamily.create(
+                creator_id=None,
+                name="Added later",
+                humans=[],
+                ignore_permission=True,
+            )
+        snapshot = base_time + timedelta(minutes=30)
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            old_family.update(
+                name="New family name",
+                humans=[],
+                ignore_permission=True,
+            )
+            added_family.update(humans=[human], ignore_permission=True)
+        human_id = human.identification["id"]
+        old_family_id = old_family.identification["id"]
+        added_family_id = added_family.identification["id"]
+
+        def assert_historical_families(historical_human):
+            families = historical_human.families_list
+            self.assertEqual(families._search_date, snapshot)
+            self.assertEqual(
+                {family.id for family in families},
+                {old_family_id},
+            )
+            self.assertEqual(families.get(id=old_family_id).name, "Old family name")
+            self.assertFalse(families.filter(id=added_family_id))
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            assert_historical_families(self.TestHuman.get(id=human_id))
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=snapshot + timedelta(seconds=10),
+        ):
+            assert_historical_families(
+                self.TestHuman.get(id=human_id, search_date=snapshot)
+            )
+
+    def test_historical_forward_many_to_many_preserves_membership_and_date(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            old_human = self.TestHuman.create(
+                creator_id=None,
+                name="Old related value",
+                ignore_permission=True,
+            )
+            added_human = self.TestHuman.create(
+                creator_id=None,
+                name="Added later",
+                ignore_permission=True,
+            )
+            family = self.TestFamily.create(
+                creator_id=None,
+                name="Historical family",
+                humans=[old_human],
+                ignore_permission=True,
+            )
+        snapshot = base_time + timedelta(minutes=30)
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            old_human.update(name="New related value", ignore_permission=True)
+            family.update(humans=[added_human], ignore_permission=True)
+        family_id = family.identification["id"]
+        old_human_id = old_human.identification["id"]
+        added_human_id = added_human.identification["id"]
+
+        def assert_historical_humans(historical_family):
+            humans = historical_family.humans_list
+            self.assertEqual(humans._search_date, snapshot)
+            self.assertEqual(
+                {human.id for human in humans},
+                {old_human_id},
+            )
+            self.assertEqual(humans.get(id=old_human_id).name, "Old related value")
+            self.assertFalse(humans.filter(id=added_human_id))
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            assert_historical_humans(self.TestFamily.get(id=family_id))
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=snapshot + timedelta(seconds=10),
+        ):
+            assert_historical_humans(
+                self.TestFamily.get(id=family_id, search_date=snapshot)
+            )
 
     def test_first_and_last_operations(self):
         """

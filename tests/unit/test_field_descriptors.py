@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
+import pytest
 from django.apps import apps
 from django.db import models
 
@@ -14,10 +16,55 @@ from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     _FieldDescriptorBuilder,
     _general_manager_accessor,
     _general_manager_many_accessor,
+    _historical_reverse_many_to_many_queryset,
     build_field_descriptors,
 )
 from general_manager.bootstrap import initialize_general_manager_classes
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.as_of import HistoricalReadNotSupportedError, as_of
+from general_manager.interface.capabilities.orm.history import (
+    HistoryNotSupportedError,
+)
+
+
+def test_historical_reverse_many_to_many_fails_closed_without_target_history() -> None:
+    class SourceModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class TargetModel(models.Model):
+        class Meta:
+            app_label = "field_descriptor_tests"
+
+    class TargetManager:
+        class Interface:
+            pass
+
+    snapshot = datetime(2026, 1, 1, tzinfo=UTC)
+    interface_instance = SimpleNamespace(pk=1)
+
+    with as_of(snapshot):
+        with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+            _historical_reverse_many_to_many_queryset(
+                interface_instance,
+                source_model=SourceModel,
+                target_model=TargetModel,
+                target_manager_cls=TargetManager,
+                relation_field_name="sources",
+                search_date=snapshot,
+            )
+    assert isinstance(exc_info.value.__cause__, HistoryNotSupportedError)
+
+    with pytest.raises(HistoricalReadNotSupportedError) as exc_info:
+        _historical_reverse_many_to_many_queryset(
+            interface_instance,
+            source_model=SourceModel,
+            target_model=TargetModel,
+            target_manager_cls=TargetManager,
+            relation_field_name="sources",
+            search_date=snapshot,
+        )
+    assert isinstance(exc_info.value.__cause__, HistoryNotSupportedError)
 
 
 def test_general_manager_many_accessor_uses_explicit_relation_field_name() -> None:

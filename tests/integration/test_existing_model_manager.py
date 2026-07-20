@@ -18,8 +18,9 @@ from general_manager.interface.capabilities.orm.mutations import (
     OrmMutationCapability,
 )
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import AttributeEvaluationError
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
-from general_manager.as_of import as_of
+from general_manager.as_of import HistoricalReadNotSupportedError, as_of
 from tests.utils.database import create_test_models, drop_test_models
 
 
@@ -400,9 +401,12 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
 
         self.assertEqual(historical_view.name, "Historical LLC")
         self.assertTrue(historical_view.is_active)
-        self.assertEqual(dict(historical_view)["notes"], "historical")
-        owners = list(historical_view.owners_list)
-        self.assertEqual(owners[0].pk, self.user1.pk)
+        self.assertEqual(historical_view.notes, "historical")
+        with self.assertRaises(AttributeEvaluationError) as exc_info:
+            list(historical_view.owners_list)
+        self.assertIsInstance(
+            exc_info.exception.__cause__, HistoricalReadNotSupportedError
+        )
 
     def test_ambient_as_of_reads_existing_model_history(self) -> None:
         customer_id = self.customer_a.identification["id"]
