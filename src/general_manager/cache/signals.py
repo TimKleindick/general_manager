@@ -15,6 +15,7 @@ from general_manager.cache.data_change_context import (
     authorize_data_change_operation,
     own_data_change_transaction,
 )
+from general_manager.as_of import reject_historical_mutation
 from general_manager.logging import get_logger
 
 post_data_change = Signal()
@@ -98,6 +99,8 @@ def data_change(
         Returns:
             R: The result returned by the wrapped function.
         """
+        reject_historical_mutation()
+
         from general_manager.cache.dependency_index import (
             begin_dependency_data_change,
             drain_invalidated_cache_keys_for_graphql_rewarm,

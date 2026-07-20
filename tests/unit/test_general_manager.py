@@ -28,6 +28,7 @@ from django.utils.crypto import get_random_string
 from general_manager.api.property import GraphQLProperty
 from general_manager.as_of import (
     HistoricalContextConflictError,
+    HistoricalMutationError,
     HistoricalReadNotSupportedError,
     as_of,
     normalize_search_date,
@@ -1467,6 +1468,41 @@ class GeneralManagerTestCase(TestCase):
             self.assertEqual(len(self.post_list), 1)
             self.assertEqual(self.post_list[0]["action"], "create")
             self.assertEqual(self.post_list[0]["name"], "New Manager")
+
+    def test_historical_context_rejects_manager_mutations_before_side_effects(self):
+        manager_obj = self.manager()
+
+        with (
+            patch.object(
+                self.manager.Permission, "check_create_permission"
+            ) as create_permission,
+            patch.object(
+                self.manager.Permission, "check_update_permission"
+            ) as update_permission,
+            patch.object(
+                self.manager.Permission, "check_delete_permission"
+            ) as delete_permission,
+            patch.object(DummyInterface, "create") as interface_create,
+            patch.object(DummyInterface, "update") as interface_update,
+            patch.object(DummyInterface, "delete") as interface_delete,
+            as_of("2022-01-01"),
+        ):
+            with self.assertRaises(HistoricalMutationError) as captured:
+                self.manager.create(name="Blocked", ignore_permission=False)
+            with self.assertRaises(HistoricalMutationError):
+                manager_obj.update(name="Blocked", ignore_permission=True)
+            with self.assertRaises(HistoricalMutationError):
+                manager_obj.delete(ignore_permission=True)
+
+        create_permission.assert_not_called()
+        update_permission.assert_not_called()
+        delete_permission.assert_not_called()
+        interface_create.assert_not_called()
+        interface_update.assert_not_called()
+        interface_delete.assert_not_called()
+        self.assertIn("2022-01-01T00:00:00", str(captured.exception))
+        self.assertEqual(self.pre_list, [])
+        self.assertEqual(self.post_list, [])
 
     def test_classmethod_update(self):
         # Test the update class method

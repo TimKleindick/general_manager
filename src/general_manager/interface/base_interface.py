@@ -24,7 +24,10 @@ from django.db.models import Model
 from django.dispatch import receiver
 
 from general_manager.conf import get_setting
-from general_manager.as_of import ensure_as_of_read_supported
+from general_manager.as_of import (
+    ensure_as_of_read_supported,
+    reject_historical_mutation,
+)
 from general_manager.utils.args_to_kwargs import args_to_kwargs
 from general_manager.api.property import GraphQLProperty
 from general_manager.interface.capabilities.base import Capability, CapabilityName
@@ -1077,6 +1080,7 @@ class InterfaceBase(ABC):
         Returns:
             The capability-level create result mapping.
         """
+        reject_historical_mutation()
         observer = cls.get_capability_handler("observability")
 
         def _invoke() -> dict[str, object]:
@@ -1119,6 +1123,7 @@ class InterfaceBase(ABC):
         Raises:
             NotImplementedError: If this interface does not provide an update capability.
         """
+        reject_historical_mutation()
         observer = self.get_capability_handler("observability")
 
         def _invoke() -> object:
@@ -1163,6 +1168,7 @@ class InterfaceBase(ABC):
         Raises:
             NotImplementedError: If the interface does not provide a delete capability.
         """
+        reject_historical_mutation()
         observer = self.get_capability_handler("observability")
 
         def _invoke() -> object:

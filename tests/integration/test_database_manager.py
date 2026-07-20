@@ -17,6 +17,7 @@ from general_manager.cache.run_context import CalculationRunContext
 from general_manager.cache.signals import pre_data_change
 from general_manager.as_of import (
     HistoricalContextConflictError,
+    HistoricalMutationError,
     as_of,
     normalize_search_date,
 )
@@ -390,6 +391,32 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         self.assertEqual(created.name, "Charlie")
         trusted_hydrate.assert_not_called()
+
+    def test_historical_context_rejects_direct_database_interface_mutations(self):
+        interface = self.test_human1._interface
+        create_handler = self.TestHuman.Interface.get_capability_handler("create")
+        update_handler = self.TestHuman.Interface.get_capability_handler("update")
+        delete_handler = self.TestHuman.Interface.get_capability_handler("delete")
+        assert create_handler is not None
+        assert update_handler is not None
+        assert delete_handler is not None
+
+        with (
+            patch.object(create_handler, "create") as create,
+            patch.object(update_handler, "update") as update,
+            patch.object(delete_handler, "delete") as delete,
+            as_of("2022-01-01"),
+        ):
+            with self.assertRaises(HistoricalMutationError):
+                self.TestHuman.Interface.create(name="Blocked")
+            with self.assertRaises(HistoricalMutationError):
+                interface.update(name="Blocked")
+            with self.assertRaises(HistoricalMutationError):
+                interface.delete()
+
+        create.assert_not_called()
+        update.assert_not_called()
+        delete.assert_not_called()
 
     def test_bucket_iteration_hydrates_loaded_rows_without_per_row_queries(self):
         self.TestHuman.create(
