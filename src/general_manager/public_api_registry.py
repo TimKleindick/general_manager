@@ -96,6 +96,24 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
 
 
 API_EXPORTS: LazyExportMap = {
+    "as_of": ("general_manager.as_of", "as_of"),
+    "current_as_of_date": ("general_manager.as_of", "current_as_of_date"),
+    "InvalidSearchDateError": (
+        "general_manager.as_of",
+        "InvalidSearchDateError",
+    ),
+    "HistoricalContextConflictError": (
+        "general_manager.as_of",
+        "HistoricalContextConflictError",
+    ),
+    "HistoricalMutationError": (
+        "general_manager.as_of",
+        "HistoricalMutationError",
+    ),
+    "HistoricalReadNotSupportedError": (
+        "general_manager.as_of",
+        "HistoricalReadNotSupportedError",
+    ),
     "GraphQL": ("general_manager.api.graphql", "GraphQL"),
     "bulk_data_change_notifications": (
         "general_manager.api.notification_batching",
