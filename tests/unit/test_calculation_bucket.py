@@ -1,9 +1,13 @@
 # type: ignore
 from django.test import TestCase
-from datetime import date
+from datetime import date, datetime, UTC
 from types import SimpleNamespace
 from unittest.mock import patch
 from general_manager.bucket.calculation_bucket import CalculationBucket
+from general_manager.as_of import (
+    HistoricalContextConflictError,
+    as_of,
+)
 from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.interface import CalculationInterface
 from general_manager.manager.input import DateRangeDomain, Input
@@ -70,6 +74,53 @@ class CountingIterable:
     return_value={"dummy": {"filter_kwargs": {}}},
 )
 class TestCalculationBucket(TestCase):
+    def test_binds_active_as_of_date_and_preserves_it_on_derived_buckets(
+        self, _mock_parse
+    ):
+        snapshot = datetime(2022, 1, 1, tzinfo=UTC)
+
+        with as_of(snapshot):
+            bucket = CalculationBucket(DummyGeneralManager)
+        derived = bucket.filter(dummy=1).exclude(dummy=2).sort("dummy").all()
+
+        self.assertEqual(bucket._effective_search_date, snapshot)
+        self.assertEqual(derived._effective_search_date, snapshot)
+
+        with as_of(snapshot):
+            derived._data = [{"dummy": 1}]
+            self.assertEqual(derived[0].identification, {"dummy": 1})
+
+    def test_rejects_live_bucket_at_historical_public_boundaries(self, _mock_parse):
+        bucket = CalculationBucket(DummyGeneralManager)
+        bucket._data = [{}]
+
+        with as_of("2022-01-01"):
+            operations = (
+                bucket.all,
+                lambda: bucket.filter(dummy=1),
+                lambda: bucket.exclude(dummy=1),
+                bucket.generate_combinations,
+                lambda: list(bucket),
+                lambda: bucket[0],
+                lambda: bucket.group_by("dummy"),
+                lambda: bucket.index_by("dummy"),
+                lambda: bucket.get_possible_values(
+                    "dummy", Input(int, possible_values=[1]), {}
+                ),
+            )
+            for operation in operations:
+                with self.subTest(operation=operation):
+                    with self.assertRaises(HistoricalContextConflictError):
+                        operation()
+
+    def test_rejects_differently_dated_bucket(self, _mock_parse):
+        with as_of("2022-01-01"):
+            bucket = CalculationBucket(DummyGeneralManager)
+
+        with as_of("2022-01-02"):
+            with self.assertRaises(HistoricalContextConflictError):
+                bucket.generate_combinations()
+
     def test_initialization_defaults(self, _mock_parse):
         # Test basic initialization without optional parameters
 
