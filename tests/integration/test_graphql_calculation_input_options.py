@@ -187,6 +187,28 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         self.assertEqual(data["employee"]["name"], "Alice")
         self.assertIsNone(data["asOf"])
 
+    def test_manager_input_can_be_filtered_by_nested_id_via_graphql(self) -> None:
+        query = """
+        query($employeeId: ID!) {
+            optionalInputCalculationList(
+                filter: {employee: {id: $employeeId}}
+            ) {
+                items {
+                    employee { name }
+                    asOf
+                }
+            }
+        }
+        """
+
+        response = self.query(query, variables={"employeeId": self.employee_a.id})
+
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["optionalInputCalculationList"]["items"],
+            [{"employee": {"name": "Alice"}, "asOf": None}],
+        )
+
     def test_optional_input_accepts_explicit_value_in_graphql_queries(self) -> None:
         query = """
         query($employeeId: ID!, $asOf: Date) {
