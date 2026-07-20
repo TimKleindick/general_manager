@@ -12,26 +12,49 @@ annotations` is enabled:
 ```python
 from __future__ import annotations
 
+from django.db import models
+
 from general_manager import GeneralManager
 from general_manager.bucket import Bucket
+from general_manager.interface import DatabaseInterface
 
 
 class User(GeneralManager):
     name: str
 
+    class Interface(DatabaseInterface):
+        name = models.CharField(max_length=100)
+
 
 class Project(GeneralManager):
     owner: User | None
     reviewer_list: Bucket[User]
+
+    class Interface(DatabaseInterface):
+        owner = models.ForeignKey(
+            User.Interface._model,
+            on_delete=models.SET_NULL,
+            null=True,
+            blank=True,
+        )
+        reviewer = models.ManyToManyField(User.Interface._model, blank=True)
+
+
+attribute_types = Project.Interface.get_attribute_types()
+assert attribute_types["owner"]["type"] is User
+assert attribute_types["reviewer_list"]["type"] is User
 ```
 
-When the schema is built, `owner` becomes a single `User` object field and
-`reviewer_list` becomes a paginated relation-list field. The same manager target
-is used for nested relation filters, mutation relation inputs, and subscription
-identifiers. `list[User]`, `tuple[User, ...]`, `set[User]`, `Optional[User]`,
-`"User"`, and `"Bucket[User]"` are also supported. Keep one manager target in a
-relation annotation; a union such as `User | Team` is ambiguous and does not
-produce manager-relation behavior.
+`DatabaseInterface` registers both managers and derives relation metadata from
+the Django fields: `owner` maps directly to the foreign key, while the
+`reviewer` many-to-many field is exposed as `reviewer_list`. When the schema is
+built, `owner` becomes a single `User` object field and `reviewer_list` becomes
+a paginated relation-list field. The same manager target is used for nested
+relation filters, mutation relation inputs, and subscription identifiers.
+`list[User]`, `tuple[User, ...]`, `set[User]`, `Optional[User]`, `"User"`, and
+`"Bucket[User]"` are also supported. Keep one manager target in a relation
+annotation; a union such as `User | Team` is ambiguous and does not produce
+manager-relation behavior.
 
 For existing or generated Django models, GeneralManager uses the model's
 manager back-reference to recover the corresponding manager type. Register
