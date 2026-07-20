@@ -600,6 +600,38 @@ def get_filter_options(
                     )
 
 
+def _get_filter_relation_info(
+    field_type: type[GeneralManager],
+    attribute_name: str,
+    attr_info: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Return explicit relation metadata or infer it for manager inputs."""
+    if attr_info.get("relation_kind") is not None:
+        return attr_info
+
+    interface = getattr(field_type, "Interface", None)
+    input_fields = getattr(interface, "input_fields", {})
+    input_field = (
+        input_fields.get(attribute_name) if isinstance(input_fields, dict) else None
+    )
+    input_type = getattr(input_field, "type", None)
+    if (
+        input_field is None
+        or resolve_general_manager_type(
+            input_type,
+            get_graphql_manager_registry(),
+        )
+        is None
+    ):
+        return attr_info
+
+    return {
+        **attr_info,
+        "relation_kind": "direct",
+        "filter_lookup": attr_info.get("filter_lookup", attribute_name),
+    }
+
+
 def get_relation_filter_option(
     attribute_type: object,
     attribute_name: str,
@@ -713,7 +745,12 @@ def create_filter_options(
 
     filter_fields: dict[str, GrapheneFieldType] = {}
     for attr_name, attr_info in field_type.Interface.get_attribute_types().items():
-        attr_type = attr_info["type"]
+        effective_attr_info = _get_filter_relation_info(
+            field_type,
+            attr_name,
+            attr_info,
+        )
+        attr_type = effective_attr_info["type"]
         manager_type = resolve_general_manager_type(
             attr_type,
             get_graphql_manager_registry(),
@@ -722,7 +759,7 @@ def create_filter_options(
             relation_option = get_relation_filter_option(
                 manager_type,
                 attr_name,
-                attr_info,
+                effective_attr_info,
                 graphql_filter_type_registry,
                 map_field_to_graphene_read,
                 remaining_depth,
@@ -736,7 +773,10 @@ def create_filter_options(
             **{
                 k: v
                 for k, v in get_filter_options(
-                    attr_type, attr_name, map_field_to_graphene_read, attr_info
+                    cast(type, attr_type),
+                    attr_name,
+                    map_field_to_graphene_read,
+                    effective_attr_info,
                 )
                 if v is not None
             },
@@ -841,9 +881,10 @@ def normalize_filter_input(
             filters[key] = normalize_id_filter_value(field_type, key, value)
             continue
 
-        attr_type = attr_info.get("type")
-        relation_kind = attr_info.get("relation_kind")
-        lookup = attr_info.get("filter_lookup", key)
+        effective_attr_info = _get_filter_relation_info(field_type, key, attr_info)
+        attr_type = effective_attr_info.get("type")
+        relation_kind = effective_attr_info.get("relation_kind")
+        lookup = effective_attr_info.get("filter_lookup", key)
         manager_type = resolve_general_manager_type(
             attr_type,
             get_graphql_manager_registry(),
