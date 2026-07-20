@@ -77,6 +77,10 @@ class DependencyWarmUpObject:
         self.identification = {"id": id}
         self.id = id
 
+    def __str__(self) -> str:
+        """Return a deterministic representation for cache-key generation."""
+        return f"DependencyWarmUpObject(**{{'id': {self.id}}})"
+
     @classmethod
     def all(cls) -> list["DependencyWarmUpObject"]:
         """Return one dependency-backed warm-up candidate."""
@@ -571,9 +575,13 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_dependency_recipe_reconstructs_and_executes_property(self) -> None:
-        """Dependency recipes re-run the descriptor path when re-warmed."""
+        """Dependency recipes re-run the descriptor path after cached data clears."""
         warm_up_graphql_properties([DependencyWarmUpObject])
         cache_key = graphql_warmup_recipe_keys()[0]
+        recipe = get_graphql_warmup_recipe(cache_key)
+        assert recipe is not None
+        cache.clear()
+        register_graphql_warmup_recipe(recipe)
         DependencyWarmUpObject.calls = 0
 
         warmed = warm_up_graphql_recipe(cache_key)
