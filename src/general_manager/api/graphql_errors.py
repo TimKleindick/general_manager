@@ -548,7 +548,8 @@ def handle_graph_ql_error(
     ``nonFieldErrors``. When ``field_name_mapper`` is provided, it maps
     ``message_dict`` field keys before they are emitted in ``fieldErrors``;
     non-field errors are not mapped. ``PermissionError`` instances use a fixed
-    public message. All other exceptions use a generic internal-error message
+    public message. Historical-context failures retain their stable public
+    historical code. All other exceptions use a generic internal-error message
     and an opaque correlation ID. Logging level/category is diagnostic behavior
     of the internal ``api.graphql`` logger and is not a public API contract.
     """
@@ -560,7 +561,15 @@ def handle_graph_ql_error(
             context={"error": error_name, "message": message},
         )
         return error
-    elif isinstance(error, ValidationError):
+    historical_error = historical_graphql_error(error)
+    if historical_error is not None:
+        logger.warning(
+            "graphql historical error",
+            context={"error": error_name, "message": message},
+            exc_info=error,
+        )
+        return historical_error
+    if isinstance(error, ValidationError):
         logger.warning(
             "graphql user error",
             context={"error": error_name, "message": message},
@@ -574,7 +583,7 @@ def handle_graph_ql_error(
                 ),
             )
         return GraphQLError(message, extensions={"code": "BAD_USER_INPUT"})
-    elif isinstance(error, PermissionError):
+    if isinstance(error, PermissionError):
         logger.info(
             "graphql permission error",
             context={"error": error_name, "message": message},

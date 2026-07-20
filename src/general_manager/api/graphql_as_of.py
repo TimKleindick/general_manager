@@ -8,12 +8,17 @@ from graphql import (
     DirectiveLocation,
     GraphQLArgument,
     GraphQLDirective,
+    GraphQLError,
     GraphQLInputType,
     GraphQLNonNull,
+    GraphQLSchema,
     OperationType,
+    VariablesInAllowedPositionRule,
     get_operation_ast,
     parse,
+    validate,
 )
+from graphql.execution.values import get_directive_values, get_variable_values
 from graphql.pyutils import Undefined
 from graphql.utilities import value_from_ast_untyped
 
@@ -24,6 +29,8 @@ _DUPLICATE_DIRECTIVE_MESSAGE = "Only one @asOf directive is allowed per operatio
 _INVALID_LOCATION_MESSAGE = "@asOf is only allowed on query operations."
 _INVALID_ARGUMENTS_MESSAGE = "@asOf requires exactly one date argument."
 _UNRESOLVED_DATE_MESSAGE = "@asOf date could not be resolved."
+_INVALID_DATE_MESSAGE = "@asOf date is invalid."
+_MISSING_SCHEMA_DIRECTIVE_MESSAGE = "@asOf is not available in this schema."
 
 
 def _public_error(message: str, code: str) -> PublicGraphQLError:
@@ -35,9 +42,10 @@ def extract_as_of_search_date(
     query: str | None,
     variables: object,
     operation_name: str | None,
+    schema: GraphQLSchema | None = None,
 ) -> datetime | None:
     """Extract and normalize ``@asOf(date:)`` from the selected operation."""
-    if query is None:
+    if not isinstance(query, str):
         return None
 
     document = parse(query)
@@ -74,12 +82,50 @@ def extract_as_of_search_date(
             "GRAPHQL_VALIDATION_FAILED",
         )
 
-    variable_values = (
+    variable_values: dict[str, object] = (
         dict(cast(Mapping[str, object], variables))
         if isinstance(variables, Mapping)
         else {}
     )
-    value = value_from_ast_untyped(date_arguments[0].value, variable_values)
+    if schema is None:
+        value = value_from_ast_untyped(date_arguments[0].value, variable_values)
+    else:
+        directive_definition = schema.get_directive("asOf")
+        if directive_definition is None:
+            raise _public_error(
+                _MISSING_SCHEMA_DIRECTIVE_MESSAGE,
+                "GRAPHQL_VALIDATION_FAILED",
+            )
+        coerced_variables = get_variable_values(
+            schema,
+            operation.variable_definitions or (),
+            variable_values,
+        )
+        if isinstance(coerced_variables, list):
+            raise _public_error(_INVALID_DATE_MESSAGE, "BAD_USER_INPUT")
+        try:
+            directive_values = get_directive_values(
+                directive_definition,
+                operation,
+                coerced_variables,
+            )
+        except GraphQLError as error:
+            raise _public_error(_INVALID_DATE_MESSAGE, "BAD_USER_INPUT") from error
+        if directive_values is None or "date" not in directive_values:
+            raise _public_error(_UNRESOLVED_DATE_MESSAGE, "BAD_USER_INPUT")
+
+        variable_position_errors = validate(
+            schema,
+            document,
+            rules=(VariablesInAllowedPositionRule,),
+        )
+        if variable_position_errors:
+            raise _public_error(_INVALID_DATE_MESSAGE, "BAD_USER_INPUT")
+        validation_errors = validate(schema, document)
+        if validation_errors:
+            raise validation_errors[0]
+        value = directive_values["date"]
+
     if value is Undefined or value is None:
         raise _public_error(
             _UNRESOLVED_DATE_MESSAGE,
@@ -88,7 +134,7 @@ def extract_as_of_search_date(
     try:
         return normalize_search_date(value)
     except InvalidSearchDateError as error:
-        raise _public_error(str(error), "BAD_USER_INPUT") from error
+        raise _public_error(_INVALID_DATE_MESSAGE, "BAD_USER_INPUT") from error
 
 
 def build_as_of_directive(date_time_type: GraphQLInputType) -> GraphQLDirective:

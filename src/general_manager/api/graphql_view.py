@@ -4,20 +4,36 @@ from __future__ import annotations
 
 import time
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Protocol, cast
 
 from asgiref.sync import async_to_sync
-from graphql import ExecutionResult, GraphQLError
+from graphql import (
+    ExecutionResult,
+    FieldNode,
+    FragmentDefinitionNode,
+    FragmentSpreadNode,
+    GraphQLError,
+    GraphQLSchema,
+    InlineFragmentNode,
+    OperationType,
+    get_operation_ast,
+    parse,
+)
+from graphql.language.ast import SelectionNode
 
 if TYPE_CHECKING:
     MUTATION_ERRORS_FLAG: str
 
     def set_rollback() -> None: ...
 
+    class _GrapheneSchema(Protocol):
+        graphql_schema: GraphQLSchema
+
     class GraphQLView:
         batch: bool
+        schema: _GrapheneSchema
 
         @classmethod
         def as_view(cls, **initkwargs: object) -> object: ...
@@ -75,6 +91,9 @@ from general_manager.metrics.graphql import (
 from general_manager.logging import get_logger
 
 logger = get_logger("graphql.metrics")
+_ASYNC_MUTATION_MESSAGE = (
+    "Async mutations are not supported by the synchronous GraphQL endpoint."
+)
 
 
 class _GraphQLExecutionResult(Protocol):
@@ -90,6 +109,98 @@ class _GraphQLExecutionResult(Protocol):
 async def _await_execution_result(result: object) -> object:
     """Await an async GraphQL execution while its request contexts are active."""
     return await result  # type: ignore[misc]
+
+
+def _close_awaitable(result: object) -> None:
+    """Close an unstarted mutation awaitable so its body cannot run later."""
+    visited: set[int] = set()
+
+    def close_nested(value: object) -> None:
+        identity = id(value)
+        if identity in visited:
+            return
+        visited.add(identity)
+
+        if inspect.iscoroutine(value):
+            frame = value.cr_frame
+            if frame is not None:
+                for nested in frame.f_locals.values():
+                    close_nested(nested)
+            value.close()
+            return
+        if type(value) is dict:
+            for nested in cast(dict[object, object], value).values():
+                close_nested(nested)
+            return
+        if type(value) in {list, tuple, set}:
+            for nested in cast(Iterable[object], value):
+                close_nested(nested)
+            return
+        if inspect.isawaitable(value):
+            close = getattr(value, "close", None)
+            if callable(close):
+                close()
+                return
+            cancel = getattr(value, "cancel", None)
+            if callable(cancel):
+                cancel()
+
+    close_nested(result)
+
+
+def _has_declared_async_mutation_resolver(
+    schema: GraphQLSchema,
+    query: object,
+    operation_name: str | None,
+) -> bool:
+    """Return whether a selected mutation declares an async root resolver."""
+    if not isinstance(query, str):
+        return False
+    try:
+        document = parse(query)
+    except GraphQLError:
+        return False
+    operation = get_operation_ast(document, operation_name)
+    mutation_type = schema.mutation_type
+    if (
+        operation is None
+        or operation.operation is not OperationType.MUTATION
+        or mutation_type is None
+    ):
+        return False
+
+    fragments = {
+        definition.name.value: definition
+        for definition in document.definitions
+        if isinstance(definition, FragmentDefinitionNode)
+    }
+    visited_fragments: set[str] = set()
+
+    def selections_are_async(selections: Sequence[SelectionNode]) -> bool:
+        for selection in selections:
+            if isinstance(selection, FieldNode):
+                field = mutation_type.fields.get(selection.name.value)
+                resolver = None if field is None else field.resolve
+                if resolver is not None and inspect.iscoroutinefunction(
+                    inspect.unwrap(resolver)
+                ):
+                    return True
+            elif isinstance(selection, InlineFragmentNode):
+                if selections_are_async(selection.selection_set.selections):
+                    return True
+            elif isinstance(selection, FragmentSpreadNode):
+                fragment_name = selection.name.value
+                if fragment_name in visited_fragments:
+                    continue
+                visited_fragments.add(fragment_name)
+                fragment = fragments.get(fragment_name)
+                if fragment is not None and selections_are_async(
+                    fragment.selection_set.selections
+                ):
+                    return True
+        return False
+
+    return selections_are_async(operation.selection_set.selections)
 
 
 class GeneralManagerGraphQLView(GraphQLView):
@@ -171,6 +282,7 @@ class GeneralManagerGraphQLView(GraphQLView):
                 query=query,
                 variables=variables,
                 operation_name=operation_name,
+                schema=self.schema.graphql_schema,
             )
         except PublicGraphQLError as error:
             execution_result = ExecutionResult(data=None, errors=[error])
@@ -180,24 +292,44 @@ class GeneralManagerGraphQLView(GraphQLView):
                 execution_result = self.execute_graphql_request(
                     request, data, query, variables, operation_name, show_graphiql
                 )
+                execution_result = self._complete_execution_result(
+                    execution_result,
+                    query=query,
+                    operation_name=operation_name,
+                )
         else:
             execution_context = (
                 nullcontext() if search_date is None else as_of(search_date)
             )
             try:
-                with execution_context, ensure_calculation_run_context():
-                    execution_result = self.execute_graphql_request(
-                        request,
-                        data,
-                        query,
-                        variables,
-                        operation_name,
-                        show_graphiql,
+                if _has_declared_async_mutation_resolver(
+                    self.schema.graphql_schema,
+                    query,
+                    operation_name,
+                ):
+                    execution_result = ExecutionResult(
+                        data=None,
+                        errors=[
+                            PublicGraphQLError(
+                                _ASYNC_MUTATION_MESSAGE,
+                                code="GRAPHQL_VALIDATION_FAILED",
+                            )
+                        ],
                     )
-                    if inspect.isawaitable(execution_result):
-                        execution_result = cast(
-                            _GraphQLExecutionResult | None,
-                            async_to_sync(_await_execution_result)(execution_result),
+                else:
+                    with execution_context, ensure_calculation_run_context():
+                        execution_result = self.execute_graphql_request(
+                            request,
+                            data,
+                            query,
+                            variables,
+                            operation_name,
+                            show_graphiql,
+                        )
+                        execution_result = self._complete_execution_result(
+                            execution_result,
+                            query=query,
+                            operation_name=operation_name,
                         )
             except HistoricalContextConflictError as error:
                 public_error = historical_graphql_error(error)
@@ -242,6 +374,32 @@ class GeneralManagerGraphQLView(GraphQLView):
             )
 
         return result, status_code
+
+    @staticmethod
+    def _complete_execution_result(
+        execution_result: object,
+        *,
+        query: str | None,
+        operation_name: str | None,
+    ) -> _GraphQLExecutionResult | None:
+        """Await async queries and reject async mutations before their body runs."""
+        if not inspect.isawaitable(execution_result):
+            return cast(_GraphQLExecutionResult | None, execution_result)
+        if resolve_operation_type(query, operation_name) == "mutation":
+            _close_awaitable(execution_result)
+            return ExecutionResult(
+                data=None,
+                errors=[
+                    PublicGraphQLError(
+                        _ASYNC_MUTATION_MESSAGE,
+                        code="GRAPHQL_VALIDATION_FAILED",
+                    )
+                ],
+            )
+        return cast(
+            _GraphQLExecutionResult | None,
+            async_to_sync(_await_execution_result)(execution_result),
+        )
 
     def format_error(self, error: Exception) -> Mapping[str, object]:
         """Format historical failures with stable public codes."""
@@ -301,12 +459,23 @@ class GeneralManagerGraphQLView(GraphQLView):
                 for error in execution_result.errors:
                     backend.record_error(
                         operation_name=op_name,
-                        code=extract_error_code(error),
+                        code=self._metrics_error_code(error),
                     )
         except Exception as exc:  # pragma: no cover - safety net  # noqa: BLE001
             logger.debug(
                 "graphql metrics recording failed",
                 context={"error": type(exc).__name__, "message": str(exc)},
             )
+
+    @staticmethod
+    def _metrics_error_code(error: Exception) -> str:
+        """Return a stable code for direct and wrapped historical errors."""
+        if isinstance(error, GraphQLError) and isinstance(
+            error.original_error, Exception
+        ):
+            public_error = historical_graphql_error(error.original_error)
+            if public_error is not None:
+                return extract_error_code(public_error)
+        return extract_error_code(error)
 
     # Inherit GraphQLView.dispatch without changes.

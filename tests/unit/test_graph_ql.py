@@ -7,11 +7,12 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from datetime import UTC, date, datetime
-from inspect import signature
+from inspect import CORO_CLOSED, getcoroutinestate, signature
 from threading import Barrier
 from types import SimpleNamespace
 import graphene
 from django.test import TestCase, override_settings
+from django.test import RequestFactory
 from django.db.models import NOT_PROVIDED
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
@@ -29,7 +30,10 @@ from general_manager.api.graphql_mutations import (
     _normalize_mutation_kwargs_for_manager,
 )
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
-from general_manager.api.graphql_as_of import extract_as_of_search_date
+from general_manager.api.graphql_as_of import (
+    build_as_of_directive,
+    extract_as_of_search_date,
+)
 from general_manager.as_of import (
     HistoricalContextConflictError,
     HistoricalMutationError,
@@ -57,12 +61,113 @@ from graphql import (
     DirectiveLocation,
     GraphQLError,
     GraphQLDirective,
+    GraphQLField,
+    GraphQLObjectType,
+    GraphQLScalarType,
+    GraphQLSchema,
+    GraphQLString,
     parse,
     specified_directives,
 )
+from graphql.language import StringValueNode
 
 
 class GraphQLAsOfExecutionTests(unittest.TestCase):
+    def test_schema_scalar_coercion_handles_literals_variables_and_defaults(
+        self,
+    ) -> None:
+        schema = self._coercion_schema()
+        expected = datetime(2000, 1, 1, tzinfo=UTC)
+        cases = (
+            ('query Q @asOf(date: "epoch") { ping }', None),
+            (
+                "query Q($date: DateTime!) @asOf(date: $date) { ping }",
+                {"date": "epoch"},
+            ),
+            (
+                'query Q($date: DateTime! = "epoch") @asOf(date: $date) { ping }',
+                {},
+            ),
+        )
+
+        for query, variables in cases:
+            with self.subTest(query=query):
+                self.assertEqual(
+                    extract_as_of_search_date(
+                        query=query,
+                        variables=variables,
+                        operation_name="Q",
+                        schema=schema,
+                    ),
+                    expected,
+                )
+
+    def test_schema_coercion_rejects_null_undefined_invalid_and_wrong_type(
+        self,
+    ) -> None:
+        schema = self._coercion_schema()
+        cases = (
+            (
+                "query Q($date: DateTime!) @asOf(date: $date) { ping }",
+                {"date": None},
+                "BAD_USER_INPUT",
+            ),
+            (
+                "query Q($date: DateTime!) @asOf(date: $date) { ping }",
+                {},
+                "BAD_USER_INPUT",
+            ),
+            (
+                'query Q @asOf(date: "invalid") { ping }',
+                None,
+                "BAD_USER_INPUT",
+            ),
+            (
+                "query Q($date: String!) @asOf(date: $date) { ping }",
+                {"date": "epoch"},
+                "BAD_USER_INPUT",
+            ),
+        )
+
+        for query, variables, code in cases:
+            with self.subTest(query=query), self.assertRaises(GraphQLError) as raised:
+                extract_as_of_search_date(
+                    query=query,
+                    variables=variables,
+                    operation_name="Q",
+                    schema=schema,
+                )
+            if code is not None:
+                self.assertEqual(raised.exception.extensions["code"], code)
+
+    def test_wrong_declared_variable_type_never_enters_context(self) -> None:
+        view = self._view()
+        with patch("general_manager.api.graphql_view.as_of") as as_of_mock:
+            payload, status = view.get_response(
+                SimpleNamespace(GET={}, method="POST"),
+                {
+                    "query": "query Q($date: String!) @asOf(date: $date) { ping }",
+                    "variables": {"date": "2022-01-01"},
+                },
+            )
+
+        self.assertEqual(status, 400)
+        self.assertIn("errors", payload)
+        as_of_mock.assert_not_called()
+
+    def test_invalid_date_error_does_not_reflect_unbounded_input(self) -> None:
+        invalid = "secret-" * 10_000
+        with self.assertRaises(GraphQLError) as raised:
+            extract_as_of_search_date(
+                query="query Q($date: DateTime!) @asOf(date: $date) { ping }",
+                variables={"date": invalid},
+                operation_name="Q",
+                schema=self._coercion_schema(),
+            )
+
+        self.assertEqual(raised.exception.message, "@asOf date is invalid.")
+        self.assertNotIn("secret", raised.exception.message)
+
     def test_extracts_selected_operation_variable_and_ignores_other_operation(
         self,
     ) -> None:
@@ -375,6 +480,222 @@ class GraphQLAsOfExecutionTests(unittest.TestCase):
         self.assertEqual(seen, [datetime(2022, 1, 1, tzinfo=UTC)])
         self.assertIsNone(current_as_of_date())
 
+    def test_syntax_fallback_awaits_async_execution_and_cleans_up(self) -> None:
+        view = self._view()
+        seen: list[datetime | None] = []
+
+        async def execute(*_args: object) -> object:
+            await asyncio.sleep(0)
+            seen.append(current_as_of_date())
+            return type("Result", (), {"data": None, "errors": [GraphQLError("bad")]})()
+
+        with patch.object(view, "execute_graphql_request", execute):
+            payload, status = view.get_response(
+                SimpleNamespace(GET={}, method="POST"),
+                {"query": "query"},
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["errors"][0]["message"], "bad")
+        self.assertEqual(seen, [None])
+        self.assertIsNone(current_as_of_date())
+
+    def test_non_string_query_uses_controlled_http_error_response(self) -> None:
+        view = self._view()
+        del view.json_encode
+        request = RequestFactory().post(
+            "/graphql",
+            data=json.dumps({"query": 123}),
+            content_type="application/json",
+        )
+
+        response = view.dispatch(request)
+
+        self.assertEqual(response.status_code, 400)
+        payload = json.loads(response.content)
+        self.assertIn("errors", payload)
+
+    def test_http_query_executes_resolver_inside_as_of_context(self) -> None:
+        class Query(graphene.ObjectType):
+            active = graphene.String()
+
+            @staticmethod
+            def resolve_active(_root: object, _info: object) -> str | None:
+                current = current_as_of_date()
+                return None if current is None else current.isoformat()
+
+        schema = graphene.Schema(query=Query, types=(graphene.DateTime,))
+        gm_bootstrap._attach_as_of_directive(schema)
+        view = GeneralManagerGraphQLView(schema=schema)
+        request = RequestFactory().post(
+            "/graphql",
+            data=json.dumps(
+                {
+                    "query": (
+                        "query Q($date: DateTime!) @asOf(date: $date) { active }"
+                    ),
+                    "variables": {"date": "2022-01-01T00:00:00Z"},
+                }
+            ),
+            content_type="application/json",
+        )
+
+        response = view.dispatch(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            json.loads(response.content)["data"]["active"],
+            "2022-01-01T00:00:00+00:00",
+        )
+        self.assertIsNone(current_as_of_date())
+
+    def test_async_mutation_is_rejected_instead_of_escaping_atomic_scope(self) -> None:
+        events: list[str] = []
+
+        class AsyncMutation(graphene.Mutation):
+            Output = graphene.String
+
+            @staticmethod
+            async def mutate(_root: object, _info: object) -> str:
+                events.append("mutation body")
+                return "changed"
+
+        class Mutation(graphene.ObjectType):
+            async_mutation = AsyncMutation.Field()
+
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        view = GeneralManagerGraphQLView(
+            schema=graphene.Schema(query=Query, mutation=Mutation)
+        )
+        request = SimpleNamespace(GET={}, method="POST")
+        view.json_encode = lambda _request, payload, **_kwargs: payload
+
+        with (
+            patch("graphene_django.views.graphene_settings.ATOMIC_MUTATIONS", True),
+            patch("graphene_django.views.transaction.atomic") as atomic_mock,
+        ):
+            payload, status = view.get_response(
+                request,
+                {"query": "mutation Q { asyncMutation }"},
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(
+            payload["errors"][0]["extensions"]["code"],
+            "GRAPHQL_VALIDATION_FAILED",
+        )
+        self.assertEqual(events, [])
+        atomic_mock.assert_not_called()
+
+    def test_dynamic_mutation_awaitables_are_closed_without_running(self) -> None:
+        created: list[object] = []
+
+        class DynamicMutation(graphene.Mutation):
+            Output = graphene.String
+
+            @staticmethod
+            def mutate(_root: object, _info: object) -> object:
+                async def mutation_body() -> str:
+                    return "changed"
+
+                result = mutation_body()
+                created.append(result)
+                return result
+
+        class Mutation(graphene.ObjectType):
+            dynamic_mutation = DynamicMutation.Field()
+
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        view = GeneralManagerGraphQLView(
+            schema=graphene.Schema(query=Query, mutation=Mutation)
+        )
+        view.json_encode = lambda _request, payload, **_kwargs: payload
+
+        payload, status = view.get_response(
+            SimpleNamespace(GET={}, method="POST"),
+            {"query": "mutation Q { dynamicMutation }"},
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(
+            payload["errors"][0]["extensions"]["code"],
+            "GRAPHQL_VALIDATION_FAILED",
+        )
+        self.assertEqual(len(created), 1)
+        self.assertEqual(
+            getcoroutinestate(created[0]),
+            CORO_CLOSED,
+        )
+
+    def test_sync_mutation_retains_graphene_atomic_execution(self) -> None:
+        events: list[str] = []
+
+        class SyncMutation(graphene.Mutation):
+            Output = graphene.String
+
+            @staticmethod
+            def mutate(_root: object, _info: object) -> str:
+                events.append("mutation body")
+                return "changed"
+
+        class Mutation(graphene.ObjectType):
+            sync_mutation = SyncMutation.Field()
+
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        view = GeneralManagerGraphQLView(
+            schema=graphene.Schema(query=Query, mutation=Mutation)
+        )
+        view.json_encode = lambda _request, payload, **_kwargs: payload
+
+        with (
+            patch("graphene_django.views.graphene_settings.ATOMIC_MUTATIONS", True),
+            patch("graphene_django.views.transaction.atomic") as atomic_mock,
+        ):
+            payload, status = view.get_response(
+                SimpleNamespace(GET={}, method="POST"),
+                {"query": "mutation Q { syncMutation }"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["data"], {"syncMutation": "changed"})
+        self.assertEqual(events, ["mutation body"])
+        atomic_mock.assert_called_once_with()
+
+    def test_generated_mutation_preserves_historical_forbidden_error(self) -> None:
+        class DummyManager:
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {}
+
+            @classmethod
+            def create(cls, **_kwargs: object) -> object:
+                raise HistoricalMutationError()
+
+        mutation_class = GraphQL.generate_create_mutation_class(
+            DummyManager,
+            {"success": graphene.Boolean()},
+        )
+        assert mutation_class is not None
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with self.assertRaises(GraphQLError) as raised:
+            mutation_class.mutate(None, info)
+
+        self.assertEqual(
+            raised.exception.extensions["code"],
+            "HISTORICAL_MUTATION_FORBIDDEN",
+        )
+
     def test_historical_resolver_error_has_public_code_path_and_location(self) -> None:
         view = self._view()
         source = "query Q { ping }"
@@ -428,9 +749,42 @@ class GraphQLAsOfExecutionTests(unittest.TestCase):
             def resolve_ping(_root: object, _info: object) -> str:
                 return "pong"
 
-        view = GeneralManagerGraphQLView(schema=graphene.Schema(query=Query))
+        schema = graphene.Schema(query=Query, types=(graphene.DateTime,))
+        gm_bootstrap._attach_as_of_directive(schema)
+        view = GeneralManagerGraphQLView(schema=schema)
         view.json_encode = lambda _request, payload, **_kwargs: payload
         return view
+
+    @staticmethod
+    def _coercion_schema() -> GraphQLSchema:
+        rejected_value_message = "custom DateTime rejected the value"
+        string_required_message = "custom DateTime requires a string"
+
+        def parse_value(value: object) -> datetime:
+            if value == "epoch":
+                return datetime(2000, 1, 1, tzinfo=UTC)
+            raise GraphQLError(rejected_value_message)
+
+        def parse_literal(node: object, _variables: object = None) -> datetime:
+            if isinstance(node, StringValueNode):
+                return parse_value(node.value)
+            raise GraphQLError(string_required_message)
+
+        date_time = GraphQLScalarType(
+            "DateTime",
+            serialize=lambda value: value,
+            parse_value=parse_value,
+            parse_literal=parse_literal,
+        )
+        query = GraphQLObjectType(
+            "Query",
+            {"ping": GraphQLField(GraphQLString)},
+        )
+        return GraphQLSchema(
+            query=query,
+            types=[date_time],
+            directives=[*specified_directives, build_as_of_directive(date_time)],
+        )
 
 
 class GraphQLPropertyTests(TestCase):

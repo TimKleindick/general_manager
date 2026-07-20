@@ -5,7 +5,9 @@ from types import SimpleNamespace
 
 import graphene
 import pytest
+from graphql import GraphQLError
 
+from general_manager.as_of import HistoricalReadNotSupportedError
 from general_manager.api import graphql_view as view_module
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.metrics.graphql import GraphQLResolverTimingMiddleware
@@ -147,6 +149,35 @@ def test_graphql_view_get_response_records_metrics(monkeypatch) -> None:
     assert payload == {"errors": [{"message": "bad"}]}
     assert backend.requests == [("op", "query", "error")]
     assert backend.errors == [("op", "bad")]
+
+
+def test_graphql_view_metrics_use_mapped_historical_error_code(monkeypatch) -> None:
+    backend = _FakeBackend()
+
+    class Query(graphene.ObjectType):
+        ping = graphene.String()
+
+    view = GeneralManagerGraphQLView(schema=graphene.Schema(query=Query))
+    request = SimpleNamespace()
+    monkeypatch.setattr(view, "get_graphql_params", lambda *_: ("query", {}, "Op", "1"))
+    error = GraphQLError(
+        "wrapped",
+        path=["ping"],
+        original_error=HistoricalReadNotSupportedError("RemoteInterface"),
+    )
+    execution_result = SimpleNamespace(data={"ping": None}, errors=[error])
+    monkeypatch.setattr(
+        view, "execute_graphql_request", lambda *_args, **_kwargs: execution_result
+    )
+    monkeypatch.setattr(view, "json_encode", lambda _req, payload, **_kw: payload)
+    monkeypatch.setattr(view_module, "graphql_metrics_enabled", lambda: True)
+    monkeypatch.setattr(view_module, "get_graphql_metrics_backend", lambda: backend)
+    monkeypatch.setattr(view_module, "normalize_operation_name", lambda _name: "op")
+    monkeypatch.setattr(view_module, "resolve_operation_type", lambda *_: "query")
+
+    view.get_response(request, data={}, show_graphiql=False)
+
+    assert backend.errors == [("op", "HISTORICAL_READ_NOT_SUPPORTED")]
 
 
 def test_graphql_view_get_response_records_success_metrics(monkeypatch) -> None:
