@@ -1129,6 +1129,58 @@ class GraphQLDirectiveRegistrationTests(TestCase):
         ):
             gm_bootstrap._build_schema_directives([self._directive("include")])
 
+    def test_handle_graphql_registers_query_only_as_of_with_schema_datetime(
+        self,
+    ) -> None:
+        schema = self._build_bootstrap_schema()
+
+        directive = schema.graphql_schema.get_directive("asOf")
+
+        self.assertIsNotNone(directive)
+        assert directive is not None
+        self.assertEqual(str(directive.args["date"].type), "DateTime!")
+        self.assertEqual(directive.locations, (DirectiveLocation.QUERY,))
+        self.assertIs(
+            directive.args["date"].type.of_type,
+            schema.graphql_schema.get_type("DateTime"),
+        )
+
+    def test_repeated_schema_builds_do_not_duplicate_as_of_or_datetime(self) -> None:
+        first_schema = self._build_bootstrap_schema()
+        second_schema = self._build_bootstrap_schema()
+
+        for schema in (first_schema, second_schema):
+            self.assertEqual(
+                [
+                    directive.name
+                    for directive in schema.graphql_schema.directives
+                    if directive.name == "asOf"
+                ],
+                ["asOf"],
+            )
+            self.assertEqual(
+                [
+                    type_.name
+                    for type_ in schema.graphql_schema.type_map.values()
+                    if type_.name == "DateTime"
+                ],
+                ["DateTime"],
+            )
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "GRAPHQL_DIRECTIVES": [
+                GraphQLDirective(name="asOf", locations=[DirectiveLocation.QUERY])
+            ]
+        }
+    )
+    def test_handle_graphql_rejects_custom_as_of_directive(self) -> None:
+        with self.assertRaisesRegex(
+            gm_bootstrap.DuplicateGraphQLDirectiveError,
+            "Duplicate GraphQL directive name 'asOf' is not allowed",
+        ):
+            self._build_bootstrap_schema()
+
     @override_settings(
         GENERAL_MANAGER={
             "GRAPHQL_DIRECTIVES": [
