@@ -191,6 +191,122 @@ class RegionInputInterface(DummyInterface):
 
 
 class HistoricalMutationOverrideGuardTests(TestCase):
+    def test_inherited_sync_mixin_mutations_are_guarded_once_with_binding_intact(
+        self,
+    ) -> None:
+        calls: list[tuple[str, object]] = []
+
+        class SyncMutationMixin:
+            @classmethod
+            def create(cls, value: str) -> str:
+                """Create through the sync mixin."""
+                calls.append(("create", cls))
+                return value
+
+            @staticmethod
+            def update(value: str) -> str:
+                """Update through the sync mixin."""
+                calls.append(("update", value))
+                return value
+
+            def delete(self) -> str:
+                """Delete through the sync mixin."""
+                calls.append(("delete", self))
+                return "deleted"
+
+        class InheritedMutationInterface(SyncMutationMixin, DummyInterface):
+            pass
+
+        class ChildInterface(InheritedMutationInterface):
+            pass
+
+        interface = InheritedMutationInterface()
+
+        self.assertEqual(InheritedMutationInterface.create("outside"), "outside")
+        self.assertEqual(InheritedMutationInterface.update("outside"), "outside")
+        self.assertEqual(interface.delete(), "deleted")
+        self.assertIs(calls[0][1], InheritedMutationInterface)
+        self.assertEqual(calls[1][1], "outside")
+        self.assertIs(calls[2][1], interface)
+        self.assertEqual(InheritedMutationInterface.create.__name__, "create")
+        self.assertEqual(
+            InheritedMutationInterface.create.__doc__,
+            "Create through the sync mixin.",
+        )
+        self.assertTrue(hasattr(InheritedMutationInterface.create, "__wrapped__"))
+        self.assertFalse(
+            hasattr(InheritedMutationInterface.create.__wrapped__, "__wrapped__")
+        )
+        self.assertIs(
+            ChildInterface.create.__func__,
+            InheritedMutationInterface.create.__func__,
+        )
+        self.assertIs(ChildInterface.update, InheritedMutationInterface.update)
+        self.assertIs(ChildInterface.delete, InheritedMutationInterface.delete)
+
+        calls.clear()
+        with as_of("2022-01-01"):
+            with self.assertRaises(HistoricalMutationError):
+                InheritedMutationInterface.create("blocked")
+            with self.assertRaises(HistoricalMutationError):
+                InheritedMutationInterface.update("blocked")
+            with self.assertRaises(HistoricalMutationError):
+                interface.delete()
+
+        self.assertEqual(calls, [])
+
+    def test_inherited_async_mixin_mutations_remain_async_and_are_guarded(
+        self,
+    ) -> None:
+        calls: list[tuple[str, object]] = []
+
+        class AsyncMutationMixin:
+            @classmethod
+            async def create(cls, value: str) -> str:
+                """Create through the async mixin."""
+                calls.append(("create", cls))
+                return value
+
+            @staticmethod
+            async def update(value: str) -> str:
+                calls.append(("update", value))
+                return value
+
+            async def delete(self) -> str:
+                calls.append(("delete", self))
+                return "deleted"
+
+        class InheritedAsyncInterface(AsyncMutationMixin, DummyInterface):
+            pass
+
+        interface = InheritedAsyncInterface()
+
+        async def exercise() -> None:
+            self.assertEqual(await InheritedAsyncInterface.create("outside"), "outside")
+            self.assertEqual(await InheritedAsyncInterface.update("outside"), "outside")
+            self.assertEqual(await interface.delete(), "deleted")
+
+            calls.clear()
+            with as_of("2022-01-01"):
+                with self.assertRaises(HistoricalMutationError):
+                    await InheritedAsyncInterface.create("blocked")
+                with self.assertRaises(HistoricalMutationError):
+                    await InheritedAsyncInterface.update("blocked")
+                with self.assertRaises(HistoricalMutationError):
+                    await interface.delete()
+
+            self.assertEqual(calls, [])
+
+        self.assertTrue(inspect.iscoroutinefunction(InheritedAsyncInterface.create))
+        self.assertTrue(inspect.iscoroutinefunction(InheritedAsyncInterface.update))
+        self.assertTrue(inspect.iscoroutinefunction(InheritedAsyncInterface.delete))
+        self.assertEqual(InheritedAsyncInterface.create.__name__, "create")
+        self.assertEqual(
+            InheritedAsyncInterface.create.__doc__,
+            "Create through the async mixin.",
+        )
+        asyncio.run(exercise())
+
     def test_sync_mutation_overrides_are_guarded_without_changing_binding(self) -> None:
         calls: list[tuple[str, object]] = []
 
