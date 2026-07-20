@@ -295,6 +295,43 @@ class DatabaseBucketTestCase(TestCase):
 
         exists.assert_not_called()
 
+    def test_equality_accepts_buckets_from_active_as_of_date(self):
+        snapshot = datetime(2024, 1, 1, tzinfo=UTC)
+        queryset = User.objects.filter(pk=self.u1.pk)
+        left = DatabaseBucket(
+            queryset,
+            UserManager,
+            search_date=snapshot,
+        )
+        right = DatabaseBucket(
+            queryset,
+            UserManager,
+            search_date=snapshot,
+        )
+
+        with as_of(snapshot):
+            self.assertEqual(left, right)
+
+    def test_equality_rejects_live_bucket_in_as_of_context(self):
+        snapshot = datetime(2024, 1, 1, tzinfo=UTC)
+        dated = DatabaseBucket(
+            User.objects.filter(pk=self.u1.pk),
+            UserManager,
+            search_date=snapshot,
+        )
+
+        with as_of(snapshot), self.assertRaises(HistoricalContextConflictError):
+            _ = dated == self.bucket
+
+    def test_equality_rejects_bucket_from_different_as_of_date(self):
+        first = datetime(2024, 1, 1, tzinfo=UTC)
+        second = datetime(2024, 2, 1, tzinfo=UTC)
+        left = DatabaseBucket(User.objects.all(), UserManager, search_date=first)
+        right = DatabaseBucket(User.objects.all(), UserManager, search_date=second)
+
+        with as_of(first), self.assertRaises(HistoricalContextConflictError):
+            _ = left == right
+
     def test_derived_filter_rejects_conflicting_reserved_search_date(self):
         snapshot = datetime(2024, 1, 1, tzinfo=UTC)
         conflicting = datetime(2024, 2, 1, tzinfo=UTC)

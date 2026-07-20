@@ -584,6 +584,9 @@ class TestOrmHistoryCapability:
             )
 
             mock_history_manager.filter.assert_called_once()
+            mock_history_qs.order_by.assert_called_once_with(
+                "history_date", "history_id"
+            )
             assert result is mock_historical
 
     def test_get_historical_record_filters_by_pk_when_instance_has_history(self):
@@ -833,6 +836,9 @@ class TestOrmHistoryCapability:
 
             mock_history_manager.filter.assert_called_once_with(
                 id=123, history_date__lte=search_date
+            )
+            mock_history_qs.order_by.assert_called_once_with(
+                "history_date", "history_id"
             )
             assert result is mock_historical
 

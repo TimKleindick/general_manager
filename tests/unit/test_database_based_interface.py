@@ -254,7 +254,7 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
         )
         res = handler.get_historical_record(PersonInterface, dummy, dt)
         mock.filter.assert_called_once_with(history_date__lte=dt)
-        history_qs.order_by.assert_called_once_with("history_date")
+        history_qs.order_by.assert_called_once_with("history_date", "history_id")
         self.assertEqual(res, "hist")
 
     def test_get_attribute_types_and_field_type(self):
@@ -601,7 +601,7 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
         )
         res = handler.get_historical_record(PersonInterface, dummy, None)
         mock.filter.assert_called_once_with()
-        history_qs.order_by.assert_called_once_with("history_date")
+        history_qs.order_by.assert_called_once_with("history_date", "history_id")
         self.assertIsNone(res)
 
     def test_get_historical_record_with_future_date(self):
@@ -623,7 +623,7 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
         )
         res = handler.get_historical_record(PersonInterface, dummy, future_date)
         mock.filter.assert_called_once_with(history_date__lte=future_date)
-        history_qs.order_by.assert_called_once_with("history_date")
+        history_qs.order_by.assert_called_once_with("history_date", "history_id")
         self.assertEqual(res, "future_hist")
 
     def test_get_attribute_types_completeness(self):

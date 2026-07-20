@@ -32,6 +32,32 @@ class HistoryNotSupportedError(RuntimeError):
         super().__init__(f"{interface_name} does not support historical queries.")
 
 
+def latest_historical_instances(
+    model: type[models.Model],
+    history_manager: SupportsHistoryQuery,
+    search_date: datetime,
+) -> models.QuerySet[models.Model]:
+    """Return the latest non-deletion history row per original primary key."""
+    pk_field = model._meta.pk
+    pk_field_name = pk_field.name if pk_field is not None else "id"
+    history_query = cast(Any, history_manager)
+    latest_history_id = (
+        history_query.filter(
+            history_date__lte=search_date,
+            **{pk_field_name: models.OuterRef(pk_field_name)},
+        )
+        .order_by("-history_date", "-history_id")
+        .values("history_id")[:1]
+    )
+    latest_history = history_query.filter(
+        history_id=models.Subquery(latest_history_id)
+    ).exclude(history_type="-")
+    return cast(
+        models.QuerySet[models.Model],
+        cast(Any, latest_history).as_instances(),
+    )
+
+
 class OrmHistoryCapability(BaseCapability):
     """Lookup historical records for ORM-backed interfaces."""
 
@@ -163,7 +189,7 @@ class OrmHistoryCapability(BaseCapability):
             filter_kwargs.update(pk_filter)
         historical = (
             cast(models.QuerySet[models.Model], history_manager.filter(**filter_kwargs))
-            .order_by("history_date")
+            .order_by("history_date", "history_id")
             .last()
         )
         return historical
@@ -229,23 +255,10 @@ class OrmHistoryCapability(BaseCapability):
             raise HistoryNotSupportedError(interface_cls.__name__)
         history_manager = cast(SupportsHistory, interface_cls._model).history
         history_manager = self._apply_database_alias(interface_cls, history_manager)
-        pk_field = interface_cls._model._meta.pk
-        pk_field_name = pk_field.name if pk_field is not None else "id"
-        history_query = cast(Any, history_manager)
-        latest_history_id = (
-            history_query.filter(
-                history_date__lte=search_date,
-                **{pk_field_name: models.OuterRef(pk_field_name)},
-            )
-            .order_by("-history_date", "-history_id")
-            .values("history_id")[:1]
-        )
-        latest_history = history_query.filter(
-            history_id=models.Subquery(latest_history_id)
-        ).exclude(history_type="-")
-        return cast(
-            models.QuerySet[models.Model],
-            cast(Any, latest_history).as_instances(),
+        return latest_historical_instances(
+            interface_cls._model,
+            history_manager,
+            search_date,
         )
 
     def get_historical_record_by_pk(
@@ -288,7 +301,7 @@ class OrmHistoryCapability(BaseCapability):
                     **{pk_field_name: pk, "history_date__lte": search_date}
                 ),
             )
-            .order_by("history_date")
+            .order_by("history_date", "history_id")
             .last()
         )
         return historical

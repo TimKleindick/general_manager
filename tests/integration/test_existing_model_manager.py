@@ -497,9 +497,15 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
 
     @classmethod
     def setUpClass(cls) -> None:
+        class MultiDatabaseOwner(models.Model):
+            name = models.CharField(max_length=64)
+
+            class Meta:
+                app_label = "general_manager"
+
         class MultiDatabaseRecord(models.Model):
             name = models.CharField(max_length=64)
-            owners = models.ManyToManyField(User, blank=True)
+            owners = models.ManyToManyField(MultiDatabaseOwner, blank=True)
 
             class Meta:
                 app_label = "general_manager"
@@ -508,13 +514,25 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
             model = MultiDatabaseRecord
             database = "secondary"
 
+        class MultiDatabaseOwnerInterface(ExistingModelInterface):
+            model = MultiDatabaseOwner
+            database = "secondary"
+
         class MultiDatabaseManager(GeneralManager):
             Interface = MultiDatabaseInterface
 
+        class MultiDatabaseOwnerManager(GeneralManager):
+            Interface = MultiDatabaseOwnerInterface
+
+        cls.MultiDatabaseOwner = MultiDatabaseOwner
         cls.MultiDatabaseRecord = MultiDatabaseRecord
         cls.MultiDatabaseOwnersHistory = MultiDatabaseRecord.history.model.owners.model
         cls.MultiDatabaseManager = MultiDatabaseManager
-        cls.general_manager_classes = [MultiDatabaseManager]
+        cls.MultiDatabaseOwnerManager = MultiDatabaseOwnerManager
+        cls.general_manager_classes = [
+            MultiDatabaseOwnerManager,
+            MultiDatabaseManager,
+        ]
         superclass_setup_complete = False
         try:
             super().setUpClass()
@@ -522,6 +540,8 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
             cls._secondary_created_models = create_test_models(
                 connections["secondary"],
                 (
+                    cls.MultiDatabaseOwner,
+                    cls.MultiDatabaseOwner.history.model,
                     cls.MultiDatabaseRecord,
                     cls.MultiDatabaseRecord.history.model,
                     cls.MultiDatabaseOwnersHistory,
@@ -693,7 +713,9 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
     def test_many_to_many_create_keeps_all_artifacts_on_configured_alias(
         self,
     ) -> None:
-        owner = User.objects.using("secondary").create(username="secondary-owner")
+        owner = self.MultiDatabaseOwner.objects.using("secondary").create(
+            name="secondary-owner"
+        )
         original_apply_many_to_many = OrmMutationCapability.apply_many_to_many
         failure = RuntimeError("post-history failure")
 
@@ -772,7 +794,7 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
         )
         self.assertTrue(
             live_through.objects.using("secondary")
-            .filter(multidatabaserecord_id=record_id, user_id=owner.pk)
+            .filter(multidatabaserecord_id=record_id, multidatabaseowner_id=owner.pk)
             .exists()
         )
         reasons = list(
@@ -784,7 +806,10 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
         self.assertEqual(set(reasons), {"created with owner on secondary"})
         self.assertTrue(
             self.MultiDatabaseOwnersHistory.objects.using("secondary")
-            .filter(multidatabaserecord_id=record_id, user_id=owner.pk)
+            .filter(
+                multidatabaserecord_id=record_id,
+                multidatabaseowner_id=owner.pk,
+            )
             .exists()
         )
         self.assertFalse(
@@ -801,6 +826,38 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
         self.assertFalse(
             self.MultiDatabaseOwnersHistory.objects.using("default").exists()
         )
+
+    def test_historical_many_to_many_reads_only_configured_alias(self) -> None:
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            owner = self.MultiDatabaseOwnerManager.create(
+                name="Secondary old owner",
+                ignore_permission=True,
+            )
+            record = self.MultiDatabaseManager.create(
+                name="Secondary record",
+                owners_id_list=[owner.identification["id"]],
+                ignore_permission=True,
+            )
+        snapshot = base_time + timedelta(minutes=1)
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            owner.update(name="Secondary new owner", ignore_permission=True)
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+            self.assertNumQueries(0, using="default"),
+        ):
+            historical_owner = self.MultiDatabaseManager.get(
+                id=record.identification["id"]
+            ).owners_list.get(id=owner.identification["id"])
+
+        self.assertEqual(historical_owner.name, "Secondary old owner")
 
 
 class ExistingModelMultiDatabaseCleanupTests(SimpleTestCase):

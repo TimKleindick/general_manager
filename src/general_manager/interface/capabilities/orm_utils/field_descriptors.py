@@ -21,7 +21,7 @@ from uuid import UUID
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import models
 from django.db.models.query import prefetch_related_objects
 
@@ -1067,18 +1067,33 @@ def _historical_reverse_many_to_many_queryset(
     ):
         fail_closed()
 
-    source_field = None
-    target_field = None
+    try:
+        m2m_field = target_model._meta.get_field(relation_field_name)
+    except FieldDoesNotExist:
+        fail_closed()
+    source_field_name_resolver = getattr(m2m_field, "m2m_field_name", None)
+    target_field_name_resolver = getattr(m2m_field, "m2m_reverse_field_name", None)
+    if not callable(source_field_name_resolver) or not callable(
+        target_field_name_resolver
+    ):
+        fail_closed()
+    source_field_name = source_field_name_resolver()
+    target_field_name = target_field_name_resolver()
+    try:
+        related_object_field = historical_through_model._meta.get_field(
+            source_field_name
+        )
+        interface_object_field = historical_through_model._meta.get_field(
+            target_field_name
+        )
+    except FieldDoesNotExist:
+        fail_closed()
     history_field = None
     for relation in historical_through_model._meta.get_fields():
         related_model = getattr(relation, "related_model", None)
-        if related_model is source_model:
-            source_field = relation
-        elif related_model is target_model:
-            target_field = relation
-        elif related_model is history_model:
+        if related_model is history_model:
             history_field = relation
-    if source_field is None or target_field is None or history_field is None:
+    if history_field is None:
         fail_closed()
 
     target_interface = cast(Any, target_manager_cls.Interface)
@@ -1105,16 +1120,22 @@ def _historical_reverse_many_to_many_queryset(
         through_manager = through_manager.db_manager(database_alias)
     memberships = through_manager.filter(
         **{
-            getattr(source_field, "attname", f"{source_field.name}_id"): (
-                interface_instance.pk
-            ),
+            getattr(
+                interface_object_field,
+                "attname",
+                f"{interface_object_field.name}_id",
+            ): (interface_instance.pk),
             f"{getattr(history_field, 'attname', f'{history_field.name}_id')}__in": (
                 models.Subquery(latest_history.values("history_id"))
             ),
         }
     )
     target_ids = memberships.values(
-        getattr(target_field, "attname", f"{target_field.name}_id")
+        getattr(
+            related_object_field,
+            "attname",
+            f"{related_object_field.name}_id",
+        )
     )
     return cast(
         models.QuerySet[models.Model],
