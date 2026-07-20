@@ -134,6 +134,13 @@ def _reconstruct_general_manager(
     effective_search_date: datetime | None,
 ) -> "GeneralManager":
     """Reconstruct a manager with the backing snapshot encoded by its pickle."""
+    active = current_as_of_date()
+    if active is not None and (
+        effective_search_date is None
+        or not _represents_same_instant(effective_search_date, active)
+    ):
+        raise HistoricalContextConflictError
+
     behavior = getattr(manager_class.Interface, "_as_of_behavior", "unsupported")
     if effective_search_date is not None and behavior == "historical":
         return manager_class(
