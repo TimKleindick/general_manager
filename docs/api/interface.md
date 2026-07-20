@@ -2,19 +2,25 @@
 
 ## Historical execution context
 
-Use `general_manager.api.as_of(search_date)` to establish an operation-scoped
-historical date. `search_date` accepts an ISO date or datetime string (including
-a trailing `Z`), a `date`, or a naive or timezone-aware `datetime`. Date-only
-and naive values are made timezone-aware with Django's current timezone as soon
-as the context is entered; aware datetimes retain their timezone.
+Use `general_manager.api.as_of(search_date)` to make every supported read in an
+operation use one historical snapshot. The positional and explicit keyword
+forms are equivalent:
 
 ```python
 from general_manager.api import as_of, current_as_of_date
 
 with as_of("2022-01-01") as search_date:
     assert current_as_of_date() == search_date
+
+with as_of(search_date="2022-01-01"):
+    project = Project(1)
+    projects = Project.filter(status="active")
 ```
 
+`search_date` accepts an ISO date or datetime string (including a trailing
+`Z`), a `datetime.date`, or a naive or timezone-aware `datetime.datetime`.
+Date-only values become midnight in Django's current timezone. Naive datetimes
+also use Django's current timezone; aware datetimes retain their timezone.
 `current_as_of_date()` returns the active aware datetime, or `None` outside an
 as-of context. Nesting is idempotent when both values represent the same instant,
 even when their timezones differ. Distinct instants during a daylight-saving
@@ -24,11 +30,32 @@ date resolved while a context is active, raises
 previous value is restored when the context exits, including when its body
 raises an exception.
 
-Invalid or unsupported inputs raise `InvalidSearchDateError`. The public error
-types `HistoricalMutationError` and `HistoricalReadNotSupportedError` are
-available for integrations that reject mutations or reads while handling a
-historical operation; this context API does not itself apply interface, GraphQL,
-or cache policies.
+Invalid or unsupported inputs raise `InvalidSearchDateError`. An explicit
+`search_date` passed to a manager or query inside the context must represent the
+same instant; it cannot override the operation snapshot. Managers and buckets
+bound to current data or another date likewise raise
+`HistoricalContextConflictError` when consumed in the context.
+
+The context is strictly read-only. GeneralManager and direct interface create,
+update, and delete entry points raise `HistoricalMutationError` before
+permission checks, transports, signals, or database writes. ORM-backed
+interfaces provide historical reads and calculation interfaces propagate the
+snapshot through their dependencies. Request-backed and custom interfaces are
+fail-closed unless they explicitly declare supported behavior: their reads
+raise `HistoricalReadNotSupportedError` before external loading begins.
+
+Historical many-to-many membership requires django-simple-history through
+tables. Generated `DatabaseInterface` models and auto-registered existing
+models include local many-to-many fields in history registration, but the
+resulting `Historical<Model>_<field>` tables must be deployed through the
+normal Django migration workflow. Only membership changes recorded after those
+tables are deployed can be reconstructed; scalar history cannot recover
+pre-rollout membership. If membership or target history is unavailable, a
+dated relation read fails closed instead of returning current relation data.
+Generated relations that name a custom through model by an unresolved string
+cannot be registered when the owner model is created; their historical reads
+also fail closed. Define and history-track such models explicitly when custom
+through history is required.
 
 ::: general_manager.interface.base_interface.InterfaceBase
 
@@ -589,7 +616,10 @@ django-simple-history. Deployments must provision the resulting
 `Historical<Model>_<field>` through tables using the project's normal Django
 schema and migration workflow. Membership history is reliable only for changes
 recorded after that schema is rolled out: pre-rollout membership cannot be
-reconstructed or backfilled from scalar history alone.
+reconstructed or backfilled from scalar history alone. A generated relation
+whose custom through model is still an unresolved string during owner-model
+creation is not auto-registered for history; define and track that through
+model explicitly if its membership must support historical reads.
 
 `OrmReadCapability.get_data(interface_instance)` returns the live model row for
 `pk` or, when `search_date` is older than the interface

@@ -1,5 +1,36 @@
 # Cache API
 
+## Historical cache identity
+
+Cache identity includes the effective historical instant. Current reads keep
+their existing cache identity, while an active `as_of(...)` context receives a
+separate namespace from current data and from every other historical instant.
+Managers explicitly bound to a historical `search_date` also carry that date in
+their serialized identity, including when passed to a cached function outside
+an active context.
+
+Historical instants are canonicalized to UTC for cache keys. For example,
+`2022-01-01T01:00:00+01:00` and `2022-01-01T00:00:00Z` share one identity.
+GeneralManager does not round historical timestamps: two genuinely different
+instants receive different keys, even when they are close together. This can
+produce more entries for highly granular timestamps, but prevents an incorrect
+snapshot from being reused.
+
+The namespace applies consistently across cache scopes:
+
+- `cache="run"` isolates memoized values, ORM bucket results, bucket indexes,
+  prefetched hits, and pending publications inside a calculation run;
+- `cache="timeout"` uses distinct backend keys per historical instant; and
+- `cache="dependency"` uses distinct backend keys and dependency metadata per
+  historical instant.
+
+GraphQL warm-up recipes use recipe format version 2 and retain the effective
+`search_date`. Background warm-up re-enters that snapshot before reconstructing
+the manager and refreshes the original historical cache key. Older or otherwise
+version-incompatible recipes are ignored. Deploying this key and recipe format
+can therefore cause a one-time cold cache, especially for historical entries;
+allow normal traffic or the configured warm-up jobs to repopulate it.
+
 ::: general_manager.cache.cache_decorator.cached
 
 `cached(func=None, timeout=None, cache_backend=django_cache,
