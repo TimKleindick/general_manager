@@ -2581,6 +2581,23 @@ class TestOrmMutationCapability:
 class TestOrmLifecycleCapability:
     """Tests for ORM lifecycle capability."""
 
+    def test_m2m_history_fields_skip_unresolved_custom_through_models(self):
+        """History setup skips relations whose custom through model is unresolved."""
+        automatic = models.ManyToManyField("general_manager.AutomaticTarget")
+        unresolved_custom = models.ManyToManyField(
+            "general_manager.CustomTarget",
+            through="general_manager.CustomMembership",
+        )
+
+        field_names = OrmLifecycleCapability._m2m_history_field_names(
+            {
+                "automatic": automatic,
+                "unresolved_custom": unresolved_custom,
+            }
+        )
+
+        assert field_names == ("automatic",)
+
     def test_pre_create_builds_model_and_interface(self):
         """Test that pre_create builds Django model and interface class."""
         capability = OrmLifecycleCapability()
