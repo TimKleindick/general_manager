@@ -341,6 +341,22 @@ class DatabaseBucketTestCase(TestCase):
             with self.assertRaises(HistoricalContextConflictError):
                 bucket.filter(search_date=conflicting)
 
+    def test_dated_bucket_rejects_conflicting_filter_date_without_context(self):
+        snapshot = datetime(2024, 1, 1, tzinfo=UTC)
+        conflicting = datetime(2024, 2, 1, tzinfo=UTC)
+        bucket = DatabaseBucket(User.objects.all(), UserManager, search_date=snapshot)
+
+        with self.assertRaises(HistoricalContextConflictError):
+            bucket.filter(search_date=conflicting)
+
+    def test_dated_bucket_rejects_conflicting_exclude_date_without_context(self):
+        snapshot = datetime(2024, 1, 1, tzinfo=UTC)
+        conflicting = datetime(2024, 2, 1, tzinfo=UTC)
+        bucket = DatabaseBucket(User.objects.all(), UserManager, search_date=snapshot)
+
+        with self.assertRaises(HistoricalContextConflictError):
+            bucket.exclude(search_date=conflicting)
+
     def test_build_manager_dispatches_model_instances_and_primary_keys(self):
         with (
             patch.object(
@@ -1278,6 +1294,28 @@ class DatabaseBucketTestCase(TestCase):
                 None,
                 False,
             )
+
+    def test_restore_rejects_undated_or_differently_dated_snapshot_in_context(self):
+        snapshot = datetime(2024, 1, 1, tzinfo=UTC)
+        conflicting = datetime(2024, 2, 1, tzinfo=UTC)
+
+        with as_of(snapshot):
+            for encoded_date in (None, conflicting):
+                with (
+                    self.subTest(encoded_date=encoded_date),
+                    self.assertRaises(HistoricalContextConflictError),
+                ):
+                    _restore_database_bucket_from_primary_keys(
+                        User,
+                        UserManager,
+                        (self.u1.pk,),
+                        {},
+                        {},
+                        "default",
+                        encoded_date,
+                        None,
+                        False,
+                    )
 
     def test_or_union_with_bucket(self):
         # split buckets

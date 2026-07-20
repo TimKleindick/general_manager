@@ -6,6 +6,7 @@ from general_manager.interface.base_interface import (
     InvalidInputTypeError,
     MissingInputArgumentsError,
     UnexpectedInputArgumentsError,
+    _guard_mutation_callable,
 )
 from general_manager.interface.orm_interface import OrmInterfaceBase
 from general_manager.interface.interfaces.existing_model import ExistingModelInterface
@@ -205,6 +206,32 @@ class InterfaceBaseTests(SimpleTestCase):
         self.assertEqual(OrmInterfaceBase._as_of_behavior, "historical")
         self.assertEqual(ExistingModelInterface._as_of_behavior, "historical")
         self.assertEqual(ReadOnlyInterface._as_of_behavior, "historical")
+
+    def test_mutation_guard_is_idempotent_for_static_methods(self):
+        from general_manager.as_of import HistoricalMutationError, as_of
+
+        class StaticMutationInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {}
+
+            @staticmethod
+            def update(value: str) -> str:
+                return value
+
+        guarded = StaticMutationInterface.__dict__["update"].__func__
+
+        self.assertIs(_guard_mutation_callable(guarded), guarded)
+        self.assertEqual(StaticMutationInterface.update("current"), "current")
+        with as_of("2022-01-01"), self.assertRaises(HistoricalMutationError):
+            StaticMutationInterface.update("historical")
+
+    def test_orm_search_date_normalization_handles_none_and_values(self):
+        from datetime import UTC, datetime
+
+        self.assertIsNone(OrmInterfaceBase.normalize_search_date(None))
+        self.assertEqual(
+            OrmInterfaceBase.normalize_search_date("2022-01-01T00:00:00Z"),
+            datetime(2022, 1, 1, tzinfo=UTC),
+        )
 
     def test_query_methods_reject_as_of_before_capability_lookup(self):
         from general_manager.as_of import HistoricalReadNotSupportedError, as_of
