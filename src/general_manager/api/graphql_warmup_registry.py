@@ -72,8 +72,8 @@ class GraphQLWarmUpRecipe:
     cache: GraphQLWarmUpCacheScope
     timeout: int | None
     refresh_at: datetime | None
-    search_date: datetime | None = None
     version: int = RECIPE_VERSION
+    search_date: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

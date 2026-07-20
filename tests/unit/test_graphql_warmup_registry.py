@@ -1,6 +1,8 @@
 """Tests for the cache-backed GraphQL warm-up recipe registry."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import pickle
 
 from django.core.cache import cache
 from django.test import SimpleTestCase
@@ -223,6 +225,48 @@ class GraphQLWarmUpRegistryTests(SimpleTestCase):
         register_graphql_warmup_recipe(recipe)
 
         self.assertIsNone(get_graphql_warmup_recipe("stale"))
+
+    def test_ignores_pickled_version_one_recipe_with_legacy_slot_state(self) -> None:
+        """Adding recipe fields cannot shift the old version slot."""
+        from general_manager.api import graphql_warmup_registry as registry
+
+        @dataclass(frozen=True, slots=True)
+        class LegacyGraphQLWarmUpRecipe:
+            cache_key: str
+            manager_path: str
+            property_name: str
+            identification: dict[str, object]
+            cache: str
+            timeout: int | None
+            refresh_at: datetime | None
+            version: int = 1
+
+        LegacyGraphQLWarmUpRecipe.__module__ = registry.__name__
+        LegacyGraphQLWarmUpRecipe.__name__ = "GraphQLWarmUpRecipe"
+        LegacyGraphQLWarmUpRecipe.__qualname__ = "GraphQLWarmUpRecipe"
+        current_recipe_class = registry.GraphQLWarmUpRecipe
+        registry.GraphQLWarmUpRecipe = LegacyGraphQLWarmUpRecipe  # type: ignore[assignment]
+        try:
+            payload = pickle.dumps(
+                LegacyGraphQLWarmUpRecipe(
+                    cache_key="legacy",
+                    manager_path=("tests.unit.test_graphql_warmup_registry.Manager"),
+                    property_name="score",
+                    identification={"id": 1},
+                    cache="dependency",
+                    timeout=None,
+                    refresh_at=None,
+                )
+            )
+        finally:
+            registry.GraphQLWarmUpRecipe = current_recipe_class
+
+        legacy_recipe = pickle.loads(payload)  # noqa: S301
+        self.assertIsInstance(legacy_recipe, GraphQLWarmUpRecipe)
+        backend = RecordingCacheBackend()
+        backend.store["general_manager:graphql_warmup:recipe:legacy"] = legacy_recipe
+
+        self.assertIsNone(get_graphql_warmup_recipe("legacy", cache_backend=backend))
 
     def test_reads_existing_recipes_for_distinct_cache_keys(self) -> None:
         """Bulk recipe lookup deduplicates requested cache keys."""
