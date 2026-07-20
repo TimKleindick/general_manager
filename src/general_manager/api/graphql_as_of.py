@@ -13,7 +13,9 @@ from graphql import (
     GraphQLNonNull,
     GraphQLSchema,
     OperationType,
+    VariableNode,
     VariablesInAllowedPositionRule,
+    VariableDefinitionNode,
     get_operation_ast,
     parse,
     validate,
@@ -96,10 +98,23 @@ def extract_as_of_search_date(
                 _MISSING_SCHEMA_DIRECTIVE_MESSAGE,
                 "GRAPHQL_VALIDATION_FAILED",
             )
+        date_value_node = date_arguments[0].value
+        relevant_variable_definitions: tuple[VariableDefinitionNode, ...] = ()
+        relevant_variable_values: dict[str, object] = {}
+        if isinstance(date_value_node, VariableNode):
+            variable_name = date_value_node.name.value
+            relevant_variable_definitions = tuple(
+                definition
+                for definition in operation.variable_definitions or ()
+                if definition.variable.name.value == variable_name
+            )
+            if variable_name in variable_values:
+                relevant_variable_values[variable_name] = variable_values[variable_name]
+
         coerced_variables = get_variable_values(
             schema,
-            operation.variable_definitions or (),
-            variable_values,
+            relevant_variable_definitions,
+            relevant_variable_values,
         )
         if isinstance(coerced_variables, list):
             raise _public_error(_INVALID_DATE_MESSAGE, "BAD_USER_INPUT")

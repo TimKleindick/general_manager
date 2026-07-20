@@ -9,6 +9,7 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING, Protocol, cast
 
 from asgiref.sync import async_to_sync
+from django.db import connection, transaction
 from graphql import (
     ExecutionResult,
     FieldNode,
@@ -25,6 +26,11 @@ from graphql.language.ast import SelectionNode
 
 if TYPE_CHECKING:
     MUTATION_ERRORS_FLAG: str
+
+    class _GrapheneSettings(Protocol):
+        ATOMIC_MUTATIONS: bool
+
+    graphene_settings: _GrapheneSettings
 
     def set_rollback() -> None: ...
 
@@ -70,6 +76,7 @@ else:
     from graphene_django.constants import MUTATION_ERRORS_FLAG
     from graphene_django.utils.utils import set_rollback
     from graphene_django.views import GraphQLView
+    from graphene_django.settings import graphene_settings
 
 from general_manager.cache.run_context import ensure_calculation_run_context
 from general_manager.as_of import HistoricalContextConflictError, as_of
@@ -289,13 +296,13 @@ class GeneralManagerGraphQLView(GraphQLView):
         except GraphQLError:
             # Preserve Graphene-Django's normal syntax-error execution path.
             with ensure_calculation_run_context():
-                execution_result = self.execute_graphql_request(
-                    request, data, query, variables, operation_name, show_graphiql
-                )
-                execution_result = self._complete_execution_result(
-                    execution_result,
-                    query=query,
-                    operation_name=operation_name,
+                execution_result = self._execute_and_complete(
+                    request,
+                    data,
+                    query,
+                    variables,
+                    operation_name,
+                    show_graphiql,
                 )
         else:
             execution_context = (
@@ -318,7 +325,7 @@ class GeneralManagerGraphQLView(GraphQLView):
                     )
                 else:
                     with execution_context, ensure_calculation_run_context():
-                        execution_result = self.execute_graphql_request(
+                        execution_result = self._execute_and_complete(
                             request,
                             data,
                             query,
@@ -400,6 +407,57 @@ class GeneralManagerGraphQLView(GraphQLView):
             _GraphQLExecutionResult | None,
             async_to_sync(_await_execution_result)(execution_result),
         )
+
+    def _execute_and_complete(
+        self,
+        request: object,
+        data: object,
+        query: str | None,
+        variables: object,
+        operation_name: str | None,
+        show_graphiql: bool,
+    ) -> _GraphQLExecutionResult | None:
+        """Execute with Graphene-compatible atomic mutation ownership."""
+        atomic_mutation = resolve_operation_type(
+            query, operation_name
+        ) == "mutation" and (
+            graphene_settings.ATOMIC_MUTATIONS is True
+            or connection.settings_dict.get("ATOMIC_MUTATIONS", False) is True
+        )
+
+        def execute() -> tuple[object, bool]:
+            result = self.execute_graphql_request(
+                request,
+                data,
+                query,
+                variables,
+                operation_name,
+                show_graphiql,
+            )
+            return result, inspect.isawaitable(result)
+
+        if not atomic_mutation:
+            result, _is_awaitable = execute()
+            return self._complete_execution_result(
+                result,
+                query=query,
+                operation_name=operation_name,
+            )
+
+        database_alias = connection.alias
+        # Graphene retains its own inner atomic block. ``savepoint=False`` avoids
+        # adding another savepoint when a request transaction is already active,
+        # while this outer scope keeps dynamic-awaitable detection rollback-safe.
+        with transaction.atomic(using=database_alias, savepoint=False):
+            result, is_awaitable = execute()
+            completed = self._complete_execution_result(
+                result,
+                query=query,
+                operation_name=operation_name,
+            )
+            if is_awaitable:
+                transaction.set_rollback(True, using=database_alias)
+            return completed
 
     def format_error(self, error: Exception) -> Mapping[str, object]:
         """Format historical failures with stable public codes."""
