@@ -118,11 +118,11 @@ _EFFECTIVE_SEARCH_DATE_MISSING = object()
 
 def _effective_search_date_for_interface(interface: object) -> datetime | None:
     """Return the snapshot instant represented by an interface instance."""
-    policy = getattr(interface.__class__, "as_of_policy", "unsupported")
-    if policy == "historical":
+    behavior = getattr(interface.__class__, "_as_of_behavior", "unsupported")
+    if behavior == "historical":
         search_date = getattr(interface, "_search_date", None)
         return search_date if isinstance(search_date, datetime) else None
-    if policy == "transparent":
+    if behavior == "transparent":
         return current_as_of_date()
     return None
 
@@ -416,9 +416,9 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         previous_effective = self.__dict__.get(
             "_effective_search_date", _EFFECTIVE_SEARCH_DATE_MISSING
         )
-        policy = getattr(self.Interface, "as_of_policy", "unsupported")
+        behavior = getattr(self.Interface, "_as_of_behavior", "unsupported")
         if (
-            policy == "historical"
+            behavior == "historical"
             and previous_effective is _EFFECTIVE_SEARCH_DATE_MISSING
         ):
             legacy_search_date = getattr(self._interface, "_search_date", None)
@@ -426,18 +426,12 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 legacy_search_date if isinstance(legacy_search_date, datetime) else None
             )
         interface_kwargs = dict(self.__id)
-        if policy == "historical" and isinstance(previous_effective, datetime):
+        if behavior == "historical" and isinstance(previous_effective, datetime):
             interface_kwargs["search_date"] = previous_effective
         self._interface = self.Interface(**interface_kwargs)
-        if (
-            policy == "transparent"
-            and previous_effective is not _EFFECTIVE_SEARCH_DATE_MISSING
-        ):
-            self._effective_search_date = cast(datetime | None, previous_effective)
-        else:
-            self._effective_search_date = _effective_search_date_for_interface(
-                self._interface
-            )
+        self._effective_search_date = _effective_search_date_for_interface(
+            self._interface
+        )
         self._attribute_value_cache = {}
         self._manager_state_valid = True
         self._manager_state_reason = None
@@ -483,7 +477,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             interface = self.__dict__.get("_interface")
             if (
                 interface is not None
-                and getattr(interface.__class__, "as_of_policy", "unsupported")
+                and getattr(interface.__class__, "_as_of_behavior", "unsupported")
                 == "historical"
             ):
                 candidate = getattr(interface, "_search_date", None)

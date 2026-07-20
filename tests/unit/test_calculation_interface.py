@@ -69,7 +69,7 @@ class TestCalculationInterface(TestCase):
             self.interface.get_data()
 
     def test_calculation_interface_is_transparent_to_as_of_context(self):
-        self.assertEqual(CalculationInterface.as_of_policy, "transparent")
+        self.assertEqual(CalculationInterface._as_of_behavior, "transparent")
 
         class CalculationManager(GeneralManager):
             pass
@@ -80,6 +80,18 @@ class TestCalculationInterface(TestCase):
             manager = CalculationManager("test", 1)
             self.assertEqual(manager._effective_search_date, active)
             manager._ensure_manager_state_valid()
+
+    def test_calculation_reload_rebinds_to_active_as_of_context(self):
+        class CalculationManager(GeneralManager):
+            pass
+
+        CalculationManager.Interface = DummyCalculationInterface  # type: ignore[assignment]
+        manager = CalculationManager("test", 1)
+        self.assertIsNone(manager._effective_search_date)
+
+        with as_of("2022-01-01") as active:
+            manager._reload_interface_state()
+            self.assertEqual(manager._effective_search_date, active)
 
     def test_get_attribute_types(self):
         """

@@ -254,7 +254,7 @@ class InterfaceBase(ABC):
 
     _parent_class: ClassVar[Type["GeneralManager"]]
     _interface_type: ClassVar[str]
-    as_of_policy: ClassVar[Literal["unsupported", "historical", "transparent"]] = (
+    _as_of_behavior: ClassVar[Literal["unsupported", "historical", "transparent"]] = (
         "unsupported"
     )
     input_fields: ClassVar[dict[str, "Input[type[object]]"]]

@@ -41,7 +41,7 @@ class CalculationInterface(InterfaceBase):
     """
 
     _interface_type: ClassVar[str] = "calculation"
-    as_of_policy: ClassVar[Literal["transparent"]] = "transparent"
+    _as_of_behavior: ClassVar[Literal["transparent"]] = "transparent"
     input_fields: ClassVar[dict[str, Input[type[object]]]]
     _resolved_input_values: dict[str, object]
 

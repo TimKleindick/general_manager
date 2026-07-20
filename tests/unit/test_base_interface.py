@@ -198,13 +198,13 @@ class DummyInterface(InterfaceBase):
 
 
 class InterfaceBaseTests(SimpleTestCase):
-    def test_as_of_policy_defaults_to_unsupported(self):
-        self.assertEqual(InterfaceBase.as_of_policy, "unsupported")
+    def test_as_of_behavior_defaults_to_unsupported(self):
+        self.assertEqual(InterfaceBase._as_of_behavior, "unsupported")
 
-    def test_orm_interfaces_have_historical_as_of_policy(self):
-        self.assertEqual(OrmInterfaceBase.as_of_policy, "historical")
-        self.assertEqual(ExistingModelInterface.as_of_policy, "historical")
-        self.assertEqual(ReadOnlyInterface.as_of_policy, "historical")
+    def test_orm_interfaces_inherit_historical_as_of_behavior(self):
+        self.assertEqual(OrmInterfaceBase._as_of_behavior, "historical")
+        self.assertEqual(ExistingModelInterface._as_of_behavior, "historical")
+        self.assertEqual(ReadOnlyInterface._as_of_behavior, "historical")
 
     def test_query_methods_reject_as_of_before_capability_lookup(self):
         from general_manager.as_of import HistoricalReadNotSupportedError, as_of
