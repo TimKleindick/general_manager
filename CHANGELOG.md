@@ -2,6 +2,51 @@
 
 <!-- version list -->
 
+## v0.65.1 (2026-07-20)
+
+### Bug Fixes
+
+- Expose GraphQL manager input filters
+  ([`bd5d2ff`](https://github.com/TimKleindick/general_manager/commit/bd5d2ff5d6542566aba81252a1a862b1d3a7b4a9))
+
+### Documentation
+
+- Add search invalidation cookbook
+  ([`66e1058`](https://github.com/TimKleindick/general_manager/commit/66e105815bcdeef85cd315af774eab65a87fdcd3))
+
+- Design GraphQL manager input filters
+  ([`cd1b855`](https://github.com/TimKleindick/general_manager/commit/cd1b85526825fb424607fc34a16620fa26202e8e))
+
+- Document GraphQL relation annotation compatibility
+  ([`ac5795f`](https://github.com/TimKleindick/general_manager/commit/ac5795f28d6e23652f79a0e385e83a10f8fba908))
+
+- Explain GraphQL calculation relation filters
+  ([`8b726eb`](https://github.com/TimKleindick/general_manager/commit/8b726eb0729f596945cbc1d7d92e9138f50470f5))
+
+- Explain related object factories
+  ([`207ead3`](https://github.com/TimKleindick/general_manager/commit/207ead323aab2a0e9d17aec61a7812fde1f27341))
+
+- Fix related factory import path
+  ([`05d7da0`](https://github.com/TimKleindick/general_manager/commit/05d7da094fdb487ec84d817b1c4db8f9ae91a231))
+
+- Link related factory guide
+  ([`927ee14`](https://github.com/TimKleindick/general_manager/commit/927ee14ad828c4d449dac7ab4cb969f88f301a40))
+
+- Make GraphQL relation example runnable
+  ([`6358cba`](https://github.com/TimKleindick/general_manager/commit/6358cbaf8a4297a904217824d346a95a7c7d5415))
+
+### Testing
+
+- Cover GraphQL input relation precedence
+  ([`a55b1c2`](https://github.com/TimKleindick/general_manager/commit/a55b1c2ed4cae4e8eddea217195fe069487b4de7))
+
+- Remove README database support assertion
+  ([`bafb331`](https://github.com/TimKleindick/general_manager/commit/bafb331cebb727ba03acd434509133db32efdabf))
+
+- Reproduce GraphQL manager input filter
+  ([`391876c`](https://github.com/TimKleindick/general_manager/commit/391876c151deb4cf90e2e9326f5a173e56b7876f))
+
+
 ## v0.65.0 (2026-07-18)
 
 ### Bug Fixes
