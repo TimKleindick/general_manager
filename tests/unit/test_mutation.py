@@ -191,6 +191,28 @@ class RegionInputInterface(DummyInterface):
 
 
 class HistoricalMutationOverrideGuardTests(TestCase):
+    def test_inherited_mixin_guard_survives_patched_interface_base_global(
+        self,
+    ) -> None:
+        calls: list[str] = []
+
+        class MutationMixin:
+            @staticmethod
+            def update(value: str) -> str:
+                calls.append(value)
+                return value
+
+        with mock.patch("general_manager.interface.base_interface.InterfaceBase"):
+
+            class PatchedGlobalInterface(MutationMixin, InterfaceBase):
+                pass
+
+        self.assertEqual(PatchedGlobalInterface.update("outside"), "outside")
+        calls.clear()
+        with as_of("2022-01-01"), self.assertRaises(HistoricalMutationError):
+            PatchedGlobalInterface.update("blocked")
+        self.assertEqual(calls, [])
+
     def test_inherited_sync_mixin_mutations_are_guarded_once_with_binding_intact(
         self,
     ) -> None:

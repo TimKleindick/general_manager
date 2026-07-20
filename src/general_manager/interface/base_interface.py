@@ -84,6 +84,7 @@ _OBSERVABILITY_HOOK_MISSING = object()
 _RUN_SCOPED_SCALAR_INPUT_TYPES = (str, int, bool)
 _FORMATLESS_IDENTIFICATION_VALUE_TYPES = {str, int, float, bool, type(None)}
 _HISTORICAL_MUTATION_GUARD_MARKER = "_general_manager_historical_mutation_guard"
+_INTERFACE_BASE_CLASS: type[object]
 
 
 def _guard_mutation_callable(
@@ -121,7 +122,7 @@ def _guard_declared_mutation(cls: type[object], name: str) -> None:
             (base for base in cls.__mro__[1:] if name in base.__dict__),
             None,
         )
-        if owner is None or issubclass(owner, InterfaceBase):
+        if owner is None or issubclass(owner, _INTERFACE_BASE_CLASS):
             return
         descriptor = owner.__dict__[name]
     if isinstance(descriptor, classmethod):
@@ -1651,3 +1652,7 @@ class InterfaceBase(ABC):
         if field is None:
             raise KeyError(field_name)
         return field.type
+
+
+# Keep owner classification stable when callers patch the public module export.
+_INTERFACE_BASE_CLASS = InterfaceBase
