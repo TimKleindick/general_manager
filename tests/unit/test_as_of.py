@@ -251,7 +251,7 @@ def test_as_of_context_is_isolated_from_fresh_thread() -> None:
     assert thread_value == [None]
 
 
-def test_historical_policy_errors_have_concise_messages() -> None:
+def test_historical_operation_errors_have_concise_messages() -> None:
     assert issubclass(as_of_module.HistoricalMutationError, RuntimeError)
     assert str(as_of_module.HistoricalMutationError()) == (
         "Mutations are not allowed in historical context."
@@ -264,15 +264,17 @@ def test_historical_policy_errors_have_concise_messages() -> None:
 
 def test_ensure_as_of_read_supported_is_inactive_without_context() -> None:
     class UnsupportedInterface:
-        as_of_policy = "unsupported"
+        _as_of_behavior = "unsupported"
 
     as_of_module.ensure_as_of_read_supported(UnsupportedInterface)
 
 
-@pytest.mark.parametrize("policy", ["historical", "transparent"])
-def test_ensure_as_of_read_supported_accepts_supported_policy(policy: str) -> None:
+@pytest.mark.parametrize("behavior", ["historical", "transparent"])
+def test_ensure_as_of_read_supported_accepts_supported_behavior(
+    behavior: str,
+) -> None:
     class SupportedInterface:
-        as_of_policy = policy
+        _as_of_behavior = behavior
 
     with as_of_module.as_of("2022-01-01"):
         as_of_module.ensure_as_of_read_supported(SupportedInterface)
@@ -280,7 +282,7 @@ def test_ensure_as_of_read_supported_accepts_supported_policy(policy: str) -> No
 
 def test_ensure_as_of_read_supported_names_unsupported_interface() -> None:
     class UnsupportedInterface:
-        as_of_policy = "unsupported"
+        _as_of_behavior = "unsupported"
 
     with (
         as_of_module.as_of("2022-01-01"),
@@ -290,6 +292,20 @@ def test_ensure_as_of_read_supported_names_unsupported_interface() -> None:
         ),
     ):
         as_of_module.ensure_as_of_read_supported(UnsupportedInterface)
+
+
+def test_ensure_as_of_read_supported_rejects_unknown_behavior() -> None:
+    class UnknownInterface:
+        _as_of_behavior = "unknown"
+
+    with (
+        as_of_module.as_of("2022-01-01"),
+        pytest.raises(
+            as_of_module.HistoricalReadNotSupportedError,
+            match="UnknownInterface does not support historical reads",
+        ),
+    ):
+        as_of_module.ensure_as_of_read_supported(UnknownInterface)
 
 
 def test_as_of_api_is_available_from_stable_public_module() -> None:

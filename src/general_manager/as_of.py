@@ -79,10 +79,10 @@ def current_as_of_date() -> datetime | None:
 
 
 def ensure_as_of_read_supported(interface_cls: type[object]) -> None:
-    """Reject historical reads for interfaces without an as-of policy."""
+    """Reject historical reads for interfaces without supported behavior."""
     if current_as_of_date() is None:
         return
-    if getattr(interface_cls, "as_of_policy", "unsupported") not in {
+    if getattr(interface_cls, "_as_of_behavior", "unsupported") not in {
         "historical",
         "transparent",
     }:

@@ -163,7 +163,7 @@ class GeneralManagerTestCase(TestCase):
         manager_class = self._temporary_manager_class()
 
         class HistoricalInterface:
-            as_of_policy = "historical"
+            _as_of_behavior = "historical"
 
             def __init__(self, id, *, search_date=None):
                 self.identification = {"id": id}
