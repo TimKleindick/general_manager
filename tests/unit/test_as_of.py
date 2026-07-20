@@ -4,6 +4,7 @@ import asyncio
 import threading
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from importlib import import_module
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.utils import timezone
@@ -20,6 +21,14 @@ class _BodyFailure(RuntimeError):
 class _BrokenTimezone(tzinfo):
     def utcoffset(self, value: datetime | None) -> timedelta | None:
         raise ValueError
+
+
+def _berlin_fold_datetimes() -> tuple[datetime, datetime]:
+    berlin = ZoneInfo("Europe/Berlin")
+    return (
+        datetime(2022, 10, 30, 2, 30, tzinfo=berlin, fold=0),
+        datetime(2022, 10, 30, 2, 30, tzinfo=berlin, fold=1),
+    )
 
 
 @pytest.mark.parametrize(
@@ -109,6 +118,25 @@ def test_conflicting_nested_date_preserves_outer_context() -> None:
     assert as_of_module.current_as_of_date() is None
 
 
+def test_as_of_rejects_dst_fold_datetimes_for_different_instants() -> None:
+    fold_zero, fold_one = _berlin_fold_datetimes()
+
+    with as_of_module.as_of(fold_zero):
+        with pytest.raises(as_of_module.HistoricalContextConflictError):
+            with as_of_module.as_of(fold_one):
+                pass
+
+
+def test_as_of_accepts_equivalent_utc_instant_during_dst_fold() -> None:
+    fold_zero, _ = _berlin_fold_datetimes()
+    utc_equivalent = fold_zero.astimezone(UTC)
+
+    with as_of_module.as_of(fold_zero) as active:
+        with as_of_module.as_of(utc_equivalent) as nested:
+            assert nested is utc_equivalent
+            assert as_of_module.current_as_of_date() is active
+
+
 def test_invalid_nested_date_preserves_outer_context() -> None:
     with as_of_module.as_of("2022-01-01") as outer:
         with pytest.raises(as_of_module.InvalidSearchDateError):
@@ -135,6 +163,23 @@ def test_resolve_search_date_uses_explicit_or_context_date() -> None:
         assert as_of_module.current_as_of_date() == active
 
 
+def test_resolve_rejects_dst_fold_datetimes_for_different_instants() -> None:
+    fold_zero, fold_one = _berlin_fold_datetimes()
+
+    with as_of_module.as_of(fold_zero):
+        with pytest.raises(as_of_module.HistoricalContextConflictError):
+            as_of_module.resolve_search_date(fold_one)
+
+
+def test_resolve_search_date_accepts_equivalent_utc_instant_during_dst_fold() -> None:
+    fold_zero, _ = _berlin_fold_datetimes()
+    utc_equivalent = fold_zero.astimezone(UTC)
+
+    with as_of_module.as_of(fold_zero) as active:
+        assert as_of_module.resolve_search_date(utc_equivalent) is utc_equivalent
+        assert as_of_module.current_as_of_date() is active
+
+
 def test_as_of_restores_context_after_body_exception() -> None:
     with pytest.raises(_BodyFailure, match="body failed"):
         with as_of_module.as_of("2022-01-01"):
@@ -154,6 +199,40 @@ def test_as_of_context_propagates_to_asyncio_tasks() -> None:
 
     active, task_value = asyncio.run(run())
     assert task_value == active
+    assert as_of_module.current_as_of_date() is None
+
+
+def test_as_of_context_is_isolated_between_overlapping_asyncio_tasks() -> None:
+    async def run() -> tuple[list[datetime | None], datetime | None]:
+        first_entered = asyncio.Event()
+        second_entered = asyncio.Event()
+
+        async def worker(
+            search_date: str,
+            entered: asyncio.Event,
+            other_entered: asyncio.Event,
+        ) -> datetime | None:
+            with as_of_module.as_of(search_date) as active:
+                entered.set()
+                await other_entered.wait()
+                await asyncio.sleep(0)
+                assert as_of_module.current_as_of_date() == active
+                return as_of_module.current_as_of_date()
+
+        results = await asyncio.gather(
+            asyncio.create_task(worker("2022-01-01", first_entered, second_entered)),
+            asyncio.create_task(worker("2023-01-01", second_entered, first_entered)),
+        )
+        return results, as_of_module.current_as_of_date()
+
+    assert as_of_module.current_as_of_date() is None
+    task_values, parent_value = asyncio.run(run())
+
+    assert task_values == [
+        normalize_search_date("2022-01-01"),
+        normalize_search_date("2023-01-01"),
+    ]
+    assert parent_value is None
     assert as_of_module.current_as_of_date() is None
 
 

@@ -16,11 +16,13 @@ with as_of("2022-01-01") as search_date:
 ```
 
 `current_as_of_date()` returns the active aware datetime, or `None` outside an
-as-of context. Nesting is idempotent when both values normalize to the same
-datetime. A different nested date, or a different explicit date resolved while
-a context is active, raises `HistoricalContextConflictError` without changing
-the outer context. The previous value is restored when the context exits,
-including when its body raises an exception.
+as-of context. Nesting is idempotent when both values represent the same instant,
+even when their timezones differ. Distinct instants during a daylight-saving
+fold still conflict. A different nested date, or a different explicit
+date resolved while a context is active, raises
+`HistoricalContextConflictError` without changing the outer context. The
+previous value is restored when the context exits, including when its body
+raises an exception.
 
 Invalid or unsupported inputs raise `InvalidSearchDateError`. The public error
 types `HistoricalMutationError` and `HistoricalReadNotSupportedError` are
