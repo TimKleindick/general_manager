@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 
 from django.utils import timezone
 
@@ -73,6 +73,10 @@ def current_as_of_date() -> datetime | None:
     return _AS_OF_DATE.get()
 
 
+def _represents_same_instant(left: datetime, right: datetime) -> bool:
+    return left.astimezone(UTC) == right.astimezone(UTC)
+
+
 def resolve_search_date(explicit: SearchDateInput | None) -> datetime | None:
     """Resolve an explicit search date against the active historical context."""
     active = current_as_of_date()
@@ -80,7 +84,7 @@ def resolve_search_date(explicit: SearchDateInput | None) -> datetime | None:
         return active
 
     normalized = normalize_search_date(explicit)
-    if active is not None and active != normalized:
+    if active is not None and not _represents_same_instant(active, normalized):
         raise HistoricalContextConflictError
     return normalized
 
@@ -90,7 +94,7 @@ def as_of(search_date: SearchDateInput) -> Iterator[datetime]:
     """Run an operation with a normalized historical date."""
     active = current_as_of_date()
     normalized = normalize_search_date(search_date)
-    if active is not None and active != normalized:
+    if active is not None and not _represents_same_instant(active, normalized):
         raise HistoricalContextConflictError
     if active is not None:
         yield normalized
