@@ -101,6 +101,23 @@ for summary in ProjectSummary.filter(project_id=my_project.id):
 
 For manager-typed inputs, filters accept either the manager instance (`project=...`) or its identifier (`project_id=...`). Nested lookups such as `project__name__startswith=...` continue to target fields on the input manager.
 
+Generated GraphQL list fields expose manager-typed calculation inputs through
+the same nested relation-filter shape as persisted managers:
+
+```graphql
+query ProjectCommercials($projectId: ID!) {
+  projectCommercialList(filter: {project: {id: $projectId}}) {
+    items {
+      project { id }
+      targetDate
+    }
+  }
+}
+```
+
+The resolver normalizes this filter to the Python lookup
+`project__id=<projectId>`.
+
 Because calculation managers do not persist data, `create`, `update`, and `delete` are unavailable. They still participate in dependency tracking when a property opts into dependency-aware caching.
 
 ## Input helpers
