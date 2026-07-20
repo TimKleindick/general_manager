@@ -8,6 +8,7 @@ from typing import ClassVar, TYPE_CHECKING, TypeVar, cast
 from django.core.exceptions import ValidationError
 
 from general_manager.bucket.request_bucket import RequestBucket
+from general_manager.as_of import ensure_as_of_read_supported
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.interface.base_interface import InterfaceBase
@@ -504,6 +505,7 @@ class RequestQueryCapability(BaseCapability):
         **kwargs: RequestLookupValue,
     ) -> RequestBucket["GeneralManager"]:
         """Return a lazy request bucket for the default query operation with filters."""
+        ensure_as_of_read_supported(interface_cls)
         return self.build_bucket(
             interface_cls, filters=self._normalize_lookup_map(kwargs)
         )
@@ -514,6 +516,7 @@ class RequestQueryCapability(BaseCapability):
         **kwargs: RequestLookupValue,
     ) -> RequestBucket["GeneralManager"]:
         """Return a lazy request bucket for the default query operation with excludes."""
+        ensure_as_of_read_supported(interface_cls)
         return self.build_bucket(
             interface_cls, excludes=self._normalize_lookup_map(kwargs)
         )
@@ -522,6 +525,7 @@ class RequestQueryCapability(BaseCapability):
         self, interface_cls: type["RequestInterface"]
     ) -> RequestBucket["GeneralManager"]:
         """Return a lazy request bucket for the default query operation without lookups."""
+        ensure_as_of_read_supported(interface_cls)
         return self.build_bucket(interface_cls)
 
     def validate_lookups(
@@ -553,6 +557,7 @@ class RequestQueryCapability(BaseCapability):
         **kwargs: RequestLookupValue,
     ) -> RequestBucket["GeneralManager"]:
         """Return a lazy request bucket for a named query operation."""
+        ensure_as_of_read_supported(interface_cls)
         return self.build_bucket(
             interface_cls,
             operation_name=operation_name,

@@ -13,7 +13,11 @@ from django.http import HttpResponse
 from django.test import Client, override_settings
 
 from general_manager.api import RemoteInvalidationClient
-from general_manager.as_of import HistoricalMutationError, as_of
+from general_manager.as_of import (
+    HistoricalMutationError,
+    HistoricalReadNotSupportedError,
+    as_of,
+)
 from general_manager.cache.cache_decorator import cached
 from general_manager.interface import DatabaseInterface, RemoteManagerInterface
 from general_manager.interface.requests import (
@@ -365,6 +369,39 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
                 interface.delete()
 
         request.assert_not_called()
+
+    def test_historical_context_rejects_remote_reads_before_planning_or_transport(
+        self,
+    ) -> None:
+        interface_cls = self.RemoteProject.Interface
+        query_capability = interface_cls.require_capability("query")
+        project_id = self.project.id
+        operations = (
+            lambda: self.RemoteProject(id=project_id),
+            lambda: interface_cls(id=project_id),
+            lambda: self.RemoteProject.get(id=project_id),
+            lambda: self.RemoteProject.filter(status="active"),
+            lambda: self.RemoteProject.exclude(status="inactive"),
+            self.RemoteProject.all,
+            lambda: interface_cls.query_operation("list"),
+            lambda: query_capability.for_operation(interface_cls, "list"),
+            lambda: query_capability.filter(interface_cls, status="active"),
+            lambda: query_capability.exclude(interface_cls, status="inactive"),
+            lambda: query_capability.all(interface_cls),
+        )
+
+        with (
+            patch.object(interface_cls, "get_query_operation") as planner,
+            patch.object(interface_cls, "execute_request_plan") as transport,
+            as_of("2022-01-01"),
+        ):
+            for operation in operations:
+                with self.subTest(operation=operation):
+                    with self.assertRaises(HistoricalReadNotSupportedError):
+                        operation()
+
+        planner.assert_not_called()
+        transport.assert_not_called()
 
     def test_protocol_version_mismatch_fails_explicitly(self) -> None:
         transport = DjangoClientTransport()

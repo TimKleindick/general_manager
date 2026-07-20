@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from collections.abc import Hashable, Iterable, Iterator
+from datetime import datetime
 from types import UnionType
 from itertools import islice
 from typing import (
@@ -18,6 +19,11 @@ from typing import (
 )
 from operator import attrgetter
 from copy import deepcopy
+from general_manager.as_of import (
+    HistoricalContextConflictError,
+    _represents_same_instant,
+    current_as_of_date,
+)
 from general_manager.interface.base_interface import (
     generalManagerClassName,
     GeneralManagerType,
@@ -33,6 +39,7 @@ from general_manager.utils.filter_parser import (
 
 if TYPE_CHECKING:
     from general_manager.api.property import GraphQLProperty
+    from general_manager.bucket.group_bucket import GroupBucket
     from general_manager.manager.general_manager import GeneralManager
 
 
@@ -214,6 +221,35 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self._data: list[Combination] | None = None
         self.sort_key = sort_key
         self.reverse = reverse
+        self._effective_search_date = current_as_of_date()
+
+    def _ensure_as_of_compatible(self) -> None:
+        """Reject use in a historical context other than the bound snapshot."""
+        active = current_as_of_date()
+        if active is None:
+            return
+        effective = self._effective_search_date
+        if effective is None or not _represents_same_instant(effective, active):
+            raise HistoricalContextConflictError
+
+    def _derive(
+        self,
+        *,
+        filter_definitions: RawFilterDefinitions,
+        exclude_definitions: RawFilterDefinitions,
+        sort_key: str | tuple[str] | None,
+        reverse: bool,
+    ) -> CalculationBucket[GeneralManagerType]:
+        """Build a derived bucket while preserving this bucket's snapshot."""
+        bucket = self.__class__(
+            self._manager_class,
+            filter_definitions,
+            exclude_definitions,
+            sort_key,
+            reverse,
+        )
+        bucket._effective_search_date = self._effective_search_date
+        return bucket
 
     def __eq__(self, other: object) -> bool:
         """
@@ -225,8 +261,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             bool: True when both buckets share the same manager class and identical filter/exclude state.
         """
+        self._ensure_as_of_compatible()
         if not isinstance(other, self.__class__):
             return False
+        other._ensure_as_of_compatible()
         return (
             self.filter_definitions == other.filter_definitions
             and self.exclude_definitions == other.exclude_definitions
@@ -249,7 +287,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 self.sort_key,
                 self.reverse,
             ),
-            {"data": self._data},
+            {
+                "data": self._data,
+                "effective_search_date": self._effective_search_date,
+            },
         )
 
     def __setstate__(self, state: dict[str, object]) -> None:
@@ -263,6 +304,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             None
         """
         self._data = cast(list[Combination] | None, state.get("data"))
+        self._effective_search_date = cast(
+            "datetime | None", state.get("effective_search_date")
+        )
 
     def __or__(
         self,
@@ -288,6 +332,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         from general_manager.manager.general_manager import GeneralManager
 
+        self._ensure_as_of_compatible()
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
             return self.__or__(self.filter(id__in=[other.identification]))
         if not isinstance(other, self.__class__):
@@ -311,10 +356,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             and value == other.exclude_definitions[key]
         }
 
-        return CalculationBucket(
-            self._manager_class,
-            combined_filters,
-            combined_excludes,
+        other._ensure_as_of_compatible()
+        return self._derive(
+            filter_definitions=combined_filters,
+            exclude_definitions=combined_excludes,
+            sort_key=None,
+            reverse=False,
         )
 
     def __str__(self) -> str:
@@ -328,6 +375,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             str: Human-readable summary of up to five combinations.
         """
+        self._ensure_as_of_compatible()
         PRINT_MAX = 5
         combinations, count_label, has_more = self._str_combinations_preview(PRINT_MAX)
         prefix = f"CalculationBucket ({count_label})["
@@ -491,13 +539,15 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 manager-bucket filtering.
             ValueError: Propagated from input parsing or normalization.
         """
-        return CalculationBucket(
-            manager_class=self._manager_class,
+        self._ensure_as_of_compatible()
+        return self._derive(
             filter_definitions={
                 **self.filter_definitions.copy(),
                 **kwargs,
             },
             exclude_definitions=self.exclude_definitions.copy(),
+            sort_key=None,
+            reverse=False,
         )
 
     def exclude(self, **kwargs: object) -> CalculationBucket[GeneralManagerType]:
@@ -520,13 +570,15 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 manager-bucket filtering.
             ValueError: Propagated from input parsing or normalization.
         """
-        return CalculationBucket(
-            manager_class=self._manager_class,
+        self._ensure_as_of_compatible()
+        return self._derive(
             filter_definitions=self.filter_definitions.copy(),
             exclude_definitions={
                 **self.exclude_definitions.copy(),
                 **kwargs,
             },
+            sort_key=None,
+            reverse=False,
         )
 
     def all(self) -> CalculationBucket[GeneralManagerType]:
@@ -536,6 +588,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             CalculationBucket[GeneralManagerType]: Independent copy that can be mutated without affecting the original.
         """
+        self._ensure_as_of_compatible()
         return deepcopy(self)
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
@@ -545,6 +598,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Yields:
             GeneralManagerType: Manager constructed from each valid set of inputs.
         """
+        self._ensure_as_of_compatible()
         combinations = self.generate_combinations()
         for combo in combinations:
             yield self._manager_class(**combo)
@@ -592,6 +646,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def _bucket_index_source_signature(self) -> Hashable:
         """Return a stable signature for equivalent calculation bucket plans."""
+        self._ensure_as_of_compatible()
         return (
             "calculation",
             self._manager_class,
@@ -631,6 +686,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         combinations: list[Combination],
     ) -> list[GeneralManagerType]:
         """Instantiate managers for each raw input-combination dictionary."""
+        self._ensure_as_of_compatible()
         return [self._manager_class(**combo) for combo in combinations]
 
     @staticmethod
@@ -666,6 +722,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             ValueError: Propagated from input parsing or normalization.
         """
 
+        self._ensure_as_of_compatible()
         if self._data is None:
             from general_manager.cache.run_context import ensure_calculation_run_context
 
@@ -799,6 +856,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Raises:
             InvalidPossibleValuesError: If the input field's `possible_values` is neither callable nor an iterable/Bucket.
         """
+        self._ensure_as_of_compatible()
         possible_values = input_field.resolve_possible_values(
             current_combo,
             cache_context=(self._manager_class, key_name),
@@ -1061,15 +1119,15 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             GeneralManagerType | CalculationBucket[GeneralManagerType]:
                 Manager instance for single indices or bucket wrapping the sliced combinations.
         """
+        self._ensure_as_of_compatible()
         items = self.generate_combinations()
         result = items[item]
         if isinstance(result, list):
-            new_bucket = CalculationBucket(
-                self._manager_class,
-                self.filter_definitions.copy(),
-                self.exclude_definitions.copy(),
-                self.sort_key,
-                self.reverse,
+            new_bucket = self._derive(
+                filter_definitions=self.filter_definitions.copy(),
+                exclude_definitions=self.exclude_definitions.copy(),
+                sort_key=self.sort_key,
+                reverse=self.reverse,
             )
             new_bucket._data = result
             return new_bucket
@@ -1129,13 +1187,18 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             A new CalculationBucket configured to sort combinations by the provided key and direction.
         """
-        return CalculationBucket(
-            self._manager_class,
-            self.filter_definitions,
-            self.exclude_definitions,
-            key,
-            reverse,
+        self._ensure_as_of_compatible()
+        return self._derive(
+            filter_definitions=self.filter_definitions,
+            exclude_definitions=self.exclude_definitions,
+            sort_key=key,
+            reverse=reverse,
         )
+
+    def group_by(self, *group_by_keys: str) -> GroupBucket[GeneralManagerType]:
+        """Group this bucket only when its snapshot matches the active context."""
+        self._ensure_as_of_compatible()
+        return super().group_by(*group_by_keys)
 
     def none(self) -> CalculationBucket[GeneralManagerType]:
         """

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import ClassVar, Protocol, TYPE_CHECKING, cast
 
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.as_of import ensure_as_of_read_supported
 from general_manager.manager.input import Input
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.bundles.request import (
@@ -110,6 +111,11 @@ class RequestInterface(InterfaceBase):
         REQUEST_CORE_CAPABILITIES,
     )
     lifecycle_capability_name: ClassVar[CapabilityName | None] = "request_lifecycle"
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        """Reject historical construction before parsing request inputs."""
+        ensure_as_of_read_supported(type(self))
+        super().__init__(*args, **kwargs)
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -256,6 +262,7 @@ class RequestInterface(InterfaceBase):
                 fragment keys, propagate unchanged.
         """
 
+        ensure_as_of_read_supported(cls)
         handler = cls.require_capability("query")
         if hasattr(handler, "for_operation"):
             operation_handler = cast(_RequestQueryOperationHandler, handler)

@@ -1,10 +1,13 @@
 # type: ignore
 
 from typing import ClassVar
+from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db.models import CASCADE, CharField, ForeignKey, IntegerField
 from django.utils.crypto import get_random_string
+from django.utils import timezone
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.manager.general_manager import GeneralManager
@@ -14,6 +17,7 @@ from general_manager.measurement import MeasurementField, Measurement
 from general_manager.manager.input import Input
 from general_manager.api.property import graph_ql_property
 from general_manager.cache.run_context import CalculationRunContext
+from general_manager.as_of import as_of
 
 
 class CustomMutationTest(GeneralManagerTransactionTestCase):
@@ -59,6 +63,11 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                     Measurement: The calculated tax amount based on the employee's salary.
                 """
                 return self.employee.salary * 0.2
+
+            @graph_ql_property()
+            def transitive_tax(self) -> Measurement:
+                """Resolve the tax through another calculation property."""
+                return self.calculated_tax
 
         class Bonus(GeneralManager):
             employee: Employee
@@ -145,6 +154,99 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         data = response.json()["data"]["taxCalculation"]
         self.assertEqual(data["calculatedTax"]["value"], 600)
         self.assertEqual(data["calculatedTax"]["unit"], "EUR")
+
+    def test_as_of_propagates_through_direct_and_transitive_calculations(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            employee = self.Employee.create(
+                name="Historical",
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+        snapshot = base_time + timedelta(minutes=30)
+        employee_id = employee.id
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            employee.update(
+                salary=Measurement(5000, "EUR"),
+                creator_id=self.user.id,
+                ignore_permission=True,
+            )
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            calculation = self.TaxCalculation(employee=employee_id)
+
+            self.assertEqual(calculation.calculated_tax, Measurement(600, "EUR"))
+            self.assertEqual(calculation.transitive_tax, Measurement(600, "EUR"))
+            self.assertEqual(calculation.employee._effective_search_date, snapshot)
+
+    def test_as_of_propagates_through_calculation_query_combinations(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            first = self.Employee.create(
+                name="Historical A",
+                salary=Measurement(3000, "EUR"),
+                creator_id=self.user.id,
+            )
+            second = self.Employee.create(
+                name="Historical B",
+                salary=Measurement(4000, "EUR"),
+                creator_id=self.user.id,
+            )
+        snapshot = base_time + timedelta(minutes=30)
+        first_id = first.id
+        second_id = second.id
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            first.update(
+                salary=Measurement(9000, "EUR"),
+                creator_id=self.user.id,
+                ignore_permission=True,
+            )
+
+        with (
+            patch(
+                "django.utils.timezone.now",
+                return_value=snapshot + timedelta(seconds=10),
+            ),
+            as_of(snapshot),
+        ):
+            all_bucket = self.TaxCalculation.all()
+            filtered_bucket = self.TaxCalculation.filter(employee_id=first_id)
+            excluded_bucket = self.TaxCalculation.exclude(employee_id=second_id)
+
+            all_calculations = list(all_bucket)
+            filtered_calculations = list(filtered_bucket)
+            excluded_calculations = list(excluded_bucket)
+
+            self.assertEqual(all_bucket._effective_search_date, snapshot)
+            self.assertEqual(
+                {calculation.employee.id for calculation in all_calculations},
+                {first_id, second_id},
+            )
+            self.assertEqual(len(filtered_calculations), 1)
+            self.assertEqual(len(excluded_calculations), 1)
+            for calculation in (
+                *all_calculations,
+                *filtered_calculations,
+                *excluded_calculations,
+            ):
+                self.assertEqual(
+                    calculation.employee._effective_search_date,
+                    snapshot,
+                )
+            self.assertEqual(
+                filtered_calculations[0].calculated_tax,
+                Measurement(600, "EUR"),
+            )
 
     def test_group_by_manager_input(self):
         first_employee = self.Employee.create(
