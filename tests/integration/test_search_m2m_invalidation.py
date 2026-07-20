@@ -40,6 +40,14 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
     _created_models_by_alias: ClassVar[dict[str, list[type[models.Model]]]] = {}
     _registered_models: ClassVar[list[type[models.Model]]] = []
 
+    @staticmethod
+    def _resolve_auto_owner_m2m_history_model(
+        auto_owner_model: type[models.Model],
+    ) -> type[models.Model]:
+        """Resolve the generated history model for the auto-through relation."""
+        history = auto_owner_model.history  # type: ignore[attr-defined]
+        return history.model.__dict__["sources"].model
+
     @classmethod
     def setUpClass(cls) -> None:
         """Create ORM-backed endpoints and both through styles."""
@@ -136,9 +144,9 @@ class SearchM2MInvalidationIntegrationTests(TransactionTestCase):
         cls.SourceModel = M2MSearchSource.Interface._model
         cls.AutoOwnerModel = M2MSearchAutoOwner.Interface._model
         cls.CustomOwnerModel = M2MSearchCustomOwner.Interface._model
-        cls.AutoOwnerM2MHistoryModel = cls.AutoOwnerModel.history.model.__dict__[
-            "sources"
-        ].model
+        cls.AutoOwnerM2MHistoryModel = cls._resolve_auto_owner_m2m_history_model(
+            cls.AutoOwnerModel
+        )
         cls.general_manager_classes = [
             M2MSearchSource,
             M2MSearchAutoOwner,

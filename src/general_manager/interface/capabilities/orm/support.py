@@ -369,7 +369,8 @@ class OrmReadCapability(BaseCapability):
                             raise HistoricalReadNotSupportedError(
                                 interface_cls.__name__
                             ) from error
-                        raise
+                        history_error = HistoryNotSupportedError(interface_cls.__name__)
+                        raise history_error from error
                     try:
                         if instance is not None:
                             historical = history_handler.get_historical_record(
