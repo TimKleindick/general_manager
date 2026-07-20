@@ -33,8 +33,15 @@ from django.core.management.base import BaseCommand
 from django.http import HttpRequest
 from django.http.response import HttpResponseBase
 from django.urls import path, re_path
-from graphql import GraphQLDirective, specified_directives
+from graphql import (
+    GraphQLDirective,
+    GraphQLInputType,
+    GraphQLSchema,
+    is_input_type,
+    specified_directives,
+)
 
+from general_manager.api.graphql_as_of import build_as_of_directive
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.api.graphql import GraphQL
 from general_manager.api.remote_api import add_remote_api_urls
@@ -491,7 +498,7 @@ def _build_schema_directives(
 ) -> tuple[GraphQLDirective, ...]:
     """Return built-in directives followed by validated custom directives."""
     custom_directives = _normalize_graphql_directives(directives)
-    used_names = {directive.name for directive in specified_directives}
+    used_names = {directive.name for directive in specified_directives} | {"asOf"}
 
     for directive in custom_directives:
         if directive.name in used_names:
@@ -499,6 +506,22 @@ def _build_schema_directives(
         used_names.add(directive.name)
 
     return (*specified_directives, *custom_directives)
+
+
+def _attach_as_of_directive(schema: graphene.Schema) -> None:
+    """Attach ``@asOf`` using the DateTime scalar owned by ``schema``."""
+    graphql_schema = schema.graphql_schema
+    if graphql_schema.get_directive("asOf") is not None:
+        return
+
+    date_time_type = graphql_schema.get_type("DateTime")
+    assert is_input_type(date_time_type)
+    schema_kwargs = graphql_schema.to_kwargs()
+    schema_kwargs["directives"] = (
+        *graphql_schema.directives,
+        build_as_of_directive(cast(GraphQLInputType, date_time_type)),
+    )
+    schema.graphql_schema = GraphQLSchema(**schema_kwargs)
 
 
 def _get_configured_graphql_directives() -> tuple[GraphQLDirective, ...]:
@@ -560,7 +583,10 @@ def handle_graph_ql(
     else:
         GraphQL._subscription_class = None
 
-    schema_kwargs: dict[str, object] = {"query": GraphQL._query_class}
+    schema_kwargs: dict[str, object] = {
+        "query": GraphQL._query_class,
+        "types": (graphene.DateTime,),
+    }
     if GraphQL._mutation_class is not None:
         schema_kwargs["mutation"] = GraphQL._mutation_class
     if GraphQL._subscription_class is not None:
@@ -569,6 +595,7 @@ def handle_graph_ql(
     if custom_directives:
         schema_kwargs["directives"] = _build_schema_directives(custom_directives)
     schema = graphene.Schema(**schema_kwargs)
+    _attach_as_of_directive(schema)
     GraphQL._schema = schema
     from general_manager.uploads.urls import add_file_upload_urls
 
