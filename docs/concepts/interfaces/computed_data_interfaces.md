@@ -118,6 +118,13 @@ query ProjectCommercials($projectId: ID!) {
 The resolver normalizes this filter to the Python lookup
 `project__id=<projectId>`.
 
+This inference applies when calculation metadata does not already describe the
+field as a relation; explicit relation metadata remains authoritative. For the
+declaration and query workflow, see [Filter calculation managers by manager
+input](../../howto/expose_via_graphql.md#filter-calculation-managers-by-manager-input),
+the [calculation filter recipe](../../examples/graphql_queries.md#filter-a-calculation-by-manager-input),
+and the [GraphQL API compatibility note](../../api/graphql.md#manager-typed-calculation-input-filters).
+
 Because calculation managers do not persist data, `create`, `update`, and `delete` are unavailable. They still participate in dependency tracking when a property opts into dependency-aware caching.
 
 ## Input helpers

@@ -68,6 +68,46 @@ Identifier equality filters (`id`, `id_Exact`, and `id_In`) use the GraphQL
 `ID` scalar, matching detail-query arguments. Ordered comparisons such as
 `id_Gt` retain the identifier's underlying numeric scalar when available.
 
+## Filter calculation managers by manager input
+
+Calculation managers expose manager-typed `Input(...)` fields as direct nested
+GraphQL relation filters. For example, this calculation accepts a `Project`
+manager input:
+
+```python
+from datetime import date
+
+from general_manager.interface import CalculationInterface
+from general_manager.manager import GeneralManager, Input
+from myapp.managers import Project
+
+
+class ProjectCommercial(GeneralManager):
+    class Interface(CalculationInterface):
+        project = Input(Project)
+        target_date = Input(date)
+```
+
+Filter the generated list field with the nested manager's fields:
+
+```graphql
+query ProjectCommercials($projectId: ID!) {
+  projectCommercialList(filter: {project: {id: $projectId}}) {
+    items {
+      project { id name }
+      targetDate
+    }
+  }
+}
+```
+
+The GraphQL resolver flattens the nested input to the Python lookup
+`project__id=<projectId>` before calling the calculation bucket. Nested manager
+lookups such as `{project: {name__startswith: "North"}}` are flattened in the
+same way. This behavior applies when the calculation input metadata omits
+relation descriptors; explicitly declared relation metadata and custom lookup
+prefixes remain authoritative.
+
 ## Use measurements and large integers
 
 Interface fields typed as `Measurement` are exposed with `MeasurementScalar` for
