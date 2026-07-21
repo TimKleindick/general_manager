@@ -150,6 +150,36 @@ explains the model, the [task guide](../howto/expose_via_graphql.md#declare-mana
 shows declaration patterns, and the [cookbook recipe](../examples/graphql_queries.md#query-a-manager-relation)
 shows directly usable queries.
 
+## Manager-typed calculation input filters
+
+`GraphQL.create_graphql_interface(manager: type[GeneralManager])` generates a
+direct nested relation filter for a calculation input declared with
+`Input(RelatedManager)`, even though calculation `get_attribute_types()` rows
+do not include `relation_kind` or `filter_lookup`. A list query can therefore
+use:
+
+```graphql
+query ProjectCommercials($projectId: ID!) {
+  projectCommercialList(filter: {project: {id: $projectId}}) {
+    items { project { id } targetDate }
+  }
+}
+```
+
+The resolver returns the equivalent backend plan
+`{"filter": {"project__id": 42}, "exclude": {}}` when the variable is `42`.
+Nested fields and lookups are prefixed in the same way. The generated input is
+subject to `GRAPHQL_FILTER_RELATION_DEPTH`; when the depth is exhausted or the
+input type is not a registered manager, the nested relation field is omitted.
+Explicit `relation_kind` and `filter_lookup` metadata remains authoritative,
+including custom prefixes. Invalid nested values continue through the existing
+GraphQL input and bucket error paths; no new framework exception is introduced.
+
+The [calculation concept guide](../concepts/interfaces/computed_data_interfaces.md#iterating-combinations)
+explains the model, the [task guide](../howto/expose_via_graphql.md#filter-calculation-managers-by-manager-input)
+shows the declaration, and the [cookbook recipe](../examples/graphql_queries.md#filter-a-calculation-by-manager-input)
+provides a directly usable request.
+
 ## File uploads
 
 Use the lazy stable imports from `general_manager.api`; modules under
