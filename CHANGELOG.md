@@ -2,6 +2,125 @@
 
 <!-- version list -->
 
+## v0.66.0 (2026-07-21)
+
+### Bug Fixes
+
+- Align as-of interface behavior contract
+  ([`7b1550a`](https://github.com/TimKleindick/general_manager/commit/7b1550a6757cf7531d520b5eac6d4d8af63ea6bb))
+
+- Canonicalize historical cache identity
+  ([`6edec26`](https://github.com/TimKleindick/general_manager/commit/6edec26c2c2173f25cc009fa21c23296441e409d))
+
+- Close historical request read bypasses
+  ([`db47d52`](https://github.com/TimKleindick/general_manager/commit/db47d527109187b9504fbcb2fa72403f23970118))
+
+- Compare as-of dates by instant
+  ([`2632e49`](https://github.com/TimKleindick/general_manager/commit/2632e49229a80b9d3e6ac6c2795ae9e0484cb299))
+
+- Fail closed before ambient ORM cache reads
+  ([`b3fde52`](https://github.com/TimKleindick/general_manager/commit/b3fde52072245352f508d62e7d0ea785b6870c68))
+
+- Guard inherited interface mutations
+  ([`e5d4611`](https://github.com/TimKleindick/general_manager/commit/e5d4611f508c24668c358ee26f051fc7f4539ee6))
+
+- Guard overridden interface mutations
+  ([`a55f9a5`](https://github.com/TimKleindick/general_manager/commit/a55f9a5ef229c984d70e8b5616476a6c1bd91207))
+
+- Harden GraphQL as-of execution
+  ([`5a9484b`](https://github.com/TimKleindick/general_manager/commit/5a9484ba29d76399581ad5b08eabcca1732c4953))
+
+- Harden historical relation snapshots
+  ([`3e59045`](https://github.com/TimKleindick/general_manager/commit/3e5904590de7947ebfdeeb297778557bf8ebb093))
+
+- Honor GraphQL field inclusion in mutation preflight
+  ([`e709c24`](https://github.com/TimKleindick/general_manager/commit/e709c24d14fad33af9f75632aac79792b33f179f))
+
+- Isolate caches by as-of snapshot
+  ([`04e61f3`](https://github.com/TimKleindick/general_manager/commit/04e61f330d4a039ac6f0981bd9c9ba8e48e87dde))
+
+- Normalize historical capability errors
+  ([`ea4af79`](https://github.com/TimKleindick/general_manager/commit/ea4af7987d8474b27ac9b8313ae5523a4d552de4))
+
+- Preserve as-of manager lifecycle
+  ([`729cbf7`](https://github.com/TimKleindick/general_manager/commit/729cbf70a059d169c21ff4a3121e441cdd90fd22))
+
+- Preserve django database cursor guards
+  ([`a1f2fd8`](https://github.com/TimKleindick/general_manager/commit/a1f2fd8e87b746e2451be399a8b1402b3da4e5bf))
+
+- Preserve GraphQL mutation atomicity
+  ([`d57213e`](https://github.com/TimKleindick/general_manager/commit/d57213e5ec1cd2466b3702f29ea7bfe3f7e979d2))
+
+- Preserve GraphQL validation before mutation preflight
+  ([`fb28278`](https://github.com/TimKleindick/general_manager/commit/fb28278ba4b2098806e21f2069a32fff8a519039))
+
+- Preserve ORM read observability
+  ([`ba8e9b1`](https://github.com/TimKleindick/general_manager/commit/ba8e9b166bfaef75029b5c5770385c643317484f))
+
+- Require matching calculation snapshot context
+  ([`c207415`](https://github.com/TimKleindick/general_manager/commit/c207415a946653d304927c6022b6a9e967f64869))
+
+- Skip unresolved m2m history through models
+  ([`770a7e9`](https://github.com/TimKleindick/general_manager/commit/770a7e9db1ad601be9b2c15fcd9587efc83b3620))
+
+- Stabilize inherited mutation guards
+  ([`ae17d03`](https://github.com/TimKleindick/general_manager/commit/ae17d03e54ede3e94cf0df8aaa14abaf4c5f44d5))
+
+- Validate as-of pickle context
+  ([`e5606ec`](https://github.com/TimKleindick/general_manager/commit/e5606ecde5ecbaf7903e12d89e51b164d3837598))
+
+### Documentation
+
+- Design as-of historical context
+  ([`2e20299`](https://github.com/TimKleindick/general_manager/commit/2e2029964592d317b7a98f12156b753ba7f4c5a8))
+
+- Document as-of context api
+  ([`ce2e832`](https://github.com/TimKleindick/general_manager/commit/ce2e83298e8bab1bd91aec2d76c8ed937356ba32))
+
+- Explain as-of historical queries
+  ([`8c0cdb0`](https://github.com/TimKleindick/general_manager/commit/8c0cdb0d632b0baa28823462cd091337049e9f02))
+
+- Plan as-of historical context
+  ([`267c73b`](https://github.com/TimKleindick/general_manager/commit/267c73b539e970e7ed13b1eefb185e27639d8599))
+
+- Remove internal as-of planning documents
+  ([`cd0906b`](https://github.com/TimKleindick/general_manager/commit/cd0906b5b318b3a0720e16d748bceb9a42b57739))
+
+### Features
+
+- Add as-of execution context
+  ([`c8bf236`](https://github.com/TimKleindick/general_manager/commit/c8bf236e921cb1cee6e69dd2805535c2081656c2))
+
+- Add historical m2m tracking
+  ([`8c72fa0`](https://github.com/TimKleindick/general_manager/commit/8c72fa05561dd1826465de8500ef6ca0a502c5d0))
+
+- Bind managers to as-of snapshots
+  ([`46c977c`](https://github.com/TimKleindick/general_manager/commit/46c977c4a94bf24253c18fe9c8a69141998b3502))
+
+- Execute GraphQL queries as of a date
+  ([`3871855`](https://github.com/TimKleindick/general_manager/commit/38718551cd5e1c79eb7fba0a06d4e7893642827b))
+
+- Propagate as-of dates through orm reads
+  ([`0bbc513`](https://github.com/TimKleindick/general_manager/commit/0bbc513cf5b883031781f9570cea9217027742f3))
+
+- Propagate as-of through calculation queries
+  ([`fe7d94b`](https://github.com/TimKleindick/general_manager/commit/fe7d94bcd7a84c7c82f29c2dd0c22f42c84fec4f))
+
+- Register GraphQL as-of directive
+  ([`8f95ff6`](https://github.com/TimKleindick/general_manager/commit/8f95ff605901411acaa701cf7097eb0b6430e88f))
+
+- Reject mutations in as-of contexts
+  ([`f7a7476`](https://github.com/TimKleindick/general_manager/commit/f7a74767d83b3ecc1e6cacdd09a7ac9caffbf1cd))
+
+### Testing
+
+- Expand as-of edge-case coverage
+  ([`e4ecbf5`](https://github.com/TimKleindick/general_manager/commit/e4ecbf58f303fc2a4c15a34a21e6b88591ab04c5))
+
+- Stabilize dependency warm-up re-execution
+  ([`0892410`](https://github.com/TimKleindick/general_manager/commit/0892410b3e5e4659e6f3f903627d46feb10b02cf))
+
+
 ## v0.65.1 (2026-07-20)
 
 ### Bug Fixes
