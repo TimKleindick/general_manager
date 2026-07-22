@@ -6,6 +6,7 @@ The cookbook collects self-contained snippets that demonstrate how to solve doma
 <!-- - [Nested set bill of materials](nested_set_bom.md) -->
 - [Derivative aggregation](derivatives_groups.md)
 - [GraphQL query patterns](graphql_queries.md)
+- [Historical snapshot queries](historical_queries.md)
 - [Bulk data-change notifications](bulk_data_change_notifications.md)
 - [Safe GraphQL mutation errors](graphql_error_handling.md)
 - [Upload a file through GraphQL](graphql_file_upload.md)

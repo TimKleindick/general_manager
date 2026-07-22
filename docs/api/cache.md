@@ -2,6 +2,10 @@
 
 ## Historical cache identity
 
+Historical context usage is introduced in the [Historical Context API
+reference](historical_context.md); this section records the cache-identity
+compatibility contract.
+
 Cache identity includes the effective historical instant. Current reads keep
 their existing cache identity, while an active `as_of(...)` context receives a
 separate namespace from current data and from every other historical instant.

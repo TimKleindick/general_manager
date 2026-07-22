@@ -2,6 +2,9 @@
 
 ## Historical execution context
 
+See the dedicated [Historical Context API reference](historical_context.md) for
+the generated signatures and the complete GraphQL directive contract.
+
 Use `general_manager.api.as_of(search_date)` to make every supported read in an
 operation use one historical snapshot. The positional and explicit keyword
 forms are equivalent:

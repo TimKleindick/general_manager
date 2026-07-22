@@ -45,6 +45,10 @@ import targets.
 
 ## Historical queries with `@asOf`
 
+The [Historical Context API reference](historical_context.md) contains the
+directive signature, Python context helpers, and stable historical error-code
+table; this section describes the generated GraphQL behavior in context.
+
 GeneralManager registers the built-in query directive
 `@asOf(date: DateTime!)`. Use either a literal:
 
