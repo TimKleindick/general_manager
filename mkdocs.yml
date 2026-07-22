@@ -80,6 +80,7 @@ nav:
           - concepts/architecture.md
           - concepts/models_entities.md
           - concepts/caching.md
+          - concepts/historical_context.md
           - concepts/search.md
           - concepts/chat_prompting.md
           - concepts/rules_validation.md
@@ -131,6 +132,7 @@ nav:
       - howto/add_permission_rule.md
       - howto/permission_walkthrough.md
       - howto/expose_via_graphql.md
+      - howto/historical_queries.md
       - howto/bulk_data_change_notifications.md
       - howto/run_chat_evals.md
       - howto/orm_atomic_writes.md
@@ -155,6 +157,7 @@ nav:
       - examples/project_volume_curve.md
       - examples/derivatives_groups.md
       - examples/graphql_queries.md
+      - examples/historical_queries.md
       - examples/bulk_data_change_notifications.md
       - examples/graphql_error_handling.md
       - examples/graphql_file_upload.md
@@ -175,6 +178,7 @@ nav:
       - api/measurement.md
       - api/dataframes.md
       - api/interface.md
+      - api/historical_context.md
       - api/permission.md
       - api/graphql.md
       - api/search.md
