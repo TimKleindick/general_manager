@@ -113,6 +113,7 @@ from general_manager.metrics import build_graphql_middleware
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
+    from general_manager.rule.rule import Rule
 
 logger = get_logger("apps")
 
@@ -134,6 +135,16 @@ class InvalidPermissionClassError(TypeError):
 
     def __init__(self, permission_name: str) -> None:
         super().__init__(f"{permission_name} must be a subclass of BasePermission.")
+
+
+class _InvalidManagerRuleCollectionError(TypeError):
+    """Raised when bootstrap receives a one-shot manager rule collection."""
+
+    def __init__(self, source_name: str) -> None:
+        super().__init__(
+            f"{source_name} must be a reusable iterable; "
+            "one-shot iterators are not supported."
+        )
 
 
 class InvalidGraphQLDirectiveError(TypeError):
@@ -332,6 +343,45 @@ def check_permission_class(general_manager_class: type[GeneralManager]) -> None:
         general_manager_class.Permission = AdditiveManagerPermission
 
 
+def _iter_manager_validation_rules(
+    manager_class: type[GeneralManager],
+) -> Iterator[Rule[GeneralManager]]:
+    """Yield each attached Rule once across interface and model sources."""
+    from general_manager.rule.rule import Rule
+
+    interface = getattr(manager_class, "Interface", None)
+    model = getattr(interface, "_model", None)
+    model_meta = getattr(model, "_meta", None)
+    rule_sources = (
+        ("Interface.rules", getattr(interface, "rules", ())),
+        (
+            "Interface._model._meta.rules",
+            getattr(model_meta, "rules", ()),
+        ),
+    )
+    reusable_rule_sources: list[Iterator[object]] = []
+    for source_name, rule_source in rule_sources:
+        if isinstance(rule_source, (str, bytes)) or not isinstance(
+            rule_source, Iterable
+        ):
+            continue
+        rule_iterator = iter(rule_source)
+        if rule_iterator is rule_source:
+            raise _InvalidManagerRuleCollectionError(source_name)
+        reusable_rule_sources.append(rule_iterator)
+
+    seen_rule_ids: set[int] = set()
+    for rule_iterator in reusable_rule_sources:
+        for candidate in rule_iterator:
+            if not isinstance(candidate, Rule):
+                continue
+            candidate_id = id(candidate)
+            if candidate_id in seen_rule_ids:
+                continue
+            seen_rule_ids.add(candidate_id)
+            yield cast("Rule[GeneralManager]", candidate)
+
+
 def initialize_general_manager_classes(
     pending_attribute_initialization: list[type[GeneralManager]],
     all_classes: list[type[GeneralManager]],
@@ -454,6 +504,9 @@ def initialize_general_manager_classes(
                 f"{_to_snake_case(general_manager_class.__name__)}_list",
                 relation_property,
             )
+    for general_manager_class in dict.fromkeys(all_classes):
+        for rule in _iter_manager_validation_rules(general_manager_class):
+            rule.validate_custom_error_message(general_manager_class)
     for general_manager_class in all_classes:
         check_permission_class(general_manager_class)
 

@@ -11,11 +11,13 @@ from django.db import connection, models
 from django.test import TransactionTestCase
 from simple_history.models import HistoricalRecords
 
+from general_manager.bootstrap import initialize_general_manager_classes
 from general_manager.interface import ExistingModelInterface
 from general_manager.interface.interfaces import existing_model as existing_model_module
 from general_manager.interface.capabilities.existing_model import (
     ExistingModelResolutionCapability,
 )
+from general_manager.interface.manifests import ManifestCapabilityBuilder
 from general_manager.interface.utils.errors import (
     InvalidModelReferenceError,
     MissingModelConfigurationError,
@@ -23,6 +25,8 @@ from general_manager.interface.utils.errors import (
 from general_manager.interface.utils import errors as interface_errors
 from general_manager.interface.utils.history import DatabaseAwareHistoricalRecords
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.rule import Rule
+from general_manager.rule.rule import InvalidErrorTemplateError
 
 
 class AlwaysFailRule:
@@ -268,6 +272,118 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         self.assertIsInstance(TemporaryManager.Interface, type)  # type: ignore[attr-defined]
         self.assertIs(TemporaryManager.Interface._parent_class, TemporaryManager)  # type: ignore[attr-defined]
         self.assertIs(TemporaryManager.Interface._model, model)  # type: ignore[attr-defined]
+
+    def test_bootstrap_validates_rule_copied_to_existing_model_metadata(self) -> None:
+        missing = object()
+        previous_rules = getattr(self.model._meta, "rules", missing)
+        previous_full_clean = vars(self.model).get("full_clean", missing)
+        previous_manager_class = vars(self.model).get(
+            "_general_manager_class",
+            missing,
+        )
+        previous_all_objects = vars(self.model).get("all_objects", missing)
+
+        def restore_model_state() -> None:
+            if previous_rules is missing:
+                if hasattr(self.model._meta, "rules"):
+                    delattr(self.model._meta, "rules")
+            else:
+                object.__setattr__(self.model._meta, "rules", previous_rules)
+
+            for attribute_name, previous_value in (
+                ("full_clean", previous_full_clean),
+                ("_general_manager_class", previous_manager_class),
+                ("all_objects", previous_all_objects),
+            ):
+                if previous_value is missing:
+                    if attribute_name in vars(self.model):
+                        type.__delattr__(self.model, attribute_name)
+                else:
+                    type.__setattr__(self.model, attribute_name, previous_value)
+
+        self.addCleanup(restore_model_state)
+
+        def has_name(customer: models.Model) -> bool:
+            return bool(customer.name)  # type: ignore[attr-defined]
+
+        rule = Rule(
+            has_name,
+            custom_error_message="Name: {name.value}",
+        )
+
+        class InterfaceUnderTest(ExistingModelInterface):
+            model = self.model
+
+            class Meta:
+                rules: ClassVar[list[Rule]] = [rule]
+
+        previous_automatic_builder = vars(InterfaceUnderTest).get(
+            "_automatic_capability_builder",
+            missing,
+        )
+        capability_builder = InterfaceUnderTest._automatic_capability_builder
+        if capability_builder is None:
+            capability_builder = ManifestCapabilityBuilder()
+            InterfaceUnderTest._automatic_capability_builder = capability_builder
+        capability_registry = capability_builder.registry
+        capability_bindings_snapshot = {
+            interface: set(capabilities)
+            for interface, capabilities in capability_registry._bindings.items()
+        }
+        capability_instances_snapshot = dict(capability_registry._instances)
+
+        def restore_capability_registry() -> None:
+            for interface in tuple(capability_registry._bindings):
+                if interface not in capability_bindings_snapshot:
+                    del capability_registry._bindings[interface]
+            for interface, capabilities in capability_bindings_snapshot.items():
+                capability_registry._bindings[interface] = set(capabilities)
+
+            for interface in tuple(capability_registry._instances):
+                if interface not in capability_instances_snapshot:
+                    del capability_registry._instances[interface]
+            capability_registry._instances.update(capability_instances_snapshot)
+
+            if previous_automatic_builder is missing:
+                if "_automatic_capability_builder" in vars(InterfaceUnderTest):
+                    del InterfaceUnderTest._automatic_capability_builder
+            else:
+                InterfaceUnderTest._automatic_capability_builder = (
+                    previous_automatic_builder
+                )
+            self.assertEqual(
+                capability_registry._bindings,
+                capability_bindings_snapshot,
+            )
+            self.assertEqual(
+                capability_registry._instances,
+                capability_instances_snapshot,
+            )
+
+        self.addCleanup(restore_capability_registry)
+
+        new_attrs, interface_cls, model, post = self._invoke_handle(
+            InterfaceUnderTest,
+            name="ExistingRuleBootstrapManager",
+        )
+        TemporaryManager = type.__new__(
+            type(GeneralManager),
+            "ExistingRuleBootstrapManager",
+            (GeneralManager,),
+            new_attrs,
+        )
+        post(TemporaryManager, interface_cls, model)
+
+        self.assertIn(rule, model._meta.rules)  # type: ignore[attr-defined]
+        self.assertIs(TemporaryManager.Interface._model, model)  # type: ignore[attr-defined]
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            initialize_general_manager_classes(
+                [TemporaryManager],
+                [TemporaryManager],
+            )
+
+        self.assertEqual(ctx.exception.placeholder, "name.value")
 
     def test_ensure_history_when_already_registered(self) -> None:
         """
