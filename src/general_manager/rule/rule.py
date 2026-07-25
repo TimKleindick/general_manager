@@ -394,6 +394,27 @@ class Rule(Generic[GeneralManagerType]):
                 )
             current_manager = related_manager
 
+    def _resolve_custom_error_path(self, parts: tuple[str, ...]) -> object | None:
+        """Resolve a parsed custom-message path against the last input."""
+        current: object | None = self._last_input
+        for part in parts:
+            if current is None:
+                return None
+            current = getattr(current, part)
+        return current
+
+    def _format_custom_error_message(self) -> str:
+        """Render parsed custom-message placeholders from the last input."""
+        assert self._custom_error_message is not None
+        values = {
+            placeholder: str(self._resolve_custom_error_path(parts))
+            for placeholder, parts in self._custom_error_paths.items()
+        }
+        return _ERROR_TEMPLATE_PLACEHOLDER.sub(
+            lambda match: values[match.group(1)],
+            self._custom_error_message,
+        )
+
     def _generate_fallback_error_messages(
         self,
         message: str | None = None,
@@ -440,10 +461,7 @@ class Rule(Generic[GeneralManagerType]):
         )
 
         if self._custom_error_message:
-            formatted = _ERROR_TEMPLATE_PLACEHOLDER.sub(
-                lambda m: str(vals.get(m.group(1), m.group(0))),
-                self._custom_error_message,
-            )
+            formatted = self._format_custom_error_message()
             logger.info(
                 "rule produced custom error message",
                 context={
