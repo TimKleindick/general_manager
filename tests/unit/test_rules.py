@@ -3,7 +3,9 @@ from django.test import TestCase, override_settings
 from datetime import datetime
 import ast
 from general_manager.rule.rule import (
+    InvalidErrorTemplateError,
     InvalidRuleHandlerConfigurationError,
+    MissingErrorTemplateVariableError,
     Rule,
 )
 from typing import cast
@@ -516,10 +518,8 @@ class RuleTests(TestCase):
         }
         self.assertEqual(error_message, expected_error)
 
-    def test_rule_with_missing_custom_error_variables(self):
-        """
-        Checks that validate_custom_error_message raises a ValueError when a custom error message lacks required template variables.
-        """
+    def test_rule_with_static_custom_error_message(self):
+        """A static custom message is attached to the referenced field."""
 
         def func(item: DummyObject) -> bool:
             """
@@ -533,10 +533,108 @@ class RuleTests(TestCase):
             """
             return item.height >= 150
 
-        custom_message = "Height must be at least 150 cm."
-        rule = Rule(func, custom_error_message=custom_message)
-        with self.assertRaises(ValueError):
-            rule.validate_custom_error_message()
+        rule = Rule(
+            func,
+            custom_error_message="Height must be at least 150 cm.",
+        )
+
+        self.assertFalse(rule.evaluate(DummyObject(height=140)))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"height": "Height must be at least 150 cm."},
+        )
+
+    def test_custom_error_message_rejects_unmatched_braces_at_construction(self):
+        """Opening and closing braces must form complete placeholders."""
+
+        def func(item: DummyObject) -> bool:
+            return item.height >= 150
+
+        for message, brace in (
+            ("Height must exceed {height", "{"),
+            ("Height must exceed height}", "}"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaises(InvalidErrorTemplateError) as ctx:
+                    Rule(func, custom_error_message=message)
+
+                self.assertEqual(ctx.exception.placeholder, brace)
+                self.assertEqual(ctx.exception.reason, "unmatched brace")
+
+    def test_custom_error_message_rejects_empty_placeholder_at_construction(self):
+        """An empty pair of braces is not a valid placeholder."""
+
+        def func(item: DummyObject) -> bool:
+            return item.height >= 150
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            Rule(func, custom_error_message="Height must exceed {}")
+
+        self.assertEqual(ctx.exception.placeholder, "")
+        self.assertIn("dot-separated Python identifiers", ctx.exception.reason)
+
+    def test_custom_error_message_rejects_invalid_placeholder_grammar(self):
+        """Calls, indexes, format syntax, and malformed paths are rejected."""
+
+        def func(item: DummyObject) -> bool:
+            return item.height >= 150
+
+        for placeholder in (
+            "height()",
+            "height[0]",
+            "height!r",
+            "height..value",
+        ):
+            with self.subTest(placeholder=placeholder):
+                with self.assertRaises(InvalidErrorTemplateError) as ctx:
+                    Rule(func, custom_error_message=f"Invalid {{{placeholder}}}")
+
+                self.assertEqual(ctx.exception.placeholder, placeholder)
+                self.assertIn(
+                    "dot-separated Python identifiers",
+                    ctx.exception.reason,
+                )
+
+    def test_custom_error_message_rejects_unrelated_root_at_construction(self):
+        """Every placeholder root must be referenced by the predicate."""
+
+        def func(item: DummyObject) -> bool:
+            return item.height >= 150
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            Rule(func, custom_error_message="Weight is {weight}")
+
+        self.assertEqual(ctx.exception.placeholder, "weight")
+        self.assertEqual(
+            ctx.exception.reason,
+            "root 'weight' is not referenced by the rule",
+        )
+
+    def test_custom_error_message_accepts_valid_dotted_path_at_construction(self):
+        """Dotted placeholder schema and rendering are deferred to later tasks."""
+
+        def func(item: DummyObject) -> bool:
+            return item.height >= 150
+
+        Rule(func, custom_error_message="Height detail: {height.value}")
+
+    def test_missing_error_template_variable_error_remains_compatible(self):
+        """The deprecated exception retains its type and historical message."""
+
+        self.assertTrue(
+            issubclass(
+                MissingErrorTemplateVariableError,
+                InvalidErrorTemplateError,
+            )
+        )
+
+        error = MissingErrorTemplateVariableError(["quantity"])
+
+        self.assertEqual(
+            str(error),
+            "The custom error message does not contain all used variables: "
+            "['quantity'].",
+        )
 
     def test_rule_with_complex_condition(self):
         """
@@ -716,9 +814,8 @@ class RuleTests(TestCase):
         self.assertTrue(result)
         self.assertIsNone(rule.get_error_message())
 
-    def test_missing_error_template_variable_error(self):
-        """Test that MissingErrorTemplateVariableError is raised when custom error template is incomplete."""
-        from general_manager.rule.rule import MissingErrorTemplateVariableError
+    def test_custom_error_message_may_use_subset_of_rule_variables(self):
+        """A partial template is formatted and attached to every error field."""
 
         def func(item: DummyObject) -> bool:
             return item.price < 100.0 and item.quantity > 5
@@ -726,14 +823,14 @@ class RuleTests(TestCase):
         x = DummyObject(price=150.75, quantity=3)
         rule = Rule(func, custom_error_message="Price is too high: {price}")
 
-        result = rule.evaluate(x)
-        self.assertFalse(result)
-
-        # Should raise error because 'quantity' is missing from custom template
-        with self.assertRaises(MissingErrorTemplateVariableError) as ctx:
-            rule.get_error_message()
-        self.assertIn("quantity", str(ctx.exception))
-        self.assertIn("does not contain all used variables", str(ctx.exception))
+        self.assertFalse(rule.evaluate(x))
+        self.assertEqual(
+            rule.get_error_message(),
+            {
+                "price": "Price is too high: 150.75",
+                "quantity": "Price is too high: 150.75",
+            },
+        )
 
     def test_error_message_generation_error(self):
         """Test that ErrorMessageGenerationError is raised when getting error before evaluation."""
