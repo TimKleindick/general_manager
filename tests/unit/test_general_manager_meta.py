@@ -1,15 +1,21 @@
+from types import SimpleNamespace
 from typing import ClassVar
 
 from django.test import SimpleTestCase, override_settings
 
+from general_manager.interface import RequestInterface
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.interfaces.calculation import (
     CalculationInterface,
 )
+from general_manager.interface.requests import RequestField, RequestQueryOperation
 from general_manager.bootstrap import initialize_general_manager_classes
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input as GMInput
+from general_manager.manager import meta as manager_meta_module
+from general_manager.rule import Rule
+from general_manager.rule.rule import InvalidErrorTemplateError
 
 
 class dummyInterface:
@@ -971,3 +977,342 @@ class GeneralManagerMetaTests(SimpleTestCase):
             hasattr(ManagerB, "b_post") and ManagerB.b_post is True,  # type: ignore
             msg="ManagerB should have the attribute 'b_post'.",
         )
+
+
+class BootstrapRuleTemplateValidationTests(SimpleTestCase):
+    """Validate attached rule templates once manager schemas are bootstrapped."""
+
+    def setUp(self) -> None:
+        self._registry_snapshots = {
+            "all_classes": list(GeneralManagerMeta.all_classes),
+            "read_only_classes": list(GeneralManagerMeta.read_only_classes),
+            "pending_graphql_interfaces": list(
+                GeneralManagerMeta.pending_graphql_interfaces
+            ),
+            "pending_attribute_initialization": list(
+                GeneralManagerMeta.pending_attribute_initialization
+            ),
+        }
+        self._capability_registry = manager_meta_module._capability_builder().registry
+        self._capability_bindings_snapshot = {
+            interface: set(capabilities)
+            for interface, capabilities in self._capability_registry._bindings.items()
+        }
+        self._capability_instances_snapshot = dict(self._capability_registry._instances)
+        GeneralManagerMeta.all_classes.clear()
+        GeneralManagerMeta.read_only_classes.clear()
+        GeneralManagerMeta.pending_graphql_interfaces.clear()
+        GeneralManagerMeta.pending_attribute_initialization.clear()
+
+    def tearDown(self) -> None:
+        for name, snapshot in self._registry_snapshots.items():
+            registry = getattr(GeneralManagerMeta, name)
+            registry.clear()
+            registry.extend(snapshot)
+        self._restore_capability_registry()
+        self.assertEqual(
+            self._capability_registry._bindings,
+            self._capability_bindings_snapshot,
+        )
+        self.assertEqual(
+            self._capability_registry._instances,
+            self._capability_instances_snapshot,
+        )
+
+    def _restore_capability_registry(self) -> None:
+        for interface in tuple(self._capability_registry._bindings):
+            if interface not in self._capability_bindings_snapshot:
+                del self._capability_registry._bindings[interface]
+        for interface, capabilities in self._capability_bindings_snapshot.items():
+            self._capability_registry._bindings[interface] = set(capabilities)
+
+        for interface in tuple(self._capability_registry._instances):
+            if interface not in self._capability_instances_snapshot:
+                del self._capability_registry._instances[interface]
+        self._capability_registry._instances.update(self._capability_instances_snapshot)
+
+    def test_cleanup_restores_shared_capability_registry_state(self) -> None:
+        class BootstrapRegistryItem(GeneralManager):
+            value: int
+
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        self.assertIn(
+            BootstrapRegistryItem.Interface,
+            self._capability_registry._bindings,
+        )
+        self.assertIn(
+            BootstrapRegistryItem.Interface,
+            self._capability_registry._instances,
+        )
+
+        self._restore_capability_registry()
+
+        self.assertEqual(
+            self._capability_registry._bindings,
+            self._capability_bindings_snapshot,
+        )
+        self.assertEqual(
+            self._capability_registry._instances,
+            self._capability_instances_snapshot,
+        )
+
+    def test_bootstrap_accepts_valid_related_manager_template_path(self) -> None:
+        class BootstrapProject(GeneralManager):
+            name: str
+
+            class Interface(CalculationInterface):
+                name = GMInput(str)
+
+        def project_exists(item: GeneralManager) -> bool:
+            return item.project is not None  # type: ignore[attr-defined]
+
+        rule = Rule(
+            project_exists,
+            custom_error_message="Project: {project.name}",
+        )
+
+        class BootstrapWorkItem(GeneralManager):
+            project: BootstrapProject
+
+            class Interface(CalculationInterface):
+                project = GMInput(BootstrapProject)
+
+        BootstrapWorkItem.Interface.rules = [rule]  # type: ignore[attr-defined]
+
+        initialize_general_manager_classes(
+            GeneralManagerMeta.pending_attribute_initialization,
+            GeneralManagerMeta.all_classes,
+        )
+
+    def test_bootstrap_rejects_unknown_related_manager_template_path(self) -> None:
+        class BootstrapProject(GeneralManager):
+            name: str
+
+            class Interface(CalculationInterface):
+                name = GMInput(str)
+
+        def project_exists(item: GeneralManager) -> bool:
+            return item.project is not None  # type: ignore[attr-defined]
+
+        rule = Rule(
+            project_exists,
+            custom_error_message="Project: {project.nmae}",
+        )
+
+        class BootstrapWorkItem(GeneralManager):
+            project: BootstrapProject
+
+            class Interface(CalculationInterface):
+                project = GMInput(BootstrapProject)
+
+        BootstrapWorkItem.Interface.rules = [rule]  # type: ignore[attr-defined]
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            initialize_general_manager_classes(
+                GeneralManagerMeta.pending_attribute_initialization,
+                GeneralManagerMeta.all_classes,
+            )
+
+        self.assertEqual(ctx.exception.placeholder, "project.nmae")
+
+    def test_declarative_rule_schema_validation_is_deferred_until_bootstrap(
+        self,
+    ) -> None:
+        validation_manager_classes: list[type[GeneralManager] | None] = []
+
+        class CountingRule(Rule[GeneralManager]):
+            def validate_custom_error_message(
+                self,
+                manager_class: type[GeneralManager] | None = None,
+            ) -> None:
+                if hasattr(self, "_handlers"):
+                    validation_manager_classes.append(manager_class)
+                super().validate_custom_error_message(manager_class)
+
+        class BootstrapProject(GeneralManager):
+            name: str
+
+            class Interface(CalculationInterface):
+                name = GMInput(str)
+
+        def project_exists(item: GeneralManager) -> bool:
+            return item.project is not None  # type: ignore[attr-defined]
+
+        rule = CountingRule(
+            project_exists,
+            custom_error_message="Project: {project.nmae}",
+        )
+
+        class BootstrapWorkItem(GeneralManager):
+            project: BootstrapProject
+
+            class Interface(CalculationInterface):
+                project = GMInput(BootstrapProject)
+                rules: ClassVar[list[object]] = [rule]
+
+        self.assertEqual(validation_manager_classes, [])
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            initialize_general_manager_classes(
+                GeneralManagerMeta.pending_attribute_initialization,
+                GeneralManagerMeta.all_classes,
+            )
+
+        self.assertEqual(validation_manager_classes, [BootstrapWorkItem])
+
+    def test_request_interface_rules_are_validated_at_bootstrap(self) -> None:
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class BootstrapRequestItem(GeneralManager):
+            class Interface(RequestInterface):
+                id = GMInput(int)
+                price = RequestField(int)
+
+                class Meta:
+                    query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                        "detail": RequestQueryOperation(
+                            name="detail",
+                            method="GET",
+                            path="/items/{id}",
+                        )
+                    }
+
+        BootstrapRequestItem.Interface.rules = [rule]
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            initialize_general_manager_classes(
+                GeneralManagerMeta.pending_attribute_initialization,
+                GeneralManagerMeta.all_classes,
+            )
+
+        self.assertEqual(ctx.exception.placeholder, "price.amount")
+
+    def test_model_metadata_rules_are_validated_at_bootstrap(self) -> None:
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class BootstrapOrmItem(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+
+        BootstrapOrmItem.Interface._model = SimpleNamespace(  # type: ignore[attr-defined]
+            _meta=SimpleNamespace(rules=[rule])
+        )
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            initialize_general_manager_classes(
+                GeneralManagerMeta.pending_attribute_initialization,
+                GeneralManagerMeta.all_classes,
+            )
+
+        self.assertEqual(ctx.exception.placeholder, "price.amount")
+
+    def test_bootstrap_rejects_one_shot_rule_iterators_without_consuming_them(
+        self,
+    ) -> None:
+        validation_manager_classes: list[type[GeneralManager] | None] = []
+
+        class CountingRule(Rule[GeneralManager]):
+            def validate_custom_error_message(
+                self,
+                manager_class: type[GeneralManager] | None = None,
+            ) -> None:
+                if hasattr(self, "_handlers"):
+                    validation_manager_classes.append(manager_class)
+                super().validate_custom_error_message(manager_class)
+
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        rule = CountingRule(
+            positive_price,
+            custom_error_message="Price: {price}",
+        )
+        iterator_entry = object()
+        rule_iterator = iter([iterator_entry])
+
+        class BootstrapIteratorItem(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [rule]
+
+        BootstrapIteratorItem.Interface._model = SimpleNamespace(  # type: ignore[attr-defined]
+            _meta=SimpleNamespace(rules=rule_iterator)
+        )
+
+        with self.assertRaisesRegex(
+            TypeError,
+            "rules must be a reusable iterable",
+        ):
+            initialize_general_manager_classes(
+                GeneralManagerMeta.pending_attribute_initialization,
+                GeneralManagerMeta.all_classes,
+            )
+
+        self.assertEqual(validation_manager_classes, [])
+        self.assertIs(next(rule_iterator), iterator_entry)
+        with self.assertRaises(StopIteration):
+            next(rule_iterator)
+
+    def test_duplicate_rules_and_manager_classes_are_validated_once(self) -> None:
+        validation_manager_classes: list[type[GeneralManager] | None] = []
+
+        class CountingRule(Rule[GeneralManager]):
+            def validate_custom_error_message(
+                self,
+                manager_class: type[GeneralManager] | None = None,
+            ) -> None:
+                if hasattr(self, "_handlers"):
+                    validation_manager_classes.append(manager_class)
+                super().validate_custom_error_message(manager_class)
+
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        rule = CountingRule(
+            positive_price,
+            custom_error_message="Price: {price}",
+        )
+
+        class BootstrapRequestItem(GeneralManager):
+            class Interface(RequestInterface):
+                id = GMInput(int)
+                price = RequestField(int)
+
+                class Meta:
+                    query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                        "detail": RequestQueryOperation(
+                            name="detail",
+                            method="GET",
+                            path="/items/{id}",
+                        )
+                    }
+
+        BootstrapRequestItem.Interface.rules = [object(), rule]
+        BootstrapRequestItem.Interface._model = SimpleNamespace(  # type: ignore[attr-defined]
+            _meta=SimpleNamespace(rules=[object(), rule])
+        )
+
+        initialize_general_manager_classes(
+            GeneralManagerMeta.pending_attribute_initialization,
+            [BootstrapRequestItem, BootstrapRequestItem],
+        )
+
+        self.assertEqual(validation_manager_classes, [BootstrapRequestItem])
