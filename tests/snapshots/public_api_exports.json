@@ -892,6 +892,10 @@
       "general_manager.rule.handler",
       "BaseRuleHandler"
     ],
+    "InvalidErrorTemplateError": [
+      "general_manager.rule.rule",
+      "InvalidErrorTemplateError"
+    ],
     "InvalidRuleHandlerConfigurationError": [
       "general_manager.rule.rule",
       "InvalidRuleHandlerConfigurationError"

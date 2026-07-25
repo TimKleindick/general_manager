@@ -689,6 +689,10 @@ MANAGER_EXPORTS: LazyExportMap = {
 
 RULE_EXPORTS: LazyExportMap = {
     "Rule": ("general_manager.rule.rule", "Rule"),
+    "InvalidErrorTemplateError": (
+        "general_manager.rule.rule",
+        "InvalidErrorTemplateError",
+    ),
     "InvalidRuleHandlerConfigurationError": (
         "general_manager.rule.rule",
         "InvalidRuleHandlerConfigurationError",

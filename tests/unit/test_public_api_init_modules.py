@@ -112,3 +112,14 @@ def test_search_invalidation_contract_is_exported(module_path: str) -> None:
 
     assert module.SearchChange.__module__ == "general_manager.search.config"
     assert module.SearchInvalidationRule.__module__ == "general_manager.search.config"
+
+
+def test_invalid_error_template_error_is_exported_from_rule() -> None:
+    public_module = import_module("general_manager.rule")
+    implementation_module = import_module("general_manager.rule.rule")
+
+    assert (
+        public_module.InvalidErrorTemplateError
+        is implementation_module.InvalidErrorTemplateError
+    )
+    assert "InvalidErrorTemplateError" in public_module.__all__
