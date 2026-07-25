@@ -327,8 +327,16 @@ class Rule(Generic[GeneralManagerType]):
         self,
         manager_class: type[GeneralManager] | None = None,
     ) -> None:
-        """Validate that placeholder roots are referenced by the rule."""
-        del manager_class
+        """Validate custom message placeholders against rule variables and schemas.
+
+        Construction-time validation checks that each placeholder root is
+        referenced by the rule. When ``manager_class`` is supplied, every path
+        segment is also validated against its manager schema.
+
+        Raises:
+            InvalidErrorTemplateError: If a root is unrelated to the rule or a
+                placeholder path is invalid for the supplied manager schema.
+        """
         variable_roots = {variable.split(".", 1)[0] for variable in self._variables}
         for placeholder, path in self._custom_error_paths.items():
             if path[0] not in variable_roots:
@@ -336,6 +344,55 @@ class Rule(Generic[GeneralManagerType]):
                     placeholder,
                     f"root {path[0]!r} is not referenced by the rule",
                 )
+            if manager_class is not None:
+                self._validate_custom_error_path(manager_class, placeholder, path)
+
+    def _validate_custom_error_path(
+        self,
+        manager_class: type[GeneralManager],
+        placeholder: str,
+        parts: tuple[str, ...],
+    ) -> None:
+        """Validate a placeholder path against manager schema metadata."""
+        current_manager = manager_class
+        for index, part in enumerate(parts):
+            try:
+                attribute_types = current_manager.Interface.get_attribute_types()
+            except NotImplementedError as exc:
+                detail = str(exc) or "get_attribute_types is not implemented"
+                raise InvalidErrorTemplateError(
+                    placeholder,
+                    f"schema unavailable for {current_manager.__name__}: {detail}",
+                ) from exc
+
+            if part not in attribute_types:
+                raise InvalidErrorTemplateError(
+                    placeholder,
+                    f"unknown segment {part!r} on {current_manager.__name__}",
+                )
+
+            if index == len(parts) - 1:
+                return
+
+            metadata = attribute_types[part]
+            if metadata.get("relation_kind") == "collection":
+                raise InvalidErrorTemplateError(
+                    placeholder,
+                    f"segment {part!r} on {current_manager.__name__} is a "
+                    "collection relation and cannot be traversed",
+                )
+
+            related_manager = metadata.get("type")
+            if not isinstance(related_manager, type) or not issubclass(
+                related_manager,
+                GeneralManager,
+            ):
+                raise InvalidErrorTemplateError(
+                    placeholder,
+                    f"segment {part!r} on {current_manager.__name__} is not a "
+                    "manager relation",
+                )
+            current_manager = related_manager
 
     def _generate_fallback_error_messages(
         self,
