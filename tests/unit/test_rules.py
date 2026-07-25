@@ -2,13 +2,16 @@ from django.core.exceptions import NON_FIELD_ERRORS
 from django.test import TestCase, override_settings
 from datetime import datetime
 import ast
+from typing import ClassVar, cast
+
+from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.rule.rule import (
     InvalidErrorTemplateError,
     InvalidRuleHandlerConfigurationError,
     MissingErrorTemplateVariableError,
     Rule,
 )
-from typing import cast
 from general_manager.rule.handler import BaseRuleHandler
 
 NONE_VALUE = None
@@ -20,6 +23,123 @@ class DummyObject:
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+
+class SchemaInterface(InterfaceBase):
+    """Lightweight interface exposing only schema metadata for rule tests."""
+
+    schema: ClassVar[dict[str, AttributeTypedDict]]
+
+    @classmethod
+    def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
+        return cls.schema
+
+
+class ProjectTemplateInterface(SchemaInterface):
+    schema: ClassVar[dict[str, AttributeTypedDict]] = {
+        "name": {
+            "type": str,
+            "default": "",
+            "is_required": True,
+            "is_editable": True,
+            "is_derived": False,
+        }
+    }
+
+
+class ProjectTemplateManager(GeneralManager):
+    pass
+
+
+ProjectTemplateManager.Interface = ProjectTemplateInterface
+
+
+class ItemTemplateInterface(SchemaInterface):
+    schema: ClassVar[dict[str, AttributeTypedDict]] = {
+        "project": {
+            "type": ProjectTemplateManager,
+            "relation_kind": "direct",
+            "default": None,
+            "is_required": False,
+            "is_editable": True,
+            "is_derived": False,
+        },
+        "projects": {
+            "type": ProjectTemplateManager,
+            "relation_kind": "collection",
+            "default": None,
+            "is_required": False,
+            "is_editable": True,
+            "is_derived": False,
+        },
+        "price": {
+            "type": float,
+            "default": 0.0,
+            "is_required": True,
+            "is_editable": True,
+            "is_derived": False,
+        },
+        "untyped_project": cast(
+            AttributeTypedDict,
+            {
+                "relation_kind": "direct",
+                "default": None,
+                "is_required": False,
+                "is_editable": True,
+                "is_derived": False,
+            },
+        ),
+    }
+
+
+class ItemTemplateManager(GeneralManager):
+    pass
+
+
+ItemTemplateManager.Interface = ItemTemplateInterface
+
+
+class UnavailableTemplateInterface(SchemaInterface):
+    @classmethod
+    def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
+        raise NotImplementedError("read capability is not configured")
+
+
+class UnavailableTemplateManager(GeneralManager):
+    pass
+
+
+UnavailableTemplateManager.Interface = UnavailableTemplateInterface
+
+
+class BareUnavailableTemplateInterface(SchemaInterface):
+    @classmethod
+    def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
+        raise NotImplementedError
+
+
+class BareUnavailableTemplateManager(GeneralManager):
+    pass
+
+
+BareUnavailableTemplateManager.Interface = BareUnavailableTemplateInterface
+
+
+class UnexpectedSchemaError(RuntimeError):
+    """Unexpected schema lookup failure used to verify propagation."""
+
+
+class FailingTemplateInterface(SchemaInterface):
+    @classmethod
+    def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
+        raise UnexpectedSchemaError
+
+
+class FailingTemplateManager(GeneralManager):
+    pass
+
+
+FailingTemplateManager.Interface = FailingTemplateInterface
 
 
 class CustomLenHandler(BaseRuleHandler):
@@ -617,6 +737,136 @@ class RuleTests(TestCase):
             return item.height >= 150
 
         Rule(func, custom_error_message="Height detail: {height.value}")
+
+    def test_custom_error_message_accepts_related_manager_path(self):
+        """A dotted placeholder may traverse a direct manager relation."""
+
+        def func(item: DummyObject) -> bool:
+            return item.project is not None
+
+        rule = Rule(func, custom_error_message="Project: {project.name}")
+
+        rule.validate_custom_error_message(ItemTemplateManager)
+
+    def test_custom_error_message_rejects_unknown_related_manager_field(self):
+        """A misspelled final segment is rejected against the related schema."""
+
+        def func(item: DummyObject) -> bool:
+            return item.project is not None
+
+        rule = Rule(func, custom_error_message="Project: {project.nmae}")
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            rule.validate_custom_error_message(ItemTemplateManager)
+
+        self.assertEqual(ctx.exception.placeholder, "project.nmae")
+        self.assertEqual(
+            ctx.exception.reason,
+            "unknown segment 'nmae' on ProjectTemplateManager",
+        )
+
+    def test_custom_error_message_rejects_scalar_path_traversal(self):
+        """A scalar field cannot be traversed as if it were a manager relation."""
+
+        def func(item: DummyObject) -> bool:
+            return item.price > 0
+
+        rule = Rule(func, custom_error_message="Price: {price.amount}")
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            rule.validate_custom_error_message(ItemTemplateManager)
+
+        self.assertEqual(ctx.exception.placeholder, "price.amount")
+        self.assertEqual(
+            ctx.exception.reason,
+            "segment 'price' on ItemTemplateManager is not a manager relation",
+        )
+
+    def test_custom_error_message_rejects_relation_without_manager_type(self):
+        """Missing relation type metadata is not a traversable manager relation."""
+
+        def func(item: DummyObject) -> bool:
+            return item.untyped_project is not None
+
+        rule = Rule(
+            func,
+            custom_error_message="Project: {untyped_project.name}",
+        )
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            rule.validate_custom_error_message(ItemTemplateManager)
+
+        self.assertEqual(ctx.exception.placeholder, "untyped_project.name")
+        self.assertEqual(
+            ctx.exception.reason,
+            "segment 'untyped_project' on ItemTemplateManager is not a "
+            "manager relation",
+        )
+
+    def test_custom_error_message_rejects_collection_path_traversal(self):
+        """A collection relation cannot be traversed by a dotted placeholder."""
+
+        def func(item: DummyObject) -> bool:
+            return bool(item.projects)
+
+        rule = Rule(func, custom_error_message="Project: {projects.name}")
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            rule.validate_custom_error_message(ItemTemplateManager)
+
+        self.assertEqual(ctx.exception.placeholder, "projects.name")
+        self.assertEqual(
+            ctx.exception.reason,
+            "segment 'projects' on ItemTemplateManager is a collection relation "
+            "and cannot be traversed",
+        )
+
+    def test_custom_error_message_rejects_unavailable_manager_schema(self):
+        """A manager without attribute metadata produces a template error."""
+
+        def func(item: DummyObject) -> bool:
+            return item.project is not None
+
+        rule = Rule(func, custom_error_message="Project: {project.name}")
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            rule.validate_custom_error_message(UnavailableTemplateManager)
+
+        self.assertEqual(ctx.exception.placeholder, "project.name")
+        self.assertEqual(
+            ctx.exception.reason,
+            "schema unavailable for UnavailableTemplateManager: "
+            "read capability is not configured",
+        )
+
+    def test_custom_error_message_explains_bare_unavailable_manager_schema(self):
+        """A bare schema availability error receives a useful fallback detail."""
+
+        def func(item: DummyObject) -> bool:
+            return item.project is not None
+
+        rule = Rule(func, custom_error_message="Project: {project.name}")
+
+        with self.assertRaises(InvalidErrorTemplateError) as ctx:
+            rule.validate_custom_error_message(BareUnavailableTemplateManager)
+
+        self.assertEqual(ctx.exception.placeholder, "project.name")
+        self.assertEqual(
+            ctx.exception.reason,
+            "schema unavailable for BareUnavailableTemplateManager: "
+            "get_attribute_types is not implemented",
+        )
+
+    def test_custom_error_message_propagates_unexpected_schema_error(self):
+        """Unexpected schema lookup errors are not translated."""
+
+        def func(item: DummyObject) -> bool:
+            return item.project is not None
+
+        rule = Rule(func, custom_error_message="Project: {project.name}")
+
+        with self.assertRaises(UnexpectedSchemaError):
+            rule.validate_custom_error_message(FailingTemplateManager)
 
     def test_missing_error_template_variable_error_remains_compatible(self):
         """The deprecated exception retains its type and historical message."""
