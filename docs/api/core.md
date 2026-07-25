@@ -686,9 +686,24 @@ non-empty `dict[str, str]`: handler-derived messages when available, a
 variable-keyed combination fallback otherwise, or Django's `"__all__"` key for
 a variable-free predicate. A custom message is retained by the fallback.
 Calling `get_error_message()` before evaluation or after a passing/skipped
-evaluation returns `None`. For a failed rule, missing custom-message
-placeholders raise `MissingErrorTemplateVariableError`, and documented custom or
-built-in handler exceptions propagate unchanged. The defensive
+evaluation returns `None`.
+
+`custom_error_message` may be static or contain optional placeholders for any
+subset of predicate variables, such as `{project.name}`. Placeholders support
+only dot-separated Python identifiers; they read attributes and do not call
+methods. Syntax and predicate roots are validated at `Rule` construction, and
+dotted paths are validated against manager schemas during shared manager
+startup. Invalid syntax, unrelated roots, and unknown or non-traversable paths
+raise `InvalidErrorTemplateError`. Calls, indexes, conversions, format
+specifications, filters, arbitrary expressions, and literal-brace escaping are
+unsupported. With `ignore_if_none=False`, an intermediate or final `None`
+renders as `"None"` when a failed rule is formatted. Templates do not change
+the existing variable or non-field keys to which error output is attached.
+
+The deprecated `MissingErrorTemplateVariableError` remains importable directly
+from `general_manager.rule.rule` for compatibility, but omitted placeholders no
+longer raise it. Documented custom or built-in handler exceptions propagate
+unchanged. The defensive
 `ErrorMessageGenerationError` applies only if internal state records failure
 without retaining the evaluated input. The non-empty failed-rule fallback is
 guaranteed from 0.62.2.
@@ -717,3 +732,5 @@ during `Rule` construction.
 ::: general_manager.rule.handler.NumericIterableError
 
 ::: general_manager.rule.rule.InvalidRuleHandlerConfigurationError
+
+::: general_manager.rule.rule.InvalidErrorTemplateError

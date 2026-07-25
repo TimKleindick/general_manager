@@ -42,16 +42,46 @@ If a rule returns `False`, the interface raises `ValidationError`. Errors propag
 
 ## Custom messages and `None` handling
 
-Rules automatically generate helpful error messages by analysing the expression. Override the text with `custom_error_message` and use placeholders that match variable names:
+Rules automatically generate helpful error messages by analysing the
+expression. Override the text with either a static message or a template:
 
 ```python
 Rule(
     lambda order: order.quantity <= order.stock,
-    custom_error_message="Ordered quantity ({quantity}) exceeds stock ({stock}).",
+    custom_error_message="The order exceeds available stock.",
+)
+
+Rule(
+    lambda task: task.project is not None and task.project.name is not None,
+    custom_error_message="A named project is required; received {project.name}.",
+    ignore_if_none=False,
 )
 ```
 
-By default, rules ignore `None` values and return `None`. Set `ignore_if_none=False` when `None` should fail the validation.
+Placeholders are optional and may cover only a subset of the attributes
+referenced by the predicate. They consist only of dot-separated Python
+identifiers. A dotted placeholder such as `{project.name}` follows declared
+single-manager relations; it does not call a method. Template choice does not
+change where validation errors are attached: the formatted message remains
+keyed by the rule's existing referenced fields (or by Django's non-field error
+key for a variable-free predicate).
+
+Placeholder syntax and roots are checked when the `Rule` is constructed. Dotted
+paths are checked against manager schemas during shared manager startup.
+Malformed syntax, a root unrelated to the predicate, and unknown or
+non-traversable schema paths raise `InvalidErrorTemplateError`. Calls, indexes,
+conversion or format specifications, filters, arbitrary expressions, and
+literal-brace escaping are unsupported.
+
+By default, rules ignore `None` values and `evaluate()` returns `None`. Set
+`ignore_if_none=False` when `None` should fail validation. If a failed rule is
+formatted, an intermediate or final `None` in a dotted path renders as
+`"None"`, as in the `{project.name}` example when `project` is absent. Passing
+and skipped rules still return no message from `get_error_message()`.
+
+`MissingErrorTemplateVariableError` remains importable from
+`general_manager.rule.rule` for compatibility, but omitting placeholders no
+longer raises it.
 
 ## Manual evaluation
 
