@@ -35,7 +35,7 @@ class SchemaInterface(InterfaceBase):
         return cls.schema
 
 
-class ProjectTemplateInterface(SchemaInterface):
+class CompanyTemplateInterface(SchemaInterface):
     schema: ClassVar[dict[str, AttributeTypedDict]] = {
         "name": {
             "type": str,
@@ -44,6 +44,33 @@ class ProjectTemplateInterface(SchemaInterface):
             "is_editable": True,
             "is_derived": False,
         }
+    }
+
+
+class CompanyTemplateManager(GeneralManager):
+    pass
+
+
+CompanyTemplateManager.Interface = CompanyTemplateInterface
+
+
+class ProjectTemplateInterface(SchemaInterface):
+    schema: ClassVar[dict[str, AttributeTypedDict]] = {
+        "company": {
+            "type": CompanyTemplateManager,
+            "relation_kind": "direct",
+            "default": None,
+            "is_required": False,
+            "is_editable": True,
+            "is_derived": False,
+        },
+        "name": {
+            "type": str,
+            "default": "",
+            "is_required": True,
+            "is_editable": True,
+            "is_derived": False,
+        },
     }
 
 
@@ -127,6 +154,10 @@ BareUnavailableTemplateManager.Interface = BareUnavailableTemplateInterface
 
 class UnexpectedSchemaError(RuntimeError):
     """Unexpected schema lookup failure used to verify propagation."""
+
+
+class ProjectNameUnavailableError(RuntimeError):
+    """Descriptor failure used to verify runtime placeholder propagation."""
 
 
 class FailingTemplateInterface(SchemaInterface):
@@ -747,6 +778,103 @@ class RuleTests(TestCase):
         rule = Rule(func, custom_error_message="Project: {project.name}")
 
         rule.validate_custom_error_message(ItemTemplateManager)
+
+    def test_custom_error_message_renders_related_attribute_on_root_error_key(self):
+        """A dotted placeholder renders while retaining predicate error keys."""
+
+        def func(item: DummyObject) -> bool:
+            return item.project is None
+
+        rule = Rule(func, custom_error_message="Project: {project.name}")
+        rule.validate_custom_error_message(ItemTemplateManager)
+
+        self.assertFalse(rule.evaluate(DummyObject(project=DummyObject(name="Apollo"))))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"project": "Project: Apollo"},
+        )
+
+    def test_custom_error_message_renders_validated_multi_level_path(self):
+        """A schema-validated path may traverse multiple direct relations."""
+
+        def func(item: DummyObject) -> bool:
+            return item.project is None
+
+        rule = Rule(
+            func,
+            custom_error_message="Company: {project.company.name}",
+        )
+        rule.validate_custom_error_message(ItemTemplateManager)
+        item = DummyObject(
+            project=DummyObject(company=DummyObject(name="Acme")),
+        )
+
+        self.assertFalse(rule.evaluate(item))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"project": "Company: Acme"},
+        )
+
+    def test_custom_error_message_renders_none_for_intermediate_value(self):
+        """A None relation renders as None without traversing later segments."""
+
+        def func(item: DummyObject) -> bool:
+            return item.project is None
+
+        rule = Rule(
+            func,
+            custom_error_message="Company: {project.company.name}",
+            ignore_if_none=False,
+        )
+        rule.validate_custom_error_message(ItemTemplateManager)
+        item = DummyObject(project=DummyObject(company=None))
+
+        self.assertFalse(rule.evaluate(item))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"project": "Company: None"},
+        )
+
+    def test_custom_error_message_renders_none_for_final_value(self):
+        """A final None value is converted to its string representation."""
+
+        def func(item: DummyObject) -> bool:
+            return item.project is None
+
+        rule = Rule(
+            func,
+            custom_error_message="Project: {project.name}",
+            ignore_if_none=False,
+        )
+        rule.validate_custom_error_message(ItemTemplateManager)
+        item = DummyObject(project=DummyObject(name=None))
+
+        self.assertFalse(rule.evaluate(item))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"project": "Project: None"},
+        )
+
+    def test_custom_error_message_propagates_descriptor_access_failure(self):
+        """Runtime failures from ordinary attribute access remain visible."""
+
+        expected_error = ProjectNameUnavailableError()
+
+        class FailingProject:
+            @property
+            def name(self) -> str:
+                raise expected_error
+
+        def func(item: DummyObject) -> bool:
+            return item.project is None
+
+        rule = Rule(func, custom_error_message="Project: {project.name}")
+        rule.validate_custom_error_message(ItemTemplateManager)
+
+        self.assertFalse(rule.evaluate(DummyObject(project=FailingProject())))
+        with self.assertRaises(ProjectNameUnavailableError) as ctx:
+            rule.get_error_message()
+        self.assertIs(ctx.exception, expected_error)
 
     def test_custom_error_message_rejects_unknown_related_manager_field(self):
         """A misspelled final segment is rejected against the related schema."""
