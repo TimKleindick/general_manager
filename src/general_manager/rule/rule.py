@@ -46,6 +46,7 @@ _REVERSED_COMPARISON_OPS: dict[type[ast.cmpop], type[ast.cmpop]] = {
     ast.Is: ast.Is,
     ast.IsNot: ast.IsNot,
 }
+_ERROR_TEMPLATE_PLACEHOLDER = re.compile(r"{([^{}]*)}")
 
 
 class NonexistentAttributeError(AttributeError):
@@ -61,8 +62,19 @@ class NonexistentAttributeError(AttributeError):
         super().__init__(f"The attribute '{attribute}' does not exist.")
 
 
-class MissingErrorTemplateVariableError(ValueError):
-    """Raised when a custom error template omits required variables."""
+class InvalidErrorTemplateError(ValueError):
+    """Raised when a custom error template contains an invalid placeholder."""
+
+    def __init__(self, placeholder: str, reason: str) -> None:
+        self.placeholder = placeholder
+        self.reason = reason
+        super().__init__(
+            f"Invalid custom error message placeholder {placeholder!r}: {reason}."
+        )
+
+
+class MissingErrorTemplateVariableError(InvalidErrorTemplateError):
+    """Deprecated error for custom templates that omitted required variables."""
 
     def __init__(self, missing: List[str]) -> None:
         """
@@ -71,8 +83,12 @@ class MissingErrorTemplateVariableError(ValueError):
         Parameters:
             missing (List[str]): Names of the variables that are required by the template but were not found; these names will be included in the exception message.
         """
-        super().__init__(
-            f"The custom error message does not contain all used variables: {missing}."
+        self.missing = missing
+        self.placeholder = ", ".join(missing)
+        self.reason = "required variables are missing"
+        ValueError.__init__(
+            self,
+            f"The custom error message does not contain all used variables: {missing}.",
         )
 
 
@@ -115,6 +131,7 @@ class Rule(Generic[GeneralManagerType]):
     _primary_param: Optional[str]
     _tree: ast.AST
     _variables: List[str]
+    _custom_error_paths: dict[str, tuple[str, ...]]
     _handlers: Dict[str, BaseRuleHandler]
 
     def __init__(
@@ -128,7 +145,7 @@ class Rule(Generic[GeneralManagerType]):
 
         Parameters:
             func (Callable[[GeneralManagerType], bool]): Predicate that evaluates a GeneralManager instance.
-            custom_error_message (Optional[str]): Optional template used to format generated error messages; placeholders must match variables referenced by the predicate.
+            custom_error_message (Optional[str]): Optional template used to format generated error messages; placeholder roots must match variables referenced by the predicate.
             ignore_if_none (bool): If True, evaluation will be skipped (result recorded as None) when any referenced variable resolves to None.
         """
         self._func = func
@@ -153,6 +170,8 @@ class Rule(Generic[GeneralManagerType]):
 
         # 3) Extract referenced variables
         self._variables = self._extract_variables()
+        self._custom_error_paths = self._parse_custom_error_paths()
+        self.validate_custom_error_message()
 
         # 4) Register handlers
         self._handlers = {}  # type: Dict[str, BaseRuleHandler]
@@ -275,20 +294,48 @@ class Rule(Generic[GeneralManagerType]):
             )
         return self._last_result
 
-    def validate_custom_error_message(self) -> None:
-        """
-        Validate that a provided custom error message template includes placeholders for every variable referenced by the rule.
+    def _parse_custom_error_paths(self) -> dict[str, tuple[str, ...]]:
+        """Parse and validate placeholder syntax in the custom error message."""
+        if self._custom_error_message is None:
+            return {}
 
-        Raises:
-            MissingErrorTemplateVariableError: If one or more extracted variables are not present as `{name}` placeholders in the custom template.
-        """
-        if not self._custom_error_message:
-            return
+        paths: dict[str, tuple[str, ...]] = {}
+        cursor = 0
+        for match in _ERROR_TEMPLATE_PLACEHOLDER.finditer(self._custom_error_message):
+            unmatched_text = self._custom_error_message[cursor : match.start()]
+            if "{" in unmatched_text or "}" in unmatched_text:
+                brace = "{" if "{" in unmatched_text else "}"
+                raise InvalidErrorTemplateError(brace, "unmatched brace")
 
-        vars_in_msg = set(re.findall(r"{([^}]+)}", self._custom_error_message))
-        missing = [v for v in self._variables if v not in vars_in_msg]
-        if missing:
-            raise MissingErrorTemplateVariableError(missing)
+            placeholder = match.group(1)
+            parts = tuple(placeholder.split("."))
+            if not placeholder or not all(part.isidentifier() for part in parts):
+                raise InvalidErrorTemplateError(
+                    placeholder,
+                    "expected one or more dot-separated Python identifiers",
+                )
+            paths[placeholder] = parts
+            cursor = match.end()
+
+        unmatched_text = self._custom_error_message[cursor:]
+        if "{" in unmatched_text or "}" in unmatched_text:
+            brace = "{" if "{" in unmatched_text else "}"
+            raise InvalidErrorTemplateError(brace, "unmatched brace")
+        return paths
+
+    def validate_custom_error_message(
+        self,
+        manager_class: type[GeneralManager] | None = None,
+    ) -> None:
+        """Validate that placeholder roots are referenced by the rule."""
+        del manager_class
+        variable_roots = {variable.split(".", 1)[0] for variable in self._variables}
+        for placeholder, path in self._custom_error_paths.items():
+            if path[0] not in variable_roots:
+                raise InvalidErrorTemplateError(
+                    placeholder,
+                    f"root {path[0]!r} is not referenced by the rule",
+                )
 
     def _generate_fallback_error_messages(
         self,
@@ -314,8 +361,6 @@ class Rule(Generic[GeneralManagerType]):
             `None` if the predicate passed, was skipped, or has not been evaluated.
 
         Raises:
-            MissingErrorTemplateVariableError: If a failed rule's custom message
-                omits a placeholder for a referenced variable.
             ErrorMessageGenerationError: If internal evaluation state records a
                 failed result without retaining its evaluated input.
             Exception: A matching rule handler's documented message-generation
@@ -326,8 +371,7 @@ class Rule(Generic[GeneralManagerType]):
         if self._last_input is None:
             raise ErrorMessageGenerationError()
 
-        # Validate and substitute template placeholders
-        self.validate_custom_error_message()
+        # Substitute template placeholders
         vals = self._extract_variable_values(self._last_input)
         manager_class = type(self._last_input).__name__
         logger.debug(
@@ -339,8 +383,7 @@ class Rule(Generic[GeneralManagerType]):
         )
 
         if self._custom_error_message:
-            formatted = re.sub(
-                r"{([^}]+)}",
+            formatted = _ERROR_TEMPLATE_PLACEHOLDER.sub(
                 lambda m: str(vals.get(m.group(1), m.group(0))),
                 self._custom_error_message,
             )
