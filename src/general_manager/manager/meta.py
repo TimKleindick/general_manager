@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 import threading
 from _thread import LockType
 from typing import TYPE_CHECKING, ClassVar, Iterable, TypeVar, cast
 from weakref import WeakKeyDictionary
+
+from django.apps import apps
 
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface.base_interface import InterfaceBase
@@ -15,6 +17,7 @@ from general_manager.logging import get_logger
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
     from general_manager.interface.manifests import ManifestCapabilityBuilder
+    from general_manager.rule.rule import Rule
     from django.db.models import Model
 
 
@@ -121,8 +124,57 @@ class InvalidManagerStateError(AttributeError):
         super().__init__(detail)
 
 
+class _InvalidManagerRuleCollectionError(TypeError):
+    """Raised when manager rules are configured as a one-shot iterator."""
+
+    def __init__(self, source_name: str) -> None:
+        super().__init__(
+            f"{source_name} must be a reusable iterable; "
+            "one-shot iterators are not supported."
+        )
+
+
 class _nonExistent:
     pass
+
+
+def _iter_manager_validation_rules(
+    manager_class: type["GeneralManager"],
+) -> Iterator["Rule[GeneralManager]"]:
+    """Yield attached rules once after preflighting both reusable sources."""
+    from general_manager.rule.rule import Rule
+
+    interface = type.__getattribute__(manager_class, "Interface")
+    model = getattr(interface, "_model", None)
+    model_meta = getattr(model, "_meta", None)
+    rule_sources = (
+        ("Interface.rules", getattr(interface, "rules", ())),
+        (
+            "Interface._model._meta.rules",
+            getattr(model_meta, "rules", ()),
+        ),
+    )
+    reusable_rule_sources: list[Iterator[object]] = []
+    for source_name, rule_source in rule_sources:
+        if isinstance(rule_source, (str, bytes)) or not isinstance(
+            rule_source, Iterable
+        ):
+            continue
+        rule_iterator = iter(rule_source)
+        if rule_iterator is rule_source:
+            raise _InvalidManagerRuleCollectionError(source_name)
+        reusable_rule_sources.append(rule_iterator)
+
+    seen_rule_ids: set[int] = set()
+    for rule_iterator in reusable_rule_sources:
+        for candidate in rule_iterator:
+            if not isinstance(candidate, Rule):
+                continue
+            candidate_id = id(candidate)
+            if candidate_id in seen_rule_ids:
+                continue
+            seen_rule_ids.add(candidate_id)
+            yield cast("Rule[GeneralManager]", candidate)
 
 
 class GeneralManagerMeta(type):
@@ -270,6 +322,10 @@ class GeneralManagerMeta(type):
                 attributes = manager_class._attributes
                 if attribute_name is not None and attribute_name not in attributes:
                     return False
+                if apps.ready:
+                    GeneralManagerMeta._ensure_rule_templates_validated_locked(
+                        manager_class
+                    )
                 if attribute_name is None or attribute_name not in vars(manager_class):
                     GeneralManagerMeta.create_at_properties_for_attributes(
                         attributes.keys(), manager_class
@@ -283,6 +339,10 @@ class GeneralManagerMeta(type):
                 return False
             if attribute_name is not None and attribute_name not in attributes:
                 return False
+            if apps.ready:
+                GeneralManagerMeta._ensure_rule_templates_validated_locked(
+                    manager_class
+                )
             manager_class._attributes = attributes
             GeneralManagerMeta.create_at_properties_for_attributes(
                 attributes.keys(), manager_class
@@ -295,6 +355,25 @@ class GeneralManagerMeta(type):
             except ValueError:
                 pass
             return True
+
+    @staticmethod
+    def _ensure_rule_templates_validated_locked(
+        manager_class: type["GeneralManager"],
+    ) -> None:
+        """Validate attached rules while the attribute initialization lock is held."""
+        if vars(manager_class).get("_gm_rule_templates_validated", False):
+            return
+        for rule in _iter_manager_validation_rules(manager_class):
+            rule.validate_custom_error_message(manager_class)
+        type.__setattr__(manager_class, "_gm_rule_templates_validated", True)
+
+    @staticmethod
+    def ensure_rule_templates_validated(
+        manager_class: type["GeneralManager"],
+    ) -> None:
+        """Validate attached rules once using the shared initialization lock."""
+        with GeneralManagerMeta._attribute_initialization_lock:
+            GeneralManagerMeta._ensure_rule_templates_validated_locked(manager_class)
 
     @staticmethod
     def ensure_manager_is_valid(
