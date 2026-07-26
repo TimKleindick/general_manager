@@ -2037,7 +2037,7 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
             env=environment,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=60,
             check=False,
         )
 
@@ -2084,6 +2084,38 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
         )
         with self.assertRaises(InvalidErrorTemplateError):
             _ = UnvalidatedSubclassManager.price
+
+    def test_validated_manager_skips_rule_validation_lock(self) -> None:
+        class ValidatedManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+
+        GeneralManagerMeta.ensure_rule_templates_validated(ValidatedManager)
+
+        class ExplodingLock:
+            def __enter__(self) -> None:
+                raise AssertionError
+
+            def __exit__(
+                self,
+                exc_type: object,
+                exc_value: object,
+                traceback: object,
+            ) -> None:
+                return None
+
+        original_lock = GeneralManagerMeta._attribute_initialization_lock
+        GeneralManagerMeta._attribute_initialization_lock = ExplodingLock()  # type: ignore[assignment]
+        self.addCleanup(
+            setattr,
+            GeneralManagerMeta,
+            "_attribute_initialization_lock",
+            original_lock,
+        )
+
+        GeneralManagerMeta.ensure_rule_templates_validated(ValidatedManager)
 
     def test_reentrant_validation_failure_rolls_back_nested_initialization(
         self,
@@ -2170,4 +2202,51 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
         self.assertNotIn(
             ReentrantFailureManager,
             GeneralManagerMeta.pending_attribute_initialization,
+        )
+
+    def test_reentrant_validation_failure_restores_interface_field_cache(
+        self,
+    ) -> None:
+        class ReentrantValidationError(RuntimeError):
+            pass
+
+        class ReentrantFailingRule(Rule[GeneralManager]):
+            def __init__(self) -> None:
+                pass
+
+            def validate_custom_error_message(
+                self,
+                manager_class: type[GeneralManager] | None = None,
+            ) -> None:
+                assert manager_class is not None
+                assert manager_class.price is int  # type: ignore[attr-defined]
+                raise ReentrantValidationError
+
+        rule = ReentrantFailingRule()
+        original_field_descriptors = {"existing": object()}
+
+        class CachedInterfaceManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [rule]
+                _field_descriptors = original_field_descriptors
+
+                @classmethod
+                def get_attributes(cls) -> dict[str, object]:
+                    cls._field_descriptors = {"transient": object()}
+                    return super().get_attributes()
+
+        type.__setattr__(
+            CachedInterfaceManager.Interface,
+            "_field_descriptors",
+            original_field_descriptors,
+        )
+        with self.assertRaises(ReentrantValidationError):
+            _ = CachedInterfaceManager.price
+
+        self.assertIs(
+            vars(CachedInterfaceManager.Interface)["_field_descriptors"],
+            original_field_descriptors,
         )

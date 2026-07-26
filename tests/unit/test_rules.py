@@ -6,6 +6,7 @@ from typing import ClassVar, cast
 
 from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.rule.rule import (
     InvalidErrorTemplateError,
     InvalidRuleHandlerConfigurationError,
@@ -172,6 +173,18 @@ class FailingTemplateManager(GeneralManager):
 
 FailingTemplateManager.Interface = FailingTemplateInterface
 
+_TEMPLATE_MANAGER_STUBS = (
+    CompanyTemplateManager,
+    ProjectTemplateManager,
+    ItemTemplateManager,
+    UnavailableTemplateManager,
+    BareUnavailableTemplateManager,
+    FailingTemplateManager,
+)
+for _template_manager_stub in _TEMPLATE_MANAGER_STUBS:
+    while _template_manager_stub in GeneralManagerMeta.pending_graphql_interfaces:
+        GeneralManagerMeta.pending_graphql_interfaces.remove(_template_manager_stub)
+
 
 class CustomLenHandler(BaseRuleHandler):
     """Test handler that replaces the built-in len handler."""
@@ -297,6 +310,19 @@ class NotARuleHandler:
 
 
 class RuleTests(TestCase):
+    def test_template_manager_stubs_do_not_pollute_metaclass_registries(self):
+        """Module-level schema stubs must not participate in app initialization."""
+        for manager_class in _TEMPLATE_MANAGER_STUBS:
+            self.assertNotIn(manager_class, GeneralManagerMeta.all_classes)
+            self.assertNotIn(
+                manager_class,
+                GeneralManagerMeta.pending_attribute_initialization,
+            )
+            self.assertNotIn(
+                manager_class,
+                GeneralManagerMeta.pending_graphql_interfaces,
+            )
+
     @override_settings(
         GENERAL_MANAGER={
             "RULE_HANDLERS": ["tests.unit.test_rules.CustomLenHandler"],
@@ -762,12 +788,30 @@ class RuleTests(TestCase):
         )
 
     def test_custom_error_message_accepts_valid_dotted_path_at_construction(self):
-        """Dotted placeholder schema and rendering are deferred to later tasks."""
+        """A dotted path passes construction before manager-schema validation."""
 
         def func(item: DummyObject) -> bool:
             return item.height >= 150
 
         Rule(func, custom_error_message="Height detail: {height.value}")
+
+    def test_custom_error_message_allows_runtime_only_root_outside_schema(self):
+        """A one-part root may resolve at runtime without schema metadata."""
+
+        def func(item: DummyObject) -> bool:
+            return item.runtime_only == "expected"
+
+        rule = Rule(
+            func,
+            custom_error_message="Runtime value: {runtime_only}",
+        )
+
+        rule.validate_custom_error_message(ItemTemplateManager)
+        self.assertFalse(rule.evaluate(DummyObject(runtime_only="actual")))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"runtime_only": "Runtime value: actual"},
+        )
 
     def test_custom_error_message_accepts_related_manager_path(self):
         """A dotted placeholder may traverse a direct manager relation."""

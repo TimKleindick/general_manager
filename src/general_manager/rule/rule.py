@@ -330,8 +330,9 @@ class Rule(Generic[GeneralManagerType]):
         """Validate custom message placeholders against rule variables and schemas.
 
         Construction-time validation checks that each placeholder root is
-        referenced by the rule. When ``manager_class`` is supplied, every path
-        segment is also validated against its manager schema.
+        referenced by the rule. When ``manager_class`` is supplied, dotted
+        relation traversal is also validated against manager schemas. A
+        single-segment root may remain runtime-only.
 
         Raises:
             InvalidErrorTemplateError: If a root is unrelated to the rule or a
@@ -353,7 +354,7 @@ class Rule(Generic[GeneralManagerType]):
         placeholder: str,
         parts: tuple[str, ...],
     ) -> None:
-        """Validate a placeholder path against manager schema metadata."""
+        """Validate relation traversal against manager schema metadata."""
         current_manager = manager_class
         for index, part in enumerate(parts):
             try:
@@ -366,6 +367,8 @@ class Rule(Generic[GeneralManagerType]):
                 ) from exc
 
             if part not in attribute_types:
+                if index == 0 and len(parts) == 1:
+                    return
                 raise InvalidErrorTemplateError(
                     placeholder,
                     f"unknown segment {part!r} on {current_manager.__name__}",
