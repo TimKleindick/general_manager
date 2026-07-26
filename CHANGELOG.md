@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.67.1 (2026-07-26)
+
+### Bug Fixes
+
+- Make devcontainer workspace path portable
+  ([`1ac9ba2`](https://github.com/TimKleindick/general_manager/commit/1ac9ba255600ccb6fd4f8138d7933e14bea32ed8))
+
+- Quote devcontainer requirements path
+  ([`ebde95f`](https://github.com/TimKleindick/general_manager/commit/ebde95fb22770d8d3401544b0c0be24e2202718b))
+
+
 ## v0.67.0 (2026-07-26)
 
 ### Bug Fixes
