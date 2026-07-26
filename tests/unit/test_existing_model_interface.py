@@ -301,6 +301,20 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
                 else:
                     type.__setattr__(self.model, attribute_name, previous_value)
 
+            if previous_rules is missing:
+                self.assertFalse(hasattr(self.model._meta, "rules"))
+            else:
+                self.assertIs(self.model._meta.rules, previous_rules)  # type: ignore[attr-defined]
+            for attribute_name, previous_value in (
+                ("full_clean", previous_full_clean),
+                ("_general_manager_class", previous_manager_class),
+                ("all_objects", previous_all_objects),
+            ):
+                if previous_value is missing:
+                    self.assertNotIn(attribute_name, vars(self.model))
+                else:
+                    self.assertIs(vars(self.model)[attribute_name], previous_value)
+
         self.addCleanup(restore_model_state)
 
         def has_name(customer: models.Model) -> bool:
@@ -350,6 +364,16 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
             else:
                 InterfaceUnderTest._automatic_capability_builder = (
                     previous_automatic_builder
+                )
+            if previous_automatic_builder is missing:
+                self.assertNotIn(
+                    "_automatic_capability_builder",
+                    vars(InterfaceUnderTest),
+                )
+            else:
+                self.assertIs(
+                    vars(InterfaceUnderTest)["_automatic_capability_builder"],
+                    previous_automatic_builder,
                 )
             self.assertEqual(
                 capability_registry._bindings,
