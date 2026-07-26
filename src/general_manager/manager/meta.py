@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 import threading
-from _thread import LockType
+from _thread import RLock as RLockType
 from typing import TYPE_CHECKING, ClassVar, Iterable, TypeVar, cast
 from weakref import WeakKeyDictionary
 
@@ -193,7 +193,7 @@ class GeneralManagerMeta(type):
     read_only_classes: ClassVar[list[type[GeneralManager]]] = []
     pending_graphql_interfaces: ClassVar[list[type[GeneralManager]]] = []
     pending_attribute_initialization: ClassVar[list[type[GeneralManager]]] = []
-    _attribute_initialization_lock: ClassVar[LockType] = threading.Lock()
+    _attribute_initialization_lock: ClassVar[RLockType] = threading.RLock()
     Interface: type[InterfaceBase]
 
     def __getattribute__(cls, attribute_name: str) -> object:
@@ -371,9 +371,26 @@ class GeneralManagerMeta(type):
         """Validate attached rules while the attribute initialization lock is held."""
         if vars(manager_class).get("_gm_rule_templates_validated", False):
             return
-        for rule in _iter_manager_validation_rules(manager_class):
-            rule.validate_custom_error_message(manager_class)
-        type.__setattr__(manager_class, "_gm_rule_templates_validated", True)
+        if vars(manager_class).get(
+            "_gm_rule_templates_validation_in_progress",
+            False,
+        ):
+            return
+        type.__setattr__(
+            manager_class,
+            "_gm_rule_templates_validation_in_progress",
+            True,
+        )
+        try:
+            for rule in _iter_manager_validation_rules(manager_class):
+                rule.validate_custom_error_message(manager_class)
+            type.__setattr__(manager_class, "_gm_rule_templates_validated", True)
+        finally:
+            if "_gm_rule_templates_validation_in_progress" in vars(manager_class):
+                type.__delattr__(
+                    manager_class,
+                    "_gm_rule_templates_validation_in_progress",
+                )
 
     @staticmethod
     def ensure_rule_templates_validated(

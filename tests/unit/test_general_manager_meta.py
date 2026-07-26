@@ -1,3 +1,8 @@
+import os
+from pathlib import Path
+import subprocess
+import sys
+import textwrap
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -1590,6 +1595,10 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
                 False,
             )
         )
+        self.assertNotIn(
+            "_gm_rule_templates_validation_in_progress",
+            vars(LateRetryManager),
+        )
         self.assertIn(
             LateRetryManager,
             GeneralManagerMeta.pending_attribute_initialization,
@@ -1704,3 +1713,112 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
                 False,
             )
         )
+
+    def test_rule_validation_can_reenter_lazy_field_access_without_deadlock(
+        self,
+    ) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        environment = os.environ.copy()
+        existing_pythonpath = environment.get("PYTHONPATH")
+        pythonpath_entries = [str(project_root / "src")]
+        if existing_pythonpath:
+            pythonpath_entries.append(existing_pythonpath)
+        environment["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
+        environment["DJANGO_SETTINGS_MODULE"] = "tests.test_settings"
+        probe = textwrap.dedent(
+            """
+            import django
+
+            django.setup()
+
+            from general_manager.interface.interfaces.calculation import (
+                CalculationInterface,
+            )
+            from general_manager.manager.general_manager import GeneralManager
+            from general_manager.manager.input import Input
+            from general_manager.rule import Rule
+
+
+            class ReentrantRule(Rule):
+                def __init__(self):
+                    self.validation_calls = 0
+
+                def validate_custom_error_message(self, manager_class=None):
+                    self.validation_calls += 1
+                    assert manager_class.price is int
+
+
+            rule = ReentrantRule()
+
+
+            class ReentrantManager(GeneralManager):
+                price: int
+
+                class Interface(CalculationInterface):
+                    price = Input(int)
+                    rules = [rule]
+
+
+            assert ReentrantManager.price is int
+            assert rule.validation_calls == 1
+            assert vars(ReentrantManager)["_gm_rule_templates_validated"] is True
+            assert "_gm_rule_templates_validation_in_progress" not in vars(
+                ReentrantManager
+            )
+            print("reentrant-validation-complete")
+            """
+        )
+
+        result = subprocess.run(  # noqa: S603 - trusted interpreter and fixed probe
+            [sys.executable, "-c", probe],
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "reentrant-validation-complete")
+
+    def test_subclass_does_not_inherit_base_rule_validation_marker(self) -> None:
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        base_rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price}",
+        )
+
+        class ValidatedBaseManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [base_rule]
+
+        self.assertIs(ValidatedBaseManager.price, int)
+        self.assertTrue(
+            vars(ValidatedBaseManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+        invalid_subclass_rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class UnvalidatedSubclassManager(ValidatedBaseManager):
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [invalid_subclass_rule]
+
+        self.assertNotIn(
+            "_gm_rule_templates_validated",
+            vars(UnvalidatedSubclassManager),
+        )
+        with self.assertRaises(InvalidErrorTemplateError):
+            _ = UnvalidatedSubclassManager.price
