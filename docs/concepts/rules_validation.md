@@ -67,11 +67,13 @@ keyed by the rule's existing referenced fields (or by Django's non-field error
 key for a variable-free predicate).
 
 Placeholder syntax and roots are checked when the `Rule` is constructed. Dotted
-paths are checked against manager schemas during shared manager startup.
-Malformed syntax, a root unrelated to the predicate, and unknown or
-non-traversable schema paths raise `InvalidErrorTemplateError`. Calls, indexes,
-conversion or format specifications, filters, arbitrary expressions, and
-literal-brace escaping are unsupported.
+paths are checked against manager schemas during shared manager startup for
+normal application managers. Late-created managers perform the same check on
+their first eligible public use after app readiness, before CRUD or descriptor
+evaluation. Malformed syntax, a root unrelated to the predicate, and unknown
+or non-traversable schema paths raise `InvalidErrorTemplateError`. Calls,
+indexes, conversion or format specifications, filters, arbitrary expressions,
+and literal-brace escaping are unsupported.
 
 By default, rules ignore `None` values and `evaluate()` returns `None`. Set
 `ignore_if_none=False` when `None` should fail validation. If a failed rule is

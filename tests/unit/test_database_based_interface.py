@@ -15,6 +15,7 @@ from django.core.exceptions import ValidationError, FieldDoesNotExist
 from django.apps import apps
 
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.interface import OrmInterfaceBase
 from general_manager.interface.bundles.database import (
     ORM_PERSISTENCE_CAPABILITIES,
@@ -32,6 +33,7 @@ from general_manager.interface.utils.errors import (
 )
 from general_manager.manager.input import Input
 from general_manager.rule import Rule
+from general_manager.rule.rule import InvalidErrorTemplateError
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
     PayloadNormalizer,
@@ -1731,6 +1733,74 @@ class OrmWritableInterfaceTestCase(
         self.assertEqual(instance.value, 42)
         self.assertEqual(instance.owner, self.user1)
         self.assertEqual(instance.changed_by, self.user1)
+
+    def test_late_orm_manager_validates_templates_before_first_create(self):
+        """A late manager must fail template validation before ORM mutation."""
+        rule_evaluations: list[object] = []
+
+        def positive_value(item: GeneralManager) -> bool:
+            rule_evaluations.append(item)
+            return item.age > 0  # type: ignore[attr-defined]
+
+        invalid_rule = Rule(
+            positive_value,
+            custom_error_message="Age: {age.amount}",
+        )
+        previous_rules = getattr(PersonModel._meta, "rules", None)
+        previous_parent = PersonInterface._parent_class
+        object.__setattr__(
+            PersonModel._meta,
+            "rules",
+            [invalid_rule],
+        )
+
+        try:
+
+            class LateWritableManager(GeneralManager):
+                Interface = PersonInterface
+
+            with patch.object(LateWritableManager.Interface, "create") as create:
+                with self.assertRaises(InvalidErrorTemplateError):
+                    LateWritableManager.create(
+                        creator_id=self.user1.pk,
+                        ignore_permission=True,
+                        name="Must Not Persist",
+                        age=1,
+                        owner=self.user1,
+                    )
+
+                create.assert_not_called()
+            self.assertEqual(rule_evaluations, [])
+            self.assertFalse(
+                vars(LateWritableManager).get(
+                    "_gm_rule_templates_validated",
+                    False,
+                )
+            )
+
+            object.__setattr__(PersonModel._meta, "rules", [])
+            GeneralManagerMeta.ensure_rule_templates_validated_after_readiness(
+                LateWritableManager
+            )
+            self.assertTrue(
+                vars(LateWritableManager).get(
+                    "_gm_rule_templates_validated",
+                    False,
+                )
+            )
+        finally:
+            PersonInterface._parent_class = previous_parent
+            if previous_rules is None:
+                try:
+                    delattr(PersonModel._meta, "rules")
+                except AttributeError:
+                    pass
+            else:
+                object.__setattr__(
+                    PersonModel._meta,
+                    "rules",
+                    previous_rules,
+                )
 
     def test_create_with_history_comment(self):
         """

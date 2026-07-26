@@ -79,12 +79,14 @@ intermediate or final `None` renders as `"None"` when the failed rule is
 formatted.
 
 Only dot-separated Python identifiers are supported in placeholders. Syntax and
-predicate roots are validated at rule construction, while paths are validated
-against declared manager schemas during shared manager startup. Invalid syntax,
-unrelated roots, and unknown or non-traversable paths raise
-`InvalidErrorTemplateError`. Calls, indexes, conversions, format
-specifications, filters, arbitrary expressions, and literal-brace escaping are
-unsupported. Passing and skipped rules return no message.
+predicate roots are validated at rule construction. Paths are validated against
+declared manager schemas during shared manager startup for normal application
+managers; a manager declared later validates on its first public use after app
+readiness, before CRUD or field evaluation. Invalid syntax, unrelated roots,
+and unknown or non-traversable paths raise `InvalidErrorTemplateError`. Calls,
+indexes, conversions, format specifications, filters, arbitrary expressions,
+and literal-brace escaping are unsupported. Passing and skipped rules return no
+message.
 
 `MissingErrorTemplateVariableError` remains available from
 `general_manager.rule.rule` for compatibility, but a template may omit

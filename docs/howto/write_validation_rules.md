@@ -102,16 +102,19 @@ assert project_required.get_error_message() == {
 A placeholder may follow declared single-manager relations using only
 dot-separated Python identifiers. In the attached `project_required` rule
 above, `{project.name}` has the predicate root `project`, and
-`Booking.Interface.project` declares a single-manager relation. Shared manager
-startup therefore discovers the rule and validates `project.name` against the
-`Booking` and `Project` schemas. When the predicate fails because `project` is
-`None`, formatting stops at that intermediate value and renders `"None"`. A
-final `None`, such as a project whose `name` is `None`, renders the same way.
+`Booking.Interface.project` declares a single-manager relation. Normal
+application managers validate the path against the `Booking` and `Project`
+schemas during shared manager startup. Managers declared later validate on
+their first public use after Django's apps are ready, before a CRUD operation or
+field evaluation runs. When the predicate fails because `project` is `None`,
+formatting stops at that intermediate value and renders `"None"`. A final
+`None`, such as a project whose `name` is `None`, renders the same way.
 
 Placeholder syntax and roots are validated when the rule is constructed.
 Dotted paths such as `project.name` are validated against the declared manager
-schemas during shared manager startup. Invalid syntax, unrelated roots, unknown
-fields, scalar traversal, and collection traversal raise
+schemas during shared manager startup, or on the first eligible public use
+after app readiness for a late-created manager. Invalid syntax, unrelated
+roots, unknown fields, scalar traversal, and collection traversal raise
 `InvalidErrorTemplateError`.
 
 Templates do not evaluate Python. Calls, indexes, conversion and format
