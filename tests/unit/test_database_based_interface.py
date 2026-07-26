@@ -1746,8 +1746,17 @@ class OrmWritableInterfaceTestCase(
             positive_value,
             custom_error_message="Age: {age.amount}",
         )
-        previous_rules = getattr(PersonModel._meta, "rules", None)
+        missing = object()
+        previous_rules = vars(PersonModel._meta).get("rules", missing)
         previous_parent = PersonInterface._parent_class
+        registry_snapshots = tuple(
+            (registry, list(registry))
+            for registry in (
+                GeneralManagerMeta.all_classes,
+                GeneralManagerMeta.pending_attribute_initialization,
+                GeneralManagerMeta.pending_graphql_interfaces,
+            )
+        )
         object.__setattr__(
             PersonModel._meta,
             "rules",
@@ -1790,11 +1799,12 @@ class OrmWritableInterfaceTestCase(
             )
         finally:
             PersonInterface._parent_class = previous_parent
-            if previous_rules is None:
-                try:
+            for registry, snapshot in registry_snapshots:
+                registry.clear()
+                registry.extend(snapshot)
+            if previous_rules is missing:
+                if "rules" in vars(PersonModel._meta):
                     delattr(PersonModel._meta, "rules")
-                except AttributeError:
-                    pass
             else:
                 object.__setattr__(
                     PersonModel._meta,

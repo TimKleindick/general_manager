@@ -380,14 +380,25 @@ class GeneralManagerMeta(type):
                 type.__setattr__(manager_class, "_gm_attributes_initialized", True)
                 return True
 
+            interface_field_descriptors_before = vars(interface).get(
+                "_field_descriptors",
+                _MANAGER_CLASS_STATE_MISSING,
+            )
             try:
                 attributes = interface.get_attributes()
             except NotImplementedError:
                 return False
             if apps.ready:
-                GeneralManagerMeta._ensure_rule_templates_validated_locked(
-                    manager_class
-                )
+                try:
+                    GeneralManagerMeta._ensure_rule_templates_validated_locked(
+                        manager_class
+                    )
+                except Exception:
+                    GeneralManagerMeta._restore_interface_field_descriptors_locked(
+                        interface,
+                        interface_field_descriptors_before,
+                    )
+                    raise
             if attribute_name is not None and attribute_name not in attributes:
                 return False
             manager_class._attributes = attributes
@@ -416,6 +427,11 @@ class GeneralManagerMeta(type):
         ):
             return
         class_state_before = dict(vars(manager_class))
+        interface = type.__getattribute__(manager_class, "Interface")
+        interface_field_descriptors_before = vars(interface).get(
+            "_field_descriptors",
+            _MANAGER_CLASS_STATE_MISSING,
+        )
         pending_positions = tuple(
             index
             for index, pending_manager in enumerate(
@@ -436,6 +452,8 @@ class GeneralManagerMeta(type):
             GeneralManagerMeta._restore_rule_validation_initialization_state_locked(
                 manager_class,
                 class_state_before,
+                interface,
+                interface_field_descriptors_before,
                 pending_positions,
             )
             raise
@@ -450,9 +468,11 @@ class GeneralManagerMeta(type):
     def _restore_rule_validation_initialization_state_locked(
         manager_class: type["GeneralManager"],
         class_state_before: dict[str, object],
+        interface: type[InterfaceBase],
+        interface_field_descriptors_before: object,
         pending_positions: tuple[int, ...],
     ) -> None:
-        """Roll back same-manager initialization committed by reentrant validation."""
+        """Roll back only initialization-owned manager, interface, and queue state."""
         current_state = vars(manager_class)
         previous_attributes = class_state_before.get(
             "_attributes",
@@ -497,6 +517,11 @@ class GeneralManagerMeta(type):
             else:
                 type.__setattr__(manager_class, state_name, previous_value)
 
+        GeneralManagerMeta._restore_interface_field_descriptors_locked(
+            interface,
+            interface_field_descriptors_before,
+        )
+
         pending = GeneralManagerMeta.pending_attribute_initialization
         pending[:] = [
             pending_manager
@@ -507,10 +532,28 @@ class GeneralManagerMeta(type):
             pending.insert(min(position, len(pending)), manager_class)
 
     @staticmethod
+    def _restore_interface_field_descriptors_locked(
+        interface: type[InterfaceBase],
+        field_descriptors_before: object,
+    ) -> None:
+        """Restore the direct ORM field cache changed during initialization."""
+        if field_descriptors_before is _MANAGER_CLASS_STATE_MISSING:
+            if "_field_descriptors" in vars(interface):
+                type.__delattr__(interface, "_field_descriptors")
+            return
+        type.__setattr__(
+            interface,
+            "_field_descriptors",
+            field_descriptors_before,
+        )
+
+    @staticmethod
     def ensure_rule_templates_validated(
         manager_class: type["GeneralManager"],
     ) -> None:
         """Validate attached rules once using the shared initialization lock."""
+        if vars(manager_class).get("_gm_rule_templates_validated", False):
+            return
         with GeneralManagerMeta._attribute_initialization_lock:
             GeneralManagerMeta._ensure_rule_templates_validated_locked(manager_class)
 
