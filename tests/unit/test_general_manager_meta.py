@@ -1672,6 +1672,8 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
 
         self.assertIs(ReadinessTransitionManager.price, int)
         self.assertIn("price", vars(ReadinessTransitionManager))
+        price_descriptor_before_validation = vars(ReadinessTransitionManager)["price"]
+        attributes_before_validation = vars(ReadinessTransitionManager)["_attributes"]
         self.assertTrue(
             vars(ReadinessTransitionManager).get(
                 "_gm_attributes_initialized",
@@ -1691,6 +1693,14 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
             _ = ReadinessTransitionManager.price
 
         self.assertIn("price", vars(ReadinessTransitionManager))
+        self.assertIs(
+            vars(ReadinessTransitionManager)["price"],
+            price_descriptor_before_validation,
+        )
+        self.assertIs(
+            vars(ReadinessTransitionManager)["_attributes"],
+            attributes_before_validation,
+        )
         self.assertTrue(
             vars(ReadinessTransitionManager).get(
                 "_gm_attributes_initialized",
@@ -1822,3 +1832,90 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
         )
         with self.assertRaises(InvalidErrorTemplateError):
             _ = UnvalidatedSubclassManager.price
+
+    def test_reentrant_validation_failure_rolls_back_nested_initialization(
+        self,
+    ) -> None:
+        class ReentrantValidationError(RuntimeError):
+            pass
+
+        class ReentrantFailingRule(Rule[GeneralManager]):
+            def __init__(self) -> None:
+                self.validation_calls = 0
+
+            def validate_custom_error_message(
+                self,
+                manager_class: type[GeneralManager] | None = None,
+            ) -> None:
+                self.validation_calls += 1
+                assert manager_class is not None
+                assert manager_class.price is int  # type: ignore[attr-defined]
+                raise ReentrantValidationError
+
+        rule = ReentrantFailingRule()
+
+        class UnrelatedPendingManager(GeneralManager):
+            value: int
+
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        class ReentrantFailureManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [rule]
+
+        pending_before_validation = list(
+            GeneralManagerMeta.pending_attribute_initialization
+        )
+
+        with self.assertRaises(ReentrantValidationError):
+            _ = ReentrantFailureManager.price
+
+        self.assertEqual(rule.validation_calls, 1)
+        self.assertNotIn("price", vars(ReentrantFailureManager))
+        self.assertNotIn("_attributes", vars(ReentrantFailureManager))
+        self.assertFalse(
+            vars(ReentrantFailureManager).get(
+                "_gm_attributes_initialized",
+                False,
+            )
+        )
+        self.assertFalse(
+            vars(ReentrantFailureManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+        self.assertNotIn(
+            "_gm_rule_templates_validation_in_progress",
+            vars(ReentrantFailureManager),
+        )
+        self.assertIn(
+            ReentrantFailureManager,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+        self.assertEqual(
+            GeneralManagerMeta.pending_attribute_initialization,
+            pending_before_validation,
+        )
+        self.assertIn(
+            UnrelatedPendingManager,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+
+        ReentrantFailureManager.Interface.rules = []
+
+        self.assertIs(ReentrantFailureManager.price, int)
+        self.assertTrue(
+            vars(ReentrantFailureManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+        self.assertNotIn(
+            ReentrantFailureManager,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )

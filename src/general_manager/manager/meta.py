@@ -33,6 +33,7 @@ _MANAGER_DEPENDENCY_TRACKING_CLASS_CACHE: WeakKeyDictionary[
     type["GeneralManager"] | None,
 ] = WeakKeyDictionary()
 _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN = object()
+_MANAGER_CLASS_STATE_MISSING = object()
 
 
 def _manager_dependency_tracking_class(
@@ -376,6 +377,14 @@ class GeneralManagerMeta(type):
             False,
         ):
             return
+        class_state_before = dict(vars(manager_class))
+        pending_positions = tuple(
+            index
+            for index, pending_manager in enumerate(
+                GeneralManagerMeta.pending_attribute_initialization
+            )
+            if pending_manager is manager_class
+        )
         type.__setattr__(
             manager_class,
             "_gm_rule_templates_validation_in_progress",
@@ -385,12 +394,79 @@ class GeneralManagerMeta(type):
             for rule in _iter_manager_validation_rules(manager_class):
                 rule.validate_custom_error_message(manager_class)
             type.__setattr__(manager_class, "_gm_rule_templates_validated", True)
+        except Exception:
+            GeneralManagerMeta._restore_rule_validation_initialization_state_locked(
+                manager_class,
+                class_state_before,
+                pending_positions,
+            )
+            raise
         finally:
             if "_gm_rule_templates_validation_in_progress" in vars(manager_class):
                 type.__delattr__(
                     manager_class,
                     "_gm_rule_templates_validation_in_progress",
                 )
+
+    @staticmethod
+    def _restore_rule_validation_initialization_state_locked(
+        manager_class: type["GeneralManager"],
+        class_state_before: dict[str, object],
+        pending_positions: tuple[int, ...],
+    ) -> None:
+        """Roll back same-manager initialization committed by reentrant validation."""
+        current_state = vars(manager_class)
+        previous_attributes = class_state_before.get(
+            "_attributes",
+            _MANAGER_CLASS_STATE_MISSING,
+        )
+        current_attributes = current_state.get(
+            "_attributes",
+            _MANAGER_CLASS_STATE_MISSING,
+        )
+        field_names: set[str] = set()
+        for attributes in (previous_attributes, current_attributes):
+            if isinstance(attributes, dict):
+                field_names.update(
+                    field_name
+                    for field_name in attributes
+                    if isinstance(field_name, str)
+                )
+
+        for field_name in field_names:
+            previous_field = class_state_before.get(
+                field_name,
+                _MANAGER_CLASS_STATE_MISSING,
+            )
+            if previous_field is _MANAGER_CLASS_STATE_MISSING:
+                if field_name in vars(manager_class):
+                    type.__delattr__(manager_class, field_name)
+            else:
+                type.__setattr__(manager_class, field_name, previous_field)
+
+        for state_name in (
+            "_attributes",
+            "_gm_attributes_initialized",
+            "_gm_rule_templates_validated",
+        ):
+            previous_value = class_state_before.get(
+                state_name,
+                _MANAGER_CLASS_STATE_MISSING,
+            )
+            if previous_value is _MANAGER_CLASS_STATE_MISSING:
+                if state_name in vars(manager_class):
+                    type.__delattr__(manager_class, state_name)
+            else:
+                type.__setattr__(manager_class, state_name, previous_value)
+
+        pending = GeneralManagerMeta.pending_attribute_initialization
+        pending[:] = [
+            pending_manager
+            for pending_manager in pending
+            if pending_manager is not manager_class
+        ]
+        for position in pending_positions:
+            pending.insert(min(position, len(pending)), manager_class)
 
     @staticmethod
     def ensure_rule_templates_validated(
