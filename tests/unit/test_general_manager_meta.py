@@ -1642,3 +1642,65 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
                 GeneralManagerMeta.pending_attribute_initialization,
                 GeneralManagerMeta.all_classes,
             )
+
+    def test_cached_descriptor_validates_after_apps_become_ready(self) -> None:
+        apps.ready = False
+
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class ReadinessTransitionManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [rule]
+
+        self.assertIs(ReadinessTransitionManager.price, int)
+        self.assertIn("price", vars(ReadinessTransitionManager))
+        self.assertTrue(
+            vars(ReadinessTransitionManager).get(
+                "_gm_attributes_initialized",
+                False,
+            )
+        )
+        self.assertFalse(
+            vars(ReadinessTransitionManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+        apps.ready = True
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            _ = ReadinessTransitionManager.price
+
+        self.assertIn("price", vars(ReadinessTransitionManager))
+        self.assertTrue(
+            vars(ReadinessTransitionManager).get(
+                "_gm_attributes_initialized",
+                False,
+            )
+        )
+        self.assertFalse(
+            vars(ReadinessTransitionManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+        ReadinessTransitionManager.Interface.rules = []
+
+        self.assertIs(ReadinessTransitionManager.price, int)
+        self.assertTrue(
+            vars(ReadinessTransitionManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )

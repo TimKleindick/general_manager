@@ -205,12 +205,14 @@ class GeneralManagerMeta(type):
         fields override inherited names the same way bootstrap initialization
         does. Once a manager class has completed descriptor initialization,
         attributes already present on that class use normal type lookup without
-        rechecking initialization. Missing names and inherited public names
-        still pass through initialization so late-discovered fields keep the
-        existing override behavior. "Non-private" means the requested name does
-        not start with ``"_"`` and is not exactly ``"Interface"``. Probing an
-        unknown public name may call ``Interface.get_attributes()``, but it
-        installs descriptors only when the probed name is declared by the
+        reinstalling descriptors. If those descriptors were installed before
+        Django finished app loading, their first access after readiness validates
+        attached rule templates before returning. Missing names and inherited
+        public names still pass through initialization so late-discovered fields
+        keep the existing override behavior. "Non-private" means the requested
+        name does not start with ``"_"`` and is not exactly ``"Interface"``.
+        Probing an unknown public name may call ``Interface.get_attributes()``,
+        but it installs descriptors only when the probed name is declared by the
         interface.
 
         Parameters:
@@ -229,6 +231,12 @@ class GeneralManagerMeta(type):
             class_dict = type.__getattribute__(cls, "__dict__")
             initialized = class_dict.get("_gm_attributes_initialized", False)
             if initialized and attribute_name in class_dict:
+                if apps.ready and not class_dict.get(
+                    "_gm_rule_templates_validated",
+                    False,
+                ):
+                    manager_class = cast(type["GeneralManager"], cls)
+                    GeneralManagerMeta.ensure_rule_templates_validated(manager_class)
                 return type.__getattribute__(cls, attribute_name)
             attributes = class_dict.get("_attributes")
             if (
