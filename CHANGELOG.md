@@ -2,6 +2,59 @@
 
 <!-- version list -->
 
+## v0.67.0 (2026-07-26)
+
+### Bug Fixes
+
+- Address rule template review feedback
+  ([`8926bbb`](https://github.com/TimKleindick/general_manager/commit/8926bbbecb07fa3615b3417bc22d687b96554ae7))
+
+- Allow reentrant manager rule validation
+  ([`146cd34`](https://github.com/TimKleindick/general_manager/commit/146cd343cfe64f047b7ca5677fceedfc9412b1f2))
+
+- Roll back reentrant manager initialization
+  ([`eb47e5f`](https://github.com/TimKleindick/general_manager/commit/eb47e5f60696eff14400e50a7e3fab4b9f2cc721))
+
+- Validate cached late manager templates
+  ([`e8a628b`](https://github.com/TimKleindick/general_manager/commit/e8a628b99cab602a2c23ba3379655dfc92d92943))
+
+- Validate late manager rule templates
+  ([`020e7d6`](https://github.com/TimKleindick/general_manager/commit/020e7d6ea307b7b1030a9bd266dca30196fbc7ff))
+
+- Validate late managers before public use
+  ([`0b36117`](https://github.com/TimKleindick/general_manager/commit/0b36117cd3cdbc4cac12e461dcf98ed9f92d54e8))
+
+### Documentation
+
+- Describe flexible rule message templates
+  ([`f778556`](https://github.com/TimKleindick/general_manager/commit/f778556feec61b040acc9efbcc9f3ff298839b57))
+
+- Document as-of historical context
+  ([`a097c19`](https://github.com/TimKleindick/general_manager/commit/a097c191f40f6a2ac48c80623d634240039dc45c))
+
+- Document GraphQL calculation input filters
+  ([`b75406a`](https://github.com/TimKleindick/general_manager/commit/b75406a14121b4d20d333bc27a275ca2a237ab7b))
+
+### Features
+
+- Render dotted rule message placeholders
+  ([`682bf32`](https://github.com/TimKleindick/general_manager/commit/682bf32ea234d48063c9c11ee62cd67f44ebd3eb))
+
+- Soften custom rule message templates
+  ([`7fdca8c`](https://github.com/TimKleindick/general_manager/commit/7fdca8cb5e08accae2ca5dcf56b52d89dfaf4082))
+
+- Validate dotted rule message paths
+  ([`c09c793`](https://github.com/TimKleindick/general_manager/commit/c09c7937dd4e5893e136cbe2dc4f8675ef5aaea2))
+
+- Validate rule message templates at startup
+  ([`b970fc8`](https://github.com/TimKleindick/general_manager/commit/b970fc8aa039cf7e4821cbe7b95e264141171e3b))
+
+### Testing
+
+- Cover rule message edge cases
+  ([`b1544d2`](https://github.com/TimKleindick/general_manager/commit/b1544d262a0d0414e818d28ad0bba53ae5fe8a06))
+
+
 ## v0.66.0 (2026-07-21)
 
 ### Bug Fixes
