@@ -691,10 +691,12 @@ evaluation returns `None`.
 `custom_error_message` may be static or contain optional placeholders for any
 subset of predicate variables, such as `{project.name}`. Placeholders support
 only dot-separated Python identifiers; they read attributes and do not call
-methods. Syntax and predicate roots are validated at `Rule` construction, and
-dotted paths are validated against manager schemas during shared manager
-startup. Invalid syntax, unrelated roots, and unknown or non-traversable paths
-raise `InvalidErrorTemplateError`. Calls, indexes, conversions, format
+methods. Syntax and predicate roots are validated at `Rule` construction.
+Dotted paths are validated against manager schemas during shared manager
+startup for normal application managers. Late-created managers validate on
+their first eligible public use after app readiness, before CRUD or field
+evaluation. Invalid syntax, unrelated roots, and unknown or non-traversable
+paths raise `InvalidErrorTemplateError`. Calls, indexes, conversions, format
 specifications, filters, arbitrary expressions, and literal-brace escaping are
 unsupported. With `ignore_if_none=False`, an intermediate or final `None`
 renders as `"None"` when a failed rule is formatted. Templates do not change

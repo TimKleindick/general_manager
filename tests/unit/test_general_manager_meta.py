@@ -15,7 +15,11 @@ from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.interfaces.calculation import (
     CalculationInterface,
 )
-from general_manager.interface.requests import RequestField, RequestQueryOperation
+from general_manager.interface.requests import (
+    RequestField,
+    RequestMutationOperation,
+    RequestQueryOperation,
+)
 from general_manager.bootstrap import initialize_general_manager_classes
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input as GMInput
@@ -1409,6 +1413,35 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
             GeneralManagerMeta.pending_attribute_initialization,
         )
 
+    def test_missing_dunder_probe_does_not_validate_or_initialize_manager(
+        self,
+    ) -> None:
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        invalid_rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class InternallyProbedManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [invalid_rule]
+
+        self.assertFalse(hasattr(InternallyProbedManager, "__origin__"))
+        self.assertNotIn("_attributes", vars(InternallyProbedManager))
+        self.assertNotIn(
+            "_gm_rule_templates_validated",
+            vars(InternallyProbedManager),
+        )
+        self.assertIn(
+            InternallyProbedManager,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+
     def test_late_manager_accepts_related_template_path_on_lazy_access(self) -> None:
         class LateProjectManager(GeneralManager):
             name: str
@@ -1719,6 +1752,225 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
         self.assertIs(ReadinessTransitionManager.price, int)
         self.assertTrue(
             vars(ReadinessTransitionManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+    def test_late_request_manager_validates_before_first_create_rule_runtime(
+        self,
+    ) -> None:
+        rule_evaluations: list[object] = []
+
+        def positive_price(item: GeneralManager) -> bool:
+            rule_evaluations.append(item)
+            return item.price > 0  # type: ignore[attr-defined]
+
+        invalid_rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class LateRequestManager(GeneralManager):
+            class Interface(RequestInterface):
+                id = GMInput(int)
+                price = RequestField(int)
+
+                class Meta:
+                    query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                        "detail": RequestQueryOperation(
+                            name="detail",
+                            method="GET",
+                            path="/items/{id}",
+                        )
+                    }
+                    create_operation = RequestMutationOperation(
+                        name="create",
+                        method="POST",
+                        path="/items",
+                    )
+
+        LateRequestManager.Interface.rules = [invalid_rule]
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            LateRequestManager.create(ignore_permission=True, price=1)
+
+        self.assertEqual(rule_evaluations, [])
+        self.assertFalse(
+            vars(LateRequestManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+        self.assertIn(
+            LateRequestManager,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+
+        LateRequestManager.Interface.rules = []
+        GeneralManagerMeta.ensure_rule_templates_validated_after_readiness(
+            LateRequestManager
+        )
+        self.assertTrue(
+            vars(LateRequestManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+    def test_cached_manager_validates_before_first_create_after_readiness(
+        self,
+    ) -> None:
+        apps.ready = False
+
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        invalid_rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class CachedCreateManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [invalid_rule]
+
+        self.assertIs(CachedCreateManager.price, int)
+        apps.ready = True
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            CachedCreateManager.create(ignore_permission=True, price=1)
+
+        self.assertFalse(
+            vars(CachedCreateManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+    def test_cached_manager_validates_before_first_update_after_readiness(
+        self,
+    ) -> None:
+        apps.ready = False
+
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        invalid_rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class CachedUpdateManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [invalid_rule]
+
+        self.assertIs(CachedUpdateManager.price, int)
+        manager = CachedUpdateManager(price=1)
+        interface_before_update = manager._interface
+        apps.ready = True
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            manager.update(ignore_permission=True, price=2)
+
+        self.assertIs(manager._interface, interface_before_update)
+        self.assertFalse(
+            vars(CachedUpdateManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+    def test_cached_manager_validates_before_first_delete_after_readiness(
+        self,
+    ) -> None:
+        apps.ready = False
+
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        invalid_rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class CachedDeleteManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [invalid_rule]
+
+        self.assertIs(CachedDeleteManager.price, int)
+        manager = CachedDeleteManager(price=1)
+        apps.ready = True
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            manager.delete(ignore_permission=True)
+
+        self.assertTrue(manager._manager_state_valid)
+        self.assertFalse(
+            vars(CachedDeleteManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+    def test_cached_instance_descriptor_validates_before_first_evaluation(
+        self,
+    ) -> None:
+        apps.ready = False
+        attribute_evaluations: list[object] = []
+
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        invalid_rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class CachedDescriptorManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [invalid_rule]
+
+        self.assertIs(CachedDescriptorManager.price, int)
+        manager = CachedDescriptorManager(price=1)
+        manager._attributes["price"] = (
+            lambda interface: attribute_evaluations.append(interface) or 1
+        )
+        descriptor_before_validation = vars(CachedDescriptorManager)["price"]
+        apps.ready = True
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            _ = manager.price
+
+        self.assertEqual(attribute_evaluations, [])
+        self.assertIs(
+            vars(CachedDescriptorManager)["price"],
+            descriptor_before_validation,
+        )
+        self.assertFalse(
+            vars(CachedDescriptorManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+        CachedDescriptorManager.Interface.rules = []
+        self.assertEqual(manager.price, 1)
+        self.assertEqual(len(attribute_evaluations), 1)
+        self.assertTrue(
+            vars(CachedDescriptorManager).get(
                 "_gm_rule_templates_validated",
                 False,
             )

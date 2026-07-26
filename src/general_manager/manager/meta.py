@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from functools import wraps
 import threading
 from _thread import RLock as RLockType
-from typing import TYPE_CHECKING, ClassVar, Iterable, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    ClassVar,
+    Iterable,
+    TypeVar,
+    cast,
+)
 from weakref import WeakKeyDictionary
 
 from django.apps import apps
@@ -22,6 +29,7 @@ if TYPE_CHECKING:
 
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
+PublicUseCallable = TypeVar("PublicUseCallable", bound=Callable[..., object])
 type MetaPreCreationHook = Callable[
     [str, dict[str, object], type[InterfaceBase]],
     tuple[dict[str, object], type[InterfaceBase], type["Model"] | None],
@@ -178,6 +186,30 @@ def _iter_manager_validation_rules(
             yield cast("Rule[GeneralManager]", candidate)
 
 
+def _validate_rule_templates_before_public_use(
+    method: PublicUseCallable,
+) -> PublicUseCallable:
+    """Validate templates before an explicit public manager operation runs."""
+
+    @wraps(method)
+    def wrapper(
+        manager_or_class: object,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        manager_class = (
+            manager_or_class
+            if isinstance(manager_or_class, GeneralManagerMeta)
+            else type(manager_or_class)
+        )
+        GeneralManagerMeta.ensure_rule_templates_validated_after_readiness(
+            cast(type["GeneralManager"], manager_class)
+        )
+        return method(manager_or_class, *args, **kwargs)
+
+    return cast(PublicUseCallable, wrapper)
+
+
 class GeneralManagerMeta(type):
     """
     Metaclass responsible for wiring GeneralManager interfaces and registries.
@@ -245,6 +277,10 @@ class GeneralManagerMeta(type):
                 and isinstance(attributes, dict)
                 and attribute_name not in attributes
             ):
+                manager_class = cast(type["GeneralManager"], cls)
+                GeneralManagerMeta.ensure_rule_templates_validated_after_readiness(
+                    manager_class
+                )
                 return type.__getattribute__(cls, attribute_name)
             manager_class = cast(type["GeneralManager"], cls)
             GeneralManagerMeta.ensure_attributes_initialized(
@@ -275,6 +311,8 @@ class GeneralManagerMeta(type):
             Exception: Exceptions from ``Interface.get_attributes()`` other than
                 ``NotImplementedError`` propagate unchanged.
         """
+        if attribute_name.startswith("_") or attribute_name == "Interface":
+            raise AttributeError(attribute_name)
         manager_class = cast(type["GeneralManager"], cls)
         if GeneralManagerMeta.ensure_attributes_initialized(
             manager_class, attribute_name
@@ -329,12 +367,12 @@ class GeneralManagerMeta(type):
         with GeneralManagerMeta._attribute_initialization_lock:
             if "_attributes" in vars(manager_class):
                 attributes = manager_class._attributes
-                if attribute_name is not None and attribute_name not in attributes:
-                    return False
                 if apps.ready:
                     GeneralManagerMeta._ensure_rule_templates_validated_locked(
                         manager_class
                     )
+                if attribute_name is not None and attribute_name not in attributes:
+                    return False
                 if attribute_name is None or attribute_name not in vars(manager_class):
                     GeneralManagerMeta.create_at_properties_for_attributes(
                         attributes.keys(), manager_class
@@ -346,12 +384,12 @@ class GeneralManagerMeta(type):
                 attributes = interface.get_attributes()
             except NotImplementedError:
                 return False
-            if attribute_name is not None and attribute_name not in attributes:
-                return False
             if apps.ready:
                 GeneralManagerMeta._ensure_rule_templates_validated_locked(
                     manager_class
                 )
+            if attribute_name is not None and attribute_name not in attributes:
+                return False
             manager_class._attributes = attributes
             GeneralManagerMeta.create_at_properties_for_attributes(
                 attributes.keys(), manager_class
@@ -475,6 +513,14 @@ class GeneralManagerMeta(type):
         """Validate attached rules once using the shared initialization lock."""
         with GeneralManagerMeta._attribute_initialization_lock:
             GeneralManagerMeta._ensure_rule_templates_validated_locked(manager_class)
+
+    @staticmethod
+    def ensure_rule_templates_validated_after_readiness(
+        manager_class: type["GeneralManager"],
+    ) -> None:
+        """Validate templates for an eligible public use after app loading."""
+        if apps.ready:
+            GeneralManagerMeta.ensure_rule_templates_validated(manager_class)
 
     @staticmethod
     def ensure_manager_is_valid(
@@ -731,6 +777,9 @@ class GeneralManagerMeta(type):
                     """
                     if instance is None:
                         return self._class.Interface.get_field_type(self._attr_name)
+                    GeneralManagerMeta.ensure_rule_templates_validated_after_readiness(
+                        self._class
+                    )
                     try:
                         ensure_as_of_compatible = object.__getattribute__(
                             instance, "_ensure_as_of_compatible"

@@ -20,7 +20,11 @@ from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.signals import data_change
 from general_manager.logging import get_logger
-from general_manager.manager.meta import GeneralManagerMeta, InvalidManagerStateError
+from general_manager.manager.meta import (
+    GeneralManagerMeta,
+    InvalidManagerStateError,
+    _validate_rule_templates_before_public_use,
+)
 
 
 class UnsupportedUnionOperandError(TypeError):
@@ -556,6 +560,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 yield name, getattr(self, name)
 
     @classmethod
+    @_validate_rule_templates_before_public_use
     @data_change
     def create(
         cls,
@@ -597,6 +602,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         )
         return cls(**identification)
 
+    @_validate_rule_templates_before_public_use
     @data_change
     def update(
         self,
@@ -647,6 +653,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         )
         return self
 
+    @_validate_rule_templates_before_public_use
     @data_change
     def delete(
         self,
