@@ -876,6 +876,56 @@ class RuleTests(TestCase):
             rule.get_error_message()
         self.assertIs(ctx.exception, expected_error)
 
+    def test_custom_error_message_propagates_missing_later_attribute_error(self):
+        """A present root does not hide an AttributeError from a later segment."""
+
+        expected_error = AttributeError("project name is unavailable")
+
+        class ProjectWithoutName:
+            @property
+            def name(self) -> str:
+                raise expected_error
+
+        def func(item: DummyObject) -> bool:
+            return item.project is None
+
+        rule = Rule(func, custom_error_message="Project: {project.name}")
+        rule.validate_custom_error_message(ItemTemplateManager)
+
+        self.assertFalse(rule.evaluate(DummyObject(project=ProjectWithoutName())))
+        with self.assertRaises(AttributeError) as ctx:
+            rule.get_error_message()
+        self.assertIs(ctx.exception, expected_error)
+
+    def test_custom_error_message_resolves_repeated_placeholder_once(self):
+        """Repeated occurrences share one resolution of their unique path."""
+
+        class AccessCountingProject:
+            def __init__(self) -> None:
+                self.name_accesses = 0
+
+            @property
+            def name(self) -> str:
+                self.name_accesses += 1
+                return "Apollo"
+
+        def func(item: DummyObject) -> bool:
+            return item.project is None
+
+        project = AccessCountingProject()
+        rule = Rule(
+            func,
+            custom_error_message="{project.name} / {project.name}",
+        )
+        rule.validate_custom_error_message(ItemTemplateManager)
+
+        self.assertFalse(rule.evaluate(DummyObject(project=project)))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"project": "Apollo / Apollo"},
+        )
+        self.assertEqual(project.name_accesses, 1)
+
     def test_custom_error_message_rejects_unknown_related_manager_field(self):
         """A misspelled final segment is rejected against the related schema."""
 
