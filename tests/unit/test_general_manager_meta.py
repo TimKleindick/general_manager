@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from typing import ClassVar
 
+from django.apps import apps
 from django.test import SimpleTestCase, override_settings
 
 from general_manager.interface import RequestInterface
@@ -1316,3 +1317,328 @@ class BootstrapRuleTemplateValidationTests(SimpleTestCase):
         )
 
         self.assertEqual(validation_manager_classes, [BootstrapRequestItem])
+
+
+class LateManagerRuleTemplateValidationTests(SimpleTestCase):
+    """Validate rules before exposing fields on managers imported after startup."""
+
+    def setUp(self) -> None:
+        self._apps_ready = apps.ready
+        apps.ready = True
+        self._registry_snapshots = {
+            "all_classes": list(GeneralManagerMeta.all_classes),
+            "read_only_classes": list(GeneralManagerMeta.read_only_classes),
+            "pending_graphql_interfaces": list(
+                GeneralManagerMeta.pending_graphql_interfaces
+            ),
+            "pending_attribute_initialization": list(
+                GeneralManagerMeta.pending_attribute_initialization
+            ),
+        }
+        self._capability_registry = manager_meta_module._capability_builder().registry
+        self._capability_bindings_snapshot = {
+            interface: set(capabilities)
+            for interface, capabilities in self._capability_registry._bindings.items()
+        }
+        self._capability_instances_snapshot = dict(self._capability_registry._instances)
+        GeneralManagerMeta.all_classes.clear()
+        GeneralManagerMeta.read_only_classes.clear()
+        GeneralManagerMeta.pending_graphql_interfaces.clear()
+        GeneralManagerMeta.pending_attribute_initialization.clear()
+
+    def tearDown(self) -> None:
+        apps.ready = self._apps_ready
+        for name, snapshot in self._registry_snapshots.items():
+            registry = getattr(GeneralManagerMeta, name)
+            registry.clear()
+            registry.extend(snapshot)
+        for interface in tuple(self._capability_registry._bindings):
+            if interface not in self._capability_bindings_snapshot:
+                del self._capability_registry._bindings[interface]
+        for interface, capabilities in self._capability_bindings_snapshot.items():
+            self._capability_registry._bindings[interface] = set(capabilities)
+        for interface in tuple(self._capability_registry._instances):
+            if interface not in self._capability_instances_snapshot:
+                del self._capability_registry._instances[interface]
+        self._capability_registry._instances.update(self._capability_instances_snapshot)
+        self.assertEqual(
+            self._capability_registry._bindings,
+            self._capability_bindings_snapshot,
+        )
+        self.assertEqual(
+            self._capability_registry._instances,
+            self._capability_instances_snapshot,
+        )
+        self.assertEqual(apps.ready, self._apps_ready)
+
+    def test_late_manager_rejects_scalar_template_traversal_before_exposure(
+        self,
+    ) -> None:
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class LatePriceManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [rule]
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            _ = LatePriceManager.price
+
+        self.assertNotIn("price", vars(LatePriceManager))
+        self.assertFalse(
+            vars(LatePriceManager).get("_gm_attributes_initialized", False)
+        )
+        self.assertFalse(
+            vars(LatePriceManager).get("_gm_rule_templates_validated", False)
+        )
+        self.assertIn(
+            LatePriceManager,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+
+    def test_late_manager_accepts_related_template_path_on_lazy_access(self) -> None:
+        class LateProjectManager(GeneralManager):
+            name: str
+
+            class Interface(CalculationInterface):
+                name = GMInput(str)
+
+        def project_exists(item: GeneralManager) -> bool:
+            return item.project is not None  # type: ignore[attr-defined]
+
+        rule = Rule(
+            project_exists,
+            custom_error_message="Project: {project.name}",
+        )
+
+        class LateWorkItemManager(GeneralManager):
+            project: LateProjectManager
+
+            class Interface(CalculationInterface):
+                project = GMInput(LateProjectManager)
+                rules: ClassVar[list[object]] = [rule]
+
+        self.assertIs(LateWorkItemManager.project, LateProjectManager)
+        self.assertTrue(
+            vars(LateWorkItemManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+    def test_late_manager_rule_validation_runs_once_across_lazy_and_bootstrap(
+        self,
+    ) -> None:
+        validation_manager_classes: list[type[GeneralManager] | None] = []
+
+        class CountingRule(Rule[GeneralManager]):
+            def validate_custom_error_message(
+                self,
+                manager_class: type[GeneralManager] | None = None,
+            ) -> None:
+                if hasattr(self, "_handlers"):
+                    validation_manager_classes.append(manager_class)
+                super().validate_custom_error_message(manager_class)
+
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        rule = CountingRule(
+            positive_price,
+            custom_error_message="Price: {price}",
+        )
+
+        class LateCountingManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [rule]
+
+        self.assertIs(LateCountingManager.price, int)
+        self.assertIs(LateCountingManager.price, int)
+        initialize_general_manager_classes(
+            GeneralManagerMeta.pending_attribute_initialization,
+            GeneralManagerMeta.all_classes,
+        )
+
+        self.assertEqual(validation_manager_classes, [LateCountingManager])
+
+    def test_late_manager_validates_cached_model_metadata_rules(self) -> None:
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class LateModelRuleManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+
+        LateModelRuleManager.Interface._model = SimpleNamespace(  # type: ignore[attr-defined]
+            _meta=SimpleNamespace(rules=[rule])
+        )
+        LateModelRuleManager._attributes = (
+            LateModelRuleManager.Interface.get_attributes()
+        )
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            _ = LateModelRuleManager.price
+
+        self.assertIn("_attributes", vars(LateModelRuleManager))
+        self.assertNotIn("price", vars(LateModelRuleManager))
+        self.assertFalse(
+            vars(LateModelRuleManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+    def test_late_manager_rejects_one_shot_source_before_partial_validation(
+        self,
+    ) -> None:
+        validation_manager_classes: list[type[GeneralManager] | None] = []
+
+        class CountingRule(Rule[GeneralManager]):
+            def validate_custom_error_message(
+                self,
+                manager_class: type[GeneralManager] | None = None,
+            ) -> None:
+                if hasattr(self, "_handlers"):
+                    validation_manager_classes.append(manager_class)
+                super().validate_custom_error_message(manager_class)
+
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        rule = CountingRule(
+            positive_price,
+            custom_error_message="Price: {price}",
+        )
+        iterator_entry = object()
+        rule_iterator = iter([iterator_entry])
+
+        class LateIteratorManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [rule]
+
+        LateIteratorManager.Interface._model = SimpleNamespace(  # type: ignore[attr-defined]
+            _meta=SimpleNamespace(rules=rule_iterator)
+        )
+
+        with self.assertRaisesRegex(
+            TypeError,
+            "rules must be a reusable iterable",
+        ):
+            _ = LateIteratorManager.price
+
+        self.assertEqual(validation_manager_classes, [])
+        self.assertIs(next(rule_iterator), iterator_entry)
+        self.assertNotIn("price", vars(LateIteratorManager))
+        self.assertFalse(
+            vars(LateIteratorManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+    def test_late_manager_rule_validation_failure_remains_retryable(self) -> None:
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        invalid_rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class LateRetryManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [invalid_rule]
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            _ = LateRetryManager.price
+
+        self.assertNotIn("price", vars(LateRetryManager))
+        self.assertNotIn("_attributes", vars(LateRetryManager))
+        self.assertFalse(
+            vars(LateRetryManager).get(
+                "_gm_attributes_initialized",
+                False,
+            )
+        )
+        self.assertFalse(
+            vars(LateRetryManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+        self.assertIn(
+            LateRetryManager,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+
+        LateRetryManager.Interface.rules = []
+
+        self.assertIs(LateRetryManager.price, int)
+        self.assertTrue(
+            vars(LateRetryManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+        self.assertNotIn(
+            LateRetryManager,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+
+    def test_lazy_access_defers_rule_validation_until_bootstrap_while_apps_load(
+        self,
+    ) -> None:
+        apps.ready = False
+
+        def positive_price(item: GeneralManager) -> bool:
+            return item.price > 0  # type: ignore[attr-defined]
+
+        rule = Rule(
+            positive_price,
+            custom_error_message="Price: {price.amount}",
+        )
+
+        class LoadingPriceManager(GeneralManager):
+            price: int
+
+            class Interface(CalculationInterface):
+                price = GMInput(int)
+                rules: ClassVar[list[object]] = [rule]
+
+        self.assertIs(LoadingPriceManager.price, int)
+        self.assertFalse(
+            vars(LoadingPriceManager).get(
+                "_gm_rule_templates_validated",
+                False,
+            )
+        )
+
+        with self.assertRaises(InvalidErrorTemplateError):
+            initialize_general_manager_classes(
+                GeneralManagerMeta.pending_attribute_initialization,
+                GeneralManagerMeta.all_classes,
+            )
