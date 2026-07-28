@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/GeneralManager.svg)](https://pypi.org/project/GeneralManager/)
 [![Python](https://img.shields.io/pypi/pyversions/GeneralManager.svg)](https://pypi.org/project/GeneralManager/)
-[![Build](https://github.com/TimKleindick/general_manager/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/TimKleindick/general_manager/actions/workflows/quality.yml)
+[![Build](https://github.com/TimKleindick/general_manager/actions/workflows/publish.yml/badge.svg?branch=main)](https://github.com/TimKleindick/general_manager/actions/workflows/publish.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/TimKleindick/general_manager)](https://app.codecov.io/gh/TimKleindick/general_manager)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/TimKleindick/general_manager/blob/main/LICENSE)
 
