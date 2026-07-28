@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.67.2 (2026-07-28)
+
+### Bug Fixes
+
+- Update vulnerable build dependencies
+  ([`b7a3d58`](https://github.com/TimKleindick/general_manager/commit/b7a3d58a99511c1bd115138f9fb0c6c78dd38d97))
+
+
 ## v0.67.1 (2026-07-26)
 
 ### Bug Fixes
