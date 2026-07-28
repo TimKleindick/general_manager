@@ -2634,14 +2634,15 @@ class GraphQLSubscriptionChannelListenerTests(unittest.TestCase):
                 {"type": "gm.subscription.event"},  # No action
             ]
             message_iter = iter(messages)
+            messages_consumed = asyncio.Event()
 
             async def mock_receive(_channel: str) -> dict[str, Any]:
                 try:
-                    await asyncio.sleep(0.001)  # Simulate async delay
+                    await asyncio.sleep(0)
                     return next(message_iter)
                 except StopIteration as err:
-                    # Simulate cancellation after messages exhausted
-                    await asyncio.sleep(10)
+                    messages_consumed.set()
+                    await asyncio.Event().wait()
                     raise AssertionError("Cancelled") from err
 
             mock_layer.receive = mock_receive
@@ -2651,8 +2652,7 @@ class GraphQLSubscriptionChannelListenerTests(unittest.TestCase):
                 GraphQL._channel_listener(mock_layer, "test_channel", queue)
             )
 
-            # Allow listener to process messages
-            await asyncio.sleep(0.01)
+            await asyncio.wait_for(messages_consumed.wait(), timeout=1)
 
             # Cancel the listener
             listener_task.cancel()
@@ -2717,13 +2717,15 @@ class GraphQLSubscriptionChannelListenerTests(unittest.TestCase):
                 {"type": "gm.subscription.event"},
             ]
             message_iter = iter(messages)
+            messages_consumed = asyncio.Event()
 
             async def mock_receive(_channel: str) -> dict[str, Any]:
                 try:
-                    await asyncio.sleep(0.001)
+                    await asyncio.sleep(0)
                     return next(message_iter)
                 except StopIteration as err:
-                    await asyncio.sleep(10)
+                    messages_consumed.set()
+                    await asyncio.Event().wait()
                     raise AssertionError("Cancelled") from err
 
             mock_layer.receive = mock_receive
@@ -2732,7 +2734,7 @@ class GraphQLSubscriptionChannelListenerTests(unittest.TestCase):
             listener_task = asyncio.create_task(
                 GraphQL._channel_message_listener(mock_layer, "test_channel", queue)
             )
-            await asyncio.sleep(0.01)
+            await asyncio.wait_for(messages_consumed.wait(), timeout=1)
             listener_task.cancel()
             try:
                 await listener_task
