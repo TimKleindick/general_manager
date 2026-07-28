@@ -95,6 +95,19 @@ def test_quality_workflow_has_reusable_least_privilege_triggers() -> None:
     }
 
 
+def test_readme_build_badge_tracks_the_main_push_workflow() -> None:
+    readme = (ROOT / "README.md").read_text()
+    badge_url = (
+        "https://github.com/TimKleindick/general_manager/actions/workflows/"
+        "publish.yml/badge.svg?branch=main"
+    )
+    workflow_url = (
+        "https://github.com/TimKleindick/general_manager/actions/workflows/publish.yml"
+    )
+
+    assert f"[![Build]({badge_url})]({workflow_url})" in readme
+
+
 def test_quality_test_job_preserves_supported_matrix_and_test_services() -> None:
     job = load_workflow("quality.yml")["jobs"]["test"]
 
