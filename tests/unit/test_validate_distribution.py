@@ -41,6 +41,21 @@ def test_distribution_metadata_packages_datasets_and_uses_workflow_uploads() -> 
     assert "upload_to_release" not in semantic_release
 
 
+def test_dependency_metadata_keeps_security_patched_versions() -> None:
+    repository_root = Path(__file__).parents[2]
+    with (repository_root / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomllib.load(pyproject_file)
+
+    assert "setuptools>=83.0.0" in pyproject["build-system"]["requires"]
+    assert "GitPython>=3.1.55" in pyproject["project"]["dependencies"]
+
+    base_requirements = (repository_root / "requirements" / "base.txt").read_text(
+        encoding="utf-8"
+    )
+    assert "GitPython==3.1.55\n" in base_requirements
+    assert "setuptools==83.0.0\n" in base_requirements
+
+
 def _write_wheel(
     dist_dir: Path,
     version: str,
