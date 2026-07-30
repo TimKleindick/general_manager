@@ -468,11 +468,14 @@ validation field keys with `snake_to_camel`.
 
 `PermissionError` returns the fixed message `Permission denied.` with code
 `PERMISSION_DENIED`, unless application code deliberately raises an explicit
-public error. Every other ordinary exception crossing these boundaries,
-including `ValueError`, returns exactly `An internal server error occurred.`
-with code `INTERNAL_SERVER_ERROR` and an opaque `errorId`. Server logs retain the
-original exception details and traceback with the matching `error_id`; failures
-while rendering the original exception are also kept out of the client response.
+public error. Framework-owned `UploadError` types retain their documented safe
+message and stable upload code; application-defined subclasses are sanitized to
+`UPLOAD_STORAGE_ERROR`. Every other ordinary exception crossing these
+boundaries, including `ValueError`, returns exactly
+`An internal server error occurred.` with code `INTERNAL_SERVER_ERROR` and an
+opaque `errorId`. Server logs retain the original exception details and
+traceback with the matching `error_id`; failures while rendering the original
+exception are also kept out of the client response.
 
 Migrate client-facing `ValueError` uses to `PublicGraphQLError`, or to Django
 `ValidationError` for validation (use structured validation errors for field

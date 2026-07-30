@@ -22,6 +22,7 @@ from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 
 from general_manager.logging import get_logger
 from general_manager.measurement.measurement import Measurement
+from general_manager.uploads.errors import UploadError, stable_upload_error
 from general_manager.as_of import (
     HistoricalContextConflictError,
     HistoricalMutationError,
@@ -554,10 +555,13 @@ def handle_graph_ql_error(
     ``nonFieldErrors``. When ``field_name_mapper`` is provided, it maps
     ``message_dict`` field keys before they are emitted in ``fieldErrors``;
     non-field errors are not mapped. ``PermissionError`` instances use a fixed
-    public message. Historical-context failures retain their stable public
-    historical code. All other exceptions use a generic internal-error message
-    and an opaque correlation ID. Logging level/category is diagnostic behavior
-    of the internal ``api.graphql`` logger and is not a public API contract.
+    public message. Framework-owned ``UploadError`` instances retain their safe
+    default message and stable code; custom subclasses are sanitized to
+    ``UPLOAD_STORAGE_ERROR``. Historical-context failures retain their stable
+    public historical code. All other exceptions use a generic internal-error
+    message and an opaque correlation ID. Logging level/category is diagnostic
+    behavior of the internal ``api.graphql`` logger and is not a public API
+    contract.
     """
     message = _safe_exception_message(error)
     error_name = type(error).__name__
@@ -597,6 +601,20 @@ def handle_graph_ql_error(
         return GraphQLError(
             _PERMISSION_DENIED_MESSAGE,
             extensions={"code": "PERMISSION_DENIED"},
+        )
+    if isinstance(error, UploadError):
+        public_error = stable_upload_error(error)
+        logger.warning(
+            "graphql upload error",
+            context={
+                "error": error_name,
+                "message": public_error.default_message,
+                "code": public_error.code,
+            },
+        )
+        return GraphQLError(
+            public_error.default_message,
+            extensions={"code": public_error.code},
         )
 
     error_id = uuid4().hex
