@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.67.3 (2026-07-30)
+
+### Bug Fixes
+
+- Repair readme build status badge
+  ([`6286429`](https://github.com/TimKleindick/general_manager/commit/6286429b20ef872b988a6a53dd69917582d22e35))
+
+### Testing
+
+- Stabilize GraphQL listener synchronization
+  ([`5a088c2`](https://github.com/TimKleindick/general_manager/commit/5a088c2944336e2e38cdc520562e2c4ee98fc528))
+
+
 ## v0.67.2 (2026-07-28)
 
 ### Bug Fixes
