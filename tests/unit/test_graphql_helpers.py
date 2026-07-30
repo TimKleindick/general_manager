@@ -38,6 +38,7 @@ from general_manager.permission.base_permission import (
     BasePermission,
     ReadPermissionPlan,
 )
+from general_manager.uploads.errors import InvalidImageError, UploadError
 from general_manager.utils.format_string import snake_to_camel
 from general_manager.api.graphql_resolvers import (
     apply_grouping,
@@ -518,6 +519,23 @@ class GraphQLHelperTests(SimpleTestCase):
         assert GraphQL._handle_graph_ql_error(error) is error
         assert error.message == "The project cannot be archived."
         assert error.extensions == {"code": "PROJECT_NOT_ARCHIVABLE"}
+
+    def test_handle_graphql_error_maps_framework_upload_error(self) -> None:
+        error = GraphQL._handle_graph_ql_error(InvalidImageError())
+
+        assert error.message == "The file upload could not be completed."
+        assert error.extensions == {"code": "INVALID_IMAGE"}
+
+    def test_handle_graphql_error_sanitizes_custom_upload_error(self) -> None:
+        class HostileUploadError(UploadError):
+            code = "SECRET_ERROR_CODE"
+            default_message = "graphql-upload-secret-must-not-escape"
+
+        error = GraphQL._handle_graph_ql_error(HostileUploadError())
+
+        assert error.message == "The file upload could not be completed."
+        assert error.extensions == {"code": "UPLOAD_STORAGE_ERROR"}
+        assert "graphql-upload-secret-must-not-escape" not in str(error.formatted)
 
     def test_handle_graphql_error_structures_validation_message_dict(self) -> None:
         error = GraphQL._handle_graph_ql_error(
