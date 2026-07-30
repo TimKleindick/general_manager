@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.67.4 (2026-07-30)
+
+### Bug Fixes
+
+- Expose safe GraphQL upload errors
+  ([`bc6240d`](https://github.com/TimKleindick/general_manager/commit/bc6240d236380b30babb4aa0160ce58ea8036865))
+
+
 ## v0.67.3 (2026-07-30)
 
 ### Bug Fixes
