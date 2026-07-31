@@ -242,6 +242,12 @@ Python-cache metadata rather than strict JSON interchange values. If
 `__getstate__()` exists but returns a non-mapping, the value uses the same
 `repr(...)` fallback as other unsupported objects.
 
+Dependency lock acquisitions store a unique owner token. Release deletes the
+lock only when the cached value still matches that token, so an expired holder
+does not delete an already-visible successor token. Django's generic cache API
+does not expose portable atomic compare-and-delete, so this ownership check is
+not documented as a backend-independent atomic release primitive.
+
 `record_dependencies()` deduplicates dependency tuples and is a no-op for an
 empty dependency iterable; an empty call does not clear existing metadata for
 that cache key. Re-recording non-empty dependencies for an existing cache key
@@ -425,6 +431,17 @@ Helpers that read shard sets inherit this behavior, so malformed filter and
 exclude lookup registries are ignored independently. `reverse_memberships()`
 first reads the reverse registry through `cache_set_members()`, then returns
 only cached values that are actual `ReverseDependencyMembership` instances.
+
+Ordinary data-change and cleanup paths do not enumerate the reverse-membership
+registry to choose a storage implementation. They read the legacy
+`dependency_index` key once: a present payload selects the legacy full index,
+and an absent payload selects manager- and lookup-specific shards. Consequently,
+hot invalidation work is independent of unrelated reverse-membership cardinality.
+
+`reverse_memberships()` remains an explicitly global operation for callers that
+need to reconstruct the complete dependency index. It reads the registry once
+and fetches referenced payloads with one batched `get_many()` call. Its transfer,
+validation, and result construction remain O(N).
 
 Shard-key builders interpolate string inputs exactly as provided; they do not
 escape empty strings, colons, or other unusual characters. `reverse_membership_key()`
