@@ -386,7 +386,7 @@ def publish_dependency_cache_entries(
     if not pending_entries:
         return
 
-    acquire_lock_with_retry("publish_dependency_cache_entries")
+    lock_token = acquire_lock_with_retry("publish_dependency_cache_entries")
     try:
         if is_dependency_data_change_active():
             raise CachePublishAborted()
@@ -430,7 +430,7 @@ def publish_dependency_cache_entries(
         _ensure_publish_current(current_generation)
         _set_dependency_cache_entries(publishable_entries)
     finally:
-        release_lock()
+        release_lock(lock_token)
 
 
 def publish_dependency_cache_entry(
@@ -473,7 +473,7 @@ def publish_dependency_cache_entry(
     )
     dependency_set = set(dependencies)
 
-    acquire_lock_with_retry("publish_dependency_cache_entry")
+    lock_token = acquire_lock_with_retry("publish_dependency_cache_entry")
     try:
         _ensure_publish_current(started_generation)
 
@@ -529,4 +529,4 @@ def publish_dependency_cache_entry(
             else:
                 cache_backend.set(prefetch_manifest_key, (cache_key,), timeout)
     finally:
-        release_lock()
+        release_lock(lock_token)
