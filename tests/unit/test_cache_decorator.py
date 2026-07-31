@@ -529,7 +529,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         with mock.patch(
             "general_manager.cache.dependency_index.acquire_lock",
-            return_value=True,
+            return_value="owner-token",
         ) as acquire_lock:
             with CalculationRunContext():
                 self.assertEqual(fn(1), 2)

@@ -744,8 +744,8 @@ def capture_old_values(
     if instance is None:
         return
     manager_name = sender.__name__
-    lookups = tracked_lookup_names(manager_name)
-    if not lookups and legacy_dependency_index_exists():
+    if legacy_dependency_index_exists():
+        lookups: set[str] = set()
         idx = get_full_index()
         for action in ACTIONS:
             model_section = idx[action].get(manager_name)
@@ -761,6 +761,8 @@ def capture_old_values(
                     lookups.add(lookup)
             elif isinstance(model_section, list):
                 lookups |= set(model_section)
+    else:
+        lookups = tracked_lookup_names(manager_name)
     if lookups and instance.identification:
         # save old values for later comparison
         vals: dict[str, object] = {}
