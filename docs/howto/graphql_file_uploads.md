@@ -313,6 +313,15 @@ It uses 401 for missing/invalid credentials, 404 for non-enumerating absence,
 409 for transfer replay/conflict, 410 for expiry, 413/422 for size/checksum,
 415 for type, 429 for rate limiting, and 503 for storage/configuration failure.
 
+GraphQL mutation errors are safe to consume by code. Framework-owned
+`UploadError` subclasses return their documented stable code and default safe
+message; a message passed to the exception is never exposed. An
+application-defined `UploadError` subclass is normalized to
+`UPLOAD_STORAGE_ERROR` with `The file upload could not be completed.` Clients
+should branch on `extensions.code`, never on arbitrary exception text. This
+normalization applies to generated mutations and mutations registered with
+`@graph_ql_mutation`.
+
 ## Stable GraphQL error codes
 
 | Code | Meaning |
