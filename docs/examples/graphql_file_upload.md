@@ -101,6 +101,13 @@ async function uploadAvatar(profileId, file) {
 }
 ```
 
+The `isPublicCode` allowlist treats the stable upload codes as a client
+contract, so this recipe can show actionable upload failures without trusting
+arbitrary server messages. Framework-owned `UploadError` types use their safe
+default message and code; custom subclasses are normalized to
+`UPLOAD_STORAGE_ERROR` with `The file upload could not be completed.` Branch on
+the code, and use the message only for those allowlisted codes.
+
 Do not retry the final mutation with the same token once the intent reaches
 `FINALIZING`. Poll the normal profile query while the returned status is
 `PROCESSING`; begin a new upload after a terminal token error. This workflow and

@@ -313,8 +313,15 @@ an adapter with a backend-native atomic exact-delete operation.
 Every public upload exception listed above inherits
 `UploadError(message: str | None = None)`, returns no value when raised, and
 exposes its stable `code` plus a safe default message. Passing a message changes
-the local exception text, but GraphQL and HTTP boundaries sanitize arbitrary
-messages and non-framework subclasses.
+the local exception text only. At generated-mutation and `@graph_ql_mutation`
+GraphQL boundaries, framework-owned exception types are re-created with their
+documented safe default message and code. An application-defined `UploadError`
+subclass is mapped to `UploadStorageError`, producing
+`The file upload could not be completed.` with code `UPLOAD_STORAGE_ERROR`.
+GraphQL and HTTP boundaries sanitize arbitrary messages and exception chains;
+third-party GraphQL resolvers that bypass these mutation paths are outside this
+contract. This GraphQL normalization behavior is part of the public contract
+from GeneralManager 0.67.4.
 
 `MeasurementScalar` parses string inputs such as `"12.5 m/s"` into
 `Measurement` values and serializes stored measurements with the canonical

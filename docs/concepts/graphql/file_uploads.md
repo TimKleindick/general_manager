@@ -129,6 +129,22 @@ Projects that need strong format recognition must supply an inspector. Its
 `FileInspection.content` is bounded by `MAX_INSPECTION_BYTES`, may be truncated,
 and deliberately contains no credentials or storage keys.
 
+## Safe GraphQL failures
+
+Upload failures crossing a generated mutation or `@graph_ql_mutation` boundary
+are converted into safe top-level GraphQL errors. Framework-owned `UploadError`
+subclasses use their documented default message and stable `extensions.code`,
+even when application code supplied a different exception message. For example,
+`InvalidImageError()` returns `INVALID_IMAGE` with
+`The file upload could not be completed.`
+
+An application-defined `UploadError` subclass is sanitized to the generic
+`UPLOAD_STORAGE_ERROR` code and the same safe message; its custom code, message,
+and exception details do not reach the client. Clients should branch on
+`extensions.code`, not exception text. This boundary covers GeneralManager's
+generated and decorator mutation paths; third-party resolvers that bypass those
+paths own their own error handling.
+
 ## Downloads
 
 Files are private by default. Local storage returns a short-lived signed
