@@ -1023,6 +1023,9 @@ class DummyManager:
 
 
 class CaptureOldValuesTests(TestCase):
+    def setUp(self) -> None:
+        cache.set("dependency_index", {}, None)
+
     @patch("general_manager.cache.dependency_index.get_full_index")
     def test_capture_old_values_sets_old_values_correctly(self, mock_get_full_index):
         mock_get_full_index.return_value = {
@@ -1165,6 +1168,9 @@ class MissingAttrManager:
 
 
 class GenericCacheInvalidationTests(TestCase):
+    def setUp(self) -> None:
+        cache.set("dependency_index", {}, None)
+
     def assert_cache_keys_removed_from_index(
         self,
         idx: dict[object, object],

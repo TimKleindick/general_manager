@@ -24,6 +24,7 @@ from general_manager.cache.dependency_shards import (
     ReverseDependencyMembership,
     all_records_cache_keys,
     candidate_cache_keys_for_lookup,
+    legacy_dependency_index_exists,
     record_cache_dependencies,
     record_many_cache_dependencies,
     remove_cache_key_from_shards,
@@ -574,7 +575,7 @@ def remove_cache_key_from_index(cache_key: str) -> None:
     """
     acquire_lock_with_retry("remove_cache_key_from_index")
     try:
-        if cache.get(INDEX_KEY, None) is not None and not reverse_memberships():
+        if legacy_dependency_index_exists():
             idx = get_full_index()
             _remove_cache_keys_from_index_locked(idx, (cache_key,))
             set_full_index(idx)
@@ -669,7 +670,7 @@ def invalidate_and_remove_cache_keys(cache_keys: Iterable[str]) -> None:
         return
     acquire_lock_with_retry("invalidate_and_remove_cache_keys")
     try:
-        if cache.get(INDEX_KEY, None) is not None and not reverse_memberships():
+        if legacy_dependency_index_exists():
             idx = get_full_index()
             for cache_key in keys:
                 cache.delete(cache_key)
@@ -711,7 +712,7 @@ def invalidate_request_query_dependencies(manager_name: str) -> tuple[str, ...]:
     """
     acquire_lock_with_retry("invalidate_request_query_dependencies")
     try:
-        if cache.get(INDEX_KEY, None) is not None and not reverse_memberships():
+        if legacy_dependency_index_exists():
             idx = get_full_index()
             invalidated_keys = _invalidate_request_query_dependencies_locked(
                 idx,
@@ -745,7 +746,7 @@ def capture_old_values(
         return
     manager_name = sender.__name__
     lookups = tracked_lookup_names(manager_name)
-    if not lookups and not reverse_memberships():
+    if not lookups and legacy_dependency_index_exists():
         idx = get_full_index()
         for action in ACTIONS:
             model_section = idx[action].get(manager_name)
@@ -1394,24 +1395,15 @@ def generic_cache_invalidation(
     invalidated_cache_keys: set[str] = set()
     acquire_lock_with_retry("generic_cache_invalidation")
     try:
-        if not reverse_memberships():
+        if legacy_dependency_index_exists():
             idx = get_full_index()
-            sections: tuple[Literal["filter", "exclude", "all", "request_query"], ...]
-            sections = ("filter", "exclude", "all", "request_query")
-            if any(idx.get(section) for section in sections):
-                invalidated_cache_keys = _generic_cache_invalidation_locked(
-                    idx,
-                    manager_name,
-                    instance,
-                    old_relevant_values,
-                )
-                set_full_index(idx)
-            else:
-                invalidated_cache_keys = _generic_cache_invalidation_from_shards(
-                    manager_name,
-                    instance,
-                    old_relevant_values,
-                )
+            invalidated_cache_keys = _generic_cache_invalidation_locked(
+                idx,
+                manager_name,
+                instance,
+                old_relevant_values,
+            )
+            set_full_index(idx)
         else:
             invalidated_cache_keys = _generic_cache_invalidation_from_shards(
                 manager_name,

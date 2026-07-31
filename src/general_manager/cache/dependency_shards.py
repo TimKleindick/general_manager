@@ -361,6 +361,15 @@ def _legacy_dependency_cache_keys(legacy_index: object) -> set[str]:
     return cache_keys
 
 
+def legacy_dependency_index_exists() -> bool:
+    """Return whether the legacy full dependency index is present.
+
+    This is the constant-read storage-mode probe used by hot invalidation paths.
+    The legacy key is authoritative when both legacy and sharded metadata exist.
+    """
+    return cache.get(LEGACY_DEPENDENCY_INDEX_KEY, None) is not None
+
+
 def clear_legacy_dependency_index() -> set[str]:
     """Delete legacy full-index metadata and cache values referenced by it.
 
@@ -784,12 +793,15 @@ def reverse_memberships() -> tuple[ReverseDependencyMembership, ...]:
         Valid reverse-membership payloads currently listed in the reverse
         membership registry. Missing or malformed registry members are skipped.
         A malformed registry payload contributes no reverse keys through
-        `cache_set_members()`. Dependency tuple members inside a valid
-        `ReverseDependencyMembership` are returned unchanged.
+        `cache_set_members()`. Payloads are fetched with one `get_many()` call.
+        Dependency tuple members inside a valid `ReverseDependencyMembership`
+        are returned unchanged.
     """
+    reverse_keys = cache_set_members(REVERSE_MEMBERSHIP_REGISTRY_KEY)
+    reverse_payloads = _cache_get_many(reverse_keys)
     memberships = []
-    for reverse_key in cache_set_members(REVERSE_MEMBERSHIP_REGISTRY_KEY):
-        reverse = cache.get(reverse_key)
+    for reverse_key in reverse_keys:
+        reverse = reverse_payloads.get(reverse_key)
         if isinstance(reverse, ReverseDependencyMembership):
             memberships.append(reverse)
     return tuple(memberships)

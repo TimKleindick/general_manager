@@ -28,7 +28,9 @@ from general_manager.cache.dependency_shards import (
     record_many_cache_dependencies,
     remove_cache_key_from_shards,
     request_query_shard_key,
+    legacy_dependency_index_exists,
     reverse_membership_key,
+    reverse_memberships,
     scan_lookup_shard_key,
     _cache_set_add_many,
     _shard_keys_for_dependency,
@@ -102,6 +104,24 @@ class CountingShardCache:
         self.delete_many_calls.append(key_tuple)
         for key in key_tuple:
             self.store.pop(key, None)
+
+
+def seed_unrelated_reverse_memberships(
+    counting_cache: CountingShardCache,
+    *,
+    count: int = 20_000,
+) -> set[str]:
+    reverse_keys = {
+        reverse_membership_key(f"unrelated-cache-{index}") for index in range(count)
+    }
+    counting_cache.store[REVERSE_MEMBERSHIP_REGISTRY_KEY] = reverse_keys
+    for index, reverse_key in enumerate(reverse_keys):
+        counting_cache.store[reverse_key] = ReverseDependencyMembership(
+            cache_key=f"unrelated-cache-{index}",
+            shard_keys=frozenset(),
+            composite_dependencies=frozenset(),
+        )
+    return reverse_keys
 
 
 @override_settings(CACHES=TEST_CACHES)
@@ -346,6 +366,64 @@ class DependencyShardKeyTests(TestCase):
 
         assert clear_legacy_dependency_index() == set()
         assert cache.get("dependency_index") is None
+
+    def test_legacy_dependency_index_exists_uses_one_cache_read(self) -> None:
+        counting_cache = CountingShardCache()
+
+        with mock.patch(
+            "general_manager.cache.dependency_shards.cache",
+            counting_cache,
+        ):
+            assert legacy_dependency_index_exists() is False
+            counting_cache.store["dependency_index"] = {
+                "filter": {},
+                "exclude": {},
+                "request_query": {},
+                "all": {},
+            }
+            assert legacy_dependency_index_exists() is True
+
+        assert counting_cache.get_calls == ["dependency_index", "dependency_index"]
+        assert counting_cache.get_many_calls == []
+
+    def test_reverse_memberships_batches_payload_reads(self) -> None:
+        counting_cache = CountingShardCache()
+        reverse_a = reverse_membership_key("cache-a")
+        reverse_b = reverse_membership_key("cache-b")
+        malformed = reverse_membership_key("malformed")
+        membership_a = ReverseDependencyMembership(
+            cache_key="cache-a",
+            shard_keys=frozenset(),
+            composite_dependencies=frozenset(),
+        )
+        membership_b = ReverseDependencyMembership(
+            cache_key="cache-b",
+            shard_keys=frozenset(),
+            composite_dependencies=frozenset(),
+        )
+        counting_cache.store[REVERSE_MEMBERSHIP_REGISTRY_KEY] = {
+            reverse_a,
+            reverse_b,
+            malformed,
+        }
+        counting_cache.store[reverse_a] = membership_a
+        counting_cache.store[reverse_b] = membership_b
+        counting_cache.store[malformed] = "not-reverse-metadata"
+
+        with mock.patch(
+            "general_manager.cache.dependency_shards.cache",
+            counting_cache,
+        ):
+            memberships = reverse_memberships()
+
+        assert set(memberships) == {membership_a, membership_b}
+        assert counting_cache.get_calls == [REVERSE_MEMBERSHIP_REGISTRY_KEY]
+        assert len(counting_cache.get_many_calls) == 1
+        assert set(counting_cache.get_many_calls[0]) == {
+            reverse_a,
+            reverse_b,
+            malformed,
+        }
 
     def test_invalid_dependencies_write_empty_reverse_membership(self) -> None:
         record_cache_dependencies(
@@ -660,6 +738,49 @@ class DependencyIndexShardFacadeTests(TestCase):
 
         assert instance._old_values == {"status": "open"}
 
+    def test_capture_old_values_uses_legacy_index_when_present(self) -> None:
+        class Project:
+            pass
+
+        cache.set(
+            "dependency_index",
+            {
+                "filter": {"Project": {"status": {'"open"': {"cache-a"}}}},
+                "exclude": {},
+                "request_query": {},
+                "all": {},
+            },
+            None,
+        )
+        instance = SimpleNamespace(status="open", identification=1)
+
+        capture_old_values(sender=Project, instance=instance)
+
+        assert instance._old_values == {"status": "open"}
+
+    def test_capture_old_values_does_not_scan_unrelated_reverse_registry(self) -> None:
+        class UntrackedProject:
+            pass
+
+        counting_cache = CountingShardCache()
+        reverse_keys = seed_unrelated_reverse_memberships(counting_cache)
+        instance = SimpleNamespace(identification=1)
+
+        with mock.patch(
+            "general_manager.cache.dependency_shards.cache",
+            counting_cache,
+        ):
+            capture_old_values(sender=UntrackedProject, instance=instance)
+
+        assert reverse_keys.isdisjoint(counting_cache.get_calls)
+        assert counting_cache.get_many_calls == []
+        assert counting_cache.get_calls == [
+            "general_manager:dependency:v1:lookups:UntrackedProject:filter",
+            "general_manager:dependency:v1:lookups:UntrackedProject:exclude",
+            "dependency_index",
+        ]
+        assert not hasattr(instance, "_old_values")
+
     def test_generic_cache_invalidation_uses_sharded_candidates(self) -> None:
         class Project:
             pass
@@ -681,6 +802,35 @@ class DependencyIndexShardFacadeTests(TestCase):
             cache_set_members(composite_lookup_shard_key("Project", "filter", "status"))
             == set()
         )
+
+    def test_generic_invalidation_does_not_scan_unrelated_reverse_registry(
+        self,
+    ) -> None:
+        class UntrackedProject:
+            pass
+
+        counting_cache = CountingShardCache()
+        reverse_keys = seed_unrelated_reverse_memberships(counting_cache)
+
+        with mock.patch(
+            "general_manager.cache.dependency_shards.cache",
+            counting_cache,
+        ):
+            generic_cache_invalidation(
+                sender=UntrackedProject,
+                instance=SimpleNamespace(identification=None),
+                old_relevant_values={},
+            )
+
+        assert reverse_keys.isdisjoint(counting_cache.get_calls)
+        assert counting_cache.get_many_calls == []
+        assert counting_cache.get_calls == [
+            "dependency_index",
+            "general_manager:dependency:v1:request_query:UntrackedProject",
+            "general_manager:dependency:v1:all:UntrackedProject",
+            "general_manager:dependency:v1:lookups:UntrackedProject:filter",
+            "general_manager:dependency:v1:lookups:UntrackedProject:exclude",
+        ]
 
     def test_generic_cache_invalidation_keeps_nonmatching_exact_lookup_candidate(
         self,
