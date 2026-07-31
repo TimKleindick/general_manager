@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v0.67.5 (2026-07-31)
+
+### Bug Fixes
+
+- Address dependency cache review feedback
+  ([`e57b7c2`](https://github.com/TimKleindick/general_manager/commit/e57b7c26bab14aab389514cfe5268b70df35cd52))
+
+- Align dependency capture mode
+  ([`a5045b8`](https://github.com/TimKleindick/general_manager/commit/a5045b8de8db72ceef602d3c3e1960562b695a3b))
+
+- Bound dependency invalidation registry reads
+  ([`9bf3a6f`](https://github.com/TimKleindick/general_manager/commit/9bf3a6f4e5ef24969f0ac52a35cd4cf19e0d7945))
+
+- Preserve dependency lock ownership
+  ([`79a22c3`](https://github.com/TimKleindick/general_manager/commit/79a22c3e2ce585437d99d888b85a55cfad6024e8))
+
+### Documentation
+
+- Document safe GraphQL upload errors
+  ([`de69c86`](https://github.com/TimKleindick/general_manager/commit/de69c86567d8db88119f17a88929a64fb7b1cec4))
+
+- Explain bounded dependency invalidation
+  ([`3c841dc`](https://github.com/TimKleindick/general_manager/commit/3c841dc844177222a93b5a674eebfd76f3f2e8f8))
+
+- Use explicit GraphQL upload code allowlist
+  ([`f25e245`](https://github.com/TimKleindick/general_manager/commit/f25e24594e2599aba460f2df0f074b44ba83e80f))
+
+### Testing
+
+- Cover stale shard legacy precedence
+  ([`d874589`](https://github.com/TimKleindick/general_manager/commit/d874589830c872d9cfc8fd4da615b852db695e75))
+
+
 ## v0.67.4 (2026-07-30)
 
 ### Bug Fixes
