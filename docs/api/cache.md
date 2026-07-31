@@ -442,8 +442,8 @@ cardinality.
 
 `reverse_memberships()` remains an explicitly global operation for callers that
 need to reconstruct the complete dependency index. It reads the registry once
-and fetches referenced payloads with one batched `get_many()` call. Its transfer,
-validation, and result construction remain O(N).
+and fetches referenced payloads with bounded `get_many()` calls of at most 1,000
+keys each. Its transfer, validation, and result construction remain O(N).
 
 Shard-key builders interpolate string inputs exactly as provided; they do not
 escape empty strings, colons, or other unusual characters. `reverse_membership_key()`

@@ -107,10 +107,11 @@ _BACKOFF_INITIAL = 0.02  # 20ms initial sleep
 _BACKOFF_MAX = 0.5  # 500ms maximum sleep between retries
 
 
-def acquire_lock(timeout: int = LOCK_TIMEOUT) -> DependencyLockToken | None:
+def acquire_lock(timeout: int | float = LOCK_TIMEOUT) -> DependencyLockToken | None:
     """Acquire the dependency lock and return its unique owner token."""
     token = uuid.uuid4().hex
-    if cache.add(LOCK_KEY, token, timeout):
+    cache_add = cast(Callable[[str, object, int | float], bool], cache.add)
+    if cache_add(LOCK_KEY, token, timeout):
         return token
     return None
 
@@ -225,6 +226,9 @@ def acquire_lock_with_retry(operation: str) -> DependencyLockToken:
 
     Raises:
         DependencyLockTimeoutError: If the lock cannot be acquired within LOCK_TIMEOUT.
+
+    Returns:
+        DependencyLockToken: Owner token that callers must pass to release_lock().
     """
     token = acquire_lock()
     if token is not None:
