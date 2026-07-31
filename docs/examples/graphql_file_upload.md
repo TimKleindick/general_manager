@@ -15,6 +15,36 @@ import {
 // than the server's upload policy, or use a reviewed streaming hash library.
 const MAX_CLIENT_HASH_BYTES = 25_000_000;
 
+const PUBLIC_UPLOAD_CODES = new Set([
+  "UNAUTHENTICATED",
+  "PERMISSION_DENIED",
+  "UPLOAD_MANAGER_INVALID",
+  "UPLOAD_FIELD_INVALID",
+  "UPLOAD_OPERATION_INVALID",
+  "UPLOAD_TARGET_UNAVAILABLE",
+  "INVALID_UPLOAD_FILENAME",
+  "INVALID_UPLOAD_SIZE",
+  "INVALID_UPLOAD_CHECKSUM",
+  "UPLOAD_QUOTA_EXCEEDED",
+  "UPLOAD_RATE_LIMITED",
+  "UPLOAD_EXPIRED",
+  "UPLOAD_TOKEN_INVALID",
+  "UPLOAD_INCOMPLETE",
+  "UPLOAD_ALREADY_CONSUMED",
+  "UPLOAD_TRANSFER_CONFLICT",
+  "UPLOAD_SUPERSEDED",
+  "UPLOAD_BINDING_MISMATCH",
+  "UPLOAD_SIZE_MISMATCH",
+  "UPLOAD_CHECKSUM_MISMATCH",
+  "INVALID_FILE_TYPE",
+  "INVALID_IMAGE",
+  "UPLOAD_BACKEND_UNSUPPORTED",
+  "UPLOAD_STORAGE_CHANGED",
+  "UPLOAD_DATABASE_MISMATCH",
+  "UPLOAD_FINALIZATION_FAILED",
+  "UPLOAD_STORAGE_ERROR",
+]);
+
 async function sha256Hex(file) {
   if (file.size > MAX_CLIENT_HASH_BYTES) {
     throw new RangeError("The file is too large to hash in this browser flow.");
@@ -36,11 +66,7 @@ async function graphql(query, variables) {
   const payload = await response.json();
   const failures = mapGraphQLErrors(payload.errors ?? [], {
     isPublicCode: (code) => (
-      code === "UNAUTHENTICATED"
-      || code === "INVALID_FILE_TYPE"
-      || code === "INVALID_IMAGE"
-      || code.startsWith("UPLOAD_")
-      || code.startsWith("INVALID_UPLOAD_")
+      PUBLIC_UPLOAD_CODES.has(code)
     ),
   });
   if (failures.length) throw new GraphQLRequestError(failures);
