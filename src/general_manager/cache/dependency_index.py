@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import random
 import time
+import uuid
 from contextvars import ContextVar
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Callable, Iterable, Literal, Tuple, Type, cast
@@ -59,6 +60,7 @@ type filter_type = Literal[
     "filter", "exclude", "identification", "request_query", "all"
 ]
 type Dependency = Tuple[general_manager_name, filter_type, str]
+type DependencyLockToken = str
 
 logger = get_logger("cache.dependency_index")
 _pending_graphql_rewarm_cache_keys: ContextVar[frozenset[str]] = ContextVar(
@@ -105,27 +107,22 @@ _BACKOFF_INITIAL = 0.02  # 20ms initial sleep
 _BACKOFF_MAX = 0.5  # 500ms maximum sleep between retries
 
 
-def acquire_lock(timeout: int = LOCK_TIMEOUT) -> bool:
+def acquire_lock(timeout: int = LOCK_TIMEOUT) -> DependencyLockToken | None:
+    """Acquire the dependency lock and return its unique owner token."""
+    token = uuid.uuid4().hex
+    if cache.add(LOCK_KEY, token, timeout):
+        return token
+    return None
+
+
+def release_lock(token: DependencyLockToken) -> None:
+    """Release the dependency lock only while ``token`` remains its owner.
+
+    Django's generic cache API has no portable atomic compare-and-delete, so
+    ownership is checked immediately before deletion without stronger claims.
     """
-    Attempt to acquire the cache-backed lock guarding dependency writes.
-
-    Parameters:
-        timeout (int): Expiration time for the lock entry in seconds.
-
-    Returns:
-        bool: True if the lock was acquired; otherwise, False.
-    """
-    return cache.add(LOCK_KEY, "1", timeout)
-
-
-def release_lock() -> None:
-    """
-    Release the cache-backed lock guarding dependency writes.
-
-    Returns:
-        None
-    """
-    cache.delete(LOCK_KEY)
+    if cache.get(LOCK_KEY) == token:
+        cache.delete(LOCK_KEY)
 
 
 def get_dependency_generation() -> int:
@@ -164,13 +161,13 @@ def begin_dependency_data_change() -> int:
     The generation bump happens before the underlying mutation, so computations
     that started before the mutation cannot publish dependency-scoped values.
     """
-    acquire_lock_with_retry("begin_dependency_data_change")
+    lock_token = acquire_lock_with_retry("begin_dependency_data_change")
     try:
         generation = _set_dependency_generation(get_dependency_generation() + 1)
         _set_dependency_data_change_count(_get_dependency_data_change_count() + 1)
         cache.set(DATA_CHANGE_LOCK_KEY, "1", None)
     finally:
-        release_lock()
+        release_lock(lock_token)
     try:
         _discard_active_context_dependency_cache_state()
     except Exception:
@@ -184,7 +181,7 @@ def begin_dependency_data_change() -> int:
 
 def end_dependency_data_change() -> None:
     """Release the publish barrier for a completed data change."""
-    acquire_lock_with_retry("end_dependency_data_change")
+    lock_token = acquire_lock_with_retry("end_dependency_data_change")
     try:
         count = _set_dependency_data_change_count(
             max(_get_dependency_data_change_count() - 1, 0)
@@ -194,7 +191,7 @@ def end_dependency_data_change() -> None:
         else:
             cache.set(DATA_CHANGE_LOCK_KEY, "1", None)
     finally:
-        release_lock()
+        release_lock(lock_token)
 
 
 def is_dependency_data_change_active() -> bool:
@@ -219,7 +216,7 @@ def drain_invalidated_cache_keys_for_graphql_rewarm() -> tuple[str, ...]:
     return cache_keys
 
 
-def acquire_lock_with_retry(operation: str) -> None:
+def acquire_lock_with_retry(operation: str) -> DependencyLockToken:
     """
     Acquire the dependency index lock, retrying with exponential backoff.
 
@@ -229,8 +226,9 @@ def acquire_lock_with_retry(operation: str) -> None:
     Raises:
         DependencyLockTimeoutError: If the lock cannot be acquired within LOCK_TIMEOUT.
     """
-    if acquire_lock():
-        return
+    token = acquire_lock()
+    if token is not None:
+        return token
     start = time.time()
     delay = _BACKOFF_INITIAL
     while True:
@@ -238,8 +236,9 @@ def acquire_lock_with_retry(operation: str) -> None:
         if remaining <= 0:
             raise DependencyLockTimeoutError(operation)
         time.sleep(random.uniform(0, min(delay, remaining)))  # noqa: S311 - jitter, not crypto
-        if acquire_lock():
-            return
+        token = acquire_lock()
+        if token is not None:
+            return token
         if time.time() - start > LOCK_TIMEOUT:
             raise DependencyLockTimeoutError(operation)
         delay = min(delay * 2, _BACKOFF_MAX)
@@ -527,11 +526,11 @@ def record_dependencies(
     Raises:
         DependencyLockTimeoutError: If a lock cannot be acquired within the configured timeout while updating the index.
     """
-    acquire_lock_with_retry("record_dependencies")
+    lock_token = acquire_lock_with_retry("record_dependencies")
     try:
         record_cache_dependencies(cache_key, dependencies)
     finally:
-        release_lock()
+        release_lock(lock_token)
 
 
 def record_many_dependencies(
@@ -548,11 +547,11 @@ def record_many_dependencies(
     if not normalized:
         return
 
-    acquire_lock_with_retry("record_many_dependencies")
+    lock_token = acquire_lock_with_retry("record_many_dependencies")
     try:
         record_many_cache_dependencies(normalized.items())
     finally:
-        release_lock()
+        release_lock(lock_token)
 
 
 # -----------------------------------------------------------------------------
@@ -573,7 +572,7 @@ def remove_cache_key_from_index(cache_key: str) -> None:
     Raises:
         DependencyLockTimeoutError: If the dependency lock cannot be acquired within LOCK_TIMEOUT.
     """
-    acquire_lock_with_retry("remove_cache_key_from_index")
+    lock_token = acquire_lock_with_retry("remove_cache_key_from_index")
     try:
         if legacy_dependency_index_exists():
             idx = get_full_index()
@@ -582,7 +581,7 @@ def remove_cache_key_from_index(cache_key: str) -> None:
             return
         remove_cache_key_from_shards(cache_key)
     finally:
-        release_lock()
+        release_lock(lock_token)
 
 
 # -----------------------------------------------------------------------------
@@ -668,7 +667,7 @@ def invalidate_and_remove_cache_keys(cache_keys: Iterable[str]) -> None:
     keys = tuple(dict.fromkeys(cache_keys))
     if not keys:
         return
-    acquire_lock_with_retry("invalidate_and_remove_cache_keys")
+    lock_token = acquire_lock_with_retry("invalidate_and_remove_cache_keys")
     try:
         if legacy_dependency_index_exists():
             idx = get_full_index()
@@ -681,7 +680,7 @@ def invalidate_and_remove_cache_keys(cache_keys: Iterable[str]) -> None:
             cache.delete(cache_key)
             remove_cache_key_from_shards(cache_key)
     finally:
-        release_lock()
+        release_lock(lock_token)
 
 
 def _invalidate_request_query_dependencies_locked(
@@ -710,7 +709,7 @@ def invalidate_request_query_dependencies(manager_name: str) -> tuple[str, ...]:
     Returns:
         tuple[str, ...]: The cache keys that were invalidated.
     """
-    acquire_lock_with_retry("invalidate_request_query_dependencies")
+    lock_token = acquire_lock_with_retry("invalidate_request_query_dependencies")
     try:
         if legacy_dependency_index_exists():
             idx = get_full_index()
@@ -727,7 +726,7 @@ def invalidate_request_query_dependencies(manager_name: str) -> tuple[str, ...]:
             remove_cache_key_from_shards(cache_key)
         return invalidated_keys
     finally:
-        release_lock()
+        release_lock(lock_token)
 
 
 @receiver(pre_data_change)
@@ -1393,7 +1392,7 @@ def generic_cache_invalidation(
     """
     manager_name = sender.__name__
     invalidated_cache_keys: set[str] = set()
-    acquire_lock_with_retry("generic_cache_invalidation")
+    lock_token = acquire_lock_with_retry("generic_cache_invalidation")
     try:
         if legacy_dependency_index_exists():
             idx = get_full_index()
@@ -1411,6 +1410,6 @@ def generic_cache_invalidation(
                 old_relevant_values,
             )
     finally:
-        release_lock()
+        release_lock(lock_token)
     if invalidated_cache_keys:
         record_invalidated_cache_keys_for_graphql_rewarm(invalidated_cache_keys)

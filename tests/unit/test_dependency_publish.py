@@ -664,6 +664,48 @@ class TestDependencyPublish(SimpleTestCase):
         self.assertEqual(cache_entry(cache_backend, "cache-a").value, "alpha")
         self.assertEqual(cache_entry(cache_backend, "cache-b").value, "bravo")
 
+    @mock.patch("general_manager.cache.dependency_publish.release_lock")
+    @mock.patch("general_manager.cache.dependency_publish.acquire_lock_with_retry")
+    def test_batch_publish_releases_acquired_owner_token(
+        self,
+        mock_acquire: mock.Mock,
+        mock_release: mock.Mock,
+    ) -> None:
+        mock_acquire.return_value = "batch-owner"
+        cache_backend = FakeDependencyCacheBackend()
+        entry = self.make_pending_publication(
+            cache_key="cache-a",
+            result="value",
+            dependencies=set(),
+            cache_backend=cache_backend,
+        )
+
+        publish_dependency_cache_entries([entry])
+
+        mock_release.assert_called_once_with("batch-owner")
+
+    @mock.patch("general_manager.cache.dependency_publish.release_lock")
+    @mock.patch("general_manager.cache.dependency_publish.acquire_lock_with_retry")
+    def test_single_publish_releases_owner_token_after_failure(
+        self,
+        mock_acquire: mock.Mock,
+        mock_release: mock.Mock,
+    ) -> None:
+        mock_acquire.return_value = "single-owner"
+        cache_backend = FakeDependencyCacheBackend()
+
+        with self.assertRaises(CachePublishAborted):
+            publish_dependency_cache_entry(
+                cache_key="cache-a",
+                result="value",
+                dependencies=frozenset(),
+                cache_backend=cache_backend,
+                timeout=None,
+                started_generation=get_dependency_generation() + 1,
+            )
+
+        mock_release.assert_called_once_with("single-owner")
+
     def test_batch_publish_retries_set_many_failures_individually(self) -> None:
         cache_backend = FakeDependencyCachePartialSetManyBackend({"cache-b"})
 

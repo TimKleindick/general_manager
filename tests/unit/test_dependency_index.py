@@ -3,7 +3,9 @@ from general_manager.cache.dependency_index import (
     DATA_CHANGE_COUNT_KEY,
     DATA_CHANGE_LOCK_KEY,
     DEPENDENCY_GENERATION_KEY,
+    LOCK_KEY,
     acquire_lock,
+    acquire_lock_with_retry,
     begin_dependency_data_change,
     end_dependency_data_change,
     get_full_index,
@@ -42,39 +44,46 @@ TEST_CACHES = {
 
 @override_settings(CACHES=TEST_CACHES)
 class TestAcquireReleaseLock(TestCase):
-    def setUp(self):
-        # Clear the cache before each test
+    def setUp(self) -> None:
         cache.clear()
 
-    def test_acquire_lock(self):
-        locked = acquire_lock()
-        self.assertTrue(locked)
+    def test_acquire_lock_stores_and_returns_unique_owner_token(self) -> None:
+        first_token = acquire_lock()
 
-    def test_lock_funcionality(self):
-        acquire_lock()
-        secound_locked = acquire_lock()
-        self.assertFalse(secound_locked)
-        release_lock()
-        locked = acquire_lock()
-        self.assertTrue(locked)
+        assert isinstance(first_token, str)
+        assert first_token
+        assert cache.get(LOCK_KEY) == first_token
+        assert acquire_lock() is None
 
-    def test_release_lock(self):
-        locked = acquire_lock()
-        self.assertTrue(locked)
-        release_lock()
-        locked = acquire_lock()
-        self.assertTrue(locked)
-        release_lock()
+        release_lock(first_token)
+        second_token = acquire_lock()
 
-    def test_release_lock_without_acquire(self):
-        release_lock()
+        assert isinstance(second_token, str)
+        assert second_token != first_token
 
-    def test_lock_ttl(self):
-        locked = acquire_lock(0.1)  # type: ignore
-        self.assertTrue(locked)
+    def test_release_lock_removes_current_owner(self) -> None:
+        token = acquire_lock()
+        assert token is not None
+
+        release_lock(token)
+
+        assert cache.get(LOCK_KEY) is None
+
+    def test_stale_owner_does_not_release_successor(self) -> None:
+        stale_token = acquire_lock(0.1)  # type: ignore[arg-type]
+        assert stale_token is not None
         time.sleep(0.15)
-        locked = acquire_lock()
-        self.assertTrue(locked)
+        successor_token = acquire_lock()
+        assert successor_token is not None
+
+        release_lock(stale_token)
+
+        assert cache.get(LOCK_KEY) == successor_token
+
+    def test_unknown_owner_release_is_noop(self) -> None:
+        release_lock("not-the-owner")
+
+        assert cache.get(LOCK_KEY) is None
 
 
 @override_settings(CACHES=TEST_CACHES)
@@ -567,7 +576,7 @@ class TestRecordDependencies(TestCase):
 
     @patch("general_manager.cache.dependency_index.acquire_lock")
     def test_waits_until_lock_is_acquired(self, mock_acquire):
-        mock_acquire.side_effect = [False, False, True]
+        mock_acquire.side_effect = [None, None, "owner-token"]
         record_dependencies(
             "abc123",
             [
@@ -595,9 +604,18 @@ class TestRecordDependencies(TestCase):
         )
 
     @patch("general_manager.cache.dependency_index.acquire_lock")
+    def test_acquire_lock_with_retry_returns_successful_token(self, mock_acquire):
+        mock_acquire.side_effect = [None, None, "owner-token"]
+
+        token = acquire_lock_with_retry("test-operation")
+
+        assert token == "owner-token"  # noqa: S105 - test-only lock token
+        assert mock_acquire.call_count == 3
+
+    @patch("general_manager.cache.dependency_index.acquire_lock")
     @patch("general_manager.cache.dependency_index.LOCK_TIMEOUT", 0.1)
     def test_raises_timeout_error(self, mock_acquire):
-        mock_acquire.return_value = False
+        mock_acquire.return_value = None
         with self.assertRaises(TimeoutError):
             record_dependencies(
                 "abc123",
@@ -615,7 +633,7 @@ class TestRecordManyDependencies(TestCase):
 
     @patch("general_manager.cache.dependency_index.acquire_lock")
     def test_records_many_dependency_sets_under_one_lock(self, mock_acquire):
-        mock_acquire.return_value = True
+        mock_acquire.return_value = "owner-token"
 
         record_many_dependencies(
             [
@@ -833,9 +851,9 @@ class TestRemoveCacheKeyFromIndex(TestCase):
 
         set_full_index(idx)
         mock_acquire.side_effect = [
-            False,
-            False,
-            True,
+            None,
+            None,
+            "owner-token",
         ]
         remove_cache_key_from_index("abc123")
         self.assertEqual(mock_acquire.call_count, 3)
@@ -868,7 +886,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
         }
 
         set_full_index(idx)
-        mock_acquire.return_value = False
+        mock_acquire.return_value = None
         with self.assertRaises(TimeoutError):
             remove_cache_key_from_index("abc123")
 
@@ -1258,6 +1276,7 @@ class GenericCacheInvalidationTests(TestCase):
             ) as mock_release,
             patch("general_manager.cache.dependency_index.set_full_index") as mock_set,
         ):
+            mock_acquire.return_value = "owner-token"
             generic_cache_invalidation(
                 sender=DummyManager2,
                 instance=inst,
@@ -1265,7 +1284,7 @@ class GenericCacheInvalidationTests(TestCase):
             )
 
         mock_acquire.assert_called_once_with("generic_cache_invalidation")
-        mock_release.assert_called_once()
+        mock_release.assert_called_once_with("owner-token")
         mock_set.assert_called_once()
         for cache_key in invalidated_keys:
             self.assertIsNone(cache.get(cache_key))
