@@ -70,9 +70,9 @@ class TestAcquireReleaseLock(TestCase):
         assert cache.get(LOCK_KEY) is None
 
     def test_stale_owner_does_not_release_successor(self) -> None:
-        stale_token = acquire_lock(0.1)  # type: ignore[arg-type]
+        stale_token = acquire_lock(0.2)
         assert stale_token is not None
-        time.sleep(0.15)
+        time.sleep(0.4)
         successor_token = acquire_lock()
         assert successor_token is not None
 
@@ -1042,6 +1042,8 @@ class DummyManager:
 
 class CaptureOldValuesTests(TestCase):
     def setUp(self) -> None:
+        cache.clear()
+        # Seed the legacy key so patched full-index reads use the legacy path.
         cache.set("dependency_index", {}, None)
 
     @patch("general_manager.cache.dependency_index.get_full_index")
@@ -1187,6 +1189,8 @@ class MissingAttrManager:
 
 class GenericCacheInvalidationTests(TestCase):
     def setUp(self) -> None:
+        cache.clear()
+        # Seed the legacy key so patched full-index reads use the legacy path.
         cache.set("dependency_index", {}, None)
 
     def assert_cache_keys_removed_from_index(

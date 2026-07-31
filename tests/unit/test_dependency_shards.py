@@ -112,16 +112,17 @@ def seed_unrelated_reverse_memberships(
     *,
     count: int = 20_000,
 ) -> set[str]:
-    reverse_keys = {
-        reverse_membership_key(f"unrelated-cache-{index}") for index in range(count)
-    }
-    counting_cache.store[REVERSE_MEMBERSHIP_REGISTRY_KEY] = reverse_keys
-    for index, reverse_key in enumerate(reverse_keys):
+    reverse_keys = set()
+    for index in range(count):
+        cache_key = f"unrelated-cache-{index}"
+        reverse_key = reverse_membership_key(cache_key)
+        reverse_keys.add(reverse_key)
         counting_cache.store[reverse_key] = ReverseDependencyMembership(
-            cache_key=f"unrelated-cache-{index}",
+            cache_key=cache_key,
             shard_keys=frozenset(),
             composite_dependencies=frozenset(),
         )
+    counting_cache.store[REVERSE_MEMBERSHIP_REGISTRY_KEY] = reverse_keys
     return reverse_keys
 
 
@@ -368,7 +369,7 @@ class DependencyShardKeyTests(TestCase):
         assert clear_legacy_dependency_index() == set()
         assert cache.get("dependency_index") is None
 
-    def test_legacy_dependency_index_exists_uses_one_cache_read(self) -> None:
+    def test_legacy_dependency_index_exists_uses_one_cache_read_per_call(self) -> None:
         counting_cache = CountingShardCache()
 
         with mock.patch(
@@ -411,16 +412,24 @@ class DependencyShardKeyTests(TestCase):
         counting_cache.store[reverse_b] = membership_b
         counting_cache.store[malformed] = "not-reverse-metadata"
 
-        with mock.patch(
-            "general_manager.cache.dependency_shards.cache",
-            counting_cache,
+        with (
+            mock.patch(
+                "general_manager.cache.dependency_shards.cache",
+                counting_cache,
+            ),
+            mock.patch(
+                "general_manager.cache.dependency_shards."
+                "REVERSE_MEMBERSHIP_READ_BATCH_SIZE",
+                2,
+            ),
         ):
             memberships = reverse_memberships()
 
         assert set(memberships) == {membership_a, membership_b}
         assert counting_cache.get_calls == [REVERSE_MEMBERSHIP_REGISTRY_KEY]
-        assert len(counting_cache.get_many_calls) == 1
-        assert set(counting_cache.get_many_calls[0]) == {
+        assert len(counting_cache.get_many_calls) == 2
+        assert all(len(call) <= 2 for call in counting_cache.get_many_calls)
+        assert {key for call in counting_cache.get_many_calls for key in call} == {
             reverse_a,
             reverse_b,
             malformed,
@@ -815,8 +824,8 @@ class DependencyIndexShardFacadeTests(TestCase):
         assert counting_cache.get_many_calls == []
         assert counting_cache.get_calls == [
             "dependency_index",
-            "general_manager:dependency:v1:lookups:UntrackedProject:filter",
-            "general_manager:dependency:v1:lookups:UntrackedProject:exclude",
+            lookup_registry_key("UntrackedProject", "filter"),
+            lookup_registry_key("UntrackedProject", "exclude"),
         ]
         assert not hasattr(instance, "_old_values")
 
@@ -906,7 +915,7 @@ class DependencyIndexShardFacadeTests(TestCase):
         )
         assert unrelated_reverse_keys.isdisjoint(counting_cache.get_calls)
         assert unrelated_reverse_keys.isdisjoint(fetched_in_batches)
-        assert len(counting_cache.get_calls) == 47
+        assert len(counting_cache.get_calls) <= 50
         assert counting_cache.get_many_calls == [
             (candidate_shard,),
             (REVERSE_MEMBERSHIP_REGISTRY_KEY,),

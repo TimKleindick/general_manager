@@ -14,6 +14,7 @@ from collections.abc import Iterable, Mapping
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import batched
 from typing import Literal
 
 from django.core.cache import cache
@@ -29,6 +30,7 @@ DEPENDENCY_SHARD_PREFIX = "general_manager:dependency:v1"
 LEGACY_DEPENDENCY_INDEX_KEY = "dependency_index"
 ALL_RECORDS_VALUE = "__all__"
 REVERSE_MEMBERSHIP_REGISTRY_KEY = f"{DEPENDENCY_SHARD_PREFIX}:reverse_keys"
+REVERSE_MEMBERSHIP_READ_BATCH_SIZE = 1000
 VALUE_NOT_PROVIDED = object()
 
 DependencyAction = Literal[
@@ -793,15 +795,19 @@ def reverse_memberships() -> tuple[ReverseDependencyMembership, ...]:
         Valid reverse-membership payloads currently listed in the reverse
         membership registry. Missing or malformed registry members are skipped.
         A malformed registry payload contributes no reverse keys through
-        `cache_set_members()`. Payloads are fetched with one `get_many()` call.
-        Dependency tuple members inside a valid `ReverseDependencyMembership`
-        are returned unchanged.
+        `cache_set_members()`. Payloads are fetched with bounded `get_many()`
+        calls. Dependency tuple members inside a valid
+        `ReverseDependencyMembership` are returned unchanged.
     """
     reverse_keys = cache_set_members(REVERSE_MEMBERSHIP_REGISTRY_KEY)
-    reverse_payloads = _cache_get_many(reverse_keys)
     memberships = []
-    for reverse_key in reverse_keys:
-        reverse = reverse_payloads.get(reverse_key)
-        if isinstance(reverse, ReverseDependencyMembership):
-            memberships.append(reverse)
+    for reverse_key_batch in batched(
+        reverse_keys,
+        REVERSE_MEMBERSHIP_READ_BATCH_SIZE,
+    ):
+        reverse_payloads = _cache_get_many(reverse_key_batch)
+        for reverse_key in reverse_key_batch:
+            reverse = reverse_payloads.get(reverse_key)
+            if isinstance(reverse, ReverseDependencyMembership):
+                memberships.append(reverse)
     return tuple(memberships)
