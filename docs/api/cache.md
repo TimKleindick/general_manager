@@ -433,10 +433,12 @@ first reads the reverse registry through `cache_set_members()`, then returns
 only cached values that are actual `ReverseDependencyMembership` instances.
 
 Ordinary data-change and cleanup paths do not enumerate the reverse-membership
-registry to choose a storage implementation. They read the legacy
-`dependency_index` key once: a present payload selects the legacy full index,
-and an absent payload selects manager- and lookup-specific shards. Consequently,
-hot invalidation work is independent of unrelated reverse-membership cardinality.
+registry to choose a storage implementation. Mode selection uses one
+constant-time probe read of the legacy `dependency_index` key. A present payload
+selects legacy mode, which then loads the legacy index for the operation; an
+absent payload selects manager- and lookup-specific shards. Consequently, hot
+sharded invalidation work is independent of unrelated reverse-membership
+cardinality.
 
 `reverse_memberships()` remains an explicitly global operation for callers that
 need to reconstruct the complete dependency index. It reads the registry once

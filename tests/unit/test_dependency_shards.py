@@ -24,11 +24,12 @@ from general_manager.cache.dependency_shards import (
     clear_legacy_dependency_index,
     composite_lookup_shard_key,
     exact_lookup_shard_key,
+    legacy_dependency_index_exists,
+    lookup_registry_key,
     record_cache_dependencies,
     record_many_cache_dependencies,
     remove_cache_key_from_shards,
     request_query_shard_key,
-    legacy_dependency_index_exists,
     reverse_membership_key,
     reverse_memberships,
     scan_lookup_shard_key,
@@ -758,6 +759,44 @@ class DependencyIndexShardFacadeTests(TestCase):
 
         assert instance._old_values == {"status": "open"}
 
+    def test_capture_old_values_prefers_legacy_lookups_over_stale_shards(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "stale-sharded-cache",
+            [("Project", "filter", json.dumps({"title": "stale"}))],
+        )
+        cache.set(
+            "dependency_index",
+            {
+                "filter": {"Project": {"status": {'"open"': {"legacy-cache"}}}},
+                "exclude": {},
+                "request_query": {},
+                "all": {},
+            },
+            None,
+        )
+        cache.set("legacy-cache", "legacy-value", None)
+        instance = SimpleNamespace(
+            status="open",
+            title="stale",
+            identification=1,
+        )
+
+        capture_old_values(sender=Project, instance=instance)
+        instance.status = "closed"
+        generic_cache_invalidation(
+            sender=Project,
+            instance=instance,
+            old_relevant_values=instance._old_values,
+        )
+
+        assert instance._old_values == {"status": "open"}
+        assert cache.get("legacy-cache") is None
+
     def test_capture_old_values_does_not_scan_unrelated_reverse_registry(self) -> None:
         class UntrackedProject:
             pass
@@ -775,9 +814,9 @@ class DependencyIndexShardFacadeTests(TestCase):
         assert reverse_keys.isdisjoint(counting_cache.get_calls)
         assert counting_cache.get_many_calls == []
         assert counting_cache.get_calls == [
+            "dependency_index",
             "general_manager:dependency:v1:lookups:UntrackedProject:filter",
             "general_manager:dependency:v1:lookups:UntrackedProject:exclude",
-            "dependency_index",
         ]
         assert not hasattr(instance, "_old_values")
 
@@ -806,30 +845,71 @@ class DependencyIndexShardFacadeTests(TestCase):
     def test_generic_invalidation_does_not_scan_unrelated_reverse_registry(
         self,
     ) -> None:
-        class UntrackedProject:
+        class Project:
             pass
 
         counting_cache = CountingShardCache()
-        reverse_keys = seed_unrelated_reverse_memberships(counting_cache)
+        unrelated_reverse_keys = set(seed_unrelated_reverse_memberships(counting_cache))
+        cache_key = "relevant-cache"
+        lookup_registry = lookup_registry_key("Project", "filter")
+        candidate_shard = composite_lookup_shard_key(
+            "Project",
+            "filter",
+            "status",
+        )
+        relevant_reverse_key = reverse_membership_key(cache_key)
+        reverse_registry = counting_cache.store[REVERSE_MEMBERSHIP_REGISTRY_KEY]
+        assert isinstance(reverse_registry, set)
+        reverse_registry.add(relevant_reverse_key)
+        counting_cache.store[lookup_registry] = {"status"}
+        counting_cache.store[candidate_shard] = {cache_key}
+        counting_cache.store[relevant_reverse_key] = ReverseDependencyMembership(
+            cache_key=cache_key,
+            shard_keys=frozenset({candidate_shard}),
+            composite_dependencies=frozenset(),
+            simple_dependencies=frozenset(
+                {("Project", "filter", json.dumps({"status": "open"}))}
+            ),
+        )
+        counting_cache.store[cache_key] = "cached-value"
 
-        with mock.patch(
-            "general_manager.cache.dependency_shards.cache",
-            counting_cache,
+        with (
+            mock.patch(
+                "general_manager.cache.dependency_shards.cache",
+                counting_cache,
+            ),
+            mock.patch(
+                "general_manager.cache.dependency_index.cache",
+                counting_cache,
+            ),
+            mock.patch(
+                "general_manager.cache.dependency_index.acquire_lock_with_retry",
+                return_value="owner-token",
+            ),
+            mock.patch("general_manager.cache.dependency_index.release_lock"),
         ):
             generic_cache_invalidation(
-                sender=UntrackedProject,
-                instance=SimpleNamespace(identification=None),
-                old_relevant_values={},
+                sender=Project,
+                instance=SimpleNamespace(status="closed", identification=None),
+                old_relevant_values={"status": "open"},
             )
 
-        assert reverse_keys.isdisjoint(counting_cache.get_calls)
-        assert counting_cache.get_many_calls == []
-        assert counting_cache.get_calls == [
-            "dependency_index",
-            "general_manager:dependency:v1:request_query:UntrackedProject",
-            "general_manager:dependency:v1:all:UntrackedProject",
-            "general_manager:dependency:v1:lookups:UntrackedProject:filter",
-            "general_manager:dependency:v1:lookups:UntrackedProject:exclude",
+        fetched_in_batches = {
+            key
+            for get_many_call in counting_cache.get_many_calls
+            for key in get_many_call
+        }
+        assert cache_key not in counting_cache.store
+        assert relevant_reverse_key not in counting_cache.store
+        assert counting_cache.store[REVERSE_MEMBERSHIP_REGISTRY_KEY] == (
+            unrelated_reverse_keys
+        )
+        assert unrelated_reverse_keys.isdisjoint(counting_cache.get_calls)
+        assert unrelated_reverse_keys.isdisjoint(fetched_in_batches)
+        assert len(counting_cache.get_calls) == 47
+        assert counting_cache.get_many_calls == [
+            (candidate_shard,),
+            (REVERSE_MEMBERSHIP_REGISTRY_KEY,),
         ]
 
     def test_generic_cache_invalidation_keeps_nonmatching_exact_lookup_candidate(
