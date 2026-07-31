@@ -776,7 +776,7 @@ class DependencyIndexShardFacadeTests(TestCase):
 
         record_dependencies(
             "stale-sharded-cache",
-            [("Project", "filter", json.dumps({"title": "stale"}))],
+            [("Project", "filter", json.dumps({"status": "open"}))],
         )
         cache.set(
             "dependency_index",
@@ -789,9 +789,9 @@ class DependencyIndexShardFacadeTests(TestCase):
             None,
         )
         cache.set("legacy-cache", "legacy-value", None)
+        cache.set("stale-sharded-cache", "stale-value", None)
         instance = SimpleNamespace(
             status="open",
-            title="stale",
             identification=1,
         )
 
@@ -805,6 +805,7 @@ class DependencyIndexShardFacadeTests(TestCase):
 
         assert instance._old_values == {"status": "open"}
         assert cache.get("legacy-cache") is None
+        assert cache.get("stale-sharded-cache") == "stale-value"
 
     def test_capture_old_values_does_not_scan_unrelated_reverse_registry(self) -> None:
         class UntrackedProject:
