@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.67.6 (2026-08-03)
+
+### Bug Fixes
+
+- Record hard-delete history reason
+  ([`bcb62b0`](https://github.com/TimKleindick/general_manager/commit/bcb62b0c0f787d7e5f687b014833ca0b73a47882))
+
+
 ## v0.67.5 (2026-07-31)
 
 ### Bug Fixes
