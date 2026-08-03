@@ -589,6 +589,29 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
         with self.assertRaises(ObjectDoesNotExist):
             self.TestProject(self.project.id)
 
+    def test_hard_delete_records_reason_without_existing_history_row(self):
+        """Hard delete records its reason without relying on prior history."""
+        model = self.TestProject.Interface._model
+        project_id = self.project.id
+        model.history.filter(id=project_id).delete()
+
+        self.project.delete(
+            history_comment="manual cleanup",
+            ignore_permission=True,
+        )
+
+        with self.assertRaises(ObjectDoesNotExist):
+            self.TestProject(project_id)
+        history_record = (
+            model.history.filter(id=project_id).order_by("-history_date").first()
+        )
+        self.assertIsNotNone(history_record)
+        self.assertEqual(history_record.history_type, "-")
+        self.assertEqual(
+            history_record.history_change_reason,
+            "manual cleanup (deleted)",
+        )
+
     def test_delete_project_sets_history_user_for_database_alias_branch(self):
         """
         Verifies that hard delete attributes the delete history row to the current actor when the database-alias path is used.

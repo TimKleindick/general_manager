@@ -666,7 +666,7 @@ class OrmDeleteCapability(BaseCapability):
             )
             if model_has_field(instance, "changed_by"):
                 object.__setattr__(instance, "changed_by_id", creator_id)
-            call_update_change_reason(instance, history_comment_local)
+            object.__setattr__(instance, "_change_reason", history_comment_local)
             atomic_context = _mutation_atomic(database_alias)
             with atomic_context:
                 if database_alias:

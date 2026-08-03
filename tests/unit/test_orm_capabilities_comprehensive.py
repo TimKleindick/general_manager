@@ -3065,20 +3065,17 @@ class TestOrmMutationCapability:
                                 return_value=True,
                             ):
                                 with patch(
-                                    "general_manager.interface.capabilities.orm.mutations.call_update_change_reason"
-                                ) as update_reason:
+                                    "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
+                                    return_value=nullcontext(),
+                                ):
                                     with patch(
-                                        "general_manager.interface.capabilities.orm.mutations.transaction.atomic",
-                                        return_value=nullcontext(),
-                                    ):
-                                        with patch(
-                                            "general_manager.interface.capabilities.orm.mutations.discard_orm_instance_cache"
-                                        ) as discard_cache:
-                                            result = capability.delete(
-                                                interface_instance,
-                                                creator_id=9,
-                                                history_comment="remove",
-                                            )
+                                        "general_manager.interface.capabilities.orm.mutations.discard_orm_instance_cache"
+                                    ) as discard_cache:
+                                        result = capability.delete(
+                                            interface_instance,
+                                            creator_id=9,
+                                            history_comment="remove",
+                                        )
 
         assert result == {"id": 5}
         assign_actor.assert_called_once_with(
@@ -3087,7 +3084,7 @@ class TestOrmMutationCapability:
             database_alias="archive",
         )
         assert model_instance.changed_by_id == 9
-        update_reason.assert_called_once_with(model_instance, "remove (deleted)")
+        assert model_instance._change_reason == "remove (deleted)"
         model_instance.delete.assert_called_once_with(using="archive")
         discard_cache.assert_called_once_with(interface_instance.__class__, 5)
 
