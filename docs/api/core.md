@@ -24,9 +24,13 @@ created identification, and returns a new manager constructed from that
 identification. `manager.update(...)` checks that the manager is still valid,
 checks update permission unless skipped, delegates to the interface, reloads the
 backing interface in place, preserves request payload cache when available, and
-returns the same manager instance. `manager.delete(...)` checks delete
-permission unless skipped, delegates to the interface, invalidates the manager
-for later field reads, and returns `None`.
+returns the same manager instance. `manager.delete(creator_id=None,
+history_comment=None, ignore_permission=False)` checks delete permission unless
+skipped, delegates to the interface, invalidates the manager for later field
+reads, and returns `None`. ORM hard deletes record the supplied history comment
+with a ` (deleted)` suffix, or `Deleted` when omitted, even when no earlier
+history row exists; soft deletes append ` (deactivated)` to a supplied comment
+and otherwise use `Deactivated`.
 
 For writable ORM interfaces as of GeneralManager 0.63.1, ordinary
 `create()`/`update()` calls commit the row save, history actor/reason, and
