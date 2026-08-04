@@ -101,7 +101,34 @@ ordinary ORM writes, any such exception rolls back the row, history rows, and
 relation table on the configured alias. Upload-aware writes keep their separate
 atomic upload and post-commit finalization contract.
 
-## 4. Handle caller-owned rollbacks
+## 4. Preserve the reason for a hard delete
+
+Hard deletes also create a history row inside the configured database
+transaction. Pass `history_comment` to retain the reason after the live row is
+gone; GeneralManager stores it with a ` (deleted)` suffix, including when the
+object had no earlier history row.
+
+```python
+customer_id = customer.identification["id"]
+customer.delete(
+    history_comment="manual cleanup",
+    ignore_permission=True,
+)
+
+history_record = (
+    LegacyCustomer.history.filter(id=customer_id)
+    .order_by("-history_date")
+    .first()
+)
+assert history_record is not None
+assert history_record.history_change_reason == "manual cleanup (deleted)"
+```
+
+When `is_active` is present and soft delete is enabled, the row remains
+available through `include_inactive=True` and the reason ends in
+` (deactivated)` instead.
+
+## 5. Handle caller-owned rollbacks
 
 GeneralManager avoids putting an uncommitted ORM row into its run-scoped read
 cache while the configured connection is inside an application `atomic()`

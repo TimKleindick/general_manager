@@ -145,3 +145,26 @@ for a pre-tracked model on a non-default alias, but its implementation-module
 import is not part of the stable `general_manager.interface` export registry;
 pin and test the dependency when using it. See the
 [task guide](../howto/orm_atomic_writes.md) for rollback handling.
+
+To retain the reason for a hard delete, capture the identifier before deleting
+the manager. The history row remains queryable after the live row is gone:
+
+```python
+contract_id = contract.identification["id"]
+contract.delete(
+    history_comment="manual cleanup",
+    ignore_permission=True,
+)
+
+delete_history = (
+    LegacyContract.history.filter(id=contract_id)
+    .order_by("-history_date")
+    .first()
+)
+assert delete_history is not None
+assert delete_history.history_change_reason == "manual cleanup (deleted)"
+```
+
+This `LegacyContract` has no `is_active` field, so the example hard-deletes the
+row. If the wrapped model has `is_active`, deletion is soft by default and the
+stored reason ends in ` (deactivated)` instead.

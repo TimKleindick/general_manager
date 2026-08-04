@@ -82,8 +82,11 @@ model fields. The write path removes those metadata keys before field
 normalization, validates payload keys, converts manager-valued foreign keys to
 identifiers, and applies the atomic write contract described below. Deletes use
 soft delete when enabled by setting `is_active=False`; otherwise they hard-delete
-inside the configured database transaction. Both delete paths record history
-comments and clear the same read cache. Internally the mutation capability returns
+inside the configured database transaction. Soft deletes store the supplied
+comment with a ` (deactivated)` suffix. Hard deletes store it with a
+` (deleted)` suffix, or store `Deleted` when no comment is supplied; this reason
+is recorded even when the object has no earlier history row. Both delete paths
+clear the same read cache. Internally the mutation capability returns
 `{"id": pk}` to the manager layer. The public manager API turns that result into
 the manager behavior described here: `create()` returns a manager instance,
 `update()` refreshes and returns the same manager instance, and `delete()`
@@ -143,7 +146,7 @@ used as filter constraints.
 
 ### Soft deletes
 
-New database-backed managers perform hard deletes by default. Add `use_soft_delete = True` to the interface's `Meta` class to keep the historical `is_active` flag and route `delete()` calls through a soft delete. When enabled GeneralManager automatically injects filtered managers (`objects` returns active rows, `all_objects` includes inactive ones), honours explicit `filter(is_active=…)` lookups, and preserves the existing history comments (`"… (deactivated)"`). Pass `include_inactive=True` to `filter()`/`exclude()` when you need the full dataset without touching the model's managers directly.
+New database-backed managers perform hard deletes by default. Add `use_soft_delete = True` to the interface's `Meta` class to keep the historical `is_active` flag and route `delete()` calls through a soft delete. When enabled GeneralManager automatically injects filtered managers (`objects` returns active rows, `all_objects` includes inactive ones), honours explicit `filter(is_active=…)` lookups, and preserves the existing history comments (`"… (deactivated)"`). Hard-delete history uses the corresponding `"… (deleted)"` reason even when the deleted object has no prior history row. Pass `include_inactive=True` to `filter()`/`exclude()` when you need the full dataset without touching the model's managers directly.
 
 ## Many-to-many relationships
 

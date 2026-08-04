@@ -734,12 +734,16 @@ and returns the same manager instance from `manager.update(...)`.
 ignores positional arguments. It accepts only the reserved metadata keys
 `creator_id` and `history_comment`; other keyword arguments are currently
 ignored by this capability. With soft delete enabled it requires activation
-support, sets `is_active=False`, saves with a deactivation history comment,
+support, sets `is_active=False`, saves with `<comment> (deactivated)` (or
+`Deactivated` when omitted) as the history comment,
 clears the read cache, and returns `{"id": pk}`. Without soft delete it sets
-history actor metadata, applies a deletion change reason, hard-deletes in an
-atomic transaction using the configured database alias, clears the read cache,
-and returns `{"id": pk}`. The GeneralManager layer consumes that result and
-invalidates the public manager instance for later field reads. Missing
+history actor metadata, stores the supplied reason as `<comment> (deleted)` (or
+`Deleted` when omitted) before the model delete, and hard-deletes in an atomic
+transaction using the configured database alias. The reason is therefore
+present on the delete history row even when no earlier history row exists. The
+capability then clears the read cache and returns `{"id": pk}`. The
+GeneralManager layer consumes that result and invalidates the public manager
+instance for later field reads. Missing
 activation support raises `MissingActivationSupportError`; queryset `.get()`,
 validation, transaction, delete, many-to-many, history, cache invalidation, and
 observability errors propagate unchanged.
