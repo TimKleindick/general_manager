@@ -119,7 +119,7 @@ compatibility promise.
 ## Auditing and validation
 
 - `create` and `update` assign `changed_by_id` when the model exposes that column and record `history_comment` values using `django-simple-history`.
-- `delete` toggles `is_active` (when the column exists) and appends `" (deactivated)"` to the provided history comment; if your legacy model lacks that field the interface performs a hard delete and records `"<comment> (deleted)"` (or `"Deleted"` when omitted), even when no earlier history row exists. Use `filter(include_inactive=True)` when you need to surface soft-deleted rows explicitly.
+- `delete` toggles `is_active` (when the column exists) and appends `" (deactivated)"` to the provided history comment (or uses `"Deactivated"` when omitted); if your legacy model lacks that field the interface performs a hard delete and records `"<comment> (deleted)"` (or `"Deleted"` when omitted), even when no earlier history row exists. Use `filter(include_inactive=True)` when you need to surface soft-deleted rows explicitly.
 - Define `Meta.rules` on the interface to add GeneralManager validation
   alongside any rules already declared on the model. The interface appends the
   interface rules after existing model rules and replaces `full_clean()` so the

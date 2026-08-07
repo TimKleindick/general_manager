@@ -28,8 +28,8 @@ returns the same manager instance. `manager.delete(creator_id=None,
 history_comment=None, ignore_permission=False)` checks delete permission unless
 skipped, delegates to the interface, invalidates the manager for later field
 reads, and returns `None`. ORM hard deletes record the supplied history comment
-with a ` (deleted)` suffix, or `Deleted` when omitted, even when no earlier
-history row exists; soft deletes append ` (deactivated)` to a supplied comment
+with a `(deleted)` suffix, or `Deleted` when omitted, even when no earlier
+history row exists; soft deletes append `(deactivated)` to a supplied comment
 and otherwise use `Deactivated`.
 
 For writable ORM interfaces as of GeneralManager 0.63.1, ordinary

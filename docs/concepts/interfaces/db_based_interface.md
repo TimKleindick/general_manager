@@ -83,8 +83,9 @@ normalization, validates payload keys, converts manager-valued foreign keys to
 identifiers, and applies the atomic write contract described below. Deletes use
 soft delete when enabled by setting `is_active=False`; otherwise they hard-delete
 inside the configured database transaction. Soft deletes store the supplied
-comment with a ` (deactivated)` suffix. Hard deletes store it with a
-` (deleted)` suffix, or store `Deleted` when no comment is supplied; this reason
+comment with a `(deactivated)` suffix, or store `Deactivated` when no comment is
+supplied. Hard deletes store it with a `(deleted)` suffix, or store `Deleted`
+when no comment is supplied; this reason
 is recorded even when the object has no earlier history row. Both delete paths
 clear the same read cache. Internally the mutation capability returns
 `{"id": pk}` to the manager layer. The public manager API turns that result into
