@@ -167,4 +167,4 @@ assert delete_history.history_change_reason == "manual cleanup (deleted)"
 
 This `LegacyContract` has no `is_active` field, so the example hard-deletes the
 row. If the wrapped model has `is_active`, deletion is soft by default and the
-stored reason ends in ` (deactivated)` instead.
+stored reason ends in `(deactivated)` instead.

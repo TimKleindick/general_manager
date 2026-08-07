@@ -105,8 +105,9 @@ atomic upload and post-commit finalization contract.
 
 Hard deletes also create a history row inside the configured database
 transaction. Pass `history_comment` to retain the reason after the live row is
-gone; GeneralManager stores it with a ` (deleted)` suffix, including when the
-object had no earlier history row.
+gone; GeneralManager stores it with a `(deleted)` suffix, including when the
+object had no earlier history row. When `history_comment` is omitted, it stores
+`Deleted` instead.
 
 ```python
 customer_id = customer.identification["id"]
@@ -126,7 +127,7 @@ assert history_record.history_change_reason == "manual cleanup (deleted)"
 
 When `is_active` is present and soft delete is enabled, the row remains
 available through `include_inactive=True` and the reason ends in
-` (deactivated)` instead.
+`(deactivated)` instead.
 
 ## 5. Handle caller-owned rollbacks
 
