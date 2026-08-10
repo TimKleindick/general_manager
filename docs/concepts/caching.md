@@ -36,6 +36,36 @@ warm-up cache keys collected by signal handlers are drained and enqueued only
 after that outermost barrier is closed, so warm-up work never starts while a
 data change is still active.
 
+## ORM transaction lifecycle consumers
+
+For ORM-backed mutations, GeneralManager also provides an outermost,
+database-alias-scoped lifecycle envelope around the existing data-change
+signals. `data_change_transaction_started` runs after GeneralManager enters its
+own `atomic()` block or savepoint and before `pre_data_change`.
+`data_change_transaction_finishing` runs after successful post-change receivers
+but before that block or savepoint exits. `data_change_transaction_finished`
+runs after the exit with `outcome="committed"` or `outcome="rolled_back"`.
+The three lifecycle signals share a mutable `transaction_context` that exposes
+the alias, whether the caller already owned an atomic block, a deduplicated set
+of changed class names, consumer metadata, and accumulated phase timings.
+
+The lifecycle is deliberately not an outer caller-transaction commit signal.
+If `transaction_context.caller_in_atomic_block` is true, a `"committed"`
+finished outcome means only the GeneralManager savepoint completed. Consumers
+that need work to run after the caller's durable commit must register it with
+`transaction.on_commit()` from the started receiver. If that outer transaction
+rolls back, Django does not call the callback. Any consumer that holds a lease
+or other external coordination resource must therefore use a bounded lease and
+expiry-based cleanup for the rollback path.
+
+Use `register_data_change_class(sender.__name__, database_alias)` from a
+`post_data_change` receiver when a consumer needs the set of classes changed in
+one framework-owned envelope. The helper deduplicates names and returns `True`
+only for the active framework-owned alias; it returns `False` for caller-owned
+transactions, different aliases, or no live envelope. The API reference gives
+the exact signal payloads, consumer wiring, and phase-timing meanings:
+[ORM data-change transaction lifecycle](../api/cache.md#orm-data-change-transaction-lifecycle).
+
 ## Bucket Dependency Semantics
 
 For ORM-backed buckets, dependency tracking happens when the bucket is actually evaluated, not when the bucket object is first constructed.
