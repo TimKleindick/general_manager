@@ -1,12 +1,18 @@
 """Tests for context-local ORM data-change transaction ownership."""
 
+from contextlib import AbstractContextManager
 from contextvars import copy_context
+from dataclasses import FrozenInstanceError
 import inspect
+
+import pytest
 
 from general_manager.cache import data_change_context
 
 
-def _own(database_alias: str, *, caller_in_atomic_block: bool):
+def _own(
+    database_alias: str, *, caller_in_atomic_block: bool
+) -> AbstractContextManager[data_change_context.DataChangeTransactionScope]:
     return data_change_context.own_data_change_transaction(
         database_alias,
         caller_in_atomic_block=caller_in_atomic_block,
@@ -34,6 +40,25 @@ def test_caller_owned_transaction_is_exposed() -> None:
     """The public context distinguishes caller-owned atomic transactions."""
     with _own("default", caller_in_atomic_block=True) as current:
         assert current.transaction.caller_in_atomic_block is True
+
+
+def test_transaction_identity_is_immutable_while_state_is_mutable() -> None:
+    """Identity cannot change without preventing transaction-local state updates."""
+    with _own("default", caller_in_atomic_block=False) as current:
+        transaction = current.transaction
+
+        with pytest.raises(FrozenInstanceError):
+            transaction.database_alias = "secondary"  # type: ignore[misc]
+        with pytest.raises(FrozenInstanceError):
+            transaction.caller_in_atomic_block = True  # type: ignore[misc]
+
+        transaction.changed_classes.add("Project")
+        transaction.metadata["source"] = "test"
+        transaction.phase_seconds["database"] = 0.1
+
+        assert transaction.changed_classes == {"Project"}
+        assert transaction.metadata == {"source": "test"}
+        assert transaction.phase_seconds == {"database": 0.1}
 
 
 def test_context_ownership_does_not_inspect_django_atomic_internals() -> None:
