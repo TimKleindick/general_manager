@@ -8,9 +8,11 @@ import time
 import uuid
 from contextvars import ContextVar
 from datetime import date, datetime
+from time import perf_counter
 from typing import TYPE_CHECKING, Callable, Iterable, Literal, Tuple, Type, cast
 
 from django.core.cache import cache
+from django.db import DEFAULT_DB_ALIAS
 from django.dispatch import receiver
 
 from general_manager.cache.dependency_matching import (
@@ -34,6 +36,7 @@ from general_manager.cache.dependency_shards import (
     reverse_memberships,
     tracked_lookup_names,
 )
+from general_manager.cache.data_change_context import record_data_change_phase
 from general_manager.cache.signals import post_data_change, pre_data_change
 from general_manager.logging import get_logger
 
@@ -1384,6 +1387,7 @@ def generic_cache_invalidation(
     sender: type[GeneralManager],
     instance: GeneralManager,
     old_relevant_values: dict[str, object],
+    database_alias: str = DEFAULT_DB_ALIAS,
     **kwargs: object,
 ) -> None:
     """
@@ -1396,26 +1400,32 @@ def generic_cache_invalidation(
         instance (GeneralManager): The manager instance that was changed.
         old_relevant_values (dict[str, object]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
     """
-    manager_name = sender.__name__
-    invalidated_cache_keys: set[str] = set()
-    lock_token = acquire_lock_with_retry("generic_cache_invalidation")
+    started = perf_counter()
     try:
-        if legacy_dependency_index_exists():
-            idx = get_full_index()
-            invalidated_cache_keys = _generic_cache_invalidation_locked(
-                idx,
-                manager_name,
-                instance,
-                old_relevant_values,
-            )
-            set_full_index(idx)
-        else:
-            invalidated_cache_keys = _generic_cache_invalidation_from_shards(
-                manager_name,
-                instance,
-                old_relevant_values,
-            )
+        manager_name = sender.__name__
+        invalidated_cache_keys: set[str] = set()
+        lock_token = acquire_lock_with_retry("generic_cache_invalidation")
+        try:
+            if legacy_dependency_index_exists():
+                idx = get_full_index()
+                invalidated_cache_keys = _generic_cache_invalidation_locked(
+                    idx,
+                    manager_name,
+                    instance,
+                    old_relevant_values,
+                )
+                set_full_index(idx)
+            else:
+                invalidated_cache_keys = _generic_cache_invalidation_from_shards(
+                    manager_name,
+                    instance,
+                    old_relevant_values,
+                )
+        finally:
+            release_lock(lock_token)
+        if invalidated_cache_keys:
+            record_invalidated_cache_keys_for_graphql_rewarm(invalidated_cache_keys)
     finally:
-        release_lock(lock_token)
-    if invalidated_cache_keys:
-        record_invalidated_cache_keys_for_graphql_rewarm(invalidated_cache_keys)
+        record_data_change_phase(
+            "invalidation", perf_counter() - started, database_alias
+        )

@@ -1518,6 +1518,26 @@ class GraphQLTests(TestCase):
         self.assertIn("bulk_data_change_notifications", type_api.__all__)
         self.assertNotIn("bulk_data_change_notifications", general_manager.__all__)
 
+    def test_data_change_receiver_records_bounded_subscription_latency(self):
+        with (
+            patch(
+                "general_manager.api.graphql.perf_counter",
+                side_effect=(30.0, 30.75),
+            ),
+            patch(
+                "general_manager.api.graphql.record_data_change_phase",
+            ) as record_phase,
+        ):
+            result = GraphQL._handle_data_change(
+                sender=GeneralManager,
+                instance=None,
+                action="update",
+                database_alias="analytics",
+            )
+
+        self.assertIsNone(result)
+        record_phase.assert_called_once_with("subscription", 0.75, "analytics")
+
     def setUp(self):
         self.general_manager_class = MagicMock(spec=GeneralManagerMeta)
         self.general_manager_class.__name__ = "TestManager"

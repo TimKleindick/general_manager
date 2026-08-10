@@ -625,6 +625,33 @@ class SearchIndexerSignalStateTests(TestCase):
         state = SearchIndexState.objects.get(index_name="global")
         assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_INITIALIZATION
 
+    def test_post_change_records_bounded_search_latency(self) -> None:
+        """Attribute only synchronous receiver work to the search phase."""
+        from general_manager.search.invalidation import _handle_search_post_change
+
+        with (
+            patch(
+                "general_manager.search.invalidation.perf_counter",
+                side_effect=(20.0, 20.5),
+            ),
+            patch(
+                "general_manager.search.invalidation.record_data_change_phase",
+            ) as record_phase,
+            patch(
+                "general_manager.search.invalidation.schedule_search_invalidation_work"
+            ),
+        ):
+            result = _handle_search_post_change(
+                sender=Project,
+                instance=Project(id=1),
+                action="update",
+                change_context={},
+                database_alias="analytics",
+            )
+
+        assert result is None
+        record_phase.assert_called_once_with("search", 0.5, "analytics")
+
     def test_pre_delete_marks_search_state_dirty(self) -> None:
         """Pre-delete only captures immutable targets; post-delete marks state."""
         from general_manager.search.invalidation import (
