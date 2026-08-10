@@ -28,6 +28,7 @@ from general_manager.api.remote_invalidation import (
     ensure_remote_invalidation_route,
 )
 from general_manager.api.remote_api import get_remote_api_config
+from general_manager.cache import data_change_context
 from general_manager.manager.general_manager import GeneralManager
 
 from tests import testing_asgi
@@ -262,6 +263,70 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
             payload["identification"],
             {"id": "12345678-1234-5678-1234-567812345678"},
         )
+
+    def test_emit_records_supplied_alias_duration_on_early_return(self) -> None:
+        """Early exits attribute subscription timing to the supplied database alias."""
+
+        class Project(GeneralManager):
+            identification: ClassVar[dict[str, object]] = {"id": 1}
+            Interface = BaseTestInterface
+
+        with (
+            data_change_context.own_data_change_transaction(
+                "default", caller_in_atomic_block=False
+            ) as default,
+            data_change_context.own_data_change_transaction(
+                "replica", caller_in_atomic_block=False
+            ) as replica,
+            patch(
+                "general_manager.api.remote_invalidation.perf_counter",
+                side_effect=(10.0, 10.25),
+            ),
+        ):
+            emit_remote_invalidation(Project, action="update", database_alias="replica")
+
+        self.assertEqual(default.transaction.phase_seconds, {})
+        self.assertEqual(replica.transaction.phase_seconds, {"subscription": 0.25})
+
+    def test_emit_propagates_scheduling_exception_after_recording_duration(
+        self,
+    ) -> None:
+        """A scheduling error retains its identity while timing is still recorded."""
+
+        class Project(GeneralManager):
+            identification: ClassVar[dict[str, object]] = {"id": 1}
+            Interface = BaseTestInterface
+
+            class RemoteAPI:
+                enabled = True
+                base_path = "/remote"
+                resource_name = "projects"
+                allow_update = True
+                websocket_invalidation = True
+
+        error = RuntimeError("commit scheduling failed")
+        with (
+            data_change_context.own_data_change_transaction(
+                "analytics", caller_in_atomic_block=False
+            ) as current,
+            patch(
+                "general_manager.api.remote_invalidation.transaction.on_commit",
+                side_effect=error,
+            ),
+            patch(
+                "general_manager.api.remote_invalidation.perf_counter",
+                side_effect=(20.0, 20.5),
+            ),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                emit_remote_invalidation(
+                    Project,
+                    action="update",
+                    database_alias="analytics",
+                )
+
+        self.assertIs(raised.exception, error)
+        self.assertEqual(current.transaction.phase_seconds, {"subscription": 0.5})
 
     def test_emit_remote_invalidation_defers_publish_until_commit(self) -> None:
         class Project:
