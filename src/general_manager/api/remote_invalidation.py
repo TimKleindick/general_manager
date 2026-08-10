@@ -8,6 +8,7 @@ from datetime import date, datetime
 import json
 from importlib import import_module
 import re
+from time import perf_counter
 from uuid import UUID, uuid4
 from collections.abc import Callable, Coroutine, Mapping, MutableSequence, Sequence
 from types import ModuleType
@@ -25,6 +26,7 @@ from general_manager.api.remote_api import (
     get_remote_api_config,
 )
 from general_manager.api.notification_batching import _queue_notification
+from general_manager.cache.data_change_context import record_data_change_phase
 from general_manager.cache.signals import post_data_change
 from general_manager.logging import get_logger
 
@@ -200,24 +202,30 @@ def emit_remote_invalidation(
     originating database alias and delegates channel lookup, batching, payload
     creation, and delivery to `_publish_remote_invalidation` after commit.
     """
-    config = get_remote_api_config(sender)
-    if config is None or not config.websocket_invalidation:
-        return
+    started = perf_counter()
+    try:
+        config = get_remote_api_config(sender)
+        if config is None or not config.websocket_invalidation:
+            return
 
-    event_identification = identification
-    if event_identification is None and instance is not None:
-        event_identification = dict(instance.identification)
-    captured_identification = (
-        deepcopy(event_identification) if event_identification is not None else None
-    )
-    transaction.on_commit(
-        lambda: _publish_remote_invalidation(
-            config,
-            action,
-            captured_identification,
-        ),
-        using=database_alias,
-    )
+        event_identification = identification
+        if event_identification is None and instance is not None:
+            event_identification = dict(instance.identification)
+        captured_identification = (
+            deepcopy(event_identification) if event_identification is not None else None
+        )
+        transaction.on_commit(
+            lambda: _publish_remote_invalidation(
+                config,
+                action,
+                captured_identification,
+            ),
+            using=database_alias,
+        )
+    finally:
+        record_data_change_phase(
+            "subscription", perf_counter() - started, database_alias
+        )
 
 
 post_data_change.connect(emit_remote_invalidation, weak=False)

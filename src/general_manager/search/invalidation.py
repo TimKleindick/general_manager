@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from inspect import getattr_static
 from itertools import islice
+from time import perf_counter
 from types import MappingProxyType
 from typing import Literal, cast
 
@@ -14,6 +15,7 @@ from django.db import DEFAULT_DB_ALIAS, transaction
 from django.utils.module_loading import import_string
 
 from general_manager.cache.signals import post_data_change, pre_data_change
+from general_manager.cache.data_change_context import record_data_change_phase
 from general_manager.conf import get_setting
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
@@ -1168,53 +1170,57 @@ def _handle_search_post_change(
     **_: object,
 ) -> None:
     """Finalize direct and related work and register one commit-bound callback."""
-    if action not in {"create", "update", "delete"} or change_context is None:
-        return
-    direct_action = cast(_DirectAction, action)
-    manager_class = _manager_class(sender, instance)
-    if manager_class is None:
-        return
-    direct_plan, delete_targets = _direct_work(
-        manager_class,
-        instance,
-        direct_action,
-        change_context,
-        database_alias,
-    )
-    change_context.pop(_DIRECT_SEARCH_CHANGE_CONTEXT, None)
-    prior = change_context.pop(_RELATED_SEARCH_CHANGE_CONTEXT, None)
-    prior_capture = prior if isinstance(prior, SearchInvalidationCapture) else None
+    started = perf_counter()
     try:
-        if direct_action == "delete":
-            related_capture = prior_capture or SearchInvalidationCapture()
-        elif instance is None:
-            related_capture = SearchInvalidationCapture()
-        else:
-            related_capture = resolve_search_invalidation_phase(
-                SearchChange(
-                    action=direct_action,
-                    phase="after",
-                    instance=instance,
-                    database_alias=database_alias,
-                ),
-                previous=prior_capture if direct_action == "update" else None,
-            )
-        related_plan = finalize_search_invalidation_capture(related_capture)
-    except Exception as exc:  # noqa: BLE001 - registry/config hooks are open-ended
-        logger.warning(
-            "related search invalidation finalization failed",
-            context={"manager": manager_class.__name__, "phase": "after"},
-            exc_info=exc,
+        if action not in {"create", "update", "delete"} or change_context is None:
+            return
+        direct_action = cast(_DirectAction, action)
+        manager_class = _manager_class(sender, instance)
+        if manager_class is None:
+            return
+        direct_plan, delete_targets = _direct_work(
+            manager_class,
+            instance,
+            direct_action,
+            change_context,
+            database_alias,
         )
-        related_plan = SearchInvalidationPlan()
-    work = SearchScheduledWork(
-        upserts=_combine_plans(direct_plan, related_plan),
-        deletes=delete_targets,
-    )
-    schedule_search_invalidation_work(
-        work,
-        source_database_alias=database_alias,
-    )
+        change_context.pop(_DIRECT_SEARCH_CHANGE_CONTEXT, None)
+        prior = change_context.pop(_RELATED_SEARCH_CHANGE_CONTEXT, None)
+        prior_capture = prior if isinstance(prior, SearchInvalidationCapture) else None
+        try:
+            if direct_action == "delete":
+                related_capture = prior_capture or SearchInvalidationCapture()
+            elif instance is None:
+                related_capture = SearchInvalidationCapture()
+            else:
+                related_capture = resolve_search_invalidation_phase(
+                    SearchChange(
+                        action=direct_action,
+                        phase="after",
+                        instance=instance,
+                        database_alias=database_alias,
+                    ),
+                    previous=prior_capture if direct_action == "update" else None,
+                )
+            related_plan = finalize_search_invalidation_capture(related_capture)
+        except Exception as exc:  # noqa: BLE001 - registry/config hooks are open-ended
+            logger.warning(
+                "related search invalidation finalization failed",
+                context={"manager": manager_class.__name__, "phase": "after"},
+                exc_info=exc,
+            )
+            related_plan = SearchInvalidationPlan()
+        work = SearchScheduledWork(
+            upserts=_combine_plans(direct_plan, related_plan),
+            deletes=delete_targets,
+        )
+        schedule_search_invalidation_work(
+            work,
+            source_database_alias=database_alias,
+        )
+    finally:
+        record_data_change_phase("search", perf_counter() - started, database_alias)
 
 
 def configure_search_invalidation() -> None:

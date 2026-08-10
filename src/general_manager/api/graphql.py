@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
 import re
+from time import perf_counter
 from types import UnionType
 from typing import (
     AsyncIterator,
@@ -37,6 +38,7 @@ from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.cache.dependency_index import (
     Dependency,
 )
+from general_manager.cache.data_change_context import record_data_change_phase
 from general_manager.cache.signals import post_data_change
 from general_manager.conf import get_setting
 from general_manager.interface.base_interface import InterfaceBase
@@ -1784,38 +1786,44 @@ class GraphQL:
             instance (GeneralManager | None): The GeneralManager instance that changed.
             action (str): A string describing the change action (e.g., "created", "updated", "deleted").
         """
-        event_instance = instance if instance is not None else previous_instance
-        if event_instance is None or not isinstance(event_instance, GeneralManager):
-            return
+        started = perf_counter()
+        try:
+            event_instance = instance if instance is not None else previous_instance
+            if event_instance is None or not isinstance(event_instance, GeneralManager):
+                return
 
-        if isinstance(sender, type) and issubclass(sender, GeneralManager):
-            manager_class: type[GeneralManager] = sender
-        else:
-            manager_class = event_instance.__class__
+            if isinstance(sender, type) and issubclass(sender, GeneralManager):
+                manager_class: type[GeneralManager] = sender
+            else:
+                manager_class = event_instance.__class__
 
-        if manager_class.__name__ not in cls.manager_registry:
-            logger.debug(
-                "skipping subscription event for unregistered manager",
-                context={
-                    "manager": manager_class.__name__,
-                    "action": action,
-                },
+            if manager_class.__name__ not in cls.manager_registry:
+                logger.debug(
+                    "skipping subscription event for unregistered manager",
+                    context={
+                        "manager": manager_class.__name__,
+                        "action": action,
+                    },
+                )
+                return
+
+            event_identification = deepcopy(
+                identification
+                if identification is not None
+                else event_instance.identification
             )
-            return
-
-        event_identification = deepcopy(
-            identification
-            if identification is not None
-            else event_instance.identification
-        )
-        transaction.on_commit(
-            lambda: cls._publish_data_change(
-                manager_class,
-                action,
-                event_identification,
-            ),
-            using=database_alias,
-        )
+            transaction.on_commit(
+                lambda: cls._publish_data_change(
+                    manager_class,
+                    action,
+                    event_identification,
+                ),
+                using=database_alias,
+            )
+        finally:
+            record_data_change_phase(
+                "subscription", perf_counter() - started, database_alias
+            )
 
     @classmethod
     def _publish_data_change(

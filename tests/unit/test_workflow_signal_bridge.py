@@ -3,13 +3,65 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from general_manager.workflow.event_registry import InMemoryEventRegistry
 from general_manager.workflow.signal_bridge import (
+    _handle_post_data_change,
     connect_workflow_signal_bridge,
     configure_workflow_signal_bridge_from_settings,
     disconnect_workflow_signal_bridge,
     workflow_signal_bridge_enabled,
 )
+
+
+def test_post_change_records_bounded_workflow_latency() -> None:
+    with (
+        patch(
+            "general_manager.workflow.signal_bridge.perf_counter",
+            side_effect=(40.0, 41.25),
+        ),
+        patch(
+            "general_manager.workflow.signal_bridge.record_data_change_phase",
+        ) as record_phase,
+    ):
+        result = _handle_post_data_change(
+            sender=object(),
+            instance=None,
+            action="update",
+            database_alias="analytics",
+        )
+
+    assert result is None
+    record_phase.assert_called_once_with("workflow", 1.25, "analytics")
+
+
+def test_post_change_records_workflow_latency_without_suppressing_exceptions() -> None:
+    failure = RuntimeError("event conversion failed")
+
+    with (
+        patch(
+            "general_manager.workflow.signal_bridge.perf_counter",
+            side_effect=(50.0, 50.5),
+        ),
+        patch(
+            "general_manager.workflow.signal_bridge.record_data_change_phase",
+        ) as record_phase,
+        patch(
+            "general_manager.workflow.signal_bridge._manager_change_to_event",
+            side_effect=failure,
+        ),
+        pytest.raises(RuntimeError) as raised,
+    ):
+        _handle_post_data_change(
+            sender=object(),
+            instance=object(),
+            action="update",
+            database_alias="analytics",
+        )
+
+    assert raised.value is failure
+    record_phase.assert_called_once_with("workflow", 0.5, "analytics")
 
 
 def test_workflow_signal_bridge_enabled_prefers_nested_setting() -> None:

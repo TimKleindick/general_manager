@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+from time import perf_counter
 from typing import TypedDict, cast
 
+from django.db import DEFAULT_DB_ALIAS
+
+from general_manager.cache.data_change_context import record_data_change_phase
 from general_manager.cache.signals import post_data_change
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.workflow.event_registry import (
@@ -133,19 +137,24 @@ def _handle_post_data_change(
     uses `previous_instance` from the signal kwargs. Exceptions raised by
     `publish()` propagate to the signal caller.
     """
-    del sender
-    event_instance = (
-        instance if instance is not None else kwargs.get("previous_instance")
-    )
-    event = _manager_change_to_event(
-        instance=event_instance,
-        action=action,
-        old_relevant_values=old_relevant_values,
-        kwargs=kwargs,
-    )
-    if event is None:
-        return
-    get_event_registry().publish(event)
+    database_alias = cast(str, kwargs.get("database_alias", DEFAULT_DB_ALIAS))
+    started = perf_counter()
+    try:
+        del sender
+        event_instance = (
+            instance if instance is not None else kwargs.get("previous_instance")
+        )
+        event = _manager_change_to_event(
+            instance=event_instance,
+            action=action,
+            old_relevant_values=old_relevant_values,
+            kwargs=kwargs,
+        )
+        if event is None:
+            return
+        get_event_registry().publish(event)
+    finally:
+        record_data_change_phase("workflow", perf_counter() - started, database_alias)
 
 
 def connect_workflow_signal_bridge(*, registry: EventRegistry | None = None) -> None:
