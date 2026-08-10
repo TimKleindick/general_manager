@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
-@dataclass
+@dataclass(frozen=True)
 class DataChangeTransactionContext:
     """Mutable state owned by one framework-managed data-change transaction."""
 
