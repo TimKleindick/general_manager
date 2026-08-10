@@ -27,6 +27,20 @@ def test_nested_same_alias_reuses_outer_transaction_context() -> None:
             assert inner.is_outermost is False
 
 
+def test_outer_scope_is_current_only_while_it_is_live() -> None:
+    """An outer scope exposes its live context and marks itself as outermost."""
+    assert data_change_context.current_data_change_transaction("default") is None
+
+    with _own("default", caller_in_atomic_block=False) as outer:
+        assert outer.is_outermost is True
+        assert (
+            data_change_context.current_data_change_transaction("default")
+            is outer.transaction
+        )
+
+    assert data_change_context.current_data_change_transaction("default") is None
+
+
 def test_changed_classes_are_deduplicated_and_alias_scoped() -> None:
     """Only a framework-owned transaction records its own alias's classes."""
     with _own("default", caller_in_atomic_block=False) as current:
@@ -45,6 +59,13 @@ def test_changed_classes_register_against_each_matching_live_alias() -> None:
             assert not data_change_context.register_data_change_class("Task", "missing")
             assert default.transaction.changed_classes == {"Project"}
             assert secondary.transaction.changed_classes == {"Part"}
+
+
+def test_caller_owned_transaction_rejects_class_registration() -> None:
+    """A caller-owned atomic transaction does not record changed classes."""
+    with _own("default", caller_in_atomic_block=True) as current:
+        assert not data_change_context.register_data_change_class("Project", "default")
+        assert current.transaction.changed_classes == set()
 
 
 def test_caller_owned_transaction_is_exposed() -> None:
@@ -70,6 +91,16 @@ def test_transaction_identity_is_immutable_while_state_is_mutable() -> None:
         assert transaction.changed_classes == {"Project"}
         assert transaction.metadata == {"source": "test"}
         assert transaction.phase_seconds == {"database": 0.1}
+
+
+def test_phase_durations_accumulate_and_clamp_negative_values() -> None:
+    """Repeated phase measurements add together without reducing elapsed time."""
+    with _own("default", caller_in_atomic_block=False) as current:
+        data_change_context.record_data_change_phase("database", 0.2, "default")
+        data_change_context.record_data_change_phase("database", 0.3, "default")
+        data_change_context.record_data_change_phase("database", -1.0, "default")
+
+        assert current.transaction.phase_seconds == {"database": 0.5}
 
 
 def test_context_ownership_does_not_inspect_django_atomic_internals() -> None:
