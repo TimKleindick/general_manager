@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from copy import deepcopy
 from functools import wraps
+from time import perf_counter
 from typing import Callable, ParamSpec, TypeVar, cast, overload
 
 from django.db import DEFAULT_DB_ALIAS, connections, transaction
@@ -12,8 +13,10 @@ from django.dispatch import Signal
 from django.utils.connection import ConnectionDoesNotExist
 
 from general_manager.cache.data_change_context import (
+    DataChangeTransactionScope,
     authorize_data_change_operation,
     own_data_change_transaction,
+    record_data_change_phase,
 )
 from general_manager.as_of import reject_historical_mutation
 from general_manager.logging import get_logger
@@ -21,6 +24,12 @@ from general_manager.logging import get_logger
 post_data_change = Signal()
 
 pre_data_change = Signal()
+
+data_change_transaction_started = Signal()
+
+data_change_transaction_finishing = Signal()
+
+data_change_transaction_finished = Signal()
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -63,6 +72,12 @@ def data_change(
     during signal handling are drained only after the outermost active
     data-change barrier has closed; failed mutations drain pending keys but do
     not enqueue rewarm work.
+
+    ORM-backed outermost mutations also emit transaction lifecycle signals.
+    A ``committed`` finished outcome means this GeneralManager atomic block or
+    savepoint completed. When ``caller_in_atomic_block`` is true, consumers
+    requiring the caller's durable commit must register work with
+    ``transaction.on_commit()``.
 
     Parameters:
         func: Function that performs a data mutation. Methods named `create`
@@ -134,6 +149,8 @@ def data_change(
 
         primary_exc: BaseException | None = None
         completed = False
+        transaction_scope: DataChangeTransactionScope | None = None
+        transaction_outcome = "rolled_back"
         begin_dependency_data_change()
         context = current_calculation_run_context()
         if context is not None:
@@ -157,7 +174,30 @@ def data_change(
                 if is_orm_backed
                 else nullcontext()
             )
-            with transaction_context, ownership_context:
+            with transaction_context, ownership_context as entered_scope:
+                if is_orm_backed:
+                    assert isinstance(entered_scope, DataChangeTransactionScope)
+                    transaction_scope = entered_scope
+                lifecycle_action = (
+                    action if action in {"create", "update", "delete"} else "other"
+                )
+                lifecycle_kwargs = (
+                    {
+                        "transaction_context": transaction_scope.transaction,
+                        "database_alias": database_alias,
+                        "caller_in_atomic_block": (
+                            transaction_scope.transaction.caller_in_atomic_block
+                        ),
+                        "action": lifecycle_action,
+                    }
+                    if transaction_scope is not None
+                    else {}
+                )
+                if transaction_scope is not None and transaction_scope.is_outermost:
+                    data_change_transaction_started.send(
+                        sender=sender,
+                        **lifecycle_kwargs,
+                    )
                 pre_data_change.send(
                     sender=sender,
                     instance=instance_before,
@@ -174,11 +214,22 @@ def data_change(
                     else nullcontext()
                 )
                 with operation_context:
-                    if isinstance(func, classmethod):
-                        inner = cast(Callable[P, R], func.__func__)
-                        result = inner(*args, **kwargs)
-                    else:
-                        result = func(*args, **kwargs)
+                    mutation_started = (
+                        perf_counter() if transaction_scope is not None else None
+                    )
+                    try:
+                        if isinstance(func, classmethod):
+                            inner = cast(Callable[P, R], func.__func__)
+                            result = inner(*args, **kwargs)
+                        else:
+                            result = func(*args, **kwargs)
+                    finally:
+                        if mutation_started is not None:
+                            record_data_change_phase(
+                                "database",
+                                perf_counter() - mutation_started,
+                                database_alias,
+                            )
 
                 context = current_calculation_run_context()
                 if context is not None:
@@ -205,6 +256,13 @@ def data_change(
                         delattr(instance_before, "_old_values")
                     except AttributeError:
                         pass
+                if transaction_scope is not None and transaction_scope.is_outermost:
+                    data_change_transaction_finishing.send(
+                        sender=sender,
+                        **lifecycle_kwargs,
+                    )
+            if transaction_scope is not None and transaction_scope.is_outermost:
+                transaction_outcome = "committed"
             completed = True
         except BaseException as error:
             primary_exc = error
@@ -215,15 +273,40 @@ def data_change(
             cache_keys: tuple[str, ...] = ()
             try:
                 try:
+                    if transaction_scope is not None and transaction_scope.is_outermost:
+                        try:
+                            data_change_transaction_finished.send(
+                                sender=sender,
+                                transaction_context=transaction_scope.transaction,
+                                database_alias=database_alias,
+                                caller_in_atomic_block=(
+                                    transaction_scope.transaction.caller_in_atomic_block
+                                ),
+                                action=(
+                                    action
+                                    if action in {"create", "update", "delete"}
+                                    else "other"
+                                ),
+                                outcome=transaction_outcome,
+                            )
+                        except Exception:
+                            if primary_exc is not None:
+                                logger.exception(
+                                    "Data-change transaction finished receiver failed "
+                                    "while handling another exception."
+                                )
+                            else:
+                                raise
+                finally:
                     end_dependency_data_change()
-                except Exception:
-                    if primary_exc is not None:
-                        logger.exception(
-                            "Dependency data-change cleanup failed while handling "
-                            "another exception."
-                        )
-                    else:
-                        raise
+            except Exception:
+                if primary_exc is not None:
+                    logger.exception(
+                        "Dependency data-change cleanup failed while handling "
+                        "another exception."
+                    )
+                else:
+                    raise
             finally:
                 try:
                     if not is_dependency_data_change_active():

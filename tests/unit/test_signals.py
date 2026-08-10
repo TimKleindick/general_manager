@@ -13,7 +13,20 @@ from general_manager.cache.dependency_index import (
     is_dependency_data_change_active,
     record_invalidated_cache_keys_for_graphql_rewarm,
 )
-from general_manager.cache.signals import data_change, pre_data_change, post_data_change
+from general_manager.cache.signals import (
+    data_change,
+    data_change_transaction_finished,
+    data_change_transaction_finishing,
+    data_change_transaction_started,
+    post_data_change,
+    pre_data_change,
+)
+from general_manager.interface.orm_interface import OrmInterfaceBase
+
+_MUTATION_ERROR = "mutation failed"
+_STARTED_ERROR = "started failed"
+_FINISHING_ERROR = "finishing failed"
+_FINISHED_ERROR = "finished failed"
 
 
 @contextmanager
@@ -124,6 +137,45 @@ class EventRecordingDummy:
         return self
 
 
+class OrmEventRecordingDummy:
+    """ORM-backed helper that records decorated mutation bodies."""
+
+    class Interface(OrmInterfaceBase):
+        """Mark this helper as ORM-backed on Django's default alias."""
+
+        database = DEFAULT_DB_ALIAS
+
+    events: ClassVar[list[str]] = []
+
+    @data_change
+    def update(self):
+        """Record the immediate mutation body."""
+        self.events.append("mutation")
+        return self
+
+    @data_change
+    def outer(self):
+        """Invoke a nested ORM-backed mutation on the same alias."""
+        self.inner()
+        return self
+
+    @data_change
+    def inner(self):
+        """Return from a nested ORM-backed mutation."""
+        return self
+
+
+class RaisingOrmDummy:
+    """ORM-backed helper whose decorated mutation raises."""
+
+    Interface = OrmEventRecordingDummy.Interface
+
+    @data_change
+    def update(self):
+        """Raise the business mutation error."""
+        raise ValueError(_MUTATION_ERROR)
+
+
 class ClassMethodWrappedDummy:
     """Test helper for manually wrapping a classmethod object."""
 
@@ -141,18 +193,291 @@ class DataChangeSignalTests(TestCase):
         # Preserve existing receivers so they can be restored after the test run
         self._original_pre_receivers = list(pre_data_change.receivers)
         self._original_post_receivers = list(post_data_change.receivers)
+        self._original_started_receivers = list(
+            data_change_transaction_started.receivers
+        )
+        self._original_finishing_receivers = list(
+            data_change_transaction_finishing.receivers
+        )
+        self._original_finished_receivers = list(
+            data_change_transaction_finished.receivers
+        )
         # Clear any existing receivers before each test
         pre_data_change.receivers.clear()
         post_data_change.receivers.clear()
+        data_change_transaction_started.receivers.clear()
+        data_change_transaction_finishing.receivers.clear()
+        data_change_transaction_finished.receivers.clear()
 
     def tearDown(self):
         """Restore signal receivers after each test."""
         # Clean up receivers after each test
         pre_data_change.receivers.clear()
         post_data_change.receivers.clear()
+        data_change_transaction_started.receivers.clear()
+        data_change_transaction_finishing.receivers.clear()
+        data_change_transaction_finished.receivers.clear()
         # Restore the original receivers to avoid leaking state into other tests
         pre_data_change.receivers[:] = self._original_pre_receivers
         post_data_change.receivers[:] = self._original_post_receivers
+        data_change_transaction_started.receivers[:] = self._original_started_receivers
+        data_change_transaction_finishing.receivers[:] = (
+            self._original_finishing_receivers
+        )
+        data_change_transaction_finished.receivers[:] = (
+            self._original_finished_receivers
+        )
+
+    def test_orm_mutation_emits_lifecycle_around_existing_signals_and_atomic(self):
+        """The outer lifecycle brackets pre/body/post and the atomic exit."""
+        events: list[str] = []
+        atomic_events: list[str] = []
+        started_payload: dict[str, object] = {}
+        finishing_payload: dict[str, object] = {}
+        finished_payload: dict[str, object] = {}
+
+        @contextmanager
+        def recording_atomic(*, using):
+            self.assertEqual(using, DEFAULT_DB_ALIAS)
+            atomic_events.append("entered")
+            try:
+                yield
+            finally:
+                atomic_events.append("exited")
+
+        def record_started(sender, **kwargs):
+            self.assertIs(sender, OrmEventRecordingDummy)
+            self.assertEqual(atomic_events, ["entered"])
+            started_payload.update(kwargs)
+            events.append("started")
+
+        def record_pre(sender, **kwargs):
+            del sender, kwargs
+            events.append("pre")
+
+        def record_post(sender, **kwargs):
+            del sender, kwargs
+            events.append("post")
+
+        def record_finishing(sender, **kwargs):
+            self.assertIs(sender, OrmEventRecordingDummy)
+            self.assertEqual(atomic_events, ["entered"])
+            finishing_payload.update(kwargs)
+            events.append("finishing")
+
+        def record_finished(sender, **kwargs):
+            self.assertIs(sender, OrmEventRecordingDummy)
+            self.assertEqual(atomic_events, ["entered", "exited"])
+            finished_payload.update(kwargs)
+            events.append(f"finished:{kwargs['outcome']}")
+
+        OrmEventRecordingDummy.events = events
+        data_change_transaction_started.connect(record_started, weak=False)
+        pre_data_change.connect(record_pre, weak=False)
+        post_data_change.connect(record_post, weak=False)
+        data_change_transaction_finishing.connect(record_finishing, weak=False)
+        data_change_transaction_finished.connect(record_finished, weak=False)
+
+        with (
+            patch("django.db.transaction.atomic", side_effect=recording_atomic),
+            patch(
+                "general_manager.cache.signals._caller_in_atomic_block",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.signals.perf_counter",
+                side_effect=(10.0, 10.25),
+            ),
+        ):
+            OrmEventRecordingDummy().update()
+
+        self.assertEqual(
+            events,
+            [
+                "started",
+                "pre",
+                "mutation",
+                "post",
+                "finishing",
+                "finished:committed",
+            ],
+        )
+        self.assertEqual(finished_payload["database_alias"], DEFAULT_DB_ALIAS)
+        self.assertIs(finished_payload["caller_in_atomic_block"], True)
+        self.assertEqual(finished_payload["action"], "update")
+        transaction_context = finished_payload["transaction_context"]
+        for payload in (started_payload, finishing_payload):
+            self.assertIs(payload["transaction_context"], transaction_context)
+            self.assertEqual(payload["database_alias"], DEFAULT_DB_ALIAS)
+            self.assertIs(payload["caller_in_atomic_block"], True)
+            self.assertEqual(payload["action"], "update")
+        self.assertEqual(transaction_context.phase_seconds["database"], 0.25)
+
+    def test_nested_orm_mutations_emit_one_outer_lifecycle(self):
+        """Same-alias nesting reuses one lifecycle transaction envelope."""
+        nested_counts = {"started": 0, "finishing": 0, "finished": 0}
+
+        def increment(event):
+            def receiver(sender, **kwargs):
+                del sender, kwargs
+                nested_counts[event] += 1
+
+            return receiver
+
+        data_change_transaction_started.connect(increment("started"), weak=False)
+        data_change_transaction_finishing.connect(increment("finishing"), weak=False)
+        data_change_transaction_finished.connect(increment("finished"), weak=False)
+
+        OrmEventRecordingDummy().outer()
+
+        self.assertEqual(
+            nested_counts,
+            {"started": 1, "finishing": 1, "finished": 1},
+        )
+
+    def test_failed_orm_mutation_emits_rolled_back_outcome(self):
+        """A business exception closes the outer lifecycle as rolled back."""
+        rollback_events: list[str] = []
+
+        def record_finished(sender, outcome, **kwargs):
+            del sender, kwargs
+            rollback_events.append(f"finished:{outcome}")
+
+        data_change_transaction_finished.connect(record_finished, weak=False)
+
+        with self.assertRaisesRegex(ValueError, "mutation failed"):
+            RaisingOrmDummy().update()
+
+        self.assertEqual(rollback_events[-1], "finished:rolled_back")
+
+    def test_lifecycle_action_normalizes_unknown_manager_method(self):
+        """Lifecycle consumers receive the bounded action vocabulary."""
+        actions: list[str] = []
+
+        def record_started(sender, action, **kwargs):
+            del sender, kwargs
+            actions.append(action)
+
+        data_change_transaction_started.connect(record_started, weak=False)
+
+        OrmEventRecordingDummy().outer()
+
+        self.assertEqual(actions, ["other"])
+
+    def test_started_receiver_failure_rolls_back_owned_transaction(self):
+        """A start receiver error exits the ORM transaction by exception."""
+        atomic_events: list[str] = []
+        finished_outcomes: list[str] = []
+
+        @contextmanager
+        def recording_atomic(*, using):
+            del using
+            atomic_events.append("entered")
+            try:
+                yield
+            except BaseException:
+                atomic_events.append("rolled_back")
+                raise
+
+        def raise_started(sender, **kwargs):
+            del sender, kwargs
+            raise RuntimeError(_STARTED_ERROR)
+
+        def record_finished(sender, outcome, **kwargs):
+            del sender, kwargs
+            finished_outcomes.append(outcome)
+
+        data_change_transaction_started.connect(raise_started, weak=False)
+        data_change_transaction_finished.connect(record_finished, weak=False)
+
+        with (
+            patch("django.db.transaction.atomic", side_effect=recording_atomic),
+            self.assertRaisesRegex(RuntimeError, "started failed"),
+        ):
+            OrmEventRecordingDummy().update()
+
+        self.assertEqual(atomic_events, ["entered", "rolled_back"])
+        self.assertEqual(finished_outcomes, ["rolled_back"])
+
+    def test_finishing_receiver_failure_rolls_back_owned_transaction(self):
+        """A finishing receiver error exits the ORM transaction by exception."""
+        atomic_events: list[str] = []
+        finished_outcomes: list[str] = []
+
+        @contextmanager
+        def recording_atomic(*, using):
+            del using
+            atomic_events.append("entered")
+            try:
+                yield
+            except BaseException:
+                atomic_events.append("rolled_back")
+                raise
+
+        def raise_finishing(sender, **kwargs):
+            del sender, kwargs
+            raise RuntimeError(_FINISHING_ERROR)
+
+        def record_finished(sender, outcome, **kwargs):
+            del sender, kwargs
+            finished_outcomes.append(outcome)
+
+        data_change_transaction_finishing.connect(raise_finishing, weak=False)
+        data_change_transaction_finished.connect(record_finished, weak=False)
+
+        with (
+            patch("django.db.transaction.atomic", side_effect=recording_atomic),
+            self.assertRaisesRegex(RuntimeError, "finishing failed"),
+        ):
+            OrmEventRecordingDummy().update()
+
+        self.assertEqual(atomic_events, ["entered", "rolled_back"])
+        self.assertEqual(finished_outcomes, ["rolled_back"])
+
+    def test_finished_receiver_failure_propagates_after_successful_commit(self):
+        """A post-commit lifecycle receiver error is not silently hidden."""
+        atomic_events: list[str] = []
+
+        @contextmanager
+        def recording_atomic(*, using):
+            del using
+            atomic_events.append("entered")
+            yield
+            atomic_events.append("committed")
+
+        def raise_finished(sender, **kwargs):
+            del sender, kwargs
+            raise RuntimeError(_FINISHED_ERROR)
+
+        data_change_transaction_finished.connect(raise_finished, weak=False)
+
+        with (
+            patch("django.db.transaction.atomic", side_effect=recording_atomic),
+            self.assertRaisesRegex(RuntimeError, "finished failed"),
+        ):
+            OrmEventRecordingDummy().update()
+
+        self.assertEqual(atomic_events, ["entered", "committed"])
+
+    def test_finished_receiver_failure_does_not_mask_mutation_exception(self):
+        """The business exception wins over a finished cleanup failure."""
+
+        def raise_finished(sender, **kwargs):
+            del sender, kwargs
+            raise RuntimeError(_FINISHED_ERROR)
+
+        data_change_transaction_finished.connect(raise_finished, weak=False)
+
+        with (
+            patch("general_manager.cache.signals.logger.exception") as log,
+            self.assertRaisesRegex(ValueError, "mutation failed"),
+        ):
+            RaisingOrmDummy().update()
+
+        log.assert_called_once_with(
+            "Data-change transaction finished receiver failed while handling "
+            "another exception."
+        )
 
     def test_create_emits_pre_and_post(self):
         """Create operations emit pre-change and post-change signals."""
