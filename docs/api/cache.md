@@ -611,6 +611,12 @@ manager, not a decorator or generator context manager; `__enter__()` yields a
 
 ::: general_manager.cache.signals.post_data_change
 
+::: general_manager.cache.signals.data_change_transaction_started
+
+::: general_manager.cache.signals.data_change_transaction_finishing
+
+::: general_manager.cache.signals.data_change_transaction_finished
+
 ::: general_manager.cache.signals.data_change
 
 `data_change(func)` wraps GeneralManager create, update, and delete methods with
@@ -648,6 +654,114 @@ closed, so nested `@data_change` calls enqueue one final rewarm batch. Failed
 mutations still drain pending rewarm keys after the outermost barrier closes,
 but enqueueing runs only for completed mutations. GraphQL warm-up enqueue errors
 are logged and suppressed.
+
+### ORM data-change transaction lifecycle
+
+ORM-backed `@data_change` mutations expose one transaction lifecycle envelope
+for the outermost active GeneralManager mutation on each database alias.
+Non-ORM-backed mutations do not emit these lifecycle signals. Nested mutations
+on the same alias share the envelope and do not emit additional lifecycle
+signals. The lifecycle action is `"create"`, `"update"`, or `"delete"` for
+those method names and `"other"` for every other decorated method.
+
+`data_change_transaction_started` and
+`data_change_transaction_finishing` receive exactly these keyword payload
+values in addition to Django's `sender`:
+
+- `transaction_context`: the live `DataChangeTransactionContext` for the
+  envelope;
+- `database_alias`: the ORM interface database alias;
+- `caller_in_atomic_block`: whether the caller was already inside Django
+  `atomic()` before GeneralManager opened its own block; and
+- `action`: the normalized lifecycle action.
+
+`data_change_transaction_finished` receives the same values plus `outcome`,
+which is either `"committed"` or `"rolled_back"`. Its `"committed"` value
+means that GeneralManager's own `atomic()` block or savepoint completed. It does
+not establish that a surrounding caller-owned transaction has durably committed.
+
+The signals run in this order for a successful outermost ORM mutation:
+
+1. `data_change_transaction_started`, after GeneralManager enters its
+   `atomic()` block or savepoint and before `pre_data_change`;
+2. `pre_data_change`, the decorated mutation body, and `post_data_change`;
+3. `data_change_transaction_finishing`, after the successful post-change
+   receivers and while GeneralManager's `atomic()` block or savepoint is still
+   active; and
+4. `data_change_transaction_finished`, after that block or savepoint exits.
+
+Failures skip the finishing signal, exit the GeneralManager block or savepoint,
+and still emit `data_change_transaction_finished` with
+`outcome="rolled_back"`. The finished signal runs before the dependency-cache
+barrier cleanup. Exceptions from lifecycle receivers follow the normal signal
+rules: started and finishing failures cause the GeneralManager block or
+savepoint to roll back, while a finished-receiver failure after a successful
+exit propagates to the mutation caller.
+
+`transaction_context` has immutable identity fields `database_alias` and
+`caller_in_atomic_block`, and three mutable transaction-local collections:
+`changed_classes` (`set[str]`), `metadata` (`dict[str, object]`), and
+`phase_seconds` (`dict[str, float]`). Receivers share the same context object
+for the whole envelope. A receiver can use `metadata` for coordination and can
+record every changed manager class through
+`register_data_change_class(class_name, database_alias)`. That helper returns
+`True` and adds the class name (deduplicated) only while the live envelope is
+framework-owned; it returns `False` for a caller-owned transaction, another
+alias, or no active envelope.
+
+Use the lifecycle signals with the ordinary post-change signal as follows:
+
+```python
+from django.db import transaction
+
+from general_manager.cache.data_change_context import register_data_change_class
+from general_manager.cache.signals import (
+    data_change_transaction_started,
+    post_data_change,
+)
+
+
+def transaction_started(sender, transaction_context, database_alias, **kwargs):
+    transaction_context.metadata["consumer"] = begin_coordination()
+    if transaction_context.caller_in_atomic_block:
+        transaction.on_commit(
+            lambda: finish_coordination(transaction_context.metadata["consumer"])
+        )
+
+
+def manager_changed(sender, database_alias, **kwargs):
+    register_data_change_class(sender.__name__, database_alias)
+
+
+data_change_transaction_started.connect(transaction_started, weak=False)
+post_data_change.connect(manager_changed, weak=False)
+```
+
+The `on_commit()` branch is required when the caller owns the outer Django
+transaction: lifecycle completion only proves completion of GeneralManager's
+inner savepoint, not the caller's durable commit. Django does not invoke an
+`on_commit()` callback when that caller-owned transaction rolls back. A
+consumer that acquires an external coordination lease at lifecycle start must
+therefore give the lease a bounded expiry and perform expiry-based cleanup; it
+cannot rely on a Django rollback callback to release the lease.
+
+For a non-default database alias, pass `using=database_alias` to
+`transaction.on_commit()` so the callback is registered on that alias's outer
+transaction.
+
+`phase_seconds` is an additive, non-negative timing map for synchronous work
+performed while the lifecycle context is live. It is not a wall-clock
+transaction duration: nested mutations and multiple receivers can contribute
+overlapping elapsed time. The only phase names recorded by GeneralManager are:
+
+- `database`: decorated ORM mutation-body execution;
+- `invalidation`: generic dependency-cache invalidation;
+- `subscription`: GraphQL and remote-invalidation subscription dispatch;
+- `search`: search invalidation receiver work; and
+- `workflow`: workflow signal-bridge publication.
+
+Absent keys mean that no configured receiver recorded that phase. Values for a
+phase accumulate across the envelope, including nested same-alias mutations.
 
 ::: general_manager.cache.dependency_index.record_dependencies
 
