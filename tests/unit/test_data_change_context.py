@@ -13,6 +13,29 @@ def _own(database_alias: str, *, caller_in_atomic_block: bool):
     )
 
 
+def test_nested_same_alias_reuses_outer_transaction_context() -> None:
+    """Nested scopes for an alias share their transaction-owned state."""
+    with _own("default", caller_in_atomic_block=False) as outer:
+        with _own("default", caller_in_atomic_block=False) as inner:
+            assert inner.transaction is outer.transaction
+            assert inner.is_outermost is False
+
+
+def test_changed_classes_are_deduplicated_and_alias_scoped() -> None:
+    """Only a framework-owned transaction records its own alias's classes."""
+    with _own("default", caller_in_atomic_block=False) as current:
+        assert data_change_context.register_data_change_class("Project", "default")
+        assert data_change_context.register_data_change_class("Project", "default")
+        assert not data_change_context.register_data_change_class("Part", "secondary")
+        assert current.transaction.changed_classes == {"Project"}
+
+
+def test_caller_owned_transaction_is_exposed() -> None:
+    """The public context distinguishes caller-owned atomic transactions."""
+    with _own("default", caller_in_atomic_block=True) as current:
+        assert current.transaction.caller_in_atomic_block is True
+
+
 def test_context_ownership_does_not_inspect_django_atomic_internals() -> None:
     """Core ownership must remain independent of Django's private stack."""
     source = inspect.getsource(data_change_context)
