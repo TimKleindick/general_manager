@@ -61,9 +61,11 @@ expiry-based cleanup for the rollback path.
 Use `register_data_change_class(sender.__name__, database_alias)` from a
 `post_data_change` receiver when a consumer needs the set of classes changed in
 one framework-owned envelope. The helper deduplicates names and returns `True`
-only for the active framework-owned alias; it returns `False` for caller-owned
-transactions, different aliases, or no live envelope. The API reference gives
-the exact signal payloads, consumer wiring, and phase-timing meanings:
+when the requested alias has a matching live framework-owned envelope. It can
+therefore register against either live alias during nested cross-alias mutations
+and returns `False` only when the requested alias has no eligible
+framework-owned envelope. The API reference gives the exact signal payloads,
+consumer wiring, and phase-timing meanings:
 [ORM data-change transaction lifecycle](../api/cache.md#orm-data-change-transaction-lifecycle).
 
 ## Bucket Dependency Semantics

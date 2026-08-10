@@ -36,6 +36,17 @@ def test_changed_classes_are_deduplicated_and_alias_scoped() -> None:
         assert current.transaction.changed_classes == {"Project"}
 
 
+def test_changed_classes_register_against_each_matching_live_alias() -> None:
+    """Cross-alias nesting records classes in each matching live context."""
+    with _own("default", caller_in_atomic_block=False) as default:
+        with _own("secondary", caller_in_atomic_block=False) as secondary:
+            assert data_change_context.register_data_change_class("Project", "default")
+            assert data_change_context.register_data_change_class("Part", "secondary")
+            assert not data_change_context.register_data_change_class("Task", "missing")
+            assert default.transaction.changed_classes == {"Project"}
+            assert secondary.transaction.changed_classes == {"Part"}
+
+
 def test_caller_owned_transaction_is_exposed() -> None:
     """The public context distinguishes caller-owned atomic transactions."""
     with _own("default", caller_in_atomic_block=True) as current:
