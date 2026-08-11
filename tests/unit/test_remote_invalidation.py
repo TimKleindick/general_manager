@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import date, datetime
+import gc
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 from uuid import UUID
+import weakref
 
 from asgiref.sync import async_to_sync
 from channels.auth import AuthMiddlewareStack  # type: ignore[import-untyped]
@@ -325,6 +327,48 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
             callbacks[0]()
 
         publish.assert_called_once()
+
+    def test_emit_remote_invalidation_captures_instance_identification_without_retaining_instance(
+        self,
+    ) -> None:
+        class Project:
+            class RemoteAPI:
+                enabled = True
+                base_path = "/remote"
+                resource_name = "projects"
+                allow_update = True
+                websocket_invalidation = True
+
+        class Instance:
+            def __init__(self) -> None:
+                self.identification = {"id": 1, "nested": {"labels": ["original"]}}
+
+        instance = Instance()
+        instance_ref = weakref.ref(instance)
+        callbacks: list[Callable[[], None]] = []
+        with (
+            patch(
+                "general_manager.api.remote_invalidation.transaction.on_commit"
+            ) as on_commit,
+            patch(
+                "general_manager.api.remote_invalidation._publish_remote_invalidation"
+            ) as publish,
+        ):
+            on_commit.side_effect = lambda callback, **_kwargs: callbacks.append(
+                callback
+            )
+            emit_remote_invalidation(Project, instance=instance, action="update")
+            instance.identification["nested"]["labels"].append("mutated")
+            del instance
+            gc.collect()
+
+            self.assertIsNone(instance_ref())
+            publish.assert_not_called()
+            callbacks[0]()
+
+        _, action, captured = publish.call_args.args
+        self.assertEqual(action, "update")
+        self.assertEqual(captured, {"id": 1, "nested": {"labels": ["original"]}})
 
     def test_publish_remote_invalidation_logs_delivery_failure(self) -> None:
         class Project:
