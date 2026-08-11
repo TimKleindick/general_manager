@@ -94,12 +94,12 @@ def estimate_cache_entry_size(
             for cls in type.__getattribute__(candidate_type, "__mro__"):
                 class_dict = type.__getattribute__(cls, "__dict__")
                 slots = class_dict.get("__slots__")
-                if isinstance(slots, str):
+                if type(slots) is str:
                     slots = (slots,)
-                if not isinstance(slots, (tuple, list, set, frozenset)):
+                if type(slots) not in (tuple, list, set, frozenset):
                     continue
                 for slot in slots:
-                    if not isinstance(slot, str):
+                    if type(slot) is not str:
                         continue
                     if slot in {"__dict__", "__weakref__"}:
                         continue
