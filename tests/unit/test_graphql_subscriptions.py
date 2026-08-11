@@ -4,12 +4,14 @@
 import asyncio
 import contextlib
 import os
+import threading
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import graphene
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import CharField
 from django.utils.crypto import get_random_string
 from graphql import parse
@@ -616,6 +618,60 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         payload = event.data["onEmployeeClassChange"]
         self.assertEqual(payload["action"], "create")
         self.assertEqual(payload["item"]["name"], "Class Alice")
+
+    def test_class_subscription_emits_visible_create_only_after_outer_commit(
+        self,
+    ) -> None:
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+        transaction_open = threading.Event()
+        allow_commit = threading.Event()
+
+        def create_inside_outer_transaction() -> None:
+            with transaction.atomic():
+                self.Employee.create(name="Committed Alice", creator_id=self.user.id)
+                transaction_open.set()
+                self.assertTrue(
+                    allow_commit.wait(timeout=2),
+                    "test did not release outer transaction",
+                )
+
+        async def run_subscription() -> object:
+            generator = await schema.subscribe(subscription, context_value=context)
+            if hasattr(generator, "errors"):
+                raise AssertionError(generator.errors)
+            try:
+                next_event = asyncio.create_task(generator.__anext__())
+                worker = asyncio.create_task(
+                    asyncio.to_thread(create_inside_outer_transaction)
+                )
+                await asyncio.to_thread(transaction_open.wait, 2)
+                self.assertTrue(transaction_open.is_set())
+                self.assertFalse(next_event.done())
+                allow_commit.set()
+                await worker
+                return await next_event
+            finally:
+                allow_commit.set()
+                await generator.aclose()
+
+        event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        payload = event.data["onEmployeeClassChange"]
+        self.assertEqual(payload["action"], "create")
+        self.assertEqual(payload["item"]["name"], "Committed Alice")
 
     def test_class_subscription_batches_creates_into_one_refresh(self) -> None:
         schema = self._build_schema()
@@ -2220,25 +2276,20 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
             )
             mock_get_layer.assert_not_called()
 
-    def test_handle_data_change_ignores_when_no_channel_layer(self) -> None:
-        """Verify _handle_data_change does nothing when no channel layer is configured."""
+    def test_publish_data_change_ignores_when_no_channel_layer(self) -> None:
+        """Verify _publish_data_change does nothing when no layer is configured."""
 
         class RegisteredManager(GeneralManager):
             identification: ClassVar[dict[str, int]] = {"id": 1}
             Interface = BaseTestInterface
 
         GraphQL.manager_registry = {"RegisteredManager": RegisteredManager}
-        instance = RegisteredManager()
-
         with patch(
             "general_manager.api.graphql.GraphQL._get_channel_layer", return_value=None
         ):
-            # Should not raise
-            GraphQL._handle_data_change(
-                sender=RegisteredManager, instance=instance, action="test"
-            )
+            GraphQL._publish_data_change(RegisteredManager, "test", {"id": 1})
 
-    def test_handle_data_change_uses_one_bridge_for_both_groups(self) -> None:
+    def test_publish_data_change_uses_one_bridge_for_both_groups(self) -> None:
         """Verify one bridge sends the unchanged row payload to both groups."""
 
         class RegisteredManager(GeneralManager):
@@ -2246,8 +2297,6 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
             Interface = BaseTestInterface
 
         GraphQL.manager_registry = {"RegisteredManager": RegisteredManager}
-        instance = RegisteredManager()
-
         sent: list[tuple[str, dict[str, object]]] = []
 
         async def group_send(group: str, message: dict[str, object]) -> None:
@@ -2261,14 +2310,12 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
                 side_effect=lambda async_fn: lambda *args: asyncio.run(async_fn(*args)),
             ) as bridge,
         ):
-            GraphQL._handle_data_change(
-                sender=RegisteredManager, instance=instance, action="update"
-            )
+            GraphQL._publish_data_change(RegisteredManager, "update", {"id": 1})
 
         bridge.assert_called_once_with(
             graphql_subscriptions.dispatch_subscription_event
         )
-        instance_group = GraphQL._group_name(RegisteredManager, instance.identification)
+        instance_group = GraphQL._group_name(RegisteredManager, {"id": 1})
         class_group = GraphQL._class_group_name(RegisteredManager)
         self.assertEqual(
             [group for group, _message in sent],
@@ -2292,46 +2339,59 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
             ],
         )
 
-    def test_handle_data_change_deep_copies_nested_identification(self) -> None:
-        """Verify dispatched row identification is detached from the source."""
-        source_identification: dict[str, object] = {
-            "id": 1,
-            "nested": {"labels": ["alpha", "beta"]},
-        }
+    def test_handle_data_change_defers_publish_until_commit(self) -> None:
+        source = {"id": 1, "nested": {"labels": ["original"]}}
 
         class RegisteredManager(GeneralManager):
-            identification: ClassVar = source_identification
+            identification: ClassVar = source
             Interface = BaseTestInterface
 
         GraphQL.manager_registry = {"RegisteredManager": RegisteredManager}
-        sent: list[dict[str, object]] = []
+        callbacks: list[Callable[[], None]] = []
 
-        async def group_send(_group: str, message: dict[str, object]) -> None:
-            sent.append(message)
+        def save_callback(callback: Callable[[], None], *, using: str) -> None:
+            self.assertEqual(using, "secondary")
+            callbacks.append(callback)
 
-        layer = SimpleNamespace(group_send=group_send)
         with (
-            patch.object(GraphQL, "_get_channel_layer", return_value=layer),
-            patch(
-                "general_manager.api.graphql.async_to_sync",
-                side_effect=lambda async_fn: lambda *args: asyncio.run(async_fn(*args)),
-            ),
+            patch("general_manager.api.graphql.transaction.on_commit") as on_commit,
+            patch.object(GraphQL, "_publish_data_change") as publish,
         ):
+            on_commit.side_effect = save_callback
             GraphQL._handle_data_change(
                 sender=RegisteredManager,
                 instance=RegisteredManager(),
-                action="update",
+                action="create",
+                database_alias="secondary",
             )
+            source["nested"]["labels"].append("mutated")
 
-        dispatched_identification = sent[0]["identification"]
-        self.assertEqual(dispatched_identification, source_identification)
-        self.assertIsNot(dispatched_identification, source_identification)
-        self.assertIsNot(
-            dispatched_identification["nested"],  # type: ignore[index]
-            source_identification["nested"],
+            publish.assert_not_called()
+            self.assertEqual(on_commit.call_args.kwargs, {"using": "secondary"})
+            callbacks[0]()
+
+        publish.assert_called_once_with(
+            RegisteredManager,
+            "create",
+            {"id": 1, "nested": {"labels": ["original"]}},
         )
 
-    def test_bulk_changes_queue_one_manager_refresh(self) -> None:
+    def test_handle_data_change_defaults_commit_alias(self) -> None:
+        class RegisteredManager(GeneralManager):
+            identification: ClassVar[dict[str, int]] = {"id": 1}
+            Interface = BaseTestInterface
+
+        GraphQL.manager_registry = {"RegisteredManager": RegisteredManager}
+        with patch("general_manager.api.graphql.transaction.on_commit") as on_commit:
+            GraphQL._handle_data_change(
+                sender=RegisteredManager,
+                instance=RegisteredManager(),
+                action="create",
+            )
+
+        self.assertEqual(on_commit.call_args.kwargs, {"using": "default"})
+
+    def test_publish_data_change_bulk_changes_queue_one_manager_refresh(self) -> None:
         """Many changes for one manager flush one aggregate refresh event."""
 
         class RegisteredManager(GeneralManager):
@@ -2351,11 +2411,7 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
         ):
             with bulk_data_change_notifications():
                 for _ in range(5):
-                    GraphQL._handle_data_change(
-                        sender=RegisteredManager,
-                        instance=RegisteredManager(),
-                        action="update",
-                    )
+                    GraphQL._publish_data_change(RegisteredManager, "update", {"id": 1})
                 self.assertEqual(sent, [])
                 immediate_bridge.assert_not_called()
 
@@ -2373,7 +2429,9 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
             ],
         )
 
-    def test_bulk_changes_queue_distinct_manager_refreshes(self) -> None:
+    def test_publish_data_change_bulk_changes_queue_distinct_manager_refreshes(
+        self,
+    ) -> None:
         """A batch flushes one refresh target for each changed manager."""
 
         class AlphaManager(GeneralManager):
@@ -2399,21 +2457,9 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
             patch("general_manager.api.graphql.async_to_sync") as immediate_bridge,
         ):
             with bulk_data_change_notifications():
-                GraphQL._handle_data_change(
-                    sender=BetaManager,
-                    instance=BetaManager(),
-                    action="delete",
-                )
-                GraphQL._handle_data_change(
-                    sender=AlphaManager,
-                    instance=AlphaManager(),
-                    action="create",
-                )
-                GraphQL._handle_data_change(
-                    sender=BetaManager,
-                    instance=BetaManager(),
-                    action="update",
-                )
+                GraphQL._publish_data_change(BetaManager, "delete", {"id": 2})
+                GraphQL._publish_data_change(AlphaManager, "create", {"id": 1})
+                GraphQL._publish_data_change(BetaManager, "update", {"id": 2})
                 immediate_bridge.assert_not_called()
 
         self.assertEqual(
