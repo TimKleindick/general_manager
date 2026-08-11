@@ -372,21 +372,25 @@ does not directly cancel a `listen_once()` call that is already waiting; that
 one-off receive finishes according to the connection's receive/close behavior.
 
 Server-side event emission is handled by `emit_remote_invalidation()` after data
-changes. It sends no message when the manager has no RemoteAPI config, websocket
-invalidation is disabled, or no Channels layer is configured. Explicit delete
-identification metadata wins over instance identification; UUID, date, and
-datetime values are serialized as strings, and other non-JSON values fall back
-to `str(value)`. The action string is forwarded as supplied. Messages are sent
-with fields `protocol_version`, `base_path`, `resource_name`, `action`,
-`identification`, and `event_id`; missing identification is sent as `null`.
-Serialization is shallow, so nested lists or mappings also fall back to
-`str(value)`. The channel-layer event type is `gm.remote.invalidation` and
-`event_id` is a UUID4 string. The ASGI consumer closes unknown or disabled
-resources with `4404`, protocol-version mismatches with `4406`, and missing
-channel-layer connections with `1011`. Missing `version` is accepted, multiple
-`version` query values use the first parsed value, non-disconnect inbound
-websocket messages are ignored, and client disconnect cleans up the
-channel-layer group subscription.
+changes. RemoteAPI receives `post_data_change` immediately but schedules each
+row invalidation with `transaction.on_commit()` using the changed manager's
+database alias. Invalidation is therefore commit-bound and rollback-safe:
+events registered in a rolled-back transaction or savepoint are never sent.
+Delivery after commit is best-effort; a missing configuration or channel layer
+produces no message, and channel-layer delivery failures are logged rather than
+raised. Explicit delete identification metadata wins over instance
+identification; UUID, date, and datetime values are serialized as strings, and
+other non-JSON values fall back to `str(value)`. The action string is forwarded
+as supplied. Messages are sent with fields `protocol_version`, `base_path`,
+`resource_name`, `action`, `identification`, and `event_id`; missing
+identification is sent as `null`. Serialization is shallow, so nested lists or
+mappings also fall back to `str(value)`. The channel-layer event type is
+`gm.remote.invalidation` and `event_id` is a UUID4 string. The ASGI consumer
+closes unknown or disabled resources with `4404`, protocol-version mismatches
+with `4406`, and missing channel-layer connections with `1011`. Missing
+`version` is accepted, multiple `version` query values use the first parsed
+value, non-disconnect inbound websocket messages are ignored, and client
+disconnect cleans up the channel-layer group subscription.
 
 For bulk writes, use the public notification context outside the true outermost
 database transaction:
@@ -406,12 +410,15 @@ with bulk_data_change_notifications():
 The context emits one invalidation per affected RemoteAPI resource with
 `action = "refresh"`, `identification = null`, and a UUID4 `event_id`. Clients
 should treat it as resource-wide invalidation and requery the resource over
-REST. The context is not transaction-aware by itself and flushes even when its
-body exits exceptionally. When the shown `transaction.atomic()` is outermost,
-its commit or rollback completes before the flush. With `ATOMIC_REQUESTS` or
-another enclosing atomic block, the actual commit may happen after refresh
-delivery; place the notification context outside that enclosing boundary.
-Outside the context, immediate row-level events remain unchanged.
+REST. When the shown `transaction.atomic()` is outermost, its commit runs the
+queued invalidation callbacks while the context remains open, and the context
+then flushes the aggregate invalidations. A rollback, including a savepoint
+rollback, discards the callbacks, so no refresh is queued. With `ATOMIC_REQUESTS`
+or another enclosing atomic block, place the notification context outside that
+enclosing boundary so it remains open until the actual commit. Reversing the
+contexts stays commit-safe, but the batch closes before commit callbacks run, so
+aggregation is not guaranteed. Outside the context, row-level invalidations are
+still scheduled for commit.
 
 ## Usage
 
