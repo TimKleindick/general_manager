@@ -154,3 +154,45 @@ def test_estimate_cache_entry_size_ignores_hostile_mutated_slot_metadata() -> No
     size = estimate_cache_entry_size("key", Value(), stop_after=None)
 
     assert size > MIN_TRACKED_ENTRY_BYTES
+
+
+def test_estimate_cache_entry_size_ignores_hostile_string_slot_subclasses() -> None:
+    class HostileSlotName(str):
+        def __hash__(self) -> int:
+            raise AssertionError("unexpected slot hash")  # noqa: TRY003
+
+        def startswith(self, prefix: str) -> bool:
+            raise AssertionError("unexpected slot string lookup")  # noqa: TRY003
+
+        def endswith(self, suffix: str) -> bool:
+            raise AssertionError("unexpected slot string lookup")  # noqa: TRY003
+
+    class Value:
+        __slots__ = ["payload"]
+
+        def __init__(self) -> None:
+            self.payload = bytearray(1024)
+
+    Value.__slots__.append(HostileSlotName("hostile"))
+
+    size = estimate_cache_entry_size("key", Value(), stop_after=None)
+
+    assert size > MIN_TRACKED_ENTRY_BYTES
+
+
+def test_estimate_cache_entry_size_ignores_hostile_slot_list_subclasses() -> None:
+    class HostileSlots(list[str]):
+        def __iter__(self) -> object:
+            raise AssertionError("unexpected slot iteration")  # noqa: TRY003
+
+    class Value:
+        __slots__ = ["payload"]
+
+        def __init__(self) -> None:
+            self.payload = bytearray(1024)
+
+    Value.__slots__ = HostileSlots(["payload"])
+
+    size = estimate_cache_entry_size("key", Value(), stop_after=None)
+
+    assert size == MIN_TRACKED_ENTRY_BYTES
