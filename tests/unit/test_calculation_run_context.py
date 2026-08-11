@@ -68,6 +68,10 @@ class PublishFailed(RuntimeError):
     """Test exception used to exercise cleanup after publish failure."""
 
 
+class LeaseReleaseFailed(RuntimeError):
+    """Test exception used to exercise cleanup after lease-release failure."""
+
+
 def raise_after_buffering(
     context: CalculationRunContext,
     entry: PendingDependencyCachePublication,
@@ -369,6 +373,32 @@ def test_dependency_cache_hits_share_lru_recency() -> None:
         assert context.get_dependency_cache_hit("cache-c") == third
 
 
+def test_run_values_and_dependency_hits_share_global_lru_across_contexts() -> None:
+    first_hit = DependencyCacheHit(value="A", dependencies=frozenset())
+    second_hit = DependencyCacheHit(value="B", dependencies=frozenset())
+    hit_size = estimate_cache_entry_size("cache-a", first_hit, stop_after=None)
+    value_size = estimate_cache_entry_size("ordinary", "value", stop_after=None)
+    two_entry_budget = hit_size + max(hit_size, value_size)
+    with (
+        override_settings(
+            GENERAL_MANAGER={
+                "RUN_CONTEXT_CACHE_MAX_BYTES": two_entry_budget,
+            }
+        ),
+        CalculationRunContext() as first_context,
+        CalculationRunContext() as second_context,
+    ):
+        second_context.set_dependency_cache_hits({"cache-a": first_hit})
+        first_context.set("ordinary", "value")
+        assert second_context.get_dependency_cache_hit("cache-a") == first_hit
+
+        second_context.set_dependency_cache_hits({"cache-b": second_hit})
+
+        assert first_context.get("ordinary") is None
+        assert second_context.get_dependency_cache_hit("cache-a") == first_hit
+        assert second_context.get_dependency_cache_hit("cache-b") == second_hit
+
+
 def test_pending_dependency_publication_hit_is_pinned_until_flush() -> None:
     entry = make_pending_publication("cache-a")
     with (
@@ -385,6 +415,165 @@ def test_pending_dependency_publication_hit_is_pinned_until_flush() -> None:
         context.flush_dependency_cache_publications()
 
         assert context.get_dependency_cache_hit("cache-a") is None
+
+
+def test_publish_failure_unpins_hit_and_preserves_original_error() -> None:
+    entry = make_pending_publication("cache-a")
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 0}),
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries",
+            side_effect=PublishFailed,
+        ) as publish_batch,
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease"
+        ) as release_lease,
+        CalculationRunContext() as context,
+    ):
+        context.buffer_dependency_cache_publication(entry)
+
+        with pytest.raises(PublishFailed):
+            context.flush_dependency_cache_publications()
+
+        assert context._dependency_cache_pending_publications == {}
+        assert context.get_dependency_cache_hit("cache-a") is None
+        publish_batch.assert_called_once_with((entry,))
+        release_lease.assert_called_once_with(entry.lease)
+
+
+def test_publish_failure_tracks_unpinned_hit_under_finite_budget() -> None:
+    entry = make_pending_publication("cache-a")
+    expected_hit = DependencyCacheHit(
+        value=entry.result,
+        dependencies=entry.dependencies,
+    )
+    entry_size = estimate_cache_entry_size(
+        entry.cache_key,
+        expected_hit,
+        stop_after=None,
+    )
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size}),
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries",
+            side_effect=PublishFailed,
+        ),
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease"
+        ) as release_lease,
+        CalculationRunContext() as context,
+    ):
+        context.buffer_dependency_cache_publication(entry)
+
+        with pytest.raises(PublishFailed):
+            context.flush_dependency_cache_publications()
+
+        assert context._dependency_cache_pending_publications == {}
+        assert context.get_dependency_cache_hit(entry.cache_key) == expected_hit
+        assert run_context_cache_budget.estimated_bytes == entry_size
+        release_lease.assert_called_once_with(entry.lease)
+
+
+def test_release_failure_supersedes_publish_failure_and_unpins_hit() -> None:
+    entry = make_pending_publication("cache-a")
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 0}),
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries",
+            side_effect=PublishFailed,
+        ) as publish_batch,
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease",
+            side_effect=LeaseReleaseFailed,
+        ) as release_lease,
+        CalculationRunContext() as context,
+    ):
+        context.buffer_dependency_cache_publication(entry)
+
+        with pytest.raises(LeaseReleaseFailed):
+            context.flush_dependency_cache_publications()
+
+        assert context._dependency_cache_pending_publications == {}
+        assert context.get_dependency_cache_hit("cache-a") is None
+        publish_batch.assert_called_once_with((entry,))
+        release_lease.assert_called_once_with(entry.lease)
+
+
+@pytest.mark.parametrize(
+    ("cleanup_method", "publishes"),
+    [
+        ("flush_dependency_cache_publications", True),
+        ("discard_dependency_cache_publications", False),
+    ],
+)
+def test_release_failure_stops_later_releases_but_unpins_every_removed_hit(
+    cleanup_method: str,
+    publishes: bool,
+) -> None:
+    first = make_pending_publication("cache-a")
+    second = make_pending_publication("cache-b")
+    third = make_pending_publication("cache-c")
+
+    def release_until_failure(lease: CacheComputeLease) -> None:
+        if lease == second.lease:
+            raise LeaseReleaseFailed
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 0}),
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ) as publish_batch,
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease",
+            side_effect=release_until_failure,
+        ) as release_lease,
+        CalculationRunContext() as context,
+    ):
+        for entry in (first, second, third):
+            context.buffer_dependency_cache_publication(entry)
+
+        with pytest.raises(LeaseReleaseFailed):
+            getattr(context, cleanup_method)()
+
+        assert context._dependency_cache_pending_publications == {}
+        assert all(
+            context.get_dependency_cache_hit(entry.cache_key) is None
+            for entry in (first, second, third)
+        )
+        assert release_lease.call_args_list == [
+            mock.call(first.lease),
+            mock.call(second.lease),
+        ]
+        if publishes:
+            publish_batch.assert_called_once_with((first, second, third))
+        else:
+            publish_batch.assert_not_called()
+
+
+def test_discard_dependency_state_clears_hits_after_release_failure() -> None:
+    prefetched = DependencyCacheHit(value="ready", dependencies=frozenset())
+    first = make_pending_publication("cache-a")
+    second = make_pending_publication("cache-b")
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 100_000}),
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease",
+            side_effect=LeaseReleaseFailed,
+        ) as release_lease,
+        CalculationRunContext() as context,
+    ):
+        context.set_dependency_cache_hits({"prefetched": prefetched})
+        context.buffer_dependency_cache_publication(first)
+        context.buffer_dependency_cache_publication(second)
+        assert run_context_cache_budget.estimated_bytes > 0
+
+        with pytest.raises(LeaseReleaseFailed):
+            context.discard_dependency_cache_state()
+
+        assert context._dependency_cache_pending_publications == {}
+        assert context._dependency_cache_hits == {}
+        assert run_context_cache_budget.estimated_bytes == 0
+        release_lease.assert_called_once_with(first.lease)
 
 
 def test_pending_dependency_publication_hit_becomes_evictable_after_discard() -> None:
@@ -516,6 +705,99 @@ def test_replacing_buffered_dependency_cache_publication_releases_prior_lease() 
     assert release_lease.call_args_list == [
         mock.call(first.lease),
         mock.call(second.lease),
+    ]
+
+
+def test_replacing_pending_hit_stays_pinned_under_finite_budget() -> None:
+    first = make_pending_publication("cache-a")
+    second = PendingDependencyCachePublication(
+        cache_key=first.cache_key,
+        result="value:cache-a:second",
+        dependencies=first.dependencies,
+        cache_backend=first.cache_backend,
+        timeout=first.timeout,
+        started_generation=first.started_generation,
+        lease=CacheComputeLease(
+            key=first.lease.key,
+            token=f"lease:{first.cache_key}:second",
+        ),
+    )
+    pressure = DependencyCacheHit(value="pressure", dependencies=frozenset())
+    pressure_size = estimate_cache_entry_size("pressure", pressure, stop_after=None)
+    with (
+        override_settings(
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": pressure_size}
+        ),
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ),
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease"
+        ) as release_lease,
+        CalculationRunContext() as context,
+    ):
+        context.buffer_dependency_cache_publication(first)
+        context.set_dependency_cache_hits({"pressure": pressure})
+
+        context.buffer_dependency_cache_publication(second)
+
+        hit = context.get_dependency_cache_hit(first.cache_key)
+        assert isinstance(hit, DependencyCacheHit)
+        assert hit.value == second.result
+        assert context.get_dependency_cache_hit("pressure") == pressure
+        assert context._dependency_cache_pending_publications == {
+            first.cache_key: second
+        }
+        assert run_context_cache_budget.estimated_bytes == pressure_size
+        release_lease.assert_called_once_with(first.lease)
+
+
+def test_failed_prior_lease_release_preserves_pinned_pending_replacement_state() -> (
+    None
+):
+    first = make_pending_publication("cache-a")
+    second = PendingDependencyCachePublication(
+        cache_key=first.cache_key,
+        result="value:cache-a:second",
+        dependencies=first.dependencies,
+        cache_backend=first.cache_backend,
+        timeout=first.timeout,
+        started_generation=first.started_generation,
+        lease=CacheComputeLease(
+            key=first.lease.key,
+            token=f"lease:{first.cache_key}:second",
+        ),
+    )
+    pressure = DependencyCacheHit(value="pressure", dependencies=frozenset())
+    pressure_size = estimate_cache_entry_size("pressure", pressure, stop_after=None)
+    with (
+        override_settings(
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": pressure_size}
+        ),
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease",
+            side_effect=[LeaseReleaseFailed, None],
+        ) as release_lease,
+        CalculationRunContext() as context,
+    ):
+        context.buffer_dependency_cache_publication(first)
+
+        with pytest.raises(LeaseReleaseFailed):
+            context.buffer_dependency_cache_publication(second)
+
+        context.set_dependency_cache_hits({"pressure": pressure})
+        assert context._dependency_cache_pending_publications == {
+            first.cache_key: first
+        }
+        hit = context.get_dependency_cache_hit(first.cache_key)
+        assert isinstance(hit, DependencyCacheHit)
+        assert hit.value == first.result
+        assert context.get_dependency_cache_hit("pressure") == pressure
+        assert run_context_cache_budget.estimated_bytes == pressure_size
+
+    assert release_lease.call_args_list == [
+        mock.call(first.lease),
+        mock.call(first.lease),
     ]
 
 
