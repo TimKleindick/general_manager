@@ -762,9 +762,16 @@ def test_run_context_reweighs_mutated_orm_index() -> None:
 
     Row._meta = SimpleNamespace(concrete_model=Row)
     row = Row()
+    empty_index_size = estimate_cache_entry_size(
+        ("orm_model_row_index", Row), {}, stop_after=None
+    )
 
     with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
+        override_settings(
+            GENERAL_MANAGER={
+                "RUN_CONTEXT_CACHE_MAX_BYTES": empty_index_size
+            }
+        ),
         CalculationRunContext() as context,
     ):
         context.set_orm_bucket_rows(("query", "rows"), (row,))
