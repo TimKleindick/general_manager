@@ -238,6 +238,78 @@ def test_run_context_does_not_retain_value_larger_than_budget() -> None:
         assert context.get("large") is None
 
 
+def test_finite_budget_set_does_not_invoke_replaced_dict_descriptor() -> None:
+    descriptor_accesses: list[str] = []
+
+    class Value:
+        @property
+        def __dict__(self) -> dict[str, object]:
+            descriptor_accesses.append("__dict__")
+            raise AssertionError("unexpected instance dictionary lookup")  # noqa: TRY003
+
+    value = Value()
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        CalculationRunContext() as context,
+    ):
+        result = context.set("key", value)
+
+        assert result is None
+        assert context.get("key") is value
+
+    assert descriptor_accesses == []
+
+
+def test_finite_budget_set_does_not_invoke_replaced_class_descriptor() -> None:
+    descriptor_accesses: list[str] = []
+
+    class Value:
+        @property
+        def __class__(self) -> type[object]:
+            descriptor_accesses.append("__class__")
+            raise AssertionError("unexpected instance class lookup")  # noqa: TRY003
+
+    value = Value()
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        CalculationRunContext() as context,
+    ):
+        result = context.set("key", value)
+
+        assert result is None
+        assert context.get("key") is value
+
+    assert descriptor_accesses == []
+
+
+def test_finite_budget_get_or_set_does_not_invoke_replaced_slot_descriptor() -> None:
+    descriptor_accesses: list[str] = []
+
+    class Value:
+        __slots__ = ["payload"]
+
+        def __init__(self) -> None:
+            self.payload = "safe"
+
+        @property
+        def hostile(self) -> object:
+            descriptor_accesses.append("hostile")
+            raise AssertionError("unexpected slot descriptor lookup")  # noqa: TRY003
+
+    Value.__slots__[0] = "hostile"
+    value = Value()
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        CalculationRunContext() as context,
+    ):
+        result = context.get_or_set("key", lambda: value)
+
+        assert result is value
+        assert context.get("key") is value
+
+    assert descriptor_accesses == []
+
+
 def test_outermost_run_context_exit_releases_process_accounting() -> None:
     with override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}):
         context = CalculationRunContext()

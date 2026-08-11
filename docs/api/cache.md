@@ -517,8 +517,10 @@ The budget uses an insertion-time estimate and evicts the least-recently-used
 eviction-safe entry across live contexts when necessary. Values whose estimate
 exceeds the complete budget are returned to the caller but bypass retention.
 Pending dependency-cache publications, and their same-run hits, remain pinned
-until publication succeeds or the state is discarded, so eviction never loses a
-pending publication or its compute lease.
+until a flush attempt removes the pending entries or publication state is
+discarded. Flush attempts unpin after success, guarded abort, unexpected publish
+failure, or lease-release failure, so eviction never loses a pending publication
+or its compute lease.
 
 This setting is not a hard cap on total process RSS. In particular, Python and
 native allocation overhead, other application memory, and caller-owned mutable

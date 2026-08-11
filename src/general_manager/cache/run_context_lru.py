@@ -7,7 +7,14 @@ from collections.abc import Hashable, Iterable
 from dataclasses import dataclass
 import sys
 from threading import RLock
-from types import CodeType, FunctionType, MethodType, ModuleType
+from types import (
+    CodeType,
+    FunctionType,
+    GetSetDescriptorType,
+    MemberDescriptorType,
+    MethodType,
+    ModuleType,
+)
 from typing import Callable, Literal, Protocol, cast
 from weakref import ReferenceType, WeakSet, ref
 
@@ -108,6 +115,7 @@ class ProcessRunContextCacheBudget:
                 self._rebuild_locked()
             elif is_new_owner:
                 self._track_owner_entries_locked(owner)
+                self._evict_excess_locked()
             else:
                 self._evict_excess_locked()
 
@@ -119,7 +127,11 @@ class ProcessRunContextCacheBudget:
         value: object,
     ) -> None:
         """Record a stored entry and evict least-recently-used entries if needed."""
+        if self._max_bytes is None:
+            return
         with self._lock:
+            if self._max_bytes is None:
+                return
             self._track_locked(owner, namespace, key, value)
 
     def touch(
@@ -129,6 +141,8 @@ class ProcessRunContextCacheBudget:
         key: Hashable,
     ) -> None:
         """Mark one tracked entry as most recently used."""
+        if self._max_bytes is None:
+            return
         with self._lock:
             if self._max_bytes is None:
                 return
@@ -143,7 +157,11 @@ class ProcessRunContextCacheBudget:
         key: Hashable,
     ) -> None:
         """Discard bookkeeping for an entry removed from owner storage."""
+        if self._max_bytes is None:
+            return
         with self._lock:
+            if self._max_bytes is None:
+                return
             self._remove_entry_locked((id(owner), namespace, key))
 
     def refresh(
@@ -154,6 +172,8 @@ class ProcessRunContextCacheBudget:
         value: object,
     ) -> None:
         """Re-estimate an already stored mutable value."""
+        if self._max_bytes is None:
+            return
         self.track(owner, namespace, key, value)
 
     def clear_context(self, owner: RunContextCacheOwner) -> None:
@@ -317,7 +337,12 @@ def estimate_cache_entry_size(
         if stop_after is not None and measured_bytes > stop_after:
             return stop_after + 1
 
-        if isinstance(candidate, _SHALLOW_LEAF_TYPES):
+        candidate_mro = type.__getattribute__(candidate_type, "__mro__")
+        if any(
+            base_type is leaf_type
+            for base_type in candidate_mro
+            for leaf_type in _SHALLOW_LEAF_TYPES
+        ):
             continue
         if candidate_type is dict:
             mapping = cast(dict[object, object], candidate)
@@ -326,13 +351,21 @@ def estimate_cache_entry_size(
         elif candidate_type in (tuple, list, set, frozenset):
             candidates.extend(cast(Iterable[object], candidate))
         else:
-            try:
-                candidates.append(object.__getattribute__(candidate, "__dict__"))
-            except (AttributeError, TypeError):
-                pass
-
-            for cls in type.__getattribute__(candidate_type, "__mro__"):
+            for cls in candidate_mro:
                 class_dict = type.__getattribute__(cls, "__dict__")
+                instance_dict_descriptor = class_dict.get("__dict__")
+                if type(instance_dict_descriptor) is GetSetDescriptorType:
+                    try:
+                        candidates.append(
+                            GetSetDescriptorType.__get__(
+                                instance_dict_descriptor,
+                                candidate,
+                                candidate_type,
+                            )
+                        )
+                    except (AttributeError, TypeError):
+                        pass
+
                 slots = class_dict.get("__slots__")
                 if type(slots) is str:
                     slots = (slots,)
@@ -346,8 +379,17 @@ def estimate_cache_entry_size(
                     if slot.startswith("__") and not slot.endswith("__"):
                         class_name = type.__getattribute__(cls, "__name__")
                         slot = f"_{class_name.lstrip('_')}{slot}"
+                    slot_descriptor = class_dict.get(slot)
+                    if type(slot_descriptor) is not MemberDescriptorType:
+                        continue
                     try:
-                        candidates.append(object.__getattribute__(candidate, slot))
+                        candidates.append(
+                            MemberDescriptorType.__get__(
+                                slot_descriptor,
+                                candidate,
+                                candidate_type,
+                            )
+                        )
                     except (AttributeError, TypeError):
                         pass
 
