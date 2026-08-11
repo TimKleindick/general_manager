@@ -2242,23 +2242,19 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
 
     def test_handle_data_change_ignores_none_instance(self) -> None:
         """Verify _handle_data_change does nothing when instance is None."""
-        with patch(
-            "general_manager.api.graphql.GraphQL._get_channel_layer"
-        ) as mock_get_layer:
+        with patch("general_manager.api.graphql.transaction.on_commit") as on_commit:
             GraphQL._handle_data_change(
                 sender=GeneralManager, instance=None, action="test"
             )
-            mock_get_layer.assert_not_called()
+            on_commit.assert_not_called()
 
     def test_handle_data_change_ignores_non_manager_instance(self) -> None:
         """Verify _handle_data_change does nothing for non-GeneralManager instances."""
-        with patch(
-            "general_manager.api.graphql.GraphQL._get_channel_layer"
-        ) as mock_get_layer:
+        with patch("general_manager.api.graphql.transaction.on_commit") as on_commit:
             GraphQL._handle_data_change(
                 sender=GeneralManager, instance=object(), action="test"
             )  # type: ignore[arg-type]
-            mock_get_layer.assert_not_called()
+            on_commit.assert_not_called()
 
     def test_handle_data_change_ignores_unregistered_manager(self) -> None:
         """Verify _handle_data_change does nothing for managers not in registry."""
@@ -2268,13 +2264,11 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
             Interface = BaseTestInterface
 
         instance = UnregisteredManager()
-        with patch(
-            "general_manager.api.graphql.GraphQL._get_channel_layer"
-        ) as mock_get_layer:
+        with patch("general_manager.api.graphql.transaction.on_commit") as on_commit:
             GraphQL._handle_data_change(
                 sender=UnregisteredManager, instance=instance, action="test"
             )
-            mock_get_layer.assert_not_called()
+            on_commit.assert_not_called()
 
     def test_publish_data_change_ignores_when_no_channel_layer(self) -> None:
         """Verify _publish_data_change does nothing when no layer is configured."""
