@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+from collections.abc import Hashable, Iterable
+from dataclasses import dataclass
 import sys
+from threading import RLock
 from types import CodeType, FunctionType, MethodType, ModuleType
-from typing import Iterable, cast
+from typing import Callable, Literal, Protocol, cast
+from weakref import ReferenceType, WeakSet, ref
 
 from django.core.exceptions import ImproperlyConfigured
 
 from general_manager.conf import get_setting
+from general_manager.logging import get_logger
 
 RUN_CONTEXT_CACHE_MAX_BYTES_SETTING = "RUN_CONTEXT_CACHE_MAX_BYTES"
 MIN_TRACKED_ENTRY_BYTES = 256
@@ -34,6 +40,205 @@ _SIZED_BUILTIN_TYPES = (
     set,
     frozenset,
 )
+
+RunCacheNamespace = Literal["values", "dependency_hits"]
+TrackedKey = tuple[int, RunCacheNamespace, Hashable]
+
+logger = get_logger("cache.run_context_lru")
+
+
+class RunContextCacheOwner(Protocol):
+    """Storage that participates in process-wide run-cache budgeting."""
+
+    def _iter_run_cache_entries(
+        self,
+    ) -> Iterable[tuple[RunCacheNamespace, Hashable, object]]:
+        """Yield every currently stored run-cache entry."""
+
+    def _evict_run_cache_entry(
+        self, namespace: RunCacheNamespace, key: Hashable
+    ) -> None:
+        """Remove one entry selected by the process-wide coordinator."""
+
+
+@dataclass(frozen=True)
+class _TrackedEntry:
+    owner: ReferenceType[RunContextCacheOwner]
+    namespace: RunCacheNamespace
+    key: Hashable
+    size: int
+
+
+class ProcessRunContextCacheBudget:
+    """Coordinate weighted LRU eviction across live calculation run caches."""
+
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._owners: WeakSet[RunContextCacheOwner] = WeakSet()
+        self._entries: OrderedDict[TrackedKey, _TrackedEntry] = OrderedDict()
+        self._total_bytes = 0
+        self._max_bytes: int | None = None
+
+    @property
+    def estimated_bytes(self) -> int:
+        """Return the coordinator's current estimated cache footprint."""
+        with self._lock:
+            return self._total_bytes
+
+    def register(self, owner: RunContextCacheOwner, max_bytes: int | None) -> None:
+        """Register an owner and rebuild tracked state when the limit changes."""
+        with self._lock:
+            self._owners.add(owner)
+            if max_bytes == self._max_bytes:
+                return
+
+            self._max_bytes = max_bytes
+            if max_bytes is None:
+                self._entries.clear()
+                self._total_bytes = 0
+                return
+
+            self._rebuild_locked()
+
+    def track(
+        self,
+        owner: RunContextCacheOwner,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+        value: object,
+    ) -> None:
+        """Record a stored entry and evict least-recently-used entries if needed."""
+        with self._lock:
+            self._track_locked(owner, namespace, key, value)
+
+    def touch(
+        self,
+        owner: RunContextCacheOwner,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+    ) -> None:
+        """Mark one tracked entry as most recently used."""
+        with self._lock:
+            if self._max_bytes is None:
+                return
+            tracked_key = (id(owner), namespace, key)
+            if tracked_key in self._entries:
+                self._entries.move_to_end(tracked_key)
+
+    def remove(
+        self,
+        owner: RunContextCacheOwner,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+    ) -> None:
+        """Discard bookkeeping for an entry removed from owner storage."""
+        with self._lock:
+            self._remove_entry_locked((id(owner), namespace, key))
+
+    def refresh(
+        self,
+        owner: RunContextCacheOwner,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+        value: object,
+    ) -> None:
+        """Re-estimate an already stored mutable value."""
+        self.track(owner, namespace, key, value)
+
+    def clear_context(self, owner: RunContextCacheOwner) -> None:
+        """Remove one owner's accounting without changing its cache storage."""
+        with self._lock:
+            owner_id = id(owner)
+            self._remove_owner_entries_locked(owner_id)
+            self._owners.discard(owner)
+
+    def _rebuild_locked(self) -> None:
+        self._entries.clear()
+        self._total_bytes = 0
+        for owner in tuple(self._owners):
+            entries = tuple(owner._iter_run_cache_entries())
+            for namespace, key, value in entries:
+                self._track_locked(owner, namespace, key, value)
+
+    def _track_locked(
+        self,
+        owner: RunContextCacheOwner,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+        value: object,
+    ) -> None:
+        max_bytes = self._max_bytes
+        if max_bytes is None:
+            return
+
+        tracked_key = (id(owner), namespace, key)
+        self._remove_entry_locked(tracked_key)
+        estimated_bytes = estimate_cache_entry_size(
+            key,
+            value,
+            stop_after=max_bytes,
+        )
+        if estimated_bytes > max_bytes:
+            owner._evict_run_cache_entry(namespace, key)
+            logger.debug(
+                "run cache entry skipped because it exceeds the process budget",
+                context={
+                    "namespace": namespace,
+                    "estimated_bytes": estimated_bytes,
+                    "configured_bytes": max_bytes,
+                },
+            )
+            return
+
+        self._entries[tracked_key] = _TrackedEntry(
+            owner=ref(owner, self._owner_finalizer(id(owner))),
+            namespace=namespace,
+            key=key,
+            size=estimated_bytes,
+        )
+        self._total_bytes += estimated_bytes
+        self._evict_excess_locked()
+
+    def _evict_excess_locked(self) -> None:
+        max_bytes = self._max_bytes
+        if max_bytes is None:
+            return
+
+        while self._total_bytes > max_bytes and self._entries:
+            _, entry = self._entries.popitem(last=False)
+            self._total_bytes -= entry.size
+            owner = entry.owner()
+            if owner is None:
+                continue
+            owner._evict_run_cache_entry(entry.namespace, entry.key)
+            logger.debug(
+                "run cache entry evicted by process-wide LRU budget",
+                context={
+                    "namespace": entry.namespace,
+                    "estimated_bytes": entry.size,
+                    "configured_bytes": max_bytes,
+                },
+            )
+
+    def _remove_entry_locked(self, tracked_key: TrackedKey) -> None:
+        entry = self._entries.pop(tracked_key, None)
+        if entry is not None:
+            self._total_bytes -= entry.size
+
+    def _remove_owner_entries_locked(self, owner_id: int) -> None:
+        for tracked_key in tuple(self._entries):
+            if tracked_key[0] == owner_id:
+                self._remove_entry_locked(tracked_key)
+
+    def _owner_finalizer(
+        self,
+        owner_id: int,
+    ) -> Callable[[ReferenceType[RunContextCacheOwner]], None]:
+        def remove_dead_owner(_: ReferenceType[RunContextCacheOwner]) -> None:
+            with self._lock:
+                self._remove_owner_entries_locked(owner_id)
+
+        return remove_dead_owner
 
 
 def resolve_run_context_cache_max_bytes() -> int | None:
@@ -112,3 +317,6 @@ def estimate_cache_entry_size(
                         pass
 
     return max(MIN_TRACKED_ENTRY_BYTES, measured_bytes)
+
+
+run_context_cache_budget = ProcessRunContextCacheBudget()
