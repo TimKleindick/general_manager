@@ -69,6 +69,28 @@ class OrderedOwnerRegistry:
         return iter(self._owners)
 
 
+class RaisingLock:
+    def __enter__(self) -> None:
+        raise AssertionError("unexpected coordinator lock entry")  # noqa: TRY003
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> None:
+        return None
+
+
+class CountingHashKey:
+    def __init__(self) -> None:
+        self.hash_calls = 0
+
+    def __hash__(self) -> int:
+        self.hash_calls += 1
+        return 1
+
+
 @pytest.mark.parametrize("configured", [None, 0, 1, 1024])
 def test_resolve_run_context_cache_max_bytes_accepts_supported_values(
     configured: int | None,
@@ -257,6 +279,20 @@ def test_estimate_cache_entry_size_ignores_hostile_slot_list_subclasses() -> Non
     assert size == MIN_TRACKED_ENTRY_BYTES
 
 
+def test_unlimited_budget_operations_do_not_enter_lock_or_hash_key() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    key = CountingHashKey()
+    budget._lock = RaisingLock()
+
+    budget.touch(owner, "values", key)
+    budget.track(owner, "values", key, "value")
+    budget.remove(owner, "values", key)
+    budget.refresh(owner, "values", key, "value")
+
+    assert key.hash_calls == 0
+
+
 def test_budget_evicts_oldest_entry_across_owners() -> None:
     budget = ProcessRunContextCacheBudget()
     first = CacheOwner()
@@ -426,6 +462,23 @@ def test_budget_lowering_finite_limit_preserves_cross_owner_lru_order() -> None:
     assert ("values", "a") in first.entries
     assert ("values", "b") not in second.entries
     assert ("values", "c") in second.entries
+
+
+def test_budget_new_empty_owner_enforces_lower_finite_limit() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    budget.register(owner, entry_size * 3)
+    for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
+        owner.store("values", key, value)
+        budget.track(owner, "values", key, value)
+
+    budget.register(CacheOwner(), entry_size * 2)
+
+    assert ("values", "a") not in owner.entries
+    assert ("values", "b") in owner.entries
+    assert ("values", "c") in owner.entries
+    assert budget.estimated_bytes == entry_size * 2
 
 
 def test_budget_stale_dead_owner_cleanup_preserves_replacement_accounting() -> None:
