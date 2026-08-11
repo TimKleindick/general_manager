@@ -69,7 +69,7 @@ hydration and checking. RemoteAPI delivery after commit is best-effort:
 unavailable channel layers produce no message, and channel-layer failures are
 logged rather than raised.
 
-## Failure and nesting behavior
+## Nesting behavior
 
 Nested notification contexts join the already-active outer batch instead of
 flushing independently. Outside the context, existing row-level notification

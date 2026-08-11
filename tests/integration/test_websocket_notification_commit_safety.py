@@ -116,7 +116,7 @@ class WebsocketNotificationCommitSafetyTests(GeneralManagerTransactionTestCase):
                 with transaction.atomic():
                     self._emit_both()
                     raise ExpectedRollback
-        self.assertEqual(self.sent, [])
+            self.assertEqual(self.sent, [])
 
     def test_savepoint_rollback_discards_both_notifications(self) -> None:
         """Rolling back an inner savepoint discards both pending publishers."""
