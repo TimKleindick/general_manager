@@ -106,3 +106,51 @@ def test_estimate_cache_entry_size_treats_module_subclasses_as_shallow_leaves() 
     size = estimate_cache_entry_size("key", module, stop_after=None)
 
     assert size == MIN_TRACKED_ENTRY_BYTES
+
+
+def test_estimate_cache_entry_size_avoids_custom_metaclass_metadata_hooks() -> None:
+    metadata_accesses: list[str] = []
+
+    class HostileMeta(type):
+        def __getattribute__(cls, name: str) -> object:
+            if name in {"__mro__", "__dict__"}:
+                metadata_accesses.append(name)
+                raise AssertionError(  # noqa: TRY003 - test double reports the hook.
+                    f"unexpected metaclass lookup: {name}"
+                )
+            return super().__getattribute__(name)
+
+    class Value(metaclass=HostileMeta):
+        __slots__ = ("payload",)
+
+        def __init__(self) -> None:
+            self.payload = bytearray(1024)
+
+    size = estimate_cache_entry_size("key", Value(), stop_after=None)
+
+    assert size > MIN_TRACKED_ENTRY_BYTES
+    assert metadata_accesses == []
+
+
+def test_estimate_cache_entry_size_ignores_hostile_mutated_slot_metadata() -> None:
+    class HostileSlot:
+        def __hash__(self) -> int:
+            raise AssertionError("unexpected slot hash")  # noqa: TRY003
+
+        def startswith(self, prefix: str) -> bool:
+            raise AssertionError("unexpected slot string lookup")  # noqa: TRY003
+
+        def endswith(self, suffix: str) -> bool:
+            raise AssertionError("unexpected slot string lookup")  # noqa: TRY003
+
+    class Value:
+        __slots__ = ["payload"]
+
+        def __init__(self) -> None:
+            self.payload = bytearray(1024)
+
+    Value.__slots__.append(HostileSlot())
+
+    size = estimate_cache_entry_size("key", Value(), stop_after=None)
+
+    assert size > MIN_TRACKED_ENTRY_BYTES
