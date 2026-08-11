@@ -349,6 +349,62 @@ def test_dependency_cache_prefetch_hits_are_cleared_on_exit() -> None:
     assert context.get_dependency_cache_hit("cache-key", None) is None
 
 
+def test_dependency_cache_hits_share_lru_recency() -> None:
+    first = DependencyCacheHit(value="A", dependencies=frozenset())
+    second = DependencyCacheHit(value="B", dependencies=frozenset())
+    third = DependencyCacheHit(value="C", dependencies=frozenset())
+    entry_size = estimate_cache_entry_size("cache-a", first, stop_after=None)
+    with (
+        override_settings(
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+        ),
+        CalculationRunContext() as context,
+    ):
+        context.set_dependency_cache_hits({"cache-a": first, "cache-b": second})
+        assert context.get_dependency_cache_hit("cache-a") == first
+        context.set_dependency_cache_hits({"cache-c": third})
+
+        assert context.get_dependency_cache_hit("cache-a") == first
+        assert context.get_dependency_cache_hit("cache-b") is None
+        assert context.get_dependency_cache_hit("cache-c") == third
+
+
+def test_pending_dependency_publication_hit_is_pinned_until_flush() -> None:
+    entry = make_pending_publication("cache-a")
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 0}),
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ),
+        mock.patch("general_manager.cache.dependency_publish.release_compute_lease"),
+        CalculationRunContext() as context,
+    ):
+        context.buffer_dependency_cache_publication(entry)
+        assert context.get_dependency_cache_hit("cache-a") is not None
+
+        context.flush_dependency_cache_publications()
+
+        assert context.get_dependency_cache_hit("cache-a") is None
+
+
+def test_pending_dependency_publication_hit_becomes_evictable_after_discard() -> None:
+    entry = make_pending_publication("cache-a")
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 0}),
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease"
+        ) as release_lease,
+        CalculationRunContext() as context,
+    ):
+        context.buffer_dependency_cache_publication(entry)
+        assert context.get_dependency_cache_hit("cache-a") is not None
+
+        context.discard_dependency_cache_publications()
+
+        assert context.get_dependency_cache_hit("cache-a") is None
+        release_lease.assert_called_once_with(entry.lease)
+
+
 def test_buffered_dependency_cache_publication_is_visible_as_run_hit() -> None:
     entry = make_pending_publication("cache-a")
 
@@ -717,6 +773,32 @@ def test_orm_bucket_rows_index_model_rows_and_prefetch_state() -> None:
             )
             == frozenset()
         )
+
+
+def test_run_context_reweighs_mutated_orm_index() -> None:
+    class Row:
+        _meta = SimpleNamespace(concrete_model=None)
+
+        def __init__(self) -> None:
+            self.pk = 7
+            self._state = SimpleNamespace(db="default")
+            self.payload = b"x" * 4096
+
+    Row._meta = SimpleNamespace(concrete_model=Row)
+    row = Row()
+    empty_index_size = estimate_cache_entry_size(
+        ("orm_model_row_index", Row), {}, stop_after=None
+    )
+
+    with (
+        override_settings(
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": empty_index_size}
+        ),
+        CalculationRunContext() as context,
+    ):
+        context.set_orm_bucket_rows(("query", "rows"), (row,))
+
+        assert context.get_orm_model_row(Row, 7, "default") is None
 
 
 def test_bucket_index_helpers_store_replay_and_clear_dependencies() -> None:
