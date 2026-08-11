@@ -160,7 +160,7 @@ task errors still propagate from the await.
 
 - Subscriptions require Django Channels. If `get_channel_layer()` returns `None`, the resolver raises a descriptive GraphQL error explaining that `CHANNEL_LAYERS` must be configured.
 - Managers are automatically decorated with `@data_change` and emit `pre_data_change` and `post_data_change` signals. GraphQL receives `post_data_change` immediately, but deep-copies the event identification and schedules websocket publication with `transaction.on_commit()` using the changed manager's database alias. For ordinary events created inside a transaction, both the instance channel group (`gm_subscriptions.<Manager>.<digest>`) and class channel group (`gm_subscriptions.<Manager>.__class__`) receive the event only after the outermost commit. Events registered in a rolled-back transaction or savepoint disappear without publication.
-- Class-wide subscriptions hydrate the changed manager and call `can_read_instance()` after that commit before yielding the event. In particular, a newly created object is visible to hydration only after it is committed, eliminating the pre-commit create race while preserving object-level permission checks.
+- For ordinary identified row-level class events, subscriptions hydrate the changed manager and call `can_read_instance()` after that commit before yielding the event. In particular, a newly created object is visible to hydration only after it is committed, eliminating the pre-commit create race while preserving object-level permission checks. Aggregate batch `refresh` events have no identification, yield `item = null`, and are exempt from object-level permission hydration and checking.
 
 ### Bulk notification refreshes
 

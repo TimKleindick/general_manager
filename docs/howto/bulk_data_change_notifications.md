@@ -60,12 +60,14 @@ Inside the context, GraphQL and RemoteAPI delivery is deduplicated by target:
 
 Each aggregate event includes a UUID4 `event_id`. The context does not reveal
 which rows changed, how many changed, or the original row-level actions. Cache
-invalidation and unrelated signal receivers still run for each write. GraphQL
-class-wide subscriptions hydrate the changed object and call
-`can_read_instance()` only after commit, so a create cannot race pre-commit
-hydration. RemoteAPI delivery after commit is best-effort: unavailable channel
-layers produce no message, and channel-layer failures are logged rather than
-raised.
+invalidation and unrelated signal receivers still run for each write. For
+ordinary identified row-level GraphQL class events, subscriptions hydrate the
+changed object and call `can_read_instance()` only after commit, so a create
+cannot race pre-commit hydration. Aggregate batch `refresh` events have no
+identification, yield `item = null`, and are exempt from object-level permission
+hydration and checking. RemoteAPI delivery after commit is best-effort:
+unavailable channel layers produce no message, and channel-layer failures are
+logged rather than raised.
 
 ## Failure and nesting behavior
 
