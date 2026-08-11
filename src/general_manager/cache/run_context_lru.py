@@ -93,6 +93,8 @@ class ProcessRunContextCacheBudget:
             self._owners.add(owner)
             self._owner_reference_locked(owner)
             if max_bytes == self._max_bytes:
+                if is_new_owner and max_bytes is not None:
+                    self._track_owner_entries_locked(owner)
                 return
 
             previous_max_bytes = self._max_bytes
