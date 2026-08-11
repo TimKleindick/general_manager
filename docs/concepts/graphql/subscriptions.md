@@ -159,7 +159,8 @@ task errors still propagate from the await.
 ### Signals and channels
 
 - Subscriptions require Django Channels. If `get_channel_layer()` returns `None`, the resolver raises a descriptive GraphQL error explaining that `CHANNEL_LAYERS` must be configured.
-- Managers are automatically decorated with `@data_change` and emit `pre_data_change` and `post_data_change` signals. GraphQL listens to `post_data_change` and forwards the event to the relevant instance channel group (`gm_subscriptions.<Manager>.<digest>`) and class channel group (`gm_subscriptions.<Manager>.__class__`).
+- Managers are automatically decorated with `@data_change` and emit `pre_data_change` and `post_data_change` signals. GraphQL receives `post_data_change` immediately, but deep-copies the event identification and schedules websocket publication with `transaction.on_commit()` using the changed manager's database alias. For ordinary events created inside a transaction, both the instance channel group (`gm_subscriptions.<Manager>.<digest>`) and class channel group (`gm_subscriptions.<Manager>.__class__`) receive the event only after the outermost commit. Events registered in a rolled-back transaction or savepoint disappear without publication.
+- Class-wide subscriptions hydrate the changed manager and call `can_read_instance()` after that commit before yielding the event. In particular, a newly created object is visible to hydration only after it is committed, eliminating the pre-commit create race while preserving object-level permission checks.
 
 ### Bulk notification refreshes
 
@@ -186,13 +187,25 @@ with bulk_data_change_notifications():
 ```
 
 Keep `bulk_data_change_notifications()` outside the true outermost database
-transaction. When the shown `transaction.atomic()` is outermost, it commits
-before the notification context flushes. With `ATOMIC_REQUESTS` or another
-enclosing atomic block, that block may only release a savepoint and the actual
-commit can occur after the refresh; place the notification context outside that
-enclosing boundary instead. The context is not transaction-aware, and it also
-flushes queued refreshes when its body exits exceptionally before re-raising the
-exception.
+transaction. When the shown `transaction.atomic()` is outermost, its commit
+runs the queued publication callbacks while the notification context is still
+open, then the context flushes one aggregate refresh per target. Rollbacks,
+including savepoint rollbacks, discard the callbacks before they can enter the
+batch. With `ATOMIC_REQUESTS` or another enclosing atomic block, place the
+notification context outside that enclosing boundary so it remains open until
+the actual commit.
+
+Reversing the contexts remains commit-safe, but does not guarantee aggregation:
+
+```python
+with transaction.atomic():
+    with bulk_data_change_notifications():
+        ...
+```
+
+In that order, the notification context closes before the outer transaction's
+commit callbacks run, so those callbacks publish ordinary events rather than
+adding their refreshes to the now-closed batch.
 
 During an explicit batch, row-level events are replaced by one `refresh` event
 for each affected manager class. A detail subscription receives refreshes for

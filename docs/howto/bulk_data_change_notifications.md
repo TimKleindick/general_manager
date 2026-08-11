@@ -22,10 +22,30 @@ with bulk_data_change_notifications():
             project.update(status="archived")
 ```
 
-The context is not transaction-aware. If another layer already encloses this
-code in `transaction.atomic()`—including Django's `ATOMIC_REQUESTS`—place the
-notification context outside that enclosing block so the flush follows the
-actual commit or rollback rather than an intermediate savepoint.
+GraphQL and RemoteAPI receive `post_data_change` immediately, but their
+websocket publishers schedule delivery with `transaction.on_commit()` on the
+changed manager's database alias. With the order above, the outermost commit
+runs those callbacks while the notification context remains open; its exit then
+flushes one aggregate refresh per target. A rollback, including a savepoint
+rollback, discards the callbacks, so no refresh enters the batch.
+
+If another layer already encloses this code in `transaction.atomic()`—including
+Django's `ATOMIC_REQUESTS`—place the notification context outside that
+enclosing block so it remains open through the actual commit rather than an
+intermediate savepoint.
+
+The reverse order is still commit-safe but does not guarantee aggregation:
+
+```python
+with transaction.atomic():
+    with bulk_data_change_notifications():
+        for project in Project.filter(status="active"):
+            project.update(status="archived")
+```
+
+Here the batch closes before the outer transaction runs its commit callbacks,
+so those callbacks publish ordinary row-level notifications instead of queuing
+aggregate refreshes.
 
 ## What clients receive
 
@@ -40,15 +60,18 @@ Inside the context, GraphQL and RemoteAPI delivery is deduplicated by target:
 
 Each aggregate event includes a UUID4 `event_id`. The context does not reveal
 which rows changed, how many changed, or the original row-level actions. Cache
-invalidation and unrelated signal receivers still run for each write.
+invalidation and unrelated signal receivers still run for each write. GraphQL
+class-wide subscriptions hydrate the changed object and call
+`can_read_instance()` only after commit, so a create cannot race pre-commit
+hydration. RemoteAPI delivery after commit is best-effort: unavailable channel
+layers produce no message, and channel-layer failures are logged rather than
+raised.
 
 ## Failure and nesting behavior
 
-The body is always allowed to finish its normal exception behavior: an
-exception raised by the body is re-raised after the queued flush is attempted.
 Nested notification contexts join the already-active outer batch instead of
 flushing independently. Outside the context, existing row-level notification
-delivery remains unchanged.
+delivery remains commit-bound and rollback-safe.
 
 For the full callable signature and exception contract, see the
 [GraphQL API reference](../api/graphql.md#bulk-notification-context). The
