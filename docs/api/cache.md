@@ -495,6 +495,35 @@ block and restore the previous context on exit, async task propagation follows
 normal context-variable behavior, and unrelated threads do not automatically
 share the active context.
 
+### Run-context cache memory budget
+
+Run-context storage is unlimited by default. To opt into a process-local,
+estimated-memory budget shared by every concurrently live
+`CalculationRunContext`, configure:
+
+```python
+GENERAL_MANAGER = {
+    "RUN_CONTEXT_CACHE_MAX_BYTES": 256 * 1024 * 1024,
+}
+```
+
+`RUN_CONTEXT_CACHE_MAX_BYTES` is optional. `None` (or an omitted setting)
+keeps unlimited retention; `0` retains no eviction-safe run-cache entries; and
+a positive integer sets the shared byte budget. Negative integers, booleans,
+and non-integer values raise a Django configuration error when a
+`CalculationRunContext` is created.
+
+The budget uses an insertion-time estimate and evicts the least-recently-used
+eviction-safe entry across live contexts when necessary. Values whose estimate
+exceeds the complete budget are returned to the caller but bypass retention.
+Pending dependency-cache publications, and their same-run hits, remain pinned
+until publication succeeds or the state is discarded, so eviction never loses a
+pending publication or its compute lease.
+
+This setting is not a hard cap on total process RSS. In particular, Python and
+native allocation overhead, other application memory, and caller-owned mutable
+values that grow after insertion are outside the insertion-time estimate.
+
 `get_or_set(key, loader)` stores the first successful loader result under the
 hashable key and returns that same object for later calls with the same key.
 Loader exceptions propagate and do not store a value. `key`,
