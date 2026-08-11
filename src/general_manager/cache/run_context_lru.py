@@ -75,6 +75,7 @@ class ProcessRunContextCacheBudget:
     def __init__(self) -> None:
         self._lock = RLock()
         self._owners: WeakSet[RunContextCacheOwner] = WeakSet()
+        self._owner_references: dict[int, ReferenceType[RunContextCacheOwner]] = {}
         self._entries: OrderedDict[TrackedKey, _TrackedEntry] = OrderedDict()
         self._total_bytes = 0
         self._max_bytes: int | None = None
@@ -89,16 +90,21 @@ class ProcessRunContextCacheBudget:
         """Register an owner and rebuild tracked state when the limit changes."""
         with self._lock:
             self._owners.add(owner)
+            self._owner_reference_locked(owner)
             if max_bytes == self._max_bytes:
                 return
 
+            previous_max_bytes = self._max_bytes
             self._max_bytes = max_bytes
             if max_bytes is None:
                 self._entries.clear()
                 self._total_bytes = 0
                 return
 
-            self._rebuild_locked()
+            if previous_max_bytes is None:
+                self._rebuild_locked()
+            else:
+                self._evict_excess_locked()
 
     def track(
         self,
@@ -150,6 +156,7 @@ class ProcessRunContextCacheBudget:
         with self._lock:
             owner_id = id(owner)
             self._remove_owner_entries_locked(owner_id)
+            self._owner_references.pop(owner_id, None)
             self._owners.discard(owner)
 
     def _rebuild_locked(self) -> None:
@@ -173,6 +180,7 @@ class ProcessRunContextCacheBudget:
 
         tracked_key = (id(owner), namespace, key)
         self._remove_entry_locked(tracked_key)
+        owner_reference = self._owner_reference_locked(owner)
         estimated_bytes = estimate_cache_entry_size(
             key,
             value,
@@ -191,7 +199,7 @@ class ProcessRunContextCacheBudget:
             return
 
         self._entries[tracked_key] = _TrackedEntry(
-            owner=ref(owner, self._owner_finalizer(id(owner))),
+            owner=owner_reference,
             namespace=namespace,
             key=key,
             size=estimated_bytes,
@@ -200,11 +208,10 @@ class ProcessRunContextCacheBudget:
         self._evict_excess_locked()
 
     def _evict_excess_locked(self) -> None:
-        max_bytes = self._max_bytes
-        if max_bytes is None:
-            return
-
-        while self._total_bytes > max_bytes and self._entries:
+        while self._entries:
+            max_bytes = self._max_bytes
+            if max_bytes is None or self._total_bytes <= max_bytes:
+                return
             _, entry = self._entries.popitem(last=False)
             self._total_bytes -= entry.size
             owner = entry.owner()
@@ -230,13 +237,33 @@ class ProcessRunContextCacheBudget:
             if tracked_key[0] == owner_id:
                 self._remove_entry_locked(tracked_key)
 
+    def _owner_reference_locked(
+        self,
+        owner: RunContextCacheOwner,
+    ) -> ReferenceType[RunContextCacheOwner]:
+        owner_id = id(owner)
+        owner_reference = self._owner_references.get(owner_id)
+        if owner_reference is not None and owner_reference() is owner:
+            return owner_reference
+
+        if owner_reference is not None:
+            self._remove_owner_entries_locked(owner_id)
+        owner_reference = ref(owner, self._owner_finalizer(owner_id))
+        self._owner_references[owner_id] = owner_reference
+        return owner_reference
+
     def _owner_finalizer(
         self,
         owner_id: int,
     ) -> Callable[[ReferenceType[RunContextCacheOwner]], None]:
-        def remove_dead_owner(_: ReferenceType[RunContextCacheOwner]) -> None:
+        def remove_dead_owner(
+            owner_reference: ReferenceType[RunContextCacheOwner],
+        ) -> None:
             with self._lock:
+                if self._owner_references.get(owner_id) is not owner_reference:
+                    return
                 self._remove_owner_entries_locked(owner_id)
+                self._owner_references.pop(owner_id, None)
 
         return remove_dead_owner
 
