@@ -212,6 +212,16 @@ was not entered is a no-op. `ensure_calculation_run_context()` reuses an
 existing active context and only creates/exits a temporary one when none is
 active.
 
+For long-lived or concurrent runs, applications can configure the optional
+`GENERAL_MANAGER["RUN_CONTEXT_CACHE_MAX_BYTES"]` setting to give eviction-safe
+run-cache entries a process-local, least-recently-used estimated-memory budget.
+Plan fleet capacity by multiplying that value by the number of worker
+processes: each Gunicorn, Celery, or other Python worker has its own budget.
+The estimate is taken when a value is inserted, so caller-owned mutable values
+can later grow beyond their recorded size. This is not a hard worker-memory or
+RSS limit; applications that need a hard worker ceiling should also configure
+deployment-level memory limits and worker recycling.
+
 Callable `Input.possible_values` providers are also cached automatically inside
 an active `CalculationRunContext` when the caller can identify the owning manager
 class and input name. The cache key uses the manager class, the input name, and
