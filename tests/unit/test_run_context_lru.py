@@ -10,6 +10,7 @@ from django.test import override_settings
 from general_manager.cache.run_context_lru import (
     MIN_TRACKED_ENTRY_BYTES,
     ProcessRunContextCacheBudget,
+    _TrackedEntry,
     estimate_cache_entry_size,
     resolve_run_context_cache_max_bytes,
 )
@@ -32,6 +33,40 @@ class CacheOwner:
 
     def _evict_run_cache_entry(self, namespace: Namespace, key: Hashable) -> None:
         self.entries.pop((namespace, key), None)
+
+
+class LimitRaisingCacheOwner(CacheOwner):
+    def __init__(
+        self,
+        budget: ProcessRunContextCacheBudget,
+        replacement_limit: int,
+    ) -> None:
+        super().__init__()
+        self._budget = budget
+        self._replacement_limit = replacement_limit
+        self._eviction_count = 0
+
+    def _evict_run_cache_entry(self, namespace: Namespace, key: Hashable) -> None:
+        super()._evict_run_cache_entry(namespace, key)
+        self._eviction_count += 1
+        if self._eviction_count == 1:
+            self._budget.register(self, self._replacement_limit)
+
+
+class OrderedOwnerRegistry:
+    def __init__(self, owners: Iterable[CacheOwner]) -> None:
+        self._owners = list(owners)
+
+    def add(self, owner: CacheOwner) -> None:
+        if owner not in self._owners:
+            self._owners.append(owner)
+
+    def discard(self, owner: CacheOwner) -> None:
+        if owner in self._owners:
+            self._owners.remove(owner)
+
+    def __iter__(self) -> Iterable[CacheOwner]:
+        return iter(self._owners)
 
 
 @pytest.mark.parametrize("configured", [None, 0, 1, 1024])
@@ -347,6 +382,86 @@ def test_budget_rebuild_eviction_does_not_mutate_live_owner_iteration() -> None:
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
 
     budget.register(owner, entry_size * 2)
+
+    assert ("values", "a") not in owner.entries
+    assert ("values", "b") in owner.entries
+    assert ("values", "c") in owner.entries
+    assert budget.estimated_bytes == entry_size * 2
+
+
+def test_budget_lowering_finite_limit_preserves_single_owner_lru_order() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    budget.register(owner, entry_size * 3)
+    for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
+        owner.store("values", key, value)
+        budget.track(owner, "values", key, value)
+
+    budget.touch(owner, "values", "a")
+    budget.register(owner, entry_size * 2)
+
+    assert ("values", "a") in owner.entries
+    assert ("values", "b") not in owner.entries
+    assert ("values", "c") in owner.entries
+
+
+def test_budget_lowering_finite_limit_preserves_cross_owner_lru_order() -> None:
+    budget = ProcessRunContextCacheBudget()
+    first = CacheOwner()
+    second = CacheOwner()
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    budget.register(first, entry_size * 3)
+    budget.register(second, entry_size * 3)
+    first.store("values", "a", "A")
+    budget.track(first, "values", "a", "A")
+    for key, value in (("b", "B"), ("c", "C")):
+        second.store("values", key, value)
+        budget.track(second, "values", key, value)
+
+    budget.touch(first, "values", "a")
+    budget._owners = OrderedOwnerRegistry((first, second))
+    budget.register(second, entry_size * 2)
+
+    assert ("values", "a") in first.entries
+    assert ("values", "b") not in second.entries
+    assert ("values", "c") in second.entries
+
+
+def test_budget_stale_dead_owner_cleanup_preserves_replacement_accounting() -> None:
+    budget = ProcessRunContextCacheBudget()
+    stale_owner = CacheOwner()
+    stale_reference = ref(stale_owner)
+    replacement_owner = CacheOwner()
+    replacement_reference = ref(replacement_owner)
+    owner_id = id(stale_owner)
+    entry_size = estimate_cache_entry_size("replacement", "R", stop_after=None)
+    replacement_owner.store("values", "replacement", "R")
+    budget._owner_references = {owner_id: replacement_reference}
+    budget._entries[(owner_id, "values", "replacement")] = _TrackedEntry(
+        owner=replacement_reference,
+        namespace="values",
+        key="replacement",
+        size=entry_size,
+    )
+    budget._total_bytes = entry_size
+
+    budget._owner_finalizer(owner_id)(stale_reference)
+
+    assert ("values", "replacement") in replacement_owner.entries
+    assert budget.estimated_bytes == entry_size
+
+
+def test_budget_reentrant_eviction_honors_raised_limit() -> None:
+    budget = ProcessRunContextCacheBudget()
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    owner = LimitRaisingCacheOwner(budget, entry_size * 2)
+    budget.register(owner, entry_size * 3)
+    for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
+        owner.store("values", key, value)
+        budget.track(owner, "values", key, value)
+
+    budget.register(owner, entry_size)
 
     assert ("values", "a") not in owner.entries
     assert ("values", "b") in owner.entries
