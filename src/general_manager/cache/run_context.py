@@ -10,6 +10,11 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Optional, TypeVar, cast
 
 from general_manager.as_of import as_of_cache_fingerprint
+from general_manager.cache.run_context_lru import (
+    RunCacheNamespace,
+    resolve_run_context_cache_max_bytes,
+    run_context_cache_budget,
+)
 from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
@@ -99,6 +104,47 @@ class CalculationRunContext:
         ] = {}
         self._dependency_cache_publish_batch_size = dependency_cache_publish_batch_size
         self._tokens: list[Token[CalculationRunContext | None]] = []
+        run_context_cache_budget.register(
+            self,
+            resolve_run_context_cache_max_bytes(),
+        )
+
+    def _iter_run_cache_entries(
+        self,
+    ) -> Iterable[tuple[RunCacheNamespace, Hashable, object]]:
+        """Yield retained entries for process-wide memory accounting."""
+        for key, value in self._values.items():
+            yield "values", key, value
+        for key, hit in self._dependency_cache_hits.items():
+            if key not in self._dependency_cache_pending_publications:
+                yield "dependency_hits", key, hit
+
+    def _evict_run_cache_entry(
+        self,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+    ) -> None:
+        """Remove one entry selected by the process-wide coordinator."""
+        if namespace == "values":
+            self._values.pop(key, None)
+        elif key not in self._dependency_cache_pending_publications:
+            self._dependency_cache_hits.pop(cast(str, key), None)
+
+    def _store_run_value(self, scoped_key: Hashable, value: object) -> None:
+        self._values[scoped_key] = value
+        run_context_cache_budget.track(self, "values", scoped_key, value)
+
+    def _remove_run_value(self, scoped_key: Hashable) -> None:
+        if scoped_key in self._values:
+            del self._values[scoped_key]
+            run_context_cache_budget.remove(self, "values", scoped_key)
+
+    def _refresh_run_value(self, scoped_key: Hashable) -> None:
+        try:
+            value = self._values[scoped_key]
+        except KeyError:
+            return
+        run_context_cache_budget.refresh(self, "values", scoped_key, value)
 
     @staticmethod
     def _scoped_key(key: Hashable) -> Hashable:
@@ -110,6 +156,11 @@ class CalculationRunContext:
 
     def __enter__(self) -> "CalculationRunContext":
         """Activate this context and return it for the `with` block."""
+        if not self._tokens:
+            run_context_cache_budget.register(
+                self,
+                resolve_run_context_cache_max_bytes(),
+            )
         self._tokens.append(_active_context.set(self))
         return self
 
@@ -152,6 +203,7 @@ class CalculationRunContext:
         finally:
             _active_context.reset(token)
             if is_outermost_exit:
+                run_context_cache_budget.clear_context(self)
                 self._values.clear()
                 self._dependency_cache_hits.clear()
                 self._dependency_cache_pending_publications.clear()
@@ -169,19 +221,28 @@ class CalculationRunContext:
         """
         scoped_key = self._scoped_key(key)
         try:
-            return cast(T, self._values[scoped_key])
+            value = self._values[scoped_key]
         except KeyError:
             value = loader()
-            self._values[scoped_key] = value
+            self._store_run_value(scoped_key, value)
             return value
+        run_context_cache_budget.touch(self, "values", scoped_key)
+        return cast(T, value)
 
     def get(self, key: Hashable, default: object = None) -> object:
         """Return the stored value for key, or default when key is absent."""
-        return self._values.get(self._scoped_key(key), default)
+        scoped_key = self._scoped_key(key)
+        try:
+            value = self._values[scoped_key]
+        except KeyError:
+            return default
+        run_context_cache_budget.touch(self, "values", scoped_key)
+        return value
 
     def set(self, key: Hashable, value: object) -> None:
         """Store a value for the active run."""
-        self._values[self._scoped_key(key)] = value
+        scoped_key = self._scoped_key(key)
+        self._store_run_value(scoped_key, value)
 
     def set_dependency_cache_hits(
         self,
@@ -320,7 +381,7 @@ class CalculationRunContext:
                     and key[2][: len(prefix)] == prefix
                 )
             if matches:
-                del self._values[key]
+                self._remove_run_value(key)
 
     def get_orm_bucket_result(self, key: Hashable) -> object:
         """Return a cached ORM bucket result for key, or `None` when absent."""
@@ -598,7 +659,11 @@ class CalculationRunContext:
 
     def has(self, key: Hashable) -> bool:
         """Return whether key has a value in the active run."""
-        return self._scoped_key(key) in self._values
+        scoped_key = self._scoped_key(key)
+        if scoped_key not in self._values:
+            return False
+        run_context_cache_budget.touch(self, "values", scoped_key)
+        return True
 
     def __contains__(self, key: Hashable) -> bool:
         """Return whether key has a value in the active run."""
