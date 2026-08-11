@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v0.67.7 (2026-08-11)
+
+### Bug Fixes
+
+- Address websocket notification review feedback
+  ([`bbd0911`](https://github.com/TimKleindick/general_manager/commit/bbd0911e25c8fcbb90c78d4bfbfaf7a4eeebf83d))
+
+- Publish GraphQL changes after commit
+  ([`2bc3325`](https://github.com/TimKleindick/general_manager/commit/2bc33254f3c0d8582811bc4435cacd54fbe55a9b))
+
+- Publish remote invalidations after commit
+  ([`ce7f825`](https://github.com/TimKleindick/general_manager/commit/ce7f825e3307e8072b1118f495e38f08374b3c2f))
+
+### Documentation
+
+- Address delete history review feedback
+  ([`c5631da`](https://github.com/TimKleindick/general_manager/commit/c5631da615177bba55ad346a326a5b0b76982b59))
+
+- Clarify class subscription refresh permissions
+  ([`962d21d`](https://github.com/TimKleindick/general_manager/commit/962d21d20ad0185495064dcf29b8b8dd434788c1))
+
+- Document hard-delete history reasons
+  ([`dbcd473`](https://github.com/TimKleindick/general_manager/commit/dbcd473004cacaa3c88b76bb222cf9f9d8702dd7))
+
+- Explain commit-safe websocket delivery
+  ([`756bd01`](https://github.com/TimKleindick/general_manager/commit/756bd019f165e2591108b49b5ce55e66ab7557cc))
+
+### Testing
+
+- Cover commit-safe websocket notifications
+  ([`7381655`](https://github.com/TimKleindick/general_manager/commit/738165574936aabbaeedbf4e739456577f24d98e))
+
+- Cover remote invalidation instance capture
+  ([`e7f810f`](https://github.com/TimKleindick/general_manager/commit/e7f810fa6bcf9b745ba1ab1475531b2fc1b3a599))
+
+- Cover skipped GraphQL event scheduling
+  ([`f3165ab`](https://github.com/TimKleindick/general_manager/commit/f3165ab72dc249bebdd7bcfe6f1fbf994d696042))
+
+
 ## v0.67.6 (2026-08-03)
 
 ### Bug Fixes
