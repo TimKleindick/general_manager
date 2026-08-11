@@ -467,3 +467,22 @@ def test_budget_reentrant_eviction_honors_raised_limit() -> None:
     assert ("values", "b") in owner.entries
     assert ("values", "c") in owner.entries
     assert budget.estimated_bytes == entry_size * 2
+
+
+def test_budget_registers_prepopulated_owner_when_finite_limit_changes() -> None:
+    budget = ProcessRunContextCacheBudget()
+    first = CacheOwner()
+    second = CacheOwner()
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    budget.register(first, entry_size * 3)
+    first.store("values", "a", "A")
+    budget.track(first, "values", "a", "A")
+    for key, value in (("b", "B"), ("c", "C")):
+        second.store("values", key, value)
+
+    budget.register(second, entry_size * 2)
+
+    assert ("values", "a") not in first.entries
+    assert ("values", "b") in second.entries
+    assert ("values", "c") in second.entries
+    assert budget.estimated_bytes == entry_size * 2

@@ -89,6 +89,7 @@ class ProcessRunContextCacheBudget:
     def register(self, owner: RunContextCacheOwner, max_bytes: int | None) -> None:
         """Register an owner and rebuild tracked state when the limit changes."""
         with self._lock:
+            is_new_owner = owner not in self._owners
             self._owners.add(owner)
             self._owner_reference_locked(owner)
             if max_bytes == self._max_bytes:
@@ -103,6 +104,8 @@ class ProcessRunContextCacheBudget:
 
             if previous_max_bytes is None:
                 self._rebuild_locked()
+            elif is_new_owner:
+                self._track_owner_entries_locked(owner)
             else:
                 self._evict_excess_locked()
 
@@ -163,9 +166,12 @@ class ProcessRunContextCacheBudget:
         self._entries.clear()
         self._total_bytes = 0
         for owner in tuple(self._owners):
-            entries = tuple(owner._iter_run_cache_entries())
-            for namespace, key, value in entries:
-                self._track_locked(owner, namespace, key, value)
+            self._track_owner_entries_locked(owner)
+
+    def _track_owner_entries_locked(self, owner: RunContextCacheOwner) -> None:
+        entries = tuple(owner._iter_run_cache_entries())
+        for namespace, key, value in entries:
+            self._track_locked(owner, namespace, key, value)
 
     def _track_locked(
         self,
