@@ -1,13 +1,37 @@
+from collections.abc import Hashable, Iterable
+from types import ModuleType
+from typing import Literal
+from weakref import ref
+
+import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
-import pytest
-from types import ModuleType
 
 from general_manager.cache.run_context_lru import (
     MIN_TRACKED_ENTRY_BYTES,
+    ProcessRunContextCacheBudget,
     estimate_cache_entry_size,
     resolve_run_context_cache_max_bytes,
 )
+
+Namespace = Literal["values", "dependency_hits"]
+
+
+class CacheOwner:
+    def __init__(self) -> None:
+        self.entries: dict[tuple[Namespace, Hashable], object] = {}
+
+    def store(self, namespace: Namespace, key: Hashable, value: object) -> None:
+        self.entries[(namespace, key)] = value
+
+    def _iter_run_cache_entries(
+        self,
+    ) -> Iterable[tuple[Namespace, Hashable, object]]:
+        for (namespace, key), value in self.entries.items():
+            yield namespace, key, value
+
+    def _evict_run_cache_entry(self, namespace: Namespace, key: Hashable) -> None:
+        self.entries.pop((namespace, key), None)
 
 
 @pytest.mark.parametrize("configured", [None, 0, 1, 1024])
@@ -196,3 +220,135 @@ def test_estimate_cache_entry_size_ignores_hostile_slot_list_subclasses() -> Non
     size = estimate_cache_entry_size("key", Value(), stop_after=None)
 
     assert size == MIN_TRACKED_ENTRY_BYTES
+
+
+def test_budget_evicts_oldest_entry_across_owners() -> None:
+    budget = ProcessRunContextCacheBudget()
+    first = CacheOwner()
+    second = CacheOwner()
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    budget.register(first, entry_size * 2)
+    budget.register(second, entry_size * 2)
+
+    first.store("values", "a", "A")
+    budget.track(first, "values", "a", "A")
+    second.store("values", "b", "B")
+    budget.track(second, "values", "b", "B")
+    second.store("values", "c", "C")
+    budget.track(second, "values", "c", "C")
+
+    assert ("values", "a") not in first.entries
+    assert ("values", "b") in second.entries
+    assert ("values", "c") in second.entries
+
+
+def test_budget_touch_refreshes_recency() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    budget.register(owner, entry_size * 2)
+    for key, value in (("a", "A"), ("b", "B")):
+        owner.store("values", key, value)
+        budget.track(owner, "values", key, value)
+
+    budget.touch(owner, "values", "a")
+    owner.store("values", "c", "C")
+    budget.track(owner, "values", "c", "C")
+
+    assert ("values", "a") in owner.entries
+    assert ("values", "b") not in owner.entries
+
+
+def test_budget_does_not_admit_entry_larger_than_limit() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 256)
+    owner.store("values", "large", b"x" * 1024)
+
+    budget.track(owner, "values", "large", b"x" * 1024)
+
+    assert ("values", "large") not in owner.entries
+
+
+def test_budget_replacement_and_remove_update_accounting() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "key", "small")
+    budget.track(owner, "values", "key", "small")
+    small_size = budget.estimated_bytes
+
+    owner.store("values", "key", b"x" * 1024)
+    budget.track(owner, "values", "key", b"x" * 1024)
+
+    assert budget.estimated_bytes > small_size
+    budget.remove(owner, "values", "key")
+    assert budget.estimated_bytes == 0
+
+
+def test_budget_clear_context_preserves_other_owner_accounting() -> None:
+    budget = ProcessRunContextCacheBudget()
+    first = CacheOwner()
+    second = CacheOwner()
+    budget.register(first, 10_000)
+    budget.register(second, 10_000)
+    first.store("values", "a", "A")
+    budget.track(first, "values", "a", "A")
+    second.store("values", "b", "B")
+    budget.track(second, "values", "b", "B")
+    second_size = estimate_cache_entry_size("b", "B", stop_after=None)
+
+    budget.clear_context(first)
+
+    assert budget.estimated_bytes == second_size
+    assert ("values", "b") in second.entries
+
+
+def test_budget_releases_dead_owner_accounting() -> None:
+    import gc
+
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "a", "A")
+    budget.track(owner, "values", "a", "A")
+    owner_reference = ref(owner)
+
+    del owner
+    gc.collect()
+
+    assert owner_reference() is None
+    assert budget.estimated_bytes == 0
+
+
+def test_budget_rebuilds_live_owners_when_limit_changes() -> None:
+    budget = ProcessRunContextCacheBudget()
+    first = CacheOwner()
+    second = CacheOwner()
+    budget.register(first, None)
+    first.store("values", "a", "A")
+    budget.track(first, "values", "a", "A")
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+
+    budget.register(second, entry_size)
+    second.store("values", "b", "B")
+    budget.track(second, "values", "b", "B")
+
+    assert ("values", "a") not in first.entries
+    assert ("values", "b") in second.entries
+
+
+def test_budget_rebuild_eviction_does_not_mutate_live_owner_iteration() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, None)
+    for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
+        owner.store("values", key, value)
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+
+    budget.register(owner, entry_size * 2)
+
+    assert ("values", "a") not in owner.entries
+    assert ("values", "b") in owner.entries
+    assert ("values", "c") in owner.entries
+    assert budget.estimated_bytes == entry_size * 2
