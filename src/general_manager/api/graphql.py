@@ -29,7 +29,7 @@ import graphene
 from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import models
+from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils.module_loading import import_string
 
 from general_manager.bucket.base_bucket import Bucket
@@ -1743,21 +1743,18 @@ class GraphQL:
         action: str,
         previous_instance: GeneralManager | None = None,
         identification: GraphQLIdentification | None = None,
+        database_alias: str = DEFAULT_DB_ALIAS,
         **_: object,
     ) -> None:
         """
-        Send a "gm.subscription.event" message to the channel group corresponding to a changed GeneralManager instance.
+        Schedule publication of a subscription event after the data change commits.
 
-        If the provided instance is a registered GeneralManager and a channel
-        layer is configured, queue one manager-wide refresh while notification
-        batching is active. Outside a batch, publish the row-level message to
-        the instance and class-wide groups through one async bridge.
-        Identification comes from the provided `identification` mapping when
-        supplied, otherwise from the changed instance, and is deep-copied
-        before dispatch. If the instance is `None`, the manager type is not
-        registered, or no channel layer is available, the function returns
-        without dispatching. Ordinary group dispatch failures are logged and
-        do not stop attempts for remaining groups.
+        If the provided instance is a registered GeneralManager, schedule the
+        row-level publication after the transaction for the originating database
+        alias commits. Identification comes from the provided `identification`
+        mapping when supplied, otherwise from the changed instance, and is
+        deep-copied before scheduling. If the instance is `None` or the manager
+        type is not registered, the function returns without scheduling.
 
         Parameters:
             sender (type[GeneralManager] | GeneralManager): The signal sender; either a GeneralManager subclass or an instance.
@@ -1783,6 +1780,28 @@ class GraphQL:
             )
             return
 
+        event_identification = deepcopy(
+            identification
+            if identification is not None
+            else event_instance.identification
+        )
+        transaction.on_commit(
+            lambda: cls._publish_data_change(
+                manager_class,
+                action,
+                event_identification,
+            ),
+            using=database_alias,
+        )
+
+    @classmethod
+    def _publish_data_change(
+        cls,
+        manager_class: type[GeneralManager],
+        action: str,
+        identification: GraphQLIdentification,
+    ) -> None:
+        """Publish a committed subscription event to its row and class groups."""
         channel_layer = cls._get_channel_layer()
         if channel_layer is None:
             logger.warning(
@@ -1794,30 +1813,24 @@ class GraphQL:
             )
             return
 
-        event_identification = (
-            deepcopy(identification)
-            if identification is not None
-            else deepcopy(event_instance.identification)
-        )
-        group_name = cls._group_name(manager_class, event_identification)
+        group_name = cls._group_name(manager_class, identification)
         class_group_name = cls._class_group_name(manager_class)
         message: dict[str, object] = {
             "type": "gm.subscription.event",
             "action": action,
             "manager": manager_class.__name__,
-            "identification": event_identification,
+            "identification": identification,
         }
         refresh_group_name = cls._refresh_group_name(manager_class)
-        refresh_message: dict[str, object] = {
-            "type": "gm.subscription.event",
-            "action": "refresh",
-            "manager": manager_class.__name__,
-        }
         if _queue_notification(
             key=("graphql", refresh_group_name),
             group_send=channel_layer.group_send,
             group=refresh_group_name,
-            message=refresh_message,
+            message={
+                "type": "gm.subscription.event",
+                "action": "refresh",
+                "manager": manager_class.__name__,
+            },
         ):
             return
 
