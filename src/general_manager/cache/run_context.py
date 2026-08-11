@@ -146,6 +146,31 @@ class CalculationRunContext:
             return
         run_context_cache_budget.refresh(self, "values", scoped_key, value)
 
+    def _store_dependency_cache_hit(
+        self,
+        key: str,
+        hit: DependencyCacheHit,
+    ) -> None:
+        self._dependency_cache_hits[key] = hit
+        if key in self._dependency_cache_pending_publications:
+            run_context_cache_budget.remove(self, "dependency_hits", key)
+        else:
+            run_context_cache_budget.track(self, "dependency_hits", key, hit)
+
+    def _remove_dependency_cache_hit(self, key: str) -> None:
+        if key in self._dependency_cache_hits:
+            del self._dependency_cache_hits[key]
+            run_context_cache_budget.remove(self, "dependency_hits", key)
+
+    def _refresh_dependency_cache_hit(self, key: str) -> None:
+        if key in self._dependency_cache_pending_publications:
+            return
+        try:
+            hit = self._dependency_cache_hits[key]
+        except KeyError:
+            return
+        run_context_cache_budget.refresh(self, "dependency_hits", key, hit)
+
     @staticmethod
     def _scoped_key(key: Hashable) -> Hashable:
         """Namespace a run value by the active historical snapshot."""
@@ -254,7 +279,8 @@ class CalculationRunContext:
         Provided keys replace existing hits for the same cache key, while
         omitted existing keys remain available.
         """
-        self._dependency_cache_hits.update(hits)
+        for key, hit in hits.items():
+            self._store_dependency_cache_hit(key, hit)
 
     def get_dependency_cache_hit(
         self,
@@ -262,7 +288,13 @@ class CalculationRunContext:
         default: object = None,
     ) -> DependencyCacheHit | object:
         """Return a prefetched dependency-cache hit, or default when absent."""
-        return self._dependency_cache_hits.get(key, default)
+        try:
+            hit = self._dependency_cache_hits[key]
+        except KeyError:
+            return default
+        if key not in self._dependency_cache_pending_publications:
+            run_context_cache_budget.touch(self, "dependency_hits", key)
+        return hit
 
     def buffer_dependency_cache_publication(
         self,
@@ -296,10 +328,14 @@ class CalculationRunContext:
         )
         if previous_entry is not None and previous_entry.lease != entry.lease:
             release_compute_lease(previous_entry.lease)
+        self._remove_dependency_cache_hit(entry.cache_key)
         self._dependency_cache_pending_publications[entry.cache_key] = entry
-        self._dependency_cache_hits[entry.cache_key] = DependencyCacheHit(
-            value=entry.result,
-            dependencies=entry.dependencies,
+        self._store_dependency_cache_hit(
+            entry.cache_key,
+            DependencyCacheHit(
+                value=entry.result,
+                dependencies=entry.dependencies,
+            ),
         )
         if (
             len(self._dependency_cache_pending_publications)
@@ -324,6 +360,7 @@ class CalculationRunContext:
         if not entries:
             return
         self._dependency_cache_pending_publications.clear()
+        cache_keys = tuple(entry.cache_key for entry in entries)
 
         from general_manager.cache.dependency_publish import (
             CachePublishAborted,
@@ -332,15 +369,19 @@ class CalculationRunContext:
         )
 
         try:
-            publish_dependency_cache_entries(entries)
-        except CachePublishAborted:
-            logger.debug(
-                "dependency cache batch publish aborted",
-                context={"entry_count": len(entries)},
-            )
+            try:
+                publish_dependency_cache_entries(entries)
+            except CachePublishAborted:
+                logger.debug(
+                    "dependency cache batch publish aborted",
+                    context={"entry_count": len(entries)},
+                )
+            finally:
+                for entry in entries:
+                    release_compute_lease(entry.lease)
         finally:
-            for entry in entries:
-                release_compute_lease(entry.lease)
+            for cache_key in cache_keys:
+                self._refresh_dependency_cache_hit(cache_key)
 
     def discard_dependency_cache_publications(self) -> None:
         """
@@ -353,18 +394,24 @@ class CalculationRunContext:
         if not entries:
             return
         self._dependency_cache_pending_publications.clear()
+        cache_keys = tuple(entry.cache_key for entry in entries)
 
         from general_manager.cache.dependency_publish import release_compute_lease
 
-        for entry in entries:
-            release_compute_lease(entry.lease)
+        try:
+            for entry in entries:
+                release_compute_lease(entry.lease)
+        finally:
+            for cache_key in cache_keys:
+                self._refresh_dependency_cache_hit(cache_key)
 
     def discard_dependency_cache_state(self) -> None:
         """Drop prefetched hits and buffered publications for this run."""
         try:
             self.discard_dependency_cache_publications()
         finally:
-            self._dependency_cache_hits.clear()
+            for key in tuple(self._dependency_cache_hits):
+                self._remove_dependency_cache_hit(key)
 
     def discard_prefix(self, prefix: tuple[Hashable, ...]) -> None:
         """Discard cached tuple keys whose leading items equal `prefix`."""
@@ -436,17 +483,23 @@ class CalculationRunContext:
         """Index cached ORM rows by model/database/primary key for relation reuse."""
         if not isinstance(rows, tuple):
             return
+        mutated_index_keys: dict[Hashable, None] = {}
         for row in rows:
             row_key = self._orm_model_row_key(row)
             if row_key is None:
                 continue
             for model_class in self._orm_model_index_classes(row):
                 cache_key = (ORM_MODEL_ROW_INDEX_PREFIX, model_class)
+                scoped_key = self._scoped_key(cache_key)
                 index = self.get(cache_key)
                 if not isinstance(index, dict):
                     index = {}
                     self.set(cache_key, index)
                 index[row_key] = row
+                if scoped_key in self._values:
+                    mutated_index_keys[scoped_key] = None
+        for scoped_key in mutated_index_keys:
+            self._refresh_run_value(scoped_key)
 
     def get_orm_model_row(
         self,
