@@ -208,9 +208,7 @@ def emit_remote_invalidation(
     if event_identification is None and instance is not None:
         event_identification = dict(instance.identification)
     captured_identification = (
-        deepcopy(dict(event_identification))
-        if event_identification is not None
-        else None
+        deepcopy(event_identification) if event_identification is not None else None
     )
     transaction.on_commit(
         lambda: _publish_remote_invalidation(
