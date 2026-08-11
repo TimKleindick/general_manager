@@ -2,6 +2,8 @@ from unittest import mock
 from types import SimpleNamespace
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
+from django.test import override_settings
 
 from general_manager.api import as_of
 from general_manager.as_of import as_of_cache_fingerprint
@@ -16,6 +18,10 @@ from general_manager.cache.run_context import (
     CalculationRunContext,
     current_calculation_run_context,
     ensure_calculation_run_context,
+)
+from general_manager.cache.run_context_lru import (
+    estimate_cache_entry_size,
+    run_context_cache_budget,
 )
 
 
@@ -107,6 +113,23 @@ def test_reentering_same_context_preserves_state_until_outer_exit() -> None:
     assert context.get("answer") is None
 
 
+def test_reused_run_context_reregisters_for_later_budget_rebuild() -> None:
+    with override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": None}):
+        context = CalculationRunContext()
+        with context:
+            pass
+
+        with context:
+            context.set("key", "value")
+
+            with (
+                override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 0}),
+                CalculationRunContext(),
+            ):
+                assert context.get("key") is None
+                assert run_context_cache_budget.estimated_bytes == 0
+
+
 def test_exit_without_enter_is_noop() -> None:
     context = CalculationRunContext()
 
@@ -164,6 +187,107 @@ def test_get_or_set_does_not_cache_failed_loader() -> None:
         assert ctx.get_or_set(("answer",), loader) == 42
 
     assert calls == 2
+
+
+def test_zero_run_context_budget_disables_value_retention() -> None:
+    calls = 0
+
+    def loader() -> str:
+        nonlocal calls
+        calls += 1
+        return "loaded"
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 0}),
+        CalculationRunContext() as context,
+    ):
+        assert context.get_or_set("key", loader) == "loaded"
+        assert context.get_or_set("key", loader) == "loaded"
+
+    assert calls == 2
+
+
+def test_run_context_budget_evicts_lru_value_across_contexts() -> None:
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    with override_settings(
+        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+    ):
+        with CalculationRunContext() as first, CalculationRunContext() as second:
+            first.set("a", "A")
+            second.set("b", "B")
+            assert first.get("a") == "A"
+            second.set("c", "C")
+
+            assert first.get("a") == "A"
+            assert second.get("b") is None
+            assert second.get("c") == "C"
+
+
+def test_run_context_does_not_retain_value_larger_than_budget() -> None:
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
+        CalculationRunContext() as context,
+    ):
+        value = context.get_or_set("large", lambda: b"x" * 1024)
+
+        assert value == b"x" * 1024
+        assert context.get("large") is None
+
+
+def test_outermost_run_context_exit_releases_process_accounting() -> None:
+    with override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}):
+        context = CalculationRunContext()
+        with context:
+            context.set("key", "value")
+            assert run_context_cache_budget.estimated_bytes > 0
+
+            with context:
+                assert run_context_cache_budget.estimated_bytes > 0
+
+            assert run_context_cache_budget.estimated_bytes > 0
+
+        assert run_context_cache_budget.estimated_bytes == 0
+
+
+@override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": True})
+def test_run_context_rejects_invalid_memory_budget() -> None:
+    with pytest.raises(ImproperlyConfigured, match="RUN_CONTEXT_CACHE_MAX_BYTES"):
+        CalculationRunContext()
+
+
+def test_run_context_budget_keeps_historical_namespaces_independent() -> None:
+    with as_of("2022-01-01"):
+        first_fingerprint = as_of_cache_fingerprint()
+    with as_of("2022-01-02"):
+        second_fingerprint = as_of_cache_fingerprint()
+    assert first_fingerprint is not None
+    assert second_fingerprint is not None
+    first_size = estimate_cache_entry_size(
+        ("as_of", first_fingerprint, "key"), "A", stop_after=None
+    )
+    second_size = estimate_cache_entry_size(
+        ("as_of", second_fingerprint, "key"), "B", stop_after=None
+    )
+
+    with (
+        override_settings(
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": first_size + second_size}
+        ),
+        CalculationRunContext() as context,
+    ):
+        with as_of("2022-01-01"):
+            context.set("key", "A")
+        with as_of("2022-01-02"):
+            context.set("key", "B")
+        with as_of("2022-01-01"):
+            assert context.get("key") == "A"
+        with as_of("2022-01-03"):
+            context.set("key", "C")
+
+        with as_of("2022-01-01"):
+            assert context.get("key") == "A"
+        with as_of("2022-01-02"):
+            assert context.get("key") is None
 
 
 def test_ensure_calculation_run_context_reuses_active_context() -> None:
