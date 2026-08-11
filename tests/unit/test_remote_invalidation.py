@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import date, datetime
 from types import SimpleNamespace
 from typing import ClassVar
@@ -10,17 +11,21 @@ from uuid import UUID
 from asgiref.sync import async_to_sync
 from channels.auth import AuthMiddlewareStack  # type: ignore[import-untyped]
 from channels.routing import ProtocolTypeRouter, URLRouter  # type: ignore[import-untyped]
+from django.db import transaction
 from django.test import SimpleTestCase
+from django.test import TransactionTestCase
 from django.test import override_settings
 from django.urls import re_path
 
 from general_manager.api import bulk_data_change_notifications
 from general_manager.api.graphql import GraphQL
 from general_manager.api.remote_invalidation import (
+    _publish_remote_invalidation,
     clear_remote_invalidation_routes,
     emit_remote_invalidation,
     ensure_remote_invalidation_route,
 )
+from general_manager.api.remote_api import get_remote_api_config
 from general_manager.manager.general_manager import GeneralManager
 
 from tests import testing_asgi
@@ -174,7 +179,9 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
         self.assertIn(existing_route, router.routes)
         self.assertEqual(len(router.routes), 2)
 
-    def test_emit_remote_invalidation_serializes_identification_values(self) -> None:
+    def test_publish_remote_invalidation_serializes_identification_values(
+        self,
+    ) -> None:
         class Project:
             class RemoteAPI:
                 enabled = True
@@ -203,7 +210,9 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
                 side_effect=lambda fn: fn,
             ),
         ):
-            emit_remote_invalidation(Project, instance=instance, action="update")
+            config = get_remote_api_config(Project)
+            assert config is not None
+            _publish_remote_invalidation(config, "update", instance.identification)
 
         _, payload = channel_layer.group_send.call_args.args
         self.assertEqual(
@@ -214,7 +223,7 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
         self.assertEqual(payload["identification"]["updated_at"], "2026-03-18T12:30:00")
         self.assertEqual(payload["identification"]["name"], "Alpha")
 
-    def test_emit_remote_invalidation_uses_delete_identification_metadata(
+    def test_publish_remote_invalidation_uses_delete_identification_metadata(
         self,
     ) -> None:
         class Project:
@@ -237,11 +246,12 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
                 side_effect=lambda fn: fn,
             ),
         ):
-            emit_remote_invalidation(
-                Project,
-                instance=None,
-                identification={"id": UUID("12345678-1234-5678-1234-567812345678")},
-                action="delete",
+            config = get_remote_api_config(Project)
+            assert config is not None
+            _publish_remote_invalidation(
+                config,
+                "delete",
+                {"id": UUID("12345678-1234-5678-1234-567812345678")},
             )
 
         _, payload = channel_layer.group_send.call_args.args
@@ -250,6 +260,131 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
             payload["identification"],
             {"id": "12345678-1234-5678-1234-567812345678"},
         )
+
+    def test_emit_remote_invalidation_defers_publish_until_commit(self) -> None:
+        class Project:
+            class RemoteAPI:
+                enabled = True
+                base_path = "/remote"
+                resource_name = "projects"
+                allow_update = True
+                websocket_invalidation = True
+
+        source = {"id": 1, "nested": {"labels": ["original"]}}
+        callbacks: list[Callable[[], None]] = []
+        with (
+            patch(
+                "general_manager.api.remote_invalidation.transaction.on_commit"
+            ) as on_commit,
+            patch(
+                "general_manager.api.remote_invalidation._publish_remote_invalidation"
+            ) as publish,
+        ):
+            on_commit.side_effect = lambda callback, **_kwargs: callbacks.append(
+                callback
+            )
+            emit_remote_invalidation(
+                Project,
+                identification=source,
+                action="create",
+                database_alias="secondary",
+            )
+            source["nested"]["labels"].append("mutated")
+            publish.assert_not_called()
+            self.assertEqual(on_commit.call_args.kwargs, {"using": "secondary"})
+            callbacks[0]()
+
+        config, action, captured = publish.call_args.args
+        self.assertEqual(config.resource_name, "projects")
+        self.assertEqual(action, "create")
+        self.assertEqual(captured, {"id": 1, "nested": {"labels": ["original"]}})
+
+    def test_emit_remote_invalidation_defaults_commit_alias(self) -> None:
+        class Project:
+            class RemoteAPI:
+                enabled = True
+                base_path = "/remote"
+                resource_name = "projects"
+                allow_update = True
+                websocket_invalidation = True
+
+        callbacks: list[Callable[[], None]] = []
+        with (
+            patch(
+                "general_manager.api.remote_invalidation.transaction.on_commit"
+            ) as on_commit,
+            patch(
+                "general_manager.api.remote_invalidation._publish_remote_invalidation"
+            ) as publish,
+        ):
+            on_commit.side_effect = lambda callback, **_kwargs: callbacks.append(
+                callback
+            )
+            emit_remote_invalidation(Project, identification={"id": 1}, action="create")
+            self.assertEqual(on_commit.call_args.kwargs, {"using": "default"})
+            callbacks[0]()
+
+        publish.assert_called_once()
+
+    def test_publish_remote_invalidation_logs_delivery_failure(self) -> None:
+        class Project:
+            class RemoteAPI:
+                enabled = True
+                base_path = "/remote"
+                resource_name = "projects"
+                allow_update = True
+                websocket_invalidation = True
+
+        redis_error = RuntimeError("redis down")
+
+        async def group_send(_group: str, _message: dict[str, object]) -> None:
+            raise redis_error
+
+        config = get_remote_api_config(Project)
+        assert config is not None
+        channel_layer = SimpleNamespace(group_send=group_send)
+        with (
+            patch(
+                "general_manager.api.remote_invalidation._get_channel_layer_safe",
+                return_value=channel_layer,
+            ),
+            patch(
+                "general_manager.api.remote_invalidation.async_to_sync",
+                side_effect=lambda fn: lambda *args: asyncio.run(fn(*args)),
+            ),
+            patch("general_manager.api.remote_invalidation.logger") as logger,
+        ):
+            _publish_remote_invalidation(config, "update", {"id": 1})
+
+        logger.warning.assert_called_once()
+
+    def test_publish_remote_invalidation_propagates_memory_error(self) -> None:
+        class Project:
+            class RemoteAPI:
+                enabled = True
+                base_path = "/remote"
+                resource_name = "projects"
+                allow_update = True
+                websocket_invalidation = True
+
+        async def group_send(_group: str, _message: dict[str, object]) -> None:
+            raise MemoryError
+
+        config = get_remote_api_config(Project)
+        assert config is not None
+        channel_layer = SimpleNamespace(group_send=group_send)
+        with (
+            patch(
+                "general_manager.api.remote_invalidation._get_channel_layer_safe",
+                return_value=channel_layer,
+            ),
+            patch(
+                "general_manager.api.remote_invalidation.async_to_sync",
+                side_effect=lambda fn: lambda *args: asyncio.run(fn(*args)),
+            ),
+            self.assertRaises(MemoryError),
+        ):
+            _publish_remote_invalidation(config, "update", {"id": 1})
 
 
 class RemoteInvalidationBatchTests(SimpleTestCase):
@@ -269,6 +404,8 @@ class RemoteInvalidationBatchTests(SimpleTestCase):
             sent.append((group, message))
 
         channel_layer = SimpleNamespace(group_send=group_send)
+        config = get_remote_api_config(Project)
+        assert config is not None
         with (
             patch(
                 "general_manager.api.remote_invalidation._get_channel_layer_safe",
@@ -280,11 +417,7 @@ class RemoteInvalidationBatchTests(SimpleTestCase):
         ):
             with bulk_data_change_notifications():
                 for identification in ({"id": 1}, {"id": 2}, {"id": 3}):
-                    emit_remote_invalidation(
-                        Project,
-                        identification=identification,
-                        action="update",
-                    )
+                    _publish_remote_invalidation(config, "update", identification)
                 self.assertEqual(sent, [])
                 immediate_bridge.assert_not_called()
 
@@ -328,15 +461,17 @@ class RemoteInvalidationBatchTests(SimpleTestCase):
             sent.append((group, message))
 
         channel_layer = SimpleNamespace(group_send=group_send)
+        project_config = get_remote_api_config(Project)
+        task_config = get_remote_api_config(Task)
+        assert project_config is not None
+        assert task_config is not None
         with patch(
             "general_manager.api.remote_invalidation._get_channel_layer_safe",
             return_value=channel_layer,
         ):
             with bulk_data_change_notifications():
-                emit_remote_invalidation(
-                    Task, identification={"id": 2}, action="delete"
-                )
-                emit_remote_invalidation(Project, instance=None, action="update")
+                _publish_remote_invalidation(task_config, "delete", {"id": 2})
+                _publish_remote_invalidation(project_config, "update", None)
 
         self.assertEqual(
             [
@@ -384,6 +519,8 @@ class RemoteInvalidationBatchTests(SimpleTestCase):
                 allow_update = True
                 websocket_invalidation = True
 
+        config = get_remote_api_config(Project)
+        assert config is not None
         with (
             patch(
                 "general_manager.api.remote_invalidation._get_channel_layer_safe",
@@ -392,7 +529,7 @@ class RemoteInvalidationBatchTests(SimpleTestCase):
             patch("general_manager.api.notification_batching.async_to_sync") as bridge,
         ):
             with bulk_data_change_notifications():
-                emit_remote_invalidation(Project, action="update")
+                _publish_remote_invalidation(config, "update", None)
 
         bridge.assert_not_called()
 
@@ -421,6 +558,8 @@ class RemoteInvalidationBatchTests(SimpleTestCase):
         graphql_layer = SimpleNamespace(group_send=graphql_group_send)
         remote_layer = SimpleNamespace(group_send=remote_group_send)
         project = Project()
+        remote_config = get_remote_api_config(Project)
+        assert remote_config is not None
         with (
             patch.object(GraphQL, "manager_registry", {"Project": Project}),
             patch.object(GraphQL, "_get_channel_layer", return_value=graphql_layer),
@@ -438,15 +577,15 @@ class RemoteInvalidationBatchTests(SimpleTestCase):
             ) as batch_bridge,
         ):
             with bulk_data_change_notifications():
-                GraphQL._handle_data_change(
-                    sender=Project,
-                    instance=project,
-                    action="update",
-                )
-                emit_remote_invalidation(
+                GraphQL._publish_data_change(
                     Project,
-                    instance=project,
-                    action="update",
+                    "update",
+                    project.identification,
+                )
+                _publish_remote_invalidation(
+                    remote_config,
+                    "update",
+                    project.identification,
                 )
 
         batch_bridge.assert_called_once()
@@ -462,3 +601,92 @@ class RemoteInvalidationBatchTests(SimpleTestCase):
                 ("remote", "gm.remote.remote.projects", "refresh"),
             ],
         )
+
+
+class RemoteInvalidationTransactionTests(TransactionTestCase):
+    databases: ClassVar[set[str]] = {"default", "secondary"}
+
+    def test_emit_remote_invalidation_publishes_only_after_successful_commit(
+        self,
+    ) -> None:
+        class Project:
+            class RemoteAPI:
+                enabled = True
+                base_path = "/remote"
+                resource_name = "projects"
+                allow_update = True
+                websocket_invalidation = True
+
+        with patch(
+            "general_manager.api.remote_invalidation._publish_remote_invalidation"
+        ) as publish:
+            with transaction.atomic(using="secondary"):
+                emit_remote_invalidation(
+                    Project,
+                    identification={"id": 1},
+                    action="create",
+                    database_alias="secondary",
+                )
+                publish.assert_not_called()
+                transaction.set_rollback(True, using="secondary")
+
+            publish.assert_not_called()
+
+            with transaction.atomic(using="secondary"):
+                emit_remote_invalidation(
+                    Project,
+                    identification={"id": 2},
+                    action="create",
+                    database_alias="secondary",
+                )
+                publish.assert_not_called()
+
+            publish.assert_called_once()
+            _, action, identification = publish.call_args.args
+            self.assertEqual(action, "create")
+            self.assertEqual(identification, {"id": 2})
+
+    def test_emit_remote_invalidation_batches_after_commit_within_bulk_context(
+        self,
+    ) -> None:
+        class Project:
+            class RemoteAPI:
+                enabled = True
+                base_path = "/remote"
+                resource_name = "projects"
+                allow_update = True
+                websocket_invalidation = True
+
+        sent: list[tuple[str, dict[str, object]]] = []
+
+        async def group_send(group: str, message: dict[str, object]) -> None:
+            sent.append((group, message))
+
+        channel_layer = SimpleNamespace(group_send=group_send)
+        with (
+            patch(
+                "general_manager.api.remote_invalidation._get_channel_layer_safe",
+                return_value=channel_layer,
+            ),
+            patch(
+                "general_manager.api.notification_batching.async_to_sync",
+                side_effect=async_to_sync,
+            ),
+        ):
+            with bulk_data_change_notifications():
+                with transaction.atomic():
+                    for identification in ({"id": 1}, {"id": 2}, {"id": 3}):
+                        emit_remote_invalidation(
+                            Project,
+                            identification=identification,
+                            action="update",
+                        )
+                    self.assertEqual(sent, [])
+
+                self.assertEqual(sent, [])
+
+        self.assertEqual(len(sent), 1)
+        group, payload = sent[0]
+        self.assertEqual(group, "gm.remote.remote.projects")
+        self.assertEqual(payload["action"], "refresh")
+        self.assertIsNone(payload["identification"])

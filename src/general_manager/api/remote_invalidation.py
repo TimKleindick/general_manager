@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from datetime import date, datetime
 import json
 from importlib import import_module
@@ -15,6 +16,7 @@ from urllib.parse import parse_qs
 
 from asgiref.sync import async_to_sync
 from django.conf import settings
+from django.db import DEFAULT_DB_ALIAS, transaction
 from django.urls import re_path
 
 from general_manager.api.remote_api import (
@@ -130,38 +132,12 @@ def _get_channel_layer_safe() -> "BaseChannelLayer | None":
     return cast("BaseChannelLayer | None", get_channel_layer())
 
 
-def emit_remote_invalidation(
-    sender: type["GeneralManager"],
-    *,
-    instance: "GeneralManager | None" = None,
-    identification: IdentificationPayload | None = None,
+def _publish_remote_invalidation(
+    config: RemoteAPIConfig,
     action: str,
-    **_: object,
+    identification: IdentificationPayload | None,
 ) -> None:
-    """
-    Emit or queue a websocket invalidation for a RemoteAPI-enabled manager.
-
-    Returns without sending when the manager has no RemoteAPI config, websocket
-    invalidation is disabled, or Channels has no configured channel layer.
-    Identification is taken from the explicit mapping first, then from
-    `instance.identification` when an instance is provided; missing
-    identification is sent as `None`. The `action` string is forwarded without
-    validation. UUID, date, and datetime identification values are serialized to
-    strings, and other non-JSON values fall back to `str(value)`.
-
-    During a bulk notification batch, the receiver queues one resource-wide
-    `refresh` payload and returns without resolving row identification or
-    creating an immediate async bridge. Outside a batch, it sends one row-level
-    payload through `async_to_sync(channel_layer.group_send)`. Payload fields
-    are `type` (`"gm.remote.invalidation"`), `protocol_version`, `base_path`,
-    `resource_name`, `action`, `identification`, and `event_id` as a UUID4
-    string. Identification serialization is shallow; nested lists or mappings
-    fall back to `str(value)`. Missing `instance.identification`, pathological
-    `str(value)` errors, and channel-layer send errors propagate.
-    """
-    config = get_remote_api_config(sender)
-    if config is None or not config.websocket_invalidation:
-        return
+    """Publish or batch a committed RemoteAPI websocket invalidation."""
     channel_layer = _get_channel_layer_safe()
     if channel_layer is None:
         return
@@ -181,18 +157,68 @@ def emit_remote_invalidation(
     ):
         return
 
-    event_identification = identification
-    if event_identification is None and instance is not None:
-        event_identification = dict(instance.identification)
     payload = _build_remote_invalidation_payload(
         config,
         action=action,
-        identification=event_identification,
+        identification=identification,
         event_id=event_id,
     )
-    async_to_sync(channel_layer.group_send)(
-        group_name,
-        payload,
+    try:
+        async_to_sync(channel_layer.group_send)(group_name, payload)
+    except MemoryError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "failed to dispatch remote invalidation",
+            context={
+                "base_path": config.base_path,
+                "resource_name": config.resource_name,
+                "action": action,
+                "group": group_name,
+            },
+            exc_info=exc,
+        )
+
+
+def emit_remote_invalidation(
+    sender: type["GeneralManager"],
+    *,
+    instance: "GeneralManager | None" = None,
+    identification: IdentificationPayload | None = None,
+    action: str,
+    database_alias: str = DEFAULT_DB_ALIAS,
+    **_: object,
+) -> None:
+    """
+    Schedule a RemoteAPI websocket invalidation after the data change commits.
+
+    Returns without scheduling when the manager has no enabled websocket
+    RemoteAPI configuration. Identification is taken from the explicit mapping
+    first, then from `instance.identification` when an instance is provided,
+    and deep-copied so transaction callbacks observe the value at signal time.
+    The `action` string is forwarded without validation. The callback uses the
+    originating database alias and delegates channel lookup, batching, payload
+    creation, and delivery to `_publish_remote_invalidation` after commit.
+    """
+    config = get_remote_api_config(sender)
+    if config is None or not config.websocket_invalidation:
+        return
+
+    event_identification = identification
+    if event_identification is None and instance is not None:
+        event_identification = dict(instance.identification)
+    captured_identification = (
+        deepcopy(dict(event_identification))
+        if event_identification is not None
+        else None
+    )
+    transaction.on_commit(
+        lambda: _publish_remote_invalidation(
+            config,
+            action,
+            captured_identification,
+        ),
+        using=database_alias,
     )
 
 
