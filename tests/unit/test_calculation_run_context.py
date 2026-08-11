@@ -550,6 +550,50 @@ def test_release_failure_stops_later_releases_but_unpins_every_removed_hit(
             publish_batch.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("cleanup_method", "publishes"),
+    [
+        ("flush_dependency_cache_publications", True),
+        ("discard_dependency_cache_publications", False),
+    ],
+)
+def test_first_release_failure_still_unpins_every_removed_hit(
+    cleanup_method: str,
+    publishes: bool,
+) -> None:
+    first = make_pending_publication("cache-a")
+    second = make_pending_publication("cache-b")
+    third = make_pending_publication("cache-c")
+    entries = (first, second, third)
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 0}),
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ) as publish_batch,
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease",
+            side_effect=LeaseReleaseFailed,
+        ) as release_lease,
+        CalculationRunContext() as context,
+    ):
+        for entry in entries:
+            context.buffer_dependency_cache_publication(entry)
+
+        with pytest.raises(LeaseReleaseFailed):
+            getattr(context, cleanup_method)()
+
+        assert context._dependency_cache_pending_publications == {}
+        assert all(
+            context.get_dependency_cache_hit(entry.cache_key) is None
+            for entry in entries
+        )
+        release_lease.assert_called_once_with(first.lease)
+        if publishes:
+            publish_batch.assert_called_once_with(entries)
+        else:
+            publish_batch.assert_not_called()
+
+
 def test_discard_dependency_state_clears_hits_after_release_failure() -> None:
     prefetched = DependencyCacheHit(value="ready", dependencies=frozenset())
     first = make_pending_publication("cache-a")
