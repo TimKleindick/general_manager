@@ -173,13 +173,32 @@ query ActiveProjects($filters: ProjectFilterInput) {
 ```
 
 Use `groupBy: [""]` to call the bucket's default grouping behavior, or pass
-explicit field names such as `groupBy: ["status"]`. `totalCount` is computed
-after permission filtering, user filters, excludes, sorting, and grouping, but
-before page slicing. Invalid `sortBy` enum values are rejected by Graphene;
-invalid filter, grouping, or slicing values propagate the corresponding bucket
-or resolver error. When grouping is active, pagination slices grouped manager
-objects rather than the original ungrouped rows, and the GraphQL `items` field
-still uses the manager's generated item type.
+explicit field names such as `groupBy: ["status"]`. Filtering and exclusion run
+before grouping; `sortBy` runs after grouping and before pagination. Without
+`groupBy`, `sortBy` orders records as usual. With `groupBy`, it orders the
+returned grouped manager objects, so sorting by a grouping key honors `reverse`,
+while sorting by another exposed field uses that field's aggregated group value.
+`totalCount` is computed after permission filtering, user filters, excludes,
+grouping, and sorting, but before page slicing.
+
+```graphql
+query ProjectsByDescendingStatus {
+  projectList(groupBy: ["status"], sortBy: STATUS, reverse: true) {
+    items {
+      status
+    }
+    pageInfo {
+      totalCount
+    }
+  }
+}
+```
+
+Invalid `sortBy` enum values are rejected by Graphene; invalid filter, grouping,
+or slicing values propagate the corresponding bucket or resolver error. When
+grouping is active, pagination slices grouped manager objects rather than the
+original ungrouped rows, and the GraphQL `items` field still uses the manager's
+generated item type.
 
 ## Expose authorization hints
 
