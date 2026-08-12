@@ -2,6 +2,41 @@
 
 <!-- version list -->
 
+## v0.69.0 (2026-08-12)
+
+### Bug Fixes
+
+- **cache**: Address lifecycle review feedback
+  ([`6e34455`](https://github.com/TimKleindick/general_manager/commit/6e3445572d8f5c67d277146dcd3b402b199242f6))
+
+- **cache**: Freeze data-change transaction identity
+  ([`bbaae49`](https://github.com/TimKleindick/general_manager/commit/bbaae49dda73b656d56b29f5d31a0200168fe72a))
+
+### Documentation
+
+- **cache**: Correct cross-alias lifecycle registration
+  ([`e35eca5`](https://github.com/TimKleindick/general_manager/commit/e35eca5b63ae15ecfaf67737a0d235c2dc0ce708))
+
+- **cache**: Describe transaction lifecycle hooks
+  ([`b0e1aa4`](https://github.com/TimKleindick/general_manager/commit/b0e1aa46fe0670b5587218de38dd8f54e43c6af7))
+
+### Features
+
+- **cache**: Emit data-change transaction lifecycle
+  ([`4b92f97`](https://github.com/TimKleindick/general_manager/commit/4b92f97cd3712bf469bc1b0db28703e7243377b8))
+
+- **cache**: Expose data-change transaction context
+  ([`0c3512b`](https://github.com/TimKleindick/general_manager/commit/0c3512b949ed985c608efeb0f58669d598ccb32f))
+
+- **observability**: Attribute mutation phase latency
+  ([`9954649`](https://github.com/TimKleindick/general_manager/commit/9954649493161e69d473eed4dd2c5b92f0064816))
+
+### Testing
+
+- **cache**: Cover data-change lifecycle attribution
+  ([`915e9e6`](https://github.com/TimKleindick/general_manager/commit/915e9e6b8f452b6a3c9fa45e648fb27c2449114b))
+
+
 ## v0.68.3 (2026-08-12)
 
 ### Bug Fixes
