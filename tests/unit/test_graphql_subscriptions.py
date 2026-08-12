@@ -19,6 +19,7 @@ from graphql.language.ast import FragmentDefinitionNode, OperationDefinitionNode
 import unittest
 
 from general_manager.api import bulk_data_change_notifications
+from general_manager.api import graphql
 from general_manager.api import graphql_subscriptions
 from general_manager.api.graphql import GraphQL
 from general_manager.interface import DatabaseInterface
@@ -1080,30 +1081,87 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
                 }
             }
         """
+        channel_layer = GraphQL._get_channel_layer(strict=True)
+        original_group_add = channel_layer.group_add
+        original_can_read = graphql._can_read_instance_for_user_fn
 
         async def run_subscription() -> object:
-            generator = await schema.subscribe(subscription, context_value=context)
-            if hasattr(generator, "errors"):
-                raise AssertionError(generator.errors)
-            try:
+            required_groups = {
+                GraphQL._class_group_name(self.Employee),
+                GraphQL._refresh_group_name(self.Employee),
+            }
+            registered_groups: set[str] = set()
+            registration_ready = asyncio.Event()
+            hidden_permission_checked = threading.Event()
+            permission_calls: list[str] = []
+            permission_results: list[tuple[str, bool]] = []
+            async_unsafe_seen: list[bool] = []
+
+            async def tracking_group_add(group: str, channel: str) -> None:
+                await original_group_add(group, channel)
+                registered_groups.add(group)
+                if required_groups <= registered_groups:
+                    registration_ready.set()
+
+            def tracking_can_read(instance: GeneralManager, user: object) -> bool:
+                permission_calls.append(instance.name)
+                async_unsafe_seen.append("DJANGO_ALLOW_ASYNC_UNSAFE" in os.environ)
+                try:
+                    readable = original_can_read(instance, user)
+                    permission_results.append((instance.name, readable))
+                    return readable
+                finally:
+                    if instance.name == "Hidden":
+                        hidden_permission_checked.set()
+
+            with (
+                patch.object(channel_layer, "group_add", new=tracking_group_add),
+                patch(
+                    "general_manager.api.graphql._can_read_instance_for_user_fn",
+                    side_effect=tracking_can_read,
+                ),
+            ):
+                generator = await schema.subscribe(subscription, context_value=context)
+                if hasattr(generator, "errors"):
+                    raise AssertionError(generator.errors)
                 next_event = asyncio.create_task(generator.__anext__())
-                await asyncio.to_thread(
-                    lambda: self.Employee.create(
-                        name="Hidden",
-                        creator_id=self.user.id,
+                try:
+                    await asyncio.wait_for(registration_ready.wait(), timeout=1)
+                    await asyncio.to_thread(
+                        lambda: self.Employee.create(
+                            name="Hidden",
+                            creator_id=self.user.id,
+                        )
                     )
-                )
-                await asyncio.sleep(0.02)
-                self.assertFalse(next_event.done())
-                await asyncio.to_thread(
-                    lambda: self.Employee.create(
-                        name="Visible",
-                        creator_id=self.user.id,
+                    hidden_checked = await asyncio.wait_for(
+                        asyncio.to_thread(hidden_permission_checked.wait),
+                        timeout=1,
                     )
-                )
-                return await next_event
-            finally:
-                await generator.aclose()
+                    self.assertTrue(hidden_checked)
+                    self.assertEqual(permission_calls, ["Hidden"])
+                    self.assertEqual(permission_results, [("Hidden", False)])
+                    self.assertFalse(next_event.done())
+                    await asyncio.to_thread(
+                        lambda: self.Employee.create(
+                            name="Visible",
+                            creator_id=self.user.id,
+                        )
+                    )
+                    event = await asyncio.wait_for(next_event, timeout=1)
+                finally:
+                    if not next_event.done():
+                        next_event.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await next_event
+                    await generator.aclose()
+
+            self.assertEqual(permission_calls, ["Hidden", "Visible"])
+            self.assertEqual(
+                permission_results,
+                [("Hidden", False), ("Visible", True)],
+            )
+            self.assertEqual(async_unsafe_seen, [False, False])
+            return event
 
         with patch.dict(os.environ):
             os.environ.pop("DJANGO_ALLOW_ASYNC_UNSAFE", None)
@@ -1113,6 +1171,82 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         payload = event.data["onEmployeeClassChange"]
         self.assertEqual(payload["action"], "create")
         self.assertEqual(payload["item"]["name"], "Visible")
+
+    def test_class_subscription_authorizes_with_user_captured_at_start(self) -> None:
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        replacement_user = get_user_model().objects.create_user(username="bob")
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item {
+                        name
+                    }
+                }
+            }
+        """
+        channel_layer = GraphQL._get_channel_layer(strict=True)
+        original_group_add = channel_layer.group_add
+        original_can_read = graphql._can_read_instance_for_user_fn
+
+        async def run_subscription() -> object:
+            required_groups = {
+                GraphQL._class_group_name(self.Employee),
+                GraphQL._refresh_group_name(self.Employee),
+            }
+            registered_groups: set[str] = set()
+            registration_ready = asyncio.Event()
+            authorization_users: list[object] = []
+
+            async def tracking_group_add(group: str, channel: str) -> None:
+                await original_group_add(group, channel)
+                registered_groups.add(group)
+                if required_groups <= registered_groups:
+                    registration_ready.set()
+
+            def tracking_can_read(instance: GeneralManager, user: object) -> bool:
+                authorization_users.append(user)
+                return original_can_read(instance, user)
+
+            with (
+                patch.object(channel_layer, "group_add", new=tracking_group_add),
+                patch(
+                    "general_manager.api.graphql._can_read_instance_for_user_fn",
+                    side_effect=tracking_can_read,
+                ),
+            ):
+                generator = await schema.subscribe(subscription, context_value=context)
+                if hasattr(generator, "errors"):
+                    raise AssertionError(generator.errors)
+                next_event = asyncio.create_task(generator.__anext__())
+                try:
+                    await asyncio.wait_for(registration_ready.wait(), timeout=1)
+                    context.user = replacement_user
+                    await asyncio.to_thread(
+                        lambda: self.Employee.create(
+                            name="Captured user",
+                            creator_id=self.user.id,
+                        )
+                    )
+                    event = await asyncio.wait_for(next_event, timeout=1)
+                finally:
+                    if not next_event.done():
+                        next_event.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await next_event
+                    await generator.aclose()
+
+            self.assertEqual(authorization_users, [self.user])
+            self.assertIs(authorization_users[0], self.user)
+            return event
+
+        event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        payload = event.data["onEmployeeClassChange"]
+        self.assertEqual(payload["action"], "create")
+        self.assertEqual(payload["item"]["name"], "Captured user")
 
     def test_class_subscription_permission_failure_is_logged(self) -> None:
         employee = self.Employee.create(name="Visible", creator_id=self.user.id)
