@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.68.3 (2026-08-12)
+
+### Bug Fixes
+
+- Preserve empty grouped GraphQL pages
+  ([`e436860`](https://github.com/TimKleindick/general_manager/commit/e436860ec001ac132183e5836ecc8e4a73d0fd1c))
+
+### Documentation
+
+- Design empty grouped pagination fix
+  ([`74c69fc`](https://github.com/TimKleindick/general_manager/commit/74c69fc5bbb1797ce8d3e56170382beeaac405c8))
+
+### Testing
+
+- Cover empty grouped page size validation
+  ([`79fef14`](https://github.com/TimKleindick/general_manager/commit/79fef14ca3c6f7ce37793512fd1e9c7f9903eca6))
+
+
 ## v0.68.2 (2026-08-12)
 
 ### Bug Fixes
