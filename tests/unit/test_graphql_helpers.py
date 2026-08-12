@@ -336,17 +336,30 @@ class GraphQLHelperTests(SimpleTestCase):
 
         assert [item.identification["id"] for item in first_page] == [0, 1, 2, 3, 4]
 
+    def test_apply_pagination_preserves_empty_group_bucket(self) -> None:
+        """An empty grouped page must not invoke GroupBucket's invalid empty slice."""
+        grouped = SimpleBucket(_DummyManager).group_by("name")
+
+        result = apply_pagination(grouped, page=1, page_size=5)
+
+        assert result is grouped
+        assert len(result) == 0
+
     def test_apply_pagination_rejects_negative_values(self) -> None:
         queryset = SimpleBucket(
             _DummyManager,
             [_DummyManager(id=value) for value in range(3)],
         )
+        empty_grouped = SimpleBucket(_DummyManager).group_by("name")
 
         with pytest.raises(ValueError, match="pagination values"):
             apply_pagination(queryset, page=-1, page_size=10)
 
         with pytest.raises(ValueError, match="pagination values"):
             apply_pagination(queryset, page=1, page_size=-10)
+
+        with pytest.raises(ValueError, match="pagination values"):
+            apply_pagination(empty_grouped, page=-1, page_size=10)
 
     def test_measurement_scalar_invalid(self) -> None:
         """

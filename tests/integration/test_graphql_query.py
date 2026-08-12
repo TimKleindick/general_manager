@@ -199,6 +199,36 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self.assertEqual(names, grouped_names[3:6])
         self.assertEqual(payload["pageInfo"]["totalCount"], len(grouped_names))
 
+    def test_empty_grouped_query_with_pagination_returns_empty_page(self):
+        """Grouped pagination returns an empty GraphQL page when no rows match."""
+        query = """
+        query {
+            commercialsList(
+                filter: {name: "No matching commercial"}
+                groupBy: ["name"]
+                pageSize: 5
+            ) {
+                items {
+                    name
+                }
+                pageInfo {
+                    totalCount
+                    currentPage
+                    totalPages
+                }
+            }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["commercialsList"]
+        self.assertEqual(payload["items"], [])
+        self.assertEqual(payload["pageInfo"]["totalCount"], 0)
+        self.assertEqual(payload["pageInfo"]["currentPage"], 1)
+        self.assertEqual(payload["pageInfo"]["totalPages"], 0)
+
     def test_query_commercials_with_project_list(self):
         """
         Tests that querying the commercials list with nested project lists returns correct items and pagination metadata for both levels.

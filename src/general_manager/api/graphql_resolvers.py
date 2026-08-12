@@ -499,6 +499,8 @@ def apply_pagination(
     Negative ``page`` or ``page_size`` values raise ``ValueError`` before
     slicing. Falsey explicit values such as ``page=0`` or ``page_size=0`` also
     fall back through those defaults for slicing.
+    Already-empty grouped buckets are returned unchanged when pagination is
+    requested, preserving their shape without invoking an invalid empty slice.
     The returned object keeps the same bucket/group-bucket shape as the slice
     operation exposes. Slice errors from the bucket implementation propagate
     unchanged.
@@ -508,6 +510,8 @@ def apply_pagination(
     if page_size is not None and page_size < 0:
         raise InvalidPaginationValueError
     if page is not None or page_size is not None:
+        if isinstance(queryset, GroupBucket) and len(queryset) == 0:
+            return queryset
         page = page or 1
         page_size = page_size or 10
         offset = (page - 1) * page_size
