@@ -207,6 +207,37 @@ def test_estimate_cache_entry_size_ignores_renamed_private_slot_alias() -> None:
     assert size == MIN_TRACKED_ENTRY_BYTES
 
 
+def test_estimate_cache_entry_size_ignores_private_slot_alias_with_qualname() -> None:
+    class Value:
+        __qualname__ = "Renamed"
+        __slots__ = ("_Renamed__payload", "__payload")
+
+        def __init__(self) -> None:
+            self.__payload = None
+            self._Renamed__payload = bytearray(1024)
+
+    value = Value()
+    Value.__slots__ = ("__payload",)
+    Value.__name__ = "Renamed"
+
+    size = estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert size == MIN_TRACKED_ENTRY_BYTES
+
+
+def test_estimate_cache_entry_size_traverses_dotted_class_private_slots() -> None:
+    value_type = type("A.B", (), {"__slots__": ("__payload",)})
+    empty = value_type()
+    payload = value_type()
+    setattr(empty, "_A.B__payload", None)
+    setattr(payload, "_A.B__payload", bytearray(1024))
+
+    empty_size = estimate_cache_entry_size("key", empty, stop_after=None)
+    payload_size = estimate_cache_entry_size("key", payload, stop_after=None)
+
+    assert empty_size < payload_size
+
+
 def test_estimate_cache_entry_size_avoids_metaclass_name_descriptor() -> None:
     metadata_accesses: list[str] = []
 
