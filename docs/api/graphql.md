@@ -118,12 +118,13 @@ The context does not open, commit, or roll back a database transaction. Put it
 outside the true outermost `transaction.atomic()` block: a successful commit
 runs the GraphQL and RemoteAPI `transaction.on_commit()` callbacks while the
 batch is still accepting targets, and context exit then flushes the aggregate
-refreshes. A rollback, including a savepoint rollback, discards those
-callbacks, so no refresh is queued. Reversing the contexts remains commit-safe
-but does not guarantee aggregation because the batch closes before the commit
-callbacks run. Body exceptions are re-raised after any queued notifications are
-flushed; if flushing also raises, both failures are reported in a
-`BaseExceptionGroup`.
+refreshes. A full transaction rollback discards all callbacks. Rolling back to
+an inner savepoint discards only callbacks registered after that savepoint;
+callbacks registered before it remain queued and run if the outer transaction
+commits. Reversing the contexts remains commit-safe but does not guarantee
+aggregation because the batch closes before the commit callbacks run. Body
+exceptions are re-raised after any queued notifications are flushed; if
+flushing also raises, both failures are reported in a `BaseExceptionGroup`.
 
 The stable import is available from `general_manager.api` in 0.64.0 and later;
 the notification batching module is an implementation location rather than a
@@ -136,9 +137,11 @@ notification how-to](../howto/bulk_data_change_notifications.md), and the
 
 GraphQL ordinary row-level subscription events and RemoteAPI invalidations are
 published after the outermost transaction on the originating database alias
-commits. Rollbacks and savepoint rollbacks publish nothing. When no transaction
-is active, Django executes the `on_commit()` callback immediately. GraphQL
-class-wide ordinary events hydrate the changed object and apply
+commits. A full transaction rollback publishes nothing. A savepoint rollback
+discards only events registered after that savepoint; events registered before
+it remain queued and publish when the outer transaction commits. When no
+transaction is active, Django executes the `on_commit()` callback immediately.
+GraphQL class-wide ordinary events hydrate the changed object and apply
 `can_read_instance()` after commit; aggregate `refresh` events have no row
 identification and yield `item = null` without object-level hydration.
 
