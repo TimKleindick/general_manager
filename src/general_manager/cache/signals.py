@@ -275,19 +275,10 @@ def data_change(
                 try:
                     if transaction_scope is not None and transaction_scope.is_outermost:
                         try:
+                            lifecycle_kwargs["outcome"] = transaction_outcome
                             data_change_transaction_finished.send(
                                 sender=sender,
-                                transaction_context=transaction_scope.transaction,
-                                database_alias=database_alias,
-                                caller_in_atomic_block=(
-                                    transaction_scope.transaction.caller_in_atomic_block
-                                ),
-                                action=(
-                                    action
-                                    if action in {"create", "update", "delete"}
-                                    else "other"
-                                ),
-                                outcome=transaction_outcome,
+                                **lifecycle_kwargs,
                             )
                         except Exception:
                             if primary_exc is not None:

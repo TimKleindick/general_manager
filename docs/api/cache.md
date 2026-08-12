@@ -706,11 +706,10 @@ for the whole envelope. A receiver can use `metadata` for coordination and can
 record every changed manager class through
 `register_data_change_class(class_name, database_alias)`. That helper returns
 `True` and adds the class name (deduplicated) when the requested alias has a
-matching live framework-owned envelope. It searches all live alias-scoped
-envelopes, so a nested cross-alias mutation can register against either matching
-framework-owned alias. It returns `False` only when the requested alias has no
-eligible live framework-owned envelope, including when that alias is absent or
-its live envelope is caller-owned.
+matching live framework-owned envelope. Registration checks only the requested
+`database_alias`; it never searches for or registers against another alias. It
+returns `False` when the requested alias is absent or its live envelope is
+caller-owned.
 
 Use the lifecycle signals with the ordinary post-change signal as follows:
 

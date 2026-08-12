@@ -1399,6 +1399,7 @@ def generic_cache_invalidation(
         sender (type[GeneralManager]): Manager class that emitted the signal.
         instance (GeneralManager): The manager instance that was changed.
         old_relevant_values (dict[str, object]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
+        database_alias (str): Database alias used to attribute invalidation timing.
     """
     started = perf_counter()
     try:

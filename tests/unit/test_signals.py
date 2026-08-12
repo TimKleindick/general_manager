@@ -45,6 +45,13 @@ def capture_signal(signal: Signal):
         signal.disconnect(_receiver)
 
 
+def _reset_receivers(signal: Signal, receivers: list[tuple[object, ...]]) -> None:
+    """Replace signal receivers and invalidate Django's sender cache."""
+    with signal.lock:
+        signal.receivers = list(receivers)
+        signal.sender_receivers_cache.clear()
+
+
 class Dummy:
     """Test helper class decorated with @data_change for create and update."""
 
@@ -202,30 +209,26 @@ class DataChangeSignalTests(TestCase):
         self._original_finished_receivers = list(
             data_change_transaction_finished.receivers
         )
-        # Clear any existing receivers before each test
-        pre_data_change.receivers.clear()
-        post_data_change.receivers.clear()
-        data_change_transaction_started.receivers.clear()
-        data_change_transaction_finishing.receivers.clear()
-        data_change_transaction_finished.receivers.clear()
+        # Clear any existing receivers and cached sender lookups before each test.
+        _reset_receivers(pre_data_change, [])
+        _reset_receivers(post_data_change, [])
+        _reset_receivers(data_change_transaction_started, [])
+        _reset_receivers(data_change_transaction_finishing, [])
+        _reset_receivers(data_change_transaction_finished, [])
 
     def tearDown(self):
         """Restore signal receivers after each test."""
-        # Clean up receivers after each test
-        pre_data_change.receivers.clear()
-        post_data_change.receivers.clear()
-        data_change_transaction_started.receivers.clear()
-        data_change_transaction_finishing.receivers.clear()
-        data_change_transaction_finished.receivers.clear()
-        # Restore the original receivers to avoid leaking state into other tests
-        pre_data_change.receivers[:] = self._original_pre_receivers
-        post_data_change.receivers[:] = self._original_post_receivers
-        data_change_transaction_started.receivers[:] = self._original_started_receivers
-        data_change_transaction_finishing.receivers[:] = (
-            self._original_finishing_receivers
+        # Restore the original receivers and invalidate cached sender lookups.
+        _reset_receivers(pre_data_change, self._original_pre_receivers)
+        _reset_receivers(post_data_change, self._original_post_receivers)
+        _reset_receivers(
+            data_change_transaction_started, self._original_started_receivers
         )
-        data_change_transaction_finished.receivers[:] = (
-            self._original_finished_receivers
+        _reset_receivers(
+            data_change_transaction_finishing, self._original_finishing_receivers
+        )
+        _reset_receivers(
+            data_change_transaction_finished, self._original_finished_receivers
         )
 
     def test_orm_mutation_emits_lifecycle_around_existing_signals_and_atomic(self):

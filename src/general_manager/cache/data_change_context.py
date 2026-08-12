@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Literal
 
 
@@ -114,6 +115,8 @@ def record_data_change_phase(
     database_alias: str,
 ) -> None:
     """Accumulate a non-negative duration for a phase in the live context."""
+    if not isfinite(duration_seconds):
+        return
     context = current_data_change_transaction(database_alias)
     if context is not None:
         context.phase_seconds[phase] = context.phase_seconds.get(phase, 0.0) + max(
