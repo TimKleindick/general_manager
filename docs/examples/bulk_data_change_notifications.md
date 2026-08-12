@@ -25,5 +25,6 @@ cache invalidation or other per-write signals.
 
 Keep the notification context outside any pre-existing outer transaction. It
 flushes queued targets even when the body raises, then re-raises the body
-exception. Ordinary channel-layer send errors are logged while other queued
-targets continue flushing.
+exception. If both the body and notification flush fail, the context raises a
+`BaseExceptionGroup` containing both failures. Ordinary channel-layer send
+errors are logged while other queued targets continue flushing.

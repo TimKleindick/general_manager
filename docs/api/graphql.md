@@ -112,15 +112,41 @@ snapshot into the next. Historical failures use stable public extension codes:
 context deduplicates targets and flushes one `refresh` event per affected
 GraphQL manager class or RemoteAPI resource after the body exits. Individual
 ordinary channel-layer send failures are logged and do not abort the remaining
-flushes; `MemoryError` and other non-ordinary flush failures propagate.
+flushes; `MemoryError` and other `BaseException` failures propagate.
 
-The context is not transaction-aware. Put it outside the true outermost
-`transaction.atomic()` block so refresh delivery follows the completed commit
-or rollback. Body exceptions are re-raised after the queued notifications are
+The context does not open, commit, or roll back a database transaction. Put it
+outside the true outermost `transaction.atomic()` block: a successful commit
+runs the GraphQL and RemoteAPI `transaction.on_commit()` callbacks while the
+batch is still accepting targets, and context exit then flushes the aggregate
+refreshes. A rollback, including a savepoint rollback, discards those
+callbacks, so no refresh is queued. Reversing the contexts remains commit-safe
+but does not guarantee aggregation because the batch closes before the commit
+callbacks run. Body exceptions are re-raised after any queued notifications are
 flushed; if flushing also raises, both failures are reported in a
-`BaseExceptionGroup`. The stable import is available from `general_manager.api`
-in 0.64.0 and later; the notification batching module is an implementation
-location rather than a separate package-level compatibility promise.
+`BaseExceptionGroup`.
+
+The stable import is available from `general_manager.api` in 0.64.0 and later;
+the notification batching module is an implementation location rather than a
+separate package-level compatibility promise. See the [subscription delivery
+concept](../concepts/graphql/subscriptions.md#signals-and-channels), the [bulk
+notification how-to](../howto/bulk_data_change_notifications.md), and the
+[runnable recipe](../examples/bulk_data_change_notifications.md).
+
+## Commit-bound websocket delivery
+
+GraphQL ordinary row-level subscription events and RemoteAPI invalidations are
+published after the outermost transaction on the originating database alias
+commits. Rollbacks and savepoint rollbacks publish nothing. When no transaction
+is active, Django executes the `on_commit()` callback immediately. GraphQL
+class-wide ordinary events hydrate the changed object and apply
+`can_read_instance()` after commit; aggregate `refresh` events have no row
+identification and yield `item = null` without object-level hydration.
+
+RemoteAPI delivery is best-effort after commit: a missing channel layer emits
+no message, and ordinary channel-layer failures are logged while other queued
+targets continue. The [RemoteAPI websocket concept](../concepts/interfaces/remote_api.md)
+explains the event model and the [end-to-end recipe](../examples/remote_manager_interface_end_to_end.md)
+shows the client/server setup.
 
 ## Relation annotation compatibility
 
@@ -556,6 +582,31 @@ a directly usable resolver and client-handling pattern.
 ::: general_manager.api.remote_invalidation.remote_invalidation_group_name
 
 ::: general_manager.api.remote_invalidation.emit_remote_invalidation
+
+`emit_remote_invalidation(sender, *, instance=None, identification=None,
+action, database_alias="default", **_) -> None` is the `post_data_change`
+receiver for an enabled RemoteAPI manager. `sender` is the manager class;
+`instance` supplies fallback identification; explicit `identification` takes
+priority; `action` is forwarded without validation; and `database_alias`
+selects the Django connection whose successful commit triggers publication, or
+the connection used for immediate callback execution when no transaction is
+active.
+The extra signal keyword arguments accepted by `**_` are ignored.
+
+The function returns `None` and returns without scheduling when the manager has
+no enabled websocket RemoteAPI configuration. Before registration,
+`RemoteAPIConfigurationError`, identification-copy errors, and transaction
+registration errors propagate. After commit, missing channel layers produce no
+message, ordinary channel-layer delivery errors are logged, and `MemoryError`
+propagates. The callback uses the deep-copied identification captured at signal
+time, so rolled-back transactions and later instance mutations cannot publish
+stale or uncommitted row data.
+
+Compatibility: `database_alias` and commit-bound delivery are available in
+GeneralManager 0.67.7 and later. Earlier versions attempted websocket delivery
+immediately from the signal receiver. Callers should use the documented
+`post_data_change` integration rather than treating the underscored publisher
+helper as public.
 
 ::: general_manager.api.remote_invalidation.RemoteInvalidationConsumer
 
