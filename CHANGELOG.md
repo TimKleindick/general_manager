@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.68.1 (2026-08-12)
+
+### Bug Fixes
+
+- Preserve grouped sort order when paginating
+  ([`34c4716`](https://github.com/TimKleindick/general_manager/commit/34c471676a04321870b95665362487699c0de089))
+
+- Sort graphql lists after grouping
+  ([`9f8d286`](https://github.com/TimKleindick/general_manager/commit/9f8d286c510c12402f605c0f794f7332eaaaaae6))
+
+### Documentation
+
+- Fix graphql sort enum examples
+  ([`2aadce0`](https://github.com/TimKleindick/general_manager/commit/2aadce09d3d3b8e2e42ca973cbb0921702af054f))
+
+### Refactoring
+
+- Extract graphql list sorting helper
+  ([`90218d6`](https://github.com/TimKleindick/general_manager/commit/90218d678bb50a9197de72a05ab0e0e5683dffd9))
+
+
 ## v0.68.0 (2026-08-12)
 
 ### Bug Fixes
