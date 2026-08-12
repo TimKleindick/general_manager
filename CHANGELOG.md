@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v0.68.2 (2026-08-12)
+
+### Bug Fixes
+
+- Propagate subscription permission failures
+  ([`00b6ede`](https://github.com/TimKleindick/general_manager/commit/00b6edec7a421ba66842a227a2abb0a64ac84a25))
+
+- Run subscription permissions off event loop
+  ([`0054d45`](https://github.com/TimKleindick/general_manager/commit/0054d4541b5ec80bb8df05823745d140636abd98))
+
+### Documentation
+
+- Design async-safe subscription permissions
+  ([`e0962e8`](https://github.com/TimKleindick/general_manager/commit/e0962e87da83ec7812ba539093a7806d773751a8))
+
+### Testing
+
+- Bound subscription permission wait
+  ([`110f622`](https://github.com/TimKleindick/general_manager/commit/110f622cf7341cc3a0207bc7828e4c9556c5818d))
+
+- Harden async subscription permission coverage
+  ([`b23428a`](https://github.com/TimKleindick/general_manager/commit/b23428a56da4f627dd112b3808da74bca96dcd05))
+
+- Reproduce async subscription permission failure
+  ([`1c5cbee`](https://github.com/TimKleindick/general_manager/commit/1c5cbee3f570f0817041fa1b235679484f5f0404))
+
+
 ## v0.68.1 (2026-08-12)
 
 ### Bug Fixes
