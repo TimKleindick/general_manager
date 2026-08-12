@@ -145,6 +145,19 @@ def test_estimate_cache_entry_size_stops_after_budget() -> None:
     assert size == 513
 
 
+def test_estimate_cache_entry_size_traverses_genuine_instance_dictionaries() -> None:
+    class Value:
+        def __init__(self, payload: object) -> None:
+            self.payload = payload
+
+    empty_size = estimate_cache_entry_size("key", Value(None), stop_after=None)
+    payload_size = estimate_cache_entry_size(
+        "key", Value(bytearray(1024)), stop_after=None
+    )
+
+    assert empty_size < payload_size
+
+
 def test_estimate_cache_entry_size_traverses_list_declared_slots() -> None:
     class SlotValue:
         __slots__ = ["payload"]
@@ -175,6 +188,53 @@ def test_estimate_cache_entry_size_traverses_private_slots() -> None:
     )
 
     assert empty_size < payload_size
+
+
+def test_estimate_cache_entry_size_ignores_renamed_private_slot_alias() -> None:
+    class Value:
+        __slots__ = ("_Renamed__payload", "__payload")
+
+        def __init__(self) -> None:
+            self.__payload = None
+            self._Renamed__payload = bytearray(1024)
+
+    value = Value()
+    Value.__slots__ = ("__payload",)
+    Value.__name__ = "Renamed"
+
+    size = estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert size == MIN_TRACKED_ENTRY_BYTES
+
+
+def test_estimate_cache_entry_size_avoids_metaclass_name_descriptor() -> None:
+    metadata_accesses: list[str] = []
+
+    class HostileNameDescriptor:
+        def __get__(self, instance: object, owner: object = None) -> object:
+            metadata_accesses.append("__name__")
+            raise AssertionError(  # noqa: TRY003 - test double reports the hook.
+                "unexpected metaclass descriptor lookup: __name__"
+            )
+
+        def __set__(self, instance: object, value: object) -> None:
+            raise AssertionError(  # noqa: TRY003 - test double reports the hook.
+                "unexpected metaclass descriptor assignment: __name__"
+            )
+
+    class HostileMeta(type):
+        __name__ = HostileNameDescriptor()
+
+    class Value(metaclass=HostileMeta):
+        __slots__ = ("__payload",)
+
+        def __init__(self) -> None:
+            self.__payload = bytearray(1024)
+
+    size = estimate_cache_entry_size("key", Value(), stop_after=None)
+
+    assert size > MIN_TRACKED_ENTRY_BYTES
+    assert metadata_accesses == []
 
 
 def test_estimate_cache_entry_size_treats_module_subclasses_as_shallow_leaves() -> None:

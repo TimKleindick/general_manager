@@ -50,7 +50,6 @@ _SIZED_BUILTIN_TYPES = (
 )
 _TYPE_MRO_DESCRIPTOR = cast(GetSetDescriptorType, type.__dict__["__mro__"])
 _TYPE_DICT_DESCRIPTOR = cast(GetSetDescriptorType, type.__dict__["__dict__"])
-_TYPE_NAME_DESCRIPTOR = cast(GetSetDescriptorType, type.__dict__["__name__"])
 
 RunCacheNamespace = Literal["values", "dependency_hits"]
 TrackedKey = tuple[int, RunCacheNamespace, Hashable]
@@ -346,8 +345,8 @@ def _get_static_type_mro(
 
 def _get_static_class_metadata(
     candidate_mro: tuple[type[object], ...],
-) -> tuple[tuple[type[object], Mapping[str, object], str], ...] | None:
-    metadata: list[tuple[type[object], Mapping[str, object], str]] = []
+) -> tuple[tuple[type[object], Mapping[str, object]], ...] | None:
+    metadata: list[tuple[type[object], Mapping[str, object]]] = []
     for cls in candidate_mro:
         try:
             class_dict = GetSetDescriptorType.__get__(
@@ -355,23 +354,68 @@ def _get_static_class_metadata(
                 cls,
                 type,
             )
-            class_name = GetSetDescriptorType.__get__(
-                _TYPE_NAME_DESCRIPTOR,
-                cls,
-                type,
-            )
         except (AttributeError, TypeError):
             return None
-        if type(class_dict) is not MappingProxyType or type(class_name) is not str:
+        if type(class_dict) is not MappingProxyType:
             return None
         metadata.append(
             (
                 cls,
                 cast(Mapping[str, object], class_dict),
-                class_name,
             )
         )
     return tuple(metadata)
+
+
+def _get_native_member_descriptor_for_slot(
+    declaring_class: type[object],
+    class_dict: Mapping[str, object],
+    slot: str,
+) -> MemberDescriptorType | None:
+    if not (slot.startswith("__") and not slot.endswith("__")):
+        descriptor = class_dict.get(slot)
+        if _is_native_descriptor_for_storage(
+            descriptor,
+            MemberDescriptorType,
+            declaring_class,
+            slot,
+        ):
+            return cast(MemberDescriptorType, descriptor)
+        return None
+
+    matching_descriptor: MemberDescriptorType | None = None
+    for storage_name, descriptor in class_dict.items():
+        if type(storage_name) is not str:
+            continue
+        if not _is_native_descriptor_for_storage(
+            descriptor,
+            MemberDescriptorType,
+            declaring_class,
+            storage_name,
+        ):
+            continue
+        try:
+            descriptor_qualname = object.__getattribute__(
+                descriptor,
+                "__qualname__",
+            )
+        except (AttributeError, TypeError):
+            continue
+        if type(descriptor_qualname) is not str:
+            continue
+        descriptor_suffix = f".{storage_name}"
+        if not descriptor_qualname.endswith(descriptor_suffix):
+            continue
+        declaring_qualname = descriptor_qualname[: -len(descriptor_suffix)]
+        original_class_name = declaring_qualname.rsplit(".", 1)[-1]
+        mangling_prefix = original_class_name.lstrip("_")
+        expected_storage_name = f"_{mangling_prefix}{slot}" if mangling_prefix else slot
+        if storage_name != expected_storage_name:
+            continue
+        if matching_descriptor is not None:
+            return None
+        matching_descriptor = cast(MemberDescriptorType, descriptor)
+    return matching_descriptor
 
 
 def estimate_cache_entry_size(
@@ -423,7 +467,7 @@ def estimate_cache_entry_size(
             class_metadata = _get_static_class_metadata(candidate_mro)
             if class_metadata is None:
                 continue
-            for cls, class_dict, class_name in class_metadata:
+            for cls, class_dict in class_metadata:
                 instance_dict_descriptor = class_dict.get("__dict__")
                 if _is_native_descriptor_for_storage(
                     instance_dict_descriptor,
@@ -452,20 +496,17 @@ def estimate_cache_entry_size(
                         continue
                     if slot in {"__dict__", "__weakref__"}:
                         continue
-                    if slot.startswith("__") and not slot.endswith("__"):
-                        slot = f"_{class_name.lstrip('_')}{slot}"
-                    slot_descriptor = class_dict.get(slot)
-                    if not _is_native_descriptor_for_storage(
-                        slot_descriptor,
-                        MemberDescriptorType,
+                    slot_descriptor = _get_native_member_descriptor_for_slot(
                         cls,
+                        class_dict,
                         slot,
-                    ):
+                    )
+                    if slot_descriptor is None:
                         continue
                     try:
                         candidates.append(
                             MemberDescriptorType.__get__(
-                                cast(MemberDescriptorType, slot_descriptor),
+                                slot_descriptor,
                                 candidate,
                                 candidate_type,
                             )
