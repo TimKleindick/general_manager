@@ -367,48 +367,6 @@ def _get_static_class_metadata(
     return tuple(metadata)
 
 
-def _get_native_member_descriptor_for_slot(
-    declaring_class: type[object],
-    class_dict: Mapping[str, object],
-    slot: str,
-) -> MemberDescriptorType | None:
-    if not (slot.startswith("__") and not slot.endswith("__")):
-        descriptor = class_dict.get(slot)
-        if _is_native_descriptor_for_storage(
-            descriptor,
-            MemberDescriptorType,
-            declaring_class,
-            slot,
-        ):
-            return cast(MemberDescriptorType, descriptor)
-        return None
-
-    matching_descriptor: MemberDescriptorType | None = None
-    for storage_name, descriptor in class_dict.items():
-        if type(storage_name) is not str:
-            continue
-        if not _is_native_descriptor_for_storage(
-            descriptor,
-            MemberDescriptorType,
-            declaring_class,
-            storage_name,
-        ):
-            continue
-        is_raw_storage_name = storage_name == slot
-        mangling_prefix_length = len(storage_name) - len(slot) - 1
-        is_mangled_storage_name = (
-            storage_name.startswith("_")
-            and storage_name.endswith(slot)
-            and mangling_prefix_length > 0
-        )
-        if not (is_raw_storage_name or is_mangled_storage_name):
-            continue
-        if matching_descriptor is not None:
-            return None
-        matching_descriptor = cast(MemberDescriptorType, descriptor)
-    return matching_descriptor
-
-
 def estimate_cache_entry_size(
     key: object,
     value: object,
@@ -477,27 +435,18 @@ def estimate_cache_entry_size(
                     except (AttributeError, TypeError):
                         pass
 
-                slots = class_dict.get("__slots__")
-                if type(slots) is str:
-                    slots = (slots,)
-                if type(slots) not in (tuple, list, set, frozenset):
-                    continue
-                for slot in cast(Iterable[object], slots):
-                    if type(slot) is not str:
-                        continue
-                    if slot in {"__dict__", "__weakref__"}:
-                        continue
-                    slot_descriptor = _get_native_member_descriptor_for_slot(
+                for storage_name, descriptor in class_dict.items():
+                    if not _is_native_descriptor_for_storage(
+                        descriptor,
+                        MemberDescriptorType,
                         cls,
-                        class_dict,
-                        slot,
-                    )
-                    if slot_descriptor is None:
+                        storage_name,
+                    ):
                         continue
                     try:
                         candidates.append(
                             MemberDescriptorType.__get__(
-                                slot_descriptor,
+                                cast(MemberDescriptorType, descriptor),
                                 candidate,
                                 candidate_type,
                             )
