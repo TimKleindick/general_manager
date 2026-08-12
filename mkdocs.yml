@@ -104,6 +104,7 @@ nav:
           - concepts/interfaces/computed_data_interfaces.md
           - concepts/interfaces/dependency_graph.md
           - concepts/interfaces/request_interface.md
+          - concepts/interfaces/remote_api.md
       - Observability:
           - concepts/observability/index.md
           - concepts/observability/logging.md
