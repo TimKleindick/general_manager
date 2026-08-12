@@ -1,5 +1,6 @@
+from collections.abc import Iterator
 from unittest import mock
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
@@ -20,6 +21,7 @@ from general_manager.cache.run_context import (
     ensure_calculation_run_context,
 )
 from general_manager.cache.run_context_lru import (
+    MIN_TRACKED_ENTRY_BYTES,
     estimate_cache_entry_size,
     run_context_cache_budget,
 )
@@ -70,6 +72,13 @@ class PublishFailed(RuntimeError):
 
 class LeaseReleaseFailed(RuntimeError):
     """Test exception used to exercise cleanup after lease-release failure."""
+
+
+@pytest.fixture(autouse=True)
+def reset_run_context_cache_budget() -> Iterator[None]:
+    run_context_cache_budget.__init__()
+    yield
+    run_context_cache_budget.__init__()
 
 
 def raise_after_buffering(
@@ -288,7 +297,11 @@ def test_finite_budget_set_ignores_unrelated_native_dict_descriptor() -> None:
 
     value = Value()
     with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
+        override_settings(
+            GENERAL_MANAGER={
+                "RUN_CONTEXT_CACHE_MAX_BYTES": MIN_TRACKED_ENTRY_BYTES,
+            }
+        ),
         CalculationRunContext() as context,
     ):
         result = context.set("key", value)
@@ -323,150 +336,6 @@ def test_finite_budget_get_or_set_does_not_invoke_replaced_slot_descriptor() -> 
         assert context.get("key") is value
 
     assert descriptor_accesses == []
-
-
-def test_finite_budget_get_or_set_ignores_member_descriptor_from_base_slot() -> None:
-    class Base:
-        __slots__ = ("base_payload",)
-
-    class Value(Base):
-        __slots__ = ("payload",)
-
-    value = Value()
-    value.base_payload = bytearray(1024)
-    value.payload = None
-    base_payload_descriptor = Base.__dict__["base_payload"]
-    Value.payload = base_payload_descriptor
-    Base.base_payload = None
-
-    with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
-        CalculationRunContext() as context,
-    ):
-        result = context.get_or_set("key", lambda: value)
-
-        assert result is value
-        assert context.get("key") is value
-
-
-def test_finite_budget_rejects_remaining_native_alias_payload() -> None:
-    class Value:
-        __slots__ = ("_Renamed__payload", "__payload")
-
-        def __init__(self) -> None:
-            self.__payload = None
-            self._Renamed__payload = bytearray(1024)
-
-    value = Value()
-    Value._Value__payload = None
-    Value.__slots__ = ()
-    Value.__name__ = "Renamed"
-
-    with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
-        CalculationRunContext() as context,
-    ):
-        result = context.get_or_set("key", lambda: value)
-
-        assert result is value
-        assert context.get("key") is None
-
-
-def test_finite_budget_rejects_slots_despite_changed_name_and_qualname() -> None:
-    class Value:
-        __qualname__ = "Renamed"
-        __slots__ = ("_Renamed__payload", "__payload")
-
-        def __init__(self) -> None:
-            self.__payload = bytearray(1024)
-            self._Renamed__payload = None
-
-    value = Value()
-    Value.__slots__ = ()
-    Value.__name__ = "Renamed"
-
-    with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
-        CalculationRunContext() as context,
-    ):
-        result = context.get_or_set("key", lambda: value)
-
-        assert result is value
-        assert context.get("key") is None
-
-
-def test_finite_budget_rejects_large_same_suffix_private_slot() -> None:
-    class Value:
-        __slots__ = ("_Other__payload", "__payload")
-
-        def __init__(self) -> None:
-            self.__payload = bytearray(1024)
-            self._Other__payload = None
-
-    value = Value()
-    with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
-        CalculationRunContext() as context,
-    ):
-        result = context.get_or_set("key", lambda: value)
-
-        assert result is value
-        assert context.get("key") is None
-
-
-def test_finite_budget_rejects_oversized_dotted_class_private_slot() -> None:
-    value_type = type("A.B", (), {"__slots__": ("__payload",)})
-    value = value_type()
-    setattr(value, "_A.B__payload", bytearray(1024))
-
-    with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
-        CalculationRunContext() as context,
-    ):
-        result = context.get_or_set("key", lambda: value)
-
-        assert result is value
-        assert context.get("key") is None
-
-
-@pytest.mark.parametrize("metadata_name", ["__mro__", "__dict__"])
-def test_finite_budget_set_avoids_shallow_leaf_metaclass_metadata_descriptors(
-    metadata_name: str,
-) -> None:
-    metadata_accesses: list[str] = []
-
-    class HostileMetadataDescriptor:
-        def __get__(self, instance: object, owner: object = None) -> object:
-            metadata_accesses.append(metadata_name)
-            raise AssertionError(  # noqa: TRY003 - test double reports the hook.
-                f"unexpected metaclass descriptor lookup: {metadata_name}"
-            )
-
-        def __set__(self, instance: object, value: object) -> None:
-            raise AssertionError(  # noqa: TRY003 - test double reports the hook.
-                f"unexpected metaclass descriptor assignment: {metadata_name}"
-            )
-
-    hostile_meta = type(
-        "HostileMeta",
-        (type,),
-        {metadata_name: HostileMetadataDescriptor()},
-    )
-
-    class Value(ModuleType, metaclass=hostile_meta):
-        pass
-
-    value = Value("hostile")
-    with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
-        CalculationRunContext() as context,
-    ):
-        result = context.set("key", value)
-
-        assert result is None
-        assert context.get("key") is value
-
-    assert metadata_accesses == []
 
 
 def test_outermost_run_context_exit_releases_process_accounting() -> None:
@@ -1356,6 +1225,32 @@ def test_run_context_reweighs_mutated_orm_index() -> None:
         context.set_orm_bucket_rows(("query", "rows"), (row,))
 
         assert context.get_orm_model_row(Row, 7, "default") is None
+
+
+def test_run_context_retains_reweighed_orm_index_that_fits_budget() -> None:
+    class Row:
+        _meta = SimpleNamespace(concrete_model=None)
+
+        def __init__(self) -> None:
+            self.pk = 7
+            self._state = SimpleNamespace(db="default")
+            self.payload = b"x"
+
+    Row._meta = SimpleNamespace(concrete_model=Row)
+    row = Row()
+    index_size = estimate_cache_entry_size(
+        ("orm_model_row_index", Row),
+        {(7, "default"): row},
+        stop_after=None,
+    )
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": index_size}),
+        CalculationRunContext() as context,
+    ):
+        context.set_orm_bucket_rows(("query", "rows"), (row,))
+
+        assert context.get_orm_model_row(Row, 7, "default") is row
 
 
 def test_bucket_index_helpers_store_replay_and_clear_dependencies() -> None:

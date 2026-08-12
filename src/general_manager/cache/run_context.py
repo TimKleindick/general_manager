@@ -235,14 +235,16 @@ class CalculationRunContext:
 
     def get_or_set(self, key: Hashable, loader: Callable[[], T]) -> T:
         """
-        Return a cached value for `key`, loading it at most once per context.
+        Return a cached value for `key`, loading it when it is not retained.
 
         The first call for a missing key invokes `loader()` and stores its
-        return value. Later calls with the same key return the stored object,
-        even if they pass a different loader. Loader exceptions propagate and do
-        not store a value. The key may be any hashable value. `loader` is a
-        synchronous callable; coroutine objects are stored as ordinary return
-        values if a loader returns one.
+        return value. Later calls with the same key return the stored object while
+        it remains cached, even if they pass a different loader. When
+        `RUN_CONTEXT_CACHE_MAX_BYTES` is configured, caching is best-effort and
+        the loader may run again if admission is refused or the entry is evicted.
+        Loader exceptions propagate and do not store a value. The key may be any
+        hashable value. `loader` is a synchronous callable; coroutine objects are
+        stored as ordinary return values if a loader returns one.
         """
         scoped_key = self._scoped_key(key)
         try:
@@ -483,6 +485,7 @@ class CalculationRunContext:
         """Index cached ORM rows by model/database/primary key for relation reuse."""
         if not isinstance(rows, tuple):
             return
+        # This dict is an insertion-ordered set of scoped keys; None is a marker.
         mutated_index_keys: dict[Hashable, None] = {}
         for row in rows:
             row_key = self._orm_model_row_key(row)

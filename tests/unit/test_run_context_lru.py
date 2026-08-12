@@ -1,7 +1,6 @@
-from collections.abc import Hashable, Iterable
+from collections.abc import Hashable, Iterable, Iterator
 import sys
 from types import ModuleType
-from typing import Literal
 from weakref import ref
 
 import pytest
@@ -11,28 +10,36 @@ from django.test import override_settings
 from general_manager.cache.run_context_lru import (
     MIN_TRACKED_ENTRY_BYTES,
     ProcessRunContextCacheBudget,
+    RunCacheNamespace,
     _TrackedEntry,
     estimate_cache_entry_size,
     resolve_run_context_cache_max_bytes,
 )
 
-Namespace = Literal["values", "dependency_hits"]
-
 
 class CacheOwner:
     def __init__(self) -> None:
-        self.entries: dict[tuple[Namespace, Hashable], object] = {}
+        self.entries: dict[tuple[RunCacheNamespace, Hashable], object] = {}
 
-    def store(self, namespace: Namespace, key: Hashable, value: object) -> None:
+    def store(
+        self,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+        value: object,
+    ) -> None:
         self.entries[(namespace, key)] = value
 
     def _iter_run_cache_entries(
         self,
-    ) -> Iterable[tuple[Namespace, Hashable, object]]:
+    ) -> Iterable[tuple[RunCacheNamespace, Hashable, object]]:
         for (namespace, key), value in self.entries.items():
             yield namespace, key, value
 
-    def _evict_run_cache_entry(self, namespace: Namespace, key: Hashable) -> None:
+    def _evict_run_cache_entry(
+        self,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+    ) -> None:
         self.entries.pop((namespace, key), None)
 
 
@@ -47,7 +54,11 @@ class LimitRaisingCacheOwner(CacheOwner):
         self._replacement_limit = replacement_limit
         self._eviction_count = 0
 
-    def _evict_run_cache_entry(self, namespace: Namespace, key: Hashable) -> None:
+    def _evict_run_cache_entry(
+        self,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+    ) -> None:
         super()._evict_run_cache_entry(namespace, key)
         self._eviction_count += 1
         if self._eviction_count == 1:
@@ -66,7 +77,7 @@ class OrderedOwnerRegistry:
         if owner in self._owners:
             self._owners.remove(owner)
 
-    def __iter__(self) -> Iterable[CacheOwner]:
+    def __iter__(self) -> Iterator[CacheOwner]:
         return iter(self._owners)
 
 
