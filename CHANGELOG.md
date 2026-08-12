@@ -2,6 +2,86 @@
 
 <!-- version list -->
 
+## v0.68.0 (2026-08-12)
+
+### Bug Fixes
+
+- Account prepopulated run-cache owners
+  ([`93d94de`](https://github.com/TimKleindick/general_manager/commit/93d94de6788ecdbc1b590405e5b2efe63aaffc8a))
+
+- Address run-context cache review
+  ([`94213a7`](https://github.com/TimKleindick/general_manager/commit/94213a70b63b6f755a2dac8bd311084d788d25c9))
+
+- Admit same-limit run-cache owners
+  ([`f515196`](https://github.com/TimKleindick/general_manager/commit/f5151964d967df4501eac88833e833e1e33a3ac2))
+
+- Enumerate native slot storage directly
+  ([`ee956e8`](https://github.com/TimKleindick/general_manager/commit/ee956e868c9ba208a2161f86de67345cc0c3ffd6))
+
+- Harden cache estimator metadata safety
+  ([`d827dd3`](https://github.com/TimKleindick/general_manager/commit/d827dd3b574b8fe778fd19237dde3106c104c35f))
+
+- Harden run-context cache budgeting
+  ([`ef4057a`](https://github.com/TimKleindick/general_manager/commit/ef4057a173af23c50c1bd34bb216baf0c9baed59))
+
+- Harden run-context size estimation
+  ([`6da6fcc`](https://github.com/TimKleindick/general_manager/commit/6da6fcc0fc7a912a1dbf31831e6919eece1c90b5))
+
+- Isolate hostile slot metadata
+  ([`dcee0b6`](https://github.com/TimKleindick/general_manager/commit/dcee0b6f9d9e31c83dca8d98cfe8cd30ff10272f))
+
+- Make private slot provenance unambiguous
+  ([`0f9b9c5`](https://github.com/TimKleindick/general_manager/commit/0f9b9c522dc2b33eb86bdea1ebd38f25255fcd04))
+
+- Preserve private slot descriptor provenance
+  ([`12baf3e`](https://github.com/TimKleindick/general_manager/commit/12baf3ecbebb71b6188b2ec688e43c1410ec24bf))
+
+- Preserve run-cache budget coordination
+  ([`c01f1ae`](https://github.com/TimKleindick/general_manager/commit/c01f1ae4ed990c8cd2fcf62e563f8ff8bd3f857d))
+
+### Documentation
+
+- Clarify transaction callback scopes
+  ([`1a55807`](https://github.com/TimKleindick/general_manager/commit/1a558077466ef9257f52bd5a47cb6763929ce71c))
+
+- Correct run-cache mutation test plan
+  ([`3bfbe80`](https://github.com/TimKleindick/general_manager/commit/3bfbe806819ec0f2f05c6eed55216be64453f98b))
+
+- Design run-context cache memory budget
+  ([`3c3a2c9`](https://github.com/TimKleindick/general_manager/commit/3c3a2c990aad733b79fa635c7cbbebcd9ed3ddaf))
+
+- Document commit-safe websocket delivery
+  ([`b77b866`](https://github.com/TimKleindick/general_manager/commit/b77b8664be3048f76c8e532f5f9ebde54d74d6d5))
+
+- Explain run-context memory budget
+  ([`b1eaf46`](https://github.com/TimKleindick/general_manager/commit/b1eaf46c17f7cbd1a860b0eb50902109cc29e022))
+
+- Plan run-context cache memory budget
+  ([`8d8de76`](https://github.com/TimKleindick/general_manager/commit/8d8de76dec1447e05707828ce0fe1ed47b7076cf))
+
+### Features
+
+- Account for run-cache hits and mutable indexes
+  ([`c2d1de8`](https://github.com/TimKleindick/general_manager/commit/c2d1de80dafb1ab32d6efc16b154fdfae55a7131))
+
+- Bound calculation run values
+  ([`a366e68`](https://github.com/TimKleindick/general_manager/commit/a366e684a388c0486b35cf7b73d4dd4d2d97cb8f))
+
+- Coordinate process-wide run-cache eviction
+  ([`50f6687`](https://github.com/TimKleindick/general_manager/commit/50f66873344be0284dfbfb8b383144fdc10b67da))
+
+- Estimate run-context cache memory
+  ([`b3783b6`](https://github.com/TimKleindick/general_manager/commit/b3783b666715e8f6461e942e4b32ee3648464056))
+
+### Testing
+
+- Cover first lease release failures
+  ([`d0236d0`](https://github.com/TimKleindick/general_manager/commit/d0236d000a3c623802ec8b5f5f835a9af764e602))
+
+- Cover run-cache hit lifecycle failures
+  ([`3a1b7f2`](https://github.com/TimKleindick/general_manager/commit/3a1b7f22ec6fe6b2e5f3f2f6307e0d6b62c3f734))
+
+
 ## v0.67.7 (2026-08-11)
 
 ### Bug Fixes
