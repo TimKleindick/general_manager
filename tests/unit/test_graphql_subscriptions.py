@@ -1134,7 +1134,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
                         )
                     )
                     hidden_checked = await asyncio.wait_for(
-                        asyncio.to_thread(hidden_permission_checked.wait),
+                        asyncio.to_thread(hidden_permission_checked.wait, 1),
                         timeout=1,
                     )
                     self.assertTrue(hidden_checked)
