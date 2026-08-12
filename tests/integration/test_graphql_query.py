@@ -166,6 +166,39 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self.assertEqual(names, sorted(names, reverse=True))
         self.assertEqual(payload["pageInfo"]["totalCount"], len(names))
 
+    def test_grouped_query_keeps_reverse_sort_order_when_paginated(self):
+        grouped_names = sorted(
+            {commercial.name for commercial in self.commercials.all()}, reverse=True
+        )
+        self.assertGreaterEqual(len(grouped_names), 6)
+        query = """
+        query {
+            commercialsList(
+                groupBy: ["name"]
+                sortBy: name
+                reverse: true
+                page: 2
+                pageSize: 3
+            ) {
+                items {
+                    name
+                }
+                pageInfo {
+                    totalCount
+                }
+            }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["commercialsList"]
+        names = [item["name"] for item in payload["items"]]
+        self.assertEqual(names, sorted(names, reverse=True))
+        self.assertEqual(names, grouped_names[3:6])
+        self.assertEqual(payload["pageInfo"]["totalCount"], len(grouped_names))
+
     def test_query_commercials_with_project_list(self):
         """
         Tests that querying the commercials list with nested project lists returns correct items and pagination metadata for both levels.
