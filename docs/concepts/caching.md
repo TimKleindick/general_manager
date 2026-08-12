@@ -62,10 +62,10 @@ Use `register_data_change_class(sender.__name__, database_alias)` from a
 `post_data_change` receiver when a consumer needs the set of classes changed in
 one framework-owned envelope. The helper deduplicates names and returns `True`
 when the requested alias has a matching live framework-owned envelope. It can
-therefore register against either live alias during nested cross-alias mutations
-and returns `False` only when the requested alias has no eligible
-framework-owned envelope. The API reference gives the exact signal payloads,
-consumer wiring, and phase-timing meanings:
+register only against the requested `database_alias`; it never searches or
+registers against another alias. It returns `False` when the requested alias is
+absent or its live envelope is caller-owned. The API reference gives the exact
+signal payloads, consumer wiring, and phase-timing meanings:
 [ORM data-change transaction lifecycle](../api/cache.md#orm-data-change-transaction-lifecycle).
 
 ## Bucket Dependency Semantics

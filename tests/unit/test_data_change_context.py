@@ -103,6 +103,22 @@ def test_phase_durations_accumulate_and_clamp_negative_values() -> None:
         assert current.transaction.phase_seconds == {"database": 0.5}
 
 
+@pytest.mark.parametrize(
+    "duration_seconds", [float("nan"), float("inf"), -float("inf")]
+)
+def test_non_finite_phase_durations_leave_total_unchanged(
+    duration_seconds: float,
+) -> None:
+    """Non-finite measurements do not contaminate the accumulated phase total."""
+    with _own("default", caller_in_atomic_block=False) as current:
+        data_change_context.record_data_change_phase("database", 0.5, "default")
+        data_change_context.record_data_change_phase(
+            "database", duration_seconds, "default"
+        )
+
+        assert current.transaction.phase_seconds == {"database": 0.5}
+
+
 def test_context_ownership_does_not_inspect_django_atomic_internals() -> None:
     """Core ownership must remain independent of Django's private stack."""
     source = inspect.getsource(data_change_context)

@@ -267,9 +267,8 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
     def test_emit_records_supplied_alias_duration_on_early_return(self) -> None:
         """Early exits attribute subscription timing to the supplied database alias."""
 
-        class Project(GeneralManager):
-            identification: ClassVar[dict[str, object]] = {"id": 1}
-            Interface = BaseTestInterface
+        class Project:
+            pass
 
         with (
             data_change_context.own_data_change_transaction(
@@ -293,10 +292,7 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
     ) -> None:
         """A scheduling error retains its identity while timing is still recorded."""
 
-        class Project(GeneralManager):
-            identification: ClassVar[dict[str, object]] = {"id": 1}
-            Interface = BaseTestInterface
-
+        class Project:
             class RemoteAPI:
                 enabled = True
                 base_path = "/remote"

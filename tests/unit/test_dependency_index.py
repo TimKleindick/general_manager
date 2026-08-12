@@ -1246,6 +1246,43 @@ class GenericCacheInvalidationTests(TestCase):
         self.assertIsNone(result)
         record_phase.assert_called_once_with("invalidation", 0.25, "analytics")
 
+    def test_generic_invalidation_records_latency_when_invalidation_fails(self) -> None:
+        inst = DummyManager2(status="active", count=1)
+        error = RuntimeError("invalidation failed")
+
+        with (
+            patch(
+                "general_manager.cache.dependency_index.perf_counter",
+                side_effect=(10.0, 10.25),
+            ),
+            patch(
+                "general_manager.cache.dependency_index.record_data_change_phase",
+            ) as record_phase,
+            patch(
+                "general_manager.cache.dependency_index.acquire_lock_with_retry",
+                return_value="owner-token",
+            ),
+            patch("general_manager.cache.dependency_index.release_lock"),
+            patch(
+                "general_manager.cache.dependency_index.legacy_dependency_index_exists",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.cache.dependency_index._generic_cache_invalidation_from_shards",
+                side_effect=error,
+            ),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                generic_cache_invalidation(
+                    sender=DummyManager2,
+                    instance=inst,
+                    old_relevant_values={"status": "inactive"},
+                    database_alias="analytics",
+                )
+
+        self.assertIs(raised.exception, error)
+        record_phase.assert_called_once_with("invalidation", 0.25, "analytics")
+
     @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
     @patch(
         "general_manager.cache.dependency_index.invalidate_request_query_dependencies",
