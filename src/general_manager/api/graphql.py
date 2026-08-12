@@ -1440,7 +1440,10 @@ class GraphQL:
         user: object,
         action: str,
     ) -> GeneralManager | None:
-        item, _ = cls._instantiate_manager(manager_class, identification)
+        try:
+            item, _ = cls._instantiate_manager(manager_class, identification)
+        except SUBSCRIPTION_HYDRATION_ERRORS:
+            return None
         try:
             readable = _can_read_instance_for_user_fn(item, user)
         except Exception as exc:  # noqa: BLE001, RUF100
@@ -1677,16 +1680,13 @@ class GraphQL:
                         if not isinstance(identification, dict):
                             continue
                         identification_copy = deepcopy(identification)
-                        try:
-                            item = await asyncio.to_thread(
-                                cls._instantiate_readable_manager,
-                                generalManagerClass,
-                                identification_copy,
-                                subscription_user,
-                                action,
-                            )
-                        except SUBSCRIPTION_HYDRATION_ERRORS:
-                            continue
+                        item = await asyncio.to_thread(
+                            cls._instantiate_readable_manager,
+                            generalManagerClass,
+                            identification_copy,
+                            subscription_user,
+                            action,
+                        )
                         if item is None:
                             continue
                         clear_capability_context(info)

@@ -1139,6 +1139,59 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
             exc_info=permission_error,
         )
 
+    def test_class_subscription_propagates_permission_failure(self) -> None:
+        employee = self.Employee.create(name="Visible", creator_id=self.user.id)
+        context = SimpleNamespace(user=self.user)
+        info = SimpleNamespace(context=context)
+        subscribe = GraphQL._subscription_fields["subscribe_on_employee_class_change"]
+        permission_error = RuntimeError("permission backend unavailable")
+
+        async def failing_permission_event_listener(
+            _channel_layer: object,
+            _channel_name: str,
+            queue: asyncio.Queue[dict[str, object]],
+        ) -> None:
+            await queue.put(
+                {
+                    "type": "gm.subscription.event",
+                    "manager": "Employee",
+                    "action": "update",
+                    "identification": employee.identification,
+                }
+            )
+            await asyncio.Event().wait()
+
+        async def run_subscription() -> None:
+            with (
+                patch.object(
+                    GraphQL,
+                    "_channel_message_listener",
+                    new=failing_permission_event_listener,
+                ),
+                patch(
+                    "general_manager.api.graphql._can_read_instance_for_user_fn",
+                    side_effect=permission_error,
+                ),
+                patch("general_manager.api.graphql.logger") as mock_logger,
+            ):
+                stream = await subscribe(None, info)
+                try:
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "permission backend unavailable",
+                    ):
+                        await asyncio.wait_for(stream.__anext__(), timeout=1)
+                finally:
+                    await stream.aclose()
+
+            mock_logger.error.assert_called_once_with(
+                "class subscription permission check failed",
+                context={"manager": "Employee", "action": "update"},
+                exc_info=permission_error,
+            )
+
+        asyncio.run(run_subscription())
+
     def test_class_subscription_hydrates_authorized_row_refresh(self) -> None:
         employee = self.Employee.create(name="Visible", creator_id=self.user.id)
         schema = self._build_schema()
