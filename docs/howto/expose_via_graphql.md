@@ -157,7 +157,7 @@ bucket-like values are used as returned.
 
 ```graphql
 query ActiveProjects($filters: ProjectFilterInput) {
-  projectList(filter: $filters, sortBy: NAME, page: 1, pageSize: 20) {
+  projectList(filter: $filters, sortBy: name, page: 1, pageSize: 20) {
     items {
       id
       name
@@ -183,7 +183,7 @@ grouping, and sorting, but before page slicing.
 
 ```graphql
 query ProjectsByDescendingStatus {
-  projectList(groupBy: ["status"], sortBy: STATUS, reverse: true) {
+  projectList(groupBy: ["status"], sortBy: status, reverse: true) {
     items {
       status
     }
