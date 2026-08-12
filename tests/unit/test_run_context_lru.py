@@ -1,4 +1,5 @@
 from collections.abc import Hashable, Iterable
+import sys
 from types import ModuleType
 from typing import Literal
 from weakref import ref
@@ -190,39 +191,74 @@ def test_estimate_cache_entry_size_traverses_private_slots() -> None:
     assert empty_size < payload_size
 
 
-def test_estimate_cache_entry_size_ignores_renamed_private_slot_alias() -> None:
+def test_estimate_cache_entry_size_counts_remaining_native_alias_once() -> None:
     class Value:
         __slots__ = ("_Renamed__payload", "__payload")
 
-        def __init__(self) -> None:
+        def __init__(self, alias_payload: object) -> None:
             self.__payload = None
-            self._Renamed__payload = bytearray(1024)
+            self._Renamed__payload = alias_payload
 
-    value = Value()
-    Value.__slots__ = ("__payload",)
+    alias_payload = bytearray(1024)
+    value = Value(alias_payload)
+    Value._Value__payload = None
+    Value.__slots__ = ()
     Value.__name__ = "Renamed"
 
     size = estimate_cache_entry_size("key", value, stop_after=None)
 
-    assert size == MIN_TRACKED_ENTRY_BYTES
+    assert size == (
+        object.__sizeof__(value) + sys.getsizeof("key") + sys.getsizeof(alias_payload)
+    )
 
 
-def test_estimate_cache_entry_size_ignores_private_slot_alias_with_qualname() -> None:
+def test_estimate_cache_entry_size_ignores_class_name_and_qualname_for_slots() -> None:
     class Value:
         __qualname__ = "Renamed"
         __slots__ = ("_Renamed__payload", "__payload")
 
         def __init__(self) -> None:
-            self.__payload = None
-            self._Renamed__payload = bytearray(1024)
+            self.__payload = bytearray(1024)
+            self._Renamed__payload = None
 
     value = Value()
-    Value.__slots__ = ("__payload",)
+    Value.__slots__ = ()
     Value.__name__ = "Renamed"
 
     size = estimate_cache_entry_size("key", value, stop_after=None)
 
-    assert size == MIN_TRACKED_ENTRY_BYTES
+    assert size > MIN_TRACKED_ENTRY_BYTES
+
+
+def test_estimate_cache_entry_size_traverses_all_same_suffix_private_slots() -> None:
+    class Value:
+        __slots__ = ("_Other__payload", "__payload")
+
+        def __init__(self, private_payload: object, other_payload: object) -> None:
+            self.__payload = private_payload
+            self._Other__payload = other_payload
+
+    empty_size = estimate_cache_entry_size("key", Value(None, None), stop_after=None)
+    private_size = estimate_cache_entry_size(
+        "key",
+        Value(bytearray(1024), None),
+        stop_after=None,
+    )
+    other_size = estimate_cache_entry_size(
+        "key",
+        Value(None, bytearray(1024)),
+        stop_after=None,
+    )
+    both_size = estimate_cache_entry_size(
+        "key",
+        Value(bytearray(1024), bytearray(1024)),
+        stop_after=None,
+    )
+
+    assert empty_size < private_size
+    assert empty_size < other_size
+    assert private_size < both_size
+    assert other_size < both_size
 
 
 def test_estimate_cache_entry_size_traverses_dotted_class_private_slots() -> None:
@@ -428,7 +464,21 @@ def test_estimate_cache_entry_size_ignores_hostile_slot_list_subclasses() -> Non
 
     size = estimate_cache_entry_size("key", Value(), stop_after=None)
 
-    assert size == MIN_TRACKED_ENTRY_BYTES
+    assert size > MIN_TRACKED_ENTRY_BYTES
+
+
+def test_estimate_cache_entry_size_traverses_many_slots_without_slot_metadata() -> None:
+    slot_names = tuple(f"payload_{index}" for index in range(64))
+    value_type = type("ManySlots", (), {"__slots__": slot_names})
+    value = value_type()
+    payloads = [bytearray(32) for _ in slot_names]
+    for slot_name, payload in zip(slot_names, payloads, strict=True):
+        setattr(value, slot_name, payload)
+    value_type.__slots__ = None
+
+    size = estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert size > sum(sys.getsizeof(payload) for payload in payloads)
 
 
 def test_unlimited_budget_operations_do_not_enter_lock_or_hash_key() -> None:
