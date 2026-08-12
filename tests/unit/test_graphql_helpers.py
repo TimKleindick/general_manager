@@ -361,6 +361,9 @@ class GraphQLHelperTests(SimpleTestCase):
         with pytest.raises(ValueError, match="pagination values"):
             apply_pagination(empty_grouped, page=-1, page_size=10)
 
+        with pytest.raises(ValueError, match="pagination values"):
+            apply_pagination(empty_grouped, page=1, page_size=-10)
+
     def test_measurement_scalar_invalid(self) -> None:
         """
         Verify that serializing a non-measurement string with MeasurementScalar raises an InvalidMeasurementValueError.
