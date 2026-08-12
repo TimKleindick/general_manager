@@ -152,3 +152,10 @@ def test_file_upload_guides_cover_required_security_and_operation_topics() -> No
     }
     missing_terms = sorted(term for term in required_terms if term not in corpus)
     assert missing_terms == []
+
+
+def test_graphql_sort_examples_use_generated_lowercase_enum_values() -> None:
+    guide = (DOCS_ROOT / "howto" / "expose_via_graphql.md").read_text(encoding="utf-8")
+
+    assert "projectList(filter: $filters, sortBy: name, page: 1, pageSize: 20)" in guide
+    assert 'projectList(groupBy: ["status"], sortBy: status, reverse: true)' in guide
