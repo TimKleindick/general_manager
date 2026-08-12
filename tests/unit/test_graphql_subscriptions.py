@@ -83,7 +83,14 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
                 )
 
                 def can_read_instance(self) -> bool:
-                    return self.instance.name != "Hidden"
+                    user_exists = (
+                        get_user_model()
+                        .objects.filter(
+                            pk=self.request_user.pk,
+                        )
+                        .exists()
+                    )
+                    return user_exists and self.instance.name != "Hidden"
 
         class SoftEmployee(GeneralManager):
             class Interface(DatabaseInterface):
@@ -1098,12 +1105,39 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
             finally:
                 await generator.aclose()
 
-        event = asyncio.run(run_subscription())
+        with patch.dict(os.environ):
+            os.environ.pop("DJANGO_ALLOW_ASYNC_UNSAFE", None)
+            event = asyncio.run(run_subscription())
 
         self.assertIsNone(event.errors)
         payload = event.data["onEmployeeClassChange"]
         self.assertEqual(payload["action"], "create")
         self.assertEqual(payload["item"]["name"], "Visible")
+
+    def test_class_subscription_permission_failure_is_logged(self) -> None:
+        employee = self.Employee.create(name="Visible", creator_id=self.user.id)
+        permission_error = RuntimeError("permission backend unavailable")
+
+        with (
+            patch(
+                "general_manager.api.graphql._can_read_instance_for_user_fn",
+                side_effect=permission_error,
+            ),
+            patch("general_manager.api.graphql.logger") as mock_logger,
+            self.assertRaisesRegex(RuntimeError, "permission backend unavailable"),
+        ):
+            GraphQL._instantiate_readable_manager(
+                self.Employee,
+                employee.identification,
+                self.user,
+                "update",
+            )
+
+        mock_logger.error.assert_called_once_with(
+            "class subscription permission check failed",
+            context={"manager": "Employee", "action": "update"},
+            exc_info=permission_error,
+        )
 
     def test_class_subscription_hydrates_authorized_row_refresh(self) -> None:
         employee = self.Employee.create(name="Visible", creator_id=self.user.id)
