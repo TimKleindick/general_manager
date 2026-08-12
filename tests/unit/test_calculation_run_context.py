@@ -1,5 +1,5 @@
 from unittest import mock
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
@@ -282,6 +282,21 @@ def test_finite_budget_set_does_not_invoke_replaced_class_descriptor() -> None:
     assert descriptor_accesses == []
 
 
+def test_finite_budget_set_ignores_unrelated_native_dict_descriptor() -> None:
+    class Value:
+        __dict__ = object.__dict__["__class__"]
+
+    value = Value()
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
+        CalculationRunContext() as context,
+    ):
+        result = context.set("key", value)
+
+        assert result is None
+        assert context.get("key") is value
+
+
 def test_finite_budget_get_or_set_does_not_invoke_replaced_slot_descriptor() -> None:
     descriptor_accesses: list[str] = []
 
@@ -308,6 +323,70 @@ def test_finite_budget_get_or_set_does_not_invoke_replaced_slot_descriptor() -> 
         assert context.get("key") is value
 
     assert descriptor_accesses == []
+
+
+def test_finite_budget_get_or_set_ignores_member_descriptor_from_base_slot() -> None:
+    class Base:
+        __slots__ = ("base_payload",)
+
+    class Value(Base):
+        __slots__ = ("payload",)
+
+    value = Value()
+    value.base_payload = bytearray(1024)
+    value.payload = None
+    base_payload_descriptor = Base.__dict__["base_payload"]
+    Value.payload = base_payload_descriptor
+    Base.base_payload = None
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
+        CalculationRunContext() as context,
+    ):
+        result = context.get_or_set("key", lambda: value)
+
+        assert result is value
+        assert context.get("key") is value
+
+
+@pytest.mark.parametrize("metadata_name", ["__mro__", "__dict__"])
+def test_finite_budget_set_avoids_shallow_leaf_metaclass_metadata_descriptors(
+    metadata_name: str,
+) -> None:
+    metadata_accesses: list[str] = []
+
+    class HostileMetadataDescriptor:
+        def __get__(self, instance: object, owner: object = None) -> object:
+            metadata_accesses.append(metadata_name)
+            raise AssertionError(  # noqa: TRY003 - test double reports the hook.
+                f"unexpected metaclass descriptor lookup: {metadata_name}"
+            )
+
+        def __set__(self, instance: object, value: object) -> None:
+            raise AssertionError(  # noqa: TRY003 - test double reports the hook.
+                f"unexpected metaclass descriptor assignment: {metadata_name}"
+            )
+
+    hostile_meta = type(
+        "HostileMeta",
+        (type,),
+        {metadata_name: HostileMetadataDescriptor()},
+    )
+
+    class Value(ModuleType, metaclass=hostile_meta):
+        pass
+
+    value = Value("hostile")
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
+        CalculationRunContext() as context,
+    ):
+        result = context.set("key", value)
+
+        assert result is None
+        assert context.get("key") is value
+
+    assert metadata_accesses == []
 
 
 def test_outermost_run_context_exit_releases_process_accounting() -> None:

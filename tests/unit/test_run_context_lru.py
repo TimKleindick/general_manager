@@ -213,6 +213,67 @@ def test_estimate_cache_entry_size_avoids_custom_metaclass_metadata_hooks() -> N
     assert metadata_accesses == []
 
 
+@pytest.mark.parametrize("metadata_name", ["__mro__", "__dict__"])
+def test_estimate_cache_entry_size_avoids_metaclass_metadata_data_descriptors(
+    metadata_name: str,
+) -> None:
+    metadata_accesses: list[str] = []
+
+    class HostileMetadataDescriptor:
+        def __get__(self, instance: object, owner: object = None) -> object:
+            metadata_accesses.append(metadata_name)
+            raise AssertionError(  # noqa: TRY003 - test double reports the hook.
+                f"unexpected metaclass descriptor lookup: {metadata_name}"
+            )
+
+        def __set__(self, instance: object, value: object) -> None:
+            raise AssertionError(  # noqa: TRY003 - test double reports the hook.
+                f"unexpected metaclass descriptor assignment: {metadata_name}"
+            )
+
+    hostile_meta = type(
+        "HostileMeta",
+        (type,),
+        {metadata_name: HostileMetadataDescriptor()},
+    )
+
+    class Value(metaclass=hostile_meta):
+        __slots__ = ()
+
+    size = estimate_cache_entry_size("key", Value(), stop_after=None)
+
+    assert size == MIN_TRACKED_ENTRY_BYTES
+    assert metadata_accesses == []
+
+
+def test_estimate_cache_entry_size_ignores_unrelated_native_dict_descriptor() -> None:
+    class Value:
+        __dict__ = object.__dict__["__class__"]
+
+    size = estimate_cache_entry_size("key", Value(), stop_after=None)
+
+    assert size == MIN_TRACKED_ENTRY_BYTES
+
+
+def test_estimate_cache_entry_size_ignores_member_descriptor_from_base_slot() -> None:
+    class Base:
+        __slots__ = ("base_payload",)
+
+    class Value(Base):
+        __slots__ = ("payload",)
+
+    value = Value()
+    value.base_payload = bytearray(1024)
+    value.payload = None
+    base_payload_descriptor = Base.__dict__["base_payload"]
+    Value.payload = base_payload_descriptor
+    Base.base_payload = None
+
+    size = estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert size == MIN_TRACKED_ENTRY_BYTES
+
+
 def test_estimate_cache_entry_size_ignores_hostile_mutated_slot_metadata() -> None:
     class HostileSlot:
         def __hash__(self) -> int:
