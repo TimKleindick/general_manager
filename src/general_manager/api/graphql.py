@@ -95,7 +95,7 @@ from general_manager.api.graphql_resolvers import (
     apply_pagination as _apply_pagination_fn,
     apply_grouping as _apply_grouping_fn,
     check_read_permission as _check_read_permission_fn,
-    can_read_instance as _can_read_instance_fn,
+    can_read_instance_for_user as _can_read_instance_for_user_fn,
     create_measurement_resolver as _create_measurement_resolver_fn,
     create_normal_resolver as _create_normal_resolver_fn,
     create_list_resolver as _create_list_resolver_fn,
@@ -1433,6 +1433,26 @@ class GraphQL:
         )
 
     @classmethod
+    def _instantiate_readable_manager(
+        cls,
+        manager_class: type[GeneralManager],
+        identification: GraphQLIdentification,
+        user: object,
+        action: str,
+    ) -> GeneralManager | None:
+        item, _ = cls._instantiate_manager(manager_class, identification)
+        try:
+            readable = _can_read_instance_for_user_fn(item, user)
+        except Exception as exc:  # noqa: BLE001, RUF100
+            logger.error(  # noqa: TRY400
+                "class subscription permission check failed",
+                context={"manager": manager_class.__name__, "action": action},
+                exc_info=exc,
+            )
+            raise
+        return item if readable else None
+
+    @classmethod
     def _add_subscription_field(
         cls,
         graphene_type: type[graphene.ObjectType],
@@ -1623,6 +1643,7 @@ class GraphQL:
                 cls._class_group_name(generalManagerClass),
                 cls._refresh_group_name(generalManagerClass),
             }
+            subscription_user = info.context.user
 
             async def event_stream() -> AsyncIterator[SubscriptionEvent]:
                 channel_name = cast(str, await channel_layer.new_channel())
@@ -1657,14 +1678,16 @@ class GraphQL:
                             continue
                         identification_copy = deepcopy(identification)
                         try:
-                            item, _ = await asyncio.to_thread(
-                                cls._instantiate_manager,
+                            item = await asyncio.to_thread(
+                                cls._instantiate_readable_manager,
                                 generalManagerClass,
                                 identification_copy,
+                                subscription_user,
+                                action,
                             )
                         except SUBSCRIPTION_HYDRATION_ERRORS:
                             continue
-                        if not _can_read_instance_fn(item, info):
+                        if item is None:
                             continue
                         clear_capability_context(info)
                         yield SubscriptionEvent(item=item, action=action)

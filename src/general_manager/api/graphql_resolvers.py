@@ -564,12 +564,12 @@ def check_read_permission(
     return True
 
 
-def can_read_instance(
+def can_read_instance_for_user(
     instance: GeneralManager,
-    info: GraphQLResolveInfo,
+    user: object,
 ) -> bool:
     """
-    Return whether the request user may see that *instance* exists.
+    Return whether *user* may see that *instance* exists.
 
     When the manager defines a Permission class, this calls
     ``Permission(instance, user).can_read_instance()``. Managers without a
@@ -577,8 +577,16 @@ def can_read_instance(
     """
     PermissionClass: type[BasePermission] | None = getattr(instance, "Permission", None)
     if PermissionClass:
-        return PermissionClass(instance, info.context.user).can_read_instance()
+        return PermissionClass(instance, user).can_read_instance()
     return True
+
+
+def can_read_instance(
+    instance: GeneralManager,
+    info: GraphQLResolveInfo,
+) -> bool:
+    """Return whether the request user may see that *instance* exists."""
+    return can_read_instance_for_user(instance, info.context.user)
 
 
 # ---------------------------------------------------------------------------
