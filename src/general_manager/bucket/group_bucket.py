@@ -502,7 +502,11 @@ class GroupBucket(Generic[GeneralManagerType]):
                     new_base_data = new_base_data | manager._data
             if new_base_data is None:
                 raise EmptyGroupBucketSliceError()
-            return GroupBucket(self._manager_class, self._group_by_keys, new_base_data)
+            new_bucket = GroupBucket(
+                self._manager_class, self._group_by_keys, new_base_data
+            )
+            new_bucket._data = new_data
+            return new_bucket
         raise InvalidGroupBucketIndexError(type(item))
 
     def __len__(self) -> int:
