@@ -2,7 +2,7 @@
 Resolver-construction helpers extracted from ``api/graphql.py``.
 
 These standalone functions build Graphene resolver callables and apply
-query modifiers (filtering, pagination, grouping). They hold no reference to the
+query modifiers (filtering, grouping, sorting, pagination). They hold no reference to the
 ``GraphQL`` class and can therefore be imported freely inside the package's
 internal GraphQL implementation without circular imports. This module is not a
 stable public import path.
@@ -660,9 +660,11 @@ def create_list_resolver(
     capability warmups. The resolver applies permission prefilters and the
     permission row gate before user-supplied query arguments,
     then explicit filters, normalized filter-side excludes, explicit excludes,
-    normalized exclude-side excludes, sorting, optional grouping, and pagination.
-    It computes ``total_count`` after grouping and before pagination. Non-grouped
-    page items are materialized to a list; grouped results remain a
+    normalized exclude-side excludes, optional grouping, sorting, and pagination.
+    Sorting therefore applies to records when grouping is omitted and to grouped
+    manager objects when grouping is active. It computes ``total_count`` after
+    grouping and sorting and before pagination. Non-grouped page items are
+    materialized to a list; grouped results remain a
     ``GroupBucket`` and are returned as the Python-side ``items`` value. When
     grouping is active, pagination slices the group bucket before it is returned.
     Dependency-cache prefetch runs only for materialized item lists when the
@@ -730,15 +732,16 @@ def create_list_resolver(
             qs,
             filter,
             exclude,
-            sort_by,
+            None,
             reverse,
             filter_normalizer=bound_filter_normalizer,
         )
         qs_grouped = apply_grouping(qs, group_by)
+        qs_sorted = apply_sorting(qs_grouped, sort_by, reverse)
 
-        total_count = len(qs_grouped)
+        total_count = len(qs_sorted)
 
-        qs_paginated = apply_pagination(qs_grouped, page, page_size)
+        qs_paginated = apply_pagination(qs_sorted, page, page_size)
         items: object
         if hasattr(qs_paginated, "groups"):
             items = qs_paginated
