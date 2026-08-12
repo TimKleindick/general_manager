@@ -371,6 +371,44 @@ def test_finite_budget_get_or_set_ignores_renamed_private_slot_alias() -> None:
         assert context.get("key") is value
 
 
+def test_finite_budget_get_or_set_ignores_private_slot_alias_with_qualname() -> None:
+    class Value:
+        __qualname__ = "Renamed"
+        __slots__ = ("_Renamed__payload", "__payload")
+
+        def __init__(self) -> None:
+            self.__payload = None
+            self._Renamed__payload = bytearray(1024)
+
+    value = Value()
+    Value.__slots__ = ("__payload",)
+    Value.__name__ = "Renamed"
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
+        CalculationRunContext() as context,
+    ):
+        result = context.get_or_set("key", lambda: value)
+
+        assert result is value
+        assert context.get("key") is value
+
+
+def test_finite_budget_rejects_oversized_dotted_class_private_slot() -> None:
+    value_type = type("A.B", (), {"__slots__": ("__payload",)})
+    value = value_type()
+    setattr(value, "_A.B__payload", bytearray(1024))
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 256}),
+        CalculationRunContext() as context,
+    ):
+        result = context.get_or_set("key", lambda: value)
+
+        assert result is value
+        assert context.get("key") is None
+
+
 @pytest.mark.parametrize("metadata_name", ["__mro__", "__dict__"])
 def test_finite_budget_set_avoids_shallow_leaf_metaclass_metadata_descriptors(
     metadata_name: str,

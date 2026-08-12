@@ -394,23 +394,14 @@ def _get_native_member_descriptor_for_slot(
             storage_name,
         ):
             continue
-        try:
-            descriptor_qualname = object.__getattribute__(
-                descriptor,
-                "__qualname__",
-            )
-        except (AttributeError, TypeError):
-            continue
-        if type(descriptor_qualname) is not str:
-            continue
-        descriptor_suffix = f".{storage_name}"
-        if not descriptor_qualname.endswith(descriptor_suffix):
-            continue
-        declaring_qualname = descriptor_qualname[: -len(descriptor_suffix)]
-        original_class_name = declaring_qualname.rsplit(".", 1)[-1]
-        mangling_prefix = original_class_name.lstrip("_")
-        expected_storage_name = f"_{mangling_prefix}{slot}" if mangling_prefix else slot
-        if storage_name != expected_storage_name:
+        is_raw_storage_name = storage_name == slot
+        mangling_prefix_length = len(storage_name) - len(slot) - 1
+        is_mangled_storage_name = (
+            storage_name.startswith("_")
+            and storage_name.endswith(slot)
+            and mangling_prefix_length > 0
+        )
+        if not (is_raw_storage_name or is_mangled_storage_name):
             continue
         if matching_descriptor is not None:
             return None
