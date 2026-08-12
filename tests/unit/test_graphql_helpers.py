@@ -43,7 +43,9 @@ from general_manager.utils.format_string import snake_to_camel
 from general_manager.api.graphql_resolvers import (
     apply_grouping,
     apply_pagination,
+    apply_query_parameters,
     apply_read_authorization,
+    apply_sorting,
     parse_input,
     resolve_instance_check_reasons,
     selection_includes_path,
@@ -283,6 +285,42 @@ class GraphQLHelperTests(SimpleTestCase):
         grouped = apply_grouping(queryset, ["name"])
 
         assert grouped._group_by_keys == ("name",)
+
+    def test_apply_sorting_normalizes_enum_and_propagates_reverse(self) -> None:
+        queryset = mock.Mock()
+        sorted_queryset = mock.Mock()
+        queryset.sort.return_value = sorted_queryset
+        sort_by = type("SortBy", (), {"value": "name"})()
+
+        result = apply_sorting(queryset, sort_by, reverse=True)
+
+        assert result is sorted_queryset
+        queryset.sort.assert_called_once_with("name", reverse=True)
+
+    def test_apply_sorting_is_noop_without_sort_key(self) -> None:
+        queryset = mock.Mock()
+
+        result = apply_sorting(queryset, None, reverse=True)
+
+        assert result is queryset
+        queryset.sort.assert_not_called()
+
+    def test_apply_query_parameters_still_sorts_direct_calls(self) -> None:
+        queryset = mock.Mock()
+        sorted_queryset = mock.Mock()
+        queryset.sort.return_value = sorted_queryset
+        sort_by = type("SortBy", (), {"value": "name"})()
+
+        result = apply_query_parameters(
+            queryset,
+            filter_input=None,
+            exclude_input=None,
+            sort_by=sort_by,
+            reverse=True,
+        )
+
+        assert result is sorted_queryset
+        queryset.sort.assert_called_once_with("name", reverse=True)
 
     def test_apply_pagination_defaults_only_the_missing_argument(self) -> None:
         """

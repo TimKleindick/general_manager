@@ -143,6 +143,18 @@ def contains_none_relation_filter(input_val: object) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def apply_sorting(
+    queryset: Bucket[GeneralManager] | GroupBucket[GeneralManager],
+    sort_by: graphene.Enum | None,
+    reverse: bool,
+) -> Bucket[GeneralManager] | GroupBucket[GeneralManager]:
+    """Sort a record or group bucket when a GraphQL sort key is present."""
+    if not sort_by:
+        return queryset
+    sort_by_str = cast(str, getattr(sort_by, "value", sort_by))
+    return queryset.sort(sort_by_str, reverse=reverse)
+
+
 def apply_query_parameters(
     queryset: Bucket[GeneralManager],
     filter_input: GraphQLFilterInput,
@@ -204,11 +216,10 @@ def apply_query_parameters(
     if normalized_excludes:
         queryset = queryset.exclude(**normalized_excludes)
 
-    if sort_by:
-        sort_by_str = cast(str, getattr(sort_by, "value", sort_by))
-        queryset = queryset.sort(sort_by_str, reverse=reverse)
-
-    return queryset
+    return cast(
+        Bucket[GeneralManager],
+        apply_sorting(queryset, sort_by, reverse),
+    )
 
 
 def apply_permission_filters(
