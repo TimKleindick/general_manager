@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Hashable, Iterable
+from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass
 import sys
 from threading import RLock
@@ -11,6 +11,7 @@ from types import (
     CodeType,
     FunctionType,
     GetSetDescriptorType,
+    MappingProxyType,
     MemberDescriptorType,
     MethodType,
     ModuleType,
@@ -47,6 +48,9 @@ _SIZED_BUILTIN_TYPES = (
     set,
     frozenset,
 )
+_TYPE_MRO_DESCRIPTOR = cast(GetSetDescriptorType, type.__dict__["__mro__"])
+_TYPE_DICT_DESCRIPTOR = cast(GetSetDescriptorType, type.__dict__["__dict__"])
+_TYPE_NAME_DESCRIPTOR = cast(GetSetDescriptorType, type.__dict__["__name__"])
 
 RunCacheNamespace = Literal["values", "dependency_hits"]
 TrackedKey = tuple[int, RunCacheNamespace, Hashable]
@@ -307,6 +311,69 @@ def resolve_run_context_cache_max_bytes() -> int | None:
     return configured
 
 
+def _is_native_descriptor_for_storage(
+    descriptor: object,
+    descriptor_type: type[object],
+    declaring_class: type[object],
+    storage_name: str,
+) -> bool:
+    if type(descriptor) is not descriptor_type:
+        return False
+    try:
+        return (
+            object.__getattribute__(descriptor, "__objclass__") is declaring_class
+            and object.__getattribute__(descriptor, "__name__") == storage_name
+        )
+    except (AttributeError, TypeError):
+        return False
+
+
+def _get_static_type_mro(
+    candidate_type: type[object],
+) -> tuple[type[object], ...] | None:
+    try:
+        candidate_mro = GetSetDescriptorType.__get__(
+            _TYPE_MRO_DESCRIPTOR,
+            candidate_type,
+            type,
+        )
+    except (AttributeError, TypeError):
+        return None
+    if type(candidate_mro) is not tuple:
+        return None
+    return cast(tuple[type[object], ...], candidate_mro)
+
+
+def _get_static_class_metadata(
+    candidate_mro: tuple[type[object], ...],
+) -> tuple[tuple[type[object], Mapping[str, object], str], ...] | None:
+    metadata: list[tuple[type[object], Mapping[str, object], str]] = []
+    for cls in candidate_mro:
+        try:
+            class_dict = GetSetDescriptorType.__get__(
+                _TYPE_DICT_DESCRIPTOR,
+                cls,
+                type,
+            )
+            class_name = GetSetDescriptorType.__get__(
+                _TYPE_NAME_DESCRIPTOR,
+                cls,
+                type,
+            )
+        except (AttributeError, TypeError):
+            return None
+        if type(class_dict) is not MappingProxyType or type(class_name) is not str:
+            return None
+        metadata.append(
+            (
+                cls,
+                cast(Mapping[str, object], class_dict),
+                class_name,
+            )
+        )
+    return tuple(metadata)
+
+
 def estimate_cache_entry_size(
     key: object,
     value: object,
@@ -337,7 +404,9 @@ def estimate_cache_entry_size(
         if stop_after is not None and measured_bytes > stop_after:
             return stop_after + 1
 
-        candidate_mro = type.__getattribute__(candidate_type, "__mro__")
+        candidate_mro = _get_static_type_mro(candidate_type)
+        if candidate_mro is None:
+            continue
         if any(
             base_type is leaf_type
             for base_type in candidate_mro
@@ -351,14 +420,21 @@ def estimate_cache_entry_size(
         elif candidate_type in (tuple, list, set, frozenset):
             candidates.extend(cast(Iterable[object], candidate))
         else:
-            for cls in candidate_mro:
-                class_dict = type.__getattribute__(cls, "__dict__")
+            class_metadata = _get_static_class_metadata(candidate_mro)
+            if class_metadata is None:
+                continue
+            for cls, class_dict, class_name in class_metadata:
                 instance_dict_descriptor = class_dict.get("__dict__")
-                if type(instance_dict_descriptor) is GetSetDescriptorType:
+                if _is_native_descriptor_for_storage(
+                    instance_dict_descriptor,
+                    GetSetDescriptorType,
+                    cls,
+                    "__dict__",
+                ):
                     try:
                         candidates.append(
                             GetSetDescriptorType.__get__(
-                                instance_dict_descriptor,
+                                cast(GetSetDescriptorType, instance_dict_descriptor),
                                 candidate,
                                 candidate_type,
                             )
@@ -371,21 +447,25 @@ def estimate_cache_entry_size(
                     slots = (slots,)
                 if type(slots) not in (tuple, list, set, frozenset):
                     continue
-                for slot in slots:
+                for slot in cast(Iterable[object], slots):
                     if type(slot) is not str:
                         continue
                     if slot in {"__dict__", "__weakref__"}:
                         continue
                     if slot.startswith("__") and not slot.endswith("__"):
-                        class_name = type.__getattribute__(cls, "__name__")
                         slot = f"_{class_name.lstrip('_')}{slot}"
                     slot_descriptor = class_dict.get(slot)
-                    if type(slot_descriptor) is not MemberDescriptorType:
+                    if not _is_native_descriptor_for_storage(
+                        slot_descriptor,
+                        MemberDescriptorType,
+                        cls,
+                        slot,
+                    ):
                         continue
                     try:
                         candidates.append(
                             MemberDescriptorType.__get__(
-                                slot_descriptor,
+                                cast(MemberDescriptorType, slot_descriptor),
                                 candidate,
                                 candidate_type,
                             )
