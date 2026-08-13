@@ -140,6 +140,34 @@ def test_estimate_cache_entry_size_handles_cycles() -> None:
     assert size >= MIN_TRACKED_ENTRY_BYTES
 
 
+@pytest.mark.parametrize("stop_after", [None, 10**400])
+def test_estimate_cache_entry_size_handles_sampled_sequence_cycles(
+    stop_after: int | None,
+) -> None:
+    value: list[object] = [None] * 2_000
+    value[-1] = value
+
+    size = estimate_cache_entry_size("cycle", value, stop_after=stop_after)
+
+    assert MIN_TRACKED_ENTRY_BYTES <= size
+    if stop_after is not None:
+        assert size <= stop_after
+
+
+@pytest.mark.parametrize("stop_after", [None, 10**400])
+def test_estimate_cache_entry_size_handles_sampled_mapping_cycles(
+    stop_after: int | None,
+) -> None:
+    value: dict[int, object] = {index: None for index in range(2_000)}
+    value[max(value)] = value
+
+    size = estimate_cache_entry_size("cycle", value, stop_after=stop_after)
+
+    assert MIN_TRACKED_ENTRY_BYTES <= size
+    if stop_after is not None:
+        assert size <= stop_after
+
+
 @pytest.mark.parametrize(
     "value",
     [None, False, 1, 1.5, 2j, "value", b"value", bytearray(b"value"), range(3)],
