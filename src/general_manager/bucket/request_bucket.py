@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Hashable, Iterable, Mapping
+from operator import attrgetter
 from typing import TYPE_CHECKING, Protocol, cast
 
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
@@ -435,12 +436,13 @@ class RequestBucket(Bucket[GeneralManagerType]):
         """
         items = list(self._ensure_items())
         key_names = (key,) if isinstance(key, str) else key
+        getters = [attrgetter(part.replace("__", ".")) for part in key_names]
 
         def _sort_key(instance: GeneralManagerType) -> tuple[object, ...]:
             values: list[object] = []
-            for part in key_names:
+            for part, getter in zip(key_names, getters, strict=True):
                 try:
-                    values.append(getattr(instance, part))
+                    values.append(getter(instance))
                 except AttributeError as error:
                     raise RequestBucketSortAttributeError(instance, part) from error
             return tuple(values)

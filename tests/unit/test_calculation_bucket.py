@@ -919,6 +919,23 @@ class TestGenerateCombinations(TestCase):
         )
         self.assertEqual(len(calls), 4)
 
+    def test_sort_accepts_flattened_compound_relation_paths(self, _mock_parse):
+        class Employee:
+            def __init__(self, employee_id: int, name: str) -> None:
+                self.id = employee_id
+                self.name = name
+
+        employees = [Employee(3, "Bob"), Employee(1, "Alice"), Employee(2, "Alice")]
+        fields = {
+            "rank": Input(type=int, possible_values=[1]),
+            "employee": Input(type=Employee, possible_values=employees),
+        }
+        bucket = self._make_bucket_with_fields(fields)
+
+        managers = list(bucket.sort(("rank", "employee__name", "employee__id")))
+
+        assert [manager.employee.id for manager in managers] == [1, 2, 3]
+
     def test_empty_possible_values(self, _mock_parse):
         # A field with no possible_values yields no combinations
 

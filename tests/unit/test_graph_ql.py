@@ -1631,6 +1631,86 @@ class GraphQLTests(TestCase):
         assert isinstance(field.args["sort_by"].type, graphene.List)
         assert field.args["sort_by"].type.of_type is sort_enum
 
+    def test_relation_list_executes_singleton_and_variable_sort_lists(self) -> None:
+        class RelatedManager(GeneralManager):
+            pass
+
+        class RelatedManagerType(graphene.ObjectType):
+            name = graphene.String()
+
+        class RelatedManagerPage(graphene.ObjectType):
+            items = graphene.List(RelatedManagerType)
+
+        sort_enum = type(
+            "RelatedSortByOptions",
+            (graphene.Enum,),
+            {"name": "name"},
+        )
+        received_sort_values: list[list[object]] = []
+
+        def resolve_related_list(_root, _info, **kwargs):
+            received_sort_values.append(kwargs["sort_by"])
+            return {"items": []}
+
+        with (
+            patch.object(GraphQL, "_create_filter_options", return_value=None),
+            patch.object(GraphQL, "_sort_by_options", return_value=sort_enum),
+            patch.object(
+                GraphQL,
+                "_get_or_create_page_type",
+                return_value=RelatedManagerPage,
+            ),
+        ):
+            field = GraphQL._map_field_to_graphene_read(
+                RelatedManager,
+                "related_manager_list",
+                {"relation_kind": "collection"},
+            )
+
+        parent_type = type(
+            "ExecutableRelationParent",
+            (graphene.ObjectType,),
+            {
+                "related_manager_list": field,
+                "resolve_related_manager_list": resolve_related_list,
+            },
+        )
+        query_type = type(
+            "ExecutableRelationQuery",
+            (graphene.ObjectType,),
+            {
+                "parent": graphene.Field(parent_type),
+                "resolve_parent": lambda *_args: object(),
+            },
+        )
+        schema = graphene.Schema(query=query_type)
+        inline_result = schema.execute(
+            """
+            query {
+              parent {
+                relatedManagerList(sortBy: name) { items { name } }
+              }
+            }
+            """
+        )
+        variable_result = schema.execute(
+            """
+            query Sort($sortBy: [RelatedSortByOptions!]!) {
+              parent {
+                relatedManagerList(sortBy: $sortBy) { items { name } }
+              }
+            }
+            """,
+            variable_values={"sortBy": ["name"]},
+        )
+
+        assert inline_result.errors is None
+        assert variable_result.errors is None
+        assert [
+            [enum_value.value for enum_value in sort_values]
+            for sort_values in received_sort_values
+        ] == [["name"], ["name"]]
+
     def test_top_level_list_uses_list_valued_sort_argument(self) -> None:
         class ManagerType(graphene.ObjectType):
             name = graphene.String()
@@ -1660,6 +1740,80 @@ class GraphQLTests(TestCase):
             )
             assert isinstance(argument_type, graphene.List)
             assert argument_type.of_type is sort_enum
+        finally:
+            GraphQL._query_fields = previous_query_fields
+
+    def test_top_level_list_executes_singleton_and_variable_sort_lists(self) -> None:
+        class ManagerType(graphene.ObjectType):
+            name = graphene.String()
+
+        class ManagerPage(graphene.ObjectType):
+            items = graphene.List(ManagerType)
+
+        sort_enum = type(
+            "TestManagerSortByOptions",
+            (graphene.Enum,),
+            {"name": "name"},
+        )
+        received_sort_values: list[list[object]] = []
+
+        def resolve_list(_root, _info, **kwargs):
+            received_sort_values.append(kwargs["sort_by"])
+            return {"items": []}
+
+        self.general_manager_class.Interface = SimpleNamespace(input_fields={})
+        previous_query_fields = GraphQL._query_fields
+        GraphQL._query_fields = {}
+        try:
+            with (
+                patch("general_manager.api.graphql.issubclass", return_value=True),
+                patch(
+                    "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                    return_value=False,
+                ),
+                patch.object(GraphQL, "_create_filter_options", return_value=None),
+                patch.object(GraphQL, "_sort_by_options", return_value=sort_enum),
+                patch.object(
+                    GraphQL,
+                    "_get_or_create_page_type",
+                    return_value=ManagerPage,
+                ),
+                patch.object(
+                    GraphQL,
+                    "_create_list_resolver",
+                    return_value=resolve_list,
+                ),
+            ):
+                GraphQL._add_queries_to_schema(ManagerType, self.general_manager_class)
+
+            query_type = type(
+                "ExecutableSortQuery",
+                (graphene.ObjectType,),
+                dict(GraphQL._query_fields),
+            )
+            schema = graphene.Schema(query=query_type)
+            inline_result = schema.execute(
+                """
+                query {
+                  testManagerList(sortBy: name) { items { name } }
+                }
+                """
+            )
+            variable_result = schema.execute(
+                """
+                query Sort($sortBy: [TestManagerSortByOptions!]!) {
+                  testManagerList(sortBy: $sortBy) { items { name } }
+                }
+                """,
+                variable_values={"sortBy": ["name"]},
+            )
+
+            assert inline_result.errors is None
+            assert variable_result.errors is None
+            assert [
+                [enum_value.value for enum_value in sort_values]
+                for sort_values in received_sort_values
+            ] == [["name"], ["name"]]
         finally:
             GraphQL._query_fields = previous_query_fields
 

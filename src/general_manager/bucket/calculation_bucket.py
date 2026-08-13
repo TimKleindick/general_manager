@@ -810,7 +810,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                         sorted_filters["prop_excludes"],
                     )
                     if sort_key is not None:
-                        getters = [attrgetter(key) for key in sort_key]
+                        getters = [
+                            attrgetter(key.replace("__", ".")) for key in sort_key
+                        ]
                         manager_combinations = sorted(
                             manager_combinations,
                             key=lambda manager_obj: tuple(
