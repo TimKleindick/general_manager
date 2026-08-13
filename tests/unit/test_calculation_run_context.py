@@ -1,4 +1,6 @@
 from collections.abc import Iterator
+from contextvars import copy_context
+from threading import Event, Thread
 from unittest import mock
 from types import SimpleNamespace
 
@@ -270,6 +272,49 @@ def test_run_context_batches_capped_value_touches() -> None:
         touch_many.assert_called_once_with(context, (("values", "key"),))
 
 
+def test_run_context_batches_capped_get_or_set_touches() -> None:
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set("key", "value")
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+            assert context.get_or_set("key", lambda: "replacement") == "value"
+
+        touch_many.assert_called_once_with(context, (("values", "key"),))
+
+
+def test_run_context_batches_capped_has_touches() -> None:
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set("key", "value")
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+            assert context.has("key")
+
+        touch_many.assert_called_once_with(context, (("values", "key"),))
+
+
+def test_run_context_batches_capped_dependency_hit_touches() -> None:
+    hit = DependencyCacheHit(value="value", dependencies=frozenset())
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set_dependency_cache_hits({"cache-key": hit})
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+            assert context.get_dependency_cache_hit("cache-key") == hit
+
+        touch_many.assert_called_once_with(
+            context,
+            (("dependency_hits", "cache-key"),),
+        )
+
+
 def test_run_context_repeated_touch_fast_path_avoids_pending_key_rehashes() -> None:
     key = CountingHashKey()
     with (
@@ -440,6 +485,76 @@ def test_reused_run_context_refreshes_cached_budget_enabled_state() -> None:
             assert context.get("key") == "value"
 
     touch_many.assert_not_called()
+
+
+def test_active_run_context_refreshes_cached_state_when_another_enables_budget() -> (
+    None
+):
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    with override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": None}):
+        with CalculationRunContext() as first:
+            first.set("a", "A")
+            first.set("b", "B")
+
+            with override_settings(
+                GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+            ):
+                with CalculationRunContext() as second:
+                    for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+                        assert first.get("a") == "A"
+                    second.set("c", "C")
+
+                    assert first.get("a") == "A"
+                    assert first.get("b") is None
+                    assert second.get("c") == "C"
+
+
+def test_foreign_thread_touch_bypasses_owner_local_batch() -> None:
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    worker_started = Event()
+    allow_worker_touch = Event()
+    worker_errors: list[BaseException] = []
+
+    with override_settings(
+        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+    ):
+        with CalculationRunContext() as first:
+            first.set("a", "A")
+            propagated_context = copy_context()
+
+            with CalculationRunContext() as second:
+                second.set("b", "B")
+
+                def touch_from_propagated_context() -> None:
+                    try:
+                        worker_started.set()
+                        assert allow_worker_touch.wait(timeout=1)
+                        assert current_calculation_run_context() is first
+                        assert first.get("a") == "A"
+                    except BaseException as error:  # noqa: BLE001
+                        worker_errors.append(error)
+
+                worker = Thread(
+                    target=lambda: propagated_context.run(touch_from_propagated_context)
+                )
+                worker.start()
+                try:
+                    assert worker_started.wait(timeout=1)
+                    allow_worker_touch.set()
+                    worker.join(timeout=1)
+                finally:
+                    allow_worker_touch.set()
+                    worker.join(timeout=1)
+
+                assert not worker.is_alive()
+                if worker_errors:
+                    raise worker_errors[0]
+
+                second.set("c", "C")
+
+                assert first.get("a") == "A"
+                assert second.get("b") is None
+                assert second.get("c") == "C"
 
 
 def test_run_context_does_not_retain_value_larger_than_budget() -> None:
