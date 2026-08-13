@@ -34,6 +34,8 @@ RUN_CONTEXT_CALIBRATION_WINDOW = 8
 RUN_CONTEXT_CALIBRATION_CANDIDATE_LIMIT = 2_048
 RUN_CONTEXT_FIXED_POINT_SCALE = 1 << 20
 RUN_CONTEXT_TRACK_MAX_REESTIMATES = 3
+RUN_CONTEXT_RECENCY_ENABLE_PERCENT = 80
+RUN_CONTEXT_RECENCY_DISABLE_PERCENT = 70
 _INVALID_MAX_BYTES_MESSAGE = (
     'GENERAL_MANAGER["RUN_CONTEXT_CACHE_MAX_BYTES"] must be None or a '
     "non-negative integer number of bytes."
@@ -96,8 +98,13 @@ def _eviction_target(max_bytes: int) -> int:
 class RunContextCacheOwner(Protocol):
     """Storage that participates in process-wide run-cache budgeting."""
 
-    def _set_run_cache_budget_enabled(self, enabled: bool) -> None:
-        """Refresh the owner's cached process-budget mode."""
+    def _set_run_cache_modes(
+        self,
+        budget_enabled: bool,
+        recency_enabled: bool,
+        generation: int,
+    ) -> None:
+        """Refresh the owner's cached process-budget and recency modes."""
 
     def _iter_run_cache_entries(
         self,
@@ -194,6 +201,12 @@ class ProcessRunContextCacheBudget:
         self._next_admission_generation = 0
         self._owner_lifecycle_generations: dict[int, int] = {}
         self._entry_attempt_generations: dict[TrackedKey, int] = {}
+        self._recency_enabled = False
+        self._mode_generation = 0
+        self._published_modes: tuple[bool, bool] | None = None
+        self._mode_publications: deque[
+            tuple[tuple[RunContextCacheOwner, ...], bool, bool, int]
+        ] = deque()
 
     @property
     def estimated_bytes(self) -> int:
@@ -206,6 +219,59 @@ class ProcessRunContextCacheBudget:
         """Return whether process-wide run-cache accounting is enabled."""
         return self._max_bytes is not None
 
+    @property
+    def is_recency_enabled(self) -> bool:
+        """Return whether reads should currently publish LRU recency."""
+        return self._recency_enabled
+
+    def _desired_recency_locked(self) -> bool:
+        max_bytes = self._max_bytes
+        if max_bytes is None or max_bytes <= 0:
+            return False
+        if self._recency_enabled:
+            return (
+                self._total_bytes * 100
+                >= max_bytes * RUN_CONTEXT_RECENCY_DISABLE_PERCENT
+            )
+        return self._total_bytes * 100 >= max_bytes * RUN_CONTEXT_RECENCY_ENABLE_PERCENT
+
+    def _capture_mode_publication_locked(
+        self,
+        *,
+        new_owner: RunContextCacheOwner | None = None,
+    ) -> None:
+        recency_enabled = self._desired_recency_locked()
+        modes = (self._max_bytes is not None, recency_enabled)
+        if modes != self._published_modes:
+            self._recency_enabled = recency_enabled
+            self._published_modes = modes
+            self._mode_generation += 1
+            owners = tuple(self._owners)
+        elif new_owner is not None:
+            owners = (new_owner,)
+        else:
+            return
+        self._mode_publications.append(
+            (owners, modes[0], modes[1], self._mode_generation)
+        )
+
+    def _publish_modes(self) -> None:
+        is_owned = getattr(self._lock, "_is_owned", None)
+        if is_owned is not None and is_owned():
+            return
+        while True:
+            with self._lock:
+                if not self._mode_publications:
+                    return
+                publication = self._mode_publications.popleft()
+            owners, budget_enabled, recency_enabled, generation = publication
+            for owner in owners:
+                owner._set_run_cache_modes(
+                    budget_enabled,
+                    recency_enabled,
+                    generation,
+                )
+
     def register(self, owner: RunContextCacheOwner, max_bytes: int | None) -> None:
         """Register an owner and rebuild tracked state when the limit changes."""
         with self._lock:
@@ -213,34 +279,31 @@ class ProcessRunContextCacheBudget:
             self._owners.add(owner)
             self._owner_reference_locked(owner)
             if max_bytes == self._max_bytes:
-                if is_new_owner:
-                    owner._set_run_cache_budget_enabled(max_bytes is not None)
                 if is_new_owner and max_bytes is not None:
                     self._track_owner_entries_locked(owner)
-                return
-
-            previous_max_bytes = self._max_bytes
-            self._max_bytes = max_bytes
-            self._configuration_generation += 1
-            enabled = max_bytes is not None
-            for registered_owner in tuple(self._owners):
-                registered_owner._set_run_cache_budget_enabled(enabled)
-            if max_bytes is None:
-                self._entries.clear()
-                self._strata.clear()
-                self._mru_key = None
-                self._entry_attempt_generations.clear()
-                self._exact_total_bytes = 0
-                self._total_bytes = 0
-                return
-
-            if previous_max_bytes is None:
-                self._rebuild_locked()
-            elif is_new_owner:
-                self._track_owner_entries_locked(owner)
-                self._evict_excess_locked()
+                self._capture_mode_publication_locked(
+                    new_owner=owner if is_new_owner else None
+                )
             else:
-                self._evict_excess_locked()
+                previous_max_bytes = self._max_bytes
+                self._max_bytes = max_bytes
+                self._configuration_generation += 1
+                if max_bytes is None:
+                    self._entries.clear()
+                    self._strata.clear()
+                    self._mru_key = None
+                    self._entry_attempt_generations.clear()
+                    self._exact_total_bytes = 0
+                    self._total_bytes = 0
+                elif previous_max_bytes is None:
+                    self._rebuild_locked()
+                elif is_new_owner:
+                    self._track_owner_entries_locked(owner)
+                    self._evict_excess_locked()
+                else:
+                    self._evict_excess_locked()
+                self._capture_mode_publication_locked()
+        self._publish_modes()
 
     def track(
         self,
@@ -250,6 +313,20 @@ class ProcessRunContextCacheBudget:
         value: object,
     ) -> None:
         """Record a stored entry and evict least-recently-used entries if needed."""
+        if self._max_bytes is None:
+            return
+        try:
+            self._track_accounting(owner, namespace, key, value)
+        finally:
+            self._publish_modes()
+
+    def _track_accounting(
+        self,
+        owner: RunContextCacheOwner,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+        value: object,
+    ) -> None:
         if self._max_bytes is None:
             return
         signal = _admission_signal(namespace, key, value)
@@ -263,6 +340,7 @@ class ProcessRunContextCacheBudget:
                 self._entry_attempt_generations.pop(tracked_key, None)
                 self._remove_entry_accounting_locked(tracked_key)
                 owner._evict_run_cache_entry(namespace, key)
+                self._capture_mode_publication_locked()
                 return
 
             requires_calibration = False
@@ -279,6 +357,7 @@ class ProcessRunContextCacheBudget:
                     estimated_bytes=None,
                     max_bytes=max_bytes,
                 )
+                self._capture_mode_publication_locked()
                 return
 
             configuration_generation = self._configuration_generation
@@ -307,6 +386,7 @@ class ProcessRunContextCacheBudget:
                         self._entry_attempt_generations.pop(tracked_key, None)
                         self._remove_entry_locked(tracked_key)
                         owner._evict_run_cache_entry(namespace, key)
+                        self._capture_mode_publication_locked()
                 raise
 
             with self._lock:
@@ -325,6 +405,7 @@ class ProcessRunContextCacheBudget:
                         self._entry_attempt_generations.pop(tracked_key, None)
                         self._remove_entry_accounting_locked(tracked_key)
                         owner._evict_run_cache_entry(namespace, key)
+                        self._capture_mode_publication_locked()
                         return
                     if reestimate_count >= RUN_CONTEXT_TRACK_MAX_REESTIMATES:
                         self._entry_attempt_generations.pop(tracked_key, None)
@@ -334,6 +415,7 @@ class ProcessRunContextCacheBudget:
                             "run cache entry skipped after repeated budget changes",
                             context={"namespace": namespace},
                         )
+                        self._capture_mode_publication_locked()
                         return
                     reestimate_count += 1
                     continue
@@ -345,6 +427,7 @@ class ProcessRunContextCacheBudget:
                     estimated_bytes=estimated_bytes,
                     max_bytes=max_bytes,
                 )
+                self._capture_mode_publication_locked()
                 return
 
     def touch(
@@ -396,6 +479,8 @@ class ProcessRunContextCacheBudget:
             if self._max_bytes is None:
                 return
             self._remove_entry_accounting_locked(tracked_key)
+            self._capture_mode_publication_locked()
+        self._publish_modes()
 
     def refresh(
         self,
@@ -417,6 +502,8 @@ class ProcessRunContextCacheBudget:
             self._remove_owner_entries_locked(owner_id)
             self._owner_references.pop(owner_id, None)
             self._owners.discard(owner)
+            self._capture_mode_publication_locked()
+        self._publish_modes()
 
     def _rebuild_locked(self) -> None:
         self._entries.clear()
@@ -685,6 +772,8 @@ class ProcessRunContextCacheBudget:
                 self._remove_owner_entries_locked(owner_id)
                 self._clear_owner_attempts_locked(owner_id)
                 self._owner_references.pop(owner_id, None)
+                self._capture_mode_publication_locked()
+            self._publish_modes()
 
         return remove_dead_owner
 

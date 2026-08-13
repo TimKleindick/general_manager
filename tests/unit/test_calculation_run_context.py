@@ -55,6 +55,13 @@ def make_pending_publication(cache_key: str) -> PendingDependencyCachePublicatio
     )
 
 
+def activate_run_cache_recency(context: CalculationRunContext) -> None:
+    modeled_bytes = run_context_cache_budget.estimated_bytes
+    assert modeled_bytes > 0
+    run_context_cache_budget.register(context, modeled_bytes * 5 // 4)
+    assert run_context_cache_budget.is_recency_enabled
+
+
 class CountingHashKey:
     def __init__(self) -> None:
         self.hash_calls = 0
@@ -253,6 +260,7 @@ def test_run_context_budget_evicts_lru_value_across_contexts() -> None:
         with CalculationRunContext() as first, CalculationRunContext() as second:
             first.set("a", "A")
             second.set("b", "B")
+            activate_run_cache_recency(second)
             for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
                 assert first.get("a") == "A"
             second.set("c", "C")
@@ -270,6 +278,7 @@ def test_run_context_budget_allows_one_batch_of_recency_staleness() -> None:
         with CalculationRunContext() as first, CalculationRunContext() as second:
             first.set("a", "A")
             second.set("b", "B")
+            activate_run_cache_recency(second)
             assert first.get("a") == "A"
             second.set("c", "C")
 
@@ -286,6 +295,7 @@ def test_same_owner_write_flushes_partial_recency_batch_before_eviction() -> Non
         with CalculationRunContext() as context:
             context.set("a", "A")
             context.set("b", "B")
+            activate_run_cache_recency(context)
             assert context.get("a") == "A"
 
             context.set("c", "C")
@@ -302,6 +312,7 @@ def test_run_context_batches_capped_value_touches() -> None:
         CalculationRunContext() as context,
     ):
         context.set("key", "value")
+        activate_run_cache_recency(context)
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE - 1):
             assert context.get("key") == "value"
         touch_many.assert_not_called()
@@ -317,6 +328,7 @@ def test_run_context_batches_capped_get_or_set_touches() -> None:
         CalculationRunContext() as context,
     ):
         context.set("key", "value")
+        activate_run_cache_recency(context)
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.get_or_set("key", lambda: "replacement") == "value"
 
@@ -330,6 +342,7 @@ def test_run_context_batches_capped_has_touches() -> None:
         CalculationRunContext() as context,
     ):
         context.set("key", "value")
+        activate_run_cache_recency(context)
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.has("key")
 
@@ -344,6 +357,7 @@ def test_run_context_batches_capped_dependency_hit_touches() -> None:
         CalculationRunContext() as context,
     ):
         context.set_dependency_cache_hits({"cache-key": hit})
+        activate_run_cache_recency(context)
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.get_dependency_cache_hit("cache-key") == hit
 
@@ -351,6 +365,105 @@ def test_run_context_batches_capped_dependency_hit_touches() -> None:
             context,
             (("dependency_hits", "cache-key"),),
         )
+
+
+def test_capped_value_reads_do_no_touch_work_below_pressure() -> None:
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 1_000_000}),
+        CalculationRunContext() as context,
+    ):
+        context.set("value", 1)
+        accounted_bytes = run_context_cache_budget.estimated_bytes
+        with (
+            mock.patch.object(
+                context,
+                "_touch_run_cache_entry",
+                side_effect=AssertionError(
+                    "below-pressure read must bypass touch path"
+                ),
+            ),
+            mock.patch(
+                "general_manager.cache.run_context.get_ident",
+                side_effect=AssertionError("below-pressure read must bypass get_ident"),
+            ),
+        ):
+            assert context.get("value") == 1
+            assert context.get_or_set("value", lambda: 2) == 1
+            assert context.has("value") is True
+            assert context.get("missing", "default") == "default"
+
+        assert run_context_cache_budget.estimated_bytes == accounted_bytes
+
+
+def test_capped_dependency_hits_do_no_touch_work_below_pressure() -> None:
+    hit = DependencyCacheHit(value="value", dependencies=frozenset())
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 1_000_000}),
+        CalculationRunContext() as context,
+    ):
+        context.set_dependency_cache_hits({"cache-key": hit})
+        with mock.patch.object(
+            context,
+            "_touch_run_cache_entry",
+            side_effect=AssertionError("below-pressure hit must bypass touch path"),
+        ):
+            assert context.get_dependency_cache_hit("cache-key") == hit
+            assert context.get_dependency_cache_hit("missing", "default") == "default"
+
+
+def test_capped_reads_do_not_acquire_owner_touch_lock_below_pressure() -> None:
+    class RaisingTouchLock:
+        def __enter__(self) -> None:
+            raise AssertionError(  # noqa: TRY003
+                "below-pressure read must bypass owner lock"
+            )
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 1_000_000}),
+        CalculationRunContext() as context,
+    ):
+        context.set("value", 1)
+        original_lock = context._run_cache_touch_lock
+        context._run_cache_touch_lock = RaisingTouchLock()  # type: ignore[assignment]
+        try:
+            assert context.get("value") == 1
+            assert context.get_or_set("value", lambda: 2) == 1
+            assert context.has("value") is True
+        finally:
+            context._run_cache_touch_lock = original_lock
+
+
+def test_older_mode_generation_cannot_disable_active_recency() -> None:
+    context = CalculationRunContext()
+    context._set_run_cache_modes(True, True, 20)
+
+    context._set_run_cache_modes(False, False, 19)
+
+    assert context._run_cache_mode_generation == 20
+    assert context._run_cache_budget_enabled is True
+    assert context._run_cache_recency_enabled is True
+
+
+def test_disabling_recency_discards_partial_touch_batch() -> None:
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set("key", "value")
+        activate_run_cache_recency(context)
+        assert context.get("key") == "value"
+
+        run_context_cache_budget.register(context, 10_000)
+        assert run_context_cache_budget.is_recency_enabled is False
+        activate_run_cache_recency(context)
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE - 1):
+            assert context.get("key") == "value"
+
+        touch_many.assert_not_called()
 
 
 def test_run_context_repeated_touch_fast_path_avoids_pending_key_rehashes() -> None:
@@ -361,6 +474,7 @@ def test_run_context_repeated_touch_fast_path_avoids_pending_key_rehashes() -> N
         CalculationRunContext() as context,
     ):
         context.set(key, "value")
+        activate_run_cache_recency(context)
         key.hash_calls = 0
 
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
@@ -377,6 +491,7 @@ def test_run_context_hot_reads_use_cached_budget_enabled_state() -> None:
         CalculationRunContext() as context,
     ):
         context.set("key", "value")
+        activate_run_cache_recency(context)
         with mock.patch.object(
             ProcessRunContextCacheBudget,
             "is_enabled",
@@ -397,6 +512,7 @@ def test_run_context_batches_capped_touches_in_latest_access_order() -> None:
     ):
         context.set("first", "first")
         context.set("second", "second")
+        activate_run_cache_recency(context)
         assert context.get("first") == "first"
         assert context.get("second") == "second"
         assert context.get("first") == "first"
@@ -417,10 +533,12 @@ def test_run_context_does_not_publish_a_removed_pending_touch() -> None:
     ):
         context.set(("removed",), "removed")
         context.set("kept", "kept")
+        activate_run_cache_recency(context)
         assert context.get(("removed",)) == "removed"
 
         context.discard_prefix(("removed",))
-        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE - 1):
+        activate_run_cache_recency(context)
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.get("kept") == "kept"
 
         touch_many.assert_called_once_with(context, (("values", "kept"),))
@@ -436,6 +554,7 @@ def test_run_context_flushes_earlier_touches_before_refresh() -> None:
     ):
         context.set("a", "A")
         context.set("b", "B")
+        activate_run_cache_recency(context)
         assert context.get("b") == "B"
 
         context._refresh_run_value("a")
@@ -457,6 +576,8 @@ def test_pending_dependency_publication_hits_do_not_queue_recency_touches() -> N
         mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
         CalculationRunContext() as context,
     ):
+        context.set("pressure", "value")
+        activate_run_cache_recency(context)
         context.buffer_dependency_cache_publication(entry)
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.get_dependency_cache_hit(entry.cache_key) is not None
@@ -472,10 +593,12 @@ def test_run_context_touch_batch_does_not_leak_across_reuse() -> None:
     ):
         with context:
             context.set("old", "old")
+            activate_run_cache_recency(context)
             assert context.get("old") == "old"
 
         with context:
             context.set("new", "new")
+            activate_run_cache_recency(context)
             for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
                 assert context.get("new") == "new"
 
@@ -508,6 +631,7 @@ def test_reused_run_context_refreshes_cached_budget_enabled_state() -> None:
         context,
     ):
         context.set("key", "value")
+        activate_run_cache_recency(context)
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.get("key") == "value"
 
@@ -538,6 +662,7 @@ def test_active_run_context_refreshes_cached_state_when_another_enables_budget()
                 GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
             ):
                 with CalculationRunContext() as second:
+                    activate_run_cache_recency(second)
                     for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
                         assert first.get("a") == "A"
                     second.set("c", "C")
@@ -562,6 +687,7 @@ def test_foreign_thread_touch_bypasses_owner_local_batch() -> None:
 
             with CalculationRunContext() as second:
                 second.set("b", "B")
+                activate_run_cache_recency(second)
 
                 def touch_from_propagated_context() -> None:
                     try:
@@ -612,19 +738,24 @@ def test_disabling_budget_from_foreign_thread_does_not_mutate_touch_iteration() 
 
     with override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}):
         context = CalculationRunContext()
-        original_set_budget_enabled = context._set_run_cache_budget_enabled
+        original_set_modes = context._set_run_cache_modes
 
-        def signal_budget_change(enabled: bool) -> None:
-            if not enabled:
+        def signal_budget_change(
+            budget_enabled: bool,
+            recency_enabled: bool,
+            generation: int,
+        ) -> None:
+            if not budget_enabled:
                 disable_callback_started.set()
-            original_set_budget_enabled(enabled)
+            original_set_modes(budget_enabled, recency_enabled, generation)
 
-        context._set_run_cache_budget_enabled = signal_budget_change  # type: ignore[method-assign]
+        context._set_run_cache_modes = signal_budget_change  # type: ignore[method-assign]
 
         def read_repeatedly() -> None:
             try:
                 with context:
                     context.set("key", "value")
+                    activate_run_cache_recency(context)
                     context._pending_run_cache_touches = BlockingIterationTouches(
                         context._pending_run_cache_touches
                     )
@@ -896,6 +1027,7 @@ def test_dependency_cache_hits_share_lru_recency() -> None:
         CalculationRunContext() as context,
     ):
         context.set_dependency_cache_hits({"cache-a": first, "cache-b": second})
+        activate_run_cache_recency(context)
         assert context.get_dependency_cache_hit("cache-a") == first
         context.set_dependency_cache_hits({"cache-c": third})
 
