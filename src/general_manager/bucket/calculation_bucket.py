@@ -177,7 +177,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         manager_class: Type[GeneralManagerType],
         filter_definitions: Optional[RawFilterDefinitions] = None,
         exclude_definitions: Optional[RawFilterDefinitions] = None,
-        sort_key: Optional[Union[str, tuple[str]]] = None,
+        sort_key: Optional[Union[str, tuple[str, ...]]] = None,
         reverse: bool = False,
     ) -> None:
         """
@@ -187,7 +187,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             manager_class (type[GeneralManagerType]): Manager subclass whose Interface must inherit from CalculationInterface.
             filter_definitions (dict[str, dict] | None): Mapping of input/property filter constraints to apply to generated combinations.
             exclude_definitions (dict[str, dict] | None): Mapping of input/property exclude constraints to remove generated combinations.
-            sort_key (str | tuple[str] | None): Key name or tuple of key names used to order generated manager combinations.
+            sort_key (str | tuple[str, ...] | None): Key name or tuple of key names used to order generated manager combinations.
             reverse (bool): If True, reverse the ordering defined by `sort_key`.
 
         Raises:
@@ -240,7 +240,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         *,
         filter_definitions: RawFilterDefinitions,
         exclude_definitions: RawFilterDefinitions,
-        sort_key: str | tuple[str] | None,
+        sort_key: str | tuple[str, ...] | None,
         reverse: bool,
     ) -> CalculationBucket[GeneralManagerType]:
         """Build a derived bucket while preserving this bucket's snapshot."""
@@ -1235,7 +1235,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             raise MultipleCalculationMatchError()
 
     def sort(
-        self, key: str | tuple[str], reverse: bool = False
+        self, key: str | tuple[str, ...], reverse: bool = False
     ) -> CalculationBucket[GeneralManagerType]:
         """
         Create a new CalculationBucket configured to order generated combinations by the given attribute key.

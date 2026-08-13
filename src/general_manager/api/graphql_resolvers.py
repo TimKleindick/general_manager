@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Generic, TYPE_CHECKING, TypeVar, TypedDict, cast
+from typing import Generic, TYPE_CHECKING, TypeAlias, TypeVar, TypedDict, cast
 
 import graphene
 from graphql.language.ast import FieldNode, FragmentSpreadNode, InlineFragmentNode
@@ -50,6 +50,9 @@ if TYPE_CHECKING:
 GeneralManagerT = TypeVar("GeneralManagerT", bound=GeneralManager)
 GraphQLFilterInput = Mapping[str, object] | str | None
 GraphQLFilterMapping = dict[str, object]
+GraphQLSortInput: TypeAlias = (
+    graphene.Enum | list[graphene.Enum] | tuple[graphene.Enum, ...] | None
+)
 NormalizedFilterPlan = dict[str, GraphQLFilterMapping]
 FilterNormalizer = Callable[[GraphQLFilterMapping], NormalizedFilterPlan]
 ManagerFilterNormalizer = Callable[
@@ -251,22 +254,30 @@ def partition_calculation_query_plan(
     )
 
 
+def _normalize_sort_keys(sort_by: GraphQLSortInput) -> tuple[str, ...]:
+    """Normalize GraphQL sort input into an ordered tuple of field keys."""
+    if not sort_by:
+        return ()
+    values = sort_by if isinstance(sort_by, (list, tuple)) else (sort_by,)
+    return tuple(cast(str, getattr(value, "value", value)) for value in values)
+
+
 def apply_sorting(
     queryset: Bucket[GeneralManager] | GroupBucket[GeneralManager],
-    sort_by: graphene.Enum | None,
+    sort_by: GraphQLSortInput,
     reverse: bool,
 ) -> Bucket[GeneralManager] | GroupBucket[GeneralManager]:
-    """Sort a record or group bucket when a GraphQL sort key is present."""
-    if not sort_by:
+    """Sort by ordered GraphQL keys, leaving empty input unchanged."""
+    sort_keys = _normalize_sort_keys(sort_by)
+    if not sort_keys:
         return queryset
-    sort_by_str = cast(str, getattr(sort_by, "value", sort_by))
-    return queryset.sort(sort_by_str, reverse=reverse)
+    return queryset.sort(sort_keys, reverse=reverse)
 
 
 def apply_query_parameter_plan(
     queryset: Bucket[GeneralManager],
     plan: QueryParameterPlan,
-    sort_by: graphene.Enum | None,
+    sort_by: GraphQLSortInput,
     reverse: bool,
 ) -> Bucket[GeneralManager]:
     """Apply a normalized query-parameter plan to *queryset*."""
@@ -287,7 +298,7 @@ def apply_query_parameters(
     queryset: Bucket[GeneralManager],
     filter_input: GraphQLFilterInput,
     exclude_input: GraphQLFilterInput,
-    sort_by: graphene.Enum | None,
+    sort_by: GraphQLSortInput,
     reverse: bool,
     *,
     filter_normalizer: FilterNormalizer | None = None,
@@ -304,8 +315,9 @@ def apply_query_parameters(
     then explicit excludes are applied before the accumulated normalized
     excludes. Normalizers must return both ``"filter"`` and ``"exclude"`` keys.
     Missing normalizer keys propagate the resulting ``KeyError``.
-    Sorting uses ``sort_by.value`` when present and otherwise uses ``sort_by``
-    itself. Relation ``none`` filters inside GraphQL exclude input are rejected
+    Sorting normalizes Graphene enum values and strings into ordered sort-key
+    tuples; an empty list performs no sort. Relation ``none`` filters inside
+    GraphQL exclude input are rejected
     before normalization when any dictionary key at any depth, including the
     top level, is named ``"none"``, because that relation shape cannot be safely
     inverted. Bucket filter, exclude, and sort errors propagate unchanged.
@@ -313,7 +325,7 @@ def apply_query_parameters(
     Parameters:
         filter_input: Filters to apply, as a mapping or JSON string.
         exclude_input: Exclusions to apply, as a mapping or JSON string.
-        sort_by: Field to sort by (Graphene Enum value).
+        sort_by: Field or ordered fields to sort by (Graphene Enum values).
         reverse: If ``True``, reverse the sort order.
 
     Returns:
@@ -780,8 +792,9 @@ def create_list_resolver(
     ``page``, ``page_size``, and ``group_by`` values. ``reverse`` and
     ``include_inactive`` default to ``False``. The generated GraphQL schema uses
     camelCase names such as ``sortBy``, ``pageSize``, ``groupBy``, and
-    ``includeInactive``. If ``sort_by`` is ``None``, no sorting is attempted even
-    when ``reverse`` is true.
+    ``includeInactive``. ``sort_by`` accepts a single key or an ordered list of
+    keys. If it is ``None`` or empty, no sorting is attempted even when
+    ``reverse`` is true.
 
     The resolver obtains a base bucket from ``base_getter(self,
     include_inactive)``. Only ``None`` triggers fallback: ``Manager.all()`` when
@@ -836,7 +849,7 @@ def create_list_resolver(
         info: GraphQLResolveInfo,
         filter: GraphQLFilterInput = None,
         exclude: GraphQLFilterInput = None,
-        sort_by: graphene.Enum | None = None,
+        sort_by: GraphQLSortInput = None,
         reverse: bool = False,
         page: int | None = None,
         page_size: int | None = None,
