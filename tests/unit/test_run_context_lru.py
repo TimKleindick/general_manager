@@ -160,6 +160,33 @@ def test_estimate_cache_entry_size_handles_sampled_sequence_cycles(
 
 
 @pytest.mark.parametrize("stop_after", [None, 10**400])
+def test_estimate_cache_entry_size_handles_mutually_cyclic_sampled_sequences(
+    stop_after: int | None,
+) -> None:
+    first: list[object] = [None] * 200
+    second: list[object] = [None] * 200
+    first[-1] = second
+    second[-1] = first
+
+    size = estimate_cache_entry_size("cycle", first, stop_after=stop_after)
+
+    assert MIN_TRACKED_ENTRY_BYTES <= size
+    if stop_after is not None:
+        assert size <= stop_after
+
+
+def test_estimate_cache_entry_size_handles_deep_sampled_identity_sharing() -> None:
+    value: object = None
+    for _ in range(1_200):
+        value = [value] * 129
+    stop_after = 10**400
+
+    size = estimate_cache_entry_size("deep", value, stop_after=stop_after)
+
+    assert MIN_TRACKED_ENTRY_BYTES <= size <= stop_after
+
+
+@pytest.mark.parametrize("stop_after", [None, 10**400])
 def test_estimate_cache_entry_size_handles_sampled_mapping_cycles(
     stop_after: int | None,
 ) -> None:
@@ -905,6 +932,87 @@ def test_track_retries_estimation_after_limit_change() -> None:
         raise worker_errors[0]
     assert stop_after_values == [old_limit, new_limit]
     assert owner.entries[("values", "key")] == "value"
+    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+
+
+def test_track_discards_current_entry_after_estimator_exception() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "key", "old")
+    budget.track(owner, "values", "key", "old")
+    owner.store("values", "key", "new")
+    tracked_key = (id(owner), "values", "key")
+
+    with (
+        mock.patch.object(
+            run_context_lru,
+            "estimate_cache_entry_size",
+            side_effect=RuntimeError("estimation failed"),
+        ),
+        pytest.raises(RuntimeError, match="estimation failed"),
+    ):
+        budget.track(owner, "values", "key", "new")
+
+    assert ("values", "key") not in owner.entries
+    assert tracked_key not in budget._entries
+    assert tracked_key not in budget._entry_attempt_generations
+    assert budget.estimated_bytes == 0
+
+
+def test_failed_track_does_not_evict_newer_same_key_replacement() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "key", "old")
+
+    estimator_started = Event()
+    allow_estimator_to_fail = Event()
+    worker_errors: list[BaseException] = []
+
+    def delayed_old_estimator(
+        key: Hashable,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        assert key == "key"
+        assert stop_after == 10_000
+        if value == "old":
+            estimator_started.set()
+            assert allow_estimator_to_fail.wait(timeout=1)
+            raise RuntimeError
+        assert value == "new"
+        return MIN_TRACKED_ENTRY_BYTES
+
+    def track_old_entry() -> None:
+        try:
+            budget.track(owner, "values", "key", "old")
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        side_effect=delayed_old_estimator,
+    ):
+        worker = Thread(target=track_old_entry)
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=1)
+            owner.store("values", "key", "new")
+            budget.track(owner, "values", "key", "new")
+        finally:
+            allow_estimator_to_fail.set()
+            worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert len(worker_errors) == 1
+    assert isinstance(worker_errors[0], RuntimeError)
+    assert owner.entries[("values", "key")] == "new"
+    assert budget._entries[(id(owner), "values", "key")].size == (
+        MIN_TRACKED_ENTRY_BYTES
+    )
     assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
 
 
