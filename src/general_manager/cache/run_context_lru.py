@@ -145,6 +145,7 @@ class ProcessRunContextCacheBudget:
             self._configuration_generation += 1
             if max_bytes is None:
                 self._entries.clear()
+                self._entry_attempt_generations.clear()
                 self._total_bytes = 0
                 return
 
@@ -231,13 +232,13 @@ class ProcessRunContextCacheBudget:
         key: Hashable,
     ) -> None:
         """Discard bookkeeping for an entry removed from owner storage."""
-        if self._max_bytes is None:
+        if self._max_bytes is None and not self._entry_attempt_generations:
             return
         with self._lock:
-            if self._max_bytes is None:
-                return
             tracked_key = (id(owner), namespace, key)
             self._entry_attempt_generations.pop(tracked_key, None)
+            if self._max_bytes is None:
+                return
             self._remove_entry_locked(tracked_key)
 
     def refresh(
