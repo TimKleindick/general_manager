@@ -607,6 +607,44 @@ exits a temporary `CalculationRunContext`. Use it only in `with` statements:
 manager, not a decorator or generator context manager; `__enter__()` yields a
 `CalculationRunContext` and `__exit__()` returns `None`.
 
+::: general_manager.cache.data_change_context.DataChangeTransactionContext
+
+`DataChangeTransactionContext(database_alias, caller_in_atomic_block)` is the
+mutable transaction-local state shared by the outermost ORM data-change
+lifecycle signals. Its identity fields are the database alias and whether the
+caller already owned an atomic block. `changed_classes` is a deduplicated
+`set[str]`; `metadata` is a caller-owned `dict[str, object]`; and
+`phase_seconds` is an additive `dict[str, float]` of recorded lifecycle work.
+
+::: general_manager.cache.data_change_context.DataChangeTransactionScope
+
+`DataChangeTransactionScope(transaction, is_outermost)` is the context-manager
+entry view used by the data-change signal envelope. It is not needed by ordinary
+signal consumers; receivers receive the `transaction` value directly as
+`transaction_context`.
+
+::: general_manager.cache.data_change_context.current_data_change_transaction
+
+`current_data_change_transaction(database_alias)` returns the live
+`DataChangeTransactionContext` for that alias, or `None` when no framework-owned
+envelope is active. It does not search other aliases.
+
+::: general_manager.cache.data_change_context.register_data_change_class
+
+`register_data_change_class(class_name, database_alias)` adds the class name to
+the matching framework-owned context's `changed_classes` set and returns
+`True`. It returns `False` for a missing alias, a caller-owned outer
+transaction, or no active envelope. It only checks the requested alias and does
+not raise a package-specific exception.
+
+::: general_manager.cache.data_change_context.record_data_change_phase
+
+`record_data_change_phase(phase, duration_seconds, database_alias)` records a
+finite duration for one of the documented lifecycle phases and returns `None`.
+Negative finite durations are clamped to zero; non-finite durations and calls
+without a matching live context are ignored. The helper is intended for
+framework receivers and observability integrations.
+
 ::: general_manager.cache.signals.pre_data_change
 
 ::: general_manager.cache.signals.post_data_change

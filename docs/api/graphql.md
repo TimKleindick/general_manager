@@ -142,8 +142,10 @@ discards only events registered after that savepoint; events registered before
 it remain queued and publish when the outer transaction commits. When no
 transaction is active, Django executes the `on_commit()` callback immediately.
 GraphQL class-wide ordinary events hydrate the changed object and apply
-`can_read_instance()` after commit; aggregate `refresh` events have no row
-identification and yield `item = null` without object-level hydration.
+`can_read_instance()` in an async-safe worker using the user captured when the
+subscription starts. Unreadable or missing objects are suppressed, while an
+unexpected permission exception propagates; aggregate `refresh` events have no
+row identification and yield `item = null` without object-level hydration.
 
 RemoteAPI delivery is best-effort after commit: a missing channel layer emits
 no message, and ordinary channel-layer failures are logged while other queued
@@ -364,15 +366,20 @@ truncation toward zero for those inputs.
 
 For pagination, treat the generated GraphQL `pageInfo` response field as the
 user-facing contract. `totalCount` is counted after permission filters, user
-filters, excludes, sorting, and grouping, but before page slicing. Supplying
+filters, excludes, grouping, and sorting, but before page slicing. Without
+`groupBy`, sorting applies to records; with `groupBy`, sorting applies to the
+grouped manager objects after grouping and before pagination. Supplying
 only one of `page` or `pageSize` defaults the missing value to page 1 or size 10
 for slicing. Falsey explicit values such as `page: 0` or `pageSize: 0` follow
 the same fallbacks for slicing; `currentPage` is `page || 1`. The reported
 `pageSize` is the original argument value, not the effective slicing default, so
 it can be `null` when only `page` is supplied and `0` when `pageSize: 0` is
 supplied. `totalPages` is `1` when the original `pageSize` is omitted or falsey.
+With a positive explicit `pageSize`, an empty result has `totalPages: 0`.
 Negative `page` or `pageSize` values raise a GraphQL `BAD_USER_INPUT` error
-before slicing. Do not import generated/internal Python pagination classes
+before slicing. An already-empty grouped result with pagination returns an empty
+`items` list and its normal page metadata; it does not raise the grouped-bucket
+empty-slice error. Do not import generated/internal Python pagination classes
 directly.
 
 ::: general_manager.api.mutation.graph_ql_mutation

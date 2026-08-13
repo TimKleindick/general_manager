@@ -75,6 +75,47 @@ Nested notification contexts join the already-active outer batch instead of
 flushing independently. Outside the context, existing row-level notification
 delivery remains commit-bound and rollback-safe.
 
+## Observe the data-change lifecycle
+
+Use the lifecycle signals when an integration needs to coordinate work around
+the outermost ORM mutation, rather than around every nested `pre_data_change`
+or `post_data_change` callback:
+
+```python
+from django.db import transaction
+
+from general_manager.cache.data_change_context import register_data_change_class
+from general_manager.cache.signals import (
+    data_change_transaction_started,
+    post_data_change,
+)
+
+
+def on_transaction_started(sender, transaction_context, database_alias, **kwargs):
+    transaction_context.metadata["consumer"] = begin_coordination()
+    if transaction_context.caller_in_atomic_block:
+        transaction.on_commit(
+            lambda: finish_coordination(transaction_context.metadata["consumer"]),
+            using=database_alias,
+        )
+
+
+def on_manager_changed(sender, database_alias, **kwargs):
+    register_data_change_class(sender.__name__, database_alias)
+
+
+data_change_transaction_started.connect(on_transaction_started, weak=False)
+post_data_change.connect(on_manager_changed, weak=False)
+```
+
+`data_change_transaction_finished` reports `committed` when GeneralManager's
+own block or savepoint exits successfully and `rolled_back` otherwise. If the
+caller already owns the outer transaction, `committed` is not the durable
+commit; use `transaction.on_commit(using=database_alias)` as shown. Nested
+same-alias mutations share one lifecycle context, and
+`transaction_context.changed_classes` deduplicates the classes registered by
+the post-change receiver.
+
 For the full callable signature and exception contract, see the
 [GraphQL API reference](../api/graphql.md#bulk-notification-context). The
 [cookbook recipe](../examples/bulk_data_change_notifications.md) is a compact

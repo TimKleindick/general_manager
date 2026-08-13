@@ -18,6 +18,29 @@ query ProjectList($page: Int!, $pageSize: Int!) {
 }
 ```
 
+## Sort grouped pages
+
+`sortBy` orders grouped manager objects after `groupBy` and before pagination.
+This keeps descending group order stable across pages:
+
+```graphql
+query ProjectsByStatus {
+  projectList(
+    groupBy: ["status"]
+    sortBy: status
+    reverse: true
+    page: 1
+    pageSize: 10
+  ) {
+    items { status }
+    pageInfo { totalCount currentPage totalPages pageSize }
+  }
+}
+```
+
+If the filter produces no groups, the same query shape returns `items: []` and
+page metadata rather than an empty-group slicing error.
+
 ## Nested buckets
 
 ```graphql
@@ -69,6 +92,36 @@ For the Python annotation forms and the generated mutation/subscription
 contracts, see the [GraphQL concept guide](../concepts/graphql/schema_autogen.md#relation-annotation-compatibility),
 the [task guide](../howto/expose_via_graphql.md#declare-manager-relations), and
 the [API reference](../api/graphql.md#relation-annotation-compatibility).
+
+## Subscribe to committed class changes
+
+```graphql
+subscription ProjectChanges {
+  onProjectClassChange {
+    action
+    item { id name }
+  }
+}
+```
+
+Identified class-wide events are checked against the subscribing user's read
+permission in an async-safe worker after commit; unreadable objects are omitted.
+Aggregate `refresh` events have `item: null` and do not disclose a row ID.
+
+## Bound run-scoped cache memory
+
+For a worker that serves long-lived GraphQL requests, configure the optional
+process-local run-cache budget:
+
+```python
+GENERAL_MANAGER = {
+    "RUN_CONTEXT_CACHE_MAX_BYTES": 256 * 1024 * 1024,
+}
+```
+
+The value is an estimated-memory LRU budget shared by live run contexts in that
+worker. Omit it or use `None` for unlimited retention; pending dependency-cache
+publications remain pinned until their lifecycle completes.
 
 ## Filter a calculation by manager input
 

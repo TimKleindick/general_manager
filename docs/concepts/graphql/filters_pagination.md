@@ -34,14 +34,16 @@ dictionary key named `none` at any depth under `exclude`, including a top-level
 `UnsupportedExcludeNoneRelationFilterError` because the resolver cannot invert
 that relation shape safely. Permission filters are applied before user filters,
 and any permission plan that still needs per-instance checks runs its row gate
-before user filters, sorting, grouping, and pagination.
+before user filters, grouping, sorting, and pagination.
 
 The resolver applies query arguments in a fixed order: permission prefilters and
-the row gate run first, then explicit filters, normalized filter-side excludes,
-explicit excludes, normalized exclude-side excludes, sorting, grouping, and
-pagination. Filter normalizers receive the parsed object mapping for the current
-`filter` or `exclude` input and must return both `filter` and `exclude`
-mappings; missing keys propagate the resulting Python `KeyError`.
+the row gate run first, then explicit filters and excludes. When `groupBy` is
+omitted, sorting follows those filters and precedes pagination. When grouping is
+active, grouping precedes sorting so `sortBy` orders the returned group managers,
+then pagination slices that sorted group bucket. Filter normalizers receive the
+parsed object mapping for the current `filter` or `exclude` input and must return
+both `filter` and `exclude` mappings; missing keys propagate the resulting Python
+`KeyError`.
 
 ## Pagination model
 
@@ -52,15 +54,18 @@ Pagination is page-based. Responses include a `pageInfo` object with:
 - `total_pages`
 - `page_size`
 
-`total_count` is computed after permission filtering, user filters, excludes, sorting, and grouping, but before pagination. If only one pagination argument is supplied, slicing defaults the other to `page=1` or `page_size=10`.
+`total_count` is computed after permission filtering, user filters, excludes,
+grouping, and sorting, but before pagination. If only one pagination argument is
+supplied, slicing defaults the other to `page=1` or `page_size=10`.
 Falsey explicit pagination values such as `page: 0` or `pageSize: 0` follow the
 same Python fallback for slicing. `currentPage` is reported as `page || 1`.
 `pageSize` reports the original GraphQL argument value, not the effective
 slicing default, so it remains `null` when only `page` is supplied and remains
 `0` for `pageSize: 0`. `totalPages` is computed from a truthy original
 `pageSize`; when `pageSize` is omitted or falsey it is reported as `1`, including
-empty result sets. Negative `page` or `pageSize` values are rejected before
-slicing and surface as GraphQL `BAD_USER_INPUT` errors.
+empty result sets; with a positive explicit `pageSize`, an empty result has
+`totalPages: 0`. Negative `page` or `pageSize` values are rejected before slicing
+and surface as GraphQL `BAD_USER_INPUT` errors.
 
 ## Grouping
 
@@ -84,6 +89,11 @@ properties. Capability warmup is triggered for ungrouped pages only when
 capabilities. Invalid group keys propagate the bucket's validation error through
 GraphQL execution.
 
+If filtering produces no groups, a paginated grouped query returns an empty
+`items` list with the normal page metadata instead of raising the grouped-bucket
+empty-slice error. Negative `page` or `pageSize` values are still rejected before
+this empty-result shortcut.
+
 ## Sorting
 
 Use the generated `sortBy` enum together with `reverse` for descending order.
@@ -91,6 +101,8 @@ Python-side tests and helper calls use `sort_by`. Buckets validate the requested
 fields; invalid names trigger `ValidationError` with descriptive messages.
 Invalid GraphQL enum values are rejected by Graphene before the resolver runs.
 When `sortBy` is omitted or `null`, sorting is skipped even if `reverse` is true.
+With `groupBy`, sorting runs on grouped manager objects after grouping; without
+`groupBy`, it runs on the individual records.
 
 ## Extending filters
 
