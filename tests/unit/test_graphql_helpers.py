@@ -374,6 +374,22 @@ class GraphQLHelperTests(SimpleTestCase):
             ("status", "employee__name"), reverse=True
         )
 
+    def test_apply_sorting_preserves_ordered_string_tuple(self) -> None:
+        queryset = mock.Mock()
+        sorted_queryset = mock.Mock()
+        queryset.sort.return_value = sorted_queryset
+
+        result = apply_sorting(
+            queryset,
+            ("status", "employee__name"),
+            reverse=True,
+        )
+
+        assert result is sorted_queryset
+        queryset.sort.assert_called_once_with(
+            ("status", "employee__name"), reverse=True
+        )
+
     def test_apply_sorting_is_noop_without_sort_key(self) -> None:
         queryset = mock.Mock()
 
