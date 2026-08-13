@@ -1544,6 +1544,125 @@ class GraphQLTests(TestCase):
         self.info = MagicMock()
         self.info.context.user = AnonymousUser()
 
+    def test_sort_options_include_direct_manager_and_related_scalars(self) -> None:
+        related_computed = SimpleNamespace(sortable=True, graphql_type_hint=str)
+        root_computed = SimpleNamespace(sortable=True, graphql_type_hint=str)
+
+        class EmployeeInterface:
+            @classmethod
+            def get_attribute_types(cls):
+                return {
+                    "id": {"type": int},
+                    "name": {"type": str},
+                    "supervisor": {"type": object, "relation_kind": "direct"},
+                }
+
+            @classmethod
+            def get_graph_ql_properties(cls):
+                return {"computed_label": related_computed}
+
+        class Employee:
+            Interface = EmployeeInterface
+
+        class ProjectInterface:
+            @classmethod
+            def get_attribute_types(cls):
+                return {
+                    "title": {"type": str},
+                    "employee": {"type": Employee, "relation_kind": "direct"},
+                    "employee_list": {
+                        "type": Employee,
+                        "relation_kind": "collection",
+                    },
+                }
+
+            @classmethod
+            def get_graph_ql_properties(cls):
+                return {"score": root_computed}
+
+        class Project:
+            Interface = ProjectInterface
+
+        def resolve(field_type, _registry):
+            return Employee if field_type in {Employee, object} else None
+
+        with patch(
+            "general_manager.api.graphql.resolve_general_manager_type",
+            side_effect=resolve,
+        ):
+            options = GraphQL._sort_by_options(Project)
+
+        assert options is not None
+        members = options._meta.enum.__members__
+        assert members["title"].value == "title"
+        assert members["employee"].value == "employee__id"
+        assert members["employee__name"].value == "employee__name"
+        assert members["score"].value == "score"
+        assert "employee_list" not in members
+        assert "employee__supervisor" not in members
+        assert "employee__computed_label" not in members
+
+    def test_relation_list_uses_list_valued_sort_argument(self) -> None:
+        class RelatedManager(GeneralManager):
+            pass
+
+        class RelatedManagerType(graphene.ObjectType):
+            name = graphene.String()
+
+        sort_enum = type(
+            "RelatedSortByOptions",
+            (graphene.Enum,),
+            {"name": "name"},
+        )
+        with (
+            patch.dict(
+                GraphQL.graphql_type_registry,
+                {"RelatedManager": RelatedManagerType},
+            ),
+            patch.object(GraphQL, "_create_filter_options", return_value=None),
+            patch.object(GraphQL, "_sort_by_options", return_value=sort_enum),
+        ):
+            field = GraphQL._map_field_to_graphene_read(
+                RelatedManager,
+                "related_manager_list",
+                {"relation_kind": "collection"},
+            )
+
+        assert isinstance(field.args["sort_by"].type, graphene.List)
+        assert field.args["sort_by"].type.of_type is sort_enum
+
+    def test_top_level_list_uses_list_valued_sort_argument(self) -> None:
+        class ManagerType(graphene.ObjectType):
+            name = graphene.String()
+
+        sort_enum = type(
+            "TestManagerSortByOptions",
+            (graphene.Enum,),
+            {"name": "name"},
+        )
+        self.general_manager_class.Interface = SimpleNamespace(input_fields={})
+        previous_query_fields = GraphQL._query_fields
+        GraphQL._query_fields = {}
+        try:
+            with (
+                patch("general_manager.api.graphql.issubclass", return_value=True),
+                patch(
+                    "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                    return_value=False,
+                ),
+                patch.object(GraphQL, "_create_filter_options", return_value=None),
+                patch.object(GraphQL, "_sort_by_options", return_value=sort_enum),
+            ):
+                GraphQL._add_queries_to_schema(ManagerType, self.general_manager_class)
+
+            argument_type = (
+                GraphQL._query_fields["test_manager_list"].args["sort_by"].type
+            )
+            assert isinstance(argument_type, graphene.List)
+            assert argument_type.of_type is sort_enum
+        finally:
+            GraphQL._query_fields = previous_query_fields
+
     @patch("general_manager.interface.base_interface.InterfaceBase")
     def test_create_graphql_interface_no_interface(self, _mock_interface):
         self.general_manager_class.Interface = None

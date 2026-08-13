@@ -839,16 +839,37 @@ class GraphQL:
         Returns:
             type[graphene.Enum] | None: A Graphene Enum type whose members are the sortable field names for the manager, or `None` if no sortable fields exist.
         """
-        sort_options = []
+        sort_options: dict[str, str] = {}
         for (
             field_name,
             field_info,
         ) in generalManagerClass.Interface.get_attribute_types().items():
             field_type = field_info["type"]
-            if resolve_general_manager_type(field_type, GraphQL.manager_registry):
+            related_manager = resolve_general_manager_type(
+                field_type, GraphQL.manager_registry
+            )
+            if related_manager is None:
+                sort_options[field_name] = field_name
                 continue
-            else:
-                sort_options.append(field_name)
+            if field_info.get("relation_kind") == "collection" or field_name.endswith(
+                "_list"
+            ):
+                continue
+
+            sort_options[field_name] = f"{field_name}__id"
+            for (
+                related_name,
+                related_info,
+            ) in related_manager.Interface.get_attribute_types().items():
+                if (
+                    resolve_general_manager_type(
+                        related_info["type"], GraphQL.manager_registry
+                    )
+                    is not None
+                ):
+                    continue
+                option_name = f"{field_name}__{related_name}"
+                sort_options[option_name] = option_name
 
         for (
             prop_name,
@@ -856,13 +877,7 @@ class GraphQL:
         ) in generalManagerClass.Interface.get_graph_ql_properties().items():
             if prop.sortable is False:
                 continue
-            type_hints = [
-                t for t in get_args(prop.graphql_type_hint) if t is not type(None)
-            ]
-            field_type = (
-                type_hints[0] if type_hints else cast(type, prop.graphql_type_hint)
-            )
-            sort_options.append(prop_name)
+            sort_options[prop_name] = prop_name
 
         if not sort_options:
             return None
@@ -870,7 +885,7 @@ class GraphQL:
         return type(
             f"{generalManagerClass.__name__}SortByOptions",
             (graphene.Enum,),
-            {option: option for option in sort_options},
+            sort_options,
         )
 
     @classmethod
@@ -1046,7 +1061,9 @@ class GraphQL:
 
                 sort_by_options = GraphQL._sort_by_options(field_type)
                 if sort_by_options:
-                    attributes["sort_by"] = graphene.Argument(sort_by_options)
+                    attributes["sort_by"] = graphene.Argument(
+                        graphene.List(sort_by_options)
+                    )
 
                 page_type = GraphQL._get_or_create_page_type(
                     field_type.__name__ + "Page",
@@ -1290,7 +1307,7 @@ class GraphQL:
             attributes["exclude"] = graphene.Argument(filter_options)
         sort_by_options = cls._sort_by_options(generalManagerClass)
         if sort_by_options:
-            attributes["sort_by"] = graphene.Argument(sort_by_options)
+            attributes["sort_by"] = graphene.Argument(graphene.List(sort_by_options))
 
         page_type = cls._get_or_create_page_type(
             graphene_type.__name__ + "Page", graphene_type
