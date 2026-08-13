@@ -199,6 +199,30 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self.assertEqual(names, grouped_names[3:6])
         self.assertEqual(payload["pageInfo"]["totalCount"], len(grouped_names))
 
+    def test_grouped_compound_relation_sort(self):
+        zulu = self.commercials.Factory.create(name="Zulu")
+        alpha_one = self.commercials.Factory.create(name="Alpha")
+        alpha_two = self.commercials.Factory.create(name="Alpha")
+        self.project.Factory.create(name="Beta", commercials=zulu)
+        self.project.Factory.create(name="Zed", commercials=alpha_one)
+        self.project.Factory.create(name="Able", commercials=alpha_two)
+        query = """
+        query {
+          projectList(
+            groupBy: ["name"]
+            sortBy: [commercials__name, name]
+          ) {
+            items { name commercials { name } }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["projectList"]["items"]
+        self.assertEqual([item["name"] for item in items], ["Able", "Zed", "Beta"])
+
     def test_empty_grouped_query_with_pagination_returns_empty_page(self):
         """Grouped pagination returns an empty GraphQL page when no rows match."""
         query = """

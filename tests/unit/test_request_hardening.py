@@ -555,6 +555,31 @@ class RequestBucketHardeningTests(SimpleTestCase):
         self.assertIn("missing", str(context.exception))
         self.assertIn("EqualityProject", str(context.exception))
 
+    def test_request_bucket_accepts_compound_relation_sort(self) -> None:
+        project_one = next(iter(EqualityProject.filter(status="active")))
+        project_two = next(iter(EqualityProject.filter(status="inactive")))
+        item_for_project_two = next(iter(EqualityProject.filter(status="active")))
+        item_for_project_one = next(iter(EqualityProject.filter(status="inactive")))
+        item_for_project_two.project = project_two
+        item_for_project_one.project = project_one
+        bucket = EqualityProject.filter(status="active")._from_items(
+            (item_for_project_two, item_for_project_one)
+        )
+
+        sorted_bucket = bucket.sort(("project__name", "project__id"))
+
+        assert [item.project.id for item in sorted_bucket] == [1, 2]
+
+    def test_request_bucket_nested_sort_reports_original_key(self) -> None:
+        item = next(iter(EqualityProject.filter(status="active")))
+        item.project = object()
+        bucket = EqualityProject.filter(status="active")._from_items((item,))
+
+        with self.assertRaises(RequestBucketSortAttributeError) as context:
+            bucket.sort("project__missing")
+
+        self.assertIn("project__missing", str(context.exception))
+
     def test_request_interface_clone_preserves_mutation_capabilities(self) -> None:
         class MutationProject(GeneralManager):
             class Interface(RequestInterface):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from collections.abc import Generator, Hashable, Mapping
+from operator import attrgetter
 from typing import Generic, cast
 from general_manager.manager.group_manager import GroupManager
 from general_manager.manager.general_manager import GeneralManager
@@ -548,16 +549,12 @@ class GroupBucket(Generic[GeneralManagerType]):
         self._ensure_as_of_compatible()
         if isinstance(key, str):
             key = (key,)
-        if reverse:
-            sorted_data = sorted(
-                self._data,
-                key=lambda x: tuple(getattr(x, k) for k in key),
-                reverse=True,
-            )
-        else:
-            sorted_data = sorted(
-                self._data, key=lambda x: tuple(getattr(x, k) for k in key)
-            )
+        getters = [attrgetter(item.replace("__", ".")) for item in key]
+        sorted_data = sorted(
+            self._data,
+            key=lambda entry: tuple(getter(entry) for getter in getters),
+            reverse=reverse,
+        )
 
         new_bucket = GroupBucket(
             self._manager_class, self._group_by_keys, self._basis_data
