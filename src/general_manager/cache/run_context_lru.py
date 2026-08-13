@@ -119,6 +119,7 @@ class ProcessRunContextCacheBudget:
         self._total_bytes = 0
         self._max_bytes: int | None = None
         self._configuration_generation = 0
+        self._owner_mutation_generations: dict[int, int] = {}
 
     @property
     def estimated_bytes(self) -> int:
@@ -163,13 +164,15 @@ class ProcessRunContextCacheBudget:
         """Record a stored entry and evict least-recently-used entries if needed."""
         if self._max_bytes is None:
             return
-        while True:
-            with self._lock:
-                max_bytes = self._max_bytes
-                generation = self._configuration_generation
+        with self._lock:
+            max_bytes = self._max_bytes
+            configuration_generation = self._configuration_generation
             if max_bytes is None:
                 return
+            owner_id = id(owner)
+            owner_mutation_generation = self._invalidate_owner_locked(owner_id)
 
+        while True:
             estimated_bytes = estimate_cache_entry_size(
                 key,
                 value,
@@ -177,7 +180,15 @@ class ProcessRunContextCacheBudget:
             )
 
             with self._lock:
-                if generation != self._configuration_generation:
+                if owner_mutation_generation != self._owner_mutation_generations.get(
+                    owner_id, 0
+                ):
+                    return
+                if configuration_generation != self._configuration_generation:
+                    max_bytes = self._max_bytes
+                    configuration_generation = self._configuration_generation
+                    if max_bytes is None:
+                        return
                     continue
                 self._track_estimated_locked(
                     owner,
@@ -216,6 +227,7 @@ class ProcessRunContextCacheBudget:
         with self._lock:
             if self._max_bytes is None:
                 return
+            self._invalidate_owner_locked(id(owner))
             self._remove_entry_locked((id(owner), namespace, key))
 
     def refresh(
@@ -234,9 +246,11 @@ class ProcessRunContextCacheBudget:
         """Remove one owner's accounting without changing its cache storage."""
         with self._lock:
             owner_id = id(owner)
+            self._invalidate_owner_locked(owner_id)
             self._remove_owner_entries_locked(owner_id)
             self._owner_references.pop(owner_id, None)
             self._owners.discard(owner)
+            self._owner_mutation_generations.pop(owner_id, None)
 
     def _rebuild_locked(self) -> None:
         self._entries.clear()
@@ -288,6 +302,7 @@ class ProcessRunContextCacheBudget:
         self._remove_entry_locked(tracked_key)
         owner_reference = self._owner_reference_locked(owner)
         if estimated_bytes > max_bytes:
+            self._invalidate_owner_locked(id(owner))
             owner._evict_run_cache_entry(namespace, key)
             logger.debug(
                 "run cache entry skipped because it exceeds the process budget",
@@ -318,6 +333,7 @@ class ProcessRunContextCacheBudget:
             owner = entry.owner()
             if owner is None:
                 continue
+            self._invalidate_owner_locked(id(owner))
             owner._evict_run_cache_entry(entry.namespace, entry.key)
             logger.debug(
                 "run cache entry evicted by process-wide LRU budget",
@@ -337,6 +353,11 @@ class ProcessRunContextCacheBudget:
         for tracked_key in tuple(self._entries):
             if tracked_key[0] == owner_id:
                 self._remove_entry_locked(tracked_key)
+
+    def _invalidate_owner_locked(self, owner_id: int) -> int:
+        generation = self._owner_mutation_generations.get(owner_id, 0) + 1
+        self._owner_mutation_generations[owner_id] = generation
+        return generation
 
     def _owner_reference_locked(
         self,
@@ -365,6 +386,7 @@ class ProcessRunContextCacheBudget:
                     return
                 self._remove_owner_entries_locked(owner_id)
                 self._owner_references.pop(owner_id, None)
+                self._owner_mutation_generations.pop(owner_id, None)
 
         return remove_dead_owner
 
