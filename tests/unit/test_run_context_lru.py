@@ -170,10 +170,17 @@ def test_estimate_cache_entry_size_handles_mutually_cyclic_sampled_sequences(
     second: list[object] = [None] * 200
     first[-1] = second
     second[-1] = first
+    visited: list[object] = []
 
-    size = estimate_cache_entry_size("cycle", first, stop_after=stop_after)
+    with mock.patch.object(
+        run_context_lru,
+        "_calibration_visit_observer",
+        visited.append,
+    ):
+        size = estimate_cache_entry_size("cycle", first, stop_after=stop_after)
 
     assert MIN_TRACKED_ENTRY_BYTES <= size
+    assert len(visited) < run_context_lru.RUN_CONTEXT_CALIBRATION_CANDIDATE_LIMIT
     if stop_after is not None:
         assert size <= stop_after
 
@@ -237,6 +244,121 @@ def test_estimate_cache_entry_size_stops_after_atomic_value_exceeds_budget() -> 
 
     assert size == 2
     getsizeof.assert_called_once_with(value)
+
+
+# Mutation caught: calling application sizing or length hooks during admission.
+def test_admission_signal_does_not_execute_application_hooks() -> None:
+    class Value:
+        __slots__ = ("payload",)
+
+        def __init__(self) -> None:
+            self.payload = bytearray(8_192)
+
+        def __sizeof__(self) -> int:
+            raise AssertionError("application __sizeof__ must not execute")  # noqa: TRY003
+
+        def __len__(self) -> int:
+            raise AssertionError("application __len__ must not execute")  # noqa: TRY003
+
+    signal = run_context_lru._admission_signal("values", "key", Value())
+
+    assert signal.exact_bytes is None
+    assert signal.stratum == ("values", "slots", 1)
+    assert 1 <= signal.shallow_bytes < 8_192
+
+
+# Mutation caught: bucketing distinct native container sizes together.
+def test_admission_signal_uses_exact_builtin_length_bucket() -> None:
+    short = run_context_lru._admission_signal("values", "key", [None] * 65)
+    long = run_context_lru._admission_signal("values", "key", [None] * 129)
+
+    assert short.stratum == ("values", "list", 128)
+    assert long.stratum == ("values", "list", 256)
+
+
+# Mutation caught: routing atomic entries through calibrated storage strata.
+def test_admission_signal_keeps_atomic_entry_exact() -> None:
+    signal = run_context_lru._admission_signal("values", "key", b"payload")
+
+    assert signal.stratum is None
+    assert signal.exact_bytes == max(
+        MIN_TRACKED_ENTRY_BYTES,
+        sys.getsizeof("key") + sys.getsizeof(b"payload"),
+    )
+
+
+# Mutation caught: treating hostile builtin subclasses as their native bases.
+@pytest.mark.parametrize("container_type", [dict, list, str])
+def test_admission_signal_does_not_execute_hostile_builtin_subclass_hooks(
+    container_type: type[object],
+) -> None:
+    class HostileContainer(container_type):  # type: ignore[misc, valid-type]
+        def __len__(self) -> int:
+            raise AssertionError("application __len__ must not execute")  # noqa: TRY003
+
+        def __sizeof__(self) -> int:
+            raise AssertionError("application __sizeof__ must not execute")  # noqa: TRY003
+
+        def __eq__(self, other: object) -> bool:
+            raise AssertionError("application equality must not execute")  # noqa: TRY003
+
+        @property
+        def __class__(self) -> type[object]:
+            raise AssertionError("application metadata must not execute")  # noqa: TRY003
+
+    if container_type is dict:
+        value = HostileContainer({"payload": bytearray(64)})
+    elif container_type is list:
+        value = HostileContainer([bytearray(64)])
+    else:
+        value = HostileContainer("payload")
+
+    signal = run_context_lru._admission_signal("values", "key", value)
+
+    assert signal.exact_bytes is None
+    assert signal.stratum is not None
+    assert signal.stratum[1] not in {"dict", "list", "shallow_leaf"}
+    assert signal.shallow_bytes >= 1
+
+
+# Mutation caught: reading instance dictionary values instead of native storage metadata.
+def test_admission_signal_buckets_genuine_instance_dict_without_reading_values() -> (
+    None
+):
+    class Value:
+        pass
+
+    one_attribute = Value()
+    one_attribute.first = object()
+    three_attributes = Value()
+    three_attributes.first = object()
+    three_attributes.second = object()
+    three_attributes.third = object()
+
+    one_signal = run_context_lru._admission_signal("values", "key", one_attribute)
+    three_signal = run_context_lru._admission_signal("values", "key", three_attributes)
+
+    assert one_signal.stratum == ("values", "instance_dict", 1)
+    assert three_signal.stratum == ("values", "instance_dict", 4)
+
+
+# Mutation caught: invoking an object's overridable __sizeof__ during estimation.
+def test_estimator_does_not_execute_application_sizing_hook() -> None:
+    class Value:
+        __slots__ = ("payload",)
+
+        def __init__(self) -> None:
+            self.payload = bytearray(1_024)
+
+        def __sizeof__(self) -> int:
+            return 1
+
+    value = Value()
+    size = estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert size == (
+        object.__sizeof__(value) + sys.getsizeof("key") + sys.getsizeof(value.payload)
+    )
 
 
 def test_estimate_cache_entry_size_counts_shared_object_once_per_entry() -> None:
@@ -303,6 +425,38 @@ def test_estimate_cache_entry_size_samples_large_uniform_mapping_with_margin() -
     )
 
     estimated = estimate_cache_entry_size(key, value, stop_after=None)
+
+    assert exact <= estimated <= math.ceil(exact * 1.06)
+
+
+# Mutation caught: allowing nested sampled candidates to grow without a global bound.
+def test_estimator_bounds_nested_container_candidate_visits() -> None:
+    value: object = bytearray(64)
+    for _ in range(40):
+        value = [value for _ in range(129)]
+    visited: list[object] = []
+
+    with mock.patch.object(
+        run_context_lru,
+        "_calibration_visit_observer",
+        visited.append,
+    ):
+        size = estimate_cache_entry_size("key", value, stop_after=10**400)
+
+    assert MIN_TRACKED_ENTRY_BYTES <= size <= 10**400
+    assert len(visited) <= run_context_lru.RUN_CONTEXT_CALIBRATION_CANDIDATE_LIMIT
+
+
+# Mutation caught: using floor projection that underestimates uniform samples.
+def test_estimator_fixed_point_projection_is_within_uniform_margin() -> None:
+    value = [bytearray(64) for _ in range(2_000)]
+    exact = (
+        sys.getsizeof("key")
+        + sys.getsizeof(value)
+        + sum(sys.getsizeof(item) for item in value)
+    )
+
+    estimated = estimate_cache_entry_size("key", value, stop_after=None)
 
     assert exact <= estimated <= math.ceil(exact * 1.06)
 
