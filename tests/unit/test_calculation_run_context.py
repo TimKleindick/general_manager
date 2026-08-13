@@ -224,6 +224,26 @@ def test_zero_run_context_budget_disables_value_retention() -> None:
     assert calls == 2
 
 
+def test_estimator_exception_does_not_retain_untracked_run_value() -> None:
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        CalculationRunContext() as context,
+        mock.patch(
+            "general_manager.cache.run_context_lru.estimate_cache_entry_size",
+            side_effect=RuntimeError("estimation failed"),
+        ),
+    ):
+        tracked_key = (id(context), "values", "key")
+
+        with pytest.raises(RuntimeError, match="estimation failed"):
+            context.set("key", "value")
+
+        assert context.get("key") is None
+        assert tracked_key not in run_context_cache_budget._entries
+        assert tracked_key not in run_context_cache_budget._entry_attempt_generations
+        assert run_context_cache_budget.estimated_bytes == 0
+
+
 def test_run_context_budget_evicts_lru_value_across_contexts() -> None:
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
     with override_settings(

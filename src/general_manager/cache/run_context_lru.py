@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass
+from fractions import Fraction
 from itertools import islice
 import math
 import sys
@@ -30,7 +31,7 @@ RUN_CONTEXT_CACHE_MAX_BYTES_SETTING = "RUN_CONTEXT_CACHE_MAX_BYTES"
 MIN_TRACKED_ENTRY_BYTES = 256
 RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD = 128
 RUN_CONTEXT_SIZE_SAMPLE_COUNT = 64
-RUN_CONTEXT_SIZE_SAFETY_MARGIN = 1.05
+RUN_CONTEXT_SIZE_SAFETY_MARGIN = Fraction(21, 20)
 _INVALID_MAX_BYTES_MESSAGE = (
     'GENERAL_MANAGER["RUN_CONTEXT_CACHE_MAX_BYTES"] must be None or a '
     "non-negative integer number of bytes."
@@ -107,7 +108,7 @@ class _StaticStoragePlan:
 @dataclass(frozen=True)
 class _WeightedCandidate:
     value: object
-    weight: float
+    weight: Fraction
     ancestor_ids: frozenset[int] = frozenset()
 
 
@@ -196,11 +197,24 @@ class ProcessRunContextCacheBudget:
             self._entry_attempt_generations[tracked_key] = entry_attempt_generation
 
         while True:
-            estimated_bytes = estimate_cache_entry_size(
-                key,
-                value,
-                stop_after=max_bytes,
-            )
+            try:
+                estimated_bytes = estimate_cache_entry_size(
+                    key,
+                    value,
+                    stop_after=max_bytes,
+                )
+            except BaseException:
+                with self._lock:
+                    if (
+                        owner_lifecycle_generation
+                        == self._owner_lifecycle_generations.get(owner_id, 0)
+                        and entry_attempt_generation
+                        == self._entry_attempt_generations.get(tracked_key, 0)
+                    ):
+                        self._entry_attempt_generations.pop(tracked_key, None)
+                        self._remove_entry_locked(tracked_key)
+                        owner._evict_run_cache_entry(namespace, key)
+                raise
 
             with self._lock:
                 if owner_lifecycle_generation != self._owner_lifecycle_generations.get(
@@ -675,8 +689,11 @@ def estimate_cache_entry_size(
         return max(MIN_TRACKED_ENTRY_BYTES, measured_bytes)
 
     measured_bytes = 0
-    seen_weights: dict[int, float] = {}
-    candidates = [_WeightedCandidate(key, 1.0), _WeightedCandidate(value, 1.0)]
+    seen_weights: dict[int, Fraction] = {}
+    candidates = [
+        _WeightedCandidate(key, Fraction(1)),
+        _WeightedCandidate(value, Fraction(1)),
+    ]
     storage_plans: dict[int, _StaticStoragePlan | None] = {}
 
     while candidates:
@@ -684,7 +701,7 @@ def estimate_cache_entry_size(
         candidate_id = id(candidate.value)
         if candidate_id in candidate.ancestor_ids:
             continue
-        previous_weight = seen_weights.get(candidate_id, 0.0)
+        previous_weight = seen_weights.get(candidate_id, Fraction(0))
         incremental_weight = candidate.weight - previous_weight
         if incremental_weight <= 0:
             continue
@@ -710,7 +727,11 @@ def estimate_cache_entry_size(
         if _is_exact_type(candidate_type, (dict, tuple, list, set, frozenset)):
             candidates.extend(
                 _sample_container_children(
-                    _WeightedCandidate(candidate_value, incremental_weight)
+                    _WeightedCandidate(
+                        candidate_value,
+                        incremental_weight,
+                        candidate.ancestor_ids,
+                    )
                 )
             )
         else:
