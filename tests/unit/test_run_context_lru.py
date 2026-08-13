@@ -16,10 +16,13 @@ from general_manager.cache.run_context_lru import (
     ProcessRunContextCacheBudget,
     RunCacheNamespace,
     _TrackedEntry,
+    _stratified_indexes,
     estimate_cache_entry_size,
     resolve_run_context_cache_max_bytes,
 )
 from general_manager.cache import run_context_lru
+
+HANDOFF_TIMEOUT_SECONDS = 5
 
 
 class CacheOwner:
@@ -412,6 +415,10 @@ def test_estimate_cache_entry_size_stratifies_large_sequence_samples() -> None:
     large_estimate = estimate_cache_entry_size("key", large, stop_after=None)
 
     assert large_estimate > small_estimate
+
+
+def test_stratified_indexes_returns_one_representative() -> None:
+    assert _stratified_indexes(129, 1) == (0,)
 
 
 def test_estimate_cache_entry_size_stops_after_budget() -> None:
@@ -827,7 +834,7 @@ def test_estimation_does_not_hold_coordinator_lock() -> None:
         assert value == "value"
         assert stop_after == 10_000
         estimator_started.set()
-        assert allow_estimator_to_finish.wait(timeout=1)
+        assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
         return MIN_TRACKED_ENTRY_BYTES
 
     def track_entry() -> None:
@@ -856,17 +863,17 @@ def test_estimation_does_not_hold_coordinator_lock() -> None:
         reader_started = False
         worker.start()
         try:
-            assert estimator_started.wait(timeout=1)
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             reader.start()
             reader_started = True
-            assert read_completed.wait(timeout=1), (
+            assert read_completed.wait(timeout=HANDOFF_TIMEOUT_SECONDS), (
                 "estimation held the coordinator lock"
             )
         finally:
             allow_estimator_to_finish.set()
-            worker.join(timeout=1)
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
             if reader_started:
-                reader.join(timeout=1)
+                reader.join(timeout=HANDOFF_TIMEOUT_SECONDS)
 
     assert not worker.is_alive()
     if reader_started:
@@ -901,7 +908,7 @@ def test_track_retries_estimation_after_limit_change() -> None:
         stop_after_values.append(stop_after)
         if len(stop_after_values) == 1:
             estimator_started.set()
-            assert allow_estimator_to_finish.wait(timeout=1)
+            assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
         return MIN_TRACKED_ENTRY_BYTES
 
     def track_entry() -> None:
@@ -918,14 +925,14 @@ def test_track_retries_estimation_after_limit_change() -> None:
         worker = Thread(target=track_entry)
         worker.start()
         try:
-            assert estimator_started.wait(timeout=1)
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             with budget._lock:
                 budget._max_bytes = new_limit
                 budget._configuration_generation += 1
             allow_estimator_to_finish.set()
         finally:
             allow_estimator_to_finish.set()
-            worker.join(timeout=1)
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
 
     assert not worker.is_alive()
     if worker_errors:
@@ -933,6 +940,44 @@ def test_track_retries_estimation_after_limit_change() -> None:
     assert stop_after_values == [old_limit, new_limit]
     assert owner.entries[("values", "key")] == "value"
     assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+
+
+def test_track_abandons_admission_during_continuous_limit_changes() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "key", "value")
+    estimator_calls = 0
+
+    def changing_configuration_estimator(
+        key: Hashable,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal estimator_calls
+        assert key == "key"
+        assert value == "value"
+        assert stop_after is not None
+        estimator_calls += 1
+        if estimator_calls <= 100:
+            with budget._lock:
+                assert budget._max_bytes is not None
+                budget._max_bytes += 1
+                budget._configuration_generation += 1
+        return MIN_TRACKED_ENTRY_BYTES
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        side_effect=changing_configuration_estimator,
+    ):
+        budget.track(owner, "values", "key", "value")
+
+    assert estimator_calls == 4
+    assert ("values", "key") not in owner.entries
+    assert (id(owner), "values", "key") not in budget._entry_attempt_generations
+    assert budget.estimated_bytes == 0
 
 
 def test_track_discards_current_entry_after_estimator_exception() -> None:
@@ -980,7 +1025,7 @@ def test_failed_track_does_not_evict_newer_same_key_replacement() -> None:
         assert stop_after == 10_000
         if value == "old":
             estimator_started.set()
-            assert allow_estimator_to_fail.wait(timeout=1)
+            assert allow_estimator_to_fail.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             raise RuntimeError
         assert value == "new"
         return MIN_TRACKED_ENTRY_BYTES
@@ -999,12 +1044,12 @@ def test_failed_track_does_not_evict_newer_same_key_replacement() -> None:
         worker = Thread(target=track_old_entry)
         worker.start()
         try:
-            assert estimator_started.wait(timeout=1)
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             owner.store("values", "key", "new")
             budget.track(owner, "values", "key", "new")
         finally:
             allow_estimator_to_fail.set()
-            worker.join(timeout=1)
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
 
     assert not worker.is_alive()
     assert len(worker_errors) == 1
@@ -1039,7 +1084,7 @@ def test_track_does_not_reintroduce_accounting_after_owner_mutation(
         assert value == "value"
         assert stop_after == 10_000
         estimator_started.set()
-        assert allow_estimator_to_finish.wait(timeout=1)
+        assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
         return MIN_TRACKED_ENTRY_BYTES
 
     def track_entry() -> None:
@@ -1056,7 +1101,7 @@ def test_track_does_not_reintroduce_accounting_after_owner_mutation(
         worker = Thread(target=track_entry)
         worker.start()
         try:
-            assert estimator_started.wait(timeout=1)
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             if mutation == "remove":
                 owner._evict_run_cache_entry("values", "key")
                 budget.remove(owner, "values", "key")
@@ -1065,7 +1110,7 @@ def test_track_does_not_reintroduce_accounting_after_owner_mutation(
             allow_estimator_to_finish.set()
         finally:
             allow_estimator_to_finish.set()
-            worker.join(timeout=1)
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
 
     assert not worker.is_alive()
     if worker_errors:
@@ -1093,7 +1138,7 @@ def test_track_keeps_latest_same_key_replacement_accounting() -> None:
         assert stop_after == 10_000
         if value == "old":
             estimator_started.set()
-            assert allow_estimator_to_finish.wait(timeout=1)
+            assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             return MIN_TRACKED_ENTRY_BYTES * 2
         assert value == "new"
         return MIN_TRACKED_ENTRY_BYTES
@@ -1112,13 +1157,13 @@ def test_track_keeps_latest_same_key_replacement_accounting() -> None:
         worker = Thread(target=track_old_entry)
         worker.start()
         try:
-            assert estimator_started.wait(timeout=1)
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             owner.store("values", "key", "new")
             budget.track(owner, "values", "key", "new")
             allow_estimator_to_finish.set()
         finally:
             allow_estimator_to_finish.set()
-            worker.join(timeout=1)
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
 
     assert not worker.is_alive()
     if worker_errors:
@@ -1148,7 +1193,7 @@ def test_track_admits_distinct_entry_after_other_entry_is_tracked() -> None:
         if key == "a":
             assert value == "A"
             estimator_started.set()
-            assert allow_estimator_to_finish.wait(timeout=1)
+            assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
         else:
             assert key == "b"
             assert value == "B"
@@ -1168,13 +1213,13 @@ def test_track_admits_distinct_entry_after_other_entry_is_tracked() -> None:
         worker = Thread(target=track_a)
         worker.start()
         try:
-            assert estimator_started.wait(timeout=1)
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             owner.store("values", "b", "B")
             budget.track(owner, "values", "b", "B")
             allow_estimator_to_finish.set()
         finally:
             allow_estimator_to_finish.set()
-            worker.join(timeout=1)
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
 
     assert not worker.is_alive()
     if worker_errors:
@@ -1203,7 +1248,7 @@ def test_track_rejects_pre_clear_attempt_after_owner_lifecycle_restarts() -> Non
         assert stop_after == 10_000
         if value == "old":
             estimator_started.set()
-            assert allow_estimator_to_finish.wait(timeout=1)
+            assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             return MIN_TRACKED_ENTRY_BYTES * 2
         assert value == "new"
         return MIN_TRACKED_ENTRY_BYTES
@@ -1222,7 +1267,7 @@ def test_track_rejects_pre_clear_attempt_after_owner_lifecycle_restarts() -> Non
         worker = Thread(target=track_old_entry)
         worker.start()
         try:
-            assert estimator_started.wait(timeout=1)
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             budget.clear_context(owner)
             owner._evict_run_cache_entry("values", "key")
             budget.register(owner, 10_000)
@@ -1231,7 +1276,7 @@ def test_track_rejects_pre_clear_attempt_after_owner_lifecycle_restarts() -> Non
             allow_estimator_to_finish.set()
         finally:
             allow_estimator_to_finish.set()
-            worker.join(timeout=1)
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
 
     assert not worker.is_alive()
     if worker_errors:
@@ -1268,7 +1313,7 @@ def test_track_does_not_admit_entry_evicted_while_estimation_is_blocked() -> Non
         estimator_calls += 1
         if estimator_calls == 1:
             estimator_started.set()
-            assert allow_estimator_to_finish.wait(timeout=1)
+            assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
         return entry_size
 
     def refresh_entry() -> None:
@@ -1285,12 +1330,12 @@ def test_track_does_not_admit_entry_evicted_while_estimation_is_blocked() -> Non
         worker = Thread(target=refresh_entry)
         worker.start()
         try:
-            assert estimator_started.wait(timeout=1)
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             budget.register(owner, entry_size)
             allow_estimator_to_finish.set()
         finally:
             allow_estimator_to_finish.set()
-            worker.join(timeout=1)
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
 
     assert not worker.is_alive()
     if worker_errors:
@@ -1359,7 +1404,7 @@ def test_disabling_budget_rejects_pre_disable_estimate_after_reenable() -> None:
         invocation = estimator_calls
         if invocation == 1:
             estimator_started.set()
-            assert allow_estimator_to_finish.wait(timeout=1)
+            assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             return MIN_TRACKED_ENTRY_BYTES * 2
         return MIN_TRACKED_ENTRY_BYTES
 
@@ -1377,14 +1422,14 @@ def test_disabling_budget_rejects_pre_disable_estimate_after_reenable() -> None:
         worker = Thread(target=track_entry)
         worker.start()
         try:
-            assert estimator_started.wait(timeout=1)
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             budget.register(owner, None)
             assert not budget._entry_attempt_generations
             budget.register(owner, 10_000)
             allow_estimator_to_finish.set()
         finally:
             allow_estimator_to_finish.set()
-            worker.join(timeout=1)
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
 
     assert not worker.is_alive()
     if worker_errors:

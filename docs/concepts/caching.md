@@ -247,12 +247,12 @@ active.
 For long-lived or concurrent runs, applications can configure the optional
 `GENERAL_MANAGER["RUN_CONTEXT_CACHE_MAX_BYTES"]` setting to give eviction-safe
 run-cache entries a process-local estimated-memory budget. Enabling the cap
-adds bounded sampled estimation and approximate-LRU bookkeeping, while
-primitive sizing, large-container sampling, and batched recency avoid work
-proportional to the complete object graph on every insertion or global
-coordination on every hit. Plan fleet capacity by multiplying that value by the
-number of worker processes: each Gunicorn, Celery, or other Python worker has
-its own budget. The estimate is taken when a value is inserted, so caller-owned
+adds bounded sampled estimation and approximate-LRU bookkeeping. Primitive
+sizing, large-container sampling, and batched recency avoid work proportional
+to the complete object graph on every insertion or global coordination on every
+hit. Plan fleet capacity by multiplying that value by the number of worker
+processes: each Gunicorn, Celery, or other Python worker has its own budget. The
+estimate is taken when a value is inserted, so caller-owned
 mutable values can later grow beyond their recorded size. This is not a hard
 worker-memory or RSS limit; applications that need a hard worker ceiling should
 also configure deployment-level memory limits and worker recycling.
