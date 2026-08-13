@@ -25,6 +25,10 @@ from general_manager.cache import run_context_lru
 class CacheOwner:
     def __init__(self) -> None:
         self.entries: dict[tuple[RunCacheNamespace, Hashable], object] = {}
+        self.budget_enabled = False
+
+    def _set_run_cache_budget_enabled(self, enabled: bool) -> None:
+        self.budget_enabled = enabled
 
     def store(
         self,
@@ -1298,6 +1302,138 @@ def test_budget_touch_skips_lock_for_mru_after_limit_setting_transition() -> Non
 
     try:
         budget.touch(owner, "values", "second")
+    finally:
+        budget._lock = original_lock
+
+
+def test_budget_notifies_live_owners_when_enabled_mode_changes() -> None:
+    budget = ProcessRunContextCacheBudget()
+    first = CacheOwner()
+    second = CacheOwner()
+    budget.register(first, None)
+    budget.register(second, 10_000)
+
+    assert first.budget_enabled
+    assert second.budget_enabled
+
+    budget.register(first, None)
+
+    assert not first.budget_enabled
+    assert not second.budget_enabled
+
+
+def test_budget_refreshes_mru_after_eviction() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    budget.register(owner, entry_size)
+    for key, value in (("a", "A"), ("b", "B")):
+        owner.store("values", key, value)
+        budget.track(owner, "values", key, value)
+    original_lock = budget._lock
+    budget._lock = RaisingLock()
+
+    try:
+        budget.touch(owner, "values", "b")
+        with pytest.raises(AssertionError, match="unexpected coordinator lock entry"):
+            budget.touch(owner, "values", "a")
+    finally:
+        budget._lock = original_lock
+
+
+def test_budget_refreshes_mru_after_clear_context() -> None:
+    budget = ProcessRunContextCacheBudget()
+    first = CacheOwner()
+    second = CacheOwner()
+    budget.register(first, 10_000)
+    budget.register(second, 10_000)
+    first.store("values", "a", "A")
+    budget.track(first, "values", "a", "A")
+    second.store("values", "b", "B")
+    budget.track(second, "values", "b", "B")
+    budget.clear_context(second)
+    original_lock = budget._lock
+    budget._lock = RaisingLock()
+
+    try:
+        budget.touch(first, "values", "a")
+        with pytest.raises(AssertionError, match="unexpected coordinator lock entry"):
+            budget.touch(second, "values", "b")
+    finally:
+        budget._lock = original_lock
+
+
+def test_budget_refreshes_mru_after_weak_owner_finalization() -> None:
+    import gc
+
+    budget = ProcessRunContextCacheBudget()
+    survivor = CacheOwner()
+    dead_owner = CacheOwner()
+    budget.register(survivor, 10_000)
+    budget.register(dead_owner, 10_000)
+    survivor.store("values", "a", "A")
+    budget.track(survivor, "values", "a", "A")
+    dead_owner.store("values", "b", "B")
+    budget.track(dead_owner, "values", "b", "B")
+    dead_reference = ref(dead_owner)
+
+    del dead_owner
+    gc.collect()
+
+    assert dead_reference() is None
+    original_lock = budget._lock
+    budget._lock = RaisingLock()
+    try:
+        budget.touch(survivor, "values", "a")
+    finally:
+        budget._lock = original_lock
+
+
+def test_budget_stale_owner_finalizer_preserves_replacement_mru() -> None:
+    budget = ProcessRunContextCacheBudget()
+    stale_owner = CacheOwner()
+    stale_reference = ref(stale_owner)
+    replacement_owner = CacheOwner()
+    replacement_reference = ref(replacement_owner)
+    owner_id = id(stale_owner)
+    tracked_key = (owner_id, "values", "replacement")
+    entry_size = estimate_cache_entry_size("replacement", "R", stop_after=None)
+    replacement_owner.store("values", "replacement", "R")
+    budget._owner_references = {owner_id: replacement_reference}
+    budget._entries[tracked_key] = _TrackedEntry(
+        owner=replacement_reference,
+        namespace="values",
+        key="replacement",
+        size=entry_size,
+    )
+    budget._mru_key = tracked_key
+    budget._total_bytes = entry_size
+
+    budget._owner_finalizer(owner_id)(stale_reference)
+    original_lock = budget._lock
+    budget._lock = RaisingLock()
+    try:
+        budget.touch(replacement_owner, "values", "replacement")
+    finally:
+        budget._lock = original_lock
+
+
+def test_budget_refreshes_mru_after_oversized_rejection() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    budget.register(owner, entry_size)
+    owner.store("values", "a", "A")
+    budget.track(owner, "values", "a", "A")
+    owner.store("values", "oversized", b"x" * 1024)
+    budget.track(owner, "values", "oversized", b"x" * 1024)
+    original_lock = budget._lock
+    budget._lock = RaisingLock()
+
+    try:
+        budget.touch(owner, "values", "a")
+        with pytest.raises(AssertionError, match="unexpected coordinator lock entry"):
+            budget.touch(owner, "values", "oversized")
     finally:
         budget._lock = original_lock
 

@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from threading import get_ident
 from types import TracebackType
 from typing import TYPE_CHECKING, Optional, TypeVar, cast
 
@@ -109,6 +110,7 @@ class CalculationRunContext:
         self._pending_run_cache_touches: dict[PendingRunCacheTouch, None] = {}
         self._last_pending_run_cache_touch: PendingRunCacheTouch | None = None
         self._run_cache_touch_count = 0
+        self._run_cache_touch_thread_id: int | None = None
         max_bytes = resolve_run_context_cache_max_bytes()
         self._run_cache_budget_enabled = max_bytes is not None
         run_context_cache_budget.register(
@@ -125,6 +127,14 @@ class CalculationRunContext:
         for key, hit in self._dependency_cache_hits.items():
             if key not in self._dependency_cache_pending_publications:
                 yield "dependency_hits", key, hit
+
+    def _set_run_cache_budget_enabled(self, enabled: bool) -> None:
+        """Refresh the lock-free owner hint after a coordinator transition."""
+        self._run_cache_budget_enabled = enabled
+        if not enabled:
+            self._pending_run_cache_touches.clear()
+            self._last_pending_run_cache_touch = None
+            self._run_cache_touch_count = 0
 
     def _evict_run_cache_entry(
         self,
@@ -208,10 +218,12 @@ class CalculationRunContext:
         self,
         pending_key: PendingRunCacheTouch,
     ) -> bool:
-        if (
-            not self._run_cache_budget_enabled
-            or pending_key != self._last_pending_run_cache_touch
-        ):
+        if not self._run_cache_budget_enabled:
+            return False
+        if self._run_cache_touch_thread_id != get_ident():
+            run_context_cache_budget.touch(self, *pending_key)
+            return True
+        if pending_key != self._last_pending_run_cache_touch:
             return False
         count = self._run_cache_touch_count + 1
         if count < RUN_CONTEXT_TOUCH_BATCH_SIZE:
@@ -253,6 +265,7 @@ class CalculationRunContext:
             self._pending_run_cache_touches.clear()
             self._last_pending_run_cache_touch = None
             self._run_cache_touch_count = 0
+            self._run_cache_touch_thread_id = get_ident()
             max_bytes = resolve_run_context_cache_max_bytes()
             self._run_cache_budget_enabled = max_bytes is not None
             run_context_cache_budget.register(
@@ -296,6 +309,7 @@ class CalculationRunContext:
             self._pending_run_cache_touches.clear()
             self._last_pending_run_cache_touch = None
             self._run_cache_touch_count = 0
+            self._run_cache_touch_thread_id = None
         try:
             if is_outermost_exit:
                 if exc_type is None:

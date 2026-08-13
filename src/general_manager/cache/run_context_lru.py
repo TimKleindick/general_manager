@@ -76,6 +76,9 @@ logger = get_logger("cache.run_context_lru")
 class RunContextCacheOwner(Protocol):
     """Storage that participates in process-wide run-cache budgeting."""
 
+    def _set_run_cache_budget_enabled(self, enabled: bool) -> None:
+        """Refresh the owner's cached process-budget mode."""
+
     def _iter_run_cache_entries(
         self,
     ) -> Iterable[tuple[RunCacheNamespace, Hashable, object]]:
@@ -142,6 +145,8 @@ class ProcessRunContextCacheBudget:
             self._owners.add(owner)
             self._owner_reference_locked(owner)
             if max_bytes == self._max_bytes:
+                if is_new_owner:
+                    owner._set_run_cache_budget_enabled(max_bytes is not None)
                 if is_new_owner and max_bytes is not None:
                     self._track_owner_entries_locked(owner)
                 return
@@ -149,6 +154,9 @@ class ProcessRunContextCacheBudget:
             previous_max_bytes = self._max_bytes
             self._max_bytes = max_bytes
             self._configuration_generation += 1
+            enabled = max_bytes is not None
+            for registered_owner in tuple(self._owners):
+                registered_owner._set_run_cache_budget_enabled(enabled)
             if max_bytes is None:
                 self._entries.clear()
                 self._mru_key = None
