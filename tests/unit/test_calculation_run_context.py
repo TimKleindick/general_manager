@@ -257,6 +257,23 @@ def test_run_context_budget_allows_one_batch_of_recency_staleness() -> None:
             assert second.get("c") == "C"
 
 
+def test_same_owner_write_flushes_partial_recency_batch_before_eviction() -> None:
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    with override_settings(
+        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+    ):
+        with CalculationRunContext() as context:
+            context.set("a", "A")
+            context.set("b", "B")
+            assert context.get("a") == "A"
+
+            context.set("c", "C")
+
+            assert context.get("a") == "A"
+            assert context.get("b") is None
+            assert context.get("c") == "C"
+
+
 def test_run_context_batches_capped_value_touches() -> None:
     with (
         override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),

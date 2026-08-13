@@ -189,6 +189,26 @@ def test_estimate_cache_entry_size_does_not_inspect_atomic_leaf_metadata(
     assert size >= MIN_TRACKED_ENTRY_BYTES
 
 
+def test_estimate_cache_entry_size_counts_same_atomic_object_once() -> None:
+    value = b"x" * 1_024
+
+    size = estimate_cache_entry_size(value, value, stop_after=None)
+
+    assert size == sys.getsizeof(value)
+
+
+def test_estimate_cache_entry_size_stops_after_atomic_value_exceeds_budget() -> None:
+    value = b"x" * 1_024
+    with mock.patch(
+        "general_manager.cache.run_context_lru.sys.getsizeof",
+        wraps=sys.getsizeof,
+    ) as getsizeof:
+        size = estimate_cache_entry_size("key", value, stop_after=1)
+
+    assert size == 2
+    getsizeof.assert_called_once_with(value)
+
+
 def test_estimate_cache_entry_size_counts_shared_object_once_per_entry() -> None:
     shared = [bytearray(1024)]
 
@@ -283,6 +303,76 @@ def test_estimate_cache_entry_size_samples_large_sequence_with_bounded_work() ->
         estimate_cache_entry_size("key", value, stop_after=None)
 
     assert getsizeof.call_count <= 64 + 2
+
+
+def test_estimate_cache_entry_size_traverses_sequence_at_exact_sample_threshold() -> (
+    None
+):
+    value = [bytearray(1) for _ in range(128)]
+    with mock.patch(
+        "general_manager.cache.run_context_lru.sys.getsizeof",
+        wraps=sys.getsizeof,
+    ) as getsizeof:
+        estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert getsizeof.call_count == 128 + 2
+
+
+def test_estimate_cache_entry_size_samples_sequence_above_threshold() -> None:
+    value = [bytearray(1) for _ in range(129)]
+    with mock.patch(
+        "general_manager.cache.run_context_lru.sys.getsizeof",
+        wraps=sys.getsizeof,
+    ) as getsizeof:
+        estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert getsizeof.call_count == 64 + 2
+
+
+def test_estimate_cache_entry_size_traverses_mapping_at_exact_sample_threshold() -> (
+    None
+):
+    value = {f"item-{index}".encode(): bytearray(1) for index in range(128)}
+    with mock.patch(
+        "general_manager.cache.run_context_lru.sys.getsizeof",
+        wraps=sys.getsizeof,
+    ) as getsizeof:
+        estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert getsizeof.call_count == (128 * 2) + 2
+
+
+def test_estimate_cache_entry_size_samples_mapping_above_threshold() -> None:
+    value = {f"item-{index}".encode(): bytearray(1) for index in range(129)}
+    with mock.patch(
+        "general_manager.cache.run_context_lru.sys.getsizeof",
+        wraps=sys.getsizeof,
+    ) as getsizeof:
+        estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert getsizeof.call_count == (64 * 2) + 2
+
+
+def test_estimate_cache_entry_size_traverses_set_at_exact_sample_threshold() -> None:
+    value = {f"item-{index}".encode() for index in range(128)}
+    with mock.patch(
+        "general_manager.cache.run_context_lru.sys.getsizeof",
+        wraps=sys.getsizeof,
+    ) as getsizeof:
+        estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert getsizeof.call_count == 128 + 2
+
+
+def test_estimate_cache_entry_size_samples_set_above_threshold() -> None:
+    value = {f"item-{index}".encode() for index in range(129)}
+    with mock.patch(
+        "general_manager.cache.run_context_lru.sys.getsizeof",
+        wraps=sys.getsizeof,
+    ) as getsizeof:
+        estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert getsizeof.call_count == 64 + 2
 
 
 def test_estimate_cache_entry_size_stratifies_large_sequence_samples() -> None:
