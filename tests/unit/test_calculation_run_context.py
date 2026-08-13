@@ -466,6 +466,109 @@ def test_disabling_recency_discards_partial_touch_batch() -> None:
         touch_many.assert_not_called()
 
 
+@pytest.mark.parametrize("prequeue_touch", [False, True])
+def test_paused_owner_read_cannot_queue_after_recency_is_disabled(
+    prequeue_touch: bool,
+) -> None:
+    read_entered_touch_path = Event()
+    allow_read_to_continue = Event()
+    disabler_errors: list[BaseException] = []
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set("key", "value")
+        activate_run_cache_recency(context)
+        if prequeue_touch:
+            assert context.get("key") == "value"
+            assert context._pending_run_cache_touches
+
+        original_touch = context._touch_run_cache_entry
+
+        def paused_touch(namespace: str, key: object) -> None:
+            read_entered_touch_path.set()
+            assert allow_read_to_continue.wait(timeout=5)
+            original_touch(namespace, key)  # type: ignore[arg-type]
+
+        def disable_recency() -> None:
+            try:
+                assert read_entered_touch_path.wait(timeout=5)
+                run_context_cache_budget.register(context, 10_000)
+            except BaseException as error:  # noqa: BLE001
+                disabler_errors.append(error)
+            finally:
+                allow_read_to_continue.set()
+
+        disabler = Thread(target=disable_recency)
+        disabler.start()
+        try:
+            with mock.patch.object(
+                context,
+                "_touch_run_cache_entry",
+                side_effect=paused_touch,
+            ):
+                assert context.get("key") == "value"
+        finally:
+            allow_read_to_continue.set()
+            disabler.join(timeout=5)
+
+        assert not disabler.is_alive()
+        if disabler_errors:
+            raise disabler_errors[0]
+        assert context._pending_run_cache_touches == {}
+        touch_many.assert_not_called()
+
+
+def test_paused_foreign_read_cannot_touch_after_recency_is_disabled() -> None:
+    read_entered_touch_path = Event()
+    allow_read_to_continue = Event()
+    worker_errors: list[BaseException] = []
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch") as touch,
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set("key", "value")
+        activate_run_cache_recency(context)
+        original_touch = context._touch_run_cache_entry
+
+        def paused_touch(namespace: str, key: object) -> None:
+            read_entered_touch_path.set()
+            assert allow_read_to_continue.wait(timeout=5)
+            original_touch(namespace, key)  # type: ignore[arg-type]
+
+        def read_from_foreign_thread() -> None:
+            try:
+                with mock.patch.object(
+                    context,
+                    "_touch_run_cache_entry",
+                    side_effect=paused_touch,
+                ):
+                    assert context.get("key") == "value"
+            except BaseException as error:  # noqa: BLE001
+                worker_errors.append(error)
+
+        worker = Thread(target=read_from_foreign_thread)
+        worker.start()
+        try:
+            assert read_entered_touch_path.wait(timeout=5)
+            run_context_cache_budget.register(context, 10_000)
+        finally:
+            allow_read_to_continue.set()
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        if worker_errors:
+            raise worker_errors[0]
+        assert context._pending_run_cache_touches == {}
+        touch.assert_not_called()
+        touch_many.assert_not_called()
+
+
 def test_run_context_repeated_touch_fast_path_avoids_pending_key_rehashes() -> None:
     key = CountingHashKey()
     with (

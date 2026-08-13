@@ -3135,6 +3135,177 @@ def test_recency_callback_is_deferred_past_reentrant_outer_lock() -> None:
     assert budget.is_recency_enabled is False
 
 
+def test_unchanged_mode_admission_enters_coordinator_lock_once() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = ModeRecordingCacheOwner()
+    budget.register(owner, 10_000)
+
+    class CountingLock:
+        def __init__(self, wrapped: object) -> None:
+            self.wrapped = wrapped
+            self.enter_count = 0
+
+        def __enter__(self) -> None:
+            self.enter_count += 1
+            self.wrapped.__enter__()  # type: ignore[attr-defined]
+
+        def __exit__(self, *args: object) -> None:
+            self.wrapped.__exit__(*args)  # type: ignore[attr-defined]
+
+        def _is_owned(self) -> bool:
+            return bool(self.wrapped._is_owned())  # type: ignore[attr-defined]
+
+    counting_lock = CountingLock(budget._lock)
+    budget._lock = counting_lock  # type: ignore[assignment]
+
+    _track_exact_bytes(budget, owner, "entry", 1_000)
+
+    assert counting_lock.enter_count == 1
+    assert owner.mode_updates == [(True, False, 1)]
+
+
+def test_track_eviction_exception_reconciles_recency_below_70_percent() -> None:
+    budget = ProcessRunContextCacheBudget()
+
+    class RaisingEvictionOwner(ModeRecordingCacheOwner):
+        def _evict_run_cache_entry(
+            self,
+            namespace: RunCacheNamespace,
+            key: Hashable,
+        ) -> None:
+            super()._evict_run_cache_entry(namespace, key)
+            raise RuntimeError("eviction failed")  # noqa: TRY003
+
+    raising = RaisingEvictionOwner()
+    survivor = ModeRecordingCacheOwner()
+    budget.register(raising, 1_000)
+    budget.register(survivor, 1_000)
+    _track_exact_bytes(budget, raising, "large", 500)
+    _track_exact_bytes(budget, survivor, "warm", 300)
+    assert budget.is_recency_enabled is True
+
+    with pytest.raises(RuntimeError, match="eviction failed"):
+        _track_exact_bytes(budget, survivor, "new", 300)
+
+    assert budget.estimated_bytes == 600
+    assert budget.is_recency_enabled is False
+    assert survivor.mode_updates[-1][:2] == (True, False)
+
+
+def test_eviction_exception_precedes_mode_callback_exception() -> None:
+    budget = ProcessRunContextCacheBudget()
+
+    class DoublyRaisingOwner(ModeRecordingCacheOwner):
+        raise_on_disabled_mode = False
+
+        def _evict_run_cache_entry(
+            self,
+            namespace: RunCacheNamespace,
+            key: Hashable,
+        ) -> None:
+            super()._evict_run_cache_entry(namespace, key)
+            raise RuntimeError("primary eviction failed")  # noqa: TRY003
+
+        def _set_run_cache_modes(
+            self,
+            budget_enabled: bool,
+            recency_enabled: bool,
+            generation: int,
+        ) -> None:
+            super()._set_run_cache_modes(
+                budget_enabled,
+                recency_enabled,
+                generation,
+            )
+            if self.raise_on_disabled_mode and not recency_enabled:
+                raise RuntimeError("secondary publication failed")  # noqa: TRY003
+
+    raising = DoublyRaisingOwner()
+    survivor = ModeRecordingCacheOwner()
+    budget.register(raising, 1_000)
+    budget.register(survivor, 1_000)
+    _track_exact_bytes(budget, raising, "large", 500)
+    _track_exact_bytes(budget, survivor, "warm", 300)
+    raising.raise_on_disabled_mode = True
+
+    with pytest.raises(RuntimeError, match="primary eviction failed") as captured:
+        _track_exact_bytes(budget, survivor, "new", 300)
+
+    assert any(
+        "secondary publication failed" in note
+        for note in getattr(captured.value, "__notes__", ())
+    )
+    assert survivor.mode_updates[-1][:2] == (True, False)
+
+
+def test_register_eviction_exception_reconciles_recency_below_70_percent() -> None:
+    budget = ProcessRunContextCacheBudget()
+
+    class RaisingEvictionOwner(ModeRecordingCacheOwner):
+        def _evict_run_cache_entry(
+            self,
+            namespace: RunCacheNamespace,
+            key: Hashable,
+        ) -> None:
+            super()._evict_run_cache_entry(namespace, key)
+            raise RuntimeError("cap eviction failed")  # noqa: TRY003
+
+    raising = RaisingEvictionOwner()
+    survivor = ModeRecordingCacheOwner()
+    budget.register(raising, 1_000)
+    budget.register(survivor, 1_000)
+    _track_exact_bytes(budget, raising, "large", 500)
+    _track_exact_bytes(budget, survivor, "warm", 300)
+    assert budget.is_recency_enabled is True
+
+    with pytest.raises(RuntimeError, match="cap eviction failed"):
+        budget.register(survivor, 700)
+
+    assert budget.estimated_bytes == 300
+    assert budget.is_recency_enabled is False
+    assert survivor.mode_updates[-1][:2] == (True, False)
+
+
+def test_rebuild_exception_publishes_enabled_mode_after_partial_eviction() -> None:
+    budget = ProcessRunContextCacheBudget()
+
+    class RaisingEvictionOwner(ModeRecordingCacheOwner):
+        def _evict_run_cache_entry(
+            self,
+            namespace: RunCacheNamespace,
+            key: Hashable,
+        ) -> None:
+            super()._evict_run_cache_entry(namespace, key)
+            raise RuntimeError("rebuild eviction failed")  # noqa: TRY003
+
+    raising = RaisingEvictionOwner()
+    survivor = ModeRecordingCacheOwner()
+    late = ModeRecordingCacheOwner()
+    budget.register(raising, None)
+    budget.register(survivor, None)
+    budget.register(late, None)
+    raising.store("values", "large", "large")
+    survivor.store("values", "warm", "warm")
+    late.store("values", "new", "new")
+    budget._owners = OrderedOwnerRegistry((raising, survivor, late))
+
+    signals = iter((500, 300, 300))
+
+    def admission_signal(*args: object) -> run_context_lru._AdmissionSignal:
+        del args
+        return run_context_lru._AdmissionSignal(None, 0, next(signals))
+
+    with (
+        mock.patch.object(run_context_lru, "_admission_signal", admission_signal),
+        pytest.raises(RuntimeError, match="rebuild eviction failed"),
+    ):
+        budget.register(late, 1_000)
+
+    assert budget.estimated_bytes == 600
+    assert budget.is_recency_enabled is False
+    assert survivor.mode_updates[-1][:2] == (True, False)
+
+
 def test_budget_refreshes_mru_after_eviction() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()

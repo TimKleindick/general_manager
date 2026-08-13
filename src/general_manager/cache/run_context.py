@@ -220,7 +220,10 @@ class CalculationRunContext:
     ) -> None:
         pending_key = (namespace, key)
         with self._run_cache_touch_lock:
-            if not self._run_cache_budget_enabled:
+            if (
+                not self._run_cache_budget_enabled
+                or not self._run_cache_recency_enabled
+            ):
                 return
             if pending_key != self._last_pending_run_cache_touch:
                 self._pending_run_cache_touches.pop(pending_key, None)
@@ -235,7 +238,10 @@ class CalculationRunContext:
         touch_immediately = False
         touches_to_flush: tuple[PendingRunCacheTouch, ...] = ()
         with self._run_cache_touch_lock:
-            if not self._run_cache_budget_enabled:
+            if (
+                not self._run_cache_budget_enabled
+                or not self._run_cache_recency_enabled
+            ):
                 return False
             if self._run_cache_touch_thread_id != get_ident():
                 touch_immediately = True
