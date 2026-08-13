@@ -1,5 +1,6 @@
 from collections import OrderedDict, deque
 from collections.abc import Hashable, Iterable, Iterator
+from datetime import date, timedelta
 from threading import Event, Thread
 from unittest import mock
 import math
@@ -54,6 +55,57 @@ class CacheOwner:
         key: Hashable,
     ) -> None:
         self.entries.pop((namespace, key), None)
+
+
+SEEDED_DUE_STRATUM = cast(run_context_lru.StratumKey, ("values", "list", 1))
+SEEDED_CALIBRATION_WINDOW = ((100, 1_000),) * 8
+
+
+def _seed_due_stratum_with_peer(
+    budget: ProcessRunContextCacheBudget,
+    peer_owner: CacheOwner,
+    pending_owner: CacheOwner,
+) -> tuple[run_context_lru._StratumState, tuple[int, RunCacheNamespace, Hashable]]:
+    budget.register(peer_owner, 100_000)
+    budget.register(pending_owner, 100_000)
+    state = run_context_lru._StratumState(
+        admission_count=255,
+        samples=deque(SEEDED_CALIBRATION_WINDOW, maxlen=8),
+    )
+    budget._strata[SEEDED_DUE_STRATUM] = state
+    peer_key = (id(peer_owner), "values", "peer")
+    peer_owner.store("values", "peer", ["peer"])
+    with budget._lock:
+        budget._add_entry_accounting_locked(
+            peer_key,
+            _TrackedEntry(
+                owner=budget._owner_reference_locked(peer_owner),
+                namespace="values",
+                key="peer",
+                exact_bytes=0,
+                stratum=SEEDED_DUE_STRATUM,
+                shallow_bytes=100,
+            ),
+        )
+        budget._mru_key = peer_key
+    assert budget.estimated_bytes == 1_000
+    return state, peer_key
+
+
+def _assert_seeded_due_stratum_unchanged(
+    budget: ProcessRunContextCacheBudget,
+    peer_owner: CacheOwner,
+    state: run_context_lru._StratumState,
+    peer_key: tuple[int, RunCacheNamespace, Hashable],
+) -> None:
+    assert budget._strata == {SEEDED_DUE_STRATUM: state}
+    assert list(state.samples) == list(SEEDED_CALIBRATION_WINDOW)
+    assert state.admission_count == 255
+    assert state.entry_count == 1
+    assert state.shallow_total == 100
+    assert set(budget._entries) == {peer_key}
+    assert peer_owner.entries == {("values", "peer"): ["peer"]}
+    assert budget.estimated_bytes == 1_000
 
 
 class LimitRaisingCacheOwner(CacheOwner):
@@ -244,14 +296,27 @@ def _representative_slotted_managers() -> list[tuple[Hashable, object]]:
 
 def _representative_metric_series() -> list[tuple[Hashable, object]]:
     entries = []
+    first_day = date(2024, 1, 1)
     for index in range(512):
         records = (
             RepresentativeMetric(index, "actual", index / 10),
             RepresentativeMetric(index + 1, "forecast", index / 8),
         )
-        series = {day: records[day % 2] for day in range(120)}
+        series = {
+            first_day + timedelta(days=offset): records[offset % 2]
+            for offset in range(120)
+        }
         entries.append((index, series))
     return entries
+
+
+def test_representative_metric_series_uses_120_distinct_dates() -> None:
+    entries = _representative_metric_series()
+
+    for _key, series in entries:
+        metric_series = cast(dict[object, object], series)
+        assert len(metric_series) == 120
+        assert all(type(day) is date for day in metric_series)
 
 
 def _representative_shared_aggregate() -> list[tuple[Hashable, object]]:
@@ -351,6 +416,87 @@ def test_representative_pressure_retains_between_ninety_and_one_hundred_percent(
     assert len(owner.entries) == 9
     assert retained_bytes <= configured_bytes
     assert retained_bytes >= 2_304
+
+
+@pytest.mark.parametrize(
+    ("configured_bytes", "expected_target"),
+    [(1, 0), (19, 18), (20, 19), (101, 95), (1_000, 950)],
+)
+def test_eviction_target_uses_floor_of_ninety_five_percent(
+    configured_bytes: int,
+    expected_target: int,
+) -> None:
+    assert run_context_lru._eviction_target(configured_bytes) == expected_target
+
+
+@pytest.mark.parametrize(
+    ("first_charge", "expected_keys"),
+    [(694, {"first", "second"}), (695, {"second"})],
+)
+def test_reserve_eviction_keeps_equality_and_evicts_one_byte_above_target(
+    first_charge: int,
+    expected_keys: set[str],
+) -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_000)
+    owner_reference = ref(owner)
+    entries = (("first", first_charge), ("second", 256))
+
+    with budget._lock:
+        for key, exact_bytes in entries:
+            owner.store("values", key, key)
+            budget._add_entry_accounting_locked(
+                (id(owner), "values", key),
+                _TrackedEntry(
+                    owner=owner_reference,
+                    namespace="values",
+                    key=key,
+                    exact_bytes=exact_bytes,
+                    stratum=None,
+                    shallow_bytes=0,
+                ),
+            )
+            budget._mru_key = (id(owner), "values", key)
+        budget._evict_excess_locked()
+
+    assert {key for _namespace, key in owner.entries} == expected_keys
+    assert budget.estimated_bytes == sum(
+        exact_bytes for key, exact_bytes in entries if key in expected_keys
+    )
+
+
+@pytest.mark.parametrize(
+    ("estimated_bytes", "expected_reason"),
+    [
+        (960, "run cache entry evicted by process-wide LRU budget"),
+        (1_001, "run cache entry skipped because it exceeds the process budget"),
+    ],
+)
+def test_complete_cap_oversized_rejection_is_distinct_from_reserve_eviction(
+    estimated_bytes: int,
+    expected_reason: str,
+) -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_000)
+    value = [bytearray(64)]
+    owner.store("values", "key", value)
+
+    with (
+        mock.patch.object(
+            run_context_lru,
+            "estimate_cache_entry_size",
+            return_value=estimated_bytes,
+        ),
+        mock.patch.object(run_context_lru.logger, "debug") as debug,
+    ):
+        budget.track(owner, "values", "key", value)
+
+    assert not owner.entries
+    assert not budget._entries
+    assert budget.estimated_bytes == 0
+    assert debug.call_args.args == (expected_reason,)
 
 
 def test_stratum_models_all_entries_from_rolling_samples() -> None:
@@ -695,6 +841,225 @@ def test_calibrated_estimator_exception_cleans_value_token_and_accounting() -> N
     assert not budget._entries
     assert not budget._entry_attempt_generations
     assert budget.estimated_bytes == 0
+
+
+def test_due_estimator_failure_preserves_seeded_stratum_and_peer() -> None:
+    budget = ProcessRunContextCacheBudget()
+    peer_owner = CacheOwner()
+    pending_owner = CacheOwner()
+    state, peer_key = _seed_due_stratum_with_peer(budget, peer_owner, pending_owner)
+    lifecycle_generation = budget._owner_lifecycle_generations.get(id(pending_owner))
+    configuration_generation = budget._configuration_generation
+    value = ["pending"]
+    pending_owner.store("values", "pending", value)
+    active_lifecycle_generations: list[int] = []
+
+    def failing_estimator(key: object, value: object, *, stop_after: int | None) -> int:
+        active_lifecycle_generations.append(
+            budget._owner_lifecycle_generations[id(pending_owner)]
+        )
+        raise RuntimeError("estimation failed")  # noqa: TRY003
+
+    with (
+        mock.patch.object(
+            run_context_lru,
+            "estimate_cache_entry_size",
+            side_effect=failing_estimator,
+        ),
+        pytest.raises(RuntimeError, match="estimation failed"),
+    ):
+        budget.track(pending_owner, "values", "pending", value)
+
+    _assert_seeded_due_stratum_unchanged(budget, peer_owner, state, peer_key)
+    assert ("values", "pending") not in pending_owner.entries
+    assert not budget._entry_attempt_generations
+    assert budget._configuration_generation == configuration_generation
+    assert active_lifecycle_generations == [
+        budget._owner_lifecycle_generations[id(pending_owner)]
+    ]
+    assert active_lifecycle_generations[0] != (lifecycle_generation or 0)
+
+
+def test_due_sample_configuration_retry_failure_preserves_seeded_stratum() -> None:
+    budget = ProcessRunContextCacheBudget()
+    peer_owner = CacheOwner()
+    pending_owner = CacheOwner()
+    state, peer_key = _seed_due_stratum_with_peer(budget, peer_owner, pending_owner)
+    first_generation = budget._configuration_generation
+    value = ["pending"]
+    pending_owner.store("values", "pending", value)
+    estimator_started = Event()
+    allow_first_estimator = Event()
+    stop_after_values: list[int | None] = []
+    lifecycle_generations: list[int] = []
+    worker_errors: list[BaseException] = []
+
+    def changing_configuration_estimator(
+        key: object, value: object, *, stop_after: int | None
+    ) -> int:
+        stop_after_values.append(stop_after)
+        lifecycle_generations.append(
+            budget._owner_lifecycle_generations[id(pending_owner)]
+        )
+        if len(stop_after_values) == 1:
+            estimator_started.set()
+            assert allow_first_estimator.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            return 9_000
+        raise RuntimeError("new-generation estimation failed")  # noqa: TRY003
+
+    def track_entry() -> None:
+        try:
+            budget.track(pending_owner, "values", "pending", value)
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        changing_configuration_estimator,
+    ):
+        worker = Thread(target=track_entry)
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            with budget._lock:
+                budget._max_bytes = 200_000
+                budget._configuration_generation += 1
+        finally:
+            allow_first_estimator.set()
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert not worker.is_alive()
+    assert len(worker_errors) == 1
+    assert isinstance(worker_errors[0], RuntimeError)
+    _assert_seeded_due_stratum_unchanged(budget, peer_owner, state, peer_key)
+    assert stop_after_values == [100_000, 200_000]
+    assert lifecycle_generations == [lifecycle_generations[0]] * 2
+    assert budget._configuration_generation == first_generation + 1
+    assert not budget._entry_attempt_generations
+
+
+@pytest.mark.parametrize("invalidation", ["weak_finalization", "owner_reuse"])
+def test_due_lifecycle_invalidation_preserves_seeded_stratum_and_peer(
+    invalidation: str,
+) -> None:
+    budget = ProcessRunContextCacheBudget()
+    peer_owner = CacheOwner()
+    pending_owner = CacheOwner()
+    state, peer_key = _seed_due_stratum_with_peer(budget, peer_owner, pending_owner)
+    configuration_generation = budget._configuration_generation
+    value = ["pending"]
+    pending_owner.store("values", "pending", value)
+    estimator_started = Event()
+    allow_estimator = Event()
+    worker_errors: list[BaseException] = []
+
+    def blocking_estimator(
+        key: object, value: object, *, stop_after: int | None
+    ) -> int:
+        estimator_started.set()
+        assert allow_estimator.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+        return 2_000
+
+    def track_entry() -> None:
+        try:
+            budget.track(pending_owner, "values", "pending", value)
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    with mock.patch.object(
+        run_context_lru, "estimate_cache_entry_size", blocking_estimator
+    ):
+        worker = Thread(target=track_entry)
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            pending_owner_id = id(pending_owner)
+            lifecycle_generation = budget._owner_lifecycle_generations[pending_owner_id]
+            with budget._lock:
+                if invalidation == "weak_finalization":
+                    owner_reference = budget._owner_references[pending_owner_id]
+                    budget._owner_finalizer(pending_owner_id)(owner_reference)
+                else:
+                    replacement = CacheOwner()
+                    budget._owner_references[pending_owner_id] = ref(replacement)
+                    budget._owner_reference_locked(pending_owner)
+        finally:
+            allow_estimator.set()
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert not worker.is_alive()
+    if worker_errors:
+        raise worker_errors[0]
+    _assert_seeded_due_stratum_unchanged(budget, peer_owner, state, peer_key)
+    assert not budget._entry_attempt_generations
+    assert budget._configuration_generation == configuration_generation
+    assert lifecycle_generation > 0
+    assert id(pending_owner) not in budget._owner_lifecycle_generations
+
+
+def test_concurrent_due_samples_preserve_seeded_window_and_count_both_entries() -> None:
+    budget = ProcessRunContextCacheBudget()
+    peer_owner = CacheOwner()
+    first_owner = CacheOwner()
+    state, peer_key = _seed_due_stratum_with_peer(budget, peer_owner, first_owner)
+    second_owner = CacheOwner()
+    budget.register(second_owner, 100_000)
+    configuration_generation = budget._configuration_generation
+    owners = {1: first_owner, 2: second_owner}
+    values = {key: [key] for key in owners}
+    estimator_started = {key: Event() for key in owners}
+    allow_estimators = Event()
+    worker_errors: list[BaseException] = []
+
+    def blocking_estimator(
+        key: object, value: object, *, stop_after: int | None
+    ) -> int:
+        typed_key = cast(int, key)
+        estimator_started[typed_key].set()
+        assert allow_estimators.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+        return 2_000
+
+    def track_entry(key: int) -> None:
+        try:
+            budget.track(owners[key], "values", key, values[key])
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    for key, owner in owners.items():
+        owner.store("values", key, values[key])
+    with mock.patch.object(
+        run_context_lru, "estimate_cache_entry_size", blocking_estimator
+    ):
+        workers = [Thread(target=track_entry, args=(key,)) for key in owners]
+        for worker in workers:
+            worker.start()
+        try:
+            assert all(
+                started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+                for started in estimator_started.values()
+            )
+        finally:
+            allow_estimators.set()
+            for worker in workers:
+                worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert all(not worker.is_alive() for worker in workers)
+    if worker_errors:
+        raise worker_errors[0]
+    assert budget._strata == {SEEDED_DUE_STRATUM: state}
+    assert list(state.samples) == [*SEEDED_CALIBRATION_WINDOW[1:], (92, 2_000)]
+    assert state.admission_count == 257
+    assert state.entry_count == 3
+    assert state.shallow_total == 284
+    assert set(budget._entries) == {
+        peer_key,
+        (id(first_owner), "values", 1),
+        (id(second_owner), "values", 2),
+    }
+    assert not budget._entry_attempt_generations
+    assert budget._configuration_generation == configuration_generation
+    assert budget.estimated_bytes == 3_261
 
 
 def test_stale_blocked_estimate_cannot_replace_newer_same_key_sample() -> None:
@@ -2053,6 +2418,67 @@ def test_track_does_not_reintroduce_accounting_after_owner_mutation(
     if worker_errors:
         raise worker_errors[0]
     assert budget.estimated_bytes == 0
+
+
+@pytest.mark.parametrize("mutation", ["remove", "clear_context"])
+def test_due_sample_mutation_preserves_seeded_stratum_and_peer(
+    mutation: str,
+) -> None:
+    budget = ProcessRunContextCacheBudget()
+    peer_owner = CacheOwner()
+    pending_owner = CacheOwner()
+    state, peer_key = _seed_due_stratum_with_peer(budget, peer_owner, pending_owner)
+    configuration_generation = budget._configuration_generation
+    value = ["pending"]
+    pending_owner.store("values", "pending", value)
+    estimator_started = Event()
+    allow_estimator = Event()
+    worker_errors: list[BaseException] = []
+
+    def blocking_estimator(
+        key: object, value: object, *, stop_after: int | None
+    ) -> int:
+        estimator_started.set()
+        assert allow_estimator.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+        return 2_000
+
+    def track_entry() -> None:
+        try:
+            budget.track(pending_owner, "values", "pending", value)
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    with mock.patch.object(
+        run_context_lru, "estimate_cache_entry_size", blocking_estimator
+    ):
+        worker = Thread(target=track_entry)
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            lifecycle_generation = budget._owner_lifecycle_generations[
+                id(pending_owner)
+            ]
+            if mutation == "remove":
+                pending_owner._evict_run_cache_entry("values", "pending")
+                budget.remove(pending_owner, "values", "pending")
+            else:
+                budget.clear_context(pending_owner)
+        finally:
+            allow_estimator.set()
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert not worker.is_alive()
+    if worker_errors:
+        raise worker_errors[0]
+    _assert_seeded_due_stratum_unchanged(budget, peer_owner, state, peer_key)
+    assert not budget._entry_attempt_generations
+    assert budget._configuration_generation == configuration_generation
+    if mutation == "remove":
+        assert budget._owner_lifecycle_generations[id(pending_owner)] == (
+            lifecycle_generation
+        )
+    else:
+        assert id(pending_owner) not in budget._owner_lifecycle_generations
 
 
 def test_track_keeps_latest_same_key_replacement_accounting() -> None:
