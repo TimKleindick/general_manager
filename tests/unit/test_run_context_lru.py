@@ -926,6 +926,119 @@ def test_track_keeps_latest_same_key_replacement_accounting() -> None:
     assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
 
 
+def test_track_admits_distinct_entry_after_other_entry_is_tracked() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "a", "A")
+
+    estimator_started = Event()
+    allow_estimator_to_finish = Event()
+    worker_errors: list[BaseException] = []
+
+    def blocking_a_estimator(
+        key: Hashable,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        assert stop_after == 10_000
+        if key == "a":
+            assert value == "A"
+            estimator_started.set()
+            assert allow_estimator_to_finish.wait(timeout=1)
+        else:
+            assert key == "b"
+            assert value == "B"
+        return MIN_TRACKED_ENTRY_BYTES
+
+    def track_a() -> None:
+        try:
+            budget.track(owner, "values", "a", "A")
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        side_effect=blocking_a_estimator,
+    ):
+        worker = Thread(target=track_a)
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=1)
+            owner.store("values", "b", "B")
+            budget.track(owner, "values", "b", "B")
+            allow_estimator_to_finish.set()
+        finally:
+            allow_estimator_to_finish.set()
+            worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    if worker_errors:
+        raise worker_errors[0]
+    assert owner.entries == {("values", "a"): "A", ("values", "b"): "B"}
+    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES * 2
+
+
+def test_track_rejects_pre_clear_attempt_after_owner_lifecycle_restarts() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "key", "old")
+
+    estimator_started = Event()
+    allow_estimator_to_finish = Event()
+    worker_errors: list[BaseException] = []
+
+    def delayed_old_estimator(
+        key: Hashable,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        assert key == "key"
+        assert stop_after == 10_000
+        if value == "old":
+            estimator_started.set()
+            assert allow_estimator_to_finish.wait(timeout=1)
+            return MIN_TRACKED_ENTRY_BYTES * 2
+        assert value == "new"
+        return MIN_TRACKED_ENTRY_BYTES
+
+    def track_old_entry() -> None:
+        try:
+            budget.track(owner, "values", "key", "old")
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        side_effect=delayed_old_estimator,
+    ):
+        worker = Thread(target=track_old_entry)
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=1)
+            budget.clear_context(owner)
+            owner._evict_run_cache_entry("values", "key")
+            budget.register(owner, 10_000)
+            owner.store("values", "key", "new")
+            budget.track(owner, "values", "key", "new")
+            allow_estimator_to_finish.set()
+        finally:
+            allow_estimator_to_finish.set()
+            worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    if worker_errors:
+        raise worker_errors[0]
+    assert owner.entries[("values", "key")] == "new"
+    assert budget._entries[(id(owner), "values", "key")].size == MIN_TRACKED_ENTRY_BYTES
+    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+
+
 def test_track_does_not_admit_entry_evicted_while_estimation_is_blocked() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
