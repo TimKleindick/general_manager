@@ -5,9 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass
-from fractions import Fraction
 from itertools import islice
-import math
 import sys
 from threading import RLock
 from types import (
@@ -31,7 +29,10 @@ RUN_CONTEXT_CACHE_MAX_BYTES_SETTING = "RUN_CONTEXT_CACHE_MAX_BYTES"
 MIN_TRACKED_ENTRY_BYTES = 256
 RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD = 128
 RUN_CONTEXT_SIZE_SAMPLE_COUNT = 64
-RUN_CONTEXT_SIZE_SAFETY_MARGIN = Fraction(21, 20)
+RUN_CONTEXT_CALIBRATION_INTERVAL = 256
+RUN_CONTEXT_CALIBRATION_WINDOW = 8
+RUN_CONTEXT_CALIBRATION_CANDIDATE_LIMIT = 2_048
+RUN_CONTEXT_FIXED_POINT_SCALE = 1 << 20
 RUN_CONTEXT_TRACK_MAX_REESTIMATES = 3
 _INVALID_MAX_BYTES_MESSAGE = (
     'GENERAL_MANAGER["RUN_CONTEXT_CACHE_MAX_BYTES"] must be None or a '
@@ -70,6 +71,18 @@ _TYPE_MRO_DESCRIPTOR = cast(GetSetDescriptorType, type.__dict__["__mro__"])
 _TYPE_DICT_DESCRIPTOR = cast(GetSetDescriptorType, type.__dict__["__dict__"])
 
 RunCacheNamespace = Literal["values", "dependency_hits"]
+StorageFamily = Literal[
+    "dict",
+    "list",
+    "tuple",
+    "set",
+    "frozenset",
+    "instance_dict",
+    "slots",
+    "shallow_leaf",
+    "opaque",
+]
+StratumKey = tuple[RunCacheNamespace, StorageFamily, int]
 TrackedKey = tuple[int, RunCacheNamespace, Hashable]
 
 logger = get_logger("cache.run_context_lru")
@@ -107,10 +120,25 @@ class _StaticStoragePlan:
 
 
 @dataclass(frozen=True)
+class _AdmissionSignal:
+    stratum: StratumKey | None
+    shallow_bytes: int
+    exact_bytes: int | None
+
+
+@dataclass(frozen=True)
 class _WeightedCandidate:
     value: object
-    weight: Fraction
+    weight: int
     ancestor_ids: frozenset[int] = frozenset()
+
+
+_storage_plan_cache_lock = RLock()
+_storage_plan_cache: dict[
+    int,
+    tuple[ReferenceType[type[object]], _StaticStoragePlan | None],
+] = {}
+_calibration_visit_observer: Callable[[object], None] | None = None
 
 
 class ProcessRunContextCacheBudget:
@@ -583,6 +611,162 @@ def _static_storage_plan(
     return _StaticStoragePlan(tuple(instance_dict_descriptors), tuple(slot_descriptors))
 
 
+def _storage_plan_finalizer(
+    candidate_type_id: int,
+) -> Callable[[ReferenceType[type[object]]], None]:
+    def remove_finalized_plan(candidate_reference: ReferenceType[type[object]]) -> None:
+        with _storage_plan_cache_lock:
+            cached = _storage_plan_cache.get(candidate_type_id)
+            if cached is not None and cached[0] is candidate_reference:
+                _storage_plan_cache.pop(candidate_type_id, None)
+
+    return remove_finalized_plan
+
+
+def _cached_static_storage_plan(
+    candidate_type: type[object],
+) -> _StaticStoragePlan | None:
+    candidate_type_id = id(candidate_type)
+    with _storage_plan_cache_lock:
+        cached = _storage_plan_cache.get(candidate_type_id)
+        if cached is not None and cached[0]() is candidate_type:
+            return cached[1]
+    plan = _static_storage_plan(candidate_type)
+    try:
+        candidate_reference = ref(
+            candidate_type,
+            _storage_plan_finalizer(candidate_type_id),
+        )
+    except TypeError:
+        return plan
+    with _storage_plan_cache_lock:
+        cached = _storage_plan_cache.get(candidate_type_id)
+        if cached is not None and cached[0]() is candidate_type:
+            return cached[1]
+        _storage_plan_cache[candidate_type_id] = (candidate_reference, plan)
+    return plan
+
+
+def _length_bucket(length: int) -> int:
+    return 1 if length <= 1 else 1 << (length - 1).bit_length()
+
+
+def _safe_shallow_size(value: object) -> int:
+    value_type = type(value)
+    try:
+        if _is_exact_type(value_type, _SIZED_BUILTIN_TYPES):
+            return sys.getsizeof(value)
+        return object.__sizeof__(value)
+    except Exception:  # noqa: BLE001 - admission must survive hostile objects.
+        return MIN_TRACKED_ENTRY_BYTES
+
+
+def _is_shallow_leaf_type(candidate_type: type[object]) -> bool:
+    candidate_mro = _get_static_type_mro(candidate_type)
+    if candidate_mro is None:
+        return False
+    return any(
+        base_type is leaf_type
+        for base_type in candidate_mro
+        for leaf_type in _SHALLOW_LEAF_TYPES
+    )
+
+
+def _admission_signal(
+    namespace: RunCacheNamespace,
+    key: object,
+    value: object,
+) -> _AdmissionSignal:
+    """Return a bounded, hook-free signal used to calibrate cache entries."""
+    key_type = type(key)
+    value_type = type(value)
+    if _is_exact_type(key_type, _ATOMIC_LEAF_TYPES) and _is_exact_type(
+        value_type, _ATOMIC_LEAF_TYPES
+    ):
+        exact_bytes = _safe_shallow_size(value)
+        if key is not value:
+            exact_bytes += _safe_shallow_size(key)
+        return _AdmissionSignal(
+            stratum=None,
+            shallow_bytes=exact_bytes,
+            exact_bytes=max(MIN_TRACKED_ENTRY_BYTES, exact_bytes),
+        )
+
+    shallow_bytes = _safe_shallow_size(value)
+    if key is not value:
+        shallow_bytes += _safe_shallow_size(key)
+    shallow_bytes = max(1, shallow_bytes)
+
+    builtin_families: tuple[tuple[type[object], StorageFamily], ...] = (
+        (dict, "dict"),
+        (list, "list"),
+        (tuple, "tuple"),
+        (set, "set"),
+        (frozenset, "frozenset"),
+    )
+    for builtin_type, builtin_family in builtin_families:
+        if value_type is builtin_type:
+            builtin_value = cast(
+                dict[object, object]
+                | list[object]
+                | tuple[object, ...]
+                | set[object]
+                | frozenset[object],
+                value,
+            )
+            return _AdmissionSignal(
+                stratum=(namespace, builtin_family, _length_bucket(len(builtin_value))),
+                shallow_bytes=shallow_bytes,
+                exact_bytes=None,
+            )
+
+    storage_plan = _cached_static_storage_plan(value_type)
+    if storage_plan is None:
+        return _AdmissionSignal((namespace, "opaque", 1), shallow_bytes, None)
+
+    for instance_dict_descriptor in storage_plan.instance_dict_descriptors:
+        try:
+            instance_dict = GetSetDescriptorType.__get__(
+                instance_dict_descriptor,
+                value,
+                value_type,
+            )
+        except (AttributeError, TypeError):
+            continue
+        if type(instance_dict) is dict:
+            return _AdmissionSignal(
+                stratum=(
+                    namespace,
+                    "instance_dict",
+                    _length_bucket(len(instance_dict)),
+                ),
+                shallow_bytes=shallow_bytes + sys.getsizeof(instance_dict),
+                exact_bytes=None,
+            )
+
+    if storage_plan.slot_descriptors:
+        return _AdmissionSignal(
+            stratum=(
+                namespace,
+                "slots",
+                _length_bucket(len(storage_plan.slot_descriptors)),
+            ),
+            shallow_bytes=shallow_bytes,
+            exact_bytes=None,
+        )
+    if _is_shallow_leaf_type(value_type):
+        return _AdmissionSignal(
+            stratum=(namespace, "shallow_leaf", 1),
+            shallow_bytes=shallow_bytes,
+            exact_bytes=None,
+        )
+    return _AdmissionSignal(
+        stratum=(namespace, "opaque", 1),
+        shallow_bytes=shallow_bytes,
+        exact_bytes=None,
+    )
+
+
 def _stratified_indexes(length: int, sample_count: int) -> tuple[int, ...]:
     if sample_count >= length:
         return tuple(range(length))
@@ -597,6 +781,13 @@ def _is_exact_type(
     candidate_type: type[object], types: tuple[type[object], ...]
 ) -> bool:
     return any(candidate_type is expected_type for expected_type in types)
+
+
+def _mul_weight(weight: int, numerator: int, denominator: int) -> int:
+    if denominator <= 0:
+        return weight
+    projected = (weight * numerator + denominator - 1) // denominator
+    return min(projected, sys.maxsize * RUN_CONTEXT_FIXED_POINT_SCALE)
 
 
 def _sample_container_children(
@@ -614,11 +805,10 @@ def _sample_container_children(
                 for item in sequence
             )
         sample_indexes = _stratified_indexes(length, RUN_CONTEXT_SIZE_SAMPLE_COUNT)
-        sample_weight = (
-            candidate.weight
-            * length
-            / len(sample_indexes)
-            * RUN_CONTEXT_SIZE_SAFETY_MARGIN
+        sample_weight = _mul_weight(
+            candidate.weight,
+            length * 21,
+            len(sample_indexes) * 20,
         )
         return tuple(
             _WeightedCandidate(sequence[index], sample_weight, child_ancestor_ids)
@@ -643,11 +833,10 @@ def _sample_container_children(
         for item_key, item_value in (*first_entries, *last_entries):
             if all(item_key is not existing_key for existing_key, _ in sample_entries):
                 sample_entries.append((item_key, item_value))
-        sample_weight = (
-            candidate.weight
-            * len(mapping)
-            / len(sample_entries)
-            * RUN_CONTEXT_SIZE_SAFETY_MARGIN
+        sample_weight = _mul_weight(
+            candidate.weight,
+            len(mapping) * 21,
+            len(sample_entries) * 20,
         )
         return tuple(
             _WeightedCandidate(item, sample_weight, child_ancestor_ids)
@@ -663,11 +852,10 @@ def _sample_container_children(
                 for item in container
             )
         sample_items = tuple(islice(container, RUN_CONTEXT_SIZE_SAMPLE_COUNT))
-        sample_weight = (
-            candidate.weight
-            * len(container)
-            / len(sample_items)
-            * RUN_CONTEXT_SIZE_SAFETY_MARGIN
+        sample_weight = _mul_weight(
+            candidate.weight,
+            len(container) * 21,
+            len(sample_items) * 20,
         )
         return tuple(
             _WeightedCandidate(item, sample_weight, child_ancestor_ids)
@@ -702,20 +890,42 @@ def estimate_cache_entry_size(
             return stop_after + 1
         return max(MIN_TRACKED_ENTRY_BYTES, measured_bytes)
 
+    saturation_limit = stop_after + 1 if stop_after is not None else sys.maxsize
     measured_bytes = 0
-    seen_weights: dict[int, Fraction] = {}
+    seen_weights: dict[int, int] = {}
     candidates = [
-        _WeightedCandidate(key, Fraction(1)),
-        _WeightedCandidate(value, Fraction(1)),
+        _WeightedCandidate(key, RUN_CONTEXT_FIXED_POINT_SCALE),
+        _WeightedCandidate(value, RUN_CONTEXT_FIXED_POINT_SCALE),
     ]
-    storage_plans: dict[int, _StaticStoragePlan | None] = {}
+    visited_candidates = 0
+    positive_shallow_sizes: list[int] = []
 
     while candidates:
+        if visited_candidates >= RUN_CONTEXT_CALIBRATION_CANDIDATE_LIMIT:
+            remaining_weight = min(
+                sum(candidate.weight for candidate in candidates),
+                sys.maxsize * RUN_CONTEXT_FIXED_POINT_SCALE,
+            )
+            if positive_shallow_sizes:
+                mean_shallow_size = (
+                    sum(positive_shallow_sizes) + len(positive_shallow_sizes) - 1
+                ) // len(positive_shallow_sizes)
+            else:
+                mean_shallow_size = MIN_TRACKED_ENTRY_BYTES
+            projected_bytes = (
+                mean_shallow_size * remaining_weight + RUN_CONTEXT_FIXED_POINT_SCALE - 1
+            ) // RUN_CONTEXT_FIXED_POINT_SCALE
+            measured_bytes = min(saturation_limit, measured_bytes + projected_bytes)
+            break
+
         candidate = candidates.pop()
+        visited_candidates += 1
+        if _calibration_visit_observer is not None:
+            _calibration_visit_observer(candidate.value)
         candidate_id = id(candidate.value)
         if candidate_id in candidate.ancestor_ids:
             continue
-        previous_weight = seen_weights.get(candidate_id, Fraction(0))
+        previous_weight = seen_weights.get(candidate_id, 0)
         incremental_weight = candidate.weight - previous_weight
         if incremental_weight <= 0:
             continue
@@ -730,10 +940,15 @@ def estimate_cache_entry_size(
                 shallow_size = object.__sizeof__(candidate_value)
         except Exception:  # noqa: BLE001 - conservative accounting must survive sizing errors.
             shallow_size = MIN_TRACKED_ENTRY_BYTES
-        measured_bytes += math.ceil(shallow_size * incremental_weight)
+        if shallow_size > 0:
+            positive_shallow_sizes.append(shallow_size)
+        incremental_bytes = (
+            shallow_size * incremental_weight + RUN_CONTEXT_FIXED_POINT_SCALE - 1
+        ) // RUN_CONTEXT_FIXED_POINT_SCALE
+        measured_bytes = min(saturation_limit, measured_bytes + incremental_bytes)
 
-        if stop_after is not None and measured_bytes > stop_after:
-            return stop_after + 1
+        if measured_bytes >= saturation_limit:
+            return saturation_limit
 
         if _is_exact_type(candidate_type, _ATOMIC_LEAF_TYPES):
             continue
@@ -749,10 +964,7 @@ def estimate_cache_entry_size(
                 )
             )
         else:
-            candidate_type_id = id(candidate_type)
-            if candidate_type_id not in storage_plans:
-                storage_plans[candidate_type_id] = _static_storage_plan(candidate_type)
-            storage_plan = storage_plans[candidate_type_id]
+            storage_plan = _cached_static_storage_plan(candidate_type)
             if storage_plan is None:
                 continue
             for instance_dict_descriptor in storage_plan.instance_dict_descriptors:
