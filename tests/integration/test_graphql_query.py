@@ -60,6 +60,39 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
 
         self.commercials.Factory.create_batch(10)
 
+    def _create_projects_for_relation_sorting(self):
+        alpha = self.commercials.create(
+            creator_id=self.user.id,
+            name="Alpha",
+            capex="1 USD",
+            opex="1 USD",
+        )
+        zulu = self.commercials.create(
+            creator_id=self.user.id,
+            name="Zulu",
+            capex="1 USD",
+            opex="1 USD",
+        )
+        beta = self.project.create(
+            creator_id=self.user.id,
+            name="Beta",
+            description=None,
+            commercials=zulu,
+        )
+        zed = self.project.create(
+            creator_id=self.user.id,
+            name="Zed",
+            description=None,
+            commercials=alpha,
+        )
+        able = self.project.create(
+            creator_id=self.user.id,
+            name="Able",
+            description=None,
+            commercials=alpha,
+        )
+        return alpha, zulu, (beta, zed, able)
+
     def test_query_commercials(self):
         """
         Tests that the GraphQL query for `commercialsList` returns all commercial items with correct fields and pagination metadata.
@@ -222,6 +255,157 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response)
         items = response.json()["data"]["projectList"]["items"]
         self.assertEqual([item["name"] for item in items], ["Able", "Zed", "Beta"])
+
+    def test_project_list_sorts_direct_manager_by_identifier(self):
+        alpha, zulu, _projects = self._create_projects_for_relation_sorting()
+        query = """
+        query {
+          projectList(sortBy: commercials) {
+            items { commercials { id } }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["projectList"]["items"]
+        commercial_ids = [int(item["commercials"]["id"]) for item in items]
+        self.assertEqual(
+            commercial_ids,
+            sorted([alpha.id, alpha.id, zulu.id]),
+        )
+
+    def test_project_list_sorts_by_related_scalar_then_root_field(self):
+        self._create_projects_for_relation_sorting()
+        query = """
+        query {
+          projectList(sortBy: [commercials__name, name]) {
+            items { name }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["projectList"]["items"]
+        self.assertEqual([item["name"] for item in items], ["Able", "Zed", "Beta"])
+
+    def test_project_list_reverses_every_compound_sort_key(self):
+        self._create_projects_for_relation_sorting()
+        query = """
+        query {
+          projectList(
+            sortBy: [commercials__name, name]
+            reverse: true
+          ) {
+            items { name }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["projectList"]["items"]
+        self.assertEqual([item["name"] for item in items], ["Beta", "Zed", "Able"])
+
+    def test_project_list_accepts_compound_sort_variable(self):
+        self._create_projects_for_relation_sorting()
+        query = """
+        query SortedProjects($sort: [ProjectSortByOptions!]) {
+          projectList(sortBy: $sort) {
+            items { name }
+          }
+        }
+        """
+
+        response = self.query(
+            query,
+            variables={"sort": ["commercials__name", "name"]},
+        )
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["projectList"]["items"]
+        self.assertEqual([item["name"] for item in items], ["Able", "Zed", "Beta"])
+
+    def test_null_empty_and_omitted_sort_inputs_preserve_the_same_rows(self):
+        _alpha, _zulu, projects = self._create_projects_for_relation_sorting()
+        query = """
+        query {
+          nullSort: projectList(sortBy: null) { items { id } }
+          emptySort: projectList(sortBy: []) { items { id } }
+          omittedSort: projectList { items { id } }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        data = response.json()["data"]
+        returned_ids = {
+            key: [item["id"] for item in data[key]["items"]]
+            for key in ("nullSort", "emptySort", "omittedSort")
+        }
+        self.assertEqual(returned_ids["nullSort"], returned_ids["omittedSort"])
+        self.assertEqual(returned_ids["emptySort"], returned_ids["omittedSort"])
+        self.assertCountEqual(
+            returned_ids["omittedSort"],
+            [project.id for project in projects],
+        )
+
+    def test_project_sort_enum_exposes_only_direct_relation_scalars(self):
+        query = """
+        query {
+          __type(name: "ProjectSortByOptions") {
+            enumValues { name }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        enum_values = {
+            value["name"] for value in response.json()["data"]["__type"]["enumValues"]
+        }
+        self.assertIn("commercials", enum_values)
+        self.assertIn("commercials__name", enum_values)
+        self.assertFalse(
+            any(
+                value.startswith("commercials__") and value.count("__") > 1
+                for value in enum_values
+            )
+        )
+        self.assertFalse(any(value.endswith("_list") for value in enum_values))
+
+    def test_relation_list_uses_related_manager_compound_sort_enum(self):
+        query = """
+        query {
+          __type(name: "CommercialsType") {
+            fields {
+              name
+              args {
+                name
+                type {
+                  kind
+                  ofType { name }
+                }
+              }
+            }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        fields = response.json()["data"]["__type"]["fields"]
+        project_list = next(field for field in fields if field["name"] == "projectList")
+        sort_by = next(arg for arg in project_list["args"] if arg["name"] == "sortBy")
+        self.assertEqual(sort_by["type"]["kind"], "LIST")
+        self.assertEqual(sort_by["type"]["ofType"]["name"], "ProjectSortByOptions")
 
     def test_empty_grouped_query_with_pagination_returns_empty_page(self):
         """Grouped pagination returns an empty GraphQL page when no rows match."""

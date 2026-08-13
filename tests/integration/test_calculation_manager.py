@@ -604,6 +604,85 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(tax_calculation_bucket_sorted[2].employee.name, "Tina")
         self.assertEqual(tax_calculation_bucket_sorted[3].employee.name, "Bob")
 
+    def test_graphql_compound_relation_sorting(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+        self.Employee.create(
+            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        self.Employee.create(
+            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id
+        )
+        self.Employee.create(
+            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id
+        )
+        self.Employee.create(
+            name="Tina", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        query = """
+        query {
+          taxCalculationList(sortBy: [calculated_tax, employee__name]) {
+            items {
+              calculatedTax { value }
+              employee { name }
+            }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["taxCalculationList"]["items"]
+        self.assertEqual(
+            [
+                (item["calculatedTax"]["value"], item["employee"]["name"])
+                for item in items
+            ],
+            [(400, "Tim"), (600, "Alice"), (600, "Tina"), (800, "Bob")],
+        )
+
+    def test_graphql_compound_relation_sorting_reverse(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+        self.Employee.create(
+            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        self.Employee.create(
+            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id
+        )
+        self.Employee.create(
+            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id
+        )
+        self.Employee.create(
+            name="Tina", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        query = """
+        query {
+          taxCalculationList(
+            sortBy: [calculated_tax, employee__name]
+            reverse: true
+          ) {
+            items {
+              calculatedTax { value }
+              employee { name }
+            }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["taxCalculationList"]["items"]
+        self.assertEqual(
+            [
+                (item["calculatedTax"]["value"], item["employee"]["name"])
+                for item in items
+            ],
+            [(800, "Bob"), (600, "Tina"), (600, "Alice"), (400, "Tim")],
+        )
+
     def test_filter_by_calculation_property(self):
         """
         Verifies that TaxCalculation entries can be filtered by employee name prefix and by calculated_tax, and that combined filters produce the expected subsets and ordering.
