@@ -77,8 +77,9 @@ same Python fallback for slicing. `currentPage` is reported as `page || 1`.
 slicing default, so it remains `null` when only `page` is supplied and remains
 `0` for `pageSize: 0`. `totalPages` is computed from a truthy original
 `pageSize`; when `pageSize` is omitted or falsey it is reported as `1`, including
-empty result sets. Negative `page` or `pageSize` values are rejected before
-slicing and surface as GraphQL `BAD_USER_INPUT` errors.
+empty result sets; with a positive explicit `pageSize`, an empty result has
+`totalPages: 0`. Negative `page` or `pageSize` values are rejected before slicing
+and surface as GraphQL `BAD_USER_INPUT` errors.
 
 ## Grouping
 
@@ -102,6 +103,11 @@ properties. Capability warmup is triggered for ungrouped pages only when
 capabilities. Invalid group keys propagate the bucket's validation error through
 GraphQL execution.
 
+If filtering produces no groups, a paginated grouped query returns an empty
+`items` list with the normal page metadata instead of raising the grouped-bucket
+empty-slice error. Negative `page` or `pageSize` values are still rejected before
+this empty-result shortcut.
+
 ## Sorting
 
 Use the generated `sortBy` enum with an ordered list of keys. GraphQL list
@@ -117,6 +123,9 @@ fields; invalid names trigger `ValidationError` with descriptive messages.
 Invalid GraphQL enum values and null list elements are rejected by Graphene
 before the resolver runs. When `sortBy` is omitted, `null`, or an empty list,
 sorting is skipped even if `reverse` is true.
+
+With `groupBy`, sorting runs on grouped manager objects after grouping; without
+`groupBy`, it runs on the individual records.
 
 Typed variables use a list declaration such as
 `$sort: [ProjectSortByOptions!]`; add an outer `!` only when the variable itself
