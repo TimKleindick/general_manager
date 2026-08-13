@@ -113,7 +113,9 @@ class CalculationRunContext:
         self._run_cache_touch_count = 0
         self._run_cache_touch_thread_id: int | None = None
         max_bytes = resolve_run_context_cache_max_bytes()
+        self._run_cache_mode_generation = -1
         self._run_cache_budget_enabled = max_bytes is not None
+        self._run_cache_recency_enabled = False
         run_context_cache_budget.register(
             self,
             max_bytes,
@@ -129,11 +131,20 @@ class CalculationRunContext:
             if key not in self._dependency_cache_pending_publications:
                 yield "dependency_hits", key, hit
 
-    def _set_run_cache_budget_enabled(self, enabled: bool) -> None:
-        """Refresh the owner hint after a coordinator transition."""
+    def _set_run_cache_modes(
+        self,
+        budget_enabled: bool,
+        recency_enabled: bool,
+        generation: int,
+    ) -> None:
+        """Refresh owner hints after a generated coordinator transition."""
         with self._run_cache_touch_lock:
-            self._run_cache_budget_enabled = enabled
-            if not enabled:
+            if generation < self._run_cache_mode_generation:
+                return
+            self._run_cache_mode_generation = generation
+            self._run_cache_budget_enabled = budget_enabled
+            self._run_cache_recency_enabled = recency_enabled
+            if not budget_enabled or not recency_enabled:
                 self._pending_run_cache_touches.clear()
                 self._last_pending_run_cache_touch = None
                 self._run_cache_touch_count = 0
@@ -296,6 +307,7 @@ class CalculationRunContext:
                 self._run_cache_touch_count = 0
                 self._run_cache_touch_thread_id = get_ident()
                 self._run_cache_budget_enabled = max_bytes is not None
+                self._run_cache_recency_enabled = False
             run_context_cache_budget.register(
                 self,
                 max_bytes,
@@ -373,7 +385,8 @@ class CalculationRunContext:
             value = loader()
             self._store_run_value(scoped_key, value)
             return value
-        self._touch_run_cache_entry("values", scoped_key)
+        if self._run_cache_recency_enabled:
+            self._touch_run_cache_entry("values", scoped_key)
         return cast(T, value)
 
     def get(self, key: Hashable, default: object = None) -> object:
@@ -383,7 +396,8 @@ class CalculationRunContext:
             value = self._values[scoped_key]
         except KeyError:
             return default
-        self._touch_run_cache_entry("values", scoped_key)
+        if self._run_cache_recency_enabled:
+            self._touch_run_cache_entry("values", scoped_key)
         return value
 
     def set(self, key: Hashable, value: object) -> None:
@@ -414,7 +428,10 @@ class CalculationRunContext:
             hit = self._dependency_cache_hits[key]
         except KeyError:
             return default
-        if key not in self._dependency_cache_pending_publications:
+        if (
+            self._run_cache_recency_enabled
+            and key not in self._dependency_cache_pending_publications
+        ):
             self._touch_run_cache_entry("dependency_hits", key)
         return hit
 
@@ -838,7 +855,8 @@ class CalculationRunContext:
         scoped_key = self._scoped_key(key)
         if scoped_key not in self._values:
             return False
-        self._touch_run_cache_entry("values", scoped_key)
+        if self._run_cache_recency_enabled:
+            self._touch_run_cache_entry("values", scoped_key)
         return True
 
     def __contains__(self, key: Hashable) -> bool:

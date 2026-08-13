@@ -35,6 +35,15 @@ class CacheOwner:
     def _set_run_cache_budget_enabled(self, enabled: bool) -> None:
         self.budget_enabled = enabled
 
+    def _set_run_cache_modes(
+        self,
+        budget_enabled: bool,
+        recency_enabled: bool,
+        generation: int,
+    ) -> None:
+        del recency_enabled, generation
+        self.budget_enabled = budget_enabled
+
     def store(
         self,
         namespace: RunCacheNamespace,
@@ -157,6 +166,44 @@ class RaisingLock:
         traceback: object,
     ) -> None:
         return None
+
+
+class ModeRecordingCacheOwner(CacheOwner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mode_updates: list[tuple[bool, bool, int]] = []
+        self.mode_generation = -1
+
+    def _set_run_cache_modes(
+        self,
+        budget_enabled: bool,
+        recency_enabled: bool,
+        generation: int,
+    ) -> None:
+        if generation < self.mode_generation:
+            return
+        self.mode_generation = generation
+        self.budget_enabled = budget_enabled
+        self.mode_updates.append((budget_enabled, recency_enabled, generation))
+
+
+def _track_exact_bytes(
+    budget: ProcessRunContextCacheBudget,
+    owner: CacheOwner,
+    key: str,
+    exact_bytes: int,
+) -> None:
+    owner.store("values", key, key)
+    with mock.patch.object(
+        run_context_lru,
+        "_admission_signal",
+        return_value=run_context_lru._AdmissionSignal(
+            stratum=None,
+            shallow_bytes=0,
+            exact_bytes=exact_bytes,
+        ),
+    ):
+        budget.track(owner, "values", key, key)
 
 
 class CountingHashKey:
@@ -2940,6 +2987,152 @@ def test_budget_notifies_live_owners_when_enabled_mode_changes() -> None:
 
     assert not first.budget_enabled
     assert not second.budget_enabled
+
+
+def test_recency_enables_at_80_percent_and_disables_below_70_percent() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = ModeRecordingCacheOwner()
+    budget.register(owner, 10_000)
+
+    _track_exact_bytes(budget, owner, "below-enable", 7_999)
+    assert budget.is_recency_enabled is False
+    _track_exact_bytes(budget, owner, "at-enable", 1)
+    assert budget.is_recency_enabled is True
+
+    budget.remove(owner, "values", "at-enable")
+    assert budget.is_recency_enabled is True
+    budget.remove(owner, "values", "below-enable")
+    assert budget.is_recency_enabled is False
+    assert [update[:2] for update in owner.mode_updates] == [
+        (True, False),
+        (True, True),
+        (True, False),
+    ]
+
+
+def test_recency_mode_handles_disabled_zero_and_cap_transitions() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = ModeRecordingCacheOwner()
+
+    budget.register(owner, None)
+    assert owner.mode_updates[-1][:2] == (False, False)
+    budget.register(owner, 0)
+    assert owner.mode_updates[-1][:2] == (True, False)
+    budget.register(owner, 10_000)
+    _track_exact_bytes(budget, owner, "entry", 4_200)
+
+    budget.register(owner, 5_250)
+    assert budget.is_recency_enabled is True
+    budget.register(owner, 6_000)
+    assert budget.is_recency_enabled is True
+    budget.register(owner, 6_001)
+    assert budget.is_recency_enabled is False
+
+
+def test_recency_mode_does_not_publish_duplicate_mode_tuple() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = ModeRecordingCacheOwner()
+    budget.register(owner, 10_000)
+    first_update = owner.mode_updates[-1]
+
+    _track_exact_bytes(budget, owner, "entry", 1_000)
+    budget.register(owner, 10_001)
+
+    assert owner.mode_updates == [first_update]
+
+
+def test_recency_mode_disables_after_weak_owner_removal_lowers_usage() -> None:
+    import gc
+
+    budget = ProcessRunContextCacheBudget()
+    survivor = ModeRecordingCacheOwner()
+    removed = ModeRecordingCacheOwner()
+    budget.register(survivor, 10_000)
+    budget.register(removed, 10_000)
+    _track_exact_bytes(budget, removed, "large", 8_000)
+    assert budget.is_recency_enabled is True
+
+    removed_reference = ref(removed)
+    del removed
+    gc.collect()
+
+    assert removed_reference() is None
+    assert budget.is_recency_enabled is False
+    assert survivor.mode_updates[-1][:2] == (True, False)
+
+
+def test_recency_reentrant_callback_keeps_newest_generation() -> None:
+    budget = ProcessRunContextCacheBudget()
+
+    class ReentrantOwner(ModeRecordingCacheOwner):
+        def _set_run_cache_modes(
+            self,
+            budget_enabled: bool,
+            recency_enabled: bool,
+            generation: int,
+        ) -> None:
+            if recency_enabled:
+                budget.register(self, 20_000)
+            super()._set_run_cache_modes(
+                budget_enabled,
+                recency_enabled,
+                generation,
+            )
+
+    owner = ReentrantOwner()
+    budget.register(owner, 10_000)
+    _track_exact_bytes(budget, owner, "entry", 8_000)
+
+    assert budget.is_recency_enabled is False
+    assert owner.mode_updates[-1][0:2] == (True, False)
+    assert owner.mode_updates[-1][2] > owner.mode_updates[-2][2]
+
+
+def test_recency_callback_is_deferred_past_reentrant_outer_lock() -> None:
+    budget = ProcessRunContextCacheBudget()
+
+    class TrackingLock:
+        def __init__(self, wrapped: object) -> None:
+            self.wrapped = wrapped
+            self.depth = 0
+
+        def __enter__(self) -> None:
+            self.wrapped.__enter__()  # type: ignore[attr-defined]
+            self.depth += 1
+
+        def __exit__(self, *args: object) -> None:
+            self.depth -= 1
+            self.wrapped.__exit__(*args)  # type: ignore[attr-defined]
+
+        def _is_owned(self) -> bool:
+            return self.depth > 0
+
+    tracking_lock = TrackingLock(budget._lock)
+    budget._lock = tracking_lock  # type: ignore[assignment]
+
+    class LockCheckingOwner(LimitRaisingCacheOwner):
+        def _set_run_cache_modes(
+            self,
+            budget_enabled: bool,
+            recency_enabled: bool,
+            generation: int,
+        ) -> None:
+            assert tracking_lock.depth == 0
+            super()._set_run_cache_modes(
+                budget_enabled,
+                recency_enabled,
+                generation,
+            )
+
+    owner = LockCheckingOwner(budget, 2_000)
+    budget.register(owner, 640)
+    _track_exact_bytes(budget, owner, "first", 256)
+    _track_exact_bytes(budget, owner, "second", 256)
+    assert budget.is_recency_enabled is True
+
+    _track_exact_bytes(budget, owner, "third", 256)
+
+    assert budget.is_recency_enabled is False
 
 
 def test_budget_refreshes_mru_after_eviction() -> None:
