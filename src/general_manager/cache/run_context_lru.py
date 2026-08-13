@@ -656,6 +656,24 @@ def estimate_cache_entry_size(
     stop_after: int | None,
 ) -> int:
     """Estimate owned bytes for one cache entry without unbounded traversal."""
+    if _is_exact_type(type(key), _ATOMIC_LEAF_TYPES) and _is_exact_type(
+        type(value), _ATOMIC_LEAF_TYPES
+    ):
+        try:
+            measured_bytes = sys.getsizeof(value)
+        except Exception:  # noqa: BLE001 - preserve conservative sizing fallback.
+            measured_bytes = MIN_TRACKED_ENTRY_BYTES
+        if stop_after is not None and measured_bytes > stop_after:
+            return stop_after + 1
+        if key is not value:
+            try:
+                measured_bytes += sys.getsizeof(key)
+            except Exception:  # noqa: BLE001 - preserve conservative sizing fallback.
+                measured_bytes += MIN_TRACKED_ENTRY_BYTES
+        if stop_after is not None and measured_bytes > stop_after:
+            return stop_after + 1
+        return max(MIN_TRACKED_ENTRY_BYTES, measured_bytes)
+
     measured_bytes = 0
     seen_weights: dict[int, float] = {}
     candidates = [_WeightedCandidate(key, 1.0), _WeightedCandidate(value, 1.0)]
