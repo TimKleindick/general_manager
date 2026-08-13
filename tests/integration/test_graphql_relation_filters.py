@@ -10,6 +10,7 @@ from django.utils.crypto import get_random_string
 
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.api.graphql import GraphQL
+from general_manager.api.property import graph_ql_property
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
@@ -30,6 +31,10 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
 
             class Interface(DatabaseInterface):
                 title = models.CharField(max_length=100)
+
+            @graph_ql_property(sortable=True)
+            def title_length(self) -> int:
+                return len(self.title)
 
         class ChangeRequestApproval(GeneralManager):
             approved_by: str
@@ -128,6 +133,95 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response)
         payload = response.json()
         return [item["title"] for item in payload["data"]["changeRequestList"]["items"]]
+
+    def _create_reverse_one_to_one_sort_rows(self) -> None:
+        approval_values = (
+            (self.primary, "Middle"),
+            (self.secondary, "Top"),
+        )
+        for change_request, approved_by in approval_values:
+            self.ChangeRequestApproval.create(
+                creator_id=None,
+                approved_by=approved_by,
+                change_request=change_request,
+                ignore_permission=True,
+            )
+
+        for title, approved_by in (("Able", "Zulu"), ("Zedd", "Alpha")):
+            change_request = self.ChangeRequest.create(
+                creator_id=None,
+                title=title,
+                ignore_permission=True,
+            )
+            self.ChangeRequestApproval.create(
+                creator_id=None,
+                approved_by=approved_by,
+                change_request=change_request,
+                ignore_permission=True,
+            )
+
+    def test_python_property_sort_resolves_reverse_one_to_one_relation(self):
+        self._create_reverse_one_to_one_sort_rows()
+        query = """
+        query {
+          ascending: changeRequestList(
+            sortBy: [title_length, change_request_approval__approved_by]
+          ) {
+            items { title }
+          }
+          descending: changeRequestList(
+            sortBy: [title_length, change_request_approval__approved_by]
+            reverse: true
+          ) {
+            items { title }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]
+        self.assertEqual(
+            [item["title"] for item in payload["ascending"]["items"]],
+            ["Zedd", "Able", "Primary", "Secondary"],
+        )
+        self.assertEqual(
+            [item["title"] for item in payload["descending"]["items"]],
+            ["Secondary", "Primary", "Able", "Zedd"],
+        )
+
+    def test_python_property_relation_sort_preloads_reverse_one_to_one(self):
+        self._create_reverse_one_to_one_sort_rows()
+
+        with self.assertNumQueries(2):
+            sorted_bucket = self.ChangeRequest.all().sort(
+                ("title_length", "change_request_approval__approved_by")
+            )
+            titles = [change_request.title for change_request in sorted_bucket]
+
+        self.assertEqual(titles, ["Zedd", "Able", "Primary", "Secondary"])
+
+    def test_relation_sort_resolves_reverse_one_to_one_query_alias(self):
+        self._create_reverse_one_to_one_sort_rows()
+        query = """
+        query {
+          changeRequestList(
+            sortBy: [change_request_approval__approved_by, title]
+          ) {
+            items { title }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        titles = [
+            item["title"]
+            for item in response.json()["data"]["changeRequestList"]["items"]
+        ]
+        self.assertEqual(titles, ["Zedd", "Primary", "Secondary", "Able"])
 
     def test_multiword_root_query_fields_use_camel_case_names(self):
         query = """

@@ -15,13 +15,18 @@ options exist. Python-side helpers use the names `sort_by`, `group_by`, and
 queries and generated relation-list fields always include nullable `reverse`,
 `page`, `pageSize`, and `groupBy`. They include nullable `filter` and `exclude`
 only when a filter input type can be generated for the manager, and nullable
-`sortBy` only when the manager has sortable scalar fields or sortable GraphQL
-properties. Top-level list queries also include nullable `includeInactive` when
-the manager uses soft delete; relation-list fields do not add
-`includeInactive`. Omitted `reverse` and `includeInactive` values default to
-`false`; omitted filter, exclude, sort, group, and pagination values default to
-`null` on the Python side. Filters support Django lookups (`name__icontains`,
-`total_capex__gte`, etc.) and automatic casting of measurements and dates.
+`sortBy` only when the manager has sortable root scalar fields, root
+`@graph_ql_property` values declared with `sortable=True`, or an eligible direct
+manager relation. Direct manager relations add the relation itself, which sorts
+by identifier, and one-hop related scalar interface fields such as
+`commercials__name`. Collection relations, multi-hop paths, and computed
+GraphQL properties on the related manager are not exposed as sort options.
+Top-level list queries also include nullable `includeInactive` when the manager
+uses soft delete; relation-list fields do not add `includeInactive`. Omitted
+`reverse` and `includeInactive` values default to `false`; omitted filter,
+exclude, sort, group, and pagination values default to `null` on the Python
+side. Filters support Django lookups (`name__icontains`, `total_capex__gte`,
+etc.) and automatic casting of measurements and dates.
 `filter` and `exclude` may be GraphQL input objects or JSON strings that decode
 to objects; malformed JSON, JSON arrays, JSON scalars, and JSON `null` are
 treated as empty filters. Bucket chaining happens server-side, so complex

@@ -5,6 +5,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.db.models import CharField, DateField, ForeignKey, CASCADE
 from django.utils.crypto import get_random_string
+from general_manager.api.property import graph_ql_property
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface
 from general_manager.measurement.measurement_field import MeasurementField
@@ -40,6 +41,10 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
                     "general_manager.Commercials",
                     on_delete=CASCADE,
                 )
+
+            @graph_ql_property(sortable=True)
+            def name_length(self) -> int:
+                return len(self.name)
 
         cls.general_manager_classes = [Commercials, Project]
         cls.project = Project
@@ -256,6 +261,35 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         items = response.json()["data"]["projectList"]["items"]
         self.assertEqual([item["name"] for item in items], ["Able", "Zed", "Beta"])
 
+    def test_grouped_compound_relation_sort_applies_pagination_after_sorting(self):
+        self._create_projects_for_relation_sorting()
+        query = """
+        query {
+          projectList(
+            groupBy: ["name"]
+            sortBy: [commercials__name, name]
+            page: 2
+            pageSize: 2
+          ) {
+            items { name }
+            pageInfo {
+              totalCount
+              currentPage
+              pageSize
+            }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["projectList"]
+        self.assertEqual([item["name"] for item in payload["items"]], ["Beta"])
+        self.assertEqual(payload["pageInfo"]["totalCount"], 3)
+        self.assertEqual(payload["pageInfo"]["currentPage"], 2)
+        self.assertEqual(payload["pageInfo"]["pageSize"], 2)
+
     def test_project_list_sorts_direct_manager_by_identifier(self):
         alpha, zulu, _projects = self._create_projects_for_relation_sorting()
         query = """
@@ -310,6 +344,57 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response)
         items = response.json()["data"]["projectList"]["items"]
         self.assertEqual([item["name"] for item in items], ["Beta", "Zed", "Able"])
+
+    def test_project_list_sorts_python_property_then_related_scalar(self):
+        self._create_projects_for_relation_sorting()
+        query = """
+        query {
+          projectList(sortBy: [name_length, commercials__name]) {
+            items { name }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["projectList"]["items"]
+        self.assertEqual([item["name"] for item in items], ["Zed", "Able", "Beta"])
+
+    def test_project_list_reverses_python_property_and_related_scalar(self):
+        self._create_projects_for_relation_sorting()
+        query = """
+        query {
+          projectList(
+            sortBy: [name_length, commercials__name]
+            reverse: true
+          ) {
+            items { name }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["projectList"]["items"]
+        self.assertEqual([item["name"] for item in items], ["Beta", "Able", "Zed"])
+
+    def test_project_list_python_property_fallback_resolves_manager_identifier(self):
+        self._create_projects_for_relation_sorting()
+        query = """
+        query {
+          projectList(sortBy: [name_length, commercials]) {
+            items { name }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["projectList"]["items"]
+        self.assertEqual([item["name"] for item in items], ["Zed", "Beta", "Able"])
 
     def test_project_list_accepts_compound_sort_variable(self):
         self._create_projects_for_relation_sorting()
@@ -497,6 +582,40 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
                 len(item["projectList"]["items"]),
                 item["projectList"]["pageInfo"]["totalCount"],
             )
+
+    def test_generated_relation_list_executes_compound_sort(self):
+        parent = self.commercials.create(
+            creator_id=self.user.id,
+            name="Nested Parent",
+            capex="1 USD",
+            opex="1 USD",
+        )
+        for name in ("Zed", "Able", "Bob"):
+            self.project.create(
+                creator_id=self.user.id,
+                name=name,
+                description=None,
+                commercials=parent,
+            )
+        query = """
+        query {
+          commercialsList(filter: {name: "Nested Parent"}) {
+            items {
+              projectList(sortBy: [name_length, commercials__name, name]) {
+                items { name }
+              }
+            }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        parents = response.json()["data"]["commercialsList"]["items"]
+        self.assertEqual(len(parents), 1)
+        items = parents[0]["projectList"]["items"]
+        self.assertEqual([item["name"] for item in items], ["Bob", "Zed", "Able"])
 
 
 class TestGraphQLIncludeInactive(GeneralManagerTransactionTestCase):

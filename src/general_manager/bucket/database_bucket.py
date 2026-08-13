@@ -3,9 +3,10 @@
 from __future__ import annotations
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from datetime import date, datetime
+from operator import attrgetter
 from typing import TYPE_CHECKING, Generator, TypeVar, cast
 
-from django.core.exceptions import EmptyResultSet, FieldError
+from django.core.exceptions import EmptyResultSet, FieldDoesNotExist, FieldError
 from django.db import models
 from django.db.models.sql.query import Query
 
@@ -1449,6 +1450,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if isinstance(key, str):
             key = (key,)
         properties = self._manager_class.Interface.get_graph_ql_properties()
+        attribute_types = self._manager_class.Interface.get_attribute_types()
         annotations: dict[str, QueryAnnotation] = {}
         python_keys: list[str] = []
         qs = self._data
@@ -1474,6 +1476,35 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             qs = qs.annotate(**annotations)
 
         if python_keys:
+            model_getters: dict[str, Callable[[object], object]] = {}
+            manager_getters: dict[str, Callable[[object], object]] = {}
+            related_roots: list[str] = []
+            for nested_key in (k for k in key if k not in properties):
+                normalized_key = nested_key.replace(".", "__")
+                attribute_root = normalized_key.split("__", maxsplit=1)[0]
+                field_info = attribute_types.get(attribute_root)
+                if field_info is None or field_info.get("relation_kind") != "direct":
+                    model_getters[nested_key] = attrgetter(
+                        nested_key.replace("__", ".")
+                    )
+                    continue
+
+                manager_getters[nested_key] = attrgetter(nested_key.replace("__", "."))
+                filter_lookup = field_info.get("filter_lookup")
+                relation_root = (
+                    filter_lookup if isinstance(filter_lookup, str) else attribute_root
+                )
+                try:
+                    relation_field = qs.model._meta.get_field(relation_root)
+                except FieldDoesNotExist:
+                    continue
+                if relation_field.is_relation and (
+                    relation_field.one_to_one
+                    or (relation_field.many_to_one and not relation_field.auto_created)
+                ):
+                    related_roots.append(relation_root)
+            if related_roots:
+                qs = qs.select_related(*dict.fromkeys(related_roots))
             objs = list(qs)
 
             def key_func(obj: models.Model) -> tuple[object, ...]:
@@ -1485,8 +1516,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                             values.append(getattr(inst, k))
                         else:
                             values.append(getattr(obj, k))
+                    elif k in manager_getters:
+                        values.append(manager_getters[k](inst))
                     else:
-                        values.append(getattr(obj, k))
+                        values.append(model_getters[k](obj))
                 return tuple(values)
 
             objs.sort(key=key_func, reverse=reverse)
@@ -1497,7 +1530,22 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             )
             qs = qs.filter(pk__in=ordered_ids).annotate(_order=case).order_by("_order")
         else:
-            order_fields = [f"-{k}" if reverse else k for k in key]
+
+            def orm_sort_key(sort_key: str) -> str:
+                if "__" not in sort_key:
+                    return sort_key
+                attribute_root, remainder = sort_key.split("__", maxsplit=1)
+                field_info = attribute_types.get(attribute_root)
+                if field_info is None:
+                    return sort_key
+                filter_lookup = field_info.get("filter_lookup")
+                if not isinstance(filter_lookup, str):
+                    return sort_key
+                return f"{filter_lookup}__{remainder}"
+
+            order_fields = [
+                f"-{orm_sort_key(k)}" if reverse else orm_sort_key(k) for k in key
+            ]
             try:
                 qs = qs.order_by(*order_fields)
             except (FieldError, TypeError, ValueError) as error:

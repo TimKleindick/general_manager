@@ -91,6 +91,7 @@ from general_manager.api.graphql_mutations import (
     generate_delete_mutation_class as _generate_delete_mutation_class_fn,
 )
 from general_manager.api.graphql_resolvers import (
+    GraphQLSortInput,
     parse_input as _parse_input_fn,
     apply_query_parameters as _apply_query_parameters_fn,
     apply_permission_filters as _apply_permission_filters_fn,
@@ -1115,7 +1116,7 @@ class GraphQL:
         queryset: Bucket[GeneralManager],
         filter_input: GraphQLFilterInput,
         exclude_input: GraphQLFilterInput,
-        sort_by: graphene.Enum | None,
+        sort_by: GraphQLSortInput,
         reverse: bool,
         filter_normalizer: GraphQLFilterNormalizer | None = None,
     ) -> Bucket[GeneralManager]:

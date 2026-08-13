@@ -163,8 +163,10 @@ list. Generated sort enums expose a direct manager field as a sort by that
 manager's identifier; for example, `sortBy: commercials` orders projects by the
 related commercial ID. A directly related scalar is available through a one-hop
 key such as `commercials__name`. Collection relations and multi-hop paths such
-as `commercials__owner__name` are not exposed as sort options. Top-level and
-generated relation-list fields use the same list-valued sort contract.
+as `commercials__owner__name` are not exposed as sort options. Computed
+`@graph_ql_property` values on the related manager are also excluded; only
+sortable properties on the root manager are eligible. Top-level and generated
+relation-list fields use the same list-valued sort contract.
 
 ```graphql
 query ActiveProjects($filters: ProjectFilterInput) {
