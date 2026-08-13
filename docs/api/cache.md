@@ -513,14 +513,27 @@ a positive integer sets the shared byte budget. Negative integers, booleans,
 and non-integer values raise a Django configuration error when a
 `CalculationRunContext` is created.
 
-The budget uses an insertion-time estimate and evicts the least-recently-used
-eviction-safe entry across live contexts when necessary. Values whose estimate
+The budget uses an insertion-time estimate and evicts approximately
+least-recently-used eviction-safe entries across live contexts when necessary.
+Successful reads update recency in small internal batches to avoid a
+process-wide lock on every cache hit. A write flushes recency already observed
+by that same context before admission, while another context may observe up to
+one internal batch of stale recency. This batching changes only which safe
+entry is selected under pressure; misses, reloads, publication pinning, and the
+configured byte budget retain their existing behavior. Values whose estimate
 exceeds the complete budget are returned to the caller but bypass retention.
 Pending dependency-cache publications, and their same-run hits, remain pinned
 until a flush attempt removes the pending entries or publication state is
 discarded. Flush attempts unpin after success, guarded abort, unexpected publish
 failure, or lease-release failure, so eviction never loses a pending publication
 or its compute lease.
+
+Small built-in containers are traversed completely. Large built-in containers
+use a bounded representative sample whose projected child size includes a 5%
+upward safety margin. This keeps admission cost bounded for large ORM results
+and indexes. The estimate targets approximately 5% accuracy for representative
+payloads, but unusual heterogeneous or heavily shared object graphs can differ
+by more; this remains an estimated cache budget rather than a hard RSS limit.
 
 This setting is not a hard cap on total process RSS. In particular, Python and
 native allocation overhead, other application memory, and caller-owned mutable
