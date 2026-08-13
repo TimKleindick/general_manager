@@ -51,7 +51,11 @@ GeneralManagerT = TypeVar("GeneralManagerT", bound=GeneralManager)
 GraphQLFilterInput = Mapping[str, object] | str | None
 GraphQLFilterMapping = dict[str, object]
 GraphQLSortInput: TypeAlias = (
-    graphene.Enum | list[graphene.Enum] | tuple[graphene.Enum, ...] | None
+    graphene.Enum
+    | str
+    | list[graphene.Enum | str]
+    | tuple[graphene.Enum | str, ...]
+    | None
 )
 NormalizedFilterPlan = dict[str, GraphQLFilterMapping]
 FilterNormalizer = Callable[[GraphQLFilterMapping], NormalizedFilterPlan]
