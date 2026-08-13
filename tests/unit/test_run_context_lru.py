@@ -1113,6 +1113,84 @@ def test_register_only_advances_configuration_generation_for_limit_changes() -> 
     assert budget._configuration_generation == 2
 
 
+def test_disabling_budget_releases_attempt_tokens_for_removed_entries() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+
+    for key in ("first", "second", "third"):
+        budget.register(owner, 10_000)
+        owner.store("values", key, "value")
+        budget.track(owner, "values", key, "value")
+        tracked_key = (id(owner), "values", key)
+        assert tracked_key in budget._entry_attempt_generations
+
+        budget.register(owner, None)
+        owner._evict_run_cache_entry("values", key)
+        budget.remove(owner, "values", key)
+
+        assert tracked_key not in budget._entry_attempt_generations
+        assert not budget._entry_attempt_generations
+
+
+def test_disabling_budget_rejects_pre_disable_estimate_after_reenable() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "key", "value")
+
+    estimator_started = Event()
+    allow_estimator_to_finish = Event()
+    worker_errors: list[BaseException] = []
+    estimator_calls = 0
+
+    def blocking_first_estimator(
+        key: Hashable,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal estimator_calls
+        assert key == "key"
+        assert value == "value"
+        assert stop_after == 10_000
+        estimator_calls += 1
+        if estimator_calls == 1:
+            estimator_started.set()
+            assert allow_estimator_to_finish.wait(timeout=1)
+        if estimator_calls == 2:
+            return MIN_TRACKED_ENTRY_BYTES
+        return MIN_TRACKED_ENTRY_BYTES * 2
+
+    def track_entry() -> None:
+        try:
+            budget.track(owner, "values", "key", "value")
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        side_effect=blocking_first_estimator,
+    ):
+        worker = Thread(target=track_entry)
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=1)
+            budget.register(owner, None)
+            assert not budget._entry_attempt_generations
+            budget.register(owner, 10_000)
+            allow_estimator_to_finish.set()
+        finally:
+            allow_estimator_to_finish.set()
+            worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    if worker_errors:
+        raise worker_errors[0]
+    assert budget._entries[(id(owner), "values", "key")].size == MIN_TRACKED_ENTRY_BYTES
+    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+
+
 def test_budget_evicts_oldest_entry_across_owners() -> None:
     budget = ProcessRunContextCacheBudget()
     first = CacheOwner()
