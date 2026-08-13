@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass
+from itertools import islice
+import math
 import sys
 from threading import RLock
 from types import (
@@ -26,12 +28,26 @@ from general_manager.logging import get_logger
 
 RUN_CONTEXT_CACHE_MAX_BYTES_SETTING = "RUN_CONTEXT_CACHE_MAX_BYTES"
 MIN_TRACKED_ENTRY_BYTES = 256
+RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD = 128
+RUN_CONTEXT_SIZE_SAMPLE_COUNT = 64
+RUN_CONTEXT_SIZE_SAFETY_MARGIN = 1.05
 _INVALID_MAX_BYTES_MESSAGE = (
     'GENERAL_MANAGER["RUN_CONTEXT_CACHE_MAX_BYTES"] must be None or a '
     "non-negative integer number of bytes."
 )
 
 _SHALLOW_LEAF_TYPES = (ModuleType, type, FunctionType, MethodType, CodeType)
+_ATOMIC_LEAF_TYPES = (
+    type(None),
+    bool,
+    int,
+    float,
+    complex,
+    str,
+    bytes,
+    bytearray,
+    range,
+)
 _SIZED_BUILTIN_TYPES = (
     type(None),
     bool,
@@ -77,6 +93,18 @@ class _TrackedEntry:
     namespace: RunCacheNamespace
     key: Hashable
     size: int
+
+
+@dataclass(frozen=True)
+class _StaticStoragePlan:
+    instance_dict_descriptors: tuple[GetSetDescriptorType, ...]
+    slot_descriptors: tuple[MemberDescriptorType, ...]
+
+
+@dataclass(frozen=True)
+class _WeightedCandidate:
+    value: object
+    weight: float
 
 
 class ProcessRunContextCacheBudget:
@@ -367,6 +395,124 @@ def _get_static_class_metadata(
     return tuple(metadata)
 
 
+def _static_storage_plan(
+    candidate_type: type[object],
+) -> _StaticStoragePlan | None:
+    candidate_mro = _get_static_type_mro(candidate_type)
+    if candidate_mro is None:
+        return None
+    if any(
+        base_type is leaf_type
+        for base_type in candidate_mro
+        for leaf_type in _SHALLOW_LEAF_TYPES
+    ):
+        return _StaticStoragePlan((), ())
+    class_metadata = _get_static_class_metadata(candidate_mro)
+    if class_metadata is None:
+        return None
+
+    instance_dict_descriptors: list[GetSetDescriptorType] = []
+    slot_descriptors: list[MemberDescriptorType] = []
+    for cls, class_dict in class_metadata:
+        descriptor = class_dict.get("__dict__")
+        if _is_native_descriptor_for_storage(
+            descriptor, GetSetDescriptorType, cls, "__dict__"
+        ):
+            instance_dict_descriptors.append(cast(GetSetDescriptorType, descriptor))
+        for storage_name, slot_descriptor in class_dict.items():
+            if _is_native_descriptor_for_storage(
+                slot_descriptor, MemberDescriptorType, cls, storage_name
+            ):
+                slot_descriptors.append(cast(MemberDescriptorType, slot_descriptor))
+    return _StaticStoragePlan(tuple(instance_dict_descriptors), tuple(slot_descriptors))
+
+
+def _stratified_indexes(length: int, sample_count: int) -> tuple[int, ...]:
+    if sample_count >= length:
+        return tuple(range(length))
+    return tuple(
+        (index * (length - 1)) // (sample_count - 1) for index in range(sample_count)
+    )
+
+
+def _is_exact_type(
+    candidate_type: type[object], types: tuple[type[object], ...]
+) -> bool:
+    return any(candidate_type is expected_type for expected_type in types)
+
+
+def _sample_container_children(
+    candidate: _WeightedCandidate,
+) -> tuple[_WeightedCandidate, ...]:
+    value = candidate.value
+    value_type = type(value)
+    if _is_exact_type(value_type, (list, tuple)):
+        sequence = cast(list[object] | tuple[object, ...], value)
+        length = len(sequence)
+        if length <= RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD:
+            return tuple(
+                _WeightedCandidate(item, candidate.weight) for item in sequence
+            )
+        sample_indexes = _stratified_indexes(length, RUN_CONTEXT_SIZE_SAMPLE_COUNT)
+        sample_weight = (
+            candidate.weight
+            * length
+            / len(sample_indexes)
+            * RUN_CONTEXT_SIZE_SAFETY_MARGIN
+        )
+        return tuple(
+            _WeightedCandidate(sequence[index], sample_weight)
+            for index in sample_indexes
+        )
+
+    if value_type is dict:
+        mapping = cast(dict[object, object], value)
+        if len(mapping) <= RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD:
+            return tuple(
+                _WeightedCandidate(item, candidate.weight)
+                for entry in mapping.items()
+                for item in entry
+            )
+        first_entries = tuple(
+            islice(mapping.items(), RUN_CONTEXT_SIZE_SAMPLE_COUNT // 2)
+        )
+        last_entries = tuple(
+            islice(reversed(mapping.items()), RUN_CONTEXT_SIZE_SAMPLE_COUNT // 2)
+        )
+        sample_entries: list[tuple[object, object]] = []
+        for item_key, item_value in (*first_entries, *last_entries):
+            if all(item_key is not existing_key for existing_key, _ in sample_entries):
+                sample_entries.append((item_key, item_value))
+        sample_weight = (
+            candidate.weight
+            * len(mapping)
+            / len(sample_entries)
+            * RUN_CONTEXT_SIZE_SAFETY_MARGIN
+        )
+        return tuple(
+            _WeightedCandidate(item, sample_weight)
+            for entry in sample_entries
+            for item in entry
+        )
+
+    if _is_exact_type(value_type, (set, frozenset)):
+        container = cast(set[object] | frozenset[object], value)
+        if len(container) <= RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD:
+            return tuple(
+                _WeightedCandidate(item, candidate.weight) for item in container
+            )
+        sample_items = tuple(islice(container, RUN_CONTEXT_SIZE_SAMPLE_COUNT))
+        sample_weight = (
+            candidate.weight
+            * len(container)
+            / len(sample_items)
+            * RUN_CONTEXT_SIZE_SAFETY_MARGIN
+        )
+        return tuple(_WeightedCandidate(item, sample_weight) for item in sample_items)
+
+    return ()
+
+
 def estimate_cache_entry_size(
     key: object,
     value: object,
@@ -375,84 +521,78 @@ def estimate_cache_entry_size(
 ) -> int:
     """Estimate owned bytes for one cache entry without unbounded traversal."""
     measured_bytes = 0
-    seen: set[int] = set()
-    candidates = [key, value]
+    seen_weights: dict[int, float] = {}
+    candidates = [_WeightedCandidate(key, 1.0), _WeightedCandidate(value, 1.0)]
+    storage_plans: dict[int, _StaticStoragePlan | None] = {}
 
     while candidates:
         candidate = candidates.pop()
-        candidate_id = id(candidate)
-        if candidate_id in seen:
+        candidate_id = id(candidate.value)
+        previous_weight = seen_weights.get(candidate_id, 0.0)
+        incremental_weight = candidate.weight - previous_weight
+        if incremental_weight <= 0:
             continue
-        seen.add(candidate_id)
+        seen_weights[candidate_id] = candidate.weight
 
-        candidate_type = type(candidate)
+        candidate_value = candidate.value
+        candidate_type = type(candidate_value)
         try:
-            if candidate_type in _SIZED_BUILTIN_TYPES:
-                measured_bytes += sys.getsizeof(candidate)
+            if _is_exact_type(candidate_type, _SIZED_BUILTIN_TYPES):
+                shallow_size = sys.getsizeof(candidate_value)
             else:
-                measured_bytes += object.__sizeof__(candidate)
+                shallow_size = object.__sizeof__(candidate_value)
         except Exception:  # noqa: BLE001 - conservative accounting must survive sizing errors.
-            measured_bytes += MIN_TRACKED_ENTRY_BYTES
+            shallow_size = MIN_TRACKED_ENTRY_BYTES
+        measured_bytes += math.ceil(shallow_size * incremental_weight)
 
         if stop_after is not None and measured_bytes > stop_after:
             return stop_after + 1
 
-        candidate_mro = _get_static_type_mro(candidate_type)
-        if candidate_mro is None:
+        if _is_exact_type(candidate_type, _ATOMIC_LEAF_TYPES):
             continue
-        if any(
-            base_type is leaf_type
-            for base_type in candidate_mro
-            for leaf_type in _SHALLOW_LEAF_TYPES
-        ):
-            continue
-        if candidate_type is dict:
-            mapping = cast(dict[object, object], candidate)
-            for item_key, item_value in mapping.items():
-                candidates.extend((item_key, item_value))
-        elif candidate_type in (tuple, list, set, frozenset):
-            candidates.extend(cast(Iterable[object], candidate))
-        else:
-            class_metadata = _get_static_class_metadata(candidate_mro)
-            if class_metadata is None:
-                continue
-            for cls, class_dict in class_metadata:
-                instance_dict_descriptor = class_dict.get("__dict__")
-                if _is_native_descriptor_for_storage(
-                    instance_dict_descriptor,
-                    GetSetDescriptorType,
-                    cls,
-                    "__dict__",
-                ):
-                    try:
-                        candidates.append(
-                            GetSetDescriptorType.__get__(
-                                cast(GetSetDescriptorType, instance_dict_descriptor),
-                                candidate,
-                                candidate_type,
-                            )
-                        )
-                    except (AttributeError, TypeError):
-                        pass
 
-                for storage_name, descriptor in class_dict.items():
-                    if not _is_native_descriptor_for_storage(
-                        descriptor,
-                        MemberDescriptorType,
-                        cls,
-                        storage_name,
-                    ):
-                        continue
-                    try:
-                        candidates.append(
-                            MemberDescriptorType.__get__(
-                                cast(MemberDescriptorType, descriptor),
-                                candidate,
+        if _is_exact_type(candidate_type, (dict, tuple, list, set, frozenset)):
+            candidates.extend(
+                _sample_container_children(
+                    _WeightedCandidate(candidate_value, incremental_weight)
+                )
+            )
+        else:
+            candidate_type_id = id(candidate_type)
+            if candidate_type_id not in storage_plans:
+                storage_plans[candidate_type_id] = _static_storage_plan(candidate_type)
+            storage_plan = storage_plans[candidate_type_id]
+            if storage_plan is None:
+                continue
+            for instance_dict_descriptor in storage_plan.instance_dict_descriptors:
+                try:
+                    candidates.append(
+                        _WeightedCandidate(
+                            GetSetDescriptorType.__get__(
+                                instance_dict_descriptor,
+                                candidate_value,
                                 candidate_type,
-                            )
+                            ),
+                            incremental_weight,
                         )
-                    except (AttributeError, TypeError):
-                        pass
+                    )
+                except (AttributeError, TypeError):
+                    pass
+
+            for slot_descriptor in storage_plan.slot_descriptors:
+                try:
+                    candidates.append(
+                        _WeightedCandidate(
+                            MemberDescriptorType.__get__(
+                                slot_descriptor,
+                                candidate_value,
+                                candidate_type,
+                            ),
+                            incremental_weight,
+                        )
+                    )
+                except (AttributeError, TypeError):
+                    pass
 
     return max(MIN_TRACKED_ENTRY_BYTES, measured_bytes)
 
