@@ -237,7 +237,7 @@ def test_estimator_exception_does_not_retain_untracked_run_value() -> None:
         tracked_key = (id(context), "values", "key")
 
         with pytest.raises(RuntimeError, match="estimation failed"):
-            context.set("key", "value")
+            context.set("key", ["value"])
 
         assert context.get("key") is None
         assert tracked_key not in run_context_cache_budget._entries
@@ -248,7 +248,7 @@ def test_estimator_exception_does_not_retain_untracked_run_value() -> None:
 def test_run_context_budget_evicts_lru_value_across_contexts() -> None:
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
     with override_settings(
-        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
     ):
         with CalculationRunContext() as first, CalculationRunContext() as second:
             first.set("a", "A")
@@ -265,7 +265,7 @@ def test_run_context_budget_evicts_lru_value_across_contexts() -> None:
 def test_run_context_budget_allows_one_batch_of_recency_staleness() -> None:
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
     with override_settings(
-        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
     ):
         with CalculationRunContext() as first, CalculationRunContext() as second:
             first.set("a", "A")
@@ -281,7 +281,7 @@ def test_run_context_budget_allows_one_batch_of_recency_staleness() -> None:
 def test_same_owner_write_flushes_partial_recency_batch_before_eviction() -> None:
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
     with override_settings(
-        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
     ):
         with CalculationRunContext() as context:
             context.set("a", "A")
@@ -430,7 +430,7 @@ def test_run_context_flushes_earlier_touches_before_refresh() -> None:
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
     with (
         override_settings(
-            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
         ),
         CalculationRunContext() as context,
     ):
@@ -535,7 +535,7 @@ def test_active_run_context_refreshes_cached_state_when_another_enables_budget()
             first.set("b", "B")
 
             with override_settings(
-                GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+                GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
             ):
                 with CalculationRunContext() as second:
                     for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
@@ -554,7 +554,7 @@ def test_foreign_thread_touch_bypasses_owner_local_batch() -> None:
     worker_errors: list[BaseException] = []
 
     with override_settings(
-        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
     ):
         with CalculationRunContext() as first:
             first.set("a", "A")
@@ -726,7 +726,7 @@ def test_finite_budget_set_ignores_unrelated_native_dict_descriptor() -> None:
     with (
         override_settings(
             GENERAL_MANAGER={
-                "RUN_CONTEXT_CACHE_MAX_BYTES": MIN_TRACKED_ENTRY_BYTES,
+                "RUN_CONTEXT_CACHE_MAX_BYTES": MIN_TRACKED_ENTRY_BYTES * 2,
             }
         ),
         CalculationRunContext() as context,
@@ -802,7 +802,11 @@ def test_run_context_budget_keeps_historical_namespaces_independent() -> None:
 
     with (
         override_settings(
-            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": first_size + second_size}
+            GENERAL_MANAGER={
+                "RUN_CONTEXT_CACHE_MAX_BYTES": (
+                    (first_size + second_size) * 100 // 95 + 1
+                )
+            }
         ),
         CalculationRunContext() as context,
     ):
@@ -887,7 +891,7 @@ def test_dependency_cache_hits_share_lru_recency() -> None:
     entry_size = estimate_cache_entry_size("cache-a", first, stop_after=None)
     with (
         override_settings(
-            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
         ),
         CalculationRunContext() as context,
     ):
@@ -905,7 +909,7 @@ def test_run_values_and_dependency_hits_share_global_lru_across_contexts() -> No
     second_hit = DependencyCacheHit(value="B", dependencies=frozenset())
     hit_size = estimate_cache_entry_size("cache-a", first_hit, stop_after=None)
     value_size = estimate_cache_entry_size("ordinary", "value", stop_after=None)
-    two_entry_budget = hit_size + max(hit_size, value_size)
+    two_entry_budget = (hit_size + max(hit_size, value_size)) * 100 // 95 + 1
     with (
         override_settings(
             GENERAL_MANAGER={
@@ -980,7 +984,9 @@ def test_publish_failure_tracks_unpinned_hit_under_finite_budget() -> None:
         stop_after=None,
     )
     with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size}),
+        override_settings(
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+        ),
         mock.patch(
             "general_manager.cache.dependency_publish.publish_dependency_cache_entries",
             side_effect=PublishFailed,
@@ -1297,7 +1303,7 @@ def test_replacing_pending_hit_stays_pinned_under_finite_budget() -> None:
     pressure_size = estimate_cache_entry_size("pressure", pressure, stop_after=None)
     with (
         override_settings(
-            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": pressure_size}
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": pressure_size * 2}
         ),
         mock.patch(
             "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
@@ -1343,7 +1349,7 @@ def test_failed_prior_lease_release_preserves_pinned_pending_replacement_state()
     pressure_size = estimate_cache_entry_size("pressure", pressure, stop_after=None)
     with (
         override_settings(
-            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": pressure_size}
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": pressure_size * 2}
         ),
         mock.patch(
             "general_manager.cache.dependency_publish.release_compute_lease",
@@ -1672,7 +1678,9 @@ def test_run_context_retains_reweighed_orm_index_that_fits_budget() -> None:
     )
 
     with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": index_size}),
+        override_settings(
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": index_size * 2}
+        ),
         CalculationRunContext() as context,
     ):
         context.set_orm_bucket_rows(("query", "rows"), (row,))

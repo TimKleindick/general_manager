@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Hashable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import islice
 import sys
 from threading import RLock
@@ -84,8 +84,13 @@ StorageFamily = Literal[
 ]
 StratumKey = tuple[RunCacheNamespace, StorageFamily, int]
 TrackedKey = tuple[int, RunCacheNamespace, Hashable]
+CalibrationPair = tuple[int, int]
 
 logger = get_logger("cache.run_context_lru")
+
+
+def _eviction_target(max_bytes: int) -> int:
+    return max_bytes * 95 // 100
 
 
 class RunContextCacheOwner(Protocol):
@@ -110,7 +115,38 @@ class _TrackedEntry:
     owner: ReferenceType[RunContextCacheOwner]
     namespace: RunCacheNamespace
     key: Hashable
-    size: int
+    exact_bytes: int
+    stratum: StratumKey | None
+    shallow_bytes: int
+
+
+@dataclass
+class _StratumState:
+    entry_count: int = 0
+    shallow_total: int = 0
+    admission_count: int = 0
+    samples: deque[CalibrationPair] = field(
+        default_factory=lambda: deque(maxlen=RUN_CONTEXT_CALIBRATION_WINDOW)
+    )
+
+    def modeled_bytes(self) -> int:
+        if self.entry_count == 0:
+            return 0
+        assert self.samples
+        sampled_shallow = sum(shallow for shallow, _deep in self.samples)
+        sampled_residual = sum(
+            max(0, deep - MIN_TRACKED_ENTRY_BYTES) for _shallow, deep in self.samples
+        )
+        projected_residual = (
+            self.shallow_total * sampled_residual + max(1, sampled_shallow) - 1
+        ) // max(1, sampled_shallow)
+        return self.entry_count * MIN_TRACKED_ENTRY_BYTES + projected_residual
+
+    def should_calibrate_next(self) -> bool:
+        next_admission = self.admission_count + 1
+        return self.admission_count == 0 or (
+            next_admission % RUN_CONTEXT_CALIBRATION_INTERVAL == 0
+        )
 
 
 @dataclass(frozen=True)
@@ -149,7 +185,9 @@ class ProcessRunContextCacheBudget:
         self._owners: WeakSet[RunContextCacheOwner] = WeakSet()
         self._owner_references: dict[int, ReferenceType[RunContextCacheOwner]] = {}
         self._entries: OrderedDict[TrackedKey, _TrackedEntry] = OrderedDict()
+        self._strata: dict[StratumKey, _StratumState] = {}
         self._mru_key: TrackedKey | None = None
+        self._exact_total_bytes = 0
         self._total_bytes = 0
         self._max_bytes: int | None = None
         self._configuration_generation = 0
@@ -189,8 +227,10 @@ class ProcessRunContextCacheBudget:
                 registered_owner._set_run_cache_budget_enabled(enabled)
             if max_bytes is None:
                 self._entries.clear()
+                self._strata.clear()
                 self._mru_key = None
                 self._entry_attempt_generations.clear()
+                self._exact_total_bytes = 0
                 self._total_bytes = 0
                 return
 
@@ -212,16 +252,39 @@ class ProcessRunContextCacheBudget:
         """Record a stored entry and evict least-recently-used entries if needed."""
         if self._max_bytes is None:
             return
+        signal = _admission_signal(namespace, key, value)
         with self._lock:
             max_bytes = self._max_bytes
-            configuration_generation = self._configuration_generation
             if max_bytes is None:
                 return
             owner_id = id(owner)
+            tracked_key = (owner_id, namespace, key)
+            if max_bytes == 0:
+                self._entry_attempt_generations.pop(tracked_key, None)
+                self._remove_entry_accounting_locked(tracked_key)
+                owner._evict_run_cache_entry(namespace, key)
+                return
+
+            requires_calibration = False
+            if signal.stratum is not None:
+                state = self._strata.get(signal.stratum)
+                requires_calibration = state is None or state.should_calibrate_next()
+            if not requires_calibration:
+                self._entry_attempt_generations.pop(tracked_key, None)
+                self._publish_entry_locked(
+                    owner,
+                    namespace,
+                    key,
+                    signal,
+                    estimated_bytes=None,
+                    max_bytes=max_bytes,
+                )
+                return
+
+            configuration_generation = self._configuration_generation
             owner_lifecycle_generation = self._owner_lifecycle_generation_locked(
                 owner_id
             )
-            tracked_key = (owner_id, namespace, key)
             entry_attempt_generation = self._next_admission_generation_locked()
             self._entry_attempt_generations[tracked_key] = entry_attempt_generation
 
@@ -254,6 +317,15 @@ class ProcessRunContextCacheBudget:
                 ):
                     return
                 if configuration_generation != self._configuration_generation:
+                    max_bytes = self._max_bytes
+                    configuration_generation = self._configuration_generation
+                    if max_bytes is None:
+                        return
+                    if max_bytes == 0:
+                        self._entry_attempt_generations.pop(tracked_key, None)
+                        self._remove_entry_accounting_locked(tracked_key)
+                        owner._evict_run_cache_entry(namespace, key)
+                        return
                     if reestimate_count >= RUN_CONTEXT_TRACK_MAX_REESTIMATES:
                         self._entry_attempt_generations.pop(tracked_key, None)
                         self._remove_entry_locked(tracked_key)
@@ -264,17 +336,14 @@ class ProcessRunContextCacheBudget:
                         )
                         return
                     reestimate_count += 1
-                    max_bytes = self._max_bytes
-                    configuration_generation = self._configuration_generation
-                    if max_bytes is None:
-                        return
                     continue
-                self._track_estimated_locked(
+                self._publish_entry_locked(
                     owner,
                     namespace,
                     key,
-                    estimated_bytes,
-                    max_bytes,
+                    signal,
+                    estimated_bytes=estimated_bytes,
+                    max_bytes=max_bytes,
                 )
                 return
 
@@ -326,7 +395,7 @@ class ProcessRunContextCacheBudget:
             self._entry_attempt_generations.pop(tracked_key, None)
             if self._max_bytes is None:
                 return
-            self._remove_entry_locked(tracked_key)
+            self._remove_entry_accounting_locked(tracked_key)
 
     def refresh(
         self,
@@ -351,7 +420,9 @@ class ProcessRunContextCacheBudget:
 
     def _rebuild_locked(self) -> None:
         self._entries.clear()
+        self._strata.clear()
         self._mru_key = None
+        self._exact_total_bytes = 0
         self._total_bytes = 0
         for owner in tuple(self._owners):
             self._track_owner_entries_locked(owner)
@@ -375,62 +446,173 @@ class ProcessRunContextCacheBudget:
         max_bytes = self._max_bytes
         if max_bytes is None:
             return
-        estimated_bytes = estimate_cache_entry_size(
-            key,
-            value,
-            stop_after=max_bytes,
-        )
-        self._track_estimated_locked(
+        tracked_key = (id(owner), namespace, key)
+        if max_bytes == 0:
+            self._remove_entry_accounting_locked(tracked_key)
+            owner._evict_run_cache_entry(namespace, key)
+            return
+        signal = _admission_signal(namespace, key, value)
+        estimated_bytes = None
+        if signal.stratum is not None:
+            state = self._strata.get(signal.stratum)
+            if state is None or state.should_calibrate_next():
+                estimated_bytes = estimate_cache_entry_size(
+                    key,
+                    value,
+                    stop_after=max_bytes,
+                )
+        self._publish_entry_locked(
             owner,
             namespace,
             key,
-            estimated_bytes,
-            max_bytes,
+            signal,
+            estimated_bytes=estimated_bytes,
+            max_bytes=max_bytes,
         )
 
-    def _track_estimated_locked(
+    def _publish_entry_locked(
         self,
         owner: RunContextCacheOwner,
         namespace: RunCacheNamespace,
         key: Hashable,
-        estimated_bytes: int,
+        signal: _AdmissionSignal,
+        *,
+        estimated_bytes: int | None,
         max_bytes: int,
     ) -> None:
         tracked_key = (id(owner), namespace, key)
-        self._remove_entry_locked(tracked_key)
-        owner_reference = self._owner_reference_locked(owner)
-        if estimated_bytes > max_bytes:
-            self._entry_attempt_generations.pop(tracked_key, None)
+        old_entry = self._entries.get(tracked_key)
+        preserved_state = None
+        if (
+            old_entry is not None
+            and old_entry.stratum is not None
+            and old_entry.stratum == signal.stratum
+        ):
+            preserved_state = self._strata[old_entry.stratum]
+        self._remove_entry_accounting_locked(tracked_key)
+        if (
+            preserved_state is not None
+            and signal.stratum is not None
+            and signal.stratum not in self._strata
+        ):
+            self._strata[signal.stratum] = preserved_state
+
+        if signal.stratum is not None and estimated_bytes is not None:
+            state = self._strata.get(signal.stratum)
+            if state is None or state.should_calibrate_next():
+                self._publish_calibration_locked(
+                    signal.stratum,
+                    signal.shallow_bytes,
+                    estimated_bytes,
+                )
+
+        entry = _TrackedEntry(
+            owner=self._owner_reference_locked(owner),
+            namespace=namespace,
+            key=key,
+            exact_bytes=signal.exact_bytes or 0,
+            stratum=signal.stratum,
+            shallow_bytes=signal.shallow_bytes if signal.stratum is not None else 0,
+        )
+        self._add_entry_accounting_locked(tracked_key, entry)
+        if signal.stratum is not None:
+            self._strata[signal.stratum].admission_count += 1
+        self._mru_key = tracked_key
+        modeled_entry_bytes = self._modeled_entry_bytes_locked(entry)
+        self._entry_attempt_generations.pop(tracked_key, None)
+        if modeled_entry_bytes > max_bytes:
+            self._remove_entry_accounting_locked(tracked_key)
             owner._evict_run_cache_entry(namespace, key)
             logger.debug(
                 "run cache entry skipped because it exceeds the process budget",
                 context={
                     "namespace": namespace,
-                    "estimated_bytes": estimated_bytes,
+                    "estimated_bytes": modeled_entry_bytes,
                     "configured_bytes": max_bytes,
                 },
             )
             return
-
-        self._entries[tracked_key] = _TrackedEntry(
-            owner=owner_reference,
-            namespace=namespace,
-            key=key,
-            size=estimated_bytes,
-        )
-        self._mru_key = tracked_key
-        self._total_bytes += estimated_bytes
         self._evict_excess_locked()
+
+    def _modeled_entry_bytes_locked(self, entry: _TrackedEntry) -> int:
+        if entry.stratum is None:
+            return entry.exact_bytes
+        state = self._strata[entry.stratum]
+        sampled_shallow = sum(shallow for shallow, _deep in state.samples)
+        sampled_residual = sum(
+            max(0, deep - MIN_TRACKED_ENTRY_BYTES) for _shallow, deep in state.samples
+        )
+        projected_residual = (
+            entry.shallow_bytes * sampled_residual + max(1, sampled_shallow) - 1
+        ) // max(1, sampled_shallow)
+        return MIN_TRACKED_ENTRY_BYTES + projected_residual
+
+    def _add_entry_accounting_locked(
+        self,
+        tracked_key: TrackedKey,
+        entry: _TrackedEntry,
+    ) -> None:
+        assert tracked_key not in self._entries
+        self._entries[tracked_key] = entry
+        if entry.stratum is None:
+            self._exact_total_bytes += entry.exact_bytes
+            self._total_bytes += entry.exact_bytes
+            return
+
+        state = self._strata[entry.stratum]
+        old_modeled_bytes = state.modeled_bytes()
+        state.entry_count += 1
+        state.shallow_total += entry.shallow_bytes
+        self._total_bytes += state.modeled_bytes() - old_modeled_bytes
+
+    def _remove_entry_accounting_locked(
+        self,
+        tracked_key: TrackedKey,
+    ) -> _TrackedEntry | None:
+        entry = self._entries.pop(tracked_key, None)
+        if entry is None:
+            return None
+        if tracked_key == self._mru_key:
+            self._refresh_mru_key_locked()
+        if entry.stratum is None:
+            self._exact_total_bytes -= entry.exact_bytes
+            self._total_bytes -= entry.exact_bytes
+        else:
+            state = self._strata[entry.stratum]
+            old_modeled_bytes = state.modeled_bytes()
+            state.entry_count -= 1
+            state.shallow_total -= entry.shallow_bytes
+            if state.entry_count == 0:
+                self._strata.pop(entry.stratum)
+                new_modeled_bytes = 0
+            else:
+                new_modeled_bytes = state.modeled_bytes()
+            self._total_bytes += new_modeled_bytes - old_modeled_bytes
+        assert self._exact_total_bytes >= 0
+        assert self._total_bytes >= 0
+        return entry
+
+    def _publish_calibration_locked(
+        self,
+        stratum: StratumKey,
+        shallow_bytes: int,
+        estimated_bytes: int,
+    ) -> None:
+        state = self._strata.setdefault(stratum, _StratumState())
+        old_modeled_bytes = state.modeled_bytes()
+        state.samples.append((shallow_bytes, estimated_bytes))
+        self._total_bytes += state.modeled_bytes() - old_modeled_bytes
 
     def _evict_excess_locked(self) -> None:
         while self._entries:
             max_bytes = self._max_bytes
-            if max_bytes is None or self._total_bytes <= max_bytes:
+            if max_bytes is None or self._total_bytes <= _eviction_target(max_bytes):
                 return
-            tracked_key, entry = self._entries.popitem(last=False)
-            if tracked_key == self._mru_key:
-                self._refresh_mru_key_locked()
-            self._total_bytes -= entry.size
+            tracked_key = next(iter(self._entries))
+            before = self._total_bytes
+            entry = self._remove_entry_accounting_locked(tracked_key)
+            assert entry is not None
+            removed_bytes = before - self._total_bytes
             owner = entry.owner()
             if owner is None:
                 continue
@@ -440,17 +622,13 @@ class ProcessRunContextCacheBudget:
                 "run cache entry evicted by process-wide LRU budget",
                 context={
                     "namespace": entry.namespace,
-                    "estimated_bytes": entry.size,
+                    "estimated_bytes": removed_bytes,
                     "configured_bytes": max_bytes,
                 },
             )
 
     def _remove_entry_locked(self, tracked_key: TrackedKey) -> None:
-        entry = self._entries.pop(tracked_key, None)
-        if entry is not None:
-            if tracked_key == self._mru_key:
-                self._refresh_mru_key_locked()
-            self._total_bytes -= entry.size
+        self._remove_entry_accounting_locked(tracked_key)
 
     def _refresh_mru_key_locked(self) -> None:
         self._mru_key = next(reversed(self._entries), None)

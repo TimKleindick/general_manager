@@ -1,10 +1,11 @@
+from collections import OrderedDict, deque
 from collections.abc import Hashable, Iterable, Iterator
 from threading import Event, Thread
 from unittest import mock
 import math
 import sys
 from types import ModuleType
-from typing import cast
+from typing import Callable, cast
 from weakref import ref
 
 import pytest
@@ -113,6 +114,782 @@ class CountingHashKey:
     def __hash__(self) -> int:
         self.hash_calls += 1
         return 1
+
+
+class RepresentativeRow:
+    def __init__(self, index: int) -> None:
+        self.identifier = index
+        self.name = f"row-{index}"
+        self.active = index % 2 == 0
+        self.score = index * 3
+
+
+class RepresentativeManager:
+    __slots__ = ("inputs", "label")
+
+    def __init__(self, index: int) -> None:
+        self.inputs = (index, index + 1)
+        self.label = f"manager-{index % 8}"
+
+
+class RepresentativeMetric:
+    __slots__ = ("count", "name", "value")
+
+    def __init__(self, count: int, name: str, value: float) -> None:
+        self.count = count
+        self.name = name
+        self.value = value
+
+
+def _exhaustive_representative_entry_size(key: object, value: object) -> int:
+    """Test-owned v0.69-style exhaustive ownership traversal."""
+    atomic_types = (
+        type(None),
+        bool,
+        int,
+        float,
+        complex,
+        str,
+        bytes,
+        bytearray,
+        range,
+    )
+    sized_builtin_types = (*atomic_types, dict, tuple, list, set, frozenset)
+    candidates = [key, value]
+    seen: set[int] = set()
+    measured_bytes = 0
+
+    while candidates:
+        candidate = candidates.pop()
+        candidate_id = id(candidate)
+        if candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        candidate_type = type(candidate)
+        if candidate_type in sized_builtin_types:
+            measured_bytes += sys.getsizeof(candidate)
+        else:
+            measured_bytes += object.__sizeof__(candidate)
+
+        if candidate_type in atomic_types:
+            continue
+        if candidate_type is dict:
+            for item_key, item_value in cast(dict[object, object], candidate).items():
+                candidates.extend((item_key, item_value))
+            continue
+        if candidate_type in (tuple, list, set, frozenset):
+            candidates.extend(cast(Iterable[object], candidate))
+            continue
+
+        try:
+            instance_dict = vars(candidate)
+        except TypeError:
+            instance_dict = None
+        if instance_dict is not None:
+            candidates.append(instance_dict)
+        for cls in candidate_type.__mro__:
+            declared_slots = cls.__dict__.get("__slots__", ())
+            if isinstance(declared_slots, str):
+                slot_names = (declared_slots,)
+            else:
+                slot_names = tuple(declared_slots)
+            for slot_name in slot_names:
+                if slot_name in {"__dict__", "__weakref__"}:
+                    continue
+                try:
+                    candidates.append(object.__getattribute__(candidate, slot_name))
+                except AttributeError:
+                    pass
+
+    return max(256, measured_bytes)
+
+
+def _representative_homogeneous_bytearray_lists() -> list[tuple[Hashable, object]]:
+    return [(index, [bytearray(96)]) for index in range(512)]
+
+
+def _representative_heterogeneous_lists() -> list[tuple[Hashable, object]]:
+    entries = []
+    for index in range(512):
+        value: list[object] = [index] * 9
+        value[0] = bytearray(32)
+        value[4] = bytearray(160)
+        value[8] = bytearray(288)
+        entries.append((index, value))
+    return entries
+
+
+def _representative_builtin_mappings_and_sets() -> list[tuple[Hashable, object]]:
+    mappings = [
+        (
+            ("mapping", index),
+            {offset: bytearray(24 + offset) for offset in range(4)},
+        )
+        for index in range(256)
+    ]
+    sets = [
+        (("set", index), {index * 4 + offset for offset in range(4)})
+        for index in range(256)
+    ]
+    return [*mappings, *sets]
+
+
+def _representative_orm_rows() -> list[tuple[Hashable, object]]:
+    return [(index, RepresentativeRow(index)) for index in range(512)]
+
+
+def _representative_slotted_managers() -> list[tuple[Hashable, object]]:
+    return [(index, RepresentativeManager(index)) for index in range(512)]
+
+
+def _representative_metric_series() -> list[tuple[Hashable, object]]:
+    entries = []
+    for index in range(512):
+        records = (
+            RepresentativeMetric(index, "actual", index / 10),
+            RepresentativeMetric(index + 1, "forecast", index / 8),
+        )
+        series = {day: records[day % 2] for day in range(120)}
+        entries.append((index, series))
+    return entries
+
+
+def _representative_shared_aggregate() -> list[tuple[Hashable, object]]:
+    aggregate = {index: [bytearray(24)] for index in range(120)}
+    references = [(("value", index), value) for index, value in aggregate.items()]
+    return [("aggregate", aggregate), *references]
+
+
+def _representative_cycles() -> list[tuple[Hashable, object]]:
+    entries: list[tuple[Hashable, object]] = []
+    for index in range(256):
+        direct: list[object] = []
+        direct.append(direct)
+        entries.append((("direct", index), direct))
+    for index in range(256):
+        first: list[object] = []
+        second: list[object] = [first]
+        first.append(second)
+        entries.append((("mutual", index), first))
+    return entries
+
+
+REPRESENTATIVE_CORPUS_BUILDERS = (
+    _representative_homogeneous_bytearray_lists,
+    _representative_heterogeneous_lists,
+    _representative_builtin_mappings_and_sets,
+    _representative_orm_rows,
+    _representative_slotted_managers,
+    _representative_metric_series,
+    _representative_shared_aggregate,
+    _representative_cycles,
+)
+
+
+@pytest.mark.parametrize(
+    "build_entries",
+    REPRESENTATIVE_CORPUS_BUILDERS,
+    ids=lambda builder: builder.__name__.removeprefix("_representative_"),
+)
+def test_representative_aggregate_is_within_five_percent(
+    build_entries: object,
+) -> None:
+    entries = cast(Callable[[], list[tuple[Hashable, object]]], build_entries)()
+    exact_total = sum(
+        _exhaustive_representative_entry_size(key, value) for key, value in entries
+    )
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_000_000_000)
+
+    groups: dict[object, list[tuple[Hashable, object]]] = {}
+    for key, value in entries:
+        owner.store("values", key, value)
+        budget.track(owner, "values", key, value)
+        stratum = budget._entries[(id(owner), "values", key)].stratum
+        if stratum is not None:
+            groups.setdefault(stratum, []).append((key, value))
+
+    for stratum, grouped_entries in groups.items():
+        next_index = 0
+        while len(budget._strata[cast(tuple, stratum)].samples) < 8:
+            key, value = grouped_entries[next_index % len(grouped_entries)]
+            owner.store("values", key, value)
+            budget.track(owner, "values", key, value)
+            next_index += 1
+
+    assert math.ceil(exact_total * 0.95) <= budget.estimated_bytes
+    assert budget.estimated_bytes <= math.ceil(exact_total * 1.05)
+
+
+def test_representative_pressure_retains_between_ninety_and_one_hundred_percent() -> (
+    None
+):
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    configured_bytes = 2_560
+    budget.register(owner, configured_bytes)
+    first_value = [bytearray(96)]
+    owner.store("values", 0, first_value)
+    budget.track(owner, "values", 0, first_value)
+    stratum = budget._entries[(id(owner), "values", 0)].stratum
+    assert stratum is not None
+
+    while len(budget._strata[stratum].samples) < 8:
+        owner.store("values", 0, first_value)
+        budget.track(owner, "values", 0, first_value)
+
+    for index in range(1, 10):
+        value = [bytearray(96)]
+        owner.store("values", index, value)
+        budget.track(owner, "values", index, value)
+
+    retained_bytes = sum(
+        _exhaustive_representative_entry_size(key, value)
+        for (_namespace, key), value in owner.entries.items()
+    )
+    assert len(owner.entries) == 9
+    assert retained_bytes <= configured_bytes
+    assert retained_bytes >= 2_304
+
+
+def test_stratum_models_all_entries_from_rolling_samples() -> None:
+    state = run_context_lru._StratumState(
+        entry_count=4,
+        shallow_total=400,
+        samples=deque([(100, 1_000)], maxlen=8),
+    )
+
+    assert state.modeled_bytes() == 4_000
+
+
+def test_stratum_keeps_only_eight_recent_samples() -> None:
+    state = run_context_lru._StratumState()
+    for deep in range(1_000, 2_000, 100):
+        state.samples.append((100, deep))
+
+    assert list(state.samples) == [
+        (100, 1_200),
+        (100, 1_300),
+        (100, 1_400),
+        (100, 1_500),
+        (100, 1_600),
+        (100, 1_700),
+        (100, 1_800),
+        (100, 1_900),
+    ]
+
+
+def test_stratum_calibrates_first_and_each_256th_admission() -> None:
+    state = run_context_lru._StratumState()
+
+    decisions = []
+    for _ in range(512):
+        decisions.append(state.should_calibrate_next())
+        state.admission_count += 1
+
+    assert [index + 1 for index, decision in enumerate(decisions) if decision] == [
+        1,
+        256,
+        512,
+    ]
+
+
+def test_track_calibrates_only_first_and_each_256th_stratum_admission() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000_000)
+    deep_calls = 0
+
+    def estimate(key: object, value: object, *, stop_after: int | None) -> int:
+        nonlocal deep_calls
+        deep_calls += 1
+        return 1_024
+
+    with mock.patch.object(run_context_lru, "estimate_cache_entry_size", estimate):
+        for index in range(512):
+            value = [index]
+            owner.store("values", index, value)
+            budget.track(owner, "values", index, value)
+
+    assert deep_calls == 3
+    assert len(owner.entries) == 512
+    assert budget.estimated_bytes > 0
+
+
+@pytest.mark.parametrize("seed_count", [0, 255])
+def test_concurrent_same_stratum_admissions_publish_one_due_calibration(
+    seed_count: int,
+) -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000_000)
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        return_value=1_024,
+    ):
+        for index in range(seed_count):
+            value = [index]
+            owner.store("values", index, value)
+            budget.track(owner, "values", index, value)
+
+    first_key = seed_count
+    second_key = seed_count + 1
+    values = {first_key: [first_key], second_key: [second_key]}
+    estimator_started = {first_key: Event(), second_key: Event()}
+    allow_estimators = Event()
+    worker_errors: list[BaseException] = []
+
+    def blocking_estimator(
+        key: object, value: object, *, stop_after: int | None
+    ) -> int:
+        typed_key = cast(int, key)
+        estimator_started[typed_key].set()
+        assert allow_estimators.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+        return 1_024
+
+    def track_entry(key: int) -> None:
+        try:
+            budget.track(owner, "values", key, values[key])
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    for key, value in values.items():
+        owner.store("values", key, value)
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        blocking_estimator,
+    ):
+        workers = [Thread(target=track_entry, args=(key,)) for key in values]
+        for worker in workers:
+            worker.start()
+        try:
+            assert all(
+                started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+                for started in estimator_started.values()
+            )
+        finally:
+            allow_estimators.set()
+            for worker in workers:
+                worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert all(not worker.is_alive() for worker in workers)
+    if worker_errors:
+        raise worker_errors[0]
+    state = next(iter(budget._strata.values()))
+    expected_sample_count = 1 if seed_count == 0 else 2
+    assert len(state.samples) == expected_sample_count
+    assert state.admission_count == seed_count + 2
+    assert len(owner.entries) == seed_count + 2
+
+
+def test_atomic_admission_never_calibrates() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "key", "value")
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        side_effect=AssertionError("atomic admission calibrated"),
+    ):
+        budget.track(owner, "values", "key", "value")
+
+    assert owner.entries == {("values", "key"): "value"}
+    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+
+
+def test_ordinary_calibrated_admission_publishes_without_attempt_token() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000_000)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        return_value=1_024,
+    ) as estimator:
+        for index in range(255):
+            value = [index]
+            owner.store("values", index, value)
+            budget.track(owner, "values", index, value)
+
+    assert estimator.call_count == 1
+    assert len(owner.entries) == 255
+    assert not budget._entry_attempt_generations
+
+
+def test_calibration_updates_aggregate_without_iterating_entries() -> None:
+    class DirectOnlyEntries(OrderedDict[object, object]):
+        def __iter__(self) -> Iterator[object]:
+            raise AssertionError("aggregate calibration iterated entries")  # noqa: TRY003
+
+        def values(self) -> object:
+            raise AssertionError("aggregate calibration read entry values")  # noqa: TRY003
+
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000_000)
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        return_value=1_024,
+    ):
+        for index in range(2):
+            value = [index]
+            owner.store("values", index, value)
+            budget.track(owner, "values", index, value)
+
+    stratum = run_context_lru._admission_signal("values", 0, [0]).stratum
+    assert stratum is not None
+    before = budget.estimated_bytes
+    original_entries = budget._entries
+    budget._entries = cast(OrderedDict, DirectOnlyEntries(budget._entries))
+
+    try:
+        with budget._lock:
+            budget._publish_calibration_locked(stratum, 100, 2_000)
+    finally:
+        budget._entries = original_entries
+
+    assert budget.estimated_bytes > before
+
+
+def test_replacement_changes_calibrated_stratum_accounting() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000_000)
+    small = [1]
+    large = [1, 2]
+    owner.store("values", "key", small)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        side_effect=[1_024, 2_048],
+    ):
+        budget.track(owner, "values", "key", small)
+        owner.store("values", "key", large)
+        budget.track(owner, "values", "key", large)
+
+    entry = budget._entries[(id(owner), "values", "key")]
+    assert (
+        entry.stratum
+        == run_context_lru._admission_signal("values", "key", large).stratum
+    )
+    assert budget.estimated_bytes == 2_048
+
+
+def test_refresh_updates_shallow_signal_without_extra_calibration() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000_000)
+    initial = [1, 2, 3, 4, 5]
+    refreshed = [1, 2, 3, 4, 5, 6, 7, 8]
+    owner.store("values", "key", initial)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        return_value=1_024,
+    ) as estimator:
+        budget.track(owner, "values", "key", initial)
+        initial_shallow = budget._entries[(id(owner), "values", "key")].shallow_bytes
+        owner.store("values", "key", refreshed)
+        budget.refresh(owner, "values", "key", refreshed)
+
+    refreshed_entry = budget._entries[(id(owner), "values", "key")]
+    assert estimator.call_count == 1
+    assert refreshed_entry.shallow_bytes > initial_shallow
+    assert budget._strata[cast(tuple, refreshed_entry.stratum)].admission_count == 2
+
+
+def test_first_blocked_estimate_is_not_published_early() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    value = [1]
+    owner.store("values", "key", value)
+    estimator_started = Event()
+    allow_estimator = Event()
+
+    def blocking_estimator(
+        key: object, value: object, *, stop_after: int | None
+    ) -> int:
+        estimator_started.set()
+        assert allow_estimator.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+        return 1_024
+
+    with mock.patch.object(
+        run_context_lru, "estimate_cache_entry_size", blocking_estimator
+    ):
+        worker = Thread(target=budget.track, args=(owner, "values", "key", value))
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            assert (id(owner), "values", "key") not in budget._entries
+            assert budget.estimated_bytes == 0
+        finally:
+            allow_estimator.set()
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert not worker.is_alive()
+
+
+def test_zero_cap_rejects_without_blocked_estimate() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 0)
+    value = [1]
+    owner.store("values", "key", value)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        side_effect=AssertionError("zero cap calibrated"),
+    ):
+        budget.track(owner, "values", "key", value)
+
+    assert not owner.entries
+    assert budget.estimated_bytes == 0
+
+
+def test_calibrated_oversized_entry_is_not_retained() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_024)
+    value = [bytearray(2_048)]
+    owner.store("values", "key", value)
+
+    with mock.patch.object(
+        run_context_lru, "estimate_cache_entry_size", return_value=2_048
+    ):
+        budget.track(owner, "values", "key", value)
+
+    assert not owner.entries
+    assert not budget._entries
+    assert budget.estimated_bytes == 0
+
+
+def test_calibrated_estimator_exception_cleans_value_token_and_accounting() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    value = [1]
+    owner.store("values", "key", value)
+
+    with (
+        mock.patch.object(
+            run_context_lru,
+            "estimate_cache_entry_size",
+            side_effect=RuntimeError("estimation failed"),
+        ),
+        pytest.raises(RuntimeError, match="estimation failed"),
+    ):
+        budget.track(owner, "values", "key", value)
+
+    assert not owner.entries
+    assert not budget._entries
+    assert not budget._entry_attempt_generations
+    assert budget.estimated_bytes == 0
+
+
+def test_stale_blocked_estimate_cannot_replace_newer_same_key_sample() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    old = ["old"]
+    new = ["new"]
+    owner.store("values", "key", old)
+    estimator_started = Event()
+    allow_old = Event()
+
+    def delayed_estimator(key: object, value: object, *, stop_after: int | None) -> int:
+        if value is old:
+            estimator_started.set()
+            assert allow_old.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            return 2_048
+        assert value is new
+        return 1_024
+
+    with mock.patch.object(
+        run_context_lru, "estimate_cache_entry_size", delayed_estimator
+    ):
+        worker = Thread(target=budget.track, args=(owner, "values", "key", old))
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            owner.store("values", "key", new)
+            budget.track(owner, "values", "key", new)
+        finally:
+            allow_old.set()
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert not worker.is_alive()
+    assert owner.entries[("values", "key")] is new
+    entry = budget._entries[(id(owner), "values", "key")]
+    assert (
+        entry.shallow_bytes
+        == run_context_lru._admission_signal("values", "key", new).shallow_bytes
+    )
+    assert list(budget._strata[cast(tuple, entry.stratum)].samples) == [
+        (entry.shallow_bytes, 1_024)
+    ]
+
+
+@pytest.mark.parametrize("invalidation", ["weak_finalization", "owner_reuse"])
+def test_blocked_estimate_lifecycle_invalidation_prevents_calibration(
+    invalidation: str,
+) -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    value = ["value"]
+    owner.store("values", "key", value)
+    estimator_started = Event()
+    allow_estimator = Event()
+    worker_errors: list[BaseException] = []
+
+    def blocking_estimator(
+        key: object, value: object, *, stop_after: int | None
+    ) -> int:
+        estimator_started.set()
+        assert allow_estimator.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+        return 1_024
+
+    def track_entry() -> None:
+        try:
+            budget.track(owner, "values", "key", value)
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    with mock.patch.object(
+        run_context_lru, "estimate_cache_entry_size", blocking_estimator
+    ):
+        worker = Thread(target=track_entry)
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            owner_id = id(owner)
+            with budget._lock:
+                if invalidation == "weak_finalization":
+                    owner_reference = budget._owner_references[owner_id]
+                    budget._owner_finalizer(owner_id)(owner_reference)
+                else:
+                    replacement = CacheOwner()
+                    budget._owner_references[owner_id] = ref(replacement)
+                    budget._owner_reference_locked(owner)
+        finally:
+            allow_estimator.set()
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert not worker.is_alive()
+    if worker_errors:
+        raise worker_errors[0]
+    assert not budget._strata
+    assert not budget._entries
+    assert not budget._entry_attempt_generations
+
+
+def test_stale_configuration_sample_never_enters_new_generation_window() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    first_limit = 10_000
+    second_limit = 20_000
+    budget.register(owner, first_limit)
+    value = ["value"]
+    owner.store("values", "key", value)
+    estimator_started = Event()
+    allow_first_estimate = Event()
+    deep_results = iter((9_000, 1_024))
+
+    def changing_generation_estimator(
+        key: object, value: object, *, stop_after: int | None
+    ) -> int:
+        result = next(deep_results)
+        if result == 9_000:
+            assert stop_after == first_limit
+            estimator_started.set()
+            assert allow_first_estimate.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+        else:
+            assert stop_after == second_limit
+        return result
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        changing_generation_estimator,
+    ):
+        worker = Thread(target=budget.track, args=(owner, "values", "key", value))
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            with budget._lock:
+                budget._max_bytes = second_limit
+                budget._configuration_generation += 1
+        finally:
+            allow_first_estimate.set()
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert not worker.is_alive()
+    entry = budget._entries[(id(owner), "values", "key")]
+    assert list(budget._strata[cast(tuple, entry.stratum)].samples) == [
+        (entry.shallow_bytes, 1_024)
+    ]
+
+
+def test_setting_change_to_zero_invalidates_blocked_estimate_without_recalibration() -> (
+    None
+):
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    value = ["value"]
+    owner.store("values", "key", value)
+    estimator_started = Event()
+    allow_estimator = Event()
+    estimator_calls = 0
+    worker_errors: list[BaseException] = []
+
+    def blocking_estimator(
+        key: object, value: object, *, stop_after: int | None
+    ) -> int:
+        nonlocal estimator_calls
+        estimator_calls += 1
+        if estimator_calls > 1:
+            raise AssertionError("zero-cap transition recalibrated")  # noqa: TRY003
+        estimator_started.set()
+        assert allow_estimator.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+        return 1_024
+
+    def track_entry() -> None:
+        try:
+            budget.track(owner, "values", "key", value)
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    with mock.patch.object(
+        run_context_lru, "estimate_cache_entry_size", blocking_estimator
+    ):
+        worker = Thread(target=track_entry)
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            budget.register(owner, 0)
+        finally:
+            allow_estimator.set()
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert not worker.is_alive()
+    if worker_errors:
+        raise worker_errors[0]
+    assert estimator_calls == 1
+    assert not owner.entries
+    assert not budget._entry_attempt_generations
+    assert not budget._strata
 
 
 @pytest.mark.parametrize("configured", [None, 0, 1, 1024])
@@ -978,6 +1755,8 @@ def test_estimation_does_not_hold_coordinator_lock() -> None:
     worker_errors: list[BaseException] = []
     reader_errors: list[BaseException] = []
 
+    blocked_value = ["value"]
+
     def blocking_estimator(
         key: Hashable,
         value: object,
@@ -985,7 +1764,7 @@ def test_estimation_does_not_hold_coordinator_lock() -> None:
         stop_after: int | None,
     ) -> int:
         assert key == "blocked"
-        assert value == "value"
+        assert value is blocked_value
         assert stop_after == 10_000
         estimator_started.set()
         assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
@@ -993,7 +1772,7 @@ def test_estimation_does_not_hold_coordinator_lock() -> None:
 
     def track_entry() -> None:
         try:
-            budget.track(owner, "values", "blocked", "value")
+            budget.track(owner, "values", "blocked", blocked_value)
         except BaseException as error:  # noqa: BLE001
             worker_errors.append(error)
 
@@ -1042,9 +1821,10 @@ def test_track_retries_estimation_after_limit_change() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     old_limit = 10_000
-    new_limit = MIN_TRACKED_ENTRY_BYTES
+    new_limit = MIN_TRACKED_ENTRY_BYTES * 2
     budget.register(owner, old_limit)
-    owner.store("values", "key", "value")
+    value = ["value"]
+    owner.store("values", "key", value)
 
     estimator_started = Event()
     allow_estimator_to_finish = Event()
@@ -1058,7 +1838,7 @@ def test_track_retries_estimation_after_limit_change() -> None:
         stop_after: int | None,
     ) -> int:
         assert key == "key"
-        assert value == "value"
+        assert value == ["value"]
         stop_after_values.append(stop_after)
         if len(stop_after_values) == 1:
             estimator_started.set()
@@ -1067,7 +1847,7 @@ def test_track_retries_estimation_after_limit_change() -> None:
 
     def track_entry() -> None:
         try:
-            budget.track(owner, "values", "key", "value")
+            budget.track(owner, "values", "key", value)
         except BaseException as error:  # noqa: BLE001
             worker_errors.append(error)
 
@@ -1092,7 +1872,7 @@ def test_track_retries_estimation_after_limit_change() -> None:
     if worker_errors:
         raise worker_errors[0]
     assert stop_after_values == [old_limit, new_limit]
-    assert owner.entries[("values", "key")] == "value"
+    assert owner.entries[("values", "key")] == ["value"]
     assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
 
 
@@ -1100,7 +1880,8 @@ def test_track_abandons_admission_during_continuous_limit_changes() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     budget.register(owner, 10_000)
-    owner.store("values", "key", "value")
+    value = ["value"]
+    owner.store("values", "key", value)
     estimator_calls = 0
 
     def changing_configuration_estimator(
@@ -1111,7 +1892,7 @@ def test_track_abandons_admission_during_continuous_limit_changes() -> None:
     ) -> int:
         nonlocal estimator_calls
         assert key == "key"
-        assert value == "value"
+        assert value == ["value"]
         assert stop_after is not None
         estimator_calls += 1
         if estimator_calls <= 100:
@@ -1126,7 +1907,7 @@ def test_track_abandons_admission_during_continuous_limit_changes() -> None:
         "estimate_cache_entry_size",
         side_effect=changing_configuration_estimator,
     ):
-        budget.track(owner, "values", "key", "value")
+        budget.track(owner, "values", "key", value)
 
     assert estimator_calls == 4
     assert ("values", "key") not in owner.entries
@@ -1140,7 +1921,8 @@ def test_track_discards_current_entry_after_estimator_exception() -> None:
     budget.register(owner, 10_000)
     owner.store("values", "key", "old")
     budget.track(owner, "values", "key", "old")
-    owner.store("values", "key", "new")
+    new_value = ["new"]
+    owner.store("values", "key", new_value)
     tracked_key = (id(owner), "values", "key")
 
     with (
@@ -1151,7 +1933,7 @@ def test_track_discards_current_entry_after_estimator_exception() -> None:
         ),
         pytest.raises(RuntimeError, match="estimation failed"),
     ):
-        budget.track(owner, "values", "key", "new")
+        budget.track(owner, "values", "key", new_value)
 
     assert ("values", "key") not in owner.entries
     assert tracked_key not in budget._entries
@@ -1163,7 +1945,8 @@ def test_failed_track_does_not_evict_newer_same_key_replacement() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     budget.register(owner, 10_000)
-    owner.store("values", "key", "old")
+    old_value = ["old"]
+    owner.store("values", "key", old_value)
 
     estimator_started = Event()
     allow_estimator_to_fail = Event()
@@ -1177,16 +1960,15 @@ def test_failed_track_does_not_evict_newer_same_key_replacement() -> None:
     ) -> int:
         assert key == "key"
         assert stop_after == 10_000
-        if value == "old":
+        if value is old_value:
             estimator_started.set()
             assert allow_estimator_to_fail.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             raise RuntimeError
-        assert value == "new"
-        return MIN_TRACKED_ENTRY_BYTES
+        raise AssertionError("new atomic replacement was estimated")  # noqa: TRY003
 
     def track_old_entry() -> None:
         try:
-            budget.track(owner, "values", "key", "old")
+            budget.track(owner, "values", "key", old_value)
         except BaseException as error:  # noqa: BLE001
             worker_errors.append(error)
 
@@ -1209,7 +1991,7 @@ def test_failed_track_does_not_evict_newer_same_key_replacement() -> None:
     assert len(worker_errors) == 1
     assert isinstance(worker_errors[0], RuntimeError)
     assert owner.entries[("values", "key")] == "new"
-    assert budget._entries[(id(owner), "values", "key")].size == (
+    assert budget._entries[(id(owner), "values", "key")].exact_bytes == (
         MIN_TRACKED_ENTRY_BYTES
     )
     assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
@@ -1222,7 +2004,8 @@ def test_track_does_not_reintroduce_accounting_after_owner_mutation(
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     budget.register(owner, 10_000)
-    owner.store("values", "key", "value")
+    value = ["value"]
+    owner.store("values", "key", value)
 
     estimator_started = Event()
     allow_estimator_to_finish = Event()
@@ -1235,7 +2018,7 @@ def test_track_does_not_reintroduce_accounting_after_owner_mutation(
         stop_after: int | None,
     ) -> int:
         assert key == "key"
-        assert value == "value"
+        assert value == ["value"]
         assert stop_after == 10_000
         estimator_started.set()
         assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
@@ -1243,7 +2026,7 @@ def test_track_does_not_reintroduce_accounting_after_owner_mutation(
 
     def track_entry() -> None:
         try:
-            budget.track(owner, "values", "key", "value")
+            budget.track(owner, "values", "key", value)
         except BaseException as error:  # noqa: BLE001
             worker_errors.append(error)
 
@@ -1276,7 +2059,8 @@ def test_track_keeps_latest_same_key_replacement_accounting() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     budget.register(owner, 10_000)
-    owner.store("values", "key", "old")
+    old_value = ["old"]
+    owner.store("values", "key", old_value)
 
     estimator_started = Event()
     allow_estimator_to_finish = Event()
@@ -1290,16 +2074,15 @@ def test_track_keeps_latest_same_key_replacement_accounting() -> None:
     ) -> int:
         assert key == "key"
         assert stop_after == 10_000
-        if value == "old":
+        if value is old_value:
             estimator_started.set()
             assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             return MIN_TRACKED_ENTRY_BYTES * 2
-        assert value == "new"
-        return MIN_TRACKED_ENTRY_BYTES
+        raise AssertionError("new atomic replacement was estimated")  # noqa: TRY003
 
     def track_old_entry() -> None:
         try:
-            budget.track(owner, "values", "key", "old")
+            budget.track(owner, "values", "key", old_value)
         except BaseException as error:  # noqa: BLE001
             worker_errors.append(error)
 
@@ -1323,7 +2106,10 @@ def test_track_keeps_latest_same_key_replacement_accounting() -> None:
     if worker_errors:
         raise worker_errors[0]
     assert owner.entries[("values", "key")] == "new"
-    assert budget._entries[(id(owner), "values", "key")].size == MIN_TRACKED_ENTRY_BYTES
+    assert (
+        budget._entries[(id(owner), "values", "key")].exact_bytes
+        == MIN_TRACKED_ENTRY_BYTES
+    )
     assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
 
 
@@ -1331,7 +2117,8 @@ def test_track_admits_distinct_entry_after_other_entry_is_tracked() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     budget.register(owner, 10_000)
-    owner.store("values", "a", "A")
+    a_value = ["A"]
+    owner.store("values", "a", a_value)
 
     estimator_started = Event()
     allow_estimator_to_finish = Event()
@@ -1345,17 +2132,16 @@ def test_track_admits_distinct_entry_after_other_entry_is_tracked() -> None:
     ) -> int:
         assert stop_after == 10_000
         if key == "a":
-            assert value == "A"
+            assert value is a_value
             estimator_started.set()
             assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
         else:
-            assert key == "b"
-            assert value == "B"
+            raise AssertionError("atomic entry was estimated")  # noqa: TRY003
         return MIN_TRACKED_ENTRY_BYTES
 
     def track_a() -> None:
         try:
-            budget.track(owner, "values", "a", "A")
+            budget.track(owner, "values", "a", a_value)
         except BaseException as error:  # noqa: BLE001
             worker_errors.append(error)
 
@@ -1378,7 +2164,7 @@ def test_track_admits_distinct_entry_after_other_entry_is_tracked() -> None:
     assert not worker.is_alive()
     if worker_errors:
         raise worker_errors[0]
-    assert owner.entries == {("values", "a"): "A", ("values", "b"): "B"}
+    assert owner.entries == {("values", "a"): a_value, ("values", "b"): "B"}
     assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES * 2
 
 
@@ -1386,7 +2172,8 @@ def test_track_rejects_pre_clear_attempt_after_owner_lifecycle_restarts() -> Non
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     budget.register(owner, 10_000)
-    owner.store("values", "key", "old")
+    old_value = ["old"]
+    owner.store("values", "key", old_value)
 
     estimator_started = Event()
     allow_estimator_to_finish = Event()
@@ -1400,16 +2187,15 @@ def test_track_rejects_pre_clear_attempt_after_owner_lifecycle_restarts() -> Non
     ) -> int:
         assert key == "key"
         assert stop_after == 10_000
-        if value == "old":
+        if value is old_value:
             estimator_started.set()
             assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
             return MIN_TRACKED_ENTRY_BYTES * 2
-        assert value == "new"
-        return MIN_TRACKED_ENTRY_BYTES
+        raise AssertionError("new atomic entry was estimated")  # noqa: TRY003
 
     def track_old_entry() -> None:
         try:
-            budget.track(owner, "values", "key", "old")
+            budget.track(owner, "values", "key", old_value)
         except BaseException as error:  # noqa: BLE001
             worker_errors.append(error)
 
@@ -1436,18 +2222,27 @@ def test_track_rejects_pre_clear_attempt_after_owner_lifecycle_restarts() -> Non
     if worker_errors:
         raise worker_errors[0]
     assert owner.entries[("values", "key")] == "new"
-    assert budget._entries[(id(owner), "values", "key")].size == MIN_TRACKED_ENTRY_BYTES
+    assert (
+        budget._entries[(id(owner), "values", "key")].exact_bytes
+        == MIN_TRACKED_ENTRY_BYTES
+    )
     assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
 
 
 def test_track_does_not_admit_entry_evicted_while_estimation_is_blocked() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(owner, entry_size * 2)
-    for key, value in (("a", "A"), ("b", "B")):
-        owner.store("values", key, value)
-        budget.track(owner, "values", key, value)
+    initial_limit = 1_000_000
+    budget.register(owner, initial_limit)
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        return_value=MIN_TRACKED_ENTRY_BYTES,
+    ):
+        for index in range(255):
+            value = [index]
+            owner.store("values", index, value)
+            budget.track(owner, "values", index, value)
 
     estimator_started = Event()
     allow_estimator_to_finish = Event()
@@ -1461,18 +2256,18 @@ def test_track_does_not_admit_entry_evicted_while_estimation_is_blocked() -> Non
         stop_after: int | None,
     ) -> int:
         nonlocal estimator_calls
-        assert key == "a"
-        assert value == "A"
-        assert stop_after in {entry_size, entry_size * 2}
+        assert key == 0
+        assert value == [0]
+        assert stop_after == initial_limit
         estimator_calls += 1
         if estimator_calls == 1:
             estimator_started.set()
             assert allow_estimator_to_finish.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
-        return entry_size
+        return MIN_TRACKED_ENTRY_BYTES
 
     def refresh_entry() -> None:
         try:
-            budget.refresh(owner, "values", "a", "A")
+            budget.refresh(owner, "values", 0, [0])
         except BaseException as error:  # noqa: BLE001
             worker_errors.append(error)
 
@@ -1485,7 +2280,7 @@ def test_track_does_not_admit_entry_evicted_while_estimation_is_blocked() -> Non
         worker.start()
         try:
             assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
-            budget.register(owner, entry_size)
+            budget.register(owner, MIN_TRACKED_ENTRY_BYTES * 2)
             allow_estimator_to_finish.set()
         finally:
             allow_estimator_to_finish.set()
@@ -1494,9 +2289,9 @@ def test_track_does_not_admit_entry_evicted_while_estimation_is_blocked() -> Non
     assert not worker.is_alive()
     if worker_errors:
         raise worker_errors[0]
-    assert ("values", "a") not in owner.entries
-    assert (id(owner), "values", "a") not in budget._entries
-    assert budget.estimated_bytes == entry_size
+    assert ("values", 0) not in owner.entries
+    assert (id(owner), "values", 0) not in budget._entries
+    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
 
 
 def test_register_only_advances_configuration_generation_for_limit_changes() -> None:
@@ -1514,7 +2309,7 @@ def test_register_only_advances_configuration_generation_for_limit_changes() -> 
     assert budget._configuration_generation == 2
 
 
-def test_disabling_budget_releases_attempt_tokens_for_removed_entries() -> None:
+def test_successful_admissions_do_not_leave_attempt_tokens() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
 
@@ -1523,7 +2318,7 @@ def test_disabling_budget_releases_attempt_tokens_for_removed_entries() -> None:
         owner.store("values", key, "value")
         budget.track(owner, "values", key, "value")
         tracked_key = (id(owner), "values", key)
-        assert tracked_key in budget._entry_attempt_generations
+        assert tracked_key not in budget._entry_attempt_generations
 
         budget.register(owner, None)
         owner._evict_run_cache_entry("values", key)
@@ -1537,7 +2332,8 @@ def test_disabling_budget_rejects_pre_disable_estimate_after_reenable() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     budget.register(owner, 10_000)
-    owner.store("values", "key", "value")
+    value = ["value"]
+    owner.store("values", "key", value)
 
     estimator_started = Event()
     allow_estimator_to_finish = Event()
@@ -1552,7 +2348,7 @@ def test_disabling_budget_rejects_pre_disable_estimate_after_reenable() -> None:
     ) -> int:
         nonlocal estimator_calls
         assert key == "key"
-        assert value == "value"
+        assert value == ["value"]
         assert stop_after == 10_000
         estimator_calls += 1
         invocation = estimator_calls
@@ -1564,7 +2360,7 @@ def test_disabling_budget_rejects_pre_disable_estimate_after_reenable() -> None:
 
     def track_entry() -> None:
         try:
-            budget.track(owner, "values", "key", "value")
+            budget.track(owner, "values", "key", value)
         except BaseException as error:  # noqa: BLE001
             worker_errors.append(error)
 
@@ -1589,7 +2385,8 @@ def test_disabling_budget_rejects_pre_disable_estimate_after_reenable() -> None:
     if worker_errors:
         raise worker_errors[0]
     assert estimator_calls == 2
-    assert budget._entries[(id(owner), "values", "key")].size == MIN_TRACKED_ENTRY_BYTES
+    entry = budget._entries[(id(owner), "values", "key")]
+    assert entry.stratum is not None
     assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
 
 
@@ -1598,8 +2395,8 @@ def test_budget_evicts_oldest_entry_across_owners() -> None:
     first = CacheOwner()
     second = CacheOwner()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(first, entry_size * 2)
-    budget.register(second, entry_size * 2)
+    budget.register(first, entry_size * 3)
+    budget.register(second, entry_size * 3)
 
     first.store("values", "a", "A")
     budget.track(first, "values", "a", "A")
@@ -1617,7 +2414,7 @@ def test_budget_touch_refreshes_recency() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(owner, entry_size * 2)
+    budget.register(owner, entry_size * 3)
     for key, value in (("a", "A"), ("b", "B")):
         owner.store("values", key, value)
         budget.track(owner, "values", key, value)
@@ -1634,7 +2431,7 @@ def test_budget_touch_many_preserves_latest_access_order() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(owner, entry_size * 3)
+    budget.register(owner, entry_size * 4)
     for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
         owner.store("values", key, value)
         budget.track(owner, "values", key, value)
@@ -1723,7 +2520,7 @@ def test_budget_refreshes_mru_after_eviction() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(owner, entry_size)
+    budget.register(owner, entry_size * 2)
     for key, value in (("a", "A"), ("b", "B")):
         owner.store("values", key, value)
         budget.track(owner, "values", key, value)
@@ -1801,9 +2598,12 @@ def test_budget_stale_owner_finalizer_preserves_replacement_mru() -> None:
         owner=replacement_reference,
         namespace="values",
         key="replacement",
-        size=entry_size,
+        exact_bytes=entry_size,
+        stratum=None,
+        shallow_bytes=0,
     )
     budget._mru_key = tracked_key
+    budget._exact_total_bytes = entry_size
     budget._total_bytes = entry_size
 
     budget._owner_finalizer(owner_id)(stale_reference)
@@ -1819,7 +2619,7 @@ def test_budget_refreshes_mru_after_oversized_rejection() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(owner, entry_size)
+    budget.register(owner, entry_size * 2)
     owner.store("values", "a", "A")
     budget.track(owner, "values", "a", "A")
     owner.store("values", "oversized", b"x" * 1024)
@@ -1923,7 +2723,7 @@ def test_budget_rebuilds_live_owners_when_limit_changes() -> None:
     budget.track(first, "values", "a", "A")
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
 
-    budget.register(second, entry_size)
+    budget.register(second, entry_size * 2)
     second.store("values", "b", "B")
     budget.track(second, "values", "b", "B")
 
@@ -1939,7 +2739,7 @@ def test_budget_rebuild_eviction_does_not_mutate_live_owner_iteration() -> None:
         owner.store("values", key, value)
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
 
-    budget.register(owner, entry_size * 2)
+    budget.register(owner, entry_size * 3)
 
     assert ("values", "a") not in owner.entries
     assert ("values", "b") in owner.entries
@@ -1951,13 +2751,13 @@ def test_budget_lowering_finite_limit_preserves_single_owner_lru_order() -> None
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(owner, entry_size * 3)
+    budget.register(owner, entry_size * 4)
     for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
         owner.store("values", key, value)
         budget.track(owner, "values", key, value)
 
     budget.touch(owner, "values", "a")
-    budget.register(owner, entry_size * 2)
+    budget.register(owner, entry_size * 3)
 
     assert ("values", "a") in owner.entries
     assert ("values", "b") not in owner.entries
@@ -1969,8 +2769,8 @@ def test_budget_lowering_finite_limit_preserves_cross_owner_lru_order() -> None:
     first = CacheOwner()
     second = CacheOwner()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(first, entry_size * 3)
-    budget.register(second, entry_size * 3)
+    budget.register(first, entry_size * 4)
+    budget.register(second, entry_size * 4)
     first.store("values", "a", "A")
     budget.track(first, "values", "a", "A")
     for key, value in (("b", "B"), ("c", "C")):
@@ -1979,7 +2779,7 @@ def test_budget_lowering_finite_limit_preserves_cross_owner_lru_order() -> None:
 
     budget.touch(first, "values", "a")
     budget._owners = OrderedOwnerRegistry((first, second))
-    budget.register(second, entry_size * 2)
+    budget.register(second, entry_size * 3)
 
     assert ("values", "a") in first.entries
     assert ("values", "b") not in second.entries
@@ -1990,12 +2790,12 @@ def test_budget_new_empty_owner_enforces_lower_finite_limit() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(owner, entry_size * 3)
+    budget.register(owner, entry_size * 4)
     for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
         owner.store("values", key, value)
         budget.track(owner, "values", key, value)
 
-    budget.register(CacheOwner(), entry_size * 2)
+    budget.register(CacheOwner(), entry_size * 3)
 
     assert ("values", "a") not in owner.entries
     assert ("values", "b") in owner.entries
@@ -2017,8 +2817,11 @@ def test_budget_stale_dead_owner_cleanup_preserves_replacement_accounting() -> N
         owner=replacement_reference,
         namespace="values",
         key="replacement",
-        size=entry_size,
+        exact_bytes=entry_size,
+        stratum=None,
+        shallow_bytes=0,
     )
+    budget._exact_total_bytes = entry_size
     budget._total_bytes = entry_size
 
     budget._owner_finalizer(owner_id)(stale_reference)
@@ -2030,13 +2833,13 @@ def test_budget_stale_dead_owner_cleanup_preserves_replacement_accounting() -> N
 def test_budget_reentrant_eviction_honors_raised_limit() -> None:
     budget = ProcessRunContextCacheBudget()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    owner = LimitRaisingCacheOwner(budget, entry_size * 2)
-    budget.register(owner, entry_size * 3)
+    owner = LimitRaisingCacheOwner(budget, entry_size * 3)
+    budget.register(owner, entry_size * 4)
     for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
         owner.store("values", key, value)
         budget.track(owner, "values", key, value)
 
-    budget.register(owner, entry_size)
+    budget.register(owner, entry_size * 2)
 
     assert ("values", "a") not in owner.entries
     assert ("values", "b") in owner.entries
@@ -2049,13 +2852,13 @@ def test_budget_registers_prepopulated_owner_when_finite_limit_changes() -> None
     first = CacheOwner()
     second = CacheOwner()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(first, entry_size * 3)
+    budget.register(first, entry_size * 4)
     first.store("values", "a", "A")
     budget.track(first, "values", "a", "A")
     for key, value in (("b", "B"), ("c", "C")):
         second.store("values", key, value)
 
-    budget.register(second, entry_size * 2)
+    budget.register(second, entry_size * 3)
 
     assert ("values", "a") not in first.entries
     assert ("values", "b") in second.entries
@@ -2068,13 +2871,13 @@ def test_budget_registers_prepopulated_owner_when_finite_limit_is_unchanged() ->
     first = CacheOwner()
     second = CacheOwner()
     entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
-    budget.register(first, entry_size * 2)
+    budget.register(first, entry_size * 3)
     first.store("values", "a", "A")
     budget.track(first, "values", "a", "A")
     for key, value in (("b", "B"), ("c", "C")):
         second.store("values", key, value)
 
-    budget.register(second, entry_size * 2)
+    budget.register(second, entry_size * 3)
 
     assert ("values", "a") not in first.entries
     assert ("values", "b") in second.entries
