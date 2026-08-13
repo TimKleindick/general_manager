@@ -1,4 +1,5 @@
 from collections.abc import Hashable, Iterable, Iterator
+from threading import Event, Thread
 from unittest import mock
 import math
 import sys
@@ -681,6 +682,135 @@ def test_unlimited_budget_operations_do_not_enter_lock_or_hash_key() -> None:
     budget.refresh(owner, "values", key, "value")
 
     assert key.hash_calls == 0
+
+
+def test_estimation_does_not_hold_coordinator_lock() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "initial", "value")
+    budget.track(owner, "values", "initial", "value")
+
+    estimator_started = Event()
+    allow_estimator_to_finish = Event()
+    worker_errors: list[BaseException] = []
+    reader_errors: list[BaseException] = []
+
+    def blocking_estimator(
+        key: Hashable,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        assert key == "blocked"
+        assert value == "value"
+        assert stop_after == 10_000
+        estimator_started.set()
+        assert allow_estimator_to_finish.wait(timeout=1)
+        return MIN_TRACKED_ENTRY_BYTES
+
+    def track_entry() -> None:
+        try:
+            budget.track(owner, "values", "blocked", "value")
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    read_completed = Event()
+
+    def read_budget() -> None:
+        try:
+            _ = budget.estimated_bytes
+        except BaseException as error:  # noqa: BLE001
+            reader_errors.append(error)
+        finally:
+            read_completed.set()
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        side_effect=blocking_estimator,
+    ):
+        worker = Thread(target=track_entry)
+        reader = Thread(target=read_budget)
+        reader_started = False
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=1)
+            reader.start()
+            reader_started = True
+            assert read_completed.wait(timeout=1), (
+                "estimation held the coordinator lock"
+            )
+        finally:
+            allow_estimator_to_finish.set()
+            worker.join(timeout=1)
+            if reader_started:
+                reader.join(timeout=1)
+
+    assert not worker.is_alive()
+    if reader_started:
+        assert not reader.is_alive()
+    if worker_errors:
+        raise worker_errors[0]
+    if reader_errors:
+        raise reader_errors[0]
+
+
+def test_track_retries_estimation_after_limit_change() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    old_limit = 10_000
+    new_limit = MIN_TRACKED_ENTRY_BYTES
+    budget.register(owner, old_limit)
+    owner.store("values", "key", "value")
+
+    estimator_started = Event()
+    allow_estimator_to_finish = Event()
+    stop_after_values: list[int | None] = []
+    worker_errors: list[BaseException] = []
+
+    def blocking_first_estimator(
+        key: Hashable,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        assert key == "key"
+        assert value == "value"
+        stop_after_values.append(stop_after)
+        if len(stop_after_values) == 1:
+            estimator_started.set()
+            assert allow_estimator_to_finish.wait(timeout=1)
+        return MIN_TRACKED_ENTRY_BYTES
+
+    def track_entry() -> None:
+        try:
+            budget.track(owner, "values", "key", "value")
+        except BaseException as error:  # noqa: BLE001
+            worker_errors.append(error)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        side_effect=blocking_first_estimator,
+    ):
+        worker = Thread(target=track_entry)
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=1)
+            with budget._lock:
+                budget._max_bytes = new_limit
+                budget._configuration_generation += 1
+            allow_estimator_to_finish.set()
+        finally:
+            allow_estimator_to_finish.set()
+            worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    if worker_errors:
+        raise worker_errors[0]
+    assert stop_after_values == [old_limit, new_limit]
+    assert budget.estimated_bytes <= new_limit
 
 
 def test_budget_evicts_oldest_entry_across_owners() -> None:

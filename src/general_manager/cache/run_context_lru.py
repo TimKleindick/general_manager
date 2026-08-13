@@ -118,6 +118,7 @@ class ProcessRunContextCacheBudget:
         self._entries: OrderedDict[TrackedKey, _TrackedEntry] = OrderedDict()
         self._total_bytes = 0
         self._max_bytes: int | None = None
+        self._configuration_generation = 0
 
     @property
     def estimated_bytes(self) -> int:
@@ -138,6 +139,7 @@ class ProcessRunContextCacheBudget:
 
             previous_max_bytes = self._max_bytes
             self._max_bytes = max_bytes
+            self._configuration_generation += 1
             if max_bytes is None:
                 self._entries.clear()
                 self._total_bytes = 0
@@ -161,10 +163,30 @@ class ProcessRunContextCacheBudget:
         """Record a stored entry and evict least-recently-used entries if needed."""
         if self._max_bytes is None:
             return
-        with self._lock:
-            if self._max_bytes is None:
+        while True:
+            with self._lock:
+                max_bytes = self._max_bytes
+                generation = self._configuration_generation
+            if max_bytes is None:
                 return
-            self._track_locked(owner, namespace, key, value)
+
+            estimated_bytes = estimate_cache_entry_size(
+                key,
+                value,
+                stop_after=max_bytes,
+            )
+
+            with self._lock:
+                if generation != self._configuration_generation:
+                    continue
+                self._track_estimated_locked(
+                    owner,
+                    namespace,
+                    key,
+                    estimated_bytes,
+                    max_bytes,
+                )
+                return
 
     def touch(
         self,
@@ -225,27 +247,46 @@ class ProcessRunContextCacheBudget:
     def _track_owner_entries_locked(self, owner: RunContextCacheOwner) -> None:
         entries = tuple(owner._iter_run_cache_entries())
         for namespace, key, value in entries:
-            self._track_locked(owner, namespace, key, value)
+            self._track_value_locked(owner, namespace, key, value)
 
-    def _track_locked(
+    def _track_value_locked(
         self,
         owner: RunContextCacheOwner,
         namespace: RunCacheNamespace,
         key: Hashable,
         value: object,
     ) -> None:
+        """Estimate rebuild entries while locked; normal track() admission is unlocked.
+
+        Only configuration rebuilds estimate while holding the coordinator lock.
+        """
         max_bytes = self._max_bytes
         if max_bytes is None:
             return
-
-        tracked_key = (id(owner), namespace, key)
-        self._remove_entry_locked(tracked_key)
-        owner_reference = self._owner_reference_locked(owner)
         estimated_bytes = estimate_cache_entry_size(
             key,
             value,
             stop_after=max_bytes,
         )
+        self._track_estimated_locked(
+            owner,
+            namespace,
+            key,
+            estimated_bytes,
+            max_bytes,
+        )
+
+    def _track_estimated_locked(
+        self,
+        owner: RunContextCacheOwner,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+        estimated_bytes: int,
+        max_bytes: int,
+    ) -> None:
+        tracked_key = (id(owner), namespace, key)
+        self._remove_entry_locked(tracked_key)
+        owner_reference = self._owner_reference_locked(owner)
         if estimated_bytes > max_bytes:
             owner._evict_run_cache_entry(namespace, key)
             logger.debug(
