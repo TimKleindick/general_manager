@@ -2,6 +2,59 @@
 
 <!-- version list -->
 
+## v0.69.1 (2026-08-13)
+
+### Bug Fixes
+
+- Clear run-cache attempt tokens when disabled
+  ([`a82af2d`](https://github.com/TimKleindick/general_manager/commit/a82af2d64c8f09a39f403d53eef00c0261175e66))
+
+- Harden run-cache size estimation
+  ([`221244d`](https://github.com/TimKleindick/general_manager/commit/221244de57b29fabd594a792151fb7a7479fda38))
+
+- Reject stale run-cache size estimates
+  ([`5f89cdf`](https://github.com/TimKleindick/general_manager/commit/5f89cdfb7755261bc34cc47e742ffe9f50a524d3))
+
+- Scope run-cache estimate invalidation by key
+  ([`2af39a7`](https://github.com/TimKleindick/general_manager/commit/2af39a73f23e2bde6ae80ba42595b0427d9edb56))
+
+- Stop projected cache-size cycles
+  ([`0ddcacf`](https://github.com/TimKleindick/general_manager/commit/0ddcacf71ad6292035adc2193a49d501bb49b0fa))
+
+- Synchronize batched run-cache recency
+  ([`dcaa666`](https://github.com/TimKleindick/general_manager/commit/dcaa6665172526d607e2505eeeaff42f37f2646e))
+
+- **cache**: Address run-context budget review
+  ([`f4c050c`](https://github.com/TimKleindick/general_manager/commit/f4c050cf013327d0342eabf4f7c99b762ae75a9e))
+
+### Documentation
+
+- Explain batched run-cache recency
+  ([`f819946`](https://github.com/TimKleindick/general_manager/commit/f819946e1e74f0b055edce31cab44edd9000cf09))
+
+### Performance Improvements
+
+- Accelerate scalar run-cache admission
+  ([`7769d26`](https://github.com/TimKleindick/general_manager/commit/7769d262e0e151f1183a1af8d0d81aa82f9b0928))
+
+- Batch capped run-cache recency updates
+  ([`2f8cedd`](https://github.com/TimKleindick/general_manager/commit/2f8cedd90b91ee3c170e0a16897c8dc88c353f42))
+
+- Benchmark capped run contexts
+  ([`99a72b1`](https://github.com/TimKleindick/general_manager/commit/99a72b116296fb300e97945cdc253d243a021dcb))
+
+- Reduce run-cache sizing overhead
+  ([`f1a6b82`](https://github.com/TimKleindick/general_manager/commit/f1a6b82d288551ae847ad6643431fbb1adc2c898))
+
+- Size run-cache entries outside coordinator lock
+  ([`7e5393b`](https://github.com/TimKleindick/general_manager/commit/7e5393b426bc7862b37ed1813215817fc42a2a3d))
+
+### Testing
+
+- Distinguish stale cache estimator calls
+  ([`41ad3a3`](https://github.com/TimKleindick/general_manager/commit/41ad3a3ce61d8a7d3f83a7024ebebaae01b40b9a))
+
+
 ## v0.69.0 (2026-08-12)
 
 ### Bug Fixes
