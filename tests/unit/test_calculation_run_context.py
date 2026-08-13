@@ -18,6 +18,7 @@ from general_manager.cache.dependency_publish import (
     PendingDependencyCachePublication,
 )
 from general_manager.cache.run_context import (
+    PendingRunCacheTouch,
     RUN_CONTEXT_TOUCH_BATCH_SIZE,
     CalculationRunContext,
     current_calculation_run_context,
@@ -592,6 +593,74 @@ def test_foreign_thread_touch_bypasses_owner_local_batch() -> None:
                 assert first.get("a") == "A"
                 assert second.get("b") is None
                 assert second.get("c") == "C"
+
+
+def test_disabling_budget_from_foreign_thread_does_not_mutate_touch_iteration() -> None:
+    iteration_started = Event()
+    allow_iteration_to_finish = Event()
+    disable_callback_started = Event()
+    disable_completed = Event()
+    reader_errors: list[BaseException] = []
+    disabler_errors: list[BaseException] = []
+
+    class BlockingIterationTouches(dict[PendingRunCacheTouch, None]):
+        def __iter__(self) -> Iterator[PendingRunCacheTouch]:
+            iterator = super().__iter__()
+            iteration_started.set()
+            assert allow_iteration_to_finish.wait(timeout=5)
+            yield from iterator
+
+    with override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}):
+        context = CalculationRunContext()
+        original_set_budget_enabled = context._set_run_cache_budget_enabled
+
+        def signal_budget_change(enabled: bool) -> None:
+            if not enabled:
+                disable_callback_started.set()
+            original_set_budget_enabled(enabled)
+
+        context._set_run_cache_budget_enabled = signal_budget_change  # type: ignore[method-assign]
+
+        def read_repeatedly() -> None:
+            try:
+                with context:
+                    context.set("key", "value")
+                    context._pending_run_cache_touches = BlockingIterationTouches(
+                        context._pending_run_cache_touches
+                    )
+                    for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+                        assert context.get("key") == "value"
+            except BaseException as error:  # noqa: BLE001
+                reader_errors.append(error)
+
+        def disable_budget() -> None:
+            try:
+                run_context_cache_budget.register(context, None)
+            except BaseException as error:  # noqa: BLE001
+                disabler_errors.append(error)
+            finally:
+                disable_completed.set()
+
+        reader = Thread(target=read_repeatedly)
+        disabler = Thread(target=disable_budget)
+        reader.start()
+        try:
+            assert iteration_started.wait(timeout=5)
+            disabler.start()
+            assert disable_callback_started.wait(timeout=5)
+            assert not disable_completed.wait(timeout=0.1)
+        finally:
+            allow_iteration_to_finish.set()
+            reader.join(timeout=5)
+            if disabler.ident is not None:
+                disabler.join(timeout=5)
+
+    assert not reader.is_alive()
+    assert not disabler.is_alive()
+    if reader_errors:
+        raise reader_errors[0]
+    if disabler_errors:
+        raise disabler_errors[0]
 
 
 def test_run_context_does_not_retain_value_larger_than_budget() -> None:

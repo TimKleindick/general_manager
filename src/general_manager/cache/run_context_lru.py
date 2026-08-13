@@ -32,6 +32,7 @@ MIN_TRACKED_ENTRY_BYTES = 256
 RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD = 128
 RUN_CONTEXT_SIZE_SAMPLE_COUNT = 64
 RUN_CONTEXT_SIZE_SAFETY_MARGIN = Fraction(21, 20)
+RUN_CONTEXT_TRACK_MAX_REESTIMATES = 3
 _INVALID_MAX_BYTES_MESSAGE = (
     'GENERAL_MANAGER["RUN_CONTEXT_CACHE_MAX_BYTES"] must be None or a '
     "non-negative integer number of bytes."
@@ -196,6 +197,7 @@ class ProcessRunContextCacheBudget:
             entry_attempt_generation = self._next_admission_generation_locked()
             self._entry_attempt_generations[tracked_key] = entry_attempt_generation
 
+        reestimate_count = 0
         while True:
             try:
                 estimated_bytes = estimate_cache_entry_size(
@@ -224,6 +226,16 @@ class ProcessRunContextCacheBudget:
                 ):
                     return
                 if configuration_generation != self._configuration_generation:
+                    if reestimate_count >= RUN_CONTEXT_TRACK_MAX_REESTIMATES:
+                        self._entry_attempt_generations.pop(tracked_key, None)
+                        self._remove_entry_locked(tracked_key)
+                        owner._evict_run_cache_entry(namespace, key)
+                        logger.debug(
+                            "run cache entry skipped after repeated budget changes",
+                            context={"namespace": namespace},
+                        )
+                        return
+                    reestimate_count += 1
                     max_bytes = self._max_bytes
                     configuration_generation = self._configuration_generation
                     if max_bytes is None:
@@ -574,6 +586,8 @@ def _static_storage_plan(
 def _stratified_indexes(length: int, sample_count: int) -> tuple[int, ...]:
     if sample_count >= length:
         return tuple(range(length))
+    if sample_count == 1:
+        return (0,)
     return tuple(
         (index * (length - 1)) // (sample_count - 1) for index in range(sample_count)
     )

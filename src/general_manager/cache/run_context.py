@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from threading import get_ident
+from threading import RLock, get_ident
 from types import TracebackType
 from typing import TYPE_CHECKING, Optional, TypeVar, cast
 
@@ -107,6 +107,7 @@ class CalculationRunContext:
         ] = {}
         self._dependency_cache_publish_batch_size = dependency_cache_publish_batch_size
         self._tokens: list[Token[CalculationRunContext | None]] = []
+        self._run_cache_touch_lock = RLock()
         self._pending_run_cache_touches: dict[PendingRunCacheTouch, None] = {}
         self._last_pending_run_cache_touch: PendingRunCacheTouch | None = None
         self._run_cache_touch_count = 0
@@ -129,12 +130,13 @@ class CalculationRunContext:
                 yield "dependency_hits", key, hit
 
     def _set_run_cache_budget_enabled(self, enabled: bool) -> None:
-        """Refresh the lock-free owner hint after a coordinator transition."""
-        self._run_cache_budget_enabled = enabled
-        if not enabled:
-            self._pending_run_cache_touches.clear()
-            self._last_pending_run_cache_touch = None
-            self._run_cache_touch_count = 0
+        """Refresh the owner hint after a coordinator transition."""
+        with self._run_cache_touch_lock:
+            self._run_cache_budget_enabled = enabled
+            if not enabled:
+                self._pending_run_cache_touches.clear()
+                self._last_pending_run_cache_touch = None
+                self._run_cache_touch_count = 0
 
     def _evict_run_cache_entry(
         self,
@@ -205,50 +207,75 @@ class CalculationRunContext:
         namespace: RunCacheNamespace,
         key: Hashable,
     ) -> None:
-        if not self._run_cache_budget_enabled:
-            return
         pending_key = (namespace, key)
-        if pending_key != self._last_pending_run_cache_touch:
-            self._pending_run_cache_touches.pop(pending_key, None)
-            self._pending_run_cache_touches[pending_key] = None
-            self._last_pending_run_cache_touch = pending_key
+        with self._run_cache_touch_lock:
+            if not self._run_cache_budget_enabled:
+                return
+            if pending_key != self._last_pending_run_cache_touch:
+                self._pending_run_cache_touches.pop(pending_key, None)
+                self._pending_run_cache_touches[pending_key] = None
+                self._last_pending_run_cache_touch = pending_key
         self._queue_repeated_run_cache_touch(pending_key)
 
     def _queue_repeated_run_cache_touch(
         self,
         pending_key: PendingRunCacheTouch,
     ) -> bool:
-        if not self._run_cache_budget_enabled:
-            return False
-        if self._run_cache_touch_thread_id != get_ident():
+        touch_immediately = False
+        touches_to_flush: tuple[PendingRunCacheTouch, ...] = ()
+        with self._run_cache_touch_lock:
+            if not self._run_cache_budget_enabled:
+                return False
+            if self._run_cache_touch_thread_id != get_ident():
+                touch_immediately = True
+            elif pending_key != self._last_pending_run_cache_touch:
+                return False
+            else:
+                count = self._run_cache_touch_count + 1
+                if count < RUN_CONTEXT_TOUCH_BATCH_SIZE:
+                    self._run_cache_touch_count = count
+                    return True
+                touches_to_flush = self._take_run_cache_touches_locked()
+        if touch_immediately:
             run_context_cache_budget.touch(self, *pending_key)
             return True
-        if pending_key != self._last_pending_run_cache_touch:
-            return False
-        count = self._run_cache_touch_count + 1
-        if count < RUN_CONTEXT_TOUCH_BATCH_SIZE:
-            self._run_cache_touch_count = count
-            return True
-        self._flush_run_cache_touches()
+        run_context_cache_budget.touch_many(self, touches_to_flush)
         return True
 
-    def _discard_run_cache_touch(self, pending_key: PendingRunCacheTouch) -> None:
-        self._pending_run_cache_touches.pop(pending_key, None)
-        if pending_key == self._last_pending_run_cache_touch:
-            self._last_pending_run_cache_touch = next(
-                reversed(self._pending_run_cache_touches),
-                None,
-            )
+    def _touch_run_cache_entry(
+        self,
+        namespace: RunCacheNamespace,
+        key: Hashable,
+    ) -> None:
+        pending_key: PendingRunCacheTouch = (namespace, key)
+        if not self._queue_repeated_run_cache_touch(pending_key):
+            self._queue_run_cache_touch(namespace, key)
 
-    def _flush_run_cache_touches(self) -> None:
-        if not self._pending_run_cache_touches:
-            self._last_pending_run_cache_touch = None
-            self._run_cache_touch_count = 0
-            return
+    def _discard_run_cache_touch(self, pending_key: PendingRunCacheTouch) -> None:
+        with self._run_cache_touch_lock:
+            self._pending_run_cache_touches.pop(pending_key, None)
+            if pending_key == self._last_pending_run_cache_touch:
+                self._last_pending_run_cache_touch = next(
+                    reversed(self._pending_run_cache_touches),
+                    None,
+                )
+
+    def _take_run_cache_touches_locked(
+        self,
+    ) -> tuple[PendingRunCacheTouch, ...]:
         touches = tuple(self._pending_run_cache_touches)
         self._pending_run_cache_touches.clear()
         self._last_pending_run_cache_touch = None
         self._run_cache_touch_count = 0
+        return touches
+
+    def _flush_run_cache_touches(self) -> None:
+        with self._run_cache_touch_lock:
+            if not self._pending_run_cache_touches:
+                self._last_pending_run_cache_touch = None
+                self._run_cache_touch_count = 0
+                return
+            touches = self._take_run_cache_touches_locked()
         run_context_cache_budget.touch_many(self, touches)
 
     @staticmethod
@@ -262,12 +289,13 @@ class CalculationRunContext:
     def __enter__(self) -> "CalculationRunContext":
         """Activate this context and return it for the `with` block."""
         if not self._tokens:
-            self._pending_run_cache_touches.clear()
-            self._last_pending_run_cache_touch = None
-            self._run_cache_touch_count = 0
-            self._run_cache_touch_thread_id = get_ident()
             max_bytes = resolve_run_context_cache_max_bytes()
-            self._run_cache_budget_enabled = max_bytes is not None
+            with self._run_cache_touch_lock:
+                self._pending_run_cache_touches.clear()
+                self._last_pending_run_cache_touch = None
+                self._run_cache_touch_count = 0
+                self._run_cache_touch_thread_id = get_ident()
+                self._run_cache_budget_enabled = max_bytes is not None
             run_context_cache_budget.register(
                 self,
                 max_bytes,
@@ -306,10 +334,11 @@ class CalculationRunContext:
         token = self._tokens.pop()
         is_outermost_exit = not self._tokens
         if is_outermost_exit:
-            self._pending_run_cache_touches.clear()
-            self._last_pending_run_cache_touch = None
-            self._run_cache_touch_count = 0
-            self._run_cache_touch_thread_id = None
+            with self._run_cache_touch_lock:
+                self._pending_run_cache_touches.clear()
+                self._last_pending_run_cache_touch = None
+                self._run_cache_touch_count = 0
+                self._run_cache_touch_thread_id = None
         try:
             if is_outermost_exit:
                 if exc_type is None:
@@ -344,9 +373,7 @@ class CalculationRunContext:
             value = loader()
             self._store_run_value(scoped_key, value)
             return value
-        pending_key: PendingRunCacheTouch = ("values", scoped_key)
-        if not self._queue_repeated_run_cache_touch(pending_key):
-            self._queue_run_cache_touch("values", scoped_key)
+        self._touch_run_cache_entry("values", scoped_key)
         return cast(T, value)
 
     def get(self, key: Hashable, default: object = None) -> object:
@@ -356,9 +383,7 @@ class CalculationRunContext:
             value = self._values[scoped_key]
         except KeyError:
             return default
-        pending_key: PendingRunCacheTouch = ("values", scoped_key)
-        if not self._queue_repeated_run_cache_touch(pending_key):
-            self._queue_run_cache_touch("values", scoped_key)
+        self._touch_run_cache_entry("values", scoped_key)
         return value
 
     def set(self, key: Hashable, value: object) -> None:
@@ -390,9 +415,7 @@ class CalculationRunContext:
         except KeyError:
             return default
         if key not in self._dependency_cache_pending_publications:
-            pending_key: PendingRunCacheTouch = ("dependency_hits", key)
-            if not self._queue_repeated_run_cache_touch(pending_key):
-                self._queue_run_cache_touch("dependency_hits", key)
+            self._touch_run_cache_entry("dependency_hits", key)
         return hit
 
     def buffer_dependency_cache_publication(
@@ -815,9 +838,7 @@ class CalculationRunContext:
         scoped_key = self._scoped_key(key)
         if scoped_key not in self._values:
             return False
-        pending_key: PendingRunCacheTouch = ("values", scoped_key)
-        if not self._queue_repeated_run_cache_touch(pending_key):
-            self._queue_run_cache_touch("values", scoped_key)
+        self._touch_run_cache_entry("values", scoped_key)
         return True
 
     def __contains__(self, key: Hashable) -> bool:
