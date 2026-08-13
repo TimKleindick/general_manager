@@ -105,6 +105,7 @@ class _StaticStoragePlan:
 class _WeightedCandidate:
     value: object
     weight: float
+    ancestor_ids: frozenset[int] = frozenset()
 
 
 class ProcessRunContextCacheBudget:
@@ -446,12 +447,14 @@ def _sample_container_children(
 ) -> tuple[_WeightedCandidate, ...]:
     value = candidate.value
     value_type = type(value)
+    child_ancestor_ids = candidate.ancestor_ids | frozenset((id(value),))
     if _is_exact_type(value_type, (list, tuple)):
         sequence = cast(list[object] | tuple[object, ...], value)
         length = len(sequence)
         if length <= RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD:
             return tuple(
-                _WeightedCandidate(item, candidate.weight) for item in sequence
+                _WeightedCandidate(item, candidate.weight, child_ancestor_ids)
+                for item in sequence
             )
         sample_indexes = _stratified_indexes(length, RUN_CONTEXT_SIZE_SAMPLE_COUNT)
         sample_weight = (
@@ -461,7 +464,7 @@ def _sample_container_children(
             * RUN_CONTEXT_SIZE_SAFETY_MARGIN
         )
         return tuple(
-            _WeightedCandidate(sequence[index], sample_weight)
+            _WeightedCandidate(sequence[index], sample_weight, child_ancestor_ids)
             for index in sample_indexes
         )
 
@@ -469,7 +472,7 @@ def _sample_container_children(
         mapping = cast(dict[object, object], value)
         if len(mapping) <= RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD:
             return tuple(
-                _WeightedCandidate(item, candidate.weight)
+                _WeightedCandidate(item, candidate.weight, child_ancestor_ids)
                 for entry in mapping.items()
                 for item in entry
             )
@@ -490,7 +493,7 @@ def _sample_container_children(
             * RUN_CONTEXT_SIZE_SAFETY_MARGIN
         )
         return tuple(
-            _WeightedCandidate(item, sample_weight)
+            _WeightedCandidate(item, sample_weight, child_ancestor_ids)
             for entry in sample_entries
             for item in entry
         )
@@ -499,7 +502,8 @@ def _sample_container_children(
         container = cast(set[object] | frozenset[object], value)
         if len(container) <= RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD:
             return tuple(
-                _WeightedCandidate(item, candidate.weight) for item in container
+                _WeightedCandidate(item, candidate.weight, child_ancestor_ids)
+                for item in container
             )
         sample_items = tuple(islice(container, RUN_CONTEXT_SIZE_SAMPLE_COUNT))
         sample_weight = (
@@ -508,7 +512,10 @@ def _sample_container_children(
             / len(sample_items)
             * RUN_CONTEXT_SIZE_SAFETY_MARGIN
         )
-        return tuple(_WeightedCandidate(item, sample_weight) for item in sample_items)
+        return tuple(
+            _WeightedCandidate(item, sample_weight, child_ancestor_ids)
+            for item in sample_items
+        )
 
     return ()
 
@@ -528,6 +535,8 @@ def estimate_cache_entry_size(
     while candidates:
         candidate = candidates.pop()
         candidate_id = id(candidate.value)
+        if candidate_id in candidate.ancestor_ids:
+            continue
         previous_weight = seen_weights.get(candidate_id, 0.0)
         incremental_weight = candidate.weight - previous_weight
         if incremental_weight <= 0:
@@ -574,6 +583,7 @@ def estimate_cache_entry_size(
                                 candidate_type,
                             ),
                             incremental_weight,
+                            candidate.ancestor_ids | frozenset((candidate_id,)),
                         )
                     )
                 except (AttributeError, TypeError):
@@ -589,6 +599,7 @@ def estimate_cache_entry_size(
                                 candidate_type,
                             ),
                             incremental_weight,
+                            candidate.ancestor_ids | frozenset((candidate_id,)),
                         )
                     )
                 except (AttributeError, TypeError):
