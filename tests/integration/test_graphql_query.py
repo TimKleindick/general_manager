@@ -61,15 +61,15 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self.commercials.Factory.create_batch(10)
 
     def _create_projects_for_relation_sorting(self):
-        alpha = self.commercials.create(
-            creator_id=self.user.id,
-            name="Alpha",
-            capex="1 USD",
-            opex="1 USD",
-        )
         zulu = self.commercials.create(
             creator_id=self.user.id,
             name="Zulu",
+            capex="1 USD",
+            opex="1 USD",
+        )
+        alpha = self.commercials.create(
+            creator_id=self.user.id,
+            name="Alpha",
             capex="1 USD",
             opex="1 USD",
         )

@@ -156,13 +156,14 @@ true. That fallback applies only when the resolver returns `None`; other falsey
 bucket-like values are used as returned.
 
 `sortBy` accepts an ordered list of keys. GraphQL's list coercion also keeps an
-inline singleton such as `sortBy: name` valid. The first key is primary, later
-keys break ties, and `reverse: true` reverses every key in the list. Generated
-sort enums expose a direct manager field as a sort by that manager's identifier;
-for example, `sortBy: commercials` orders projects by the related commercial
-ID. A directly related scalar is available through a one-hop key such as
-`commercials__name`. Collection relations and multi-hop paths such as
-`commercials__owner__name` are not exposed as sort options. Top-level and
+inline singleton such as `sortBy: name` valid. An empty list, `sortBy: []`, is a
+no-op equivalent to omitting `sortBy` or passing `sortBy: null`. The first key is
+primary, later keys break ties, and `reverse: true` reverses every key in the
+list. Generated sort enums expose a direct manager field as a sort by that
+manager's identifier; for example, `sortBy: commercials` orders projects by the
+related commercial ID. A directly related scalar is available through a one-hop
+key such as `commercials__name`. Collection relations and multi-hop paths such
+as `commercials__owner__name` are not exposed as sort options. Top-level and
 generated relation-list fields use the same list-valued sort contract.
 
 ```graphql
