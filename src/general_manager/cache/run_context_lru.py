@@ -119,7 +119,9 @@ class ProcessRunContextCacheBudget:
         self._total_bytes = 0
         self._max_bytes: int | None = None
         self._configuration_generation = 0
-        self._owner_mutation_generations: dict[int, int] = {}
+        self._next_admission_generation = 0
+        self._owner_lifecycle_generations: dict[int, int] = {}
+        self._entry_attempt_generations: dict[TrackedKey, int] = {}
 
     @property
     def estimated_bytes(self) -> int:
@@ -170,7 +172,12 @@ class ProcessRunContextCacheBudget:
             if max_bytes is None:
                 return
             owner_id = id(owner)
-            owner_mutation_generation = self._invalidate_owner_locked(owner_id)
+            owner_lifecycle_generation = self._owner_lifecycle_generation_locked(
+                owner_id
+            )
+            tracked_key = (owner_id, namespace, key)
+            entry_attempt_generation = self._next_admission_generation_locked()
+            self._entry_attempt_generations[tracked_key] = entry_attempt_generation
 
         while True:
             estimated_bytes = estimate_cache_entry_size(
@@ -180,8 +187,10 @@ class ProcessRunContextCacheBudget:
             )
 
             with self._lock:
-                if owner_mutation_generation != self._owner_mutation_generations.get(
+                if owner_lifecycle_generation != self._owner_lifecycle_generations.get(
                     owner_id, 0
+                ) or entry_attempt_generation != self._entry_attempt_generations.get(
+                    tracked_key, 0
                 ):
                     return
                 if configuration_generation != self._configuration_generation:
@@ -227,8 +236,9 @@ class ProcessRunContextCacheBudget:
         with self._lock:
             if self._max_bytes is None:
                 return
-            self._invalidate_owner_locked(id(owner))
-            self._remove_entry_locked((id(owner), namespace, key))
+            tracked_key = (id(owner), namespace, key)
+            self._entry_attempt_generations.pop(tracked_key, None)
+            self._remove_entry_locked(tracked_key)
 
     def refresh(
         self,
@@ -246,11 +256,10 @@ class ProcessRunContextCacheBudget:
         """Remove one owner's accounting without changing its cache storage."""
         with self._lock:
             owner_id = id(owner)
-            self._invalidate_owner_locked(owner_id)
+            self._clear_owner_attempts_locked(owner_id)
             self._remove_owner_entries_locked(owner_id)
             self._owner_references.pop(owner_id, None)
             self._owners.discard(owner)
-            self._owner_mutation_generations.pop(owner_id, None)
 
     def _rebuild_locked(self) -> None:
         self._entries.clear()
@@ -302,7 +311,7 @@ class ProcessRunContextCacheBudget:
         self._remove_entry_locked(tracked_key)
         owner_reference = self._owner_reference_locked(owner)
         if estimated_bytes > max_bytes:
-            self._invalidate_owner_locked(id(owner))
+            self._entry_attempt_generations.pop(tracked_key, None)
             owner._evict_run_cache_entry(namespace, key)
             logger.debug(
                 "run cache entry skipped because it exceeds the process budget",
@@ -328,12 +337,12 @@ class ProcessRunContextCacheBudget:
             max_bytes = self._max_bytes
             if max_bytes is None or self._total_bytes <= max_bytes:
                 return
-            _, entry = self._entries.popitem(last=False)
+            tracked_key, entry = self._entries.popitem(last=False)
             self._total_bytes -= entry.size
             owner = entry.owner()
             if owner is None:
                 continue
-            self._invalidate_owner_locked(id(owner))
+            self._entry_attempt_generations.pop(tracked_key, None)
             owner._evict_run_cache_entry(entry.namespace, entry.key)
             logger.debug(
                 "run cache entry evicted by process-wide LRU budget",
@@ -354,10 +363,23 @@ class ProcessRunContextCacheBudget:
             if tracked_key[0] == owner_id:
                 self._remove_entry_locked(tracked_key)
 
-    def _invalidate_owner_locked(self, owner_id: int) -> int:
-        generation = self._owner_mutation_generations.get(owner_id, 0) + 1
-        self._owner_mutation_generations[owner_id] = generation
+    def _next_admission_generation_locked(self) -> int:
+        self._next_admission_generation += 1
+        return self._next_admission_generation
+
+    def _owner_lifecycle_generation_locked(self, owner_id: int) -> int:
+        generation = self._owner_lifecycle_generations.get(owner_id)
+        if generation is not None:
+            return generation
+        generation = self._next_admission_generation_locked()
+        self._owner_lifecycle_generations[owner_id] = generation
         return generation
+
+    def _clear_owner_attempts_locked(self, owner_id: int) -> None:
+        for tracked_key in tuple(self._entry_attempt_generations):
+            if tracked_key[0] == owner_id:
+                self._entry_attempt_generations.pop(tracked_key)
+        self._owner_lifecycle_generations.pop(owner_id, None)
 
     def _owner_reference_locked(
         self,
@@ -370,6 +392,7 @@ class ProcessRunContextCacheBudget:
 
         if owner_reference is not None:
             self._remove_owner_entries_locked(owner_id)
+            self._clear_owner_attempts_locked(owner_id)
         owner_reference = ref(owner, self._owner_finalizer(owner_id))
         self._owner_references[owner_id] = owner_reference
         return owner_reference
@@ -385,8 +408,8 @@ class ProcessRunContextCacheBudget:
                 if self._owner_references.get(owner_id) is not owner_reference:
                     return
                 self._remove_owner_entries_locked(owner_id)
+                self._clear_owner_attempts_locked(owner_id)
                 self._owner_references.pop(owner_id, None)
-                self._owner_mutation_generations.pop(owner_id, None)
 
         return remove_dead_owner
 
