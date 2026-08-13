@@ -97,6 +97,11 @@ Calculation buckets will accept `__` paths in addition to their existing dotted
 paths by translating `__` to `.` when constructing `operator.attrgetter`
 instances. Existing programmatic calls that use dotted paths remain valid.
 
+Request-backed buckets will use the same nested attribute-path resolution when
+sorting materialized manager objects. Direct manager and related-scalar enum
+values are therefore executable across database, calculation, request-backed,
+and grouped list results rather than being conditionally omitted by backend.
+
 Grouped results retain the current behavior: sorting runs after grouping and
 before pagination. The group bucket will use the same nested attribute-path
 resolution as calculation buckets so relation options do not fail merely
@@ -124,13 +129,14 @@ Tests will cover:
 4. A manager option orders by the related identifier.
 5. A flattened related scalar option orders ORM-backed results.
 6. Compound root and related keys work for a calculation-backed list.
-7. `reverse` applies to all compound keys.
-8. Empty, null, and omitted sort lists preserve existing order.
-9. Collection relations, nested relation hops, and related computed properties
+7. Compound root and related keys work for a request-backed list.
+8. `reverse` applies to all compound keys.
+9. Empty, null, and omitted sort lists preserve existing order.
+10. Collection relations, nested relation hops, and related computed properties
    are absent from the generated enum.
-10. Generated relation-list fields accept the same compound options as
+11. Generated relation-list fields accept the same compound options as
     top-level fields.
-11. Grouping and pagination retain compound sort order.
+12. Grouping and pagination retain compound sort order.
 
 Documentation for generated GraphQL list queries will be updated with the new
 list syntax, manager-field semantics, direction behavior, and typed-variable
