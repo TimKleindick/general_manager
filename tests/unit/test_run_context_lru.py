@@ -1229,6 +1229,96 @@ def test_budget_touch_refreshes_recency() -> None:
     assert ("values", "b") not in owner.entries
 
 
+def test_budget_touch_many_preserves_latest_access_order() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    budget.register(owner, entry_size * 3)
+    for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
+        owner.store("values", key, value)
+        budget.track(owner, "values", key, value)
+
+    budget.touch_many(
+        owner,
+        (("values", "a"), ("values", "b"), ("values", "a")),
+    )
+    owner.store("values", "d", "D")
+    budget.track(owner, "values", "d", "D")
+
+    assert ("values", "a") in owner.entries
+    assert ("values", "b") in owner.entries
+    assert ("values", "c") not in owner.entries
+    assert ("values", "d") in owner.entries
+
+
+def test_budget_touch_skips_lock_for_current_mru_entry() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    owner.store("values", "key", "value")
+    budget.track(owner, "values", "key", "value")
+    original_lock = budget._lock
+    budget._lock = RaisingLock()
+
+    try:
+        budget.touch(owner, "values", "key")
+    finally:
+        budget._lock = original_lock
+
+
+def test_budget_touch_skips_lock_for_mru_after_current_entry_is_removed() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    for key in ("first", "second"):
+        owner.store("values", key, key)
+        budget.track(owner, "values", key, key)
+    owner.entries.pop(("values", "second"))
+    budget.remove(owner, "values", "second")
+    original_lock = budget._lock
+    budget._lock = RaisingLock()
+
+    try:
+        budget.touch(owner, "values", "first")
+    finally:
+        budget._lock = original_lock
+
+
+def test_budget_touch_skips_lock_for_mru_after_limit_setting_transition() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    for key in ("first", "second"):
+        owner.store("values", key, key)
+        budget.track(owner, "values", key, key)
+    budget.register(owner, None)
+    budget.register(owner, 10_000)
+    original_lock = budget._lock
+    budget._lock = RaisingLock()
+
+    try:
+        budget.touch(owner, "values", "second")
+    finally:
+        budget._lock = original_lock
+
+
+def test_budget_touch_locks_when_entry_is_not_current_mru() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000)
+    for key in ("first", "second"):
+        owner.store("values", key, key)
+        budget.track(owner, "values", key, key)
+    original_lock = budget._lock
+    budget._lock = RaisingLock()
+
+    try:
+        with pytest.raises(AssertionError, match="unexpected coordinator lock entry"):
+            budget.touch(owner, "values", "first")
+    finally:
+        budget._lock = original_lock
+
+
 def test_budget_does_not_admit_entry_larger_than_limit() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()

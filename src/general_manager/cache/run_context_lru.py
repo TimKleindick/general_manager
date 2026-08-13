@@ -116,6 +116,7 @@ class ProcessRunContextCacheBudget:
         self._owners: WeakSet[RunContextCacheOwner] = WeakSet()
         self._owner_references: dict[int, ReferenceType[RunContextCacheOwner]] = {}
         self._entries: OrderedDict[TrackedKey, _TrackedEntry] = OrderedDict()
+        self._mru_key: TrackedKey | None = None
         self._total_bytes = 0
         self._max_bytes: int | None = None
         self._configuration_generation = 0
@@ -128,6 +129,11 @@ class ProcessRunContextCacheBudget:
         """Return the coordinator's current estimated cache footprint."""
         with self._lock:
             return self._total_bytes
+
+    @property
+    def is_enabled(self) -> bool:
+        """Return whether process-wide run-cache accounting is enabled."""
+        return self._max_bytes is not None
 
     def register(self, owner: RunContextCacheOwner, max_bytes: int | None) -> None:
         """Register an owner and rebuild tracked state when the limit changes."""
@@ -145,6 +151,7 @@ class ProcessRunContextCacheBudget:
             self._configuration_generation += 1
             if max_bytes is None:
                 self._entries.clear()
+                self._mru_key = None
                 self._entry_attempt_generations.clear()
                 self._total_bytes = 0
                 return
@@ -216,14 +223,32 @@ class ProcessRunContextCacheBudget:
         key: Hashable,
     ) -> None:
         """Mark one tracked entry as most recently used."""
+        self.touch_many(owner, ((namespace, key),))
+
+    def touch_many(
+        self,
+        owner: RunContextCacheOwner,
+        entries: Iterable[tuple[RunCacheNamespace, Hashable]],
+    ) -> None:
+        """Mark tracked entries as recently used in caller-provided order."""
         if self._max_bytes is None:
+            return
+        owner_id = id(owner)
+        tracked_keys = tuple((owner_id, namespace, key) for namespace, key in entries)
+        if not tracked_keys:
+            return
+        if len(tracked_keys) == 1 and tracked_keys[0] == self._mru_key:
             return
         with self._lock:
             if self._max_bytes is None:
                 return
-            tracked_key = (id(owner), namespace, key)
-            if tracked_key in self._entries:
-                self._entries.move_to_end(tracked_key)
+            last_moved_key = None
+            for tracked_key in tracked_keys:
+                if tracked_key in self._entries:
+                    self._entries.move_to_end(tracked_key)
+                    last_moved_key = tracked_key
+            if last_moved_key is not None:
+                self._mru_key = last_moved_key
 
     def remove(
         self,
@@ -264,6 +289,7 @@ class ProcessRunContextCacheBudget:
 
     def _rebuild_locked(self) -> None:
         self._entries.clear()
+        self._mru_key = None
         self._total_bytes = 0
         for owner in tuple(self._owners):
             self._track_owner_entries_locked(owner)
@@ -330,6 +356,7 @@ class ProcessRunContextCacheBudget:
             key=key,
             size=estimated_bytes,
         )
+        self._mru_key = tracked_key
         self._total_bytes += estimated_bytes
         self._evict_excess_locked()
 
@@ -339,6 +366,8 @@ class ProcessRunContextCacheBudget:
             if max_bytes is None or self._total_bytes <= max_bytes:
                 return
             tracked_key, entry = self._entries.popitem(last=False)
+            if tracked_key == self._mru_key:
+                self._refresh_mru_key_locked()
             self._total_bytes -= entry.size
             owner = entry.owner()
             if owner is None:
@@ -357,7 +386,12 @@ class ProcessRunContextCacheBudget:
     def _remove_entry_locked(self, tracked_key: TrackedKey) -> None:
         entry = self._entries.pop(tracked_key, None)
         if entry is not None:
+            if tracked_key == self._mru_key:
+                self._refresh_mru_key_locked()
             self._total_bytes -= entry.size
+
+    def _refresh_mru_key_locked(self) -> None:
+        self._mru_key = next(reversed(self._entries), None)
 
     def _remove_owner_entries_locked(self, owner_id: int) -> None:
         for tracked_key in tuple(self._entries):

@@ -16,12 +16,14 @@ from general_manager.cache.dependency_publish import (
     PendingDependencyCachePublication,
 )
 from general_manager.cache.run_context import (
+    RUN_CONTEXT_TOUCH_BATCH_SIZE,
     CalculationRunContext,
     current_calculation_run_context,
     ensure_calculation_run_context,
 )
 from general_manager.cache.run_context_lru import (
     MIN_TRACKED_ENTRY_BYTES,
+    ProcessRunContextCacheBudget,
     estimate_cache_entry_size,
     run_context_cache_budget,
 )
@@ -228,12 +230,216 @@ def test_run_context_budget_evicts_lru_value_across_contexts() -> None:
         with CalculationRunContext() as first, CalculationRunContext() as second:
             first.set("a", "A")
             second.set("b", "B")
-            assert first.get("a") == "A"
+            for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+                assert first.get("a") == "A"
             second.set("c", "C")
 
             assert first.get("a") == "A"
             assert second.get("b") is None
             assert second.get("c") == "C"
+
+
+def test_run_context_budget_allows_one_batch_of_recency_staleness() -> None:
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    with override_settings(
+        GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+    ):
+        with CalculationRunContext() as first, CalculationRunContext() as second:
+            first.set("a", "A")
+            second.set("b", "B")
+            assert first.get("a") == "A"
+            second.set("c", "C")
+
+            assert first.get("a") is None
+            assert second.get("b") == "B"
+            assert second.get("c") == "C"
+
+
+def test_run_context_batches_capped_value_touches() -> None:
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set("key", "value")
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE - 1):
+            assert context.get("key") == "value"
+        touch_many.assert_not_called()
+
+        assert context.get("key") == "value"
+        touch_many.assert_called_once_with(context, (("values", "key"),))
+
+
+def test_run_context_repeated_touch_fast_path_avoids_pending_key_rehashes() -> None:
+    key = CountingHashKey()
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set(key, "value")
+        key.hash_calls = 0
+
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+            assert context.get(key) == "value"
+
+        touch_many.assert_called_once_with(context, (("values", key),))
+        assert key.hash_calls <= RUN_CONTEXT_TOUCH_BATCH_SIZE + 2
+
+
+def test_run_context_hot_reads_use_cached_budget_enabled_state() -> None:
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set("key", "value")
+        with mock.patch.object(
+            ProcessRunContextCacheBudget,
+            "is_enabled",
+            new_callable=mock.PropertyMock,
+            side_effect=AssertionError("hot reads must use cached enabled state"),
+        ):
+            for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+                assert context.get("key") == "value"
+
+        touch_many.assert_called_once_with(context, (("values", "key"),))
+
+
+def test_run_context_batches_capped_touches_in_latest_access_order() -> None:
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set("first", "first")
+        context.set("second", "second")
+        assert context.get("first") == "first"
+        assert context.get("second") == "second"
+        assert context.get("first") == "first"
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE - 3):
+            assert context.get("first") == "first"
+
+        touch_many.assert_called_once_with(
+            context,
+            (("values", "second"), ("values", "first")),
+        )
+
+
+def test_run_context_does_not_publish_a_removed_pending_touch() -> None:
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.set(("removed",), "removed")
+        context.set("kept", "kept")
+        assert context.get(("removed",)) == "removed"
+
+        context.discard_prefix(("removed",))
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE - 1):
+            assert context.get("kept") == "kept"
+
+        touch_many.assert_called_once_with(context, (("values", "kept"),))
+
+
+def test_run_context_flushes_earlier_touches_before_refresh() -> None:
+    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    with (
+        override_settings(
+            GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 2}
+        ),
+        CalculationRunContext() as context,
+    ):
+        context.set("a", "A")
+        context.set("b", "B")
+        assert context.get("b") == "B"
+
+        context._refresh_run_value("a")
+        context.set("c", "C")
+
+        assert context.get("a") == "A"
+        assert context.get("b") is None
+        assert context.get("c") == "C"
+
+
+def test_pending_dependency_publication_hits_do_not_queue_recency_touches() -> None:
+    entry = make_pending_publication("cache-a")
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ),
+        mock.patch("general_manager.cache.dependency_publish.release_compute_lease"),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        CalculationRunContext() as context,
+    ):
+        context.buffer_dependency_cache_publication(entry)
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+            assert context.get_dependency_cache_hit(entry.cache_key) is not None
+
+        touch_many.assert_not_called()
+
+
+def test_run_context_touch_batch_does_not_leak_across_reuse() -> None:
+    context = CalculationRunContext()
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+    ):
+        with context:
+            context.set("old", "old")
+            assert context.get("old") == "old"
+
+        with context:
+            context.set("new", "new")
+            for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+                assert context.get("new") == "new"
+
+        touch_many.assert_called_once_with(context, (("values", "new"),))
+
+
+def test_inactive_run_context_discards_touches_before_setting_transition() -> None:
+    with override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}):
+        context = CalculationRunContext()
+        context.set("old", "old")
+        assert context.get("old") == "old"
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 20_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        context,
+    ):
+        context.set("new", "new")
+
+    touch_many.assert_not_called()
+
+
+def test_reused_run_context_refreshes_cached_budget_enabled_state() -> None:
+    with override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": None}):
+        context = CalculationRunContext()
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        context,
+    ):
+        context.set("key", "value")
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+            assert context.get("key") == "value"
+
+    touch_many.assert_called_once_with(context, (("values", "key"),))
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": None}),
+        mock.patch.object(run_context_cache_budget, "touch_many") as touch_many,
+        context,
+    ):
+        context.set("key", "value")
+        for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
+            assert context.get("key") == "value"
+
+    touch_many.assert_not_called()
 
 
 def test_run_context_does_not_retain_value_larger_than_budget() -> None:
