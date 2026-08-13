@@ -1154,12 +1154,12 @@ def test_disabling_budget_rejects_pre_disable_estimate_after_reenable() -> None:
         assert value == "value"
         assert stop_after == 10_000
         estimator_calls += 1
-        if estimator_calls == 1:
+        invocation = estimator_calls
+        if invocation == 1:
             estimator_started.set()
             assert allow_estimator_to_finish.wait(timeout=1)
-        if estimator_calls == 2:
-            return MIN_TRACKED_ENTRY_BYTES
-        return MIN_TRACKED_ENTRY_BYTES * 2
+            return MIN_TRACKED_ENTRY_BYTES * 2
+        return MIN_TRACKED_ENTRY_BYTES
 
     def track_entry() -> None:
         try:
@@ -1187,6 +1187,7 @@ def test_disabling_budget_rejects_pre_disable_estimate_after_reenable() -> None:
     assert not worker.is_alive()
     if worker_errors:
         raise worker_errors[0]
+    assert estimator_calls == 2
     assert budget._entries[(id(owner), "values", "key")].size == MIN_TRACKED_ENTRY_BYTES
     assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
 
