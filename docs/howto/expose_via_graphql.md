@@ -270,7 +270,20 @@ Invalid `sortBy` enum values are rejected by Graphene; invalid filter, grouping,
 or slicing values propagate the corresponding bucket or resolver error. When
 grouping is active, pagination slices grouped manager objects rather than the
 original ungrouped rows, and the GraphQL `items` field still uses the manager's
-generated item type.
+generated item type. If no rows match, a paginated grouped query returns an
+empty `items` list with `totalCount: 0`; negative `page` or `pageSize` values
+still raise the normal input error.
+
+## Class-wide subscription permission checks
+
+Class-wide subscriptions receive committed row-level events for any instance of
+the manager class. Before an identified event is yielded, GeneralManager
+rehydrates the manager and checks object-level read permission in an
+`asyncio.to_thread` worker using the user captured when the subscription starts.
+An unreadable or no-longer-existing object is suppressed, while an unexpected
+permission exception propagates through the subscription error path. Aggregate
+`refresh` events have no identification and yield `item = null` without this
+object-level check.
 
 ## Expose authorization hints
 

@@ -100,6 +100,27 @@ read-only after class definition. `GraphQLPropertyReturnAnnotationError`,
 from `general_manager.api`. `GraphQLProperty` itself remains an implementation
 descriptor unless it appears in the public API registry.
 
+### Bound long-lived run caches
+
+Run-scoped values are unlimited by default. For long-lived or concurrent
+requests, set a process-local estimated-memory budget shared by live
+`CalculationRunContext` instances:
+
+```python
+GENERAL_MANAGER = {
+    "RUN_CONTEXT_CACHE_MAX_BYTES": 256 * 1024 * 1024,
+}
+```
+
+`None` or an omitted setting keeps unlimited retention; `0` retains no
+eviction-safe entries; and a positive integer enables least-recently-used
+eviction across the worker's live run contexts. Negative integers, booleans,
+and other non-integer values raise `django.core.exceptions.ImproperlyConfigured`
+when a run context is created. Pending dependency-cache publications remain
+pinned until they are flushed or discarded. The estimate is taken at insertion
+time, so this setting is a cache-retention guardrail rather than a hard process
+RSS limit. Give each worker process its own capacity allowance.
+
 ## Step 3: Verify invalidation
 
 For dependency-aware properties, update a derivative that contributes to the summary. The dependency tracker captures the relationship and invalidates the cache entry automatically.

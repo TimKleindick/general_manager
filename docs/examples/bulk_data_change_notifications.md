@@ -28,3 +28,32 @@ flushes queued targets even when the body raises, then re-raises the body
 exception. If both the body and notification flush fail, the context raises a
 `BaseExceptionGroup` containing both failures. Ordinary channel-layer send
 errors are logged while other queued targets continue flushing.
+
+To observe the surrounding ORM transaction lifecycle, register a started
+receiver and collect changed classes from the ordinary post-change signal:
+
+```python
+from general_manager.cache.data_change_context import register_data_change_class
+from general_manager.cache.signals import (
+    data_change_transaction_started,
+    post_data_change,
+)
+
+
+def started(sender, transaction_context, **kwargs):
+    transaction_context.metadata["batch"] = begin_coordination()
+
+
+def changed(sender, database_alias, **kwargs):
+    register_data_change_class(sender.__name__, database_alias)
+
+
+data_change_transaction_started.connect(started, weak=False)
+post_data_change.connect(changed, weak=False)
+```
+
+`data_change_transaction_finished` reports `committed` for GeneralManager's
+own block or savepoint and `rolled_back` for failures. When the caller owns an
+outer transaction, register durable completion work with
+`transaction.on_commit(using=database_alias)`; the lifecycle's `committed`
+outcome alone does not prove that outer transaction committed.
