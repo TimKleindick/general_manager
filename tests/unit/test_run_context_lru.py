@@ -1,6 +1,9 @@
 from collections.abc import Hashable, Iterable, Iterator
+from unittest import mock
+import math
 import sys
 from types import ModuleType
+from typing import cast
 from weakref import ref
 
 import pytest
@@ -15,6 +18,7 @@ from general_manager.cache.run_context_lru import (
     estimate_cache_entry_size,
     resolve_run_context_cache_max_bytes,
 )
+from general_manager.cache import run_context_lru
 
 
 class CacheOwner:
@@ -136,6 +140,22 @@ def test_estimate_cache_entry_size_handles_cycles() -> None:
     assert size >= MIN_TRACKED_ENTRY_BYTES
 
 
+@pytest.mark.parametrize(
+    "value",
+    [None, False, 1, 1.5, 2j, "value", b"value", bytearray(b"value"), range(3)],
+)
+def test_estimate_cache_entry_size_does_not_inspect_atomic_leaf_metadata(
+    value: object,
+) -> None:
+    with mock.patch(
+        "general_manager.cache.run_context_lru._get_static_type_mro",
+        side_effect=AssertionError("atomic leaves must not inspect type metadata"),
+    ):
+        size = estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert size >= MIN_TRACKED_ENTRY_BYTES
+
+
 def test_estimate_cache_entry_size_counts_shared_object_once_per_entry() -> None:
     shared = [bytearray(1024)]
 
@@ -145,6 +165,103 @@ def test_estimate_cache_entry_size_counts_shared_object_once_per_entry() -> None
     )
 
     assert shared_size < copied_size
+
+
+def test_estimate_cache_entry_size_reuses_storage_plan_for_same_type() -> None:
+    class Value:
+        __slots__ = ("payload",)
+
+        def __init__(self, payload: object) -> None:
+            self.payload = payload
+
+    values = [Value(bytearray(64)) for _ in range(20)]
+    original = run_context_lru._get_static_class_metadata
+    with mock.patch(
+        "general_manager.cache.run_context_lru._get_static_class_metadata",
+        wraps=original,
+    ) as get_metadata:
+        size = estimate_cache_entry_size("key", values, stop_after=None)
+
+    assert size > MIN_TRACKED_ENTRY_BYTES
+    assert get_metadata.call_count == 1
+
+
+@pytest.mark.parametrize("container_type", [list, tuple, set, frozenset])
+def test_estimate_cache_entry_size_samples_large_uniform_container_with_margin(
+    container_type: object,
+) -> None:
+    key = "key"
+    if container_type in (list, tuple):
+        items: list[object] = [bytearray(64) for _ in range(2_000)]
+    else:
+        items = [f"{index:06}".encode().ljust(64, b"x") for index in range(2_000)]
+    value = cast(type[object], container_type)(items)
+    exact = (
+        sys.getsizeof(key)
+        + sys.getsizeof(value)
+        + sum(sys.getsizeof(item) for item in cast(Iterable[object], value))
+    )
+
+    estimated = estimate_cache_entry_size(key, value, stop_after=None)
+
+    assert exact <= estimated <= math.ceil(exact * 1.06)
+
+
+def test_estimate_cache_entry_size_samples_large_uniform_mapping_with_margin() -> None:
+    key = "key"
+    value = {f"key-{index:04}": bytearray(64) for index in range(2_000)}
+    exact = (
+        sys.getsizeof(key)
+        + sys.getsizeof(value)
+        + sum(
+            sys.getsizeof(item_key) + sys.getsizeof(item_value)
+            for item_key, item_value in value.items()
+        )
+    )
+
+    estimated = estimate_cache_entry_size(key, value, stop_after=None)
+
+    assert exact <= estimated <= math.ceil(exact * 1.06)
+
+
+def test_estimate_cache_entry_size_samples_mapping_without_rehashing_keys() -> None:
+    class Key:
+        def __hash__(self) -> int:
+            return id(self)
+
+    value = {Key(): bytearray(64) for _ in range(129)}
+
+    def raise_if_rehashed(self: Key) -> int:
+        raise AssertionError("sampled keys must not be rehashed")  # noqa: TRY003
+
+    Key.__hash__ = raise_if_rehashed
+
+    size = estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert size > MIN_TRACKED_ENTRY_BYTES
+
+
+def test_estimate_cache_entry_size_samples_large_sequence_with_bounded_work() -> None:
+    value = list(range(10_000))
+    with mock.patch(
+        "general_manager.cache.run_context_lru.sys.getsizeof",
+        wraps=sys.getsizeof,
+    ) as getsizeof:
+        estimate_cache_entry_size("key", value, stop_after=None)
+
+    assert getsizeof.call_count <= 64 + 2
+
+
+def test_estimate_cache_entry_size_stratifies_large_sequence_samples() -> None:
+    small = [bytearray(1) for _ in range(2_001)]
+    large = [bytearray(1) for _ in range(2_001)]
+    for index in (0, len(large) // 2, len(large) - 1):
+        large[index] = bytearray(4_096)
+
+    small_estimate = estimate_cache_entry_size("key", small, stop_after=None)
+    large_estimate = estimate_cache_entry_size("key", large, stop_after=None)
+
+    assert large_estimate > small_estimate
 
 
 def test_estimate_cache_entry_size_stops_after_budget() -> None:
@@ -349,6 +466,38 @@ def test_estimate_cache_entry_size_avoids_custom_metaclass_metadata_hooks() -> N
 
     assert size > MIN_TRACKED_ENTRY_BYTES
     assert metadata_accesses == []
+
+
+def test_estimate_cache_entry_size_avoids_custom_metaclass_hash_hook() -> None:
+    class HostileMeta(type):
+        def __hash__(cls) -> int:
+            raise AssertionError("unexpected metaclass hash")  # noqa: TRY003
+
+    class Value(metaclass=HostileMeta):
+        __slots__ = ("payload",)
+
+        def __init__(self) -> None:
+            self.payload = bytearray(1024)
+
+    size = estimate_cache_entry_size("key", Value(), stop_after=None)
+
+    assert size > MIN_TRACKED_ENTRY_BYTES
+
+
+def test_estimate_cache_entry_size_avoids_custom_metaclass_equality_hook() -> None:
+    class HostileMeta(type):
+        def __eq__(cls, other: object) -> bool:
+            raise AssertionError("unexpected metaclass equality")  # noqa: TRY003
+
+    class Value(metaclass=HostileMeta):
+        __slots__ = ("payload",)
+
+        def __init__(self) -> None:
+            self.payload = bytearray(1024)
+
+    size = estimate_cache_entry_size("key", Value(), stop_after=None)
+
+    assert size > MIN_TRACKED_ENTRY_BYTES
 
 
 @pytest.mark.parametrize("metadata_name", ["__mro__", "__dict__"])
