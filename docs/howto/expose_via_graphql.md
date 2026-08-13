@@ -155,6 +155,16 @@ loading from `Manager.all()` to `Manager.filter(include_inactive=True)` when
 true. That fallback applies only when the resolver returns `None`; other falsey
 bucket-like values are used as returned.
 
+`sortBy` accepts an ordered list of keys. GraphQL's list coercion also keeps an
+inline singleton such as `sortBy: name` valid. The first key is primary, later
+keys break ties, and `reverse: true` reverses every key in the list. Generated
+sort enums expose a direct manager field as a sort by that manager's identifier;
+for example, `sortBy: commercials` orders projects by the related commercial
+ID. A directly related scalar is available through a one-hop key such as
+`commercials__name`. Collection relations and multi-hop paths such as
+`commercials__owner__name` are not exposed as sort options. Top-level and
+generated relation-list fields use the same list-valued sort contract.
+
 ```graphql
 query ActiveProjects($filters: ProjectFilterInput) {
   projectList(filter: $filters, sortBy: name, page: 1, pageSize: 20) {
@@ -169,6 +179,28 @@ query ActiveProjects($filters: ProjectFilterInput) {
       pageSize
     }
   }
+}
+```
+
+For typed variables, migrate a previous singleton enum declaration such as
+`$sort: ProjectSortByOptions` to the list form
+`$sort: [ProjectSortByOptions!]`. Add an outer `!` only when the client requires
+the variable itself to be non-null. For example:
+
+```graphql
+query SortedProjects($sort: [ProjectSortByOptions!]) {
+  projectList(sortBy: $sort) {
+    items {
+      id
+      name
+    }
+  }
+}
+```
+
+```json
+{
+  "sort": ["commercials__name", "name"]
 }
 ```
 
