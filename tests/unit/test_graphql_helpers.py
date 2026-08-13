@@ -536,7 +536,7 @@ class GraphQLHelperTests(SimpleTestCase):
         partition.assert_not_called()
 
     def test_apply_query_parameter_plan_applies_operations_in_order(self) -> None:
-        events: list[tuple[str, dict[str, object] | str]] = []
+        events: list[tuple[str, dict[str, object] | tuple[str, ...]]] = []
 
         class RecordingBucket:
             def filter(self, **kwargs: object) -> "RecordingBucket":
@@ -547,7 +547,7 @@ class GraphQLHelperTests(SimpleTestCase):
                 events.append(("exclude", kwargs))
                 return self
 
-            def sort(self, key: str, *, reverse: bool) -> "RecordingBucket":
+            def sort(self, key: tuple[str, ...], *, reverse: bool) -> "RecordingBucket":
                 events.append(("sort", key))
                 return self
 
@@ -572,7 +572,7 @@ class GraphQLHelperTests(SimpleTestCase):
             ("filter", {"subject__id": 1}),
             ("exclude", {"result": 2}),
             ("exclude", {"period__lt": 1, "period__gt": 2}),
-            ("sort", "name"),
+            ("sort", ("name",)),
         ]
 
     def test_apply_sorting_is_noop_for_empty_sort_tuple(self) -> None:
