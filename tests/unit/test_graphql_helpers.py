@@ -314,7 +314,23 @@ class GraphQLHelperTests(SimpleTestCase):
         result = apply_sorting(queryset, sort_by, reverse=True)
 
         assert result is sorted_queryset
-        queryset.sort.assert_called_once_with("name", reverse=True)
+        queryset.sort.assert_called_once_with(("name",), reverse=True)
+
+    def test_apply_sorting_normalizes_multiple_enums_in_order(self) -> None:
+        queryset = mock.Mock()
+        sorted_queryset = mock.Mock()
+        queryset.sort.return_value = sorted_queryset
+        sort_by = [
+            type("SortBy", (), {"value": "status"})(),
+            type("SortBy", (), {"value": "employee__name"})(),
+        ]
+
+        result = apply_sorting(queryset, sort_by, reverse=True)
+
+        assert result is sorted_queryset
+        queryset.sort.assert_called_once_with(
+            ("status", "employee__name"), reverse=True
+        )
 
     def test_apply_sorting_is_noop_without_sort_key(self) -> None:
         queryset = mock.Mock()
@@ -339,7 +355,15 @@ class GraphQLHelperTests(SimpleTestCase):
         )
 
         assert result is sorted_queryset
-        queryset.sort.assert_called_once_with("name", reverse=True)
+        queryset.sort.assert_called_once_with(("name",), reverse=True)
+
+    def test_apply_sorting_is_noop_for_empty_sort_list(self) -> None:
+        queryset = mock.Mock()
+
+        result = apply_sorting(queryset, [], reverse=True)
+
+        assert result is queryset
+        queryset.sort.assert_not_called()
 
     def test_query_parameter_plan_normalizes_each_input_once(self) -> None:
         normalizer = mock.Mock(

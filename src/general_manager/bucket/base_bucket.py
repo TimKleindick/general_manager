@@ -231,7 +231,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
     @abstractmethod
     def sort(
         self,
-        key: tuple[str] | str,
+        key: tuple[str, ...] | str,
         reverse: bool = False,
     ) -> Bucket[GeneralManagerType]:
         """
