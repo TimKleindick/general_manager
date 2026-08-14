@@ -292,7 +292,7 @@ def _permission_is_self(
     _config: list[str],
 ) -> bool:
     """Allow access when the instance ``creator`` is the resolved user."""
-    return bool(_user_has_id(user) and getattr(instance, "creator", None) == user)
+    return bool(getattr(instance, "creator", None) == user)
 
 
 def _is_authenticated_permission_filter(
@@ -387,7 +387,7 @@ def _permission_related_user_field(
     config: list[str],
 ) -> bool:
     """Allow access when a configured related-object field equals the user."""
-    if not config or not _user_has_id(user):
+    if not config:
         return False
     related_object = getattr(instance, config[0], None)
     return bool(related_object == user)

@@ -482,6 +482,46 @@ class PermissionFunctionsTests(TestCase):
             PermissionFilterDecision.DENY_ALL,
         )
 
+    def test_is_self_permission_allows_matching_anonymous_instance(self) -> None:
+        """A matching in-memory anonymous user keeps the original equality behavior."""
+        check = permission_functions["isSelf"]
+        instance = MagicMock()
+        instance.creator = self.anonymous
+
+        self.assertTrue(check["permission_method"](instance, self.anonymous, []))
+        self.assertIs(
+            check["permission_filter"](self.anonymous, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
+
+    def test_no_id_user_matches_self_and_related_field_in_memory(self) -> None:
+        """Equality checks support unsaved users even though row filters cannot."""
+        unsaved_user = get_user_model()(username="unsaved-user")
+        instance = MagicMock()
+        instance.creator = unsaved_user
+        instance.owner = unsaved_user
+
+        self.assertTrue(
+            permission_functions["isSelf"]["permission_method"](
+                instance, unsaved_user, []
+            )
+        )
+        self.assertTrue(
+            permission_functions["relatedUserField"]["permission_method"](
+                instance, unsaved_user, ["owner"]
+            )
+        )
+        self.assertIs(
+            permission_functions["isSelf"]["permission_filter"](unsaved_user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
+        self.assertIs(
+            permission_functions["relatedUserField"]["permission_filter"](
+                unsaved_user, ["owner"]
+            ),
+            PermissionFilterDecision.DENY_ALL,
+        )
+
     def test_many_to_many_contains_user_with_no_config(self) -> None:
         """Test manyToManyContainsUser requires config."""
         check = permission_functions["manyToManyContainsUser"]
