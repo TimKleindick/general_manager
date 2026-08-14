@@ -1297,6 +1297,10 @@ def test_concurrent_due_samples_preserve_seeded_window_and_count_both_entries() 
     configuration_generation = budget._configuration_generation
     owners = {1: first_owner, 2: second_owner}
     values = {key: [key] for key in owners}
+    signals = {
+        key: run_context_lru._admission_signal("values", key, value)
+        for key, value in values.items()
+    }
     estimator_started = {key: Event() for key in owners}
     allow_estimators = Event()
     worker_errors: list[BaseException] = []
@@ -1337,10 +1341,17 @@ def test_concurrent_due_samples_preserve_seeded_window_and_count_both_entries() 
     if worker_errors:
         raise worker_errors[0]
     assert budget._strata == {SEEDED_DUE_STRATUM: state}
-    assert list(state.samples) == [*SEEDED_CALIBRATION_WINDOW[1:], (92, 2_000)]
+    sample_shallow_bytes = {signal.shallow_bytes for signal in signals.values()}
+    assert len(sample_shallow_bytes) == 1
+    assert list(state.samples) == [
+        *SEEDED_CALIBRATION_WINDOW[1:],
+        (sample_shallow_bytes.pop(), 2_000),
+    ]
     assert state.admission_count == 257
     assert state.entry_count == 3
-    assert state.shallow_total == 284
+    assert state.shallow_total == 100 + sum(
+        signal.shallow_bytes for signal in signals.values()
+    )
     assert set(budget._entries) == {
         peer_key,
         (id(first_owner), "values", 1),
@@ -1348,7 +1359,7 @@ def test_concurrent_due_samples_preserve_seeded_window_and_count_both_entries() 
     }
     assert not budget._entry_attempt_generations
     assert budget._configuration_generation == configuration_generation
-    assert budget.estimated_bytes == 3_261
+    assert budget.estimated_bytes == state.modeled_bytes()
 
 
 def test_stale_blocked_estimate_cannot_replace_newer_same_key_sample() -> None:
@@ -3325,6 +3336,96 @@ def test_recency_mode_disables_after_weak_owner_removal_lowers_usage() -> None:
     assert removed_reference() is None
     assert budget.is_recency_enabled is False
     assert survivor.mode_updates[-1][:2] == (True, False)
+
+
+def test_touch_many_flushes_reentrant_finalizer_mode_publication() -> None:
+    budget = ProcessRunContextCacheBudget()
+
+    class LockCheckingOwner(ModeRecordingCacheOwner):
+        def _set_run_cache_modes(
+            self,
+            budget_enabled: bool,
+            recency_enabled: bool,
+            generation: int,
+        ) -> None:
+            assert not budget._lock._is_owned()  # type: ignore[attr-defined]
+            super()._set_run_cache_modes(
+                budget_enabled,
+                recency_enabled,
+                generation,
+            )
+
+    survivor = LockCheckingOwner()
+    removed = CacheOwner()
+    budget.register(survivor, 10_000)
+    budget.register(removed, 10_000)
+    _track_exact_bytes(budget, survivor, "survivor", 1_000)
+    _track_exact_bytes(budget, removed, "removed", 7_000)
+    assert budget.is_recency_enabled is True
+    removed_reference = budget._owner_references[id(removed)]
+
+    class FinalizingKey:
+        def __init__(self) -> None:
+            self.finalized = False
+
+        def __hash__(self) -> int:
+            if not self.finalized:
+                self.finalized = True
+                budget._owner_finalizer(id(removed))(removed_reference)
+            return hash("survivor")
+
+        def __eq__(self, other: object) -> bool:
+            return other == "survivor"
+
+    budget.touch_many(survivor, (("values", FinalizingKey()),))
+
+    assert budget.is_recency_enabled is False
+    assert survivor.mode_updates[-1][:2] == (True, False)
+
+
+def test_touch_many_rejects_stale_recency_generation_after_aba() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = ModeRecordingCacheOwner()
+    budget.register(owner, 10_000)
+    _track_exact_bytes(budget, owner, "first", 4_000)
+    _track_exact_bytes(budget, owner, "second", 4_000)
+    stale_generation = owner.mode_generation
+    assert budget.is_recency_enabled is True
+
+    budget.register(owner, 20_000)
+    assert budget.is_recency_enabled is False
+    budget.register(owner, 10_000)
+    assert budget.is_recency_enabled is True
+    assert owner.mode_generation > stale_generation
+
+    budget.touch_many(
+        owner,
+        (("values", "first"),),
+        mode_generation=stale_generation,
+    )
+
+    assert tuple(entry[2] for entry in budget._entries) == ("first", "second")
+
+
+def test_touch_many_rejects_current_generation_when_recency_is_disabled() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = ModeRecordingCacheOwner()
+    budget.register(owner, 10_000)
+    _track_exact_bytes(budget, owner, "first", 4_000)
+    _track_exact_bytes(budget, owner, "second", 4_000)
+    assert budget.is_recency_enabled is True
+
+    budget.register(owner, 20_000)
+    assert budget.is_recency_enabled is False
+    disabled_generation = owner.mode_generation
+
+    budget.touch_many(
+        owner,
+        (("values", "first"),),
+        mode_generation=disabled_generation,
+    )
+
+    assert tuple(entry[2] for entry in budget._entries) == ("first", "second")
 
 
 def test_recency_reentrant_callback_keeps_newest_generation() -> None:

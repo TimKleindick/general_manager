@@ -37,6 +37,8 @@ RUN_CONTEXT_FIXED_POINT_SCALE = 1 << 20
 RUN_CONTEXT_TRACK_MAX_REESTIMATES = 3
 RUN_CONTEXT_RECENCY_ENABLE_PERCENT = 80
 RUN_CONTEXT_RECENCY_DISABLE_PERCENT = 70
+RUN_CONTEXT_SAMPLE_MARGIN_NUMERATOR = 21
+RUN_CONTEXT_SAMPLE_MARGIN_DENOMINATOR = 20
 _INVALID_MAX_BYTES_MESSAGE = (
     'GENERAL_MANAGER["RUN_CONTEXT_CACHE_MAX_BYTES"] must be None or a '
     "non-negative integer number of bytes."
@@ -94,6 +96,13 @@ StorageFamily = Literal[
     "shallow_leaf",
     "opaque",
 ]
+_BUILTIN_STORAGE_FAMILIES: dict[int, StorageFamily] = {
+    id(dict): "dict",
+    id(list): "list",
+    id(tuple): "tuple",
+    id(set): "set",
+    id(frozenset): "frozenset",
+}
 StratumKey = tuple[RunCacheNamespace, StorageFamily, int]
 TrackedKey = tuple[int, RunCacheNamespace, Hashable]
 CalibrationPair = tuple[int, int]
@@ -102,7 +111,15 @@ logger = get_logger("cache.run_context_lru")
 
 
 def _eviction_target(max_bytes: int) -> int:
+    """Return the 95% eviction threshold that preserves a 5% reserve."""
     return max_bytes * 95 // 100
+
+
+def _should_calibrate_next(admission_count: int) -> bool:
+    next_admission = admission_count + 1
+    return admission_count == 0 or (
+        next_admission % RUN_CONTEXT_CALIBRATION_INTERVAL == 0
+    )
 
 
 class RunContextCacheOwner(Protocol):
@@ -166,10 +183,7 @@ class _StratumState:
         return self.entry_count * MIN_TRACKED_ENTRY_BYTES + projected_residual
 
     def should_calibrate_next(self) -> bool:
-        next_admission = self.admission_count + 1
-        return self.admission_count == 0 or (
-            next_admission % RUN_CONTEXT_CALIBRATION_INTERVAL == 0
-        )
+        return _should_calibrate_next(self.admission_count)
 
 
 @dataclass(frozen=True)
@@ -178,10 +192,7 @@ class _CalibrationMetadata:
     samples: tuple[CalibrationPair, ...]
 
     def should_calibrate_next(self) -> bool:
-        next_admission = self.admission_count + 1
-        return self.admission_count == 0 or (
-            next_admission % RUN_CONTEXT_CALIBRATION_INTERVAL == 0
-        )
+        return _should_calibrate_next(self.admission_count)
 
 
 @dataclass(frozen=True)
@@ -494,14 +505,22 @@ class ProcessRunContextCacheBudget:
         owner: RunContextCacheOwner,
         namespace: RunCacheNamespace,
         key: Hashable,
+        *,
+        mode_generation: int | None = None,
     ) -> None:
         """Mark one tracked entry as most recently used."""
-        self.touch_many(owner, ((namespace, key),))
+        self.touch_many(
+            owner,
+            ((namespace, key),),
+            mode_generation=mode_generation,
+        )
 
     def touch_many(
         self,
         owner: RunContextCacheOwner,
         entries: Iterable[tuple[RunCacheNamespace, Hashable]],
+        *,
+        mode_generation: int | None = None,
     ) -> None:
         """Mark tracked entries as recently used in caller-provided order."""
         if self._max_bytes is None:
@@ -515,6 +534,10 @@ class ProcessRunContextCacheBudget:
         with self._lock:
             if self._max_bytes is None:
                 return
+            if mode_generation is not None and (
+                mode_generation != self._mode_generation or not self._recency_enabled
+            ):
+                return
             last_moved_key = None
             for tracked_key in tracked_keys:
                 if tracked_key in self._entries:
@@ -522,6 +545,7 @@ class ProcessRunContextCacheBudget:
                     last_moved_key = tracked_key
             if last_moved_key is not None:
                 self._mru_key = last_moved_key
+        self._publish_modes()
 
     def remove(
         self,
@@ -1066,28 +1090,21 @@ def _admission_signal(
         shallow_bytes += _safe_shallow_size(key)
     shallow_bytes = max(1, shallow_bytes)
 
-    builtin_families: tuple[tuple[type[object], StorageFamily], ...] = (
-        (dict, "dict"),
-        (list, "list"),
-        (tuple, "tuple"),
-        (set, "set"),
-        (frozenset, "frozenset"),
-    )
-    for builtin_type, builtin_family in builtin_families:
-        if value_type is builtin_type:
-            builtin_value = cast(
-                dict[object, object]
-                | list[object]
-                | tuple[object, ...]
-                | set[object]
-                | frozenset[object],
-                value,
-            )
-            return _AdmissionSignal(
-                stratum=(namespace, builtin_family, _length_bucket(len(builtin_value))),
-                shallow_bytes=shallow_bytes,
-                exact_bytes=None,
-            )
+    builtin_family = _BUILTIN_STORAGE_FAMILIES.get(id(value_type))
+    if builtin_family is not None:
+        builtin_value = cast(
+            dict[object, object]
+            | list[object]
+            | tuple[object, ...]
+            | set[object]
+            | frozenset[object],
+            value,
+        )
+        return _AdmissionSignal(
+            stratum=(namespace, builtin_family, _length_bucket(len(builtin_value))),
+            shallow_bytes=shallow_bytes,
+            exact_bytes=None,
+        )
 
     storage_plan = _cached_static_storage_plan(value_type)
     if storage_plan is None:
@@ -1174,8 +1191,8 @@ def _sample_container_children(
         sample_indexes = _stratified_indexes(length, RUN_CONTEXT_SIZE_SAMPLE_COUNT)
         sample_weight = _mul_weight(
             candidate.weight,
-            length * 21,
-            len(sample_indexes) * 20,
+            length * RUN_CONTEXT_SAMPLE_MARGIN_NUMERATOR,
+            len(sample_indexes) * RUN_CONTEXT_SAMPLE_MARGIN_DENOMINATOR,
         )
         return tuple(
             _WeightedCandidate(sequence[index], sample_weight, child_ancestor_ids)
@@ -1202,8 +1219,8 @@ def _sample_container_children(
                 sample_entries.append((item_key, item_value))
         sample_weight = _mul_weight(
             candidate.weight,
-            len(mapping) * 21,
-            len(sample_entries) * 20,
+            len(mapping) * RUN_CONTEXT_SAMPLE_MARGIN_NUMERATOR,
+            len(sample_entries) * RUN_CONTEXT_SAMPLE_MARGIN_DENOMINATOR,
         )
         return tuple(
             _WeightedCandidate(item, sample_weight, child_ancestor_ids)
@@ -1221,8 +1238,8 @@ def _sample_container_children(
         sample_items = tuple(islice(container, RUN_CONTEXT_SIZE_SAMPLE_COUNT))
         sample_weight = _mul_weight(
             candidate.weight,
-            len(container) * 21,
-            len(sample_items) * 20,
+            len(container) * RUN_CONTEXT_SAMPLE_MARGIN_NUMERATOR,
+            len(sample_items) * RUN_CONTEXT_SAMPLE_MARGIN_DENOMINATOR,
         )
         return tuple(
             _WeightedCandidate(item, sample_weight, child_ancestor_ids)

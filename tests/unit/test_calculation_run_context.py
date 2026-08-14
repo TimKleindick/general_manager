@@ -318,7 +318,11 @@ def test_run_context_batches_capped_value_touches() -> None:
         touch_many.assert_not_called()
 
         assert context.get("key") == "value"
-        touch_many.assert_called_once_with(context, (("values", "key"),))
+        touch_many.assert_called_once_with(
+            context,
+            (("values", "key"),),
+            mode_generation=context._run_cache_mode_generation,
+        )
 
 
 def test_run_context_batches_capped_get_or_set_touches() -> None:
@@ -332,7 +336,11 @@ def test_run_context_batches_capped_get_or_set_touches() -> None:
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.get_or_set("key", lambda: "replacement") == "value"
 
-        touch_many.assert_called_once_with(context, (("values", "key"),))
+        touch_many.assert_called_once_with(
+            context,
+            (("values", "key"),),
+            mode_generation=context._run_cache_mode_generation,
+        )
 
 
 def test_run_context_batches_capped_has_touches() -> None:
@@ -346,7 +354,11 @@ def test_run_context_batches_capped_has_touches() -> None:
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.has("key")
 
-        touch_many.assert_called_once_with(context, (("values", "key"),))
+        touch_many.assert_called_once_with(
+            context,
+            (("values", "key"),),
+            mode_generation=context._run_cache_mode_generation,
+        )
 
 
 def test_run_context_batches_capped_dependency_hit_touches() -> None:
@@ -364,6 +376,7 @@ def test_run_context_batches_capped_dependency_hit_touches() -> None:
         touch_many.assert_called_once_with(
             context,
             (("dependency_hits", "cache-key"),),
+            mode_generation=context._run_cache_mode_generation,
         )
 
 
@@ -464,6 +477,129 @@ def test_disabling_recency_discards_partial_touch_batch() -> None:
             assert context.get("key") == "value"
 
         touch_many.assert_not_called()
+
+
+def test_extracted_owner_touch_batch_rejects_delayed_aba_generation() -> None:
+    publication_started = Event()
+    allow_publication = Event()
+    worker_errors: list[BaseException] = []
+    original_touch_many = run_context_cache_budget.touch_many
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        CalculationRunContext() as context,
+    ):
+        context.set("first", "first")
+        context.set("second", "second")
+        activate_run_cache_recency(context)
+        active_limit = run_context_cache_budget._max_bytes
+        assert active_limit is not None
+        stale_generation = context._run_cache_mode_generation
+        assert context.get("first") == "first"
+
+        def delayed_touch_many(
+            owner: object,
+            entries: object,
+            *,
+            mode_generation: int | None = None,
+        ) -> None:
+            publication_started.set()
+            assert allow_publication.wait(timeout=5)
+            original_touch_many(
+                owner,  # type: ignore[arg-type]
+                entries,  # type: ignore[arg-type]
+                mode_generation=mode_generation,
+            )
+
+        def flush() -> None:
+            try:
+                context._flush_run_cache_touches()
+            except BaseException as error:  # noqa: BLE001
+                worker_errors.append(error)
+
+        with mock.patch.object(
+            run_context_cache_budget,
+            "touch_many",
+            delayed_touch_many,
+        ):
+            worker = Thread(target=flush)
+            worker.start()
+            try:
+                assert publication_started.wait(timeout=5)
+                run_context_cache_budget.register(context, active_limit * 2)
+                run_context_cache_budget.register(context, active_limit)
+                assert context._run_cache_mode_generation > stale_generation
+            finally:
+                allow_publication.set()
+                worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        if worker_errors:
+            raise worker_errors[0]
+        assert tuple(entry[2] for entry in run_context_cache_budget._entries) == (
+            "first",
+            "second",
+        )
+
+
+def test_foreign_immediate_touch_rejects_delayed_aba_generation() -> None:
+    publication_started = Event()
+    allow_publication = Event()
+    worker_errors: list[BaseException] = []
+    original_touch = run_context_cache_budget.touch
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 10_000}),
+        CalculationRunContext() as context,
+    ):
+        context.set("first", "first")
+        context.set("second", "second")
+        activate_run_cache_recency(context)
+        active_limit = run_context_cache_budget._max_bytes
+        assert active_limit is not None
+        stale_generation = context._run_cache_mode_generation
+
+        def delayed_touch(
+            owner: object,
+            namespace: object,
+            key: object,
+            *,
+            mode_generation: int | None = None,
+        ) -> None:
+            publication_started.set()
+            assert allow_publication.wait(timeout=5)
+            original_touch(
+                owner,  # type: ignore[arg-type]
+                namespace,  # type: ignore[arg-type]
+                key,  # type: ignore[arg-type]
+                mode_generation=mode_generation,
+            )
+
+        def touch_from_foreign_thread() -> None:
+            try:
+                context._touch_run_cache_entry("values", "first")
+            except BaseException as error:  # noqa: BLE001
+                worker_errors.append(error)
+
+        with mock.patch.object(run_context_cache_budget, "touch", delayed_touch):
+            worker = Thread(target=touch_from_foreign_thread)
+            worker.start()
+            try:
+                assert publication_started.wait(timeout=5)
+                run_context_cache_budget.register(context, active_limit * 2)
+                run_context_cache_budget.register(context, active_limit)
+                assert context._run_cache_mode_generation > stale_generation
+            finally:
+                allow_publication.set()
+                worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        if worker_errors:
+            raise worker_errors[0]
+        assert tuple(entry[2] for entry in run_context_cache_budget._entries) == (
+            "first",
+            "second",
+        )
 
 
 @pytest.mark.parametrize("prequeue_touch", [False, True])
@@ -583,7 +719,11 @@ def test_run_context_repeated_touch_fast_path_avoids_pending_key_rehashes() -> N
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.get(key) == "value"
 
-        touch_many.assert_called_once_with(context, (("values", key),))
+        touch_many.assert_called_once_with(
+            context,
+            (("values", key),),
+            mode_generation=context._run_cache_mode_generation,
+        )
         assert key.hash_calls <= RUN_CONTEXT_TOUCH_BATCH_SIZE + 2
 
 
@@ -604,7 +744,11 @@ def test_run_context_hot_reads_use_cached_budget_enabled_state() -> None:
             for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
                 assert context.get("key") == "value"
 
-        touch_many.assert_called_once_with(context, (("values", "key"),))
+        touch_many.assert_called_once_with(
+            context,
+            (("values", "key"),),
+            mode_generation=context._run_cache_mode_generation,
+        )
 
 
 def test_run_context_batches_capped_touches_in_latest_access_order() -> None:
@@ -625,6 +769,7 @@ def test_run_context_batches_capped_touches_in_latest_access_order() -> None:
         touch_many.assert_called_once_with(
             context,
             (("values", "second"), ("values", "first")),
+            mode_generation=context._run_cache_mode_generation,
         )
 
 
@@ -644,7 +789,11 @@ def test_run_context_does_not_publish_a_removed_pending_touch() -> None:
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.get("kept") == "kept"
 
-        touch_many.assert_called_once_with(context, (("values", "kept"),))
+        touch_many.assert_called_once_with(
+            context,
+            (("values", "kept"),),
+            mode_generation=context._run_cache_mode_generation,
+        )
 
 
 def test_run_context_flushes_earlier_touches_before_refresh() -> None:
@@ -705,7 +854,11 @@ def test_run_context_touch_batch_does_not_leak_across_reuse() -> None:
             for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
                 assert context.get("new") == "new"
 
-        touch_many.assert_called_once_with(context, (("values", "new"),))
+        touch_many.assert_called_once_with(
+            context,
+            (("values", "new"),),
+            mode_generation=context._run_cache_mode_generation,
+        )
 
 
 def test_inactive_run_context_discards_touches_before_setting_transition() -> None:
@@ -738,7 +891,11 @@ def test_reused_run_context_refreshes_cached_budget_enabled_state() -> None:
         for _ in range(RUN_CONTEXT_TOUCH_BATCH_SIZE):
             assert context.get("key") == "value"
 
-    touch_many.assert_called_once_with(context, (("values", "key"),))
+    touch_many.assert_called_once_with(
+        context,
+        (("values", "key"),),
+        mode_generation=context._run_cache_mode_generation,
+    )
 
     with (
         override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": None}),
