@@ -2,7 +2,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, cast, ClassVar
 from django.test import TestCase
 from django.contrib.auth.models import AnonymousUser  # as Dummy-User
-from general_manager.permission.base_permission import BasePermission
+from general_manager.permission.base_permission import (
+    BasePermission,
+    ReadPermissionPlan,
+)
 from general_manager.permission.permission_checks import (
     permission_functions,
     PermissionDict,
@@ -142,6 +145,20 @@ class BasePermissionTests(TestCase):
             email="super@example.com",
             password=get_random_string(12),
         )
+
+    def test_read_permission_plan_defaults_to_conditional(self) -> None:
+        legacy = ReadPermissionPlan(filters=[], requires_instance_check=True)
+
+        assert legacy.decision == "conditional"
+
+    def test_read_permission_plan_accepts_explicit_static_decision(self) -> None:
+        allow = ReadPermissionPlan(
+            filters=[],
+            requires_instance_check=False,
+            decision="allow_all",
+        )
+
+        assert allow.decision == "allow_all"
 
     def tearDown(self):
         # Restore the original permission_functions

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, TypeAlias, TypedDict, cast
 
@@ -38,6 +38,11 @@ ReadPermissionReason: TypeAlias = Literal[
     "based_on_class_context",
     "filter_key_conflict",
     "no_prefilter_backend",
+]
+ReadPermissionDecision: TypeAlias = Literal[
+    "allow_all",
+    "deny_all",
+    "conditional",
 ]
 
 
@@ -109,11 +114,19 @@ class ReadPermissionPlan:
     ``requires_instance_check=False`` should normally use an empty reasons tuple.
     Non-empty reasons in that state are diagnostic only and do not force an
     instance check by themselves.
+
+    ``decision`` describes the complete read authorization outcome.
+    ``"allow_all"`` and ``"deny_all"`` are definitive and therefore use no
+    prefilters or instance check. ``"conditional"`` means authorization still
+    depends on the listed row constraints, an instance check, or both. The
+    default remains conditional so legacy constructors retain their safe
+    behavior.
     """
 
     filters: list[PermissionConstraint]
     requires_instance_check: bool = True
     instance_check_reasons: tuple[ReadPermissionReason, ...] = ()
+    decision: ReadPermissionDecision = "conditional"
 
 
 class PermissionCheckError(PermissionError):
@@ -131,6 +144,29 @@ class PermissionCheckError(PermissionError):
         user_label = "anonymous" if user_id is None else f"id={user_id}"
         super().__init__(
             f"Permission denied for user {user_label} with errors: {errors}."
+        )
+
+
+class _InvalidPermissionFilterResultError(TypeError):
+    """Raised when a registered read-filter callback returns an invalid shape."""
+
+    def __init__(
+        self,
+        permission: str,
+        result: object,
+        *,
+        part_name: str | None = None,
+        unsupported_keys: Collection[object] | None = None,
+    ) -> None:
+        if unsupported_keys:
+            rendered_keys = ", ".join(sorted(repr(key) for key in unsupported_keys))
+            detail = f"unsupported constraint keys: {rendered_keys}"
+        elif part_name is None:
+            detail = f"unsupported {type(result).__name__}"
+        else:
+            detail = f"a non-mapping '{part_name}' constraint"
+        super().__init__(
+            f"Permission filter for fragment '{permission}' returned {detail}."
         )
 
 
@@ -613,19 +649,61 @@ class BasePermission(ABC):
         Raises:
             PermissionNotFoundError: If no permission function matches the leading name in `permission`.
         """
-        if self._is_superuser():
-            return {"filter": {}, "exclude": {}}
-        permission_function, *config = permission.split(":")
-        if permission_function not in permission_functions:
-            raise PermissionNotFoundError(permission)
-        permission_filter = permission_functions[permission_function][
-            "permission_filter"
-        ](self.request_user, config)
+        permission_filter = self._get_permission_filter_result(permission)
         if permission_filter is None or isinstance(
             permission_filter, PermissionFilterDecision
         ):
             return {"filter": {}, "exclude": {}}
-        return cast(PermissionConstraint, permission_filter)
+        return permission_filter
+
+    def _get_permission_filter_result(
+        self,
+        permission: str,
+    ) -> PermissionConstraint | PermissionFilterDecision | None:
+        """Resolve and normalize one permission-filter callback result.
+
+        Static decisions and ``None`` are preserved for read-plan composition.
+        Mapping results are copied into plain constraint dictionaries. Invalid
+        callback results fail here so query planning never accidentally treats
+        them as authorization constraints.
+        """
+        if self._is_superuser():
+            return PermissionFilterDecision.ALLOW_ALL
+        permission_function, *config = permission.split(":")
+        if permission_function not in permission_functions:
+            raise PermissionNotFoundError(permission)
+        result: object = permission_functions[permission_function]["permission_filter"](
+            self.request_user,
+            config,
+        )
+        if result is None or isinstance(result, PermissionFilterDecision):
+            return result
+        if not isinstance(result, Mapping):
+            raise _InvalidPermissionFilterResultError(permission, result)
+        unsupported_keys = set(result).difference(("filter", "exclude"))
+        if unsupported_keys:
+            raise _InvalidPermissionFilterResultError(
+                permission,
+                result,
+                unsupported_keys=unsupported_keys,
+            )
+
+        constraint: PermissionConstraint = {}
+        for part_name in ("filter", "exclude"):
+            if part_name not in result:
+                continue
+            part = result[part_name]
+            if not isinstance(part, Mapping):
+                raise _InvalidPermissionFilterResultError(
+                    permission,
+                    result,
+                    part_name=part_name,
+                )
+            if part_name == "filter":
+                constraint["filter"] = dict(part)
+            else:
+                constraint["exclude"] = dict(part)
+        return constraint
 
     def _get_permission_filter_info(
         self, permission: str
@@ -645,19 +723,12 @@ class BasePermission(ABC):
             PermissionNotFoundError: If no registered permission function
                 matches the leading permission name.
         """
-        if self._is_superuser():
-            return {"filter": {}, "exclude": {}}, True
-        permission_function, *config = permission.split(":")
-        if permission_function not in permission_functions:
-            raise PermissionNotFoundError(permission)
-        permission_filter = permission_functions[permission_function][
-            "permission_filter"
-        ](self.request_user, config)
+        permission_filter = self._get_permission_filter_result(permission)
         if permission_filter is None or isinstance(
             permission_filter, PermissionFilterDecision
         ):
             return {"filter": {}, "exclude": {}}, False
-        return cast(PermissionConstraint, permission_filter), True
+        return permission_filter, True
 
     def validate_permission_string(
         self,

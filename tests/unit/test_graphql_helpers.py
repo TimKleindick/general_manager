@@ -516,6 +516,7 @@ class GraphQLHelperTests(SimpleTestCase):
         assert plan.filters == [{"filter": {"status": "public"}, "exclude": {}}]
         assert plan.requires_instance_check is True
         assert plan.instance_check_reasons in ((), ("no_prefilter_backend",))
+        assert plan.decision == "conditional"
 
     def test_permission_filter_helper_preserves_custom_read_plan(self) -> None:
         class CustomPlanPermission(_DummyPermission):
@@ -548,6 +549,7 @@ class GraphQLHelperTests(SimpleTestCase):
 
         assert plan.filters == []
         assert plan.requires_instance_check is False
+        assert plan.decision == "allow_all"
 
     def test_permission_filter_helper_rejects_invalid_permission_attribute(
         self,
