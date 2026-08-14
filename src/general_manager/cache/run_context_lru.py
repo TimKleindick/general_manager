@@ -31,6 +31,7 @@ RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD = 128
 RUN_CONTEXT_SIZE_SAMPLE_COUNT = 64
 RUN_CONTEXT_CALIBRATION_INTERVAL = 256
 RUN_CONTEXT_CALIBRATION_WINDOW = 8
+RUN_CONTEXT_CALIBRATION_HISTORY_LIMIT = 256
 RUN_CONTEXT_CALIBRATION_CANDIDATE_LIMIT = 2_048
 RUN_CONTEXT_FIXED_POINT_SCALE = 1 << 20
 RUN_CONTEXT_TRACK_MAX_REESTIMATES = 3
@@ -69,6 +70,15 @@ _SIZED_BUILTIN_TYPES = (
     set,
     frozenset,
 )
+_ATOMIC_LEAF_TYPE_IDS = frozenset(
+    id(candidate_type) for candidate_type in _ATOMIC_LEAF_TYPES
+)
+_SIZED_BUILTIN_TYPE_IDS = frozenset(
+    id(candidate_type) for candidate_type in _SIZED_BUILTIN_TYPES
+)
+_SEQUENCE_TYPE_IDS = frozenset((id(list), id(tuple)))
+_SET_TYPE_IDS = frozenset((id(set), id(frozenset)))
+_CONTAINER_TYPE_IDS = frozenset((id(dict), id(tuple), id(list), id(set), id(frozenset)))
 _TYPE_MRO_DESCRIPTOR = cast(GetSetDescriptorType, type.__dict__["__mro__"])
 _TYPE_DICT_DESCRIPTOR = cast(GetSetDescriptorType, type.__dict__["__dict__"])
 
@@ -135,19 +145,37 @@ class _StratumState:
     samples: deque[CalibrationPair] = field(
         default_factory=lambda: deque(maxlen=RUN_CONTEXT_CALIBRATION_WINDOW)
     )
+    sampled_shallow: int = field(init=False)
+    sampled_residual: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.sampled_shallow = sum(shallow for shallow, _deep in self.samples)
+        self.sampled_residual = sum(
+            max(0, deep - MIN_TRACKED_ENTRY_BYTES) for _shallow, deep in self.samples
+        )
 
     def modeled_bytes(self) -> int:
         if self.entry_count == 0:
             return 0
         assert self.samples
-        sampled_shallow = sum(shallow for shallow, _deep in self.samples)
-        sampled_residual = sum(
-            max(0, deep - MIN_TRACKED_ENTRY_BYTES) for _shallow, deep in self.samples
-        )
         projected_residual = (
-            self.shallow_total * sampled_residual + max(1, sampled_shallow) - 1
-        ) // max(1, sampled_shallow)
+            self.shallow_total * self.sampled_residual
+            + max(1, self.sampled_shallow)
+            - 1
+        ) // max(1, self.sampled_shallow)
         return self.entry_count * MIN_TRACKED_ENTRY_BYTES + projected_residual
+
+    def should_calibrate_next(self) -> bool:
+        next_admission = self.admission_count + 1
+        return self.admission_count == 0 or (
+            next_admission % RUN_CONTEXT_CALIBRATION_INTERVAL == 0
+        )
+
+
+@dataclass(frozen=True)
+class _CalibrationMetadata:
+    admission_count: int
+    samples: tuple[CalibrationPair, ...]
 
     def should_calibrate_next(self) -> bool:
         next_admission = self.admission_count + 1
@@ -193,6 +221,9 @@ class ProcessRunContextCacheBudget:
         self._owner_references: dict[int, ReferenceType[RunContextCacheOwner]] = {}
         self._entries: OrderedDict[TrackedKey, _TrackedEntry] = OrderedDict()
         self._strata: dict[StratumKey, _StratumState] = {}
+        self._calibration_history: OrderedDict[StratumKey, _CalibrationMetadata] = (
+            OrderedDict()
+        )
         self._mru_key: TrackedKey | None = None
         self._exact_total_bytes = 0
         self._total_bytes = 0
@@ -308,6 +339,7 @@ class ProcessRunContextCacheBudget:
                     previous_max_bytes = self._max_bytes
                     self._max_bytes = max_bytes
                     self._configuration_generation += 1
+                    self._calibration_history.clear()
                     if max_bytes is None:
                         self._entries.clear()
                         self._strata.clear()
@@ -370,7 +402,9 @@ class ProcessRunContextCacheBudget:
 
             requires_calibration = False
             if signal.stratum is not None:
-                state = self._strata.get(signal.stratum)
+                state = self._strata.get(
+                    signal.stratum
+                ) or self._calibration_history.get(signal.stratum)
                 requires_calibration = state is None or state.should_calibrate_next()
             if not requires_calibration:
                 self._entry_attempt_generations.pop(tracked_key, None)
@@ -533,6 +567,7 @@ class ProcessRunContextCacheBudget:
     def _rebuild_locked(self) -> None:
         self._entries.clear()
         self._strata.clear()
+        self._calibration_history.clear()
         self._mru_key = None
         self._exact_total_bytes = 0
         self._total_bytes = 0
@@ -607,11 +642,12 @@ class ProcessRunContextCacheBudget:
             and signal.stratum is not None
             and signal.stratum not in self._strata
         ):
+            self._calibration_history.pop(signal.stratum, None)
             self._strata[signal.stratum] = preserved_state
 
-        if signal.stratum is not None and estimated_bytes is not None:
-            state = self._strata.get(signal.stratum)
-            if state is None or state.should_calibrate_next():
+        if signal.stratum is not None:
+            state = self._activate_stratum_locked(signal.stratum)
+            if estimated_bytes is not None and state.should_calibrate_next():
                 self._publish_calibration_locked(
                     signal.stratum,
                     signal.shallow_bytes,
@@ -650,13 +686,11 @@ class ProcessRunContextCacheBudget:
         if entry.stratum is None:
             return entry.exact_bytes
         state = self._strata[entry.stratum]
-        sampled_shallow = sum(shallow for shallow, _deep in state.samples)
-        sampled_residual = sum(
-            max(0, deep - MIN_TRACKED_ENTRY_BYTES) for _shallow, deep in state.samples
-        )
         projected_residual = (
-            entry.shallow_bytes * sampled_residual + max(1, sampled_shallow) - 1
-        ) // max(1, sampled_shallow)
+            entry.shallow_bytes * state.sampled_residual
+            + max(1, state.sampled_shallow)
+            - 1
+        ) // max(1, state.sampled_shallow)
         return MIN_TRACKED_ENTRY_BYTES + projected_residual
 
     def _add_entry_accounting_locked(
@@ -696,6 +730,7 @@ class ProcessRunContextCacheBudget:
             state.shallow_total -= entry.shallow_bytes
             if state.entry_count == 0:
                 self._strata.pop(entry.stratum)
+                self._retain_calibration_locked(entry.stratum, state)
                 new_modeled_bytes = 0
             else:
                 new_modeled_bytes = state.modeled_bytes()
@@ -703,6 +738,39 @@ class ProcessRunContextCacheBudget:
         assert self._exact_total_bytes >= 0
         assert self._total_bytes >= 0
         return entry
+
+    def _activate_stratum_locked(self, stratum: StratumKey) -> _StratumState:
+        state = self._strata.get(stratum)
+        if state is not None:
+            return state
+        retained = self._calibration_history.pop(stratum, None)
+        if retained is None:
+            state = _StratumState()
+        else:
+            state = _StratumState(
+                admission_count=retained.admission_count,
+                samples=deque(
+                    retained.samples,
+                    maxlen=RUN_CONTEXT_CALIBRATION_WINDOW,
+                ),
+            )
+        self._strata[stratum] = state
+        return state
+
+    def _retain_calibration_locked(
+        self,
+        stratum: StratumKey,
+        state: _StratumState,
+    ) -> None:
+        if not state.samples:
+            return
+        self._calibration_history[stratum] = _CalibrationMetadata(
+            admission_count=state.admission_count,
+            samples=tuple(state.samples),
+        )
+        self._calibration_history.move_to_end(stratum)
+        while len(self._calibration_history) > RUN_CONTEXT_CALIBRATION_HISTORY_LIMIT:
+            self._calibration_history.popitem(last=False)
 
     def _publish_calibration_locked(
         self,
@@ -712,7 +780,16 @@ class ProcessRunContextCacheBudget:
     ) -> None:
         state = self._strata.setdefault(stratum, _StratumState())
         old_modeled_bytes = state.modeled_bytes()
+        if len(state.samples) == state.samples.maxlen:
+            old_shallow, old_deep = state.samples[0]
+            state.sampled_shallow -= old_shallow
+            state.sampled_residual -= max(0, old_deep - MIN_TRACKED_ENTRY_BYTES)
         state.samples.append((shallow_bytes, estimated_bytes))
+        state.sampled_shallow += shallow_bytes
+        state.sampled_residual += max(
+            0,
+            estimated_bytes - MIN_TRACKED_ENTRY_BYTES,
+        )
         self._total_bytes += state.modeled_bytes() - old_modeled_bytes
 
     def _evict_excess_locked(self) -> None:
@@ -946,7 +1023,7 @@ def _length_bucket(length: int) -> int:
 def _safe_shallow_size(value: object) -> int:
     value_type = type(value)
     try:
-        if _is_exact_type(value_type, _SIZED_BUILTIN_TYPES):
+        if _is_exact_type(value_type, _SIZED_BUILTIN_TYPE_IDS):
             return sys.getsizeof(value)
         return object.__sizeof__(value)
     except Exception:  # noqa: BLE001 - admission must survive hostile objects.
@@ -972,8 +1049,8 @@ def _admission_signal(
     """Return a bounded, hook-free signal used to calibrate cache entries."""
     key_type = type(key)
     value_type = type(value)
-    if _is_exact_type(key_type, _ATOMIC_LEAF_TYPES) and _is_exact_type(
-        value_type, _ATOMIC_LEAF_TYPES
+    if _is_exact_type(key_type, _ATOMIC_LEAF_TYPE_IDS) and _is_exact_type(
+        value_type, _ATOMIC_LEAF_TYPE_IDS
     ):
         exact_bytes = _safe_shallow_size(value)
         if key is not value:
@@ -1069,10 +1146,8 @@ def _stratified_indexes(length: int, sample_count: int) -> tuple[int, ...]:
     )
 
 
-def _is_exact_type(
-    candidate_type: type[object], types: tuple[type[object], ...]
-) -> bool:
-    return any(candidate_type is expected_type for expected_type in types)
+def _is_exact_type(candidate_type: type[object], type_ids: frozenset[int]) -> bool:
+    return id(candidate_type) in type_ids
 
 
 def _mul_weight(weight: int, numerator: int, denominator: int) -> int:
@@ -1088,7 +1163,7 @@ def _sample_container_children(
     value = candidate.value
     value_type = type(value)
     child_ancestor_ids = candidate.ancestor_ids | frozenset((id(value),))
-    if _is_exact_type(value_type, (list, tuple)):
+    if _is_exact_type(value_type, _SEQUENCE_TYPE_IDS):
         sequence = cast(list[object] | tuple[object, ...], value)
         length = len(sequence)
         if length <= RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD:
@@ -1136,7 +1211,7 @@ def _sample_container_children(
             for item in entry
         )
 
-    if _is_exact_type(value_type, (set, frozenset)):
+    if _is_exact_type(value_type, _SET_TYPE_IDS):
         container = cast(set[object] | frozenset[object], value)
         if len(container) <= RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD:
             return tuple(
@@ -1164,8 +1239,8 @@ def estimate_cache_entry_size(
     stop_after: int | None,
 ) -> int:
     """Estimate owned bytes for one cache entry without unbounded traversal."""
-    if _is_exact_type(type(key), _ATOMIC_LEAF_TYPES) and _is_exact_type(
-        type(value), _ATOMIC_LEAF_TYPES
+    if _is_exact_type(type(key), _ATOMIC_LEAF_TYPE_IDS) and _is_exact_type(
+        type(value), _ATOMIC_LEAF_TYPE_IDS
     ):
         try:
             measured_bytes = sys.getsizeof(value)
@@ -1226,7 +1301,7 @@ def estimate_cache_entry_size(
         candidate_value = candidate.value
         candidate_type = type(candidate_value)
         try:
-            if _is_exact_type(candidate_type, _SIZED_BUILTIN_TYPES):
+            if _is_exact_type(candidate_type, _SIZED_BUILTIN_TYPE_IDS):
                 shallow_size = sys.getsizeof(candidate_value)
             else:
                 shallow_size = object.__sizeof__(candidate_value)
@@ -1242,10 +1317,10 @@ def estimate_cache_entry_size(
         if measured_bytes >= saturation_limit:
             return saturation_limit
 
-        if _is_exact_type(candidate_type, _ATOMIC_LEAF_TYPES):
+        if _is_exact_type(candidate_type, _ATOMIC_LEAF_TYPE_IDS):
             continue
 
-        if _is_exact_type(candidate_type, (dict, tuple, list, set, frozenset)):
+        if _is_exact_type(candidate_type, _CONTAINER_TYPE_IDS):
             candidates.extend(
                 _sample_container_children(
                     _WeightedCandidate(

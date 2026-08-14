@@ -5,8 +5,8 @@ from threading import Event, Thread
 from unittest import mock
 import math
 import sys
-from types import ModuleType
-from typing import Callable, cast
+from types import FrameType, ModuleType
+from typing import Callable, Never, cast
 from weakref import ref
 
 import pytest
@@ -554,6 +554,248 @@ def test_stratum_models_all_entries_from_rolling_samples() -> None:
     )
 
     assert state.modeled_bytes() == 4_000
+
+
+def test_ordinary_admission_does_not_iterate_calibration_samples() -> None:
+    class IterationForbiddenDeque(deque[tuple[int, int]]):
+        def __iter__(self) -> Never:
+            raise AssertionError(  # noqa: TRY003
+                "ordinary admission iterated calibration samples"
+            )
+
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000_000)
+    first_value = [1]
+    owner.store("values", "first", first_value)
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        return_value=1_024,
+    ):
+        budget.track(owner, "values", "first", first_value)
+
+    state = next(iter(budget._strata.values()))
+    samples = tuple(state.samples)
+    state.samples = IterationForbiddenDeque(samples, maxlen=8)
+    second_value = [2]
+    owner.store("values", "second", second_value)
+
+    budget.track(owner, "values", "second", second_value)
+
+    assert owner.entries[("values", "second")] is second_value
+    assert budget.estimated_bytes > 0
+    state.samples = deque(samples, maxlen=8)
+    budget.clear_context(owner)
+
+
+def test_empty_stratum_retains_only_calibration_metadata() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000_000)
+    value = [bytearray(96)]
+    owner.store("values", "key", value)
+    budget.track(owner, "values", "key", value)
+    tracked = budget._entries[(id(owner), "values", "key")]
+    assert tracked.stratum is not None
+    sample = tuple(budget._strata[tracked.stratum].samples)
+
+    budget.clear_context(owner)
+
+    assert not budget._entries
+    assert not budget._strata
+    assert budget.estimated_bytes == 0
+    retained = budget._calibration_history[tracked.stratum]
+    assert retained.samples == sample
+    assert retained.admission_count == 1
+
+
+def test_repeated_context_reuses_retained_calibration_without_deep_sample() -> None:
+    budget = ProcessRunContextCacheBudget()
+    first_owner = CacheOwner()
+    budget.register(first_owner, 10_000_000)
+    first_value = [bytearray(96)]
+    first_owner.store("values", "first", first_value)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        return_value=1_024,
+    ) as estimator:
+        budget.track(first_owner, "values", "first", first_value)
+        budget.clear_context(first_owner)
+        second_owner = CacheOwner()
+        budget.register(second_owner, 10_000_000)
+        second_value = [bytearray(96)]
+        second_owner.store("values", "second", second_value)
+        budget.track(second_owner, "values", "second", second_value)
+
+    assert estimator.call_count == 1
+    assert budget.estimated_bytes > 0
+
+
+def test_materially_different_retained_stratum_still_calibrates() -> None:
+    budget = ProcessRunContextCacheBudget()
+    first_owner = CacheOwner()
+    budget.register(first_owner, 10_000_000)
+    first_value = [1]
+    first_owner.store("values", "first", first_value)
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        return_value=1_024,
+    ) as estimator:
+        budget.track(first_owner, "values", "first", first_value)
+        budget.clear_context(first_owner)
+        second_owner = CacheOwner()
+        budget.register(second_owner, 10_000_000)
+        second_value = [1, 2, 3]
+        second_owner.store("values", "second", second_value)
+        budget.track(second_owner, "values", "second", second_value)
+
+    assert estimator.call_count == 2
+
+
+def test_calibration_history_is_bounded_and_evicts_oldest_deterministically() -> None:
+    budget = ProcessRunContextCacheBudget()
+    limit = run_context_lru.RUN_CONTEXT_CALIBRATION_HISTORY_LIMIT
+    strata = [
+        cast(run_context_lru.StratumKey, ("values", "opaque", index))
+        for index in range(limit + 1)
+    ]
+    with budget._lock:
+        for index, stratum in enumerate(strata):
+            budget._retain_calibration_locked(
+                stratum,
+                run_context_lru._StratumState(
+                    admission_count=index + 1,
+                    samples=deque([(100, 1_000)], maxlen=8),
+                ),
+            )
+
+    assert list(budget._calibration_history) == strata[1:]
+
+
+def test_failed_due_sample_does_not_corrupt_retained_calibration() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000_000)
+    stratum = cast(run_context_lru.StratumKey, ("values", "list", 1))
+    with budget._lock:
+        budget._retain_calibration_locked(
+            stratum,
+            run_context_lru._StratumState(
+                admission_count=255,
+                samples=deque([(100, 1_000)], maxlen=8),
+            ),
+        )
+    value = [1]
+    owner.store("values", "key", value)
+
+    with (
+        mock.patch.object(
+            run_context_lru,
+            "estimate_cache_entry_size",
+            side_effect=RuntimeError("estimation failed"),
+        ),
+        pytest.raises(RuntimeError, match="estimation failed"),
+    ):
+        budget.track(owner, "values", "key", value)
+
+    assert not budget._strata
+    retained = budget._calibration_history[stratum]
+    assert retained.admission_count == 255
+    assert retained.samples == ((100, 1_000),)
+
+
+def test_lifecycle_invalidated_due_sample_does_not_corrupt_retained_calibration() -> (
+    None
+):
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 10_000_000)
+    stratum = cast(run_context_lru.StratumKey, ("values", "list", 1))
+    with budget._lock:
+        budget._retain_calibration_locked(
+            stratum,
+            run_context_lru._StratumState(
+                admission_count=255,
+                samples=deque([(100, 1_000)], maxlen=8),
+            ),
+        )
+    value = [1]
+    owner.store("values", "key", value)
+    estimator_started = Event()
+    allow_estimator = Event()
+
+    def blocking_estimator(
+        key: object, value: object, *, stop_after: int | None
+    ) -> int:
+        estimator_started.set()
+        assert allow_estimator.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+        return 2_000
+
+    with mock.patch.object(
+        run_context_lru,
+        "estimate_cache_entry_size",
+        blocking_estimator,
+    ):
+        worker = Thread(target=budget.track, args=(owner, "values", "key", value))
+        worker.start()
+        try:
+            assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
+            budget.clear_context(owner)
+        finally:
+            allow_estimator.set()
+            worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
+
+    assert not worker.is_alive()
+    assert not budget._strata
+    retained = budget._calibration_history[stratum]
+    assert retained.admission_count == 255
+    assert retained.samples == ((100, 1_000),)
+
+
+def test_configuration_change_discards_retained_calibration() -> None:
+    budget = ProcessRunContextCacheBudget()
+    first_owner = CacheOwner()
+    budget.register(first_owner, 10_000_000)
+    value = [1]
+    first_owner.store("values", "key", value)
+    budget.track(first_owner, "values", "key", value)
+    budget.clear_context(first_owner)
+    assert budget._calibration_history
+
+    second_owner = CacheOwner()
+    budget.register(second_owner, 20_000_000)
+
+    assert not budget._calibration_history
+
+
+def test_reused_calibration_keeps_representative_aggregate_within_five_percent() -> (
+    None
+):
+    budget = ProcessRunContextCacheBudget()
+    calibration_owner = CacheOwner()
+    budget.register(calibration_owner, 1_000_000_000)
+    calibration_value = [bytearray(96)]
+    calibration_owner.store("values", "calibration", calibration_value)
+    budget.track(calibration_owner, "values", "calibration", calibration_value)
+    budget.clear_context(calibration_owner)
+
+    owner = CacheOwner()
+    budget.register(owner, 1_000_000_000)
+    entries = [(index, [bytearray(96)]) for index in range(64)]
+    for key, value in entries:
+        owner.store("values", key, value)
+        budget.track(owner, "values", key, value)
+
+    exact_total = sum(
+        _exhaustive_representative_entry_size(key, value) for key, value in entries
+    )
+    assert math.ceil(exact_total * 0.95) <= budget.estimated_bytes
+    assert budget.estimated_bytes <= math.ceil(exact_total * 1.05)
 
 
 def test_stratum_keeps_only_eight_recent_samples() -> None:
@@ -1634,6 +1876,30 @@ def test_estimator_bounds_nested_container_candidate_visits() -> None:
 
     assert MIN_TRACKED_ENTRY_BYTES <= size <= 10**400
     assert len(visited) <= run_context_lru.RUN_CONTEXT_CALIBRATION_CANDIDATE_LIMIT
+
+
+def test_estimator_exact_type_classification_adds_no_generators_per_candidate() -> None:
+    generator_calls = 0
+    value = list(range(64))
+
+    def profile(frame: FrameType, event: str, arg: object) -> None:
+        del arg
+        nonlocal generator_calls
+        if (
+            event == "call"
+            and frame.f_code.co_name == "<genexpr>"
+            and frame.f_code.co_filename == run_context_lru.__file__
+        ):
+            generator_calls += 1
+
+    previous_profile = sys.getprofile()
+    sys.setprofile(profile)
+    try:
+        estimate_cache_entry_size("key", value, stop_after=None)
+    finally:
+        sys.setprofile(previous_profile)
+
+    assert generator_calls <= len(value) + 1
 
 
 # Mutation caught: using floor projection that underestimates uniform samples.
