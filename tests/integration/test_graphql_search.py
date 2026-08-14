@@ -405,6 +405,10 @@ class TestGraphQLSearchReadHardening(GeneralManagerTransactionTestCase):
         query {
             search(index: "global", query: "Internal") {
                 total
+                results {
+                    __typename
+                    ... on AdminOnlyProjectType { id name status }
+                }
             }
         }
         """
@@ -413,6 +417,10 @@ class TestGraphQLSearchReadHardening(GeneralManagerTransactionTestCase):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["search"]
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(len(payload["results"]), 1)
+        self.assertEqual(payload["results"][0]["__typename"], "AdminOnlyProjectType")
         contexts = [
             context
             for call in logger_mock.info.call_args_list
@@ -517,6 +525,10 @@ class TestGraphQLSearchBasedOnReadHardening(GeneralManagerTransactionTestCase):
         query {
             search(index: "global", query: "Hidden") {
                 total
+                results {
+                    __typename
+                    ... on DelegatedDocumentType { title }
+                }
             }
         }
         """
@@ -525,6 +537,10 @@ class TestGraphQLSearchBasedOnReadHardening(GeneralManagerTransactionTestCase):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["search"]
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(len(payload["results"]), 1)
+        self.assertEqual(payload["results"][0]["__typename"], "DelegatedDocumentType")
         contexts = [
             context
             for call in logger_mock.info.call_args_list

@@ -189,15 +189,15 @@ Built-in registry names:
 | Name | Config | Instance check | Query filter |
 | --- | --- | --- | --- |
 | `public` | none | Allows every user, including anonymous and inactive users. | `ALLOW_ALL` |
-| `matches` | `<field>:<value>` | Allows when `str(getattr(instance, field)) == value`. | `{"filter": {field: value}}` |
+| `matches` | `<field>:<value>` | Allows when `str(getattr(instance, field)) == value`. | `{"filter": {field: value}}`; `DENY_ALL` when fewer than two configuration values are supplied. |
 | `isAdmin` | none | Allows Django staff users, including superusers. | `ALLOW_ALL` for staff; otherwise `DENY_ALL` |
-| `isSelf` | none | Allows when `instance.creator == user`. | `{"filter": {"creator_id": user.id}}` |
+| `isSelf` | none | Allows when `instance.creator == user`. | `{"filter": {"creator_id": user.id}}`; `DENY_ALL` when the user has no id. |
 | `isAuthenticated` | none | Allows authenticated users. | `ALLOW_ALL` when authenticated; otherwise `DENY_ALL` |
 | `isActive` | none | Allows active users. | `ALLOW_ALL` when active; otherwise `DENY_ALL` |
 | `hasPermission` | `<app_label.codename>` | Delegates to `user.has_perm(...)`. | `ALLOW_ALL` when granted; otherwise `DENY_ALL` |
 | `inGroup` | `<group name>` | Allows users in the named Django group. | `ALLOW_ALL` when in the group; otherwise `DENY_ALL` |
-| `relatedUserField` | `<field>` | Allows when `getattr(instance, field) == user`. | `{"filter": {f"{field}_id": user.id}}` |
-| `manyToManyContainsUser` | `<field>` | Allows when the related manager contains the user. | `{"filter": {f"{field}__id": user.id}}` |
+| `relatedUserField` | `<field>` | Allows when `getattr(instance, field) == user`. | `{"filter": {f"{field}_id": user.id}}`; `DENY_ALL` when configuration is missing or the user has no id. |
+| `manyToManyContainsUser` | `<field>` | Allows when the related manager contains the user. | `{"filter": {f"{field}__id": user.id}}`; `DENY_ALL` when configuration is missing or the user has no id. |
 
 ## GraphQL permission capabilities
 

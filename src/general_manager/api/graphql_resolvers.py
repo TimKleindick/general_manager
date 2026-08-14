@@ -90,12 +90,17 @@ class UnsupportedExcludeNoneRelationFilterError(ValueError):
 
 @dataclass(slots=True)
 class ReadAuthorizationResult(Generic[GeneralManagerT]):
-    """Aggregate outcome from GraphQL read prefiltering and row authorization."""
+    """Aggregate outcome from GraphQL read prefiltering and row authorization.
+
+    Counts remain ``None`` when authorization can return a bucket lazily without
+    inspecting or counting it. They are populated when a row-level gate actually
+    scans candidates; deny-all plans use known zero counts.
+    """
 
     queryset: Bucket[GeneralManagerT]
-    candidate_count: int
-    authorized_count: int
-    denied_count: int
+    candidate_count: int | None
+    authorized_count: int | None
+    denied_count: int | None
     backend_shape: str
     requires_instance_check: bool
     instance_check_reasons: tuple[str, ...]
@@ -266,7 +271,7 @@ def apply_read_authorization(
     final row gate runs and an aggregate log event is emitted only if the final
     authorization result still requires instance checks.
     Unrestricted plans that do not require instance checks return the original
-    queryset with matching candidate and authorized counts.
+    queryset without evaluating it to compute counts.
     """
     permission_plan = get_read_permission_filter(general_manager_class, info)
     backend_shape = get_backend_shape(general_manager_class)
@@ -287,12 +292,11 @@ def apply_read_authorization(
         )
 
     if permission_plan.decision == "allow_all":
-        candidate_count = len(queryset)
         return ReadAuthorizationResult(
             queryset=queryset,
-            candidate_count=candidate_count,
-            authorized_count=candidate_count,
-            denied_count=0,
+            candidate_count=None,
+            authorized_count=None,
+            denied_count=None,
             backend_shape=backend_shape,
             requires_instance_check=False,
             instance_check_reasons=(),
@@ -302,12 +306,11 @@ def apply_read_authorization(
     if not permission_plan.requires_instance_check and permission_plan.filters == [
         {"filter": {}, "exclude": {}}
     ]:
-        candidate_count = len(queryset)
         result = ReadAuthorizationResult(
             queryset=queryset,
-            candidate_count=candidate_count,
-            authorized_count=candidate_count,
-            denied_count=0,
+            candidate_count=None,
+            authorized_count=None,
+            denied_count=None,
             backend_shape=backend_shape,
             requires_instance_check=False,
             instance_check_reasons=instance_check_reasons,
@@ -355,19 +358,18 @@ def filter_queryset_by_read_permission(
     Apply final row-level read authorization to a bucket.
 
     When an instance gate is not required, or the manager has no Permission
-    class, the original queryset is returned with all candidates authorized.
+    class, the original queryset is returned without eagerly computing counts.
     Otherwise each candidate is checked with ``can_read_instance()``. Authorized
     rows with an ``identification["id"]`` are rebuilt through an ``id__in``
     filter; authorized rows without an id are unioned back as concrete manager
     instances.
     """
     if not requires_instance_check:
-        candidate_count = len(queryset)
         return ReadAuthorizationResult(
             queryset=queryset,
-            candidate_count=candidate_count,
-            authorized_count=candidate_count,
-            denied_count=0,
+            candidate_count=None,
+            authorized_count=None,
+            denied_count=None,
             backend_shape=backend_shape,
             requires_instance_check=False,
             instance_check_reasons=instance_check_reasons,
@@ -377,12 +379,11 @@ def filter_queryset_by_read_permission(
         general_manager_class, "Permission", None
     )
     if PermissionClass is None:
-        candidate_count = len(queryset)
         return ReadAuthorizationResult(
             queryset=queryset,
-            candidate_count=candidate_count,
-            authorized_count=candidate_count,
-            denied_count=0,
+            candidate_count=None,
+            authorized_count=None,
+            denied_count=None,
             backend_shape=backend_shape,
             requires_instance_check=False,
             instance_check_reasons=instance_check_reasons,
