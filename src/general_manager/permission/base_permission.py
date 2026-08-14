@@ -16,7 +16,10 @@ from general_manager.permission.audit import (
     audit_logging_enabled,
     emit_permission_audit_event,
 )
-from general_manager.permission.permission_checks import permission_functions
+from general_manager.permission.permission_checks import (
+    PermissionFilterDecision,
+    permission_functions,
+)
 from general_manager.permission.permission_data_manager import PermissionDataManager
 from general_manager.permission.utils import (
     PermissionNotFoundError,
@@ -604,7 +607,8 @@ class BasePermission(ABC):
             PermissionConstraint: A mapping with optional ``"filter"`` and
             ``"exclude"`` dictionaries whose lookup values are typed as
             ``object``. Superusers and unfilterable permissions that return
-            ``None`` both resolve to empty ``filter`` and ``exclude`` mappings.
+            ``None`` or a static decision both resolve to empty ``filter`` and
+            ``exclude`` mappings.
 
         Raises:
             PermissionNotFoundError: If no permission function matches the leading name in `permission`.
@@ -614,15 +618,14 @@ class BasePermission(ABC):
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:
             raise PermissionNotFoundError(permission)
-        permission_filter = cast(
-            PermissionConstraint | None,
-            permission_functions[permission_function]["permission_filter"](
-                self.request_user, config
-            ),
-        )
-        if permission_filter is None:
+        permission_filter = permission_functions[permission_function][
+            "permission_filter"
+        ](self.request_user, config)
+        if permission_filter is None or isinstance(
+            permission_filter, PermissionFilterDecision
+        ):
             return {"filter": {}, "exclude": {}}
-        return permission_filter
+        return cast(PermissionConstraint, permission_filter)
 
     def _get_permission_filter_info(
         self, permission: str
@@ -631,8 +634,9 @@ class BasePermission(ABC):
         Resolve filter/exclude constraints and whether the permission is query-filterable.
 
         Superusers return empty filter/exclude mappings marked filterable. When
-        a permission filter returns ``None``, empty mappings are returned with
-        ``False`` to signal that callers must keep a row-level instance check.
+        a permission filter returns ``None`` or a static decision, empty
+        mappings are returned with ``False`` to signal that callers must keep
+        a row-level instance check until static decisions are planned directly.
 
         Returns:
             ``(constraint, is_filterable)``.
@@ -646,15 +650,14 @@ class BasePermission(ABC):
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:
             raise PermissionNotFoundError(permission)
-        permission_filter = cast(
-            PermissionConstraint | None,
-            permission_functions[permission_function]["permission_filter"](
-                self.request_user, config
-            ),
-        )
-        if permission_filter is None:
+        permission_filter = permission_functions[permission_function][
+            "permission_filter"
+        ](self.request_user, config)
+        if permission_filter is None or isinstance(
+            permission_filter, PermissionFilterDecision
+        ):
             return {"filter": {}, "exclude": {}}, False
-        return permission_filter, True
+        return cast(PermissionConstraint, permission_filter), True
 
     def validate_permission_string(
         self,

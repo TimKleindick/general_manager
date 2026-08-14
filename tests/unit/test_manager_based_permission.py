@@ -570,6 +570,54 @@ class ManagerBasedPermissionTests(TestCase):
         self.assertTrue(plan.requires_instance_check)
         self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
 
+    def test_read_permission_plan_treats_public_decision_as_unfilterable(
+        self,
+    ) -> None:
+        """Static public decisions remain instance-checked until planner support lands."""
+
+        class PublicReadPermission(AdditiveManagerPermission):
+            __read__: ClassVar[list[str]] = ["public"]
+
+        plan = PublicReadPermission(
+            self.mock_instance, self.anonymous_user
+        ).get_read_permission_plan()
+
+        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
+        self.assertTrue(plan.requires_instance_check)
+        self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
+
+    def test_read_permission_plan_treats_allowed_static_decision_as_unfilterable(
+        self,
+    ) -> None:
+        """Allowed user predicates remain instance-checked until planner support lands."""
+
+        class StaffReadPermission(AdditiveManagerPermission):
+            __read__: ClassVar[list[str]] = ["isAdmin"]
+
+        plan = StaffReadPermission(
+            self.mock_instance, self.admin_user
+        ).get_read_permission_plan()
+
+        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
+        self.assertTrue(plan.requires_instance_check)
+        self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
+
+    def test_read_permission_plan_treats_denied_static_decision_as_unfilterable(
+        self,
+    ) -> None:
+        """Denied user predicates remain instance-checked until planner support lands."""
+
+        class StaffReadPermission(AdditiveManagerPermission):
+            __read__: ClassVar[list[str]] = ["isAdmin"]
+
+        plan = StaffReadPermission(
+            self.mock_instance, self.anonymous_user
+        ).get_read_permission_plan()
+
+        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
+        self.assertTrue(plan.requires_instance_check)
+        self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
+
     def test_read_permission_plan_combines_based_on_and_local_filters_with_and(
         self,
     ) -> None:
