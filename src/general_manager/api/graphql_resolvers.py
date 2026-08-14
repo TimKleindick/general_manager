@@ -275,6 +275,29 @@ def apply_read_authorization(
         backend_shape=backend_shape,
     )
 
+    if permission_plan.decision == "deny_all":
+        return ReadAuthorizationResult(
+            queryset=queryset.none(),
+            candidate_count=0,
+            authorized_count=0,
+            denied_count=0,
+            backend_shape=backend_shape,
+            requires_instance_check=False,
+            instance_check_reasons=(),
+        )
+
+    if permission_plan.decision == "allow_all":
+        candidate_count = len(queryset)
+        return ReadAuthorizationResult(
+            queryset=queryset,
+            candidate_count=candidate_count,
+            authorized_count=candidate_count,
+            denied_count=0,
+            backend_shape=backend_shape,
+            requires_instance_check=False,
+            instance_check_reasons=(),
+        )
+
     filtered_queryset = queryset
     if not permission_plan.requires_instance_check and permission_plan.filters == [
         {"filter": {}, "exclude": {}}
