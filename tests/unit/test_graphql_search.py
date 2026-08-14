@@ -879,6 +879,45 @@ class GraphQLSearchTests(SimpleTestCase):
         assert backend.search_calls[0]["kwargs"]["filters"] == {"status": "private"}
         can_read.assert_not_called()
 
+    def test_graphql_search_static_allow_skips_instance_check_summary(
+        self,
+    ) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=1)
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+        allowed_plan = ReadPermissionPlan(
+            filters=[],
+            requires_instance_check=True,
+            decision="allow_all",
+        )
+
+        with (
+            patch.object(
+                graphql_search_module,
+                "get_read_permission_filter",
+                return_value=allowed_plan,
+            ),
+            patch.object(graphql_search_module, "can_read_instance") as can_read,
+            patch.object(graphql_search_module.logger, "info") as log_info,
+        ):
+            response = field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=["Project"],
+                filters=None,
+                page=1,
+                page_size=10,
+            )
+
+        assert response["total"] == 1
+        assert [item.identification for item in response["results"]] == [{"id": 1}]
+        assert backend.search_calls
+        can_read.assert_not_called()
+        log_info.assert_not_called()
+
     def test_graphql_search_runs_conditional_manager_when_another_is_static_deny(
         self,
     ) -> None:

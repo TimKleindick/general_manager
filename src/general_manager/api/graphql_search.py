@@ -1139,7 +1139,7 @@ def register_search_query(
             total += total_hits_for_manager
             if not manager_total_is_exact:
                 total_is_exact = False
-            if permission_plan.requires_instance_check:
+            if decision == "conditional" and permission_plan.requires_instance_check:
                 logger.info(
                     "graphql read authorization summary",
                     context={
