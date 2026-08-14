@@ -46,6 +46,10 @@ CURRENT_EXPORTS: dict[str, dict[str, tuple[str, str]]] = {
 MODULE_EXPORTS = SNAPSHOT_EXPORTS
 
 
+def test_permission_filter_decision_is_an_expected_permission_export() -> None:
+    assert "PermissionFilterDecision" in MODULE_EXPORTS["general_manager.permission"]
+
+
 def _build_export_parameters() -> list[tuple[str, str, str, str]]:
     parameters: list[tuple[str, str, str, str]] = []
     for module_path, exports in MODULE_EXPORTS.items():

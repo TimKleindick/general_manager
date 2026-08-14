@@ -7,8 +7,17 @@ from django.contrib.auth.models import AbstractUser, AnonymousUser, Group, Permi
 from django.test import TestCase
 from django.utils.crypto import get_random_string
 
-from general_manager.permission import permission_functions, register_permission
+from general_manager.permission import (
+    PermissionFilterDecision,
+    permission_functions,
+    register_permission,
+)
 from general_manager.permission.permission_checks import PermissionFilter
+
+
+def test_permission_filter_decision_is_public() -> None:
+    assert PermissionFilterDecision.ALLOW_ALL.value == "allow_all"
+    assert PermissionFilterDecision.DENY_ALL.value == "deny_all"
 
 
 class PermissionFunctionsTests(TestCase):
@@ -40,7 +49,10 @@ class PermissionFunctionsTests(TestCase):
         instance = type("Dummy", (), {"status": "ok"})()
 
         self.assertFalse(matches["permission_method"](instance, self.user, []))
-        self.assertIsNone(matches["permission_filter"](self.user, []))
+        self.assertIs(
+            matches["permission_filter"](self.user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
         self.assertTrue(
             matches["permission_method"](instance, self.user, ["status", "ok"])
@@ -54,28 +66,52 @@ class PermissionFunctionsTests(TestCase):
         check = permission_functions["public"]
 
         self.assertTrue(check["permission_method"](None, self.anonymous, []))
-        self.assertIsNone(check["permission_filter"](self.anonymous, []))
+        self.assertIs(
+            check["permission_filter"](self.anonymous, []),
+            PermissionFilterDecision.ALLOW_ALL,
+        )
 
     def test_is_admin_permission(self) -> None:
         check = permission_functions["isAdmin"]
 
         self.assertFalse(check["permission_method"](None, self.user, []))
         self.assertTrue(check["permission_method"](None, self.admin_user, []))
-        self.assertIsNone(check["permission_filter"](self.admin_user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
+        self.assertIs(
+            check["permission_filter"](self.admin_user, []),
+            PermissionFilterDecision.ALLOW_ALL,
+        )
 
     def test_is_authenticated_permission(self) -> None:
         check = permission_functions["isAuthenticated"]
 
         self.assertTrue(check["permission_method"](None, self.user, []))
         self.assertFalse(check["permission_method"](None, self.anonymous, []))
-        self.assertIsNone(check["permission_filter"](self.user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.ALLOW_ALL,
+        )
+        self.assertIs(
+            check["permission_filter"](self.anonymous, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_is_active_permission(self) -> None:
         check = permission_functions["isActive"]
 
         self.assertTrue(check["permission_method"](None, self.user, []))
         self.assertFalse(check["permission_method"](None, self.inactive_user, []))
-        self.assertIsNone(check["permission_filter"](self.user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.ALLOW_ALL,
+        )
+        self.assertIs(
+            check["permission_filter"](self.inactive_user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_has_permission(self) -> None:
         check = permission_functions["hasPermission"]
@@ -95,7 +131,18 @@ class PermissionFunctionsTests(TestCase):
         self.assertFalse(
             check["permission_method"](None, self.user, ["unknown.missing_permission"]),
         )
-        self.assertIsNone(check["permission_filter"](self.user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, [perm_name]),
+            PermissionFilterDecision.ALLOW_ALL,
+        )
+        self.assertIs(
+            check["permission_filter"](self.user, ["unknown.missing_permission"]),
+            PermissionFilterDecision.DENY_ALL,
+        )
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_in_group(self) -> None:
         check = permission_functions["inGroup"]
@@ -107,7 +154,18 @@ class PermissionFunctionsTests(TestCase):
         self.assertFalse(
             check["permission_method"](None, self.user, ["other-group"]),
         )
-        self.assertIsNone(check["permission_filter"](self.user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, ["testers"]),
+            PermissionFilterDecision.ALLOW_ALL,
+        )
+        self.assertIs(
+            check["permission_filter"](self.user, ["other-group"]),
+            PermissionFilterDecision.DENY_ALL,
+        )
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_related_user_field_permission(self) -> None:
         check = permission_functions["relatedUserField"]
@@ -119,7 +177,10 @@ class PermissionFunctionsTests(TestCase):
         self.assertFalse(
             check["permission_method"](instance, self.inactive_user, ["owner"])
         )
-        self.assertIsNone(check["permission_filter"](self.user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
         self.assertEqual(
             check["permission_filter"](self.user, ["owner"]),
             {"filter": {"owner_id": self.user.id}},
@@ -155,7 +216,10 @@ class PermissionFunctionsTests(TestCase):
 
         filter_result.exists.return_value = False
         self.assertFalse(check["permission_method"](instance, self.user, ["members"]))
-        self.assertIsNone(check["permission_filter"](self.user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
         self.assertEqual(
             check["permission_filter"](self.user, ["members"]),
             {"filter": {"members__id": self.user.id}},
@@ -285,6 +349,10 @@ class PermissionFunctionsTests(TestCase):
 
         self.assertFalse(matches["permission_method"](instance, self.user, []))
         self.assertFalse(matches["permission_method"](instance, self.user, ["status"]))
+        self.assertIs(
+            matches["permission_filter"](self.user, ["status"]),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_matches_permission_with_multiple_attributes(self) -> None:
         """Test matches permission with various attribute types."""
@@ -324,6 +392,10 @@ class PermissionFunctionsTests(TestCase):
         """Test hasPermission requires config."""
         check = permission_functions["hasPermission"]
         self.assertFalse(check["permission_method"](None, self.user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_has_permission_with_anonymous_user(self) -> None:
         """Test hasPermission with anonymous user."""
@@ -336,6 +408,10 @@ class PermissionFunctionsTests(TestCase):
         """Test inGroup requires config."""
         check = permission_functions["inGroup"]
         self.assertFalse(check["permission_method"](None, self.user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_in_group_with_anonymous_user(self) -> None:
         """Test inGroup with anonymous user."""
@@ -361,7 +437,10 @@ class PermissionFunctionsTests(TestCase):
         instance = MagicMock()
 
         self.assertFalse(check["permission_method"](instance, self.user, []))
-        self.assertIsNone(check["permission_filter"](self.user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_related_user_field_permission_with_missing_field(self) -> None:
         """Test relatedUserField with missing field."""
@@ -380,8 +459,10 @@ class PermissionFunctionsTests(TestCase):
         self.assertFalse(
             check["permission_method"](instance, self.anonymous, ["owner"])
         )
-        # Anonymous user should return None for filter
-        self.assertIsNone(check["permission_filter"](self.anonymous, ["owner"]))
+        self.assertIs(
+            check["permission_filter"](self.anonymous, ["owner"]),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_is_self_permission_with_different_user(self) -> None:
         """Test isSelf permission with different users."""
@@ -396,8 +477,10 @@ class PermissionFunctionsTests(TestCase):
     def test_is_self_permission_filter_with_anonymous(self) -> None:
         """Test isSelf permission filter with anonymous user."""
         check = permission_functions["isSelf"]
-        result = check["permission_filter"](self.anonymous, [])
-        self.assertEqual(result, {"filter": {"creator_id": None}})
+        self.assertIs(
+            check["permission_filter"](self.anonymous, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_many_to_many_contains_user_with_no_config(self) -> None:
         """Test manyToManyContainsUser requires config."""
@@ -405,7 +488,10 @@ class PermissionFunctionsTests(TestCase):
         instance = MagicMock()
 
         self.assertFalse(check["permission_method"](instance, self.user, []))
-        self.assertIsNone(check["permission_filter"](self.user, []))
+        self.assertIs(
+            check["permission_filter"](self.user, []),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_many_to_many_contains_user_with_missing_field(self) -> None:
         """Test manyToManyContainsUser with missing field."""
@@ -433,8 +519,10 @@ class PermissionFunctionsTests(TestCase):
         self.assertFalse(
             check["permission_method"](instance, self.anonymous, ["members"])
         )
-        # Anonymous user should return None for filter
-        self.assertIsNone(check["permission_filter"](self.anonymous, ["members"]))
+        self.assertIs(
+            check["permission_filter"](self.anonymous, ["members"]),
+            PermissionFilterDecision.DENY_ALL,
+        )
 
     def test_many_to_many_contains_user_filter_result_no_exists(self) -> None:
         """Test manyToManyContainsUser when filter result has no exists method."""

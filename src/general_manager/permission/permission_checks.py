@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from enum import Enum
 from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, cast
 
 if TYPE_CHECKING:
@@ -16,12 +17,24 @@ if TYPE_CHECKING:
 
 type PermissionFilterAction = Literal["filter", "exclude"]
 type PermissionFilter = dict[PermissionFilterAction, dict[str, object]]
+
+
+class PermissionFilterDecision(Enum):
+    """Static authorization decisions returned by permission filter callbacks."""
+
+    ALLOW_ALL = "allow_all"
+    DENY_ALL = "deny_all"
+
+
+type PermissionFilterResult = PermissionFilter | PermissionFilterDecision | None
+
+
 type PermissionSubject = (
     PermissionDataManager[GeneralManager] | GeneralManager | GeneralManagerMeta
 )
 type permission_filter = Callable[
     [AbstractBaseUser | AnonymousUser, list[str]],
-    PermissionFilter | None,
+    PermissionFilterResult,
 ]
 
 type permission_method = Callable[
@@ -43,7 +56,7 @@ class PermissionDict(TypedDict):
 
 permission_functions: dict[str, PermissionDict] = {}
 
-__all__ = ["permission_functions", "register_permission"]
+__all__ = ["PermissionFilterDecision", "permission_functions", "register_permission"]
 
 _PERMISSION_ALREADY_REGISTERED_MESSAGE = "Permission function is already registered."
 
@@ -84,9 +97,60 @@ def _filter_result_exists(result: object | None) -> bool:
 
 def _default_permission_filter(
     _user: AbstractBaseUser | AnonymousUser, _config: list[str]
-) -> PermissionFilter | None:
+) -> PermissionFilterResult:
     """Return no queryset constraint for permissions that are only instance checks."""
     return None
+
+
+def _decision_from_user_predicate(predicate_result: bool) -> PermissionFilterDecision:
+    """Convert a user-only permission predicate result into a static decision."""
+    return (
+        PermissionFilterDecision.ALLOW_ALL
+        if predicate_result
+        else PermissionFilterDecision.DENY_ALL
+    )
+
+
+def _user_is_admin(user: AbstractBaseUser | AnonymousUser) -> bool:
+    """Return whether a user has Django staff access."""
+    return bool(getattr(user, "is_staff", False))
+
+
+def _user_is_authenticated(user: AbstractBaseUser | AnonymousUser) -> bool:
+    """Return whether a user is authenticated."""
+    return bool(getattr(user, "is_authenticated", False))
+
+
+def _user_is_active(user: AbstractBaseUser | AnonymousUser) -> bool:
+    """Return whether a user is active."""
+    return bool(getattr(user, "is_active", False))
+
+
+def _user_has_permission(
+    user: AbstractBaseUser | AnonymousUser, config: list[str]
+) -> bool:
+    """Return whether a user has the configured Django permission."""
+    if not config:
+        return False
+    has_perm: object = getattr(user, "has_perm", None)
+    if not callable(has_perm):
+        return False
+    return bool(cast(_PermissionCheckCallable, has_perm)(config[0]))
+
+
+def _user_is_in_group(
+    user: AbstractBaseUser | AnonymousUser, config: list[str]
+) -> bool:
+    """Return whether a user's groups relation contains the configured name."""
+    if not config:
+        return False
+    filtered = _relation_filter(getattr(user, "groups", None), name=config[0])
+    return _filter_result_exists(filtered)
+
+
+def _user_has_id(user: AbstractBaseUser | AnonymousUser) -> bool:
+    """Return whether a user has a persistent identity usable in row filters."""
+    return getattr(user, "id", None) is not None
 
 
 def register_permission(
@@ -111,9 +175,11 @@ def register_permission(
 
     When ``permission_filter`` is provided, read-query paths call it with the
     same user/config pair to build Django-style ``{"filter": {...}}`` and/or
-    ``{"exclude": {...}}`` constraints. Return ``None`` when a permission
-    cannot be represented as a queryset prefilter and must be evaluated per
-    instance. Registry entries always store a callable ``permission_filter``;
+    ``{"exclude": {...}}`` constraints. It may also return a
+    ``PermissionFilterDecision`` when the permission is statically true or
+    false for every row. Return ``None`` when a permission cannot be
+    represented as a queryset prefilter and must be evaluated per instance.
+    Registry entries always store a callable ``permission_filter``;
     permissions registered without one receive a default callable returning
     ``None``. Django queryset authorization applies filter kwargs before
     exclude kwargs. Search backends receive only the filter side as a prefilter
@@ -129,7 +195,8 @@ def register_permission(
         name (str): Identifier used before the first colon in permission
             expressions.
         permission_filter (permission_filter | None): Optional callable that
-            returns queryset constraints corresponding to the permission.
+            returns queryset constraints or static decisions corresponding to
+            the permission.
 
     Returns:
         Callable[[permission_method], permission_method]: Decorator that
@@ -153,7 +220,14 @@ def register_permission(
     return decorator
 
 
-@register_permission("public")
+def _public_permission_filter(
+    _user: AbstractBaseUser | AnonymousUser, _config: list[str]
+) -> PermissionFilterResult:
+    """Return the static decision for an always-public permission."""
+    return PermissionFilterDecision.ALLOW_ALL
+
+
+@register_permission("public", permission_filter=_public_permission_filter)
 def _permission_public(
     _instance: PermissionSubject,
     _user: AbstractBaseUser | AnonymousUser,
@@ -165,10 +239,10 @@ def _permission_public(
 
 def _matches_permission_filter(
     _user: AbstractBaseUser | AnonymousUser, config: list[str]
-) -> PermissionFilter | None:
+) -> PermissionFilterResult:
     """Convert ``matches:<field>:<value>`` into an equality queryset filter."""
     if len(config) < 2:
-        return None
+        return PermissionFilterDecision.DENY_ALL
     return {"filter": {config[0]: config[1]}}
 
 
@@ -184,21 +258,30 @@ def _permission_matches(
     )
 
 
-@register_permission("isAdmin")
+def _is_admin_permission_filter(
+    user: AbstractBaseUser | AnonymousUser, _config: list[str]
+) -> PermissionFilterResult:
+    """Return the static decision for the staff-user predicate."""
+    return _decision_from_user_predicate(_user_is_admin(user))
+
+
+@register_permission("isAdmin", permission_filter=_is_admin_permission_filter)
 def _permission_is_admin(
     _instance: PermissionSubject,
     user: AbstractBaseUser | AnonymousUser,
     _config: list[str],
 ) -> bool:
     """Allow staff users, including Django superusers."""
-    return bool(getattr(user, "is_staff", False))
+    return _user_is_admin(user)
 
 
 def _is_self_permission_filter(
     user: AbstractBaseUser | AnonymousUser,
     _config: list[str],
-) -> PermissionFilter | None:
+) -> PermissionFilterResult:
     """Constrain querysets to rows whose ``creator_id`` matches the user id."""
+    if not _user_has_id(user):
+        return PermissionFilterDecision.DENY_ALL
     return {"filter": {"creator_id": getattr(user, "id", None)}}
 
 
@@ -209,66 +292,88 @@ def _permission_is_self(
     _config: list[str],
 ) -> bool:
     """Allow access when the instance ``creator`` is the resolved user."""
-    return bool(getattr(instance, "creator", None) == user)
+    return bool(_user_has_id(user) and getattr(instance, "creator", None) == user)
 
 
-@register_permission("isAuthenticated")
+def _is_authenticated_permission_filter(
+    user: AbstractBaseUser | AnonymousUser, _config: list[str]
+) -> PermissionFilterResult:
+    """Return the static decision for the authenticated-user predicate."""
+    return _decision_from_user_predicate(_user_is_authenticated(user))
+
+
+@register_permission(
+    "isAuthenticated", permission_filter=_is_authenticated_permission_filter
+)
 def _permission_is_authenticated(
     _instance: PermissionSubject,
     user: AbstractBaseUser | AnonymousUser,
     _config: list[str],
 ) -> bool:
     """Allow users whose Django authentication flag is truthy."""
-    return bool(getattr(user, "is_authenticated", False))
+    return _user_is_authenticated(user)
 
 
-@register_permission("isActive")
+def _is_active_permission_filter(
+    user: AbstractBaseUser | AnonymousUser, _config: list[str]
+) -> PermissionFilterResult:
+    """Return the static decision for the active-user predicate."""
+    return _decision_from_user_predicate(_user_is_active(user))
+
+
+@register_permission("isActive", permission_filter=_is_active_permission_filter)
 def _permission_is_active(
     _instance: PermissionSubject,
     user: AbstractBaseUser | AnonymousUser,
     _config: list[str],
 ) -> bool:
     """Allow users whose Django active flag is truthy."""
-    return bool(getattr(user, "is_active", False))
+    return _user_is_active(user)
 
 
-@register_permission("hasPermission")
+def _has_permission_filter(
+    user: AbstractBaseUser | AnonymousUser, config: list[str]
+) -> PermissionFilterResult:
+    """Return the static decision for the configured Django permission."""
+    return _decision_from_user_predicate(_user_has_permission(user, config))
+
+
+@register_permission("hasPermission", permission_filter=_has_permission_filter)
 def _permission_has_permission(
     _instance: PermissionSubject,
     user: AbstractBaseUser | AnonymousUser,
     config: list[str],
 ) -> bool:
     """Allow users for whom ``user.has_perm(config[0])`` grants access."""
-    if not config:
-        return False
-    has_perm: object = getattr(user, "has_perm", None)
-    if not callable(has_perm):
-        return False
-    return bool(cast(_PermissionCheckCallable, has_perm)(config[0]))
+    return _user_has_permission(user, config)
 
 
-@register_permission("inGroup")
+def _in_group_permission_filter(
+    user: AbstractBaseUser | AnonymousUser, config: list[str]
+) -> PermissionFilterResult:
+    """Return the static decision for the configured user group."""
+    return _decision_from_user_predicate(_user_is_in_group(user, config))
+
+
+@register_permission("inGroup", permission_filter=_in_group_permission_filter)
 def _permission_in_group(
     _instance: PermissionSubject,
     user: AbstractBaseUser | AnonymousUser,
     config: list[str],
 ) -> bool:
     """Allow users whose Django ``groups`` relation contains the configured name."""
-    if not config:
-        return False
-    filtered = _relation_filter(getattr(user, "groups", None), name=config[0])
-    return _filter_result_exists(filtered)
+    return _user_is_in_group(user, config)
 
 
 def _related_user_field_permission_filter(
     user: AbstractBaseUser | AnonymousUser, config: list[str]
-) -> PermissionFilter | None:
+) -> PermissionFilterResult:
     """Constrain querysets to rows whose configured foreign key references the user."""
     if not config:
-        return None
+        return PermissionFilterDecision.DENY_ALL
     user_id = getattr(user, "id", None)
     if user_id is None:
-        return None
+        return PermissionFilterDecision.DENY_ALL
     return {"filter": {f"{config[0]}_id": user_id}}
 
 
@@ -282,7 +387,7 @@ def _permission_related_user_field(
     config: list[str],
 ) -> bool:
     """Allow access when a configured related-object field equals the user."""
-    if not config:
+    if not config or not _user_has_id(user):
         return False
     related_object = getattr(instance, config[0], None)
     return bool(related_object == user)
@@ -290,13 +395,13 @@ def _permission_related_user_field(
 
 def _many_to_many_contains_user_permission_filter(
     user: AbstractBaseUser | AnonymousUser, config: list[str]
-) -> PermissionFilter | None:
+) -> PermissionFilterResult:
     """Constrain querysets to rows whose configured many-to-many relation contains the user."""
     if not config:
-        return None
+        return PermissionFilterDecision.DENY_ALL
     user_id = getattr(user, "id", None)
     if user_id is None:
-        return None
+        return PermissionFilterDecision.DENY_ALL
     return {"filter": {f"{config[0]}__id": user_id}}
 
 
