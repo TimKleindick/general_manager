@@ -423,6 +423,10 @@ PERMISSION_EXPORTS: LazyExportMap = {
         "general_manager.permission.permission_data_manager",
         "InvalidPermissionDataError",
     ),
+    "PermissionFilterDecision": (
+        "general_manager.permission.permission_checks",
+        "PermissionFilterDecision",
+    ),
     "register_permission": (
         "general_manager.permission.permission_checks",
         "register_permission",

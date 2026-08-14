@@ -16,6 +16,7 @@ __all__ = [
     "OverrideManagerPermission",
     "PermissionAuditEvent",
     "PermissionDataManager",
+    "PermissionFilterDecision",
     "configure_audit_logger",
     "configure_audit_logger_from_settings",
     "mutation_capability",
@@ -44,6 +45,7 @@ from general_manager.permission.manager_based_permission import (
 )
 from general_manager.permission.audit import PermissionAuditEvent
 from general_manager.permission.permission_data_manager import PermissionDataManager
+from general_manager.permission.permission_checks import PermissionFilterDecision
 from general_manager.permission.audit import configure_audit_logger
 from general_manager.permission.audit import configure_audit_logger_from_settings
 from general_manager.permission.graphql_capabilities import mutation_capability

@@ -858,6 +858,10 @@
       "general_manager.permission.permission_data_manager",
       "PermissionDataManager"
     ],
+    "PermissionFilterDecision": [
+      "general_manager.permission.permission_checks",
+      "PermissionFilterDecision"
+    ],
     "configure_audit_logger": [
       "general_manager.permission.audit",
       "configure_audit_logger"
