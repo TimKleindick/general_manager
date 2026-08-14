@@ -87,6 +87,8 @@ has `User` and `Item` managers, reuse them and copy only `OrderedItems`.
 ```python title="myapp/managers.py"
 from __future__ import annotations
 
+import math
+
 from django.conf import settings
 from django.db import models
 
@@ -152,9 +154,15 @@ class OrderedItems(GeneralManager):
         preferred_items: list[Item] = []
         seen_ids: set[int] = set()
         for raw_id in stored_ids:
+            if isinstance(raw_id, bool):
+                continue
+            if isinstance(raw_id, float) and (
+                not math.isfinite(raw_id) or not raw_id.is_integer()
+            ):
+                continue
             try:
                 item_id = int(raw_id)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
             if item_id in seen_ids:
                 continue
@@ -179,7 +187,8 @@ query:
    order.
 3. `seen_ids` keeps only the first occurrence of a duplicate stored ID.
 4. A stored ID absent from `items_by_id` is stale and is skipped safely. Values
-   that cannot be converted to an integer are skipped as malformed data.
+   that cannot represent an integer ID, including booleans and non-integral or
+   non-finite floats, are skipped as malformed data.
 5. Items not selected by the stored sequence are appended in the original
    `(name, id)` fallback order.
 
@@ -337,6 +346,28 @@ def test_stale_ids_are_ignored(owner, items):
     assert ordered_names(owner) == ["Beta", "Alpha", "Gamma"]
 
 
+def test_boolean_ids_are_ignored(owner, items):
+    save_order(owner, [True])
+
+    assert ordered_names(owner) == ["Alpha", "Beta", "Gamma"]
+
+
+def test_fractional_float_ids_are_ignored(owner, items):
+    save_order(owner, [items["Gamma"].id + 0.5])
+
+    assert ordered_names(owner) == ["Alpha", "Beta", "Gamma"]
+
+
+@pytest.mark.parametrize(
+    "non_finite_id",
+    [float("nan"), float("inf"), float("-inf")],
+)
+def test_non_finite_float_ids_are_ignored(owner, items, non_finite_id):
+    save_order(owner, [non_finite_id])
+
+    assert ordered_names(owner) == ["Alpha", "Beta", "Gamma"]
+
+
 def test_missing_preference_record_uses_fallback_order(owner, items):
     assert ordered_names(owner) == ["Alpha", "Beta", "Gamma"]
 
@@ -390,10 +421,10 @@ def test_caller_cannot_read_another_users_order(
 ```
 
 These tests keep separate assertions for preferred ordering, fallback ordering,
-duplicates, stale IDs, and a missing record. That separation makes a regression
-in one branch of the algorithm easy to identify. The two GraphQL tests verify
-both sides of the ownership rule rather than relying only on direct resolver
-tests.
+duplicates, stale and malformed IDs, and a missing record. That separation
+makes a regression in one branch of the algorithm easy to identify. The two
+GraphQL tests verify both sides of the ownership rule rather than relying only
+on direct resolver tests.
 
 ## When to use this pattern
 
