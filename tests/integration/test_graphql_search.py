@@ -371,7 +371,7 @@ class TestGraphQLSearchReadHardening(GeneralManagerTransactionTestCase):
         self.assertEqual(payload["total"], 0)
         self.assertEqual(payload["results"], [])
 
-    def test_non_admin_search_logs_aggregate_read_summary(self):
+    def test_non_admin_search_skips_static_deny_read_summary(self):
         query = """
         query {
             search(index: "global", query: "Internal") {
@@ -396,15 +396,9 @@ class TestGraphQLSearchReadHardening(GeneralManagerTransactionTestCase):
             if context.get("source") == "search"
             and context.get("manager") == "AdminOnlyProject"
         ]
-        self.assertEqual(len(matching), 1)
-        context = matching[0]
-        self.assertEqual(context["candidate_count"], 1)
-        self.assertEqual(context["authorized_count"], 0)
-        self.assertEqual(context["denied_count"], 1)
-        self.assertTrue(context["requires_instance_check"])
-        self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
+        self.assertEqual(matching, [])
 
-    def test_admin_search_logs_authorized_read_summary(self):
+    def test_admin_search_skips_static_allow_read_summary(self):
         self.user.is_staff = True
         self.user.save(update_fields=["is_staff"])
         query = """
@@ -431,13 +425,7 @@ class TestGraphQLSearchReadHardening(GeneralManagerTransactionTestCase):
             if context.get("source") == "search"
             and context.get("manager") == "AdminOnlyProject"
         ]
-        self.assertEqual(len(matching), 1)
-        context = matching[0]
-        self.assertEqual(context["candidate_count"], 1)
-        self.assertEqual(context["authorized_count"], 1)
-        self.assertEqual(context["denied_count"], 0)
-        self.assertTrue(context["requires_instance_check"])
-        self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
+        self.assertEqual(matching, [])
 
 
 class TestGraphQLSearchBasedOnReadHardening(GeneralManagerTransactionTestCase):
@@ -522,7 +510,7 @@ class TestGraphQLSearchBasedOnReadHardening(GeneralManagerTransactionTestCase):
         self.assertEqual(payload["total"], 0)
         self.assertEqual(payload["results"], [])
 
-    def test_admin_search_logs_authorized_based_on_read_summary(self):
+    def test_admin_search_skips_static_based_on_read_summary(self):
         self.user.is_staff = True
         self.user.save(update_fields=["is_staff"])
         query = """
@@ -549,13 +537,7 @@ class TestGraphQLSearchBasedOnReadHardening(GeneralManagerTransactionTestCase):
             if context.get("source") == "search"
             and context.get("manager") == "DelegatedDocument"
         ]
-        self.assertEqual(len(matching), 1)
-        context = matching[0]
-        self.assertEqual(context["candidate_count"], 1)
-        self.assertEqual(context["authorized_count"], 1)
-        self.assertEqual(context["denied_count"], 0)
-        self.assertTrue(context["requires_instance_check"])
-        self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
+        self.assertEqual(matching, [])
 
 
 class TestGraphQLSearchPermissionIntegration(GeneralManagerTransactionTestCase):

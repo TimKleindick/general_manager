@@ -382,6 +382,11 @@ def passes_permission_filters(
     """
     if permission_plan is None:
         permission_plan = get_read_permission_filter(instance.__class__, info)
+    decision = getattr(permission_plan, "decision", "conditional")
+    if decision == "allow_all":
+        return True
+    if decision == "deny_all":
+        return False
     permission_filters = permission_plan.filters
     if not permission_filters:
         return can_read_instance(instance, info)
@@ -1046,14 +1051,21 @@ def register_search_query(
         for manager_class in manager_classes:
             type_label = manager_class.__name__
             permission_plan = get_read_permission_filter(manager_class, info)
+            decision = getattr(permission_plan, "decision", "conditional")
+            if decision == "deny_all":
+                continue
             backend_shape = get_backend_shape(manager_class)
             instance_check_reasons = resolve_instance_check_reasons(
                 permission_plan,
                 backend_shape=backend_shape,
             )
-            filter_groups = merge_permission_filters(
-                parsed_filters,
-                permission_plan.filters,
+            filter_groups = (
+                parsed_filters
+                if decision == "allow_all"
+                else merge_permission_filters(
+                    parsed_filters,
+                    permission_plan.filters,
+                )
             )
             total_hits_for_manager = 0
             candidate_hits_for_manager = 0

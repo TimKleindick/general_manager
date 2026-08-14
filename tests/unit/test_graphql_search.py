@@ -17,7 +17,10 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.measurement.measurement import Measurement
-from general_manager.permission.base_permission import BasePermission
+from general_manager.permission.base_permission import (
+    BasePermission,
+    ReadPermissionPlan,
+)
 from general_manager.permission.manager_based_permission import (
     AdditiveManagerPermission,
 )
@@ -132,6 +135,22 @@ class ProjectPermission(BasePermission):
 
 class Project(GeneralManager):
     Interface = ProjectInterface
+    Permission = ProjectPermission
+
+    class SearchConfig:
+        indexes: ClassVar[list[IndexConfig]] = [
+            IndexConfig(name="global", fields=["name"], filters=["status"])
+        ]
+
+
+class AlternateProjectInterface(ProjectInterface):
+    data_store: ClassVar[dict[int, dict[str, str]]] = {
+        3: {"name": "Gamma", "status": "public"},
+    }
+
+
+class AlternateProject(GeneralManager):
+    Interface = AlternateProjectInterface
     Permission = ProjectPermission
 
     class SearchConfig:
@@ -787,6 +806,138 @@ class GraphQLSearchTests(SimpleTestCase):
         assert response["total"] == 1
         assert response["results"][0].identification == {"id": 1}
 
+    def test_graphql_search_static_deny_skips_backend_and_response_data(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=1)
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+        denied_plan = ReadPermissionPlan(
+            filters=[],
+            requires_instance_check=False,
+            decision="deny_all",
+        )
+
+        with patch.object(
+            graphql_search_module,
+            "get_read_permission_filter",
+            return_value=denied_plan,
+        ):
+            response = field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=["Project"],
+                filters=None,
+                page=1,
+                page_size=10,
+            )
+
+        assert response["results"] == []
+        assert response["total"] == 0
+        assert response["total_is_exact"] is True
+        assert response["raw"] == []
+        assert response["took_ms"] is None
+        assert backend.search_calls == []
+
+    def test_graphql_search_static_allow_keeps_user_filters_without_row_gate(
+        self,
+    ) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=2)
+        ProjectInterface.data_store[2]["status"] = "private"
+        SearchIndexer(backend).index_instance(Project(id=2))
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+        allowed_plan = ReadPermissionPlan(
+            filters=[],
+            requires_instance_check=False,
+            decision="allow_all",
+        )
+
+        with (
+            patch.object(
+                graphql_search_module,
+                "get_read_permission_filter",
+                return_value=allowed_plan,
+            ),
+            patch.object(graphql_search_module, "can_read_instance") as can_read,
+        ):
+            response = field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=["Project"],
+                filters={"status": "private"},
+                page=1,
+                page_size=10,
+            )
+
+        assert response["total"] == 1
+        assert [item.identification for item in response["results"]] == [{"id": 2}]
+        assert backend.search_calls[0]["kwargs"]["filters"] == {"status": "private"}
+        can_read.assert_not_called()
+
+    def test_graphql_search_runs_conditional_manager_when_another_is_static_deny(
+        self,
+    ) -> None:
+        GeneralManagerMeta.all_classes = [Project, AlternateProject]
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [Project, AlternateProject], [Project, AlternateProject]
+        )
+        GraphQL._query_fields = {}
+        GraphQL.graphql_type_registry = {}
+        GraphQL.manager_registry = {}
+        GraphQL._search_union = None
+        GraphQL._search_result_type = None
+        GraphQL.create_graphql_interface(Project)
+        GraphQL.create_graphql_interface(AlternateProject)
+        GraphQL.register_search_query()
+        backend = CountingDevSearchBackend()
+        configure_search_backend(backend)
+        SearchIndexer(backend).index_instance(Project(id=1))
+        SearchIndexer(backend).index_instance(AlternateProject(id=3))
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+        denied_plan = ReadPermissionPlan(
+            filters=[],
+            requires_instance_check=False,
+            decision="deny_all",
+        )
+        conditional_plan = ReadPermissionPlan(
+            filters=[{"filter": {"status": "public"}, "exclude": {}}],
+            requires_instance_check=False,
+        )
+
+        def get_plan(
+            manager_class: type[GeneralManager], _info: object
+        ) -> ReadPermissionPlan:
+            return denied_plan if manager_class is Project else conditional_plan
+
+        with patch.object(
+            graphql_search_module,
+            "get_read_permission_filter",
+            side_effect=get_plan,
+        ):
+            response = field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=["Project", "AlternateProject"],
+                filters=None,
+                page=1,
+                page_size=10,
+            )
+
+        assert response["total"] == 1
+        assert [item.identification for item in response["results"]] == [{"id": 3}]
+        assert [call["kwargs"]["types"] for call in backend.search_calls] == [
+            ["AlternateProject"]
+        ]
+
     def test_graphql_search_sorting_numeric_and_dates(self) -> None:
         class RankedInterface(BaseTestInterface):
             input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
@@ -941,6 +1092,40 @@ class GraphQLSearchTests(SimpleTestCase):
 
 
 class GraphQLSearchHelperCoverageTests(SimpleTestCase):
+    def test_static_permission_plans_return_without_filter_or_instance_checks(
+        self,
+    ) -> None:
+        info = MagicMock()
+        instance = Project(id=1)
+        allowed_plan = ReadPermissionPlan(
+            filters=[],
+            requires_instance_check=False,
+            decision="allow_all",
+        )
+        denied_plan = ReadPermissionPlan(
+            filters=[],
+            requires_instance_check=False,
+            decision="deny_all",
+        )
+
+        with (
+            patch.object(graphql_search_module, "matches_filters") as matches,
+            patch.object(graphql_search_module, "can_read_instance") as can_read,
+        ):
+            assert graphql_search_module.passes_permission_filters(
+                instance,
+                info,
+                permission_plan=allowed_plan,
+            )
+            assert not graphql_search_module.passes_permission_filters(
+                instance,
+                info,
+                permission_plan=denied_plan,
+            )
+
+        matches.assert_not_called()
+        can_read.assert_not_called()
+
     def test_compound_exclude_plan_runs_final_instance_gate(self) -> None:
         def exclude_private_filter(_user, _config):
             return {"exclude": {"status": "private"}}
