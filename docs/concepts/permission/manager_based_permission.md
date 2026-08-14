@@ -27,7 +27,12 @@ Each list contains permission expressions evaluated by `validate_permission_stri
 - Built-in keywords such as `public`, `isAuthenticated`, or `isAdmin`.
 - Custom methods on the manager (e.g., `isProjectManager`).
 
-If any expression evaluates to `True`, the action is allowed.
+Each expression is an alternative: if any expression evaluates to `True`, the
+action is allowed. Within one expression, `&` is an AND operator, so
+`"isAuthenticated&isProjectManager"` requires both checks. This same algebra is
+used while planning read access: a static deny in an AND expression denies that
+alternative, a static allow contributes no additional restriction, and the
+remaining mapping or instance checks determine conditional alternatives.
 
 ## Default permissions from settings
 
@@ -104,11 +109,34 @@ class Permission(OverrideManagerPermission):
 
 For `total_capex`, only `isFinanceTeam` is evaluated locally; the class-level `__update__` rule still applies to other attributes.
 
-When `__based_on__` is set, delegated permissions always remain an outer gate in both classes.
+When `__based_on__` is set, delegated permissions always remain an outer gate
+in both classes. In read planning this is an AND with the local alternatives:
+the delegated plan must allow access as well as one local alternative. A
+delegated `DENY_ALL` therefore denies the result, while a delegated `ALLOW_ALL`
+leaves the local plan unchanged. Conditional delegated filters are prefixed with
+`<based_on>__` before being combined with local filters.
 
 ## Permission filters
 
-`AdditiveManagerPermission.get_permission_filter()` and `OverrideManagerPermission.get_permission_filter()` convert read expressions into Django queryset filters. Buckets use those filters as a prefilter, then run a final per-instance read check before a row contributes to list membership or counts. This keeps list and search authorization fail-closed even when a read rule cannot be represented as a queryset constraint.
+`AdditiveManagerPermission.get_permission_filter()` and
+`OverrideManagerPermission.get_permission_filter()` retain the legacy filter
+interface. Their newer `get_read_permission_plan()` counterpart additionally
+captures whether a read is statically `allow_all`, statically `deny_all`, or
+conditional. It is an internal resolver adapter, rather than a public
+application import; its `decision` field defaults to `"conditional"` so
+plan-shaped compatibility objects that predate the field keep the safe legacy
+behavior.
+
+For conditional plans, read expressions become Django queryset prefilters.
+Buckets use those filters before any necessary final per-instance check, so an
+unfilterable rule remains fail-closed. Static allow and deny avoid that work:
+list resolvers return every candidate row or an empty result respectively,
+without per-row authorization calls. Aggregate authorization logs are emitted
+only for conditional list/search paths that actually required the final
+instance check; they record candidate, authorized, and denied counts plus the
+reason labels. Existing custom callbacks that return mappings or `None`, and
+legacy permission classes that expose only `get_permission_filter()`, retain
+the conditional, per-instance-check behavior.
 
 `get_read_permission_plan()` combines delegated `__based_on__` filters and local
 read filters as alternative constraint groups. Delegated filter and exclude keys
@@ -120,7 +148,7 @@ for deterministic diagnostics.
 
 The read path also plugs into the project's existing observability pattern:
 
-- GraphQL list and search paths emit one aggregate structured log event per manager/query path, with the structured payload attached at the log call site (for example `logger.info(..., context=...)`).
+- GraphQL list and search paths emit one aggregate structured log event per manager/query path only when a conditional plan requires the final instance gate, with the structured payload attached at the log call site (for example `logger.info(..., context=...)`).
 - The log context records candidate rows, authorized rows, denied rows, whether a final instance gate was required, and the reason labels that triggered it.
 - These events complement the existing GraphQL metrics pipeline; the permission hardening does not introduce a separate telemetry subsystem or a new public metrics API.
 

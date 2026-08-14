@@ -133,10 +133,41 @@ preserved: `"rule:"` passes `[""]`, and `"rule::x"` passes `["", "x"]`.
 
 Permission filters receive `(user, config)` and return one of these shapes:
 
-- `None` when the rule cannot be represented as a queryset prefilter.
+- `None` when the rule cannot be represented as a queryset prefilter and needs
+  a concrete instance check.
 - `{"filter": {"field": value}}` for Django-style filter kwargs.
 - `{"exclude": {"field": value}}` for Django-style exclude kwargs.
 - Both `filter` and `exclude` keys when a rule needs both constraints.
+- `PermissionFilterDecision.ALLOW_ALL` when this user/config combination may
+  read every possible instance.
+- `PermissionFilterDecision.DENY_ALL` when this user/config combination may
+  read no instances.
+
+For example, a user-only rule can make the static decision directly:
+
+```python
+from general_manager.permission import PermissionFilterDecision, register_permission
+
+
+def is_tenant_operator_filter(user, config):
+    if user.is_authenticated and user.tenant_role == "operator":
+        return PermissionFilterDecision.ALLOW_ALL
+    return PermissionFilterDecision.DENY_ALL
+
+
+@register_permission(
+    "isTenantOperator", permission_filter=is_tenant_operator_filter
+)
+def is_tenant_operator(instance, user, config):
+    return bool(user.is_authenticated and user.tenant_role == "operator")
+```
+
+Mappings constrain candidate rows; they do not by themselves make a static
+authorization claim. `None` keeps authorization conditional and requires a
+concrete instance check. `ALLOW_ALL` is stronger: it grants every possible
+instance for that user/config pair, while `DENY_ALL` grants none. Return
+`ALLOW_ALL` only when that statement is true for every row: an incorrect value
+broadens access.
 
 Registry entries always contain a callable `permission_filter`. When a
 permission is registered without one, GeneralManager stores a default callable
@@ -157,14 +188,14 @@ Built-in registry names:
 
 | Name | Config | Instance check | Query filter |
 | --- | --- | --- | --- |
-| `public` | none | Allows every user, including anonymous and inactive users. | None |
+| `public` | none | Allows every user, including anonymous and inactive users. | `ALLOW_ALL` |
 | `matches` | `<field>:<value>` | Allows when `str(getattr(instance, field)) == value`. | `{"filter": {field: value}}` |
-| `isAdmin` | none | Allows Django staff users, including superusers. | None |
+| `isAdmin` | none | Allows Django staff users, including superusers. | `ALLOW_ALL` for staff; otherwise `DENY_ALL` |
 | `isSelf` | none | Allows when `instance.creator == user`. | `{"filter": {"creator_id": user.id}}` |
-| `isAuthenticated` | none | Allows authenticated users. | None |
-| `isActive` | none | Allows active users. | None |
-| `hasPermission` | `<app_label.codename>` | Delegates to `user.has_perm(...)`. | None |
-| `inGroup` | `<group name>` | Allows users in the named Django group. | None |
+| `isAuthenticated` | none | Allows authenticated users. | `ALLOW_ALL` when authenticated; otherwise `DENY_ALL` |
+| `isActive` | none | Allows active users. | `ALLOW_ALL` when active; otherwise `DENY_ALL` |
+| `hasPermission` | `<app_label.codename>` | Delegates to `user.has_perm(...)`. | `ALLOW_ALL` when granted; otherwise `DENY_ALL` |
+| `inGroup` | `<group name>` | Allows users in the named Django group. | `ALLOW_ALL` when in the group; otherwise `DENY_ALL` |
 | `relatedUserField` | `<field>` | Allows when `getattr(instance, field) == user`. | `{"filter": {f"{field}_id": user.id}}` |
 | `manyToManyContainsUser` | `<field>` | Allows when the related manager contains the user. | `{"filter": {f"{field}__id": user.id}}` |
 
