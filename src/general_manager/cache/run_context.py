@@ -237,6 +237,7 @@ class CalculationRunContext:
     ) -> bool:
         touch_immediately = False
         touches_to_flush: tuple[PendingRunCacheTouch, ...] = ()
+        mode_generation = -1
         with self._run_cache_touch_lock:
             if (
                 not self._run_cache_budget_enabled
@@ -245,6 +246,7 @@ class CalculationRunContext:
                 return False
             if self._run_cache_touch_thread_id != get_ident():
                 touch_immediately = True
+                mode_generation = self._run_cache_mode_generation
             elif pending_key != self._last_pending_run_cache_touch:
                 return False
             else:
@@ -252,11 +254,21 @@ class CalculationRunContext:
                 if count < RUN_CONTEXT_TOUCH_BATCH_SIZE:
                     self._run_cache_touch_count = count
                     return True
-                touches_to_flush = self._take_run_cache_touches_locked()
+                touches_to_flush, mode_generation = (
+                    self._take_run_cache_touches_locked()
+                )
         if touch_immediately:
-            run_context_cache_budget.touch(self, *pending_key)
+            run_context_cache_budget.touch(
+                self,
+                *pending_key,
+                mode_generation=mode_generation,
+            )
             return True
-        run_context_cache_budget.touch_many(self, touches_to_flush)
+        run_context_cache_budget.touch_many(
+            self,
+            touches_to_flush,
+            mode_generation=mode_generation,
+        )
         return True
 
     def _touch_run_cache_entry(
@@ -279,12 +291,13 @@ class CalculationRunContext:
 
     def _take_run_cache_touches_locked(
         self,
-    ) -> tuple[PendingRunCacheTouch, ...]:
+    ) -> tuple[tuple[PendingRunCacheTouch, ...], int]:
         touches = tuple(self._pending_run_cache_touches)
+        mode_generation = self._run_cache_mode_generation
         self._pending_run_cache_touches.clear()
         self._last_pending_run_cache_touch = None
         self._run_cache_touch_count = 0
-        return touches
+        return touches, mode_generation
 
     def _flush_run_cache_touches(self) -> None:
         with self._run_cache_touch_lock:
@@ -292,8 +305,12 @@ class CalculationRunContext:
                 self._last_pending_run_cache_touch = None
                 self._run_cache_touch_count = 0
                 return
-            touches = self._take_run_cache_touches_locked()
-        run_context_cache_budget.touch_many(self, touches)
+            touches, mode_generation = self._take_run_cache_touches_locked()
+        run_context_cache_budget.touch_many(
+            self,
+            touches,
+            mode_generation=mode_generation,
+        )
 
     @staticmethod
     def _scoped_key(key: Hashable) -> Hashable:
