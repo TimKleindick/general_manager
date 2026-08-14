@@ -2,6 +2,41 @@
 
 <!-- version list -->
 
+## v0.69.2 (2026-08-14)
+
+### Bug Fixes
+
+- Fence run-cache recency publications
+  ([`21f5b40`](https://github.com/TimKleindick/general_manager/commit/21f5b406544762c7ccad12b1b5d3bf360f8efda1))
+
+- Harden run-cache recency transitions
+  ([`7f23988`](https://github.com/TimKleindick/general_manager/commit/7f2398883a52b6f5ff0a3d2c2b45dd7853dc4ede))
+
+### Documentation
+
+- Explain calibrated run-cache budgeting
+  ([`1217ffa`](https://github.com/TimKleindick/general_manager/commit/1217ffa3684ce01b18581103b99182bc722119c4))
+
+### Performance Improvements
+
+- Bound run-cache calibration sizing
+  ([`ee7413a`](https://github.com/TimKleindick/general_manager/commit/ee7413a839a6790e988995e9c8491c0297387058))
+
+- Calibrate aggregate run-cache usage
+  ([`40b036a`](https://github.com/TimKleindick/general_manager/commit/40b036a078383a5ed283389625cdf39d1e998e17))
+
+- Defer run-cache recency until pressure
+  ([`02401e1`](https://github.com/TimKleindick/general_manager/commit/02401e12d6197926dbabff391f85dfbd1283c237))
+
+- Reduce calibrated run-cache overhead
+  ([`91a7a1d`](https://github.com/TimKleindick/general_manager/commit/91a7a1ddce7db5fa3600c85ee39980e2fb57011a))
+
+### Testing
+
+- Harden aggregate cache budget coverage
+  ([`9091f4c`](https://github.com/TimKleindick/general_manager/commit/9091f4c1cbec1c03b358cfa26db73f2fe2b70ae8))
+
+
 ## v0.69.1 (2026-08-13)
 
 ### Bug Fixes
