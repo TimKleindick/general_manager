@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Literal, cast
 
 from general_manager.permission.base_permission import (
     BasePermission,
     PermissionConstraint,
+    ReadPermissionDecision,
     ReadPermissionPlan,
     ReadPermissionReason,
     UserLike,
 )
+from general_manager.permission.permission_checks import PermissionFilterDecision
 
 if TYPE_CHECKING:
     from general_manager.permission.permission_data_manager import (
@@ -20,6 +23,16 @@ if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
 
 type permission_type = Literal["create", "read", "update", "delete"]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadPermissionFragment:
+    """Normalized planning outcome for one registered permission fragment."""
+
+    decision: ReadPermissionDecision
+    constraint: PermissionConstraint | None = None
+    requires_instance_check: bool = False
+
 
 _DEFAULT_PERMISSIONS_KEY = "DEFAULT_PERMISSIONS"
 _PERMISSION_ACTIONS: tuple[permission_type, ...] = (
@@ -272,6 +285,231 @@ class _ConfiguredManagerPermission(BasePermission):
             merged[key] = value
         return merged, had_conflict
 
+    def _plan_permission_fragment(self, fragment: str) -> _ReadPermissionFragment:
+        """Normalize one callback into a static, row, or instance outcome."""
+        result = self._get_permission_filter_result(fragment)
+        if result is PermissionFilterDecision.ALLOW_ALL:
+            return _ReadPermissionFragment(decision="allow_all")
+        if result is PermissionFilterDecision.DENY_ALL:
+            return _ReadPermissionFragment(decision="deny_all")
+        if result is None:
+            return _ReadPermissionFragment(
+                decision="conditional",
+                requires_instance_check=True,
+            )
+        return _ReadPermissionFragment(
+            decision="conditional",
+            constraint=result,
+        )
+
+    def _plan_permission_expression(self, expression: str) -> ReadPermissionPlan:
+        """Compose the ``&``-joined fragments in one read alternative."""
+        combined_filter: dict[str, object] = {}
+        combined_exclude: dict[str, object] = {}
+        has_constraint = False
+        requires_instance_check = False
+        reasons: set[ReadPermissionReason] = set()
+
+        for fragment_name in expression.split("&"):
+            fragment = self._plan_permission_fragment(fragment_name)
+            if fragment.decision == "deny_all":
+                return ReadPermissionPlan(
+                    filters=[],
+                    requires_instance_check=False,
+                    decision="deny_all",
+                )
+            if fragment.decision == "allow_all":
+                continue
+            if fragment.requires_instance_check:
+                requires_instance_check = True
+                reasons.add("unfilterable_read_rule")
+            if fragment.constraint is None:
+                continue
+            has_constraint = True
+            combined_filter, filter_conflict = self._merge_filter_group_parts(
+                combined_filter,
+                dict(fragment.constraint.get("filter", {})),
+            )
+            combined_exclude, exclude_conflict = self._merge_filter_group_parts(
+                combined_exclude,
+                dict(fragment.constraint.get("exclude", {})),
+            )
+            if filter_conflict or exclude_conflict:
+                requires_instance_check = True
+                reasons.add("filter_key_conflict")
+
+        if not has_constraint and not requires_instance_check:
+            return ReadPermissionPlan(
+                filters=[],
+                requires_instance_check=False,
+                decision="allow_all",
+            )
+        return ReadPermissionPlan(
+            filters=(
+                [{"filter": combined_filter, "exclude": combined_exclude}]
+                if has_constraint
+                else []
+            ),
+            requires_instance_check=requires_instance_check,
+            instance_check_reasons=tuple(sorted(reasons)),
+            decision="conditional",
+        )
+
+    def _plan_local_read_permissions(self) -> ReadPermissionPlan:
+        """Compose configured read expressions as authorization alternatives."""
+        if not self._read_permissions:
+            return ReadPermissionPlan(
+                filters=[],
+                requires_instance_check=False,
+                decision="allow_all",
+            )
+
+        surviving_plans: list[ReadPermissionPlan] = []
+        for expression in self._read_permissions:
+            expression_plan = self._plan_permission_expression(expression)
+            if expression_plan.decision == "allow_all":
+                return expression_plan
+            if expression_plan.decision != "deny_all":
+                surviving_plans.append(expression_plan)
+
+        if not surviving_plans:
+            return ReadPermissionPlan(
+                filters=[],
+                requires_instance_check=False,
+                decision="deny_all",
+            )
+
+        requires_instance_check = any(
+            plan.requires_instance_check for plan in surviving_plans
+        )
+        reasons = {
+            reason for plan in surviving_plans for reason in plan.instance_check_reasons
+        }
+        has_unrestricted_alternative = any(
+            plan.requires_instance_check and not plan.filters
+            for plan in surviving_plans
+        )
+        filters = (
+            []
+            if has_unrestricted_alternative
+            else [constraint for plan in surviving_plans for constraint in plan.filters]
+        )
+        return ReadPermissionPlan(
+            filters=filters,
+            requires_instance_check=requires_instance_check,
+            instance_check_reasons=tuple(sorted(reasons)),
+            decision="conditional",
+        )
+
+    @staticmethod
+    def _coerce_read_permission_plan(candidate: object) -> ReadPermissionPlan | None:
+        """Copy a plan-shaped object while applying compatibility defaults."""
+        filters = getattr(candidate, "filters", None)
+        requires_instance_check = getattr(candidate, "requires_instance_check", None)
+        if not isinstance(filters, list) or not isinstance(
+            requires_instance_check, bool
+        ):
+            return None
+
+        raw_reasons = getattr(candidate, "instance_check_reasons", ())
+        reasons = tuple(raw_reasons) if isinstance(raw_reasons, (list, tuple)) else ()
+        raw_decision = getattr(candidate, "decision", "conditional")
+        decision: ReadPermissionDecision = (
+            cast(ReadPermissionDecision, raw_decision)
+            if raw_decision in ("allow_all", "deny_all", "conditional")
+            else "conditional"
+        )
+        return ReadPermissionPlan(
+            filters=cast(list[PermissionConstraint], list(filters)),
+            requires_instance_check=requires_instance_check,
+            instance_check_reasons=cast(tuple[ReadPermissionReason, ...], reasons),
+            decision=decision,
+        )
+
+    @staticmethod
+    def _prefix_read_permission_plan(
+        plan: ReadPermissionPlan,
+        prefix: str,
+    ) -> ReadPermissionPlan:
+        """Prefix delegated constraints while preserving the plan decision."""
+        if plan.decision != "conditional":
+            return ReadPermissionPlan(
+                filters=[],
+                requires_instance_check=False,
+                decision=plan.decision,
+            )
+        return ReadPermissionPlan(
+            filters=[
+                {
+                    "filter": {
+                        f"{prefix}__{key}": value
+                        for key, value in constraint.get("filter", {}).items()
+                    },
+                    "exclude": {
+                        f"{prefix}__{key}": value
+                        for key, value in constraint.get("exclude", {}).items()
+                    },
+                }
+                for constraint in plan.filters
+            ],
+            requires_instance_check=plan.requires_instance_check,
+            instance_check_reasons=plan.instance_check_reasons,
+            decision="conditional",
+        )
+
+    def _and_read_permission_plans(
+        self,
+        delegated_plan: ReadPermissionPlan,
+        local_plan: ReadPermissionPlan,
+    ) -> ReadPermissionPlan:
+        """Compose delegated and local plans as an outer authorization AND."""
+        if delegated_plan.decision == "deny_all" or local_plan.decision == "deny_all":
+            return ReadPermissionPlan(
+                filters=[],
+                requires_instance_check=False,
+                decision="deny_all",
+            )
+        if delegated_plan.decision == "allow_all":
+            return local_plan
+        if local_plan.decision == "allow_all":
+            return delegated_plan
+
+        requires_instance_check = (
+            delegated_plan.requires_instance_check or local_plan.requires_instance_check
+        )
+        reasons = set(delegated_plan.instance_check_reasons)
+        reasons.update(local_plan.instance_check_reasons)
+        delegated_filters = delegated_plan.filters or [{"filter": {}, "exclude": {}}]
+        local_filters = local_plan.filters or [{"filter": {}, "exclude": {}}]
+        combined_filters: list[PermissionConstraint] = []
+        for delegated_filter_group in delegated_filters:
+            for local_filter_group in local_filters:
+                combined_filter, filter_conflict = self._merge_filter_group_parts(
+                    dict(delegated_filter_group.get("filter", {})),
+                    dict(local_filter_group.get("filter", {})),
+                )
+                combined_exclude, exclude_conflict = self._merge_filter_group_parts(
+                    dict(delegated_filter_group.get("exclude", {})),
+                    dict(local_filter_group.get("exclude", {})),
+                )
+                if filter_conflict or exclude_conflict:
+                    requires_instance_check = True
+                    reasons.add("filter_key_conflict")
+                combined_filters.append(
+                    {
+                        "filter": combined_filter,
+                        "exclude": combined_exclude,
+                    }
+                )
+        if combined_filters == [{"filter": {}, "exclude": {}}]:
+            combined_filters = []
+        return ReadPermissionPlan(
+            filters=combined_filters,
+            requires_instance_check=requires_instance_check,
+            instance_check_reasons=tuple(sorted(reasons)),
+            decision="conditional",
+        )
+
     def _set_effective_permissions(
         self,
         *,
@@ -420,7 +658,8 @@ class _ConfiguredManagerPermission(BasePermission):
     def get_permission_filter(
         self,
     ) -> list[PermissionConstraint]:
-        return self.get_read_permission_plan().filters
+        plan = self.get_read_permission_plan()
+        return plan.filters or [{"filter": {}, "exclude": {}}]
 
     def can_read_instance(self) -> bool:
         """Return whether the current user may see that this manager exists."""
@@ -439,122 +678,59 @@ class _ConfiguredManagerPermission(BasePermission):
         return result
 
     def get_read_permission_plan(self) -> ReadPermissionPlan:
-        """Return read prefilters plus whether row-level checks must still run.
+        """Compose static decisions, prefilters, and required row-level checks.
 
-        Delegated ``__based_on__`` filters and local read filters are combined
-        as alternative constraint groups. Delegated filter and exclude keys are
-        prefixed with ``"<based_on>__"`` before merging. The returned plan marks
-        row-level instance checks as required for unfilterable read rules,
-        class-level delegated contexts that lack a concrete object, and filter
-        key conflicts while merging delegated and local constraints. Reason
-        labels are sorted for deterministic diagnostics.
+        Fragments joined with ``&`` are planned as AND, while entries in
+        ``__read__`` are alternatives planned as OR. Delegated ``__based_on__``
+        authorization is an outer AND whose filter and exclude keys are prefixed
+        with ``"<based_on>__"``. Unfilterable rules, unresolved class context,
+        and filter conflicts retain an instance gate with sorted reason labels.
         """
         if self._is_superuser():
             return ReadPermissionPlan(
-                filters=[{"filter": {}, "exclude": {}}],
+                filters=[],
                 requires_instance_check=False,
+                decision="allow_all",
             )
+        local_plan = self._plan_local_read_permissions()
+        if local_plan.decision == "deny_all":
+            return local_plan
         __based_on__ = self.__based_on__
-        requires_instance_check = False
-        instance_check_reasons: set[ReadPermissionReason] = set()
-        delegated_filters: list[PermissionConstraint] = [{"filter": {}, "exclude": {}}]
+        if self.__based_on_permission is None and not (
+            __based_on__ is not None and self._is_class_context
+        ):
+            return local_plan
+
+        delegated_plan: ReadPermissionPlan
         if self.__based_on_permission is not None:
             delegated_plan_method = getattr(
                 self.__based_on_permission,
                 "get_read_permission_plan",
                 None,
             )
-            delegated_plan: ReadPermissionPlan | None = None
+            delegated_plan_candidate: ReadPermissionPlan | None = None
             if callable(delegated_plan_method):
                 plan_candidate = delegated_plan_method()
-                if isinstance(plan_candidate, ReadPermissionPlan):
-                    delegated_plan = plan_candidate
-                elif isinstance(getattr(plan_candidate, "filters", None), list) and (
-                    isinstance(
-                        getattr(plan_candidate, "requires_instance_check", None),
-                        bool,
-                    )
-                ):
-                    raw_reasons = getattr(plan_candidate, "instance_check_reasons", ())
-                    delegated_plan = ReadPermissionPlan(
-                        filters=list(plan_candidate.filters),
-                        requires_instance_check=plan_candidate.requires_instance_check,
-                        instance_check_reasons=tuple(raw_reasons)
-                        if isinstance(raw_reasons, (list, tuple))
-                        else (),
-                    )
-            if delegated_plan is None:
-                delegated_plan = ReadPermissionPlan(
+                delegated_plan_candidate = self._coerce_read_permission_plan(
+                    plan_candidate
+                )
+            if delegated_plan_candidate is None:
+                delegated_plan_candidate = ReadPermissionPlan(
                     filters=self.__based_on_permission.get_permission_filter(),
                     requires_instance_check=True,
                     instance_check_reasons=("no_prefilter_backend",),
                 )
-            requires_instance_check = (
-                requires_instance_check or delegated_plan.requires_instance_check
+            delegated_plan = self._prefix_read_permission_plan(
+                delegated_plan_candidate,
+                cast(str, __based_on__),
             )
-            instance_check_reasons.update(delegated_plan.instance_check_reasons)
-            delegated_filters = []
-            for delegated_filter_group in delegated_plan.filters:
-                filter_dict = delegated_filter_group.get("filter", {})
-                exclude_dict = delegated_filter_group.get("exclude", {})
-                delegated_filters.append(
-                    {
-                        "filter": {
-                            f"{__based_on__}__{key}": value
-                            for key, value in filter_dict.items()
-                        },
-                        "exclude": {
-                            f"{__based_on__}__{key}": value
-                            for key, value in exclude_dict.items()
-                        },
-                    }
-                )
-        elif self.__based_on__ is not None and self._is_class_context:
-            requires_instance_check = True
-            instance_check_reasons.add("based_on_class_context")
-
-        local_filters: list[PermissionConstraint] = []
-        for permission in self._read_permissions:
-            permission_filter, is_filterable = self._get_permission_filter_info(
-                permission
+        else:
+            delegated_plan = ReadPermissionPlan(
+                filters=[],
+                requires_instance_check=True,
+                instance_check_reasons=("based_on_class_context",),
             )
-            if is_filterable:
-                local_filters.append(permission_filter)
-            else:
-                requires_instance_check = True
-                instance_check_reasons.add("unfilterable_read_rule")
-
-        if not local_filters:
-            local_filters = [{"filter": {}, "exclude": {}}]
-
-        combined_filters: list[PermissionConstraint] = []
-        for delegated_filter_group in delegated_filters:
-            for local_filter_group in local_filters:
-                combined_filter, filter_conflict = self._merge_filter_group_parts(
-                    dict(delegated_filter_group.get("filter", {})),
-                    dict(local_filter_group.get("filter", {})),
-                )
-                combined_exclude, exclude_conflict = self._merge_filter_group_parts(
-                    dict(delegated_filter_group.get("exclude", {})),
-                    dict(local_filter_group.get("exclude", {})),
-                )
-                requires_instance_check = (
-                    requires_instance_check or filter_conflict or exclude_conflict
-                )
-                if filter_conflict or exclude_conflict:
-                    instance_check_reasons.add("filter_key_conflict")
-                combined_filters.append(
-                    {
-                        "filter": combined_filter,
-                        "exclude": combined_exclude,
-                    }
-                )
-
-        return ReadPermissionPlan(
-            filters=combined_filters or [{"filter": {}, "exclude": {}}],
-            requires_instance_check=requires_instance_check,
-            instance_check_reasons=tuple(sorted(instance_check_reasons)),
-        )
+        return self._and_read_permission_plans(delegated_plan, local_plan)
 
     def describe_permissions(
         self,

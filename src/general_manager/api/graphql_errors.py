@@ -655,7 +655,7 @@ def get_read_permission_filter(
 
     Returns:
         A ``ReadPermissionPlan`` with ``filters``, ``requires_instance_check``,
-        and ``instance_check_reasons`` fields. ``ReadPermissionPlan`` is an
+        ``instance_check_reasons``, and ``decision`` fields. ``ReadPermissionPlan`` is an
         internal adapter from ``general_manager.permission.base_permission``, not
         a stable public import path, but generated resolvers rely on these
         fields.
@@ -677,7 +677,8 @@ def get_read_permission_filter(
         ``("no_prefilter_backend",)``.
 
         Managers without a permission factory receive an empty filter plan and
-        do not require instance checks. This is a default-allow read policy for
+        do not require instance checks, with an explicit ``"allow_all"``
+        decision. This is a default-allow read policy for
         managers that do not define ``Permission``; no additional GraphQL
         permission filtering or per-object read authorization is applied by this
         helper. More generally, ``filters=[]`` with
@@ -715,4 +716,8 @@ def get_read_permission_filter(
         )
     if permission_attribute is not None:
         raise InvalidReadPermissionConfigurationError(generalManagerClass.__name__)
-    return ReadPermissionPlan(filters=[], requires_instance_check=False)
+    return ReadPermissionPlan(
+        filters=[],
+        requires_instance_check=False,
+        decision="allow_all",
+    )

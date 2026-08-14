@@ -1,4 +1,5 @@
 from __future__ import annotations
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, ClassVar, Dict, Literal, Optional, cast
 from django.test import TestCase, override_settings
 from django.contrib.auth.models import User, AnonymousUser
@@ -6,13 +7,18 @@ from django.utils.crypto import get_random_string
 from unittest.mock import Mock, patch
 
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.permission.base_permission import BasePermission
+from general_manager.permission.base_permission import (
+    BasePermission,
+    ReadPermissionPlan,
+)
 from general_manager.permission.manager_based_permission import (
     AdditiveManagerPermission,
     ManagerBasedPermission,
     OverrideManagerPermission,
 )
 from general_manager.permission.permission_checks import (
+    PermissionDict,
+    PermissionFilterDecision,
     permission_functions,
 )
 
@@ -153,6 +159,15 @@ class ManagerBasedPermissionTests(TestCase):
     def _restore_permission_functions(self):
         permission_functions.clear()
         permission_functions.update(self._original_permission_functions)
+
+    def _register_filter_result(self, name: str, result: object) -> None:
+        permission_functions[name] = cast(
+            PermissionDict,
+            {
+                "permission_filter": lambda _user, _config: result,
+                "permission_method": lambda _instance, _user, _config: True,
+            },
+        )
 
     def test_init(self):
         """Test initialization of ManagerBasedPermission."""
@@ -558,22 +573,25 @@ class ManagerBasedPermissionTests(TestCase):
     ) -> None:
         """Unfilterable read rules must not degrade to allow-all queryset filters."""
 
+        self._register_filter_result("instanceOnly", None)
+
         class StaffOnlyPermission(AdditiveManagerPermission):
-            __read__: ClassVar[list[str]] = ["isAdmin"]
+            __read__: ClassVar[list[str]] = ["instanceOnly"]
 
         permission = StaffOnlyPermission(
             self.mock_instance, cast("AbstractUser", self.anonymous_user)
         )
         plan = permission.get_read_permission_plan()
 
-        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
+        self.assertEqual(plan.filters, [])
         self.assertTrue(plan.requires_instance_check)
         self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
+        self.assertEqual(plan.decision, "conditional")
 
-    def test_read_permission_plan_treats_public_decision_as_unfilterable(
+    def test_read_permission_plan_treats_public_decision_as_allow_all(
         self,
     ) -> None:
-        """Static public decisions remain instance-checked until planner support lands."""
+        """A statically allowed read rule grants every row without an instance gate."""
 
         class PublicReadPermission(AdditiveManagerPermission):
             __read__: ClassVar[list[str]] = ["public"]
@@ -582,14 +600,15 @@ class ManagerBasedPermissionTests(TestCase):
             self.mock_instance, self.anonymous_user
         ).get_read_permission_plan()
 
-        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
-        self.assertTrue(plan.requires_instance_check)
-        self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
+        self.assertEqual(plan.filters, [])
+        self.assertFalse(plan.requires_instance_check)
+        self.assertEqual(plan.instance_check_reasons, ())
+        self.assertEqual(plan.decision, "allow_all")
 
-    def test_read_permission_plan_treats_allowed_static_decision_as_unfilterable(
+    def test_read_permission_plan_treats_allowed_user_decision_as_allow_all(
         self,
     ) -> None:
-        """Allowed user predicates remain instance-checked until planner support lands."""
+        """A true user-only predicate grants every row without an instance gate."""
 
         class StaffReadPermission(AdditiveManagerPermission):
             __read__: ClassVar[list[str]] = ["isAdmin"]
@@ -598,14 +617,15 @@ class ManagerBasedPermissionTests(TestCase):
             self.mock_instance, self.admin_user
         ).get_read_permission_plan()
 
-        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
-        self.assertTrue(plan.requires_instance_check)
-        self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
+        self.assertEqual(plan.filters, [])
+        self.assertFalse(plan.requires_instance_check)
+        self.assertEqual(plan.instance_check_reasons, ())
+        self.assertEqual(plan.decision, "allow_all")
 
-    def test_read_permission_plan_treats_denied_static_decision_as_unfilterable(
+    def test_read_permission_plan_treats_denied_static_decision_as_deny_all(
         self,
     ) -> None:
-        """Denied user predicates remain instance-checked until planner support lands."""
+        """A statically denied read rule rejects every row without an instance gate."""
 
         class StaffReadPermission(AdditiveManagerPermission):
             __read__: ClassVar[list[str]] = ["isAdmin"]
@@ -614,9 +634,139 @@ class ManagerBasedPermissionTests(TestCase):
             self.mock_instance, self.anonymous_user
         ).get_read_permission_plan()
 
-        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
-        self.assertTrue(plan.requires_instance_check)
-        self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
+        self.assertEqual(plan.filters, [])
+        self.assertFalse(plan.requires_instance_check)
+        self.assertEqual(plan.instance_check_reasons, ())
+        self.assertEqual(plan.decision, "deny_all")
+
+    def test_read_permission_plan_composes_fragment_and_expression_decisions(
+        self,
+    ) -> None:
+        owner_filter = MappingProxyType(
+            {
+                "filter": MappingProxyType({"owner_id": self.user.id}),
+                "exclude": MappingProxyType({}),
+            }
+        )
+        self._register_filter_result("staticAllow", PermissionFilterDecision.ALLOW_ALL)
+        self._register_filter_result("staticDeny", PermissionFilterDecision.DENY_ALL)
+        self._register_filter_result("ownerFilter", owner_filter)
+        self._register_filter_result("instanceOnly", None)
+
+        scenarios = (
+            ("staticAllow&ownerFilter", [dict(owner_filter)], False, "conditional"),
+            ("staticDeny&ownerFilter", [], False, "deny_all"),
+            ("instanceOnly&ownerFilter", [dict(owner_filter)], True, "conditional"),
+        )
+        for expression, filters, requires_check, decision in scenarios:
+            with self.subTest(expression=expression):
+
+                class PlannedPermission(AdditiveManagerPermission):
+                    __read__: ClassVar[list[str]] = [expression]
+
+                plan = PlannedPermission(
+                    self.mock_instance, self.user
+                ).get_read_permission_plan()
+
+                self.assertEqual(plan.filters, filters)
+                self.assertEqual(plan.requires_instance_check, requires_check)
+                self.assertEqual(plan.decision, decision)
+                for constraint in plan.filters:
+                    self.assertIs(type(constraint), dict)
+                    self.assertIs(type(constraint.get("filter")), dict)
+                    self.assertIs(type(constraint.get("exclude")), dict)
+
+    def test_read_permission_plan_composes_read_alternatives_with_or(self) -> None:
+        owner_filter = {
+            "filter": {"owner_id": self.user.id},
+            "exclude": {},
+        }
+        self._register_filter_result("staticAllow", PermissionFilterDecision.ALLOW_ALL)
+        self._register_filter_result("staticDeny", PermissionFilterDecision.DENY_ALL)
+        self._register_filter_result("ownerFilter", owner_filter)
+        self._register_filter_result("instanceOnly", None)
+
+        scenarios = (
+            (["ownerFilter"], [owner_filter], False, "conditional"),
+            (["staticAllow", "ownerFilter"], [], False, "allow_all"),
+            (["staticDeny", "ownerFilter"], [owner_filter], False, "conditional"),
+            (["staticDeny", "staticDeny"], [], False, "deny_all"),
+            (["instanceOnly", "ownerFilter"], [], True, "conditional"),
+        )
+        for expressions, filters, requires_check, decision in scenarios:
+            with self.subTest(expressions=expressions):
+
+                class PlannedPermission(AdditiveManagerPermission):
+                    __read__: ClassVar[list[str]] = expressions
+
+                plan = PlannedPermission(
+                    self.mock_instance, self.user
+                ).get_read_permission_plan()
+
+                self.assertEqual(plan.filters, filters)
+                self.assertEqual(plan.requires_instance_check, requires_check)
+                self.assertEqual(plan.decision, decision)
+
+    def test_read_permission_plan_allows_empty_read_rule_list(self) -> None:
+        class EmptyReadPermission(AdditiveManagerPermission):
+            __read__: ClassVar[list[str]] = []
+
+        plan = EmptyReadPermission(
+            self.mock_instance, self.anonymous_user
+        ).get_read_permission_plan()
+
+        self.assertEqual(plan.filters, [])
+        self.assertFalse(plan.requires_instance_check)
+        self.assertEqual(plan.decision, "allow_all")
+
+    def test_read_permission_plan_allows_superusers(self) -> None:
+        class DeniedReadPermission(AdditiveManagerPermission):
+            __read__: ClassVar[list[str]] = ["isAdmin"]
+
+        plan = DeniedReadPermission(
+            self.mock_instance, self.superuser
+        ).get_read_permission_plan()
+
+        self.assertEqual(plan.filters, [])
+        self.assertFalse(plan.requires_instance_check)
+        self.assertEqual(plan.decision, "allow_all")
+
+    def test_read_permission_plan_rejects_malformed_callback_results(self) -> None:
+        for name, malformed_result in (
+            ("plainBool", True),
+            ("plainInteger", 1),
+            ("unrelatedObject", object()),
+            ("unknownMapping", {"where": {"owner_id": self.user.id}}),
+        ):
+            with self.subTest(name=name):
+                self._register_filter_result(name, malformed_result)
+
+                class MalformedPermission(AdditiveManagerPermission):
+                    __read__: ClassVar[list[str]] = [name]
+
+                with self.assertRaisesRegex(TypeError, name):
+                    MalformedPermission(
+                        self.mock_instance, self.user
+                    ).get_read_permission_plan()
+
+    def test_read_permission_plan_splits_compound_rules_before_registry_lookup(
+        self,
+    ) -> None:
+        self._register_filter_result(
+            "firstFragment", PermissionFilterDecision.ALLOW_ALL
+        )
+        self._register_filter_result(
+            "secondFragment", PermissionFilterDecision.ALLOW_ALL
+        )
+
+        class CompoundPermission(AdditiveManagerPermission):
+            __read__: ClassVar[list[str]] = ["firstFragment&secondFragment"]
+
+        plan = CompoundPermission(
+            self.mock_instance, self.user
+        ).get_read_permission_plan()
+
+        self.assertEqual(plan.decision, "allow_all")
 
     def test_read_permission_plan_combines_based_on_and_local_filters_with_and(
         self,
@@ -663,10 +813,11 @@ class ManagerBasedPermissionTests(TestCase):
         permission = ChildPermission(GeneralManager, self.user)
         plan = permission.get_read_permission_plan()
 
-        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
+        self.assertEqual(plan.filters, [])
         self.assertTrue(plan.requires_instance_check)
         self.assertIn("based_on_class_context", plan.instance_check_reasons)
-        self.assertIn("unfilterable_read_rule", plan.instance_check_reasons)
+        self.assertNotIn("unfilterable_read_rule", plan.instance_check_reasons)
+        self.assertEqual(plan.decision, "conditional")
 
     def test_read_permission_plan_marks_filter_key_collisions_for_instance_checks(
         self,
@@ -683,16 +834,12 @@ class ManagerBasedPermissionTests(TestCase):
             __based_on__: ClassVar[Optional[str]] = "manager"
             __read__: ClassVar[list[str]] = ["conflictingFilter"]
 
+        self._register_filter_result(
+            "conflictingFilter",
+            {"filter": {"manager__status": "local"}, "exclude": {}},
+        )
         permission = ConflictingPermission(self.mock_instance, self.user)
-        with patch.object(
-            permission,
-            "_get_permission_filter_info",
-            return_value=(
-                {"filter": {"manager__status": "local"}, "exclude": {}},
-                True,
-            ),
-        ):
-            plan = permission.get_read_permission_plan()
+        plan = permission.get_read_permission_plan()
 
         self.assertEqual(
             plan.filters,
@@ -700,6 +847,167 @@ class ManagerBasedPermissionTests(TestCase):
         )
         self.assertTrue(plan.requires_instance_check)
         self.assertEqual(plan.instance_check_reasons, ("filter_key_conflict",))
+
+    def test_read_permission_plan_composes_delegated_and_local_decisions(self) -> None:
+        owner_filter = {
+            "filter": {"owner_id": self.user.id},
+            "exclude": {},
+        }
+        delegated_filter = {
+            "filter": {"status": "public"},
+            "exclude": {},
+        }
+        self._register_filter_result("staticAllow", PermissionFilterDecision.ALLOW_ALL)
+        self._register_filter_result("staticDeny", PermissionFilterDecision.DENY_ALL)
+        self._register_filter_result("ownerFilter", owner_filter)
+
+        scenarios = (
+            (
+                "deny_delegated",
+                ReadPermissionPlan(
+                    filters=[],
+                    requires_instance_check=False,
+                    decision="deny_all",
+                ),
+                "ownerFilter",
+                [],
+                False,
+                "deny_all",
+            ),
+            (
+                "allow_delegated",
+                ReadPermissionPlan(
+                    filters=[],
+                    requires_instance_check=False,
+                    decision="allow_all",
+                ),
+                "ownerFilter",
+                [owner_filter],
+                False,
+                "conditional",
+            ),
+            (
+                "deny_local",
+                ReadPermissionPlan(
+                    filters=[delegated_filter],
+                    requires_instance_check=True,
+                    instance_check_reasons=("no_prefilter_backend",),
+                ),
+                "staticDeny",
+                [],
+                False,
+                "deny_all",
+            ),
+            (
+                "allow_local",
+                ReadPermissionPlan(
+                    filters=[delegated_filter],
+                    requires_instance_check=True,
+                    instance_check_reasons=("no_prefilter_backend",),
+                ),
+                "staticAllow",
+                [
+                    {
+                        "filter": {"manager__status": "public"},
+                        "exclude": {},
+                    }
+                ],
+                True,
+                "conditional",
+            ),
+        )
+        for (
+            name,
+            delegated_plan,
+            local_rule,
+            expected_filters,
+            expected_check,
+            expected_decision,
+        ) in scenarios:
+            with self.subTest(name=name):
+                based_on_permission = Mock()
+                based_on_permission.get_read_permission_plan.return_value = (
+                    delegated_plan
+                )
+                self.mock_check.return_value = based_on_permission
+
+                class DelegatingPermission(AdditiveManagerPermission):
+                    __based_on__: ClassVar[Optional[str]] = "manager"
+                    __read__: ClassVar[list[str]] = [local_rule]
+
+                plan = DelegatingPermission(
+                    self.mock_instance, self.user
+                ).get_read_permission_plan()
+
+                self.assertEqual(plan.filters, expected_filters)
+                self.assertEqual(plan.requires_instance_check, expected_check)
+                self.assertEqual(plan.decision, expected_decision)
+
+    def test_read_permission_plan_preserves_plan_shaped_delegated_decision(
+        self,
+    ) -> None:
+        self._register_filter_result("staticAllow", PermissionFilterDecision.ALLOW_ALL)
+        based_on_permission = Mock()
+        based_on_permission.get_read_permission_plan.return_value = SimpleNamespace(
+            filters=[],
+            requires_instance_check=False,
+            instance_check_reasons=(),
+            decision="deny_all",
+        )
+        self.mock_check.return_value = based_on_permission
+
+        class DelegatingPermission(AdditiveManagerPermission):
+            __based_on__: ClassVar[Optional[str]] = "manager"
+            __read__: ClassVar[list[str]] = ["staticAllow"]
+
+        plan = DelegatingPermission(
+            self.mock_instance, self.user
+        ).get_read_permission_plan()
+
+        self.assertEqual(plan.decision, "deny_all")
+
+    def test_read_permission_plan_defaults_invalid_delegated_decision_to_conditional(
+        self,
+    ) -> None:
+        self._register_filter_result("staticAllow", PermissionFilterDecision.ALLOW_ALL)
+        based_on_permission = Mock()
+        based_on_permission.get_read_permission_plan.return_value = SimpleNamespace(
+            filters=[{"filter": {"status": "public"}, "exclude": {}}],
+            requires_instance_check=False,
+            instance_check_reasons=(),
+            decision="unsupported",
+        )
+        self.mock_check.return_value = based_on_permission
+
+        class DelegatingPermission(AdditiveManagerPermission):
+            __based_on__: ClassVar[Optional[str]] = "manager"
+            __read__: ClassVar[list[str]] = ["staticAllow"]
+
+        plan = DelegatingPermission(
+            self.mock_instance, self.user
+        ).get_read_permission_plan()
+
+        self.assertEqual(plan.decision, "conditional")
+        self.assertEqual(
+            plan.filters,
+            [{"filter": {"manager__status": "public"}, "exclude": {}}],
+        )
+
+    def test_local_denial_short_circuits_unresolved_class_context_gate(self) -> None:
+        self._register_filter_result("staticDeny", PermissionFilterDecision.DENY_ALL)
+
+        class DeniedChildPermission(AdditiveManagerPermission):
+            __based_on__: ClassVar[Optional[str]] = "manager"
+            __read__: ClassVar[list[str]] = ["staticDeny"]
+
+        plan = DeniedChildPermission(
+            GeneralManager, self.user
+        ).get_read_permission_plan()
+
+        self.assertEqual(plan.filters, [])
+        self.assertFalse(plan.requires_instance_check)
+        self.assertEqual(plan.instance_check_reasons, ())
+        self.assertEqual(plan.decision, "deny_all")
 
     def test_based_on_denial_blocks_row_visibility(self) -> None:
         """Row visibility must respect delegated denial even when local reads are permissive."""
@@ -866,9 +1174,11 @@ class ManagerBasedPermissionTests(TestCase):
     def test_get_read_permission_plan_marks_unfilterable_permissions(self) -> None:
         """Non-filterable read permissions should require an instance-level check."""
 
+        self._register_filter_result("instanceOnly", None)
+
         class AdminReadPermission(ManagerBasedPermission):
             __based_on__ = None
-            __read__: ClassVar[list[str]] = ["isAdmin"]
+            __read__: ClassVar[list[str]] = ["instanceOnly"]
 
         permission = AdminReadPermission(
             self.mock_instance, cast("AbstractUser", self.anonymous_user)
@@ -876,7 +1186,8 @@ class ManagerBasedPermissionTests(TestCase):
         plan = permission.get_read_permission_plan()
 
         self.assertTrue(plan.requires_instance_check)
-        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
+        self.assertEqual(plan.filters, [])
+        self.assertEqual(plan.decision, "conditional")
         self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
 
     def test_get_read_permission_plan_combines_based_on_with_local_read_filters(
