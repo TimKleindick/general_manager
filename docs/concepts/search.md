@@ -192,6 +192,17 @@ relative to the user filters, with any exclude-only restriction still handled by
 the instance check. When a manager has no permission filter alternatives, the
 user filter mapping is passed through unchanged.
 
+Static read decisions use fast paths. A manager with `deny_all` is skipped
+entirely: GraphQL does not call the search backend for it, and it contributes no
+raw backend payload or backend timing to the response. A manager with
+`allow_all` still queries the backend with the user's filters, but adds no
+permission filter group and does not run per-hit instance checks. Its backend
+`raw` payload and reported `took_ms` retain the normal response semantics.
+Conditional mapping and `None` callbacks retain the existing behavior: mapping
+filters prefilter hits, exclude mappings and unfilterable rules are resolved by
+the later permission pass, and aggregate authorization logging occurs only when
+that pass requires an instance check.
+
 ## GraphQL search API
 
 When GraphQL is auto-created, a global `search` query is added. It accepts:
@@ -316,6 +327,11 @@ alternative. The paired `exclude` mapping is evaluated after the hit is
 instantiated. Empty entries (`{}`, `{"filter": {}}`, or `{"exclude": {}}`) mean
 that one alternative is unrestricted relative to the user filters. If the plan
 still requires instance checks, `can_read_instance()` must pass for that hit.
+
+Custom callbacks that return a mapping or `None` remain conditional; `None`
+does not mean unrestricted access. Legacy permission classes that only provide
+`get_permission_filter()` also remain conditional and receive the same final
+per-instance checks as before.
 
 Filter-key validation runs against the parsed top-level search filters before
 permission filters or relation normalizers are applied. Exclude-derived
