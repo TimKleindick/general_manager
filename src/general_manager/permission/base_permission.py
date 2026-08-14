@@ -36,6 +36,7 @@ UserLike: TypeAlias = AbstractBaseUser | AnonymousUser
 ReadPermissionReason: TypeAlias = Literal[
     "unfilterable_read_rule",
     "based_on_class_context",
+    "compound_exclude_semantics",
     "filter_key_conflict",
     "no_prefilter_backend",
 ]
@@ -106,6 +107,9 @@ class ReadPermissionPlan:
     least one read rule could not be converted into a backend prefilter.
     ``"based_on_class_context"`` means delegated permission logic required
     class-level context that cannot be represented as a row prefilter.
+    ``"compound_exclude_semantics"`` means multiple ANDed exclusion predicates
+    were conservatively merged into one safe prefilter but require row-level
+    authorization to preserve sequential exclusion semantics.
     ``"filter_key_conflict"`` means generated filter keys conflicted while
     composing permission filters. ``"no_prefilter_backend"`` means the interface
     backend cannot enforce read prefilters fully. Reason tuples are request
