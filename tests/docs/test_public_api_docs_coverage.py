@@ -168,8 +168,8 @@ def test_manager_permission_guide_distinguishes_conditional_instance_gates() -> 
     normalized_guide = " ".join(guide.split())
 
     assert (
-        "Mappings may fully constrain a conditional plan without a final"
-        in normalized_guide
+        "Mappings may fully constrain a conditional plan without a final per-instance "
+        "check." in normalized_guide
     )
     assert "`None` requires the final per-instance check." in normalized_guide
     assert (
