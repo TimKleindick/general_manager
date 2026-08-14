@@ -844,6 +844,93 @@ class GraphQLHelperTests(SimpleTestCase):
         assert result.requires_instance_check is False
         logger_mock.info.assert_not_called()
 
+    def test_apply_read_authorization_allow_all_skips_row_permission_objects(
+        self,
+    ) -> None:
+        class FailingConstructorPermission(BasePermission):
+            def __init__(self, *args, **kwargs) -> None:
+                raise AssertionError
+
+            def check_permission(self, *args, **kwargs) -> bool:
+                return True
+
+            def check_operation_permission(self, *args, **kwargs) -> bool:
+                return True
+
+            def describe_operation_permissions(
+                self, *args, **kwargs
+            ) -> tuple[str, ...]:
+                return ()
+
+        class AllowAllManager(GeneralManager):
+            Interface = _DummyInterface
+            Permission = FailingConstructorPermission
+
+        queryset = SimpleBucket(
+            AllowAllManager,
+            [AllowAllManager(id=1), AllowAllManager(id=2)],
+        )
+
+        with mock.patch(
+            "general_manager.api.graphql_resolvers.get_read_permission_filter",
+            return_value=ReadPermissionPlan(
+                filters=[],
+                requires_instance_check=False,
+                decision="allow_all",
+            ),
+        ):
+            result = apply_read_authorization(
+                queryset,
+                AllowAllManager,
+                _Info(),
+                source="list",
+            )
+
+        assert result.queryset is queryset
+        assert result.candidate_count == 2
+        assert result.authorized_count == 2
+        assert result.denied_count == 0
+        assert result.requires_instance_check is False
+
+    def test_apply_read_authorization_deny_all_avoids_candidates(self) -> None:
+        class DenyAllManager(GeneralManager):
+            Interface = _DummyInterface
+            Permission = _DummyPermission
+
+        class CandidateAccessForbiddenBucket(SimpleBucket):
+            def __iter__(self):
+                raise AssertionError
+
+            def __len__(self):
+                raise AssertionError
+
+        queryset = CandidateAccessForbiddenBucket(
+            DenyAllManager,
+            [DenyAllManager(id=1), DenyAllManager(id=2)],
+        )
+
+        with mock.patch(
+            "general_manager.api.graphql_resolvers.get_read_permission_filter",
+            return_value=ReadPermissionPlan(
+                filters=[],
+                requires_instance_check=False,
+                decision="deny_all",
+            ),
+        ):
+            result = apply_read_authorization(
+                queryset,
+                DenyAllManager,
+                _Info(),
+                source="list",
+            )
+
+        assert result.queryset is not queryset
+        assert list(result.queryset) == []
+        assert result.candidate_count == 0
+        assert result.authorized_count == 0
+        assert result.denied_count == 0
+        assert result.requires_instance_check is False
+
     def test_create_list_resolver_runs_row_gate_once_per_candidate(self) -> None:
         class CountingPermission(BasePermission):
             check_count = 0

@@ -409,7 +409,7 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
         self.assertEqual(payload["items"], [])
         self.assertEqual(payload["pageInfo"]["totalCount"], 0)
 
-    def test_non_admin_list_query_logs_aggregate_read_summary(self):
+    def test_non_admin_list_query_skips_row_permission_checks_and_logging(self):
         query = """
         query {
             internalRecordList {
@@ -420,11 +420,17 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
         }
         """
 
-        with patch("general_manager.api.graphql_resolvers.logger") as logger_mock:
+        with (
+            patch("general_manager.api.graphql_resolvers.logger") as logger_mock,
+            patch.object(
+                self.internal_record.Permission,
+                "can_read_instance",
+                side_effect=AssertionError("deny_all must not check candidate rows"),
+            ),
+        ):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
-        logger_mock.info.assert_called()
         contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
         matching = [
             context
@@ -432,15 +438,9 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
             if context.get("source") == "list"
             and context.get("manager") == "InternalRecord"
         ]
-        self.assertEqual(len(matching), 1)
-        context = matching[0]
-        self.assertEqual(context["candidate_count"], 2)
-        self.assertEqual(context["authorized_count"], 0)
-        self.assertEqual(context["denied_count"], 2)
-        self.assertTrue(context["requires_instance_check"])
-        self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
+        self.assertEqual(matching, [])
 
-    def test_admin_list_query_logs_authorized_read_summary(self):
+    def test_admin_list_query_skips_row_permission_checks_and_logging(self):
         self.user.is_staff = True
         self.user.save(update_fields=["is_staff"])
         query = """
@@ -456,7 +456,14 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
         }
         """
 
-        with patch("general_manager.api.graphql_resolvers.logger") as logger_mock:
+        with (
+            patch("general_manager.api.graphql_resolvers.logger") as logger_mock,
+            patch.object(
+                self.internal_record.Permission,
+                "can_read_instance",
+                side_effect=AssertionError("allow_all must not check candidate rows"),
+            ),
+        ):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
@@ -467,13 +474,7 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
             if context.get("source") == "list"
             and context.get("manager") == "InternalRecord"
         ]
-        self.assertEqual(len(matching), 1)
-        context = matching[0]
-        self.assertEqual(context["candidate_count"], 2)
-        self.assertEqual(context["authorized_count"], 2)
-        self.assertEqual(context["denied_count"], 0)
-        self.assertTrue(context["requires_instance_check"])
-        self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
+        self.assertEqual(matching, [])
 
 
 class TestGraphQLQueryBasedOnReadHardening(GeneralManagerTransactionTestCase):
@@ -537,7 +538,7 @@ class TestGraphQLQueryBasedOnReadHardening(GeneralManagerTransactionTestCase):
         self.assertEqual(payload["items"], [])
         self.assertEqual(payload["pageInfo"]["totalCount"], 0)
 
-    def test_admin_list_query_logs_authorized_based_on_read_summary(self):
+    def test_admin_list_query_skips_static_based_on_row_checks_and_logging(self):
         self.user.is_staff = True
         self.user.save(update_fields=["is_staff"])
         query = """
@@ -553,7 +554,14 @@ class TestGraphQLQueryBasedOnReadHardening(GeneralManagerTransactionTestCase):
         }
         """
 
-        with patch("general_manager.api.graphql_resolvers.logger") as logger_mock:
+        with (
+            patch("general_manager.api.graphql_resolvers.logger") as logger_mock,
+            patch.object(
+                self.delegated_document.Permission,
+                "can_read_instance",
+                side_effect=AssertionError("allow_all must not check candidate rows"),
+            ),
+        ):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
@@ -564,13 +572,7 @@ class TestGraphQLQueryBasedOnReadHardening(GeneralManagerTransactionTestCase):
             if context.get("source") == "list"
             and context.get("manager") == "DelegatedDocument"
         ]
-        self.assertEqual(len(matching), 1)
-        context = matching[0]
-        self.assertEqual(context["candidate_count"], 1)
-        self.assertEqual(context["authorized_count"], 1)
-        self.assertEqual(context["denied_count"], 0)
-        self.assertTrue(context["requires_instance_check"])
-        self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
+        self.assertEqual(matching, [])
 
 
 class TestGraphQLIncludeInactiveValidation(GeneralManagerTransactionTestCase):
