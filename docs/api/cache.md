@@ -513,35 +513,40 @@ a positive integer sets the shared byte budget. Negative integers, booleans,
 and non-integer values raise a Django configuration error when a
 `CalculationRunContext` is created.
 
-The budget uses an insertion-time estimate and evicts approximately
-least-recently-used eviction-safe entries across live contexts when necessary.
-Successful reads from the thread that entered the context update recency in
-small internal batches to avoid a process-wide lock on every cache hit. Reads
-from another thread update recency immediately. A write flushes recency already
-observed by that same context before admission, while another context may
-observe up to one internal batch of stale recency. This batching changes only
-which safe entry is selected under pressure; misses, reloads, publication
-pinning, and the configured byte budget retain their existing behavior. Values
-whose estimate exceeds the complete budget are returned to the caller but
-bypass retention.
+The budget uses an insertion-time estimate and keeps a 5% modeled reserve while
+evicting eviction-safe entries across live contexts. Ordinary admissions use
+shallow signals and coarse aggregate calibration instead of traversing every
+stored object graph. The first entry and sparse later entries for each storage
+family are bounded deep samples; admissions between samples use the calibrated
+aggregate estimate.
+
+Read recency is inactive below budget pressure, so earlier accesses retain
+insertion order. Near the cap, recency becomes a batched approximate LRU: reads
+from the thread that entered the context are published in small internal
+batches, while reads from another thread publish immediately. A write flushes
+recency already observed by that same context before admission, while another
+context may observe up to one internal batch of stale recency. This approximation
+changes only which safe entry is selected under pressure; misses, reloads, and
+publication pinning retain their existing behavior. Values whose estimate
+exceeds the complete configured budget are returned to the caller but bypass
+retention.
 Pending dependency-cache publications, and their same-run hits, remain pinned
 until a flush attempt removes the pending entries or publication state is
 discarded. Flush attempts unpin after success, guarded abort, unexpected publish
 failure, or lease-release failure, so eviction never loses a pending publication
 or its compute lease.
 
-Built-in containers at or below `RUN_CONTEXT_SIZE_SAMPLE_THRESHOLD` (128) are
-traversed completely. Larger built-in containers use
-`RUN_CONTEXT_SIZE_SAMPLE_COUNT` (64) representatives whose projected child size
-includes a 5% upward safety margin. This keeps admission cost bounded for large
-ORM results and indexes. The estimate targets approximately 5% accuracy for
-representative payloads, but unusual heterogeneous or heavily shared object
-graphs can differ by more; this remains an estimated cache budget rather than a
-hard RSS limit.
+Deep calibration samples traverse built-in containers at or below an internal
+threshold completely. Larger containers use a bounded set of representatives.
+This keeps the occasional calibration cost bounded for large ORM results and
+indexes. The resulting aggregate estimate targets approximately 5% accuracy for
+representative payloads, not adversarial graphs or process RSS. Unusual
+heterogeneous or heavily shared object graphs can differ by more.
 
 This setting is not a hard cap on total process RSS. In particular, Python and
 native allocation overhead, other application memory, and caller-owned mutable
-values that grow after insertion are outside the insertion-time estimate.
+values that grow after insertion are outside the insertion-time estimate. The
+budgeting mechanism collects no telemetry.
 
 `get_or_set(key, loader)` stores the first successful loader result under the
 hashable key and returns that same object for later calls with the same key.
