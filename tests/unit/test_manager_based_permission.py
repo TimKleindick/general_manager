@@ -676,6 +676,38 @@ class ManagerBasedPermissionTests(TestCase):
                     self.assertIs(type(constraint.get("filter")), dict)
                     self.assertIs(type(constraint.get("exclude")), dict)
 
+    def test_read_permission_plan_gates_distinct_anded_excludes(self) -> None:
+        self._register_filter_result(
+            "excludeArchived",
+            {"exclude": {"archived": True}},
+        )
+        self._register_filter_result(
+            "excludeDeleted",
+            {"exclude": {"deleted": True}},
+        )
+
+        class CompoundExcludePermission(AdditiveManagerPermission):
+            __read__: ClassVar[list[str]] = ["excludeArchived&excludeDeleted"]
+
+        plan = CompoundExcludePermission(
+            self.mock_instance, self.user
+        ).get_read_permission_plan()
+
+        self.assertEqual(
+            plan.filters,
+            [
+                {
+                    "filter": {},
+                    "exclude": {"archived": True, "deleted": True},
+                }
+            ],
+        )
+        self.assertTrue(plan.requires_instance_check)
+        self.assertEqual(
+            plan.instance_check_reasons,
+            ("compound_exclude_semantics",),
+        )
+
     def test_read_permission_plan_composes_read_alternatives_with_or(self) -> None:
         owner_filter = {
             "filter": {"owner_id": self.user.id},
@@ -847,6 +879,46 @@ class ManagerBasedPermissionTests(TestCase):
         )
         self.assertTrue(plan.requires_instance_check)
         self.assertEqual(plan.instance_check_reasons, ("filter_key_conflict",))
+
+    def test_read_permission_plan_gates_distinct_delegated_and_local_excludes(
+        self,
+    ) -> None:
+        based_on_permission = Mock()
+        based_on_permission.get_read_permission_plan.return_value = ReadPermissionPlan(
+            filters=[{"exclude": {"archived": True}}],
+            requires_instance_check=False,
+        )
+        self.mock_check.return_value = based_on_permission
+        self._register_filter_result(
+            "excludeDeleted",
+            {"exclude": {"deleted": True}},
+        )
+
+        class CompoundExcludePermission(AdditiveManagerPermission):
+            __based_on__: ClassVar[Optional[str]] = "manager"
+            __read__: ClassVar[list[str]] = ["excludeDeleted"]
+
+        plan = CompoundExcludePermission(
+            self.mock_instance, self.user
+        ).get_read_permission_plan()
+
+        self.assertEqual(
+            plan.filters,
+            [
+                {
+                    "filter": {},
+                    "exclude": {
+                        "manager__archived": True,
+                        "deleted": True,
+                    },
+                }
+            ],
+        )
+        self.assertTrue(plan.requires_instance_check)
+        self.assertEqual(
+            plan.instance_check_reasons,
+            ("compound_exclude_semantics",),
+        )
 
     def test_read_permission_plan_composes_delegated_and_local_decisions(self) -> None:
         owner_filter = {

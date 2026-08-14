@@ -330,9 +330,17 @@ class _ConfiguredManagerPermission(BasePermission):
                 combined_filter,
                 dict(fragment.constraint.get("filter", {})),
             )
+            fragment_exclude = dict(fragment.constraint.get("exclude", {}))
+            if (
+                combined_exclude
+                and fragment_exclude
+                and combined_exclude != fragment_exclude
+            ):
+                requires_instance_check = True
+                reasons.add("compound_exclude_semantics")
             combined_exclude, exclude_conflict = self._merge_filter_group_parts(
                 combined_exclude,
-                dict(fragment.constraint.get("exclude", {})),
+                fragment_exclude,
             )
             if filter_conflict or exclude_conflict:
                 requires_instance_check = True
@@ -488,9 +496,18 @@ class _ConfiguredManagerPermission(BasePermission):
                     dict(delegated_filter_group.get("filter", {})),
                     dict(local_filter_group.get("filter", {})),
                 )
+                delegated_exclude = dict(delegated_filter_group.get("exclude", {}))
+                local_exclude = dict(local_filter_group.get("exclude", {}))
+                if (
+                    delegated_exclude
+                    and local_exclude
+                    and delegated_exclude != local_exclude
+                ):
+                    requires_instance_check = True
+                    reasons.add("compound_exclude_semantics")
                 combined_exclude, exclude_conflict = self._merge_filter_group_parts(
-                    dict(delegated_filter_group.get("exclude", {})),
-                    dict(local_filter_group.get("exclude", {})),
+                    delegated_exclude,
+                    local_exclude,
                 )
                 if filter_conflict or exclude_conflict:
                     requires_instance_check = True

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth.models import AnonymousUser
@@ -18,6 +18,13 @@ from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.measurement.measurement import Measurement
 from general_manager.permission.base_permission import BasePermission
+from general_manager.permission.manager_based_permission import (
+    AdditiveManagerPermission,
+)
+from general_manager.permission.permission_checks import (
+    PermissionDict,
+    permission_functions,
+)
 from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.backend import SearchHit, SearchResult
 from general_manager.search import backend_registry
@@ -934,6 +941,70 @@ class GraphQLSearchTests(SimpleTestCase):
 
 
 class GraphQLSearchHelperCoverageTests(SimpleTestCase):
+    def test_compound_exclude_plan_runs_final_instance_gate(self) -> None:
+        def exclude_private_filter(_user, _config):
+            return {"exclude": {"status": "private"}}
+
+        def exclude_private(instance, _user, _config):
+            return instance.status != "private"
+
+        def exclude_alpha_filter(_user, _config):
+            return {"exclude": {"name": "Alpha"}}
+
+        def exclude_alpha(instance, _user, _config):
+            return instance.name != "Alpha"
+
+        registry_entries = {
+            "testExcludePrivate": cast(
+                PermissionDict,
+                {
+                    "permission_filter": exclude_private_filter,
+                    "permission_method": exclude_private,
+                },
+            ),
+            "testExcludeAlpha": cast(
+                PermissionDict,
+                {
+                    "permission_filter": exclude_alpha_filter,
+                    "permission_method": exclude_alpha,
+                },
+            ),
+        }
+
+        class CompoundExcludePermission(AdditiveManagerPermission):
+            __read__: ClassVar[list[str]] = ["testExcludePrivate&testExcludeAlpha"]
+
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+        with (
+            patch.dict(permission_functions, registry_entries),
+            patch.object(Project, "Permission", CompoundExcludePermission),
+            patch.dict(
+                ProjectInterface.data_store,
+                {3: {"name": "Gamma", "status": "public"}},
+            ),
+        ):
+            plan = CompoundExcludePermission(
+                Project,
+                info.context.user,
+            ).get_read_permission_plan()
+
+            assert not graphql_search_module.passes_permission_filters(
+                Project(id=1),
+                info,
+                permission_plan=plan,
+            )
+            assert not graphql_search_module.passes_permission_filters(
+                Project(id=2),
+                info,
+                permission_plan=plan,
+            )
+            assert graphql_search_module.passes_permission_filters(
+                Project(id=3),
+                info,
+                permission_plan=plan,
+            )
+
     def test_total_mode_and_sort_value_edge_cases(self) -> None:
         bad_mode: Any = object()
         with self.assertRaises(GraphQLError):
