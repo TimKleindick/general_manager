@@ -1060,7 +1060,7 @@ def register_search_query(
                 backend_shape=backend_shape,
             )
             filter_groups = (
-                parsed_filters
+                parsed_filters or None
                 if decision == "allow_all"
                 else merge_permission_filters(
                     parsed_filters,

@@ -838,9 +838,9 @@ class GraphQLHelperTests(SimpleTestCase):
             )
 
         assert result.queryset is queryset
-        assert result.candidate_count == 2
-        assert result.authorized_count == 2
-        assert result.denied_count == 0
+        assert result.candidate_count is None
+        assert result.authorized_count is None
+        assert result.denied_count is None
         assert result.requires_instance_check is False
         logger_mock.info.assert_not_called()
 
@@ -866,7 +866,11 @@ class GraphQLHelperTests(SimpleTestCase):
             Interface = _DummyInterface
             Permission = FailingConstructorPermission
 
-        queryset = SimpleBucket(
+        class CandidateCountForbiddenBucket(SimpleBucket):
+            def __len__(self):
+                raise AssertionError
+
+        queryset = CandidateCountForbiddenBucket(
             AllowAllManager,
             [AllowAllManager(id=1), AllowAllManager(id=2)],
         )
@@ -887,9 +891,45 @@ class GraphQLHelperTests(SimpleTestCase):
             )
 
         assert result.queryset is queryset
-        assert result.candidate_count == 2
-        assert result.authorized_count == 2
-        assert result.denied_count == 0
+        assert result.candidate_count is None
+        assert result.authorized_count is None
+        assert result.denied_count is None
+        assert result.requires_instance_check is False
+
+    def test_apply_read_authorization_unrestricted_plan_avoids_candidate_count(
+        self,
+    ) -> None:
+        class UnrestrictedManager(GeneralManager):
+            Interface = _DummyInterface
+            Permission = _DummyPermission
+
+        class CandidateCountForbiddenBucket(SimpleBucket):
+            def __len__(self):
+                raise AssertionError
+
+        queryset = CandidateCountForbiddenBucket(
+            UnrestrictedManager,
+            [UnrestrictedManager(id=1), UnrestrictedManager(id=2)],
+        )
+
+        with mock.patch(
+            "general_manager.api.graphql_resolvers.get_read_permission_filter",
+            return_value=ReadPermissionPlan(
+                filters=[{"filter": {}, "exclude": {}}],
+                requires_instance_check=False,
+            ),
+        ):
+            result = apply_read_authorization(
+                queryset,
+                UnrestrictedManager,
+                _Info(),
+                source="list",
+            )
+
+        assert result.queryset is queryset
+        assert result.candidate_count is None
+        assert result.authorized_count is None
+        assert result.denied_count is None
         assert result.requires_instance_check is False
 
     def test_apply_read_authorization_deny_all_avoids_candidates(self) -> None:

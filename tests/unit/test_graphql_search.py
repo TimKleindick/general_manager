@@ -915,8 +915,17 @@ class GraphQLSearchTests(SimpleTestCase):
         assert response["total"] == 1
         assert [item.identification for item in response["results"]] == [{"id": 1}]
         assert backend.search_calls
+        assert backend.search_calls[0]["kwargs"]["filters"] is None
         can_read.assert_not_called()
-        log_info.assert_not_called()
+        matching_contexts = [
+            context
+            for call in log_info.call_args_list
+            for context in [call.kwargs.get("context")]
+            if isinstance(context, dict)
+            and context.get("source") == "search"
+            and context.get("manager") == "Project"
+        ]
+        assert matching_contexts == []
 
     def test_graphql_search_runs_conditional_manager_when_another_is_static_deny(
         self,
