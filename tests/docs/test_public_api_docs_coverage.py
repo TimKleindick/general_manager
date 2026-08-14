@@ -159,3 +159,20 @@ def test_graphql_sort_examples_use_generated_lowercase_enum_values() -> None:
 
     assert "projectList(filter: $filters, sortBy: name, page: 1, pageSize: 20)" in guide
     assert 'projectList(groupBy: ["status"], sortBy: status, reverse: true)' in guide
+
+
+def test_manager_permission_guide_distinguishes_conditional_instance_gates() -> None:
+    guide = (
+        DOCS_ROOT / "concepts" / "permission" / "manager_based_permission.md"
+    ).read_text(encoding="utf-8")
+    normalized_guide = " ".join(guide.split())
+
+    assert (
+        "Mappings may fully constrain a conditional plan without a final"
+        in normalized_guide
+    )
+    assert "`None` requires the final per-instance check." in normalized_guide
+    assert (
+        "Legacy `get_permission_filter()` fallback also requires that check."
+        in normalized_guide
+    )

@@ -134,9 +134,10 @@ list resolvers return every candidate row or an empty result respectively,
 without per-row authorization calls. Aggregate authorization logs are emitted
 only for conditional list/search paths that actually required the final
 instance check; they record candidate, authorized, and denied counts plus the
-reason labels. Existing custom callbacks that return mappings or `None`, and
-legacy permission classes that expose only `get_permission_filter()`, retain
-the conditional, per-instance-check behavior.
+reason labels. Custom callbacks that return mappings remain conditional.
+Mappings may fully constrain a conditional plan without a final per-instance
+check. `None` requires the final per-instance check. Legacy
+`get_permission_filter()` fallback also requires that check.
 
 `get_read_permission_plan()` combines delegated `__based_on__` filters and local
 read filters as alternative constraint groups. Delegated filter and exclude keys
