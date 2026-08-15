@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Literal, cast
+from typing import ClassVar, Literal, cast
 
 from django.contrib.auth import get_user_model
 from django.db.models import CharField
@@ -24,6 +24,9 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                 name = CharField(max_length=100)
 
         class ReportCalculation(GeneralManager):
+            authorization_checks: ClassVar[list[tuple[int, date]]] = []
+            result_evaluations: ClassVar[list[tuple[int, date]]] = []
+
             class Interface(CalculationInterface):
                 subject = Input(
                     AuthorizationSubject,
@@ -67,11 +70,15 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
 
                 def can_read_instance(self) -> bool:
                     calculation = cast(ReportCalculation, self.instance)
+                    ReportCalculation.authorization_checks.append(
+                        (calculation.subject.id, calculation.period)
+                    )
                     return calculation.period.month == 2
 
-            @graph_ql_property
+            @graph_ql_property(filterable=True)
             def result(self) -> int:
-                return 1
+                type(self).result_evaluations.append((self.subject.id, self.period))
+                return self.period.month
 
         cls.Subject = AuthorizationSubject
         cls.Calculation = ReportCalculation
@@ -89,6 +96,9 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
             password=password,
         )
         self.subject = self.Subject.Factory.create(name="Subject")
+        self.other_subject = self.Subject.Factory.create(name="Other subject")
+        self.Calculation.authorization_checks.clear()
+        self.Calculation.result_evaluations.clear()
 
     def test_list_returns_only_instance_authorized_calculations(self) -> None:
         response = self.query(
@@ -106,8 +116,11 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         self.assertEqual(
             response.json()["data"]["reportCalculationList"],
             {
-                "items": [{"period": "2026-02-28", "result": 1}],
-                "pageInfo": {"totalCount": 1},
+                "items": [
+                    {"period": "2026-02-28", "result": 2},
+                    {"period": "2026-02-28", "result": 2},
+                ],
+                "pageInfo": {"totalCount": 2},
             },
         )
 
@@ -132,7 +145,102 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         self.assertEqual(
             response.json()["data"]["reportCalculationList"],
             {
-                "items": [{"period": "2026-02-28", "result": 1}],
+                "items": [{"period": "2026-02-28", "result": 2}],
                 "pageInfo": {"totalCount": 1},
             },
+        )
+
+    def test_input_filter_is_applied_before_authorization(self) -> None:
+        response = self.query(
+            """
+            query($subjectId: ID!) {
+                reportCalculationList(
+                    page: 1,
+                    pageSize: 10,
+                    filter: {subject: {id: $subjectId}}
+                ) {
+                    items { period result }
+                    pageInfo { totalCount }
+                }
+            }
+            """,
+            variables={"subjectId": self.subject.id},
+        )
+
+        self.assertResponseNoErrors(response)
+        assert response.json()["data"]["reportCalculationList"]["pageInfo"] == {
+            "totalCount": 1
+        }
+        assert self.Calculation.authorization_checks == [
+            (self.subject.id, date(2026, 1, 31)),
+            (self.subject.id, date(2026, 2, 28)),
+        ]
+
+    def test_computed_property_filter_is_applied_after_authorization(self) -> None:
+        response = self.query(
+            """
+            query($subjectId: ID!) {
+                reportCalculationList(
+                    page: 1,
+                    pageSize: 1,
+                    filter: {subject: {id: $subjectId}, result: 2}
+                ) {
+                    items { period }
+                    pageInfo { totalCount }
+                }
+            }
+            """,
+            variables={"subjectId": self.subject.id},
+        )
+
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["reportCalculationList"],
+            {
+                "items": [{"period": "2026-02-28"}],
+                "pageInfo": {"totalCount": 1},
+            },
+        )
+        self.assertEqual(
+            self.Calculation.result_evaluations,
+            [(self.subject.id, date(2026, 2, 28))],
+        )
+        self.assertEqual(
+            self.Calculation.authorization_checks,
+            [
+                (self.subject.id, date(2026, 1, 31)),
+                (self.subject.id, date(2026, 2, 28)),
+            ],
+        )
+
+    def test_input_exclude_is_applied_before_authorization(self) -> None:
+        response = self.query(
+            """
+            query {
+                reportCalculationList(
+                    page: 1,
+                    pageSize: 10,
+                    exclude: {period: "2026-01-31"}
+                ) {
+                    items { period }
+                    pageInfo { totalCount }
+                }
+            }
+            """
+        )
+
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["reportCalculationList"],
+            {
+                "items": [{"period": "2026-02-28"}, {"period": "2026-02-28"}],
+                "pageInfo": {"totalCount": 2},
+            },
+        )
+        self.assertEqual(
+            self.Calculation.authorization_checks,
+            [
+                (self.subject.id, date(2026, 2, 28)),
+                (self.other_subject.id, date(2026, 2, 28)),
+            ],
         )
