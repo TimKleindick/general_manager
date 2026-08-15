@@ -2,6 +2,53 @@
 
 <!-- version list -->
 
+## v0.70.0 (2026-08-15)
+
+### Bug Fixes
+
+- Address static permission review feedback
+  ([`3984332`](https://github.com/TimKleindick/general_manager/commit/398433232185c60adb8b541b6c2b2ceb20a53b05))
+
+- Bridge static permission filter decisions
+  ([`4a75e41`](https://github.com/TimKleindick/general_manager/commit/4a75e414566d1285e7b6daa4e13a1b67c4805d7e))
+
+- Preserve compound exclude authorization
+  ([`99dcbfb`](https://github.com/TimKleindick/general_manager/commit/99dcbfb0ef461e7229c6c99693c89bcc0273f300))
+
+- Recognize empty permission constraints
+  ([`3471b72`](https://github.com/TimKleindick/general_manager/commit/3471b724403c50482b6dde4091f772aec530d9db))
+
+- Suppress static search authorization summaries
+  ([`2beb765`](https://github.com/TimKleindick/general_manager/commit/2beb765a19409162f698c2ba25f1f39b6046832b))
+
+### Documentation
+
+- Clarify conditional permission gates
+  ([`2a632e4`](https://github.com/TimKleindick/general_manager/commit/2a632e4314fd64e1611d82618e7a8541fcc4678f))
+
+- Explain static read permission decisions
+  ([`9eaab09`](https://github.com/TimKleindick/general_manager/commit/9eaab09552a6f34736a44c5039b6d8d451d1a75e))
+
+### Features
+
+- Add static permission filter decisions
+  ([`6384665`](https://github.com/TimKleindick/general_manager/commit/63846654d462d973f3794954d358ca25899318b3))
+
+- Compose static read permission plans
+  ([`85816d9`](https://github.com/TimKleindick/general_manager/commit/85816d9a57cc1f8286082640328bf0cdb8a8e88d))
+
+- Short-circuit static list permissions
+  ([`e81931d`](https://github.com/TimKleindick/general_manager/commit/e81931d4ec8d6fe9b1127e9d0ee4cc9fa4eae762))
+
+- Short-circuit static search permissions
+  ([`6060223`](https://github.com/TimKleindick/general_manager/commit/60602232e4f4476e82593d5aa11c0ae8a4becadb))
+
+### Testing
+
+- Tighten permission guide coverage
+  ([`422d0f1`](https://github.com/TimKleindick/general_manager/commit/422d0f14c9e865ba7e9edf05b40d4ae7b18afd37))
+
+
 ## v0.69.2 (2026-08-14)
 
 ### Bug Fixes
