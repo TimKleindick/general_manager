@@ -41,14 +41,14 @@ never evaluated before per-instance authorization.
 
 The resolver parses and normalizes all query arguments before authorization. For
 non-calculation lists, permission prefilters and the row gate run first, then
-explicit filters, normalized filter-side excludes, explicit excludes, and
-normalized exclude-side excludes. For calculation lists, that predicate order
-is preserved within two phases: declared-input predicates run before
-authorization and deferred computed-property predicates run afterward. Sorting,
-grouping, and pagination follow both predicate phases. Filter normalizers
-receive the parsed object mapping for the current `filter` or `exclude` input
-and must return both `filter` and `exclude` mappings; missing keys propagate the
-resulting Python `KeyError`.
+normalized positive filter predicates, explicit excludes, and the accumulated
+relation-derived exclusions from both inputs. For calculation lists, that
+predicate order is preserved within two phases: declared-input predicates run
+before authorization and deferred computed-property predicates run afterward.
+Sorting, grouping, and pagination follow both predicate phases. Filter
+normalizers receive the parsed object mapping for the current `filter` or
+`exclude` input and must return both `filter` and `exclude` mappings; missing
+keys propagate the resulting Python `KeyError`.
 
 ## Pagination model
 
