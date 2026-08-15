@@ -384,31 +384,42 @@ class GraphQLHelperTests(SimpleTestCase):
     def test_partition_calculation_query_plan_separates_inputs_and_properties(
         self,
     ) -> None:
-        cutoff = "2026-01-01"
-
         input_plan, deferred_plan = partition_calculation_query_plan(
             _CalculationManager,
             QueryParameterPlan(
                 filters={"subject__id": 7, "result__gte": 10},
-                excludes={"period__lt": cutoff, "result": 0},
-                normalized_excludes={},
+                excludes={"subject__id": 7, "result__gte": 10},
+                normalized_excludes={"subject__id": 7, "result__gte": 10},
             ),
         )
 
-        assert input_plan.filters == {"subject__id": 7}
-        assert deferred_plan.filters == {"result__gte": 10}
-        assert input_plan.excludes == {"period__lt": cutoff}
-        assert deferred_plan.excludes == {"result": 0}
-
-    def test_partition_calculation_query_plan_rejects_unknown_root(self) -> None:
-        plan = QueryParameterPlan(
-            filters={"unknown__gte": 10},
-            excludes={},
-            normalized_excludes={},
+        assert input_plan == QueryParameterPlan(
+            filters={"subject__id": 7},
+            excludes={"subject__id": 7},
+            normalized_excludes={"subject__id": 7},
+        )
+        assert deferred_plan == QueryParameterPlan(
+            filters={"result__gte": 10},
+            excludes={"result__gte": 10},
+            normalized_excludes={"result__gte": 10},
         )
 
-        with pytest.raises(UnknownInputFieldError, match="unknown"):
-            partition_calculation_query_plan(_CalculationManager, plan)
+    def test_partition_calculation_query_plan_rejects_unknown_roots_in_all_mappings(
+        self,
+    ) -> None:
+        for mapping_name in ("filters", "excludes", "normalized_excludes"):
+            with self.subTest(mapping=mapping_name):
+                plan = QueryParameterPlan(
+                    **{
+                        "filters": {},
+                        "excludes": {},
+                        "normalized_excludes": {},
+                        mapping_name: {"unknown__gte": 10},
+                    },
+                )
+
+                with pytest.raises(UnknownInputFieldError, match="unknown"):
+                    partition_calculation_query_plan(_CalculationManager, plan)
 
     def test_non_calculation_resolver_does_not_partition_calculation_query_plan(
         self,

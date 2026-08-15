@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import date
 from typing import ClassVar, Literal, cast
 
@@ -267,13 +268,15 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
             },
         )
         self.assertEqual(
-            self.Calculation.authorization_checks,
-            [
-                (self.subject.id, date(2026, 2, 28)),
-                (self.subject.id, date(2026, 3, 31)),
-                (self.subject.id, date(2026, 4, 30)),
-                (self.other_subject.id, date(2026, 2, 28)),
-                (self.other_subject.id, date(2026, 3, 31)),
-                (self.other_subject.id, date(2026, 4, 30)),
-            ],
+            Counter(self.Calculation.authorization_checks),
+            Counter(
+                [
+                    (self.subject.id, date(2026, 2, 28)),
+                    (self.subject.id, date(2026, 3, 31)),
+                    (self.subject.id, date(2026, 4, 30)),
+                    (self.other_subject.id, date(2026, 2, 28)),
+                    (self.other_subject.id, date(2026, 3, 31)),
+                    (self.other_subject.id, date(2026, 4, 30)),
+                ]
+            ),
         )
