@@ -32,16 +32,23 @@ Nested relation filters are normalized before they reach the bucket. Relation
 dictionary key named `none` at any depth under `exclude`, including a top-level
 `none` key, raises
 `UnsupportedExcludeNoneRelationFilterError` because the resolver cannot invert
-that relation shape safely. Permission filters are applied before user filters,
-and any permission plan that still needs per-instance checks runs its row gate
-before user filters, sorting, grouping, and pagination.
+that relation shape safely. For non-calculation lists, permission filters and
+any required per-instance row gate run before user filters. Calculation lists
+first apply predicates rooted at declared calculation inputs, then run
+permission filtering and the row gate; predicates rooted at computed GraphQL
+properties remain deferred until afterward. Computed properties are therefore
+never evaluated before per-instance authorization.
 
-The resolver applies query arguments in a fixed order: permission prefilters and
-the row gate run first, then explicit filters, normalized filter-side excludes,
-explicit excludes, normalized exclude-side excludes, sorting, grouping, and
-pagination. Filter normalizers receive the parsed object mapping for the current
-`filter` or `exclude` input and must return both `filter` and `exclude`
-mappings; missing keys propagate the resulting Python `KeyError`.
+The resolver parses and normalizes all query arguments before authorization. For
+non-calculation lists, permission prefilters and the row gate run first, then
+explicit filters, normalized filter-side excludes, explicit excludes, and
+normalized exclude-side excludes. For calculation lists, that predicate order
+is preserved within two phases: declared-input predicates run before
+authorization and deferred computed-property predicates run afterward. Sorting,
+grouping, and pagination follow both predicate phases. Filter normalizers
+receive the parsed object mapping for the current `filter` or `exclude` input
+and must return both `filter` and `exclude` mappings; missing keys propagate the
+resulting Python `KeyError`.
 
 ## Pagination model
 
