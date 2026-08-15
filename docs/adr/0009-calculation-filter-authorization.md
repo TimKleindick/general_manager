@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -24,9 +24,10 @@ prerequisite and remains unchanged.
 
 ### Normalized query plan
 
-Extract the existing parsing and relation-filter normalization in
-`graphql_resolvers.py` into a small immutable query-parameter plan. The plan
-retains the existing operation order:
+`build_query_parameter_plan()` parses the existing inputs and relation-filter
+normalization in `graphql_resolvers.py` into the immutable
+`QueryParameterPlan`. `apply_query_parameter_plan()` retains the existing
+operation order:
 
 1. normalized positive predicates from `filter`;
 2. normalized positive predicates from `exclude`, applied as exclusions;
@@ -40,9 +41,10 @@ expression inside GraphQL `exclude` also remains unchanged. Graphene and the
 existing normalizer continue to perform input-shape, scalar, and relation-ID
 normalization before this validation.
 
-`apply_query_parameters()` will consume this plan so existing direct callers
-keep their current behavior and normalization occurs only once in the list
-resolver.
+`apply_query_parameters()` builds this plan and delegates to
+`apply_query_parameter_plan()` so existing direct callers keep their current
+behavior. Generated list resolvers construct the plan once, so normalization
+occurs only once per resolver invocation.
 
 ### Safe predicate partition
 
@@ -55,9 +57,9 @@ All other valid predicates are deferred. These include filters and exclusions
 on computed GraphQL properties. The partition preserves whether each mapping
 is a filter or exclusion and preserves the current operation order.
 
-The validation and partition helper is resolver-local and side-effect free. It
-does not instantiate managers, enumerate possible values, or access computed
-properties.
+`partition_calculation_query_plan()` performs validation and partitioning. It
+is resolver-local and side-effect free: it does not instantiate managers,
+enumerate possible values, or access computed properties.
 
 The resolver data flow becomes:
 
