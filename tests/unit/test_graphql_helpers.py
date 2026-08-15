@@ -44,9 +44,11 @@ from general_manager.utils.format_string import snake_to_camel
 from general_manager.api.graphql_resolvers import (
     apply_grouping,
     apply_pagination,
+    apply_query_parameter_plan,
     apply_query_parameters,
     apply_read_authorization,
     apply_sorting,
+    build_query_parameter_plan,
     parse_input,
     resolve_instance_check_reasons,
     selection_includes_path,
@@ -322,6 +324,74 @@ class GraphQLHelperTests(SimpleTestCase):
 
         assert result is sorted_queryset
         queryset.sort.assert_called_once_with("name", reverse=True)
+
+    def test_query_parameter_plan_normalizes_each_input_once(self) -> None:
+        normalizer = mock.Mock(
+            side_effect=[
+                {
+                    "filter": {"subject__id": 1},
+                    "exclude": {"period__lt": "2026-01-01"},
+                },
+                {
+                    "filter": {"result": 2},
+                    "exclude": {"period__gt": "2026-12-31"},
+                },
+            ]
+        )
+
+        plan = build_query_parameter_plan(
+            {"subject": {"id": 1}},
+            {"result": 2},
+            normalizer,
+        )
+
+        assert plan.filters == {"subject__id": 1}
+        assert plan.excludes == {"result": 2}
+        assert plan.normalized_excludes == {
+            "period__lt": "2026-01-01",
+            "period__gt": "2026-12-31",
+        }
+        assert normalizer.call_count == 2
+
+    def test_apply_query_parameter_plan_applies_operations_in_order(self) -> None:
+        events: list[tuple[str, dict[str, object] | str]] = []
+
+        class RecordingBucket:
+            def filter(self, **kwargs: object) -> "RecordingBucket":
+                events.append(("filter", kwargs))
+                return self
+
+            def exclude(self, **kwargs: object) -> "RecordingBucket":
+                events.append(("exclude", kwargs))
+                return self
+
+            def sort(self, key: str, *, reverse: bool) -> "RecordingBucket":
+                events.append(("sort", key))
+                return self
+
+        bucket = RecordingBucket()
+        plan = build_query_parameter_plan(
+            {"subject__id": 1},
+            {"result": 2},
+            mock.Mock(
+                side_effect=[
+                    {"filter": {"subject__id": 1}, "exclude": {"period__lt": 1}},
+                    {"filter": {"result": 2}, "exclude": {"period__gt": 2}},
+                ]
+            ),
+        )
+
+        result = apply_query_parameter_plan(
+            bucket, plan, sort_by=type("SortBy", (), {"value": "name"})(), reverse=True
+        )
+
+        assert result is bucket
+        assert events == [
+            ("filter", {"subject__id": 1}),
+            ("exclude", {"result": 2}),
+            ("exclude", {"period__lt": 1, "period__gt": 2}),
+            ("sort", "name"),
+        ]
 
     def test_apply_pagination_defaults_only_the_missing_argument(self) -> None:
         """

@@ -88,6 +88,15 @@ class UnsupportedExcludeNoneRelationFilterError(ValueError):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class QueryParameterPlan:
+    """Normalized filter and exclusion operations for a list query."""
+
+    filters: GraphQLFilterMapping
+    excludes: GraphQLFilterMapping
+    normalized_excludes: GraphQLFilterMapping
+
+
 @dataclass(slots=True)
 class ReadAuthorizationResult(Generic[GeneralManagerT]):
     """Aggregate outcome from GraphQL read prefiltering and row authorization.
@@ -148,6 +157,35 @@ def contains_none_relation_filter(input_val: object) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def build_query_parameter_plan(
+    filter_input: GraphQLFilterInput,
+    exclude_input: GraphQLFilterInput,
+    filter_normalizer: FilterNormalizer | None = None,
+) -> QueryParameterPlan:
+    """Parse and normalize filter and exclusion inputs once."""
+    filters = parse_input(filter_input)
+    excludes = parse_input(exclude_input)
+    normalized_excludes: GraphQLFilterMapping = {}
+
+    if filters and filter_normalizer is not None:
+        normalized = filter_normalizer(filters)
+        filters = normalized["filter"]
+        normalized_excludes = normalized["exclude"]
+
+    if excludes and filter_normalizer is not None:
+        if contains_none_relation_filter(excludes):
+            raise UnsupportedExcludeNoneRelationFilterError
+        normalized = filter_normalizer(excludes)
+        excludes = normalized["filter"]
+        normalized_excludes = {**normalized_excludes, **normalized["exclude"]}
+
+    return QueryParameterPlan(
+        filters=filters,
+        excludes=excludes,
+        normalized_excludes=normalized_excludes,
+    )
+
+
 def apply_sorting(
     queryset: Bucket[GeneralManager] | GroupBucket[GeneralManager],
     sort_by: graphene.Enum | None,
@@ -158,6 +196,26 @@ def apply_sorting(
         return queryset
     sort_by_str = cast(str, getattr(sort_by, "value", sort_by))
     return queryset.sort(sort_by_str, reverse=reverse)
+
+
+def apply_query_parameter_plan(
+    queryset: Bucket[GeneralManager],
+    plan: QueryParameterPlan,
+    sort_by: graphene.Enum | None,
+    reverse: bool,
+) -> Bucket[GeneralManager]:
+    """Apply a normalized query-parameter plan to *queryset*."""
+    if plan.filters:
+        queryset = queryset.filter(**plan.filters)
+    if plan.excludes:
+        queryset = queryset.exclude(**plan.excludes)
+    if plan.normalized_excludes:
+        queryset = queryset.exclude(**plan.normalized_excludes)
+
+    return cast(
+        Bucket[GeneralManager],
+        apply_sorting(queryset, sort_by, reverse),
+    )
 
 
 def apply_query_parameters(
@@ -199,32 +257,12 @@ def apply_query_parameters(
     Raises:
         UnsupportedExcludeNoneRelationFilterError: If an exclude input contains a nested relation ``none`` filter.
     """
-    normalized_excludes: GraphQLFilterMapping = {}
-
-    filters = parse_input(filter_input)
-    if filters and filter_normalizer is not None:
-        normalized = filter_normalizer(filters)
-        filters = normalized["filter"]
-        normalized_excludes = normalized["exclude"]
-    if filters:
-        queryset = queryset.filter(**filters)
-
-    excludes = parse_input(exclude_input)
-    if excludes and filter_normalizer is not None:
-        if contains_none_relation_filter(excludes):
-            raise UnsupportedExcludeNoneRelationFilterError
-        normalized = filter_normalizer(excludes)
-        excludes = normalized["filter"]
-        normalized_excludes = {**normalized_excludes, **normalized["exclude"]}
-    if excludes:
-        queryset = queryset.exclude(**excludes)
-    if normalized_excludes:
-        queryset = queryset.exclude(**normalized_excludes)
-
-    return cast(
-        Bucket[GeneralManager],
-        apply_sorting(queryset, sort_by, reverse),
+    plan = build_query_parameter_plan(
+        filter_input,
+        exclude_input,
+        filter_normalizer,
     )
+    return apply_query_parameter_plan(queryset, plan, sort_by, reverse)
 
 
 def apply_permission_filters(
