@@ -28,9 +28,12 @@ from general_manager.api.graphql import (
     get_read_permission_filter,
 )
 from general_manager.api.graphql_errors import PublicGraphQLError
+from general_manager.api.property import graph_ql_property
+from general_manager.utils.filter_parser import UnknownInputFieldError
 from typing import ClassVar
 
 from general_manager.apps import GeneralmanagerConfig
+from general_manager.interface import CalculationInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
@@ -50,6 +53,8 @@ from general_manager.api.graphql_resolvers import (
     apply_sorting,
     build_query_parameter_plan,
     parse_input,
+    partition_calculation_query_plan,
+    QueryParameterPlan,
     resolve_instance_check_reasons,
     selection_includes_path,
     UnsupportedExcludeNoneRelationFilterError,
@@ -140,6 +145,16 @@ class _DummyPermission(BasePermission):
 class _DummyManager(GeneralManager):
     Interface = _DummyInterface
     Permission = _DummyPermission
+
+
+class _CalculationManager(GeneralManager):
+    class Interface(CalculationInterface):
+        subject = Input(int)
+        period = Input(str)
+
+    @graph_ql_property(filterable=True)
+    def result(self) -> int:
+        return 1
 
 
 class _Info:
@@ -365,6 +380,50 @@ class GraphQLHelperTests(SimpleTestCase):
             )
 
         normalizer.assert_not_called()
+
+    def test_partition_calculation_query_plan_separates_inputs_and_properties(
+        self,
+    ) -> None:
+        cutoff = "2026-01-01"
+
+        input_plan, deferred_plan = partition_calculation_query_plan(
+            _CalculationManager,
+            QueryParameterPlan(
+                filters={"subject__id": 7, "result__gte": 10},
+                excludes={"period__lt": cutoff, "result": 0},
+                normalized_excludes={},
+            ),
+        )
+
+        assert input_plan.filters == {"subject__id": 7}
+        assert deferred_plan.filters == {"result__gte": 10}
+        assert input_plan.excludes == {"period__lt": cutoff}
+        assert deferred_plan.excludes == {"result": 0}
+
+    def test_partition_calculation_query_plan_rejects_unknown_root(self) -> None:
+        plan = QueryParameterPlan(
+            filters={"unknown__gte": 10},
+            excludes={},
+            normalized_excludes={},
+        )
+
+        with pytest.raises(UnknownInputFieldError, match="unknown"):
+            partition_calculation_query_plan(_CalculationManager, plan)
+
+    def test_non_calculation_resolver_does_not_partition_calculation_query_plan(
+        self,
+    ) -> None:
+        bucket = SimpleBucket(_DummyManager, [_DummyManager(id=1)])
+        resolver = create_list_resolver(
+            lambda _parent, _inactive: bucket, _DummyManager
+        )
+
+        with mock.patch(
+            "general_manager.api.graphql_resolvers.partition_calculation_query_plan"
+        ) as partition:
+            resolver(object(), _Info())
+
+        partition.assert_not_called()
 
     def test_apply_query_parameter_plan_applies_operations_in_order(self) -> None:
         events: list[tuple[str, dict[str, object] | str]] = []
