@@ -34,7 +34,12 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                 )
                 period = Input(
                     date,
-                    possible_values=[date(2026, 1, 31), date(2026, 2, 28)],
+                    possible_values=[
+                        date(2026, 1, 31),
+                        date(2026, 2, 28),
+                        date(2026, 3, 31),
+                        date(2026, 4, 30),
+                    ],
                     depends_on=["subject"],
                 )
 
@@ -73,7 +78,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                     ReportCalculation.authorization_checks.append(
                         (calculation.subject.id, calculation.period)
                     )
-                    return calculation.period.month == 2
+                    return calculation.period.month > 1
 
             @graph_ql_property(filterable=True)
             def result(self) -> int:
@@ -118,9 +123,13 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
             {
                 "items": [
                     {"period": "2026-02-28", "result": 2},
+                    {"period": "2026-03-31", "result": 3},
+                    {"period": "2026-04-30", "result": 4},
                     {"period": "2026-02-28", "result": 2},
+                    {"period": "2026-03-31", "result": 3},
+                    {"period": "2026-04-30", "result": 4},
                 ],
-                "pageInfo": {"totalCount": 2},
+                "pageInfo": {"totalCount": 6},
             },
         )
 
@@ -145,8 +154,12 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         self.assertEqual(
             response.json()["data"]["reportCalculationList"],
             {
-                "items": [{"period": "2026-02-28", "result": 2}],
-                "pageInfo": {"totalCount": 1},
+                "items": [
+                    {"period": "2026-02-28", "result": 2},
+                    {"period": "2026-03-31", "result": 3},
+                    {"period": "2026-04-30", "result": 4},
+                ],
+                "pageInfo": {"totalCount": 3},
             },
         )
 
@@ -169,11 +182,13 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
 
         self.assertResponseNoErrors(response)
         assert response.json()["data"]["reportCalculationList"]["pageInfo"] == {
-            "totalCount": 1
+            "totalCount": 3
         }
         assert self.Calculation.authorization_checks == [
             (self.subject.id, date(2026, 1, 31)),
             (self.subject.id, date(2026, 2, 28)),
+            (self.subject.id, date(2026, 3, 31)),
+            (self.subject.id, date(2026, 4, 30)),
         ]
 
     def test_computed_property_filter_is_applied_after_authorization(self) -> None:
@@ -183,7 +198,8 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                 reportCalculationList(
                     page: 1,
                     pageSize: 1,
-                    filter: {subject: {id: $subjectId}, result: 2}
+                    filter: {subject: {id: $subjectId}}
+                    exclude: {result: 2}
                 ) {
                     items { period }
                     pageInfo { totalCount }
@@ -197,19 +213,25 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         self.assertEqual(
             response.json()["data"]["reportCalculationList"],
             {
-                "items": [{"period": "2026-02-28"}],
-                "pageInfo": {"totalCount": 1},
+                "items": [{"period": "2026-03-31"}],
+                "pageInfo": {"totalCount": 2},
             },
         )
         self.assertEqual(
             self.Calculation.result_evaluations,
-            [(self.subject.id, date(2026, 2, 28))],
+            [
+                (self.subject.id, date(2026, 2, 28)),
+                (self.subject.id, date(2026, 3, 31)),
+                (self.subject.id, date(2026, 4, 30)),
+            ],
         )
         self.assertEqual(
             self.Calculation.authorization_checks,
             [
                 (self.subject.id, date(2026, 1, 31)),
                 (self.subject.id, date(2026, 2, 28)),
+                (self.subject.id, date(2026, 3, 31)),
+                (self.subject.id, date(2026, 4, 30)),
             ],
         )
 
@@ -233,14 +255,25 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         self.assertEqual(
             response.json()["data"]["reportCalculationList"],
             {
-                "items": [{"period": "2026-02-28"}, {"period": "2026-02-28"}],
-                "pageInfo": {"totalCount": 2},
+                "items": [
+                    {"period": "2026-02-28"},
+                    {"period": "2026-03-31"},
+                    {"period": "2026-04-30"},
+                    {"period": "2026-02-28"},
+                    {"period": "2026-03-31"},
+                    {"period": "2026-04-30"},
+                ],
+                "pageInfo": {"totalCount": 6},
             },
         )
         self.assertEqual(
             self.Calculation.authorization_checks,
             [
                 (self.subject.id, date(2026, 2, 28)),
+                (self.subject.id, date(2026, 3, 31)),
+                (self.subject.id, date(2026, 4, 30)),
                 (self.other_subject.id, date(2026, 2, 28)),
+                (self.other_subject.id, date(2026, 3, 31)),
+                (self.other_subject.id, date(2026, 4, 30)),
             ],
         )
