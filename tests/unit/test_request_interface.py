@@ -252,6 +252,22 @@ class TestRequestInterface(SimpleTestCase):
 
         self.assertIsInstance(bucket, RequestBucket)
 
+    def test_with_instances_reuses_materialized_request_candidates(self) -> None:
+        """Build an exact materialized subset without another request execution."""
+        bucket = RemoteProject.filter(status="active")
+        first, second = tuple(bucket)
+        calls_after_materialization = len(RemoteProject.Interface.calls)
+
+        subset = bucket.with_instances([first, second])
+
+        self.assertEqual(
+            [item.identification for item in subset],
+            [first.identification, second.identification],
+        )
+        self.assertEqual(
+            len(RemoteProject.Interface.calls), calls_after_materialization
+        )
+
     def test_request_capabilities_alias_is_reexported_from_bundles_package(
         self,
     ) -> None:

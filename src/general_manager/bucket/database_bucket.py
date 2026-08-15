@@ -1,7 +1,7 @@
 """Database-backed bucket implementation for GeneralManager collections."""
 
 from __future__ import annotations
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Generator, TypeVar, cast
 
@@ -1533,3 +1533,19 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         own._query_signature_cache = _QUERY_SIGNATURE_NOT_COMPUTED
         own._trusted_query_signature = None
         return own
+
+    def with_instances(
+        self,
+        instances: Iterable[GeneralManagerType],
+    ) -> DatabaseBucket[GeneralManagerType]:
+        """Return a source-ordered subset selected by manager primary keys."""
+        self._ensure_as_of_compatible()
+        ids: list[object] = []
+        for instance in instances:
+            if not isinstance(instance, GeneralManager) or (
+                instance.__class__ != self._manager_class
+            ):
+                raise DatabaseBucketTypeMismatchError(self.__class__, type(instance))
+            instance._ensure_as_of_compatible()
+            ids.append(instance.identification["id"])
+        return self.filter(id__in=ids) if ids else self.none()

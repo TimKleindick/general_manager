@@ -275,6 +275,17 @@ class DatabaseBucketTestCase(TestCase):
         self.assertEqual(len(self.bucket), 3)
         self.assertEqual(self.bucket.count(), 3)
 
+    def test_with_instances_retains_source_queryset_order(self):
+        """Materialize only supplied managers while preserving source ordering."""
+        first, _, third = list(self.bucket)
+
+        subset = self.bucket.with_instances([first, third])
+
+        self.assertEqual(
+            [item.identification["id"] for item in subset],
+            [self.u1.id, self.u3.id],
+        )
+
     def test_live_bucket_created_before_as_of_rejects_before_evaluation(self):
         snapshot = datetime(2024, 1, 1, tzinfo=UTC)
 

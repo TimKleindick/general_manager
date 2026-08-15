@@ -154,6 +154,10 @@ class DummyBucket(Bucket[int]):
         """
         return DummyBucket(self._manager_class, self._data)
 
+    def none(self):
+        """Return an empty DummyBucket for base contract tests."""
+        return DummyBucket(self._manager_class)
+
     def get(self, **kwargs):
         # support lookup by 'value'
         """
@@ -296,6 +300,14 @@ class BucketTests(SimpleTestCase):
         copy = self.bucket.all()
         self.assertIsNot(copy, self.bucket)
         self.assertEqual(copy, self.bucket)
+
+    def test_with_instances_uses_empty_bucket_and_unions_items_in_order(self):
+        """Keep the default subset fallback available to existing subclasses."""
+        subset = self.bucket.with_instances([2, 3, 1])
+
+        self.assertIsInstance(subset, DummyBucket)
+        self.assertEqual(list(subset), [2, 3, 1])
+        self.assertEqual(list(self.bucket), [3, 1, 2])
 
     def test_get_no_kwargs(self):
         """
