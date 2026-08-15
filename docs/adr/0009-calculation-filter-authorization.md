@@ -33,10 +33,10 @@ operation order:
 2. normalized positive predicates from `exclude`, applied as exclusions;
 3. relation-derived exclusions accumulated from both inputs.
 
-For calculation lists, plan construction validates every normalized lookup root
-against the union of declared inputs and exposed GraphQL properties before any
-bucket is authorized. Unknown lookup roots retain the existing
-`UnknownInputFieldError` behavior. The existing rejection of a relation `none`
+For calculation lists, `partition_calculation_query_plan()` validates every
+normalized lookup root against the union of declared inputs and exposed GraphQL
+properties before any bucket is authorized. Unknown lookup roots retain the
+existing `UnknownInputFieldError` behavior. The existing rejection of a relation `none`
 expression inside GraphQL `exclude` also remains unchanged. Graphene and the
 existing normalizer continue to perform input-shape, scalar, and relation-ID
 normalization before this validation.
