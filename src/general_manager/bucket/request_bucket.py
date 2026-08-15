@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator, Hashable, Mapping
+from collections.abc import Generator, Hashable, Iterable, Mapping
 from typing import TYPE_CHECKING, Protocol, cast
 
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
@@ -451,6 +451,17 @@ class RequestBucket(Bucket[GeneralManagerType]):
     def none(self) -> "RequestBucket[GeneralManagerType]":
         """Return an empty materialized bucket preserving the operation name."""
         return self._from_items(tuple())
+
+    def with_instances(
+        self,
+        instances: Iterable[GeneralManagerType],
+    ) -> "RequestBucket[GeneralManagerType]":
+        """Return a materialized subset without re-executing the request plan."""
+        items = tuple(instances)
+        for instance in items:
+            if not isinstance(instance, self._manager_class):
+                raise RequestBucketTypeMismatchError(self.__class__, type(instance))
+        return self._from_items(items)
 
     @property
     def operation_name(self) -> str:

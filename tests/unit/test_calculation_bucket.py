@@ -387,6 +387,59 @@ class TestCalculationBucket(TestCase):
         # Sliced bucket should have its own combinations
         self.assertEqual(sliced._data, [{"i": 1}, {"i": 2}])
 
+    def test_with_instances_materializes_non_id_identifications_in_order(
+        self, _mock_parse
+    ) -> None:
+        """Keep exact input identifications without reconstructing through filters."""
+
+        class InputIdentificationInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "field1": Input(str, possible_values=["first", "second"]),
+                "field2": Input(int, possible_values=[1, 2]),
+            }
+
+        class InputIdentificationManager:
+            Interface = InputIdentificationInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        InputIdentificationInterface._parent_class = InputIdentificationManager
+        snapshot = datetime(2022, 1, 1, tzinfo=UTC)
+        with as_of(snapshot):
+            source = CalculationBucket(
+                InputIdentificationManager,
+                {"field1": "source"},
+                {"field2": 0},
+                ("field1", "field2"),
+                True,
+            )
+            source._data = [{"field1": "cached", "field2": 99}]
+            selected = [
+                InputIdentificationManager(field1="second", field2=2),
+                InputIdentificationManager(field1="first", field2=1),
+            ]
+
+            subset = source.with_instances(selected)
+            empty = source.with_instances(())
+
+            self.assertEqual(
+                [item.identification for item in subset],
+                [
+                    {"field1": "second", "field2": 2},
+                    {"field1": "first", "field2": 1},
+                ],
+            )
+            self.assertIsNot(subset, source)
+            self.assertIsInstance(empty, CalculationBucket)
+            self.assertEqual(list(empty), [])
+            self.assertEqual(source.filter_definitions, {"field1": "source"})
+            self.assertEqual(source.exclude_definitions, {"field2": 0})
+            self.assertEqual(source.sort_key, ("field1", "field2"))
+            self.assertTrue(source.reverse)
+            self.assertEqual(source._data, [{"field1": "cached", "field2": 99}])
+            self.assertEqual(source._effective_search_date, snapshot)
+
     def test_sort_returns_new_bucket(self, _mock_parse):
         """
         Tests that the sort() method returns a new CalculationBucket with updated sort key and reverse flag, leaving the original bucket unchanged.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from collections.abc import Hashable, Mapping
+from collections.abc import Hashable, Iterable, Mapping
 from typing import (
     Generator,
     TYPE_CHECKING,
@@ -437,3 +437,18 @@ class Bucket(ABC, Generic[GeneralManagerType]):
             "The 'none' method is not implemented in the base Bucket class. "
             "Subclasses should implement this method to return an empty bucket."
         )
+
+    def with_instances(
+        self,
+        instances: Iterable[GeneralManagerType],
+    ) -> Bucket[GeneralManagerType]:
+        """Return a bucket containing exactly the supplied manager instances.
+
+        Callers provide instances in source iteration order and implementations
+        retain that order. Backends may override this compatibility fallback to
+        avoid repeated unions or unsupported lookups.
+        """
+        subset = self.none()
+        for instance in instances:
+            subset = subset | instance
+        return subset

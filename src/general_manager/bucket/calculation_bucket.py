@@ -1223,3 +1223,27 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         own._filters = {}
         own._excludes = {}
         return own
+
+    def with_instances(
+        self,
+        instances: Iterable[GeneralManagerType],
+    ) -> CalculationBucket[GeneralManagerType]:
+        """Return a materialized subset using declared input identifications."""
+        self._ensure_as_of_compatible()
+        from general_manager.manager.general_manager import GeneralManager
+
+        identifications: list[Combination] = []
+        for instance in instances:
+            if instance.__class__ != self._manager_class:
+                raise IncompatibleBucketTypeError(self.__class__, type(instance))
+            if isinstance(instance, GeneralManager):
+                instance._ensure_as_of_compatible()
+            identifications.append(dict(instance.identification))
+        subset = self._derive(
+            filter_definitions=self.filter_definitions.copy(),
+            exclude_definitions=self.exclude_definitions.copy(),
+            sort_key=self.sort_key,
+            reverse=self.reverse,
+        )
+        subset._data = identifications
+        return subset
