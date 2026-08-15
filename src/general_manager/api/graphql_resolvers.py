@@ -303,9 +303,12 @@ def apply_read_authorization(
         )
 
     filtered_queryset = queryset
-    if not permission_plan.requires_instance_check and permission_plan.filters == [
-        {"filter": {}, "exclude": {}}
-    ]:
+    if (
+        not permission_plan.requires_instance_check
+        and len(permission_plan.filters) == 1
+        and not permission_plan.filters[0].get("filter")
+        and not permission_plan.filters[0].get("exclude")
+    ):
         result = ReadAuthorizationResult(
             queryset=queryset,
             candidate_count=None,

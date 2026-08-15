@@ -36,6 +36,7 @@ from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.base_permission import (
     BasePermission,
+    PermissionConstraint,
     ReadPermissionPlan,
 )
 from general_manager.uploads.errors import InvalidImageError, UploadError
@@ -896,7 +897,7 @@ class GraphQLHelperTests(SimpleTestCase):
         assert result.denied_count is None
         assert result.requires_instance_check is False
 
-    def test_apply_read_authorization_unrestricted_plan_avoids_candidate_count(
+    def test_apply_read_authorization_unrestricted_plan_preserves_lazy_queryset(
         self,
     ) -> None:
         class UnrestrictedManager(GeneralManager):
@@ -907,30 +908,37 @@ class GraphQLHelperTests(SimpleTestCase):
             def __len__(self):
                 raise AssertionError
 
-        queryset = CandidateCountForbiddenBucket(
-            UnrestrictedManager,
-            [UnrestrictedManager(id=1), UnrestrictedManager(id=2)],
+        constraints: tuple[PermissionConstraint, ...] = (
+            {},
+            {"filter": {}},
+            {"exclude": {}},
+            {"filter": {}, "exclude": {}},
         )
+        for constraint in constraints:
+            with self.subTest(constraint=constraint):
+                queryset = CandidateCountForbiddenBucket(
+                    UnrestrictedManager,
+                    [UnrestrictedManager(id=1), UnrestrictedManager(id=2)],
+                )
+                with mock.patch(
+                    "general_manager.api.graphql_resolvers.get_read_permission_filter",
+                    return_value=ReadPermissionPlan(
+                        filters=[constraint],
+                        requires_instance_check=False,
+                    ),
+                ):
+                    result = apply_read_authorization(
+                        queryset,
+                        UnrestrictedManager,
+                        _Info(),
+                        source="list",
+                    )
 
-        with mock.patch(
-            "general_manager.api.graphql_resolvers.get_read_permission_filter",
-            return_value=ReadPermissionPlan(
-                filters=[{"filter": {}, "exclude": {}}],
-                requires_instance_check=False,
-            ),
-        ):
-            result = apply_read_authorization(
-                queryset,
-                UnrestrictedManager,
-                _Info(),
-                source="list",
-            )
-
-        assert result.queryset is queryset
-        assert result.candidate_count is None
-        assert result.authorized_count is None
-        assert result.denied_count is None
-        assert result.requires_instance_check is False
+                assert result.queryset is queryset
+                assert result.candidate_count is None
+                assert result.authorized_count is None
+                assert result.denied_count is None
+                assert result.requires_instance_check is False
 
     def test_apply_read_authorization_deny_all_avoids_candidates(self) -> None:
         class DenyAllManager(GeneralManager):
