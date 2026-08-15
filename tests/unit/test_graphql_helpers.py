@@ -52,6 +52,7 @@ from general_manager.api.graphql_resolvers import (
     parse_input,
     resolve_instance_check_reasons,
     selection_includes_path,
+    UnsupportedExcludeNoneRelationFilterError,
     create_list_resolver,
     create_normal_resolver,
 )
@@ -352,6 +353,18 @@ class GraphQLHelperTests(SimpleTestCase):
             "period__gt": "2026-12-31",
         }
         assert normalizer.call_count == 2
+
+    def test_query_parameter_plan_rejects_none_exclude_before_normalizing(self) -> None:
+        normalizer = mock.Mock()
+
+        with pytest.raises(UnsupportedExcludeNoneRelationFilterError):
+            build_query_parameter_plan(
+                None,
+                {"subject": {"none": {"id": 1}}},
+                normalizer,
+            )
+
+        normalizer.assert_not_called()
 
     def test_apply_query_parameter_plan_applies_operations_in_order(self) -> None:
         events: list[tuple[str, dict[str, object] | str]] = []

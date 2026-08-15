@@ -72,3 +72,23 @@ ruff format --check src/general_manager/api/graphql_resolvers.py tests/unit/test
   checked in isolation because its lightweight test double is not a concrete
   `Bucket` subclass. This does not affect runtime tests; resolving the broader
   typing debt is outside Task 1.
+
+## Fix Round 1
+
+Added regression coverage for raw nested-`none` exclude validation. The test
+asserts that `UnsupportedExcludeNoneRelationFilterError` is raised and the
+supplied normalizer is not called.
+
+Focused test:
+
+```text
+python -m pytest tests/unit/test_graphql_helpers.py -k "query_parameter_plan_rejects_none_exclude_before_normalizing" -q
+1 passed, 51 deselected in 0.08s
+```
+
+Complete helper suite:
+
+```text
+python -m pytest tests/unit/test_graphql_helpers.py -q
+52 passed, 10 subtests passed in 0.08s
+```
