@@ -845,6 +845,55 @@ class GraphQLHelperTests(SimpleTestCase):
         assert result.requires_instance_check is False
         logger_mock.info.assert_not_called()
 
+    def test_apply_read_authorization_uses_bucket_instance_subset(self) -> None:
+        class SelectivePermission(BasePermission):
+            def check_permission(self, *args, **kwargs) -> bool:
+                return True
+
+            def check_operation_permission(self, *args, **kwargs) -> bool:
+                return True
+
+            def describe_operation_permissions(
+                self, *args, **kwargs
+            ) -> tuple[str, ...]:
+                return ()
+
+            def can_read_instance(self) -> bool:
+                return self.instance.identification["id"] == 2
+
+        class SelectiveManager(GeneralManager):
+            Interface = _DummyInterface
+            Permission = SelectivePermission
+
+        class IdFilterUnsupportedBucket(SimpleBucket):
+            def filter(self, **kwargs):
+                raise AssertionError
+
+        queryset = IdFilterUnsupportedBucket(
+            SelectiveManager,
+            [SelectiveManager(id=1), SelectiveManager(id=2)],
+        )
+
+        with mock.patch(
+            "general_manager.api.graphql_resolvers.get_read_permission_filter",
+            return_value=ReadPermissionPlan(
+                filters=[],
+                requires_instance_check=True,
+                instance_check_reasons=("unfilterable_read_rule",),
+            ),
+        ):
+            result = apply_read_authorization(
+                queryset,
+                SelectiveManager,
+                _Info(),
+                source="list",
+            )
+
+        assert [item.identification["id"] for item in result.queryset] == [2]
+        assert result.candidate_count == 2
+        assert result.authorized_count == 1
+        assert result.denied_count == 1
+
     def test_apply_read_authorization_allow_all_skips_row_permission_objects(
         self,
     ) -> None:
