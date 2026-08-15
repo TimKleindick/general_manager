@@ -293,6 +293,32 @@ class TestCalculationBucket(TestCase):
         self.assertEqual(combined.filter_definitions, {"f1": 1})
         self.assertEqual(combined.exclude_definitions, {"e1": 2})
 
+    def test_or_intersects_distinct_allowed_instance_subsets(self, _mock_parse):
+        """Combining exact subsets must not widen either authorization boundary."""
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "num": Input(type=int, possible_values=[1, 2, 3]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        source = CalculationBucket(DynManager)
+        left = source.with_instances([DynManager(num=1), DynManager(num=2)])
+        right = source.with_instances([DynManager(num=2), DynManager(num=3)])
+
+        combined = left | right
+
+        self.assertEqual(
+            [manager.identification for manager in combined],
+            [{"num": 2}],
+        )
+
     def test_or_with_invalid(self, _mock_parse):
         """
         Tests that combining a CalculationBucket with an incompatible type or a bucket of a different manager class raises a TypeError.
@@ -793,6 +819,37 @@ class TestGenerateCombinations(TestCase):
             calls,
             [{"num": 1}, {"num": 2}, {"num": 3}],
         )
+
+    def test_allowed_subset_reuses_managers_for_property_access(self, _mock_parse):
+        calls = []
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "num": Input(type=int, possible_values=[1, 2, 3]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                calls.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.num = kwargs["num"]
+
+            @property
+            def doubled(self):
+                return self.num * 2
+
+        DynInterface._parent_class = DynManager
+        source = CalculationBucket(DynManager)
+        subset = source.with_instances([DynManager(num=2), DynManager(num=3)])
+        subset = subset.sort("doubled")
+        calls.clear()
+
+        combinations = subset.generate_combinations()
+
+        self.assertEqual(combinations, [{"num": 2}, {"num": 3}])
+        self.assertEqual(calls, [{"num": 1}, {"num": 2}, {"num": 3}])
 
     def test_mixed_input_and_property_sort_key_uses_manager_sorting(self, _mock_parse):
         calls = []

@@ -370,12 +370,29 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         }
 
         other._ensure_as_of_compatible()
-        return self._derive(
+        combined = self._derive(
             filter_definitions=combined_filters,
             exclude_definitions=combined_excludes,
             sort_key=None,
             reverse=False,
         )
+        if self._allowed_identifications is None:
+            if other._allowed_identifications is not None:
+                combined._allowed_identifications = [
+                    dict(identification)
+                    for identification in other._allowed_identifications
+                ]
+        elif other._allowed_identifications is not None:
+            other_allowed_keys = {
+                freeze_bucket_index_value(identification)
+                for identification in other._allowed_identifications
+            }
+            combined._allowed_identifications = [
+                dict(identification)
+                for identification in self._allowed_identifications
+                if freeze_bucket_index_value(identification) in other_allowed_keys
+            ]
+        return combined
 
     def __str__(self) -> str:
         """
@@ -749,17 +766,21 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                     sorted_filters["input_filters"],
                     sorted_filters["input_excludes"],
                 )
+                manager_combinations: list[GeneralManagerType] | None = None
                 if self._allowed_identifications is not None:
                     allowed_identification_keys = {
                         freeze_bucket_index_value(identification)
                         for identification in self._allowed_identifications
                     }
-                    current_combinations = [
-                        manager.identification
+                    manager_combinations = [
+                        manager
                         for manager in self._manager_combinations(current_combinations)
                         if freeze_bucket_index_value(manager.identification)
                         in allowed_identification_keys
                     ]
+                    current_combinations = self._manager_identifications(
+                        manager_combinations
+                    )
                 sort_key = self._normalized_sort_key()
                 needs_manager_access = (
                     bool(sorted_filters["prop_filters"])
@@ -768,9 +789,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 )
 
                 if needs_manager_access:
-                    manager_combinations = self._manager_combinations(
-                        current_combinations
-                    )
+                    if manager_combinations is None:
+                        manager_combinations = self._manager_combinations(
+                            current_combinations
+                        )
                     manager_combinations = self._filter_prop_combinations(
                         manager_combinations,
                         sorted_filters["prop_filters"],
