@@ -778,13 +778,15 @@ def create_list_resolver(
     ``base_queryset._manager_class`` when that is a GeneralManager subclass,
     otherwise using ``fallback_manager_class``. That manager class drives
     permission checks, filter normalization, dependency prefetching, and
-    capability warmups. The resolver applies permission prefilters and the
-    permission row gate before user-supplied query arguments,
-    then explicit filters, normalized filter-side excludes, explicit excludes,
-    normalized exclude-side excludes, optional grouping, sorting, and pagination.
-    Sorting therefore applies to records when grouping is omitted and to grouped
-    manager objects when grouping is active. It computes ``total_count`` after
-    grouping and sorting and before pagination. Non-grouped page items are
+    capability warmups. For non-calculation managers, the resolver applies
+    permission prefilters and the permission row gate before all user-supplied
+    query predicates. For calculation managers, it applies input predicates
+    before authorization to limit generated candidates, then applies deferred
+    computed-property predicates afterward. Grouping, sorting, and pagination
+    remain after those predicate phases. Sorting therefore applies to records
+    when grouping is omitted and to grouped manager objects when grouping is
+    active. It computes ``total_count`` after grouping and sorting and before
+    pagination. Non-grouped page items are
     materialized to a list; grouped results remain a
     ``GroupBucket`` and are returned as the Python-side ``items`` value. When
     grouping is active, pagination slices the group bucket before it is returned.
@@ -840,7 +842,6 @@ def create_list_resolver(
             and issubclass(manager_class, GeneralManager)
         ):
             manager_class = fallback_manager_class
-        qs = apply_permission_filters(base_queryset, manager_class, info)
         bound_filter_normalizer = None
         if filter_normalizer is not None:
 
@@ -849,14 +850,30 @@ def create_list_resolver(
             ) -> NormalizedFilterPlan:
                 return filter_normalizer(manager_class, filters)
 
-        qs = apply_query_parameters(
-            qs,
+        plan = build_query_parameter_plan(
             filter,
             exclude,
-            None,
-            reverse,
             filter_normalizer=bound_filter_normalizer,
         )
+        from general_manager.interface import CalculationInterface
+
+        interface = getattr(manager_class, "Interface", None)
+        if isinstance(interface, type) and issubclass(interface, CalculationInterface):
+            input_plan, deferred_plan = partition_calculation_query_plan(
+                manager_class,
+                plan,
+            )
+            input_queryset = apply_query_parameter_plan(
+                base_queryset,
+                input_plan,
+                None,
+                reverse,
+            )
+            qs = apply_permission_filters(input_queryset, manager_class, info)
+            qs = apply_query_parameter_plan(qs, deferred_plan, None, reverse)
+        else:
+            qs = apply_permission_filters(base_queryset, manager_class, info)
+            qs = apply_query_parameter_plan(qs, plan, None, reverse)
         qs_grouped = apply_grouping(qs, group_by)
         qs_sorted = apply_sorting(qs_grouped, sort_by, reverse)
 
