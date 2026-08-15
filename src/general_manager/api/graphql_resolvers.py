@@ -302,7 +302,7 @@ def apply_read_authorization(
             instance_check_reasons=(),
         )
 
-    filtered_queryset = queryset
+    filtered_queryset: Bucket[GeneralManagerT] | None = queryset
     if (
         not permission_plan.requires_instance_check
         and len(permission_plan.filters) == 1
@@ -321,7 +321,7 @@ def apply_read_authorization(
         return result
 
     if permission_plan.filters:
-        filtered_queryset = queryset.none()
+        filtered_queryset = None
         for permission_filter in permission_plan.filters:
             filter_dict = permission_filter.get("filter", {})
             exclude_dict = permission_filter.get("exclude", {})
@@ -329,7 +329,10 @@ def apply_read_authorization(
                 qs_perm = queryset
             else:
                 qs_perm = queryset.filter(**filter_dict).exclude(**exclude_dict)
-            filtered_queryset = filtered_queryset | qs_perm
+            filtered_queryset = (
+                qs_perm if filtered_queryset is None else filtered_queryset | qs_perm
+            )
+    assert filtered_queryset is not None
 
     result = filter_queryset_by_read_permission(
         filtered_queryset,
@@ -362,10 +365,9 @@ def filter_queryset_by_read_permission(
 
     When an instance gate is not required, or the manager has no Permission
     class, the original queryset is returned without eagerly computing counts.
-    Otherwise each candidate is checked with ``can_read_instance()``. Authorized
-    rows with an ``identification["id"]`` are rebuilt through an ``id__in``
-    filter; authorized rows without an id are unioned back as concrete manager
-    instances.
+    Otherwise each candidate is checked with ``can_read_instance()`` and the
+    originating bucket reconstructs the exact authorized instance subset using
+    its backend-native representation.
     """
     if not requires_instance_check:
         return ReadAuthorizationResult(
@@ -392,25 +394,15 @@ def filter_queryset_by_read_permission(
             instance_check_reasons=instance_check_reasons,
         )
 
-    authorized_ids: list[object] = []
     authorized_instances: list[GeneralManagerT] = []
     candidate_count = 0
     for instance in queryset:
         candidate_count += 1
         if PermissionClass(instance, info.context.user).can_read_instance():
-            identification = cast(Mapping[str, object], instance.identification)
-            instance_id = identification.get("id")
-            if instance_id is None:
-                authorized_instances.append(instance)
-            else:
-                authorized_ids.append(instance_id)
+            authorized_instances.append(instance)
 
-    authorized_queryset = (
-        queryset.filter(id__in=authorized_ids) if authorized_ids else queryset.none()
-    )
-    for instance in authorized_instances:
-        authorized_queryset = authorized_queryset | instance
-    authorized_count = len(authorized_ids) + len(authorized_instances)
+    authorized_queryset = queryset.with_instances(authorized_instances)
+    authorized_count = len(authorized_instances)
     return ReadAuthorizationResult(
         queryset=authorized_queryset,
         candidate_count=candidate_count,

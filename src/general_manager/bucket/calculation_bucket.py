@@ -219,6 +219,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self._excludes = parse_filters(self.exclude_definitions, possible_values)
 
         self._data: list[Combination] | None = None
+        self._allowed_identifications: list[Combination] | None = None
         self.sort_key = sort_key
         self.reverse = reverse
         self._effective_search_date = current_as_of_date()
@@ -251,6 +252,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             reverse,
         )
         bucket._effective_search_date = self._effective_search_date
+        if self._allowed_identifications is not None:
+            bucket._allowed_identifications = [
+                dict(identification) for identification in self._allowed_identifications
+            ]
         return bucket
 
     def __eq__(self, other: object) -> bool:
@@ -292,6 +297,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             ),
             {
                 "data": self._data,
+                "allowed_identifications": self._allowed_identifications,
                 "effective_search_date": self._effective_search_date,
             },
         )
@@ -307,6 +313,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             None
         """
         self._data = cast(list[Combination] | None, state.get("data"))
+        self._allowed_identifications = cast(
+            list[Combination] | None,
+            state.get("allowed_identifications"),
+        )
         self._effective_search_date = cast(
             "datetime | None", state.get("effective_search_date")
         )
@@ -656,6 +666,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             self._manager_class,
             freeze_bucket_index_value(self.filter_definitions),
             freeze_bucket_index_value(self.exclude_definitions),
+            freeze_bucket_index_value(self._allowed_identifications),
             self._normalized_sort_key(),
             self.reverse,
         )
@@ -738,6 +749,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                     sorted_filters["input_filters"],
                     sorted_filters["input_excludes"],
                 )
+                if self._allowed_identifications is not None:
+                    allowed_identification_keys = {
+                        freeze_bucket_index_value(identification)
+                        for identification in self._allowed_identifications
+                    }
+                    current_combinations = [
+                        manager.identification
+                        for manager in self._manager_combinations(current_combinations)
+                        if freeze_bucket_index_value(manager.identification)
+                        in allowed_identification_keys
+                    ]
                 sort_key = self._normalized_sort_key()
                 needs_manager_access = (
                     bool(sorted_filters["prop_filters"])
@@ -1222,6 +1244,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         own.exclude_definitions = {}
         own._filters = {}
         own._excludes = {}
+        own._allowed_identifications = []
         return own
 
     def with_instances(
@@ -1245,5 +1268,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             sort_key=self.sort_key,
             reverse=self.reverse,
         )
+        subset._allowed_identifications = [
+            dict(identification) for identification in identifications
+        ]
         subset._data = identifications
         return subset
