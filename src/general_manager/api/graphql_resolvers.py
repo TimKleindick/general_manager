@@ -197,10 +197,13 @@ def partition_calculation_query_plan(
     calculation bucket. Predicates rooted at GraphQL properties must be
     deferred until those combinations have been materialized. This helper only
     inspects interface metadata and the already-normalized plan; it does not
-    instantiate managers or access descriptors.
+    instantiate managers or access descriptors. Manager-input ``_id`` aliases
+    are classified with their declared input while preserving the original
+    lookup for the bucket parser.
     """
     interface = manager_class.Interface
-    input_names = set(interface.input_fields)
+    input_fields = interface.input_fields
+    input_names = set(input_fields)
     computed_names = set(interface.get_graph_ql_properties())
     known_names = input_names | computed_names
 
@@ -211,9 +214,19 @@ def partition_calculation_query_plan(
         deferred_mapping: GraphQLFilterMapping = {}
         for lookup, value in mapping.items():
             root = lookup.partition("__")[0]
-            if root not in known_names:
+            classified_root = root
+            if root not in known_names and root.endswith("_id"):
+                alias_root = root.removesuffix("_id")
+                alias_input = input_fields.get(alias_root)
+                if (
+                    alias_input is not None
+                    and isinstance(alias_input.type, type)
+                    and issubclass(alias_input.type, GeneralManager)
+                ):
+                    classified_root = alias_root
+            if classified_root not in known_names:
                 raise UnknownInputFieldError(root)
-            if root in input_names:
+            if classified_root in input_names:
                 input_mapping[lookup] = value
             else:
                 deferred_mapping[lookup] = value
@@ -781,8 +794,10 @@ def create_list_resolver(
     capability warmups. For non-calculation managers, the resolver applies
     permission prefilters and the permission row gate before all user-supplied
     query predicates. For calculation managers, it applies input predicates
-    before authorization to limit generated candidates, then applies deferred
-    computed-property predicates afterward. Grouping, sorting, and pagination
+    before authorization to limit generated candidates, fences that exact
+    candidate subset before permission prefilters, then applies deferred
+    computed-property predicates afterward. Permission constraints can only
+    narrow the user-selected input domain. Grouping, sorting, and pagination
     remain after those predicate phases. Sorting therefore applies to records
     when grouping is omitted and to grouped manager objects when grouping is
     active. It computes ``total_count`` after grouping and sorting and before
@@ -869,6 +884,12 @@ def create_list_resolver(
                 None,
                 reverse,
             )
+            if (
+                input_plan.filters
+                or input_plan.excludes
+                or input_plan.normalized_excludes
+            ):
+                input_queryset = input_queryset.with_instances(input_queryset)
             qs = apply_permission_filters(input_queryset, manager_class, info)
             qs = apply_query_parameter_plan(qs, deferred_plan, None, reverse)
         else:

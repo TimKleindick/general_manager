@@ -7,6 +7,7 @@ from django.db.models import CharField
 from django.utils.crypto import get_random_string
 
 from general_manager.api.property import graph_ql_property
+from general_manager.api.graphql_resolvers import create_list_resolver
 from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.manager import GeneralManager, Input
 from general_manager.permission.base_permission import (
@@ -27,6 +28,9 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         class ReportCalculation(GeneralManager):
             authorization_checks: ClassVar[list[tuple[int, date]]] = []
             result_evaluations: ClassVar[list[tuple[int, date]]] = []
+            permission_constraints: ClassVar[list[PermissionConstraint]] = [
+                {"filter": {}, "exclude": {}}
+            ]
 
             class Interface(CalculationInterface):
                 subject = Input(
@@ -65,11 +69,11 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                     return True
 
                 def get_permission_filter(self) -> list[PermissionConstraint]:
-                    return [{"filter": {}, "exclude": {}}]
+                    return ReportCalculation.permission_constraints
 
                 def get_read_permission_plan(self) -> ReadPermissionPlan:
                     return ReadPermissionPlan(
-                        filters=[{"filter": {}, "exclude": {}}],
+                        filters=ReportCalculation.permission_constraints,
                         requires_instance_check=True,
                         instance_check_reasons=("unfilterable_read_rule",),
                     )
@@ -105,6 +109,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         self.other_subject = self.Subject.Factory.create(name="Other subject")
         self.Calculation.authorization_checks.clear()
         self.Calculation.result_evaluations.clear()
+        self.Calculation.permission_constraints = [{"filter": {}, "exclude": {}}]
 
     def test_list_returns_only_instance_authorized_calculations(self) -> None:
         response = self.query(
@@ -280,3 +285,108 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                 ]
             ),
         )
+
+    def test_permission_filter_cannot_replace_same_key_user_filter(self) -> None:
+        self.Calculation.permission_constraints = [
+            {
+                "filter": {"period": date(2026, 2, 28)},
+                "exclude": {},
+            }
+        ]
+
+        response = self.query(
+            """
+            query {
+                reportCalculationList(
+                    filter: {period: "2026-01-31"}
+                ) {
+                    items { period }
+                    pageInfo { totalCount }
+                }
+            }
+            """
+        )
+
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["reportCalculationList"],
+            {"items": [], "pageInfo": {"totalCount": 0}},
+        )
+        self.assertEqual(self.Calculation.authorization_checks, [])
+
+    def test_permission_exclude_cannot_replace_same_key_user_exclude(self) -> None:
+        self.Calculation.permission_constraints = [
+            {
+                "filter": {},
+                "exclude": {"period": date(2026, 2, 28)},
+            }
+        ]
+
+        response = self.query(
+            """
+            query {
+                reportCalculationList(
+                    exclude: {period: "2026-01-31"}
+                ) {
+                    items { period }
+                    pageInfo { totalCount }
+                }
+            }
+            """
+        )
+
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["reportCalculationList"],
+            {
+                "items": [
+                    {"period": "2026-03-31"},
+                    {"period": "2026-04-30"},
+                    {"period": "2026-03-31"},
+                    {"period": "2026-04-30"},
+                ],
+                "pageInfo": {"totalCount": 4},
+            },
+        )
+        self.assertEqual(
+            Counter(self.Calculation.authorization_checks),
+            Counter(
+                [
+                    (self.subject.id, date(2026, 3, 31)),
+                    (self.subject.id, date(2026, 4, 30)),
+                    (self.other_subject.id, date(2026, 3, 31)),
+                    (self.other_subject.id, date(2026, 4, 30)),
+                ]
+            ),
+        )
+
+    def test_manager_id_aliases_narrow_authorization_candidates(self) -> None:
+        resolver = create_list_resolver(
+            lambda _parent, _include_inactive: self.Calculation.all(),
+            self.Calculation,
+        )
+        info = type(
+            "Info",
+            (),
+            {"context": type("Context", (), {"user": self.user})()},
+        )()
+
+        for lookup, value in (
+            ("subject_id", self.subject.id),
+            ("subject_id__in", [self.subject.id]),
+        ):
+            with self.subTest(lookup=lookup):
+                self.Calculation.authorization_checks.clear()
+
+                result = resolver(object(), info, filter={lookup: value})
+
+                self.assertEqual(result["pageInfo"]["total_count"], 3)
+                self.assertEqual(
+                    self.Calculation.authorization_checks,
+                    [
+                        (self.subject.id, date(2026, 1, 31)),
+                        (self.subject.id, date(2026, 2, 28)),
+                        (self.subject.id, date(2026, 3, 31)),
+                        (self.subject.id, date(2026, 4, 30)),
+                    ],
+                )
