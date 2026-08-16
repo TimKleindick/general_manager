@@ -852,9 +852,7 @@ class GraphQL:
             if related_manager is None:
                 sort_options[field_name] = field_name
                 continue
-            if field_info.get("relation_kind") == "collection" or field_name.endswith(
-                "_list"
-            ):
+            if field_info.get("relation_kind") == "collection":
                 continue
 
             sort_options[field_name] = f"{field_name}__id"
@@ -862,6 +860,8 @@ class GraphQL:
                 related_name,
                 related_info,
             ) in related_manager.Interface.get_attribute_types().items():
+                if related_info.get("relation_kind") == "collection":
+                    continue
                 if (
                     resolve_general_manager_type(
                         related_info["type"], GraphQL.manager_registry
@@ -1063,7 +1063,7 @@ class GraphQL:
                 sort_by_options = GraphQL._sort_by_options(field_type)
                 if sort_by_options:
                     attributes["sort_by"] = graphene.Argument(
-                        graphene.List(sort_by_options)
+                        graphene.List(graphene.NonNull(sort_by_options))
                     )
 
                 page_type = GraphQL._get_or_create_page_type(
@@ -1308,7 +1308,9 @@ class GraphQL:
             attributes["exclude"] = graphene.Argument(filter_options)
         sort_by_options = cls._sort_by_options(generalManagerClass)
         if sort_by_options:
-            attributes["sort_by"] = graphene.Argument(graphene.List(sort_by_options))
+            attributes["sort_by"] = graphene.Argument(
+                graphene.List(graphene.NonNull(sort_by_options))
+            )
 
         page_type = cls._get_or_create_page_type(
             graphene_type.__name__ + "Page", graphene_type

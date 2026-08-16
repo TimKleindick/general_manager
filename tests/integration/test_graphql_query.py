@@ -440,10 +440,29 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
             [project.id for project in projects],
         )
 
+    def test_sort_list_rejects_null_elements(self):
+        response = self.query(
+            """
+            query {
+              projectList(sortBy: [name, null]) { items { id } }
+            }
+            """
+        )
+
+        self.assertResponseHasErrors(response)
+        errors = response.json()["errors"]
+        self.assertIn(
+            "Expected value of type 'ProjectSortByOptions!'", errors[0]["message"]
+        )
+        self.assertIn("found null", errors[0]["message"])
+
     def test_project_sort_enum_exposes_only_direct_relation_scalars(self):
         query = """
         query {
-          __type(name: "ProjectSortByOptions") {
+          projectOptions: __type(name: "ProjectSortByOptions") {
+            enumValues { name }
+          }
+          commercialsOptions: __type(name: "CommercialsSortByOptions") {
             enumValues { name }
           }
         }
@@ -452,18 +471,22 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         response = self.query(query)
 
         self.assertResponseNoErrors(response)
-        enum_values = {
-            value["name"] for value in response.json()["data"]["__type"]["enumValues"]
+        data = response.json()["data"]
+        project_values = {
+            value["name"] for value in data["projectOptions"]["enumValues"]
         }
-        self.assertIn("commercials", enum_values)
-        self.assertIn("commercials__name", enum_values)
+        commercials_values = {
+            value["name"] for value in data["commercialsOptions"]["enumValues"]
+        }
+        self.assertIn("commercials", project_values)
+        self.assertIn("commercials__name", project_values)
         self.assertFalse(
             any(
                 value.startswith("commercials__") and value.count("__") > 1
-                for value in enum_values
+                for value in project_values
             )
         )
-        self.assertFalse(any(value.endswith("_list") for value in enum_values))
+        self.assertNotIn("project_list", commercials_values)
 
     def test_relation_list_uses_related_manager_compound_sort_enum(self):
         query = """
@@ -475,7 +498,10 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
                 name
                 type {
                   kind
-                  ofType { name }
+                  ofType {
+                    kind
+                    ofType { name }
+                  }
                 }
               }
             }
@@ -490,7 +516,11 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         project_list = next(field for field in fields if field["name"] == "projectList")
         sort_by = next(arg for arg in project_list["args"] if arg["name"] == "sortBy")
         self.assertEqual(sort_by["type"]["kind"], "LIST")
-        self.assertEqual(sort_by["type"]["ofType"]["name"], "ProjectSortByOptions")
+        self.assertEqual(sort_by["type"]["ofType"]["kind"], "NON_NULL")
+        self.assertEqual(
+            sort_by["type"]["ofType"]["ofType"]["name"],
+            "ProjectSortByOptions",
+        )
 
     def test_empty_grouped_query_with_pagination_returns_empty_page(self):
         """Grouped pagination returns an empty GraphQL page when no rows match."""

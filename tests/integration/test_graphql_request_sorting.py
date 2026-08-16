@@ -147,3 +147,51 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(len(self.transport.requests), 1)
         self.assertEqual(self.transport.requests[0].operation_name, "list")
+
+    def test_generated_request_list_accepts_singleton_relation_sort(self) -> None:
+        query = """
+        query {
+          requestSortItemList(sortBy: project__name) {
+            items { id project { name } }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["requestSortItemList"]["items"]
+        self.assertEqual([int(item["id"]) for item in items], [3, 2, 1])
+        self.assertEqual(
+            [item["project"]["name"] for item in items],
+            ["Alpha", "Alpha", "Zulu"],
+        )
+        self.assertEqual(len(self.transport.requests), 1)
+        self.assertEqual(self.transport.requests[0].operation_name, "list")
+
+    def test_generated_request_list_reverses_compound_root_keys(self) -> None:
+        alpha_id = self.transport.payload[0]["projectId"]
+        self.transport.payload = [
+            {"identifier": 3, "rootKey": "Alpha", "projectId": alpha_id},
+            {"identifier": 1, "rootKey": "Beta", "projectId": alpha_id},
+            {"identifier": 2, "rootKey": "Alpha", "projectId": alpha_id},
+        ]
+        query = """
+        query {
+          requestSortItemList(sortBy: [root_key, id], reverse: true) {
+            items { id rootKey }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["requestSortItemList"]["items"]
+        self.assertEqual([int(item["id"]) for item in items], [1, 3, 2])
+        self.assertEqual(
+            [item["rootKey"] for item in items],
+            ["Beta", "Alpha", "Alpha"],
+        )
+        self.assertEqual(len(self.transport.requests), 1)
+        self.assertEqual(self.transport.requests[0].operation_name, "list")
