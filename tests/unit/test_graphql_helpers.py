@@ -421,6 +421,23 @@ class GraphQLHelperTests(SimpleTestCase):
                 with pytest.raises(UnknownInputFieldError, match="unknown"):
                     partition_calculation_query_plan(_CalculationManager, plan)
 
+    def test_partition_calculation_query_plan_rejects_invalid_id_aliases(
+        self,
+    ) -> None:
+        for lookup in ("period_id", "missing_id__in"):
+            with self.subTest(lookup=lookup):
+                plan = QueryParameterPlan(
+                    filters={lookup: 1},
+                    excludes={},
+                    normalized_excludes={},
+                )
+
+                with pytest.raises(
+                    UnknownInputFieldError,
+                    match=lookup.partition("__")[0],
+                ):
+                    partition_calculation_query_plan(_CalculationManager, plan)
+
     def test_non_calculation_resolver_does_not_partition_calculation_query_plan(
         self,
     ) -> None:

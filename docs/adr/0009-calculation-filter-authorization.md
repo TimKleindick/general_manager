@@ -67,6 +67,7 @@ The resolver data flow becomes:
 base CalculationBucket
 -> parse and normalize the complete GraphQL filter/exclude input
 -> apply declared-input filters and exclusions
+-> fence the exact remaining calculation subset
 -> permission prefilters and per-instance authorization
 -> apply deferred computed-property filters and exclusions
 -> grouping
@@ -84,6 +85,9 @@ before applying the complete query-parameter plan.
   authorization.
 - Permission predicates continue to run against every candidate remaining
   after pure calculation-input constraints.
+- Permission predicates can only narrow the exact candidate subset produced by
+  user input constraints; same-key filters or exclusions cannot replace those
+  constraints and reintroduce candidates.
 - No grouping, sorting, counting, or pagination moves before authorization.
 - The complete GraphQL input is parsed and normalized before authorization, so
   invalid deferred predicates do not cause partial authorization work followed

@@ -37,7 +37,10 @@ any required per-instance row gate run before user filters. Calculation lists
 first apply predicates rooted at declared calculation inputs, then run
 permission filtering and the row gate; predicates rooted at computed GraphQL
 properties remain deferred until afterward. Computed properties are therefore
-never evaluated before per-instance authorization.
+never evaluated before per-instance authorization. The input-filtered
+calculation candidates are fenced as an exact subset before permission
+prefilters, so permission constraints can narrow that subset but cannot
+replace a same-key user predicate and reintroduce candidates.
 
 The resolver parses and normalizes all query arguments before authorization. For
 non-calculation lists, permission prefilters and the row gate run first, then
