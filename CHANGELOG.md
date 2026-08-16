@@ -2,6 +2,54 @@
 
 <!-- version list -->
 
+## v0.72.0 (2026-08-16)
+
+### Bug Fixes
+
+- Filter calculation inputs before authorization
+  ([`2991ed8`](https://github.com/TimKleindick/general_manager/commit/2991ed8563e35bf6cf4b9572d61d858c33c31cbc))
+
+- Preserve calculation input authorization subset
+  ([`3282342`](https://github.com/TimKleindick/general_manager/commit/328234287db35a68ff28e6fea2ae66ec1f93ec3a))
+
+### Chores
+
+- Remove SDD scratch report
+  ([`727c879`](https://github.com/TimKleindick/general_manager/commit/727c879d8a2a2e8d808e8f4fa83270da713d0e55))
+
+### Documentation
+
+- Correct GraphQL filter ordering
+  ([`9367210`](https://github.com/TimKleindick/general_manager/commit/936721010393f1ae294183986f2a88d8cbe71c0b))
+
+- Design calculation filter authorization ordering
+  ([`5cc5fa5`](https://github.com/TimKleindick/general_manager/commit/5cc5fa5ca30422932fb8ae99ebea20f4cfb80c31))
+
+- Document calculation authorization filtering
+  ([`c85b63f`](https://github.com/TimKleindick/general_manager/commit/c85b63f7f87db2984771dec53344ca7cfa51232f))
+
+### Features
+
+- Partition calculation list predicates
+  ([`c6fe1a4`](https://github.com/TimKleindick/general_manager/commit/c6fe1a4758c408d88685d5728194c47d2a99507a))
+
+### Refactoring
+
+- Plan GraphQL list query parameters
+  ([`778834c`](https://github.com/TimKleindick/general_manager/commit/778834c1e5ea7a960fb33cda28e1427b8d9235ac))
+
+### Testing
+
+- Address calculation filter review minors
+  ([`cee59a7`](https://github.com/TimKleindick/general_manager/commit/cee59a7ba69ac6f94542d6ac6fe41159c800b381))
+
+- Cover raw exclude validation ordering
+  ([`1f9851a`](https://github.com/TimKleindick/general_manager/commit/1f9851ad6f06e5f7d568ad587ffbfc6303740968))
+
+- Strengthen calculation filter pagination coverage
+  ([`a24b2e6`](https://github.com/TimKleindick/general_manager/commit/a24b2e6e31b2b3367e1c0a63aeeab29f8117ced8))
+
+
 ## v0.71.0 (2026-08-16)
 
 ### Bug Fixes
