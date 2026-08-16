@@ -74,9 +74,34 @@ Add `"belongsToCustomer:customer"` to `__read__` to produce filters automaticall
 
 `permission_filter` may return only a `filter` mapping, only an `exclude`
 mapping, both keys, or `None`. Return `None` when a rule depends on runtime
-state that cannot be expressed as queryset kwargs. GeneralManager still stores a
-callable filter in `permission_functions` for permissions registered without a
-custom filter; that default callable returns `None`.
+state that cannot be expressed as queryset kwargs. For a rule whose outcome is
+the same for every row, return a static decision instead:
+
+```python
+from general_manager.permission import PermissionFilterDecision
+
+
+def is_project_reviewer_filter(user, _config):
+    return (
+        PermissionFilterDecision.ALLOW_ALL
+        if getattr(user, "is_staff", False)
+        else PermissionFilterDecision.DENY_ALL
+    )
+
+
+@register_permission(
+    "isProjectReviewer", permission_filter=is_project_reviewer_filter
+)
+def is_project_reviewer(_instance, user, _config):
+    return bool(getattr(user, "is_staff", False))
+```
+
+Use `ALLOW_ALL` only when the user/configuration grants every possible row and
+`DENY_ALL` only when it grants none. GraphQL list and search resolvers use these
+decisions to avoid unnecessary prefilters and per-row checks; a deny-all search
+manager is skipped. GeneralManager still stores a callable filter in
+`permission_functions` for permissions registered without a custom filter; that
+default callable returns `None`.
 
 Permission strings are split on `&` and `:` without escaping. Keep registered
 names colon-free for ordinary rules, and expect empty config segments to be
