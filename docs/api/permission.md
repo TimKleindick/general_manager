@@ -33,11 +33,14 @@ messages.
 
 `_get_permission_filter(permission)` resolves a permission expression to optional
 `filter`/`exclude` mappings with object-valued lookup values. Superusers and
-registered permission filters that return `None` both produce empty filter and
-exclude mappings. `_get_permission_filter_info(permission)` returns the same
-constraint plus a boolean indicating whether the permission was representable as
-a prefilter; `None` from the registered filter means `False`. Unknown permission
-names raise `PermissionNotFoundError`.
+registered permission filters that return `None` or a `PermissionFilterDecision`
+both produce empty filter and exclude mappings for this low-level compatibility
+helper. Read-plan composition preserves static decisions so GraphQL list and
+search resolvers can short-circuit definitive allow/deny outcomes.
+`_get_permission_filter_info(permission)` returns the same constraint plus a
+boolean indicating whether the permission was representable as a prefilter;
+`None` and static decisions mean `False`. Unknown permission names raise
+`PermissionNotFoundError`.
 
 ::: general_manager.permission.manager_based_permission.AdditiveManagerPermission
 
@@ -110,6 +113,8 @@ needs an explicit before/after comparison. Unsupported payload types raise
 `permission_data must be either a dict or an instance of GeneralManager.`
 
 ## Registry and reusable checks
+
+::: general_manager.permission.permission_checks.PermissionFilterDecision
 
 ::: general_manager.permission.permission_checks.register_permission
 

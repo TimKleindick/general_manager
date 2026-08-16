@@ -76,6 +76,44 @@ def permission_visible_invoice(instance, user, _config):
     )
 ```
 
+## Static user-only decisions
+
+When a rule depends only on the requesting user and its configuration, return a
+`PermissionFilterDecision` instead of making the list/search path inspect every
+row. This example lets staff users read every `Project` and denies the entire
+manager for other users:
+
+```python
+from general_manager.manager import GeneralManager
+from general_manager.permission import PermissionFilterDecision, register_permission
+from general_manager.permission.manager_based_permission import AdditiveManagerPermission
+
+
+def is_project_reviewer_filter(user, _config):
+    return (
+        PermissionFilterDecision.ALLOW_ALL
+        if getattr(user, "is_staff", False)
+        else PermissionFilterDecision.DENY_ALL
+    )
+
+
+@register_permission(
+    "isProjectReviewer", permission_filter=is_project_reviewer_filter
+)
+def is_project_reviewer(_instance, user, _config):
+    return bool(getattr(user, "is_staff", False))
+
+
+class Project(GeneralManager):
+    class Permission(AdditiveManagerPermission):
+        __read__ = ["isProjectReviewer"]
+```
+
+Static decisions must be correct for every row. Use `None` when the rule needs
+the concrete instance, and use a mapping when a queryset constraint can narrow
+the candidate rows but does not itself prove authorization. Read expressions
+joined with `&` are ANDed; entries in `__read__` remain OR alternatives.
+
 ## Guarding GraphQL mutations
 
 Mutation classes can reuse permission checks for fine-grained control. The example below assumes an `Invoice` manager backed by a Django model:
