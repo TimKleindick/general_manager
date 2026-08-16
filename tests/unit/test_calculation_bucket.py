@@ -14,6 +14,7 @@ from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.interface import CalculationInterface
 from general_manager.manager.input import DateRangeDomain, Input
 from general_manager.manager import GeneralManager
+from general_manager.utils.filter_parser import parse_filters
 from tests.utils.simple_manager_interface import SimpleBucket
 from typing import ClassVar
 
@@ -434,11 +435,12 @@ class TestCalculationBucket(TestCase):
         self, _mock_parse
     ) -> None:
         """Keep exact input identifications without reconstructing through filters."""
+        _mock_parse.side_effect = parse_filters
         snapshot = datetime(2022, 1, 1, tzinfo=UTC)
         with as_of(snapshot):
             source = CalculationBucket(
                 InputIdentificationManager,
-                {"field1": "source"},
+                {"field1__in": ["first", "second"]},
                 {"field2": 0},
                 ("field1", "field2"),
                 True,
@@ -452,7 +454,7 @@ class TestCalculationBucket(TestCase):
             subset = source.with_instances(selected)
             empty = source.with_instances(())
             restored = pickle.loads(pickle.dumps(subset))  # noqa: S301
-            filtered = restored.filter(field1__in=["first", "second"])
+            filtered = restored.filter(field1="first")
             sorted_subset = restored.sort("field2")
 
             expected_identifications = [
@@ -471,6 +473,10 @@ class TestCalculationBucket(TestCase):
             self.assertEqual(
                 filtered._allowed_identifications, expected_identifications
             )
+            self.assertEqual(
+                [manager.identification for manager in filtered],
+                [{"field1": "first", "field2": 1}],
+            )
             self.assertIsNone(sorted_subset._data)
             self.assertEqual(
                 sorted_subset._allowed_identifications,
@@ -479,7 +485,10 @@ class TestCalculationBucket(TestCase):
             self.assertIsNot(subset, source)
             self.assertIsInstance(empty, CalculationBucket)
             self.assertEqual(list(empty), [])
-            self.assertEqual(source.filter_definitions, {"field1": "source"})
+            self.assertEqual(
+                source.filter_definitions,
+                {"field1__in": ["first", "second"]},
+            )
             self.assertEqual(source.exclude_definitions, {"field2": 0})
             self.assertEqual(source.sort_key, ("field1", "field2"))
             self.assertTrue(source.reverse)
