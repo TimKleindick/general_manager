@@ -1554,6 +1554,7 @@ class GraphQLTests(TestCase):
                 return {
                     "id": {"type": int},
                     "name": {"type": str},
+                    "aliases": {"type": str, "relation_kind": "collection"},
                     "supervisor": {"type": object, "relation_kind": "direct"},
                 }
 
@@ -1570,6 +1571,10 @@ class GraphQLTests(TestCase):
                 return {
                     "title": {"type": str},
                     "employee": {"type": Employee, "relation_kind": "direct"},
+                    "contact_list": {
+                        "type": Employee,
+                        "relation_kind": "direct",
+                    },
                     "employee_list": {
                         "type": Employee,
                         "relation_kind": "collection",
@@ -1597,8 +1602,10 @@ class GraphQLTests(TestCase):
         assert members["title"].value == "title"
         assert members["employee"].value == "employee__id"
         assert members["employee__name"].value == "employee__name"
+        assert members["contact_list"].value == "contact_list__id"
         assert members["score"].value == "score"
         assert "employee_list" not in members
+        assert "employee__aliases" not in members
         assert "employee__supervisor" not in members
         assert "employee__computed_label" not in members
 
@@ -1629,7 +1636,8 @@ class GraphQLTests(TestCase):
             )
 
         assert isinstance(field.args["sort_by"].type, graphene.List)
-        assert field.args["sort_by"].type.of_type is sort_enum
+        assert isinstance(field.args["sort_by"].type.of_type, graphene.NonNull)
+        assert field.args["sort_by"].type.of_type.of_type is sort_enum
 
     def test_relation_list_executes_singleton_and_variable_sort_lists(self) -> None:
         class RelatedManager(GeneralManager):
@@ -1739,7 +1747,8 @@ class GraphQLTests(TestCase):
                 GraphQL._query_fields["test_manager_list"].args["sort_by"].type
             )
             assert isinstance(argument_type, graphene.List)
-            assert argument_type.of_type is sort_enum
+            assert isinstance(argument_type.of_type, graphene.NonNull)
+            assert argument_type.of_type.of_type is sort_enum
         finally:
             GraphQL._query_fields = previous_query_fields
 

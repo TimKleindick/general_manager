@@ -155,7 +155,7 @@ git commit -m "feat: normalize compound GraphQL sort keys"
 
 **Interfaces:**
 - Consumes: `Interface.get_attribute_types()` metadata and `resolve_general_manager_type()`.
-- Produces: `_sort_by_options(manager_class) -> type[graphene.Enum] | None`, where enum member names map to normalized bucket lookup strings; both generated list paths expose `graphene.List(sort_enum)`.
+- Produces: `_sort_by_options(manager_class) -> type[graphene.Enum] | None`, where enum member names map to normalized bucket lookup strings; both generated list paths expose `graphene.List(graphene.NonNull(sort_enum))`.
 
 - [ ] **Step 1: Add failing enum-generation tests**
 
@@ -244,7 +244,8 @@ with (
     )
 
 assert isinstance(field.args["sort_by"].type, graphene.List)
-assert field.args["sort_by"].type.of_type is sort_enum
+assert isinstance(field.args["sort_by"].type.of_type, graphene.NonNull)
+assert field.args["sort_by"].type.of_type.of_type is sort_enum
 ```
 
 Add a top-level-path test around `_add_queries_to_schema()` using
@@ -273,7 +274,8 @@ with (
 
 argument_type = GraphQL._query_fields["test_manager_list"].args["sort_by"].type
 assert isinstance(argument_type, graphene.List)
-assert argument_type.of_type is sort_enum
+assert isinstance(argument_type.of_type, graphene.NonNull)
+assert argument_type.of_type.of_type is sort_enum
 ```
 
 Reset `GraphQL._query_fields` in a `finally` block to the value captured before
@@ -306,11 +308,13 @@ for field_name, field_info in generalManagerClass.Interface.get_attribute_types(
     if related_manager is None:
         sort_options[field_name] = field_name
         continue
-    if field_info.get("relation_kind") == "collection" or field_name.endswith("_list"):
+    if field_info.get("relation_kind") == "collection":
         continue
 
     sort_options[field_name] = f"{field_name}__id"
     for related_name, related_info in related_manager.Interface.get_attribute_types().items():
+        if related_info.get("relation_kind") == "collection":
+            continue
         if resolve_general_manager_type(
             related_info["type"], GraphQL.manager_registry
         ) is not None:
@@ -324,13 +328,18 @@ Keep the existing root `@graph_ql_property(sortable=True)` loop, assigning
 instead of `{option: option for option in sort_options}`. Remove the unused
 property return-type calculation if Ruff identifies it as dead code.
 
-- [ ] **Step 5: Wrap both schema arguments in `graphene.List`**
+- [ ] **Step 5: Wrap both schema arguments in lists with non-null elements**
 
 At both current `_sort_by_options()` call sites, use:
 
 ```python
-attributes["sort_by"] = graphene.Argument(graphene.List(sort_by_options))
+attributes["sort_by"] = graphene.Argument(
+    graphene.List(graphene.NonNull(sort_by_options))
+)
 ```
+
+The outer list remains nullable for omitted and `null` inputs, while individual
+list elements are non-null.
 
 - [ ] **Step 6: Run focused and full GraphQL unit tests**
 
@@ -523,6 +532,7 @@ git commit -m "feat: sort in-memory buckets by relation paths"
 **Files:**
 - Test: `tests/integration/test_graphql_query.py`
 - Test: `tests/integration/test_calculation_manager.py`
+- Test: `tests/integration/test_graphql_request_sorting.py`
 - Modify: `docs/howto/expose_via_graphql.md:140-200`
 
 **Interfaces:**
@@ -604,20 +614,23 @@ Execute three otherwise identical `projectList` queries using `sortBy: null`,
 equal. Introspect `ProjectSortByOptions` and assert these exact conditions:
 
 ```python
-enum_values = {
-    value["name"]
-    for value in response.json()["data"]["__type"]["enumValues"]
+project_enum_values = {
+    value["name"] for value in response.json()["data"]["projectOptions"]["enumValues"]
 }
-assert "commercials" in enum_values
-assert "commercials__name" in enum_values
-assert not any(value.startswith("commercials__") and value.count("__") > 1 for value in enum_values)
-assert not any(value.endswith("_list") for value in enum_values)
+commercials_enum_values = {
+    value["name"]
+    for value in response.json()["data"]["commercialsOptions"]["enumValues"]
+}
+assert "commercials" in project_enum_values
+assert "commercials__name" in project_enum_values
+assert not any(value.startswith("commercials__") and value.count("__") > 1 for value in project_enum_values)
+assert "project_list" not in commercials_enum_values
 ```
 
 Use an introspection query against the generated collection field already
 covered by `test_map_field_to_graphene_resolves_manager_relations` and assert
-its `sortBy` argument has `kind == "LIST"` and an `ofType.name` equal to the
-related manager's top-level sort enum. If the Project fixture exposes no
+its `sortBy` argument has `kind == "LIST"`, a non-null element type, and an
+element enum name equal to the related manager's top-level sort enum. If the Project fixture exposes no
 collection relation, add this assertion to the unit relation-list test from
 Task 2 instead of introducing another integration-only manager.
 
@@ -631,7 +644,20 @@ python -m pytest tests/integration/test_graphql_query.py -q
 
 Expected: PASS.
 
-- [ ] **Step 4: Add calculation GraphQL compound sorting coverage**
+- [ ] **Step 4: Add request-backed GraphQL compound sorting coverage**
+
+Add request-backed generated-list integration coverage in
+`tests/integration/test_graphql_request_sorting.py`. Execute the real GraphQL
+schema and request transport for:
+
+- compound root keys with shared `reverse` behavior;
+- a direct related scalar combined with a root key; and
+- inline singleton coercion for a relation key.
+
+Assert the returned ordering and that each query executes exactly one list
+transport request.
+
+- [ ] **Step 5: Add calculation GraphQL compound sorting coverage**
 
 In `CustomMutationTest`, seed employees so two calculated-tax values tie and
 execute the generated calculation list query with:
@@ -646,7 +672,7 @@ Assert calculated tax is the primary order and employee name breaks the tie.
 Repeat with `reverse: true` and assert both key directions reverse. This must
 exercise the GraphQL resolver rather than calling `.sort()` directly.
 
-- [ ] **Step 5: Run calculation integration tests**
+- [ ] **Step 6: Run calculation integration tests**
 
 Run:
 
@@ -659,7 +685,7 @@ Name the new tests
 `test_graphql_compound_relation_sorting_reverse`, then run those two node IDs
 directly if the `-k` selection also collects unrelated tests. Expected: PASS.
 
-- [ ] **Step 6: Update public documentation and changelog**
+- [ ] **Step 7: Update public documentation and changelog**
 
 In `docs/howto/expose_via_graphql.md`, update the list-query contract and
 examples to state:
@@ -675,20 +701,20 @@ examples to state:
 Do not edit released changelog sections; semantic-release owns versioned
 changelog generation.
 
-- [ ] **Step 7: Run documentation and relevant integration coverage**
+- [ ] **Step 8: Run documentation and relevant integration coverage**
 
 Run:
 
 ```bash
-python -m pytest tests/docs/test_public_api_docs_coverage.py tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py -q
+python -m pytest tests/docs/test_public_api_docs_coverage.py tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py tests/integration/test_graphql_request_sorting.py -q
 ```
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py docs/howto/expose_via_graphql.md
+git add tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py tests/integration/test_graphql_request_sorting.py docs/howto/expose_via_graphql.md
 git commit -m "docs: explain compound GraphQL sorting"
 ```
 
@@ -706,7 +732,7 @@ git commit -m "docs: explain compound GraphQL sorting"
 - [ ] **Step 1: Run focused GraphQL and bucket tests**
 
 ```bash
-python -m pytest tests/unit/test_graphql_helpers.py tests/unit/test_graph_ql.py tests/unit/test_calculation_bucket.py tests/unit/test_database_bucket.py tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py -q
+python -m pytest tests/unit/test_graphql_helpers.py tests/unit/test_graph_ql.py tests/unit/test_calculation_bucket.py tests/unit/test_database_bucket.py tests/unit/test_request_hardening.py tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py tests/integration/test_graphql_request_sorting.py -q
 ```
 
 Expected: PASS.
@@ -714,8 +740,9 @@ Expected: PASS.
 - [ ] **Step 2: Run formatting and lint checks**
 
 ```bash
-ruff format --check src/general_manager/api/graphql.py src/general_manager/api/graphql_resolvers.py src/general_manager/bucket/calculation_bucket.py src/general_manager/bucket/group_bucket.py tests/unit/test_graphql_helpers.py tests/unit/test_graph_ql.py tests/unit/test_calculation_bucket.py tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py
-ruff check src/general_manager/api/graphql.py src/general_manager/api/graphql_resolvers.py src/general_manager/bucket/calculation_bucket.py src/general_manager/bucket/group_bucket.py tests/unit/test_graphql_helpers.py tests/unit/test_graph_ql.py tests/unit/test_calculation_bucket.py tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py
+ruff format src/general_manager/api/graphql.py src/general_manager/api/graphql_resolvers.py src/general_manager/bucket/calculation_bucket.py src/general_manager/bucket/group_bucket.py src/general_manager/bucket/request_bucket.py tests/unit/test_graphql_helpers.py tests/unit/test_graph_ql.py tests/unit/test_calculation_bucket.py tests/unit/test_request_hardening.py tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py tests/integration/test_graphql_request_sorting.py
+ruff format --check src/general_manager/api/graphql.py src/general_manager/api/graphql_resolvers.py src/general_manager/bucket/calculation_bucket.py src/general_manager/bucket/group_bucket.py src/general_manager/bucket/request_bucket.py tests/unit/test_graphql_helpers.py tests/unit/test_graph_ql.py tests/unit/test_calculation_bucket.py tests/unit/test_request_hardening.py tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py tests/integration/test_graphql_request_sorting.py
+ruff check src/general_manager/api/graphql.py src/general_manager/api/graphql_resolvers.py src/general_manager/bucket/calculation_bucket.py src/general_manager/bucket/group_bucket.py src/general_manager/bucket/request_bucket.py tests/unit/test_graphql_helpers.py tests/unit/test_graph_ql.py tests/unit/test_calculation_bucket.py tests/unit/test_request_hardening.py tests/integration/test_graphql_query.py tests/integration/test_calculation_manager.py tests/integration/test_graphql_request_sorting.py
 ```
 
 Expected: both commands exit 0 with no findings.
