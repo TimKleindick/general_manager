@@ -104,11 +104,24 @@ GraphQL execution.
 
 ## Sorting
 
-Use the generated `sortBy` enum together with `reverse` for descending order.
+Use the generated `sortBy` enum with an ordered list of keys. GraphQL list
+coercion keeps an inline singleton such as `sortBy: name` valid. The first key
+is primary, later keys break ties, and `reverse: true` reverses every key. A
+direct manager field sorts by that manager's identifier, while a one-hop key
+such as `commercials__name` sorts by an eligible related scalar. Collection
+relations, multi-hop paths, and computed GraphQL properties on related managers
+are excluded.
+
 Python-side tests and helper calls use `sort_by`. Buckets validate the requested
 fields; invalid names trigger `ValidationError` with descriptive messages.
-Invalid GraphQL enum values are rejected by Graphene before the resolver runs.
-When `sortBy` is omitted or `null`, sorting is skipped even if `reverse` is true.
+Invalid GraphQL enum values and null list elements are rejected by Graphene
+before the resolver runs. When `sortBy` is omitted, `null`, or an empty list,
+sorting is skipped even if `reverse` is true.
+
+Typed variables use a list declaration such as
+`$sort: [ProjectSortByOptions!]`; add an outer `!` only when the variable itself
+must be non-null. This replaces the earlier singleton declaration
+`$sort: ProjectSortByOptions`.
 
 ## Extending filters
 
