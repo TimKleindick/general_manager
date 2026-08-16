@@ -190,11 +190,36 @@ registry. Each registry entry stores the permission method and a callable
 returns `None`.
 
 Permission filters can return `{"filter": {...}}`, `{"exclude": {...}}`, both
-keys, or `None`. The GraphQL/list path applies Django constraints as
-`filter(...).exclude(...)`, combines those constraints with client filters, and
-still evaluates a final per-instance read check for rules that could not be
-fully represented as query filters. Search backends receive the `filter` side as
-the backend prefilter and rely on the final instance gate for `exclude` checks.
+keys, or `None`. A user/config-only rule may instead return
+`PermissionFilterDecision.ALLOW_ALL` or `PermissionFilterDecision.DENY_ALL`:
+
+```python
+from general_manager.permission import PermissionFilterDecision, register_permission
+
+
+def is_tenant_operator_filter(user, _config):
+    return (
+        PermissionFilterDecision.ALLOW_ALL
+        if getattr(user, "is_staff", False)
+        else PermissionFilterDecision.DENY_ALL
+    )
+
+
+@register_permission(
+    "isTenantOperator", permission_filter=is_tenant_operator_filter
+)
+def is_tenant_operator(_instance, user, _config):
+    return bool(getattr(user, "is_staff", False))
+```
+
+Use a static decision only when every row has the same outcome for that
+user/configuration. `ALLOW_ALL` and `DENY_ALL` are preserved while read plans
+compose `&` fragments as AND and permission-list entries as OR alternatives;
+`None` remains the correct result for a rule that needs a concrete instance.
+The GraphQL/list path applies mapping constraints as `filter(...).exclude(...)`
+and still evaluates a final per-instance read check for conditional rules that
+need it. Search backends receive the `filter` side as the backend prefilter and
+rely on the final instance gate for `exclude` checks.
 
 Permission expressions use simple string splitting: `&` joins sub-permissions and
 `:` separates the registry name from config values. There is no escape syntax,
