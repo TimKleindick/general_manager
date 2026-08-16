@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.71.0 (2026-08-16)
+
+### Bug Fixes
+
+- Combine calculation authorization subsets
+  ([`1484a2d`](https://github.com/TimKleindick/general_manager/commit/1484a2d5ee1fb1933a20ec9e9cf69191feb172e5))
+
+- Preserve calculation authorization subsets
+  ([`6e4d136`](https://github.com/TimKleindick/general_manager/commit/6e4d1364c8f4192a258bf56177930c29b6722124))
+
+- Restrict calculation bucket previews
+  ([`43a12ee`](https://github.com/TimKleindick/general_manager/commit/43a12eedb697d133add8febfb54134519b8de5db))
+
+### Features
+
+- Add exact bucket instance subsets
+  ([`26d3b5a`](https://github.com/TimKleindick/general_manager/commit/26d3b5a67e3dc6e592615cee31b2698c009d6a46))
+
+### Testing
+
+- Verify restricted calculation derivation
+  ([`adb9b08`](https://github.com/TimKleindick/general_manager/commit/adb9b08b804e50ff07ef70efd6b2aae2c438b42c))
+
+
 ## v0.70.0 (2026-08-15)
 
 ### Bug Fixes
