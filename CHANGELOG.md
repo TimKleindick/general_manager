@@ -2,6 +2,59 @@
 
 <!-- version list -->
 
+## v0.73.0 (2026-08-16)
+
+### Bug Fixes
+
+- Address GraphQL sorting review
+  ([`072bafa`](https://github.com/TimKleindick/general_manager/commit/072bafa5e14e0cbbc61cd5efd89501967e077bca))
+
+- Complete compound relation sorting
+  ([`ba54366`](https://github.com/TimKleindick/general_manager/commit/ba54366c604d059c35d5626fa97e7b5d08f7a9d7))
+
+- Type GraphQL compound sort inputs
+  ([`ddb7b4d`](https://github.com/TimKleindick/general_manager/commit/ddb7b4d18e486e56811b2acb34af3ad7aa0d37c8))
+
+### Documentation
+
+- Add GraphQL preferred item ordering recipe
+  ([`05a0fd8`](https://github.com/TimKleindick/general_manager/commit/05a0fd8092dd70295b4e73a62feae53a9af68e69))
+
+- Design compound GraphQL sorting
+  ([`98628d3`](https://github.com/TimKleindick/general_manager/commit/98628d36ee125431cb275149a944850b94dc09b1))
+
+- Explain compound GraphQL sorting
+  ([`d32b2ae`](https://github.com/TimKleindick/general_manager/commit/d32b2aecc607d14a6242f052e236fad78f4d1d73))
+
+- Harden preferred item id example
+  ([`50adade`](https://github.com/TimKleindick/general_manager/commit/50adade6f9b94f8c4cb6b89b70be4c76ddcc0b60))
+
+- Include request-backed relation sorting
+  ([`309e3be`](https://github.com/TimKleindick/general_manager/commit/309e3be49a3163b992d799bc96e83c94324a9096))
+
+- Remove ignored sorting artifacts
+  ([`514d3ee`](https://github.com/TimKleindick/general_manager/commit/514d3ee8e160545aa3c9bcc27bfd12f286ffdeae))
+
+### Features
+
+- Expose manager relation sort options
+  ([`470bb57`](https://github.com/TimKleindick/general_manager/commit/470bb5797e1e39ceae209955de587a414816ae33))
+
+- Normalize compound GraphQL sort keys
+  ([`56b4f64`](https://github.com/TimKleindick/general_manager/commit/56b4f64be23db203f3c64cc47d45d64d605b9a5e))
+
+- Sort in-memory buckets by relation paths
+  ([`44c6304`](https://github.com/TimKleindick/general_manager/commit/44c6304d6a9706160bdddf93455f98ef35d8d01e))
+
+### Testing
+
+- Cover tuple GraphQL sort keys
+  ([`bface82`](https://github.com/TimKleindick/general_manager/commit/bface822d916ba919e3378cb103c254e304e0e92))
+
+- Distinguish GraphQL relation sort keys
+  ([`da4e316`](https://github.com/TimKleindick/general_manager/commit/da4e316a8f91c88601b788df07d5997d9e0f7fb5))
+
+
 ## v0.72.0 (2026-08-16)
 
 ### Bug Fixes
