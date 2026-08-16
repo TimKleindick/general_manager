@@ -458,11 +458,22 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 sorted_filters["input_excludes"],
                 snapshot_iterables=snapshot_iterables,
             )
-            if sorted_filters["prop_filters"] or sorted_filters["prop_excludes"]:
+            allowed_identification_keys = None
+            if self._allowed_identifications is not None:
+                allowed_identification_keys = {
+                    freeze_bucket_index_value(identification)
+                    for identification in self._allowed_identifications
+                }
+            if (
+                sorted_filters["prop_filters"]
+                or sorted_filters["prop_excludes"]
+                or allowed_identification_keys is not None
+            ):
                 preview_iterator = self._iter_prop_filtered_identifications(
                     preview_iterator,
                     sorted_filters["prop_filters"],
                     sorted_filters["prop_excludes"],
+                    allowed_identification_keys,
                 )
             preview = list(islice(preview_iterator, limit + 1))
 
@@ -1050,6 +1061,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         combinations: Iterable[Combination],
         prop_filters: ParsedFilters,
         prop_excludes: ParsedFilters,
+        allowed_identification_keys: set[Hashable] | None = None,
     ) -> Generator[Combination, None, None]:
         """
         Lazily apply property filters and yield manager identifications.
@@ -1060,6 +1072,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         for combo in combinations:
             manager = self._manager_class(**combo)
+            if (
+                allowed_identification_keys is not None
+                and freeze_bucket_index_value(manager.identification)
+                not in allowed_identification_keys
+            ):
+                continue
             if self._filter_prop_combinations([manager], prop_filters, prop_excludes):
                 yield manager.identification
 

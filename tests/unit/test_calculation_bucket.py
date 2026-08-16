@@ -60,6 +60,23 @@ class DummyGeneralManager:
 DummyCalculationInterface._parent_class = DummyGeneralManager
 
 
+class InputIdentificationInterface(CalculationInterface):
+    input_fields: ClassVar[dict] = {
+        "field1": Input(str, possible_values=["first", "second"]),
+        "field2": Input(int, possible_values=[1, 2]),
+    }
+
+
+class InputIdentificationManager:
+    Interface = InputIdentificationInterface
+
+    def __init__(self, **kwargs):
+        self.identification = dict(kwargs)
+
+
+InputIdentificationInterface._parent_class = InputIdentificationManager
+
+
 class CountingIterable:
     def __init__(self, values):
         self.values = values
@@ -417,20 +434,6 @@ class TestCalculationBucket(TestCase):
         self, _mock_parse
     ) -> None:
         """Keep exact input identifications without reconstructing through filters."""
-
-        class InputIdentificationInterface(CalculationInterface):
-            input_fields: ClassVar[dict] = {
-                "field1": Input(str, possible_values=["first", "second"]),
-                "field2": Input(int, possible_values=[1, 2]),
-            }
-
-        class InputIdentificationManager:
-            Interface = InputIdentificationInterface
-
-            def __init__(self, **kwargs):
-                self.identification = dict(kwargs)
-
-        InputIdentificationInterface._parent_class = InputIdentificationManager
         snapshot = datetime(2022, 1, 1, tzinfo=UTC)
         with as_of(snapshot):
             source = CalculationBucket(
@@ -448,13 +451,30 @@ class TestCalculationBucket(TestCase):
 
             subset = source.with_instances(selected)
             empty = source.with_instances(())
+            restored = pickle.loads(pickle.dumps(subset))  # noqa: S301
+            filtered = restored.filter(field1__in=["first", "second"])
+            sorted_subset = restored.sort("field2")
+
+            expected_identifications = [
+                {"field1": "second", "field2": 2},
+                {"field1": "first", "field2": 1},
+            ]
 
             self.assertEqual(
                 [item.identification for item in subset],
-                [
-                    {"field1": "second", "field2": 2},
-                    {"field1": "first", "field2": 1},
-                ],
+                expected_identifications,
+            )
+            self.assertEqual(
+                restored._allowed_identifications, expected_identifications
+            )
+            self.assertIsNone(filtered._data)
+            self.assertEqual(
+                filtered._allowed_identifications, expected_identifications
+            )
+            self.assertIsNone(sorted_subset._data)
+            self.assertEqual(
+                sorted_subset._allowed_identifications,
+                expected_identifications,
             )
             self.assertIsNot(subset, source)
             self.assertIsInstance(empty, CalculationBucket)
@@ -1245,6 +1265,32 @@ class TestCalculationBucketAdditional(TestCase):
         self.assertIn("...", s)
         self.assertIsNone(bucket._data)
         self.assertLessEqual(values.yield_count, 6)
+
+    @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
+    def test_str_uncached_preview_honors_allowed_identifications(self, _mock_parse):
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "n": Input(type=int, possible_values=range(10)),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DynInterface._parent_class = DynManager
+        source = CalculationBucket(DynManager)
+        restricted = source.with_instances([DynManager(n=7), DynManager(n=9)])
+        uncached = restricted.filter()
+
+        preview = str(uncached)
+
+        self.assertTrue(preview.startswith("CalculationBucket (2)["))
+        self.assertIn("DynManager(**{'n': 7})", preview)
+        self.assertIn("DynManager(**{'n': 9})", preview)
+        self.assertNotIn("DynManager(**{'n': 0})", preview)
+        self.assertIsNone(uncached._data)
 
     @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
     def test_str_preserves_static_iterator_possible_values(self, _mock_parse):
