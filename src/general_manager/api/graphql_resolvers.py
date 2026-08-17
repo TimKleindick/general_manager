@@ -806,19 +806,26 @@ def create_measurement_resolver(field_name: str) -> Resolver:
         self: GeneralManager,
         info: GraphQLResolveInfo,
         target_unit: str | None = None,
-    ) -> dict[str, object] | None:
+    ) -> object:
         _ensure_as_of_compatible(self)
-        if not check_read_permission(self, info, field_name):
-            return None
-        result = getattr(self, field_name)
-        if not isinstance(result, Measurement):
-            return None
-        if target_unit:
-            result = result.to(target_unit)
-        return {
-            "value": result.quantity.magnitude,
-            "unit": result.unit,
-        }
+
+        def resolve_measurement() -> dict[str, object] | None:
+            result = getattr(self, field_name)
+            if not isinstance(result, Measurement):
+                return None
+            if target_unit:
+                result = result.to(target_unit)
+            return {
+                "value": result.quantity.magnitude,
+                "unit": result.unit,
+            }
+
+        return resolve_with_read_permission(
+            self,
+            info,
+            field_name,
+            resolve_measurement,
+        )
 
     return resolver
 

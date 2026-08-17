@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import MappingProxyType
 from types import SimpleNamespace
 from unittest import mock
@@ -61,8 +62,10 @@ from general_manager.api.graphql_resolvers import (
     selection_includes_path,
     UnsupportedExcludeNoneRelationFilterError,
     create_list_resolver,
+    create_measurement_resolver,
     create_normal_resolver,
 )
+from general_manager.measurement.measurement import Measurement
 from tests.utils.simple_manager_interface import BaseTestInterface, SimpleBucket
 
 
@@ -237,6 +240,29 @@ class GraphQLHelperTests(SimpleTestCase):
             side_effect=permission,
         ):
             assert asyncio.run(resolve()) == "Visible"
+
+    def test_measurement_subscription_resolver_runs_permission_in_worker(self) -> None:
+        parent = SimpleNamespace(
+            amount=Measurement(12, "EUR"),
+            _ensure_as_of_compatible=lambda: None,
+        )
+        resolver = create_measurement_resolver("amount")
+
+        def permission(*_args: object) -> bool:
+            with pytest.raises(RuntimeError, match="no running event loop"):
+                asyncio.get_running_loop()
+            return True
+
+        async def resolve() -> object:
+            value = resolver(parent, _resolver_info(OperationType.SUBSCRIPTION))
+            assert inspect.isawaitable(value)
+            return await value
+
+        with mock.patch(
+            "general_manager.api.graphql_resolvers.check_read_permission_for_user",
+            side_effect=permission,
+        ):
+            assert asyncio.run(resolve()) == {"value": 12, "unit": "EUR"}
 
     def test_normal_query_resolver_stays_sync_inside_running_loop(self) -> None:
         parent = SimpleNamespace(
