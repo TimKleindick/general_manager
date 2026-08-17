@@ -93,11 +93,10 @@ from general_manager.cache.signals import (
 
 def on_transaction_started(sender, transaction_context, database_alias, **kwargs):
     transaction_context.metadata["consumer"] = begin_coordination()
-    if transaction_context.caller_in_atomic_block:
-        transaction.on_commit(
-            lambda: finish_coordination(transaction_context.metadata["consumer"]),
-            using=database_alias,
-        )
+    transaction.on_commit(
+        lambda: finish_coordination(transaction_context.metadata["consumer"]),
+        using=database_alias,
+    )
 
 
 def on_manager_changed(sender, database_alias, **kwargs):
@@ -109,12 +108,20 @@ post_data_change.connect(on_manager_changed, weak=False)
 ```
 
 `data_change_transaction_finished` reports `committed` when GeneralManager's
-own block or savepoint exits successfully and `rolled_back` otherwise. If the
-caller already owns the outer transaction, `committed` is not the durable
-commit; use `transaction.on_commit(using=database_alias)` as shown. Nested
-same-alias mutations share one lifecycle context, and
+own block or savepoint exits successfully and `rolled_back` otherwise. Register
+completion unconditionally with
+`transaction.on_commit(using=database_alias)` as shown so it follows either
+GeneralManager's commit or the caller-owned outer commit. Nested same-alias
+mutations share one lifecycle context, and
 `transaction_context.changed_classes` deduplicates the classes registered by
-the post-change receiver.
+the post-change receiver when GeneralManager owns the transaction.
+
+When the caller already owns the outer transaction,
+`register_data_change_class()` returns `False` without adding the class to
+`transaction_context.changed_classes`. Consumers that need outer-transaction
+aggregation must instead collect class names in caller-owned transaction state
+and consume them from an `on_commit(using=database_alias)` callback registered
+on that outer transaction.
 
 For the full callable signature and exception contract, see the
 [GraphQL API reference](../api/graphql.md#bulk-notification-context). The

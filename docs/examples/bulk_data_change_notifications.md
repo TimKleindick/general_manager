@@ -33,6 +33,8 @@ To observe the surrounding ORM transaction lifecycle, register a started
 receiver and collect changed classes from the ordinary post-change signal:
 
 ```python
+from django.db import transaction
+
 from general_manager.cache.data_change_context import register_data_change_class
 from general_manager.cache.signals import (
     data_change_transaction_started,
@@ -40,8 +42,12 @@ from general_manager.cache.signals import (
 )
 
 
-def started(sender, transaction_context, **kwargs):
+def started(sender, transaction_context, database_alias, **kwargs):
     transaction_context.metadata["batch"] = begin_coordination()
+    transaction.on_commit(
+        lambda: finish_coordination(transaction_context.metadata["batch"]),
+        using=database_alias,
+    )
 
 
 def changed(sender, database_alias, **kwargs):
@@ -53,7 +59,14 @@ post_data_change.connect(changed, weak=False)
 ```
 
 `data_change_transaction_finished` reports `committed` for GeneralManager's
-own block or savepoint and `rolled_back` for failures. When the caller owns an
-outer transaction, register durable completion work with
-`transaction.on_commit(using=database_alias)`; the lifecycle's `committed`
-outcome alone does not prove that outer transaction committed.
+own block or savepoint and `rolled_back` for failures. Register durable
+completion work unconditionally with
+`transaction.on_commit(using=database_alias)`; it runs after GeneralManager's
+transaction commits or, when the caller owns an outer transaction, after that
+outer transaction commits.
+
+`register_data_change_class()` returns `False` for a caller-owned outer
+transaction and does not add the class to
+`transaction_context.changed_classes`. In that case, collect changed class
+names in caller-owned transaction state and consume that state from an
+`on_commit(using=database_alias)` callback registered on the outer transaction.
