@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import ClassVar
@@ -16,6 +17,7 @@ from django.db import models
 from django.db.models import NOT_PROVIDED
 from django.test import override_settings
 from django.utils import timezone
+from graphql import OperationType
 
 from general_manager.uploads.graphql_types import (
     StoredFile,
@@ -608,6 +610,63 @@ def test_generated_file_resolver_preserves_field_read_permission() -> None:
         info = SimpleNamespace(context=SimpleNamespace(user=object()))
 
         assert resolver(manager, info) is None
+    finally:
+        GraphQL.graphql_type_registry = old_types
+        GraphQL.manager_registry = old_managers
+        del ResolverGraphManager.Permission
+
+
+def test_generated_file_subscription_resolver_offloads_only_permission() -> None:
+    permission_threads: list[bool] = []
+    value_threads: list[bool] = []
+    sentinel = object()
+
+    class AllowPermission:
+        def __init__(self, instance: object, user: object) -> None:
+            del instance, user
+
+        def check_permission(self, action: str, field_name: str) -> bool:
+            assert (action, field_name) == ("read", "document")
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                permission_threads.append(False)
+            return True
+
+    def stored_value(*_args: object, **_kwargs: object) -> object:
+        asyncio.get_running_loop()
+        value_threads.append(True)
+        return sentinel
+
+    ResolverGraphManager.Permission = AllowPermission  # type: ignore[assignment]
+    old_types = dict(GraphQL.graphql_type_registry)
+    old_managers = dict(GraphQL.manager_registry)
+    try:
+        with (
+            patch.object(GraphQL, "_add_queries_to_schema"),
+            patch.object(GraphQL, "_add_subscription_field"),
+        ):
+            GraphQL.create_graphql_interface(ResolverGraphManager)
+        generated = GraphQL.graphql_type_registry[ResolverGraphManager.__name__]
+        resolver = generated.resolve_document
+        manager = ResolverGraphManager._from_trusted_orm_instance(
+            ResolverRecord(id=7, document="documents/allowed.txt")
+        )
+        info = SimpleNamespace(
+            context=SimpleNamespace(user=object()),
+            operation=SimpleNamespace(operation=OperationType.SUBSCRIPTION),
+        )
+
+        async def resolve() -> object:
+            with patch(
+                "general_manager.api.graphql.create_stored_file_value",
+                side_effect=stored_value,
+            ):
+                return await resolver(manager, info)
+
+        assert asyncio.run(resolve()) is sentinel
+        assert permission_threads == [False]
+        assert value_threads == [True]
     finally:
         GraphQL.graphql_type_registry = old_types
         GraphQL.manager_registry = old_managers

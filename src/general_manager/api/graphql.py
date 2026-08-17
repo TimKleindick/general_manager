@@ -103,6 +103,7 @@ from general_manager.api.graphql_resolvers import (
     create_normal_resolver as _create_normal_resolver_fn,
     create_list_resolver as _create_list_resolver_fn,
     create_resolver as _create_resolver_fn,
+    resolve_with_read_permission as _resolve_with_read_permission_fn,
 )
 from general_manager.api.graphql_relations import resolve_general_manager_type
 from general_manager.api.graphql_search import (
@@ -570,17 +571,16 @@ class GraphQL:
                     _field_name: str = field_name,
                     _manager_name: str = generalManagerClass.__name__,
                 ) -> object:
-                    if not cls._check_read_permission(
+                    return cls._resolve_with_read_permission(
                         manager_instance,
                         info,
                         _field_name,
-                    ):
-                        return None
-                    return create_stored_file_value(
-                        manager_instance,
-                        info,
-                        field_name=_field_name,
-                        manager_name=_manager_name,
+                        lambda: create_stored_file_value(
+                            manager_instance,
+                            info,
+                            field_name=_field_name,
+                            manager_name=_manager_name,
+                        ),
                     )
 
                 fields[resolver_name] = resolve_stored_file
@@ -1145,6 +1145,20 @@ class GraphQL:
     ) -> bool:
         """Check read permission for *field_name*. See ``graphql_resolvers.check_read_permission``."""
         return _check_read_permission_fn(instance, info, field_name)
+
+    @staticmethod
+    def _resolve_with_read_permission(
+        instance: GeneralManager,
+        info: GraphQLResolveInfo,
+        field_name: str,
+        value_factory: Callable[[], object],
+    ) -> object:
+        return _resolve_with_read_permission_fn(
+            instance,
+            info,
+            field_name,
+            value_factory,
+        )
 
     @staticmethod
     def _create_list_resolver(
