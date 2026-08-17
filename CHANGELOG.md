@@ -2,6 +2,37 @@
 
 <!-- version list -->
 
+## v0.73.1 (2026-08-17)
+
+### Bug Fixes
+
+- Cover structured subscription field permissions
+  ([`bd1667a`](https://github.com/TimKleindick/general_manager/commit/bd1667a83495e024d8546ab09742379bb17641c4))
+
+- Make subscription field permissions async-safe
+  ([`91a12fe`](https://github.com/TimKleindick/general_manager/commit/91a12fe6748be8fb910fa1733a659f8fa0a978d3))
+
+### Documentation
+
+- Address lifecycle review feedback
+  ([`54e24cc`](https://github.com/TimKleindick/general_manager/commit/54e24ccb2501bc1ee18aa490dafc240fb03b2ab6))
+
+- Document compound GraphQL sorting
+  ([`0e41b6d`](https://github.com/TimKleindick/general_manager/commit/0e41b6d3614b6b6e2f832f9b710fafba8f9467cf))
+
+- Document exact bucket subsets
+  ([`0b495bc`](https://github.com/TimKleindick/general_manager/commit/0b495bc855dc27a919b0a6e98bbafdfa6a630157))
+
+- Document recent public API changes
+  ([`4ce678d`](https://github.com/TimKleindick/general_manager/commit/4ce678d5d12270cb3b1439a1ebe82b401d01c117))
+
+- Document static permission decisions
+  ([`7c9236d`](https://github.com/TimKleindick/general_manager/commit/7c9236d4b70875fc0b3fa271293f3f11e1891d1e))
+
+- Explain async-safe subscription field permissions
+  ([`b35576e`](https://github.com/TimKleindick/general_manager/commit/b35576e42a2c2ae3fb0b9d0978777b6a106440b5))
+
+
 ## v0.73.0 (2026-08-16)
 
 ### Bug Fixes
