@@ -25,6 +25,7 @@ from general_manager.api.graphql import GraphQL
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.permission import AdditiveManagerPermission, object_capability
+from general_manager.permission.permission_checks import register_permission
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from tests.utils.simple_manager_interface import BaseTestInterface
 
@@ -50,6 +51,17 @@ class _DummyManager:
 
 
 _DummyInterface._parent_class = _DummyManager
+
+
+@register_permission("subscriptionFieldOwnerExists")
+def _subscription_field_owner_exists(
+    instance: GeneralManager,
+    user: object,
+    _config: list[str],
+) -> bool:
+    user_id = getattr(user, "pk", None)
+    owner_exists = get_user_model().objects.filter(pk=user_id).exists()
+    return owner_exists and instance.name != "Field denied"
 
 
 def _exception_group_leaves(error: BaseException) -> list[BaseException]:
@@ -204,6 +216,98 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         update = second_event.data["onEmployeeChange"]
         self.assertEqual(update["action"], "update")
         self.assertEqual(update["item"]["name"], "Bob")
+
+    def test_detail_subscription_resolves_orm_backed_field_permission(self) -> None:
+        employee = self.Employee.create(name="Field visible", creator_id=self.user.id)
+        schema = self._build_schema()
+        subscription = """
+            subscription ($id: ID!) {
+                onEmployeeChange(id: $id) { item { id name } action }
+            }
+        """
+
+        async def run_subscription() -> object:
+            with patch.object(
+                self.Employee.Permission,
+                "name",
+                {"read": ["subscriptionFieldOwnerExists"]},
+                create=True,
+            ):
+                generator = await schema.subscribe(
+                    subscription,
+                    variable_values={"id": employee.id},
+                    context_value=SimpleNamespace(user=self.user),
+                )
+                try:
+                    return await generator.__anext__()
+                finally:
+                    await generator.aclose()
+
+        with patch.dict(os.environ):
+            os.environ.pop("DJANGO_ALLOW_ASYNC_UNSAFE", None)
+            event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        self.assertEqual(
+            event.data["onEmployeeChange"]["item"]["name"], "Field visible"
+        )
+
+    def test_detail_subscription_keeps_attribute_denial_nullable(self) -> None:
+        employee = self.Employee.create(name="Field denied", creator_id=self.user.id)
+        schema = self._build_schema()
+        subscription = """
+            subscription ($id: ID!) {
+                onEmployeeChange(id: $id) { item { id name } action }
+            }
+        """
+
+        async def run_subscription() -> object:
+            with patch.object(
+                self.Employee.Permission,
+                "name",
+                {"read": ["subscriptionFieldOwnerExists"]},
+                create=True,
+            ):
+                generator = await schema.subscribe(
+                    subscription,
+                    variable_values={"id": employee.id},
+                    context_value=SimpleNamespace(user=self.user),
+                )
+                try:
+                    return await generator.__anext__()
+                finally:
+                    await generator.aclose()
+
+        with patch.dict(os.environ):
+            os.environ.pop("DJANGO_ALLOW_ASYNC_UNSAFE", None)
+            event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        item = event.data["onEmployeeChange"]["item"]
+        self.assertEqual(str(item["id"]), str(employee.id))
+        self.assertIsNone(item["name"])
+
+    def test_sync_query_keeps_concrete_orm_backed_field_value(self) -> None:
+        employee = self.Employee.create(name="Field visible", creator_id=self.user.id)
+        schema = self._build_schema()
+        with patch.object(
+            self.Employee.Permission,
+            "name",
+            {"read": ["subscriptionFieldOwnerExists"]},
+            create=True,
+        ):
+            result = schema.execute(
+                """
+                query ($id: ID!) {
+                    employee(id: $id) { id name }
+                }
+                """,
+                variable_values={"id": employee.id},
+                context_value=SimpleNamespace(user=self.user),
+            )
+
+        self.assertIsNone(result.errors)
+        self.assertEqual(result.data["employee"]["name"], "Field visible")
 
     def test_subscription_capabilities_are_recomputed_for_each_event(self) -> None:
         employee = self.Employee.create(name="Alice", creator_id=self.user.id)
@@ -1066,6 +1170,73 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
             self.assertCountEqual(discard_attempts, successfully_added)
 
         asyncio.run(run_subscription())
+
+    def test_class_subscription_resolves_orm_backed_field_permission(self) -> None:
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item { id name }
+                }
+            }
+        """
+        channel_layer = GraphQL._get_channel_layer(strict=True)
+        original_group_add = channel_layer.group_add
+
+        async def run_subscription() -> object:
+            required_groups = {
+                GraphQL._class_group_name(self.Employee),
+                GraphQL._refresh_group_name(self.Employee),
+            }
+            registered_groups: set[str] = set()
+            registration_ready = asyncio.Event()
+
+            async def tracking_group_add(group: str, channel: str) -> None:
+                await original_group_add(group, channel)
+                registered_groups.add(group)
+                if required_groups <= registered_groups:
+                    registration_ready.set()
+
+            with (
+                patch.object(channel_layer, "group_add", new=tracking_group_add),
+                patch.object(
+                    self.Employee.Permission,
+                    "name",
+                    {"read": ["subscriptionFieldOwnerExists"]},
+                    create=True,
+                ),
+            ):
+                generator = await schema.subscribe(subscription, context_value=context)
+                if hasattr(generator, "errors"):
+                    raise AssertionError(generator.errors)
+                next_event = asyncio.create_task(generator.__anext__())
+                try:
+                    await asyncio.wait_for(registration_ready.wait(), timeout=1)
+                    await asyncio.to_thread(
+                        lambda: self.Employee.create(
+                            name="Field visible",
+                            creator_id=self.user.id,
+                        )
+                    )
+                    return await asyncio.wait_for(next_event, timeout=1)
+                finally:
+                    if not next_event.done():
+                        next_event.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await next_event
+                    await generator.aclose()
+
+        with patch.dict(os.environ):
+            os.environ.pop("DJANGO_ALLOW_ASYNC_UNSAFE", None)
+            event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        self.assertEqual(
+            event.data["onEmployeeClassChange"]["item"]["name"],
+            "Field visible",
+        )
 
     def test_class_subscription_suppresses_unreadable_events(self) -> None:
         schema = self._build_schema()
