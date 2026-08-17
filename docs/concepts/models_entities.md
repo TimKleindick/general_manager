@@ -57,6 +57,18 @@ same bucket context while returning no rows.
 
 Most application code should depend on the shared bucket behavior returned by manager APIs. Reach for a concrete bucket type only when documenting source-specific behavior, testing evaluation semantics, or extending an interface.
 
+When an integration has already selected the exact manager instances it should
+return, use `bucket.with_instances(instances)` to reconstruct that subset
+without changing the originating bucket's meaning. Pass instances in source
+iteration order when order matters. `DatabaseBucket` rebuilds a source-ordered
+subset from manager IDs; `RequestBucket` and `CalculationBucket` materialize the
+supplied managers without re-executing their request or calculation plan. The
+instances must belong to the bucket's manager class and compatible historical
+context. Generated GraphQL list authorization uses this contract for its final
+per-instance check; custom adapters can use the same pattern. See the
+[exact-subset how-to](../howto/expose_via_graphql.md#preserve-an-exact-authorized-subset)
+and [permission cookbook recipe](../examples/permission_cookbook.md#preserve-an-authorized-bucket-subset).
+
 ### Grouped data
 
 Use `group_by()` to aggregate managers into `GroupedManager` instances. Grouped
