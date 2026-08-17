@@ -70,6 +70,41 @@ contracts, see the [GraphQL concept guide](../concepts/graphql/schema_autogen.md
 the [task guide](../howto/expose_via_graphql.md#declare-manager-relations), and
 the [API reference](../api/graphql.md#relation-annotation-compatibility).
 
+## Sort by a compound relation key
+
+Generated list fields accept an ordered `sortBy` list. This request sorts
+projects by the related commercial name first, then by project name and unique
+project ID to make ties deterministic:
+
+```graphql
+query ProjectsByCommercialName($sort: [ProjectSortByOptions!]) {
+  projectList(sortBy: $sort, page: 1, pageSize: 20) {
+    items {
+      id
+      name
+      commercials { id name }
+    }
+    pageInfo {
+      totalCount
+      currentPage
+      totalPages
+      pageSize
+    }
+  }
+}
+```
+
+```json
+{"sort": ["commercials__name", "name", "id"]}
+```
+
+The enum values must be exposed by the generated `ProjectSortByOptions` type.
+GraphQL also accepts a single inline value such as `sortBy: name`; an empty
+list is a no-op. See the [sorting concept](../concepts/graphql/filters_pagination.md#sorting),
+the [generated-list how-to](../howto/expose_via_graphql.md#query-generated-lists),
+and the [GraphQL API reference](../api/graphql.md#compound-list-sorting) for
+the supported relation paths and error behavior.
+
 ## Filter a calculation by manager input
 
 For a calculation manager with `project = Input(Project)`, use the same nested

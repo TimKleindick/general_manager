@@ -183,6 +183,46 @@ explains the model, the [task guide](../howto/expose_via_graphql.md#declare-mana
 shows declaration patterns, and the [cookbook recipe](../examples/graphql_queries.md#query-a-manager-relation)
 shows directly usable queries.
 
+## Compound list sorting
+
+Generated top-level list fields and generated relation-list fields expose the
+following arguments when the manager has at least one sortable field:
+
+```graphql
+sortBy: [<Manager>SortByOptions!]
+reverse: Boolean
+```
+
+Both arguments are nullable. `sortBy` may be omitted, `null`, or an empty list;
+all three forms skip sorting, even when `reverse: true`. GraphQL list coercion
+also accepts one inline enum value, so `sortBy: name` remains valid. A typed
+variable uses the list form, for example `$sort: [ProjectSortByOptions!]`.
+The generated field returns the manager's paginated page type with its normal
+`items` and `pageInfo` fields; these arguments only change item ordering.
+
+The generated enum includes root scalar interface fields, root
+`@graph_ql_property` values declared with `sortable=True`, and eligible direct
+manager relations. A direct manager relation contributes the relation field
+itself, which sorts by its identifier, plus one-hop scalar interface fields such
+as `commercials__name`. Collection relations, multi-hop paths, and computed
+GraphQL properties on the related manager are not exposed as options. The
+generated enum is schema output, not a stable Python import.
+
+Keys are applied in list order: the first key is primary and later keys break
+ties. `reverse: true` reverses the complete compound ordering. For database
+buckets, eligible relation paths use the declared relation metadata and remain
+compatible with custom `filter_lookup` prefixes. Request and in-memory buckets
+resolve the same paths as attributes; missing attributes or incomparable values
+raise through the existing bucket/resolver error path without a new
+sorting-specific public error code. Invalid enum values and null list elements
+are rejected by GraphQL input coercion before the resolver runs.
+
+This compound sorting contract is available from GeneralManager 0.73.0. The
+[sorting concept](../concepts/graphql/filters_pagination.md#sorting) explains
+the model and ordering semantics, the [generated-list how-to](../howto/expose_via_graphql.md#query-generated-lists)
+shows the setup, and the [cookbook query](../examples/graphql_queries.md#sort-by-a-compound-relation-key)
+provides a directly usable request.
+
 ## Manager-typed calculation input filters
 
 `GraphQL.create_graphql_interface(manager: type[GeneralManager])` generates a
