@@ -160,7 +160,12 @@ task errors still propagate from the await.
 
 - Subscriptions require Django Channels. If `get_channel_layer()` returns `None`, the resolver raises a descriptive GraphQL error explaining that `CHANNEL_LAYERS` must be configured.
 - Managers are automatically decorated with `@data_change` and emit `pre_data_change` and `post_data_change` signals. GraphQL receives `post_data_change` immediately, but deep-copies the event identification and schedules websocket publication with `transaction.on_commit()` using the changed manager's database alias. For ordinary events created inside a transaction, both the instance channel group (`gm_subscriptions.<Manager>.<digest>`) and class channel group (`gm_subscriptions.<Manager>.__class__`) receive the event only after the outermost commit. Events registered in a rolled-back transaction or savepoint disappear without publication.
-- For ordinary identified row-level class events, subscriptions hydrate the changed manager and call `can_read_instance()` together in an async-safe worker using the user captured when the subscription starts, before yielding the event. In particular, a newly created object is visible to hydration only after it is committed, eliminating the pre-commit create race while preserving object-level permission checks. Aggregate batch `refresh` events have no identification, yield `item = null`, and are exempt from object-level permission hydration and checking.
+- For ordinary identified row-level class events, subscriptions hydrate the changed manager and call `can_read_instance()` together in an async-safe worker using the user captured when the subscription starts, before yielding the event. In particular, a newly created object is visible to hydration only after it is committed, eliminating the pre-commit create race while preserving object-level permission checks. This event-level object authorization is separate from later field-level authorization for the selected payload. Aggregate batch `refresh` events have no identification, yield `item = null`, and are exempt from object-level permission hydration and checking.
+- Selected normal, measurement, and stored-file payload fields also evaluate
+  their field-level read permissions in an async-safe worker. Attribute-specific
+  permission denials retain the existing GraphQL behavior and resolve only that
+  field to `null`; value access and formatting remain in GraphQL's execution
+  context after authorization succeeds.
 
 ### Bulk notification refreshes
 
