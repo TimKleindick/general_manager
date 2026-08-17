@@ -142,6 +142,39 @@ def reject_invoice(info, invoice: Invoice, reason: str) -> Invoice:
 - Raise `PermissionCheckError(request_user, [...])` from custom checks when a domain-specific denial should be converted into a GraphQL permission error.
 - Call `GeneralManager.update` instead of writing to model fields directly; it re-runs permission checks and records history comments when provided.
 
+## Preserve an authorized bucket subset
+
+If a custom integration has already evaluated a per-instance rule, reconstruct
+the result from the original bucket instead of issuing a second identifier
+lookup. This works for database, request-backed, and calculation buckets:
+
+```python
+from typing import Any
+
+from general_manager.bucket import Bucket
+from myapp.managers import Invoice
+
+
+def visible_invoices(
+    invoices: Bucket[Invoice],
+    request_user: Any,
+) -> Bucket[Invoice]:
+    is_finance = request_user.groups.filter(name="finance").exists()
+    allowed = [
+        invoice
+        for invoice in invoices
+        if invoice.status != "archived" or is_finance
+    ]
+    return invoices.with_instances(allowed)
+```
+
+`with_instances()` keeps exactly the selected managers and returns the same
+concrete bucket family. Supply selected managers in source order when the
+existing order matters. The generated GraphQL authorization flow uses the same
+contract after row-level checks. See the [bucket concept](../concepts/models_entities.md#buckets)
+and [GraphQL how-to](../howto/expose_via_graphql.md#preserve-an-exact-authorized-subset)
+for the backend behavior and a generic resolver helper.
+
 ## Testing shortcuts
 
 ```python

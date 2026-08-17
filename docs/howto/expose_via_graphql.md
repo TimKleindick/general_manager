@@ -168,6 +168,43 @@ as `commercials__owner__name` are not exposed as sort options. Computed
 sortable properties on the root manager are eligible. Top-level and generated
 relation-list fields use the same list-valued sort contract.
 
+## Preserve an exact authorized subset
+
+When a custom resolver has already evaluated each candidate manager against an
+instance-level policy, keep the originating bucket and reconstruct the result
+with `with_instances()`. This preserves the bucket's backend-specific
+representation and avoids replacing composite or calculation identifications
+with an `id__in` lookup:
+
+```python
+from collections.abc import Callable
+from typing import TypeVar
+
+from general_manager.bucket import Bucket
+from general_manager.manager import GeneralManager
+
+
+ManagerT = TypeVar("ManagerT", bound=GeneralManager)
+
+
+def authorized_subset(
+    bucket: Bucket[ManagerT],
+    can_read: Callable[[ManagerT], bool],
+) -> Bucket[ManagerT]:
+    authorized = [manager for manager in bucket if can_read(manager)]
+    return bucket.with_instances(authorized)
+```
+
+The returned bucket contains exactly the managers that passed the policy. Pass
+the managers in the bucket's iteration order when the existing ordering must be
+retained. Database-backed buckets reconstruct a source-ordered ID subset;
+request-backed and calculation buckets materialize the supplied instances
+without re-running their remote request or calculation domain. Generated
+GraphQL list resolvers apply this contract automatically for row-level read
+authorization, so custom resolvers only need it when they own that policy step.
+See the [bucket concept](../concepts/models_entities.md#buckets) and the
+[permission cookbook version](../examples/permission_cookbook.md#preserve-an-authorized-bucket-subset).
+
 ```graphql
 query ActiveProjects($filters: ProjectFilterInput) {
   projectList(filter: $filters, sortBy: name, page: 1, pageSize: 20) {

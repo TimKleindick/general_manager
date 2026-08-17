@@ -463,6 +463,27 @@ normalizes it to `2024-01-01`; `year_end` normalizes it to `2024-12-31`.
 
 ::: general_manager.bucket.base_bucket.Bucket
 
+`Bucket.with_instances(instances: Iterable[GeneralManagerType]) -> Bucket[GeneralManagerType]`
+returns a bucket containing exactly the supplied manager instances. `instances`
+must contain instances of the bucket's manager class; pass them in source
+iteration order when the existing ordering matters. An empty iterable returns
+an empty bucket. The base implementation starts from `none()` and unions the
+instances, while concrete backends keep their native representation:
+`DatabaseBucket` selects matching manager IDs in source-queryset order,
+`RequestBucket` materializes the items without re-executing its request plan,
+and `CalculationBucket` materializes the declared identifications while
+retaining its filter, exclude, sort, and historical context.
+
+The method returns the concrete bucket family and raises the backend's existing
+`TypeError` subclass for an instance from the wrong manager class. It raises
+`HistoricalContextConflictError` when the bucket or an instance is used in an
+incompatible historical context; a database bucket also requires each manager
+identification to contain an `id` key. This backend-neutral contract is
+available from GeneralManager 0.71.0 and is used by generated GraphQL
+row-authorization flows. See the [bucket concept](../concepts/models_entities.md#buckets),
+[authorization how-to](../howto/expose_via_graphql.md#preserve-an-exact-authorized-subset),
+and [permission recipe](../examples/permission_cookbook.md#preserve-an-authorized-bucket-subset).
+
 ::: general_manager.bucket.database_bucket.DatabaseBucket
 
 `DatabaseBucket` is the ORM-backed collection returned by database and
