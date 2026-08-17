@@ -173,8 +173,10 @@ relation-list fields use the same list-valued sort contract.
 When a custom resolver has already evaluated each candidate manager against an
 instance-level policy, keep the originating bucket and reconstruct the result
 with `with_instances()`. This preserves the bucket's backend-specific
-representation and avoids replacing composite or calculation identifications
-with an `id__in` lookup:
+representation. Non-database buckets that retain full identification mappings,
+such as `CalculationBucket`, can preserve composite identifications without
+replacing them with an `id__in` lookup. `DatabaseBucket` is ID-based and reads
+each manager's `identification["id"]`:
 
 ```python
 from collections.abc import Callable
