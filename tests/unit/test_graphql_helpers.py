@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from types import MappingProxyType
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 import graphene  # type: ignore[import]
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.test import SimpleTestCase
-from graphql import GraphQLError
+from graphql import GraphQLError, OperationType
 from graphql import parse
 from graphql.language.ast import (
     FragmentDefinitionNode,
@@ -191,6 +193,13 @@ def _selection_info(query: str) -> object:
     )()
 
 
+def _resolver_info(operation: OperationType) -> object:
+    return SimpleNamespace(
+        context=SimpleNamespace(user=object()),
+        operation=SimpleNamespace(operation=operation),
+    )
+
+
 class GraphQLHelperTests(SimpleTestCase):
     def test_normal_resolver_validates_parent_before_permission(self) -> None:
         parent = mock.Mock()
@@ -199,13 +208,47 @@ class GraphQLHelperTests(SimpleTestCase):
 
         with (
             mock.patch(
-                "general_manager.api.graphql_resolvers.check_read_permission"
+                "general_manager.api.graphql_resolvers.resolve_with_read_permission"
             ) as permission,
             pytest.raises(RuntimeError, match="stale parent"),
         ):
             resolver(parent, _Info())
 
         permission.assert_not_called()
+
+    def test_normal_subscription_resolver_runs_permission_in_worker(self) -> None:
+        parent = SimpleNamespace(
+            name="Visible",
+            _ensure_as_of_compatible=lambda: None,
+        )
+        resolver = create_normal_resolver("name")
+
+        def permission(*_args: object) -> bool:
+            with pytest.raises(RuntimeError, match="no running event loop"):
+                asyncio.get_running_loop()
+            return True
+
+        async def resolve() -> object:
+            value = resolver(parent, _resolver_info(OperationType.SUBSCRIPTION))
+            return await value
+
+        with mock.patch(
+            "general_manager.api.graphql_resolvers.check_read_permission_for_user",
+            side_effect=permission,
+        ):
+            assert asyncio.run(resolve()) == "Visible"
+
+    def test_normal_query_resolver_stays_sync_inside_running_loop(self) -> None:
+        parent = SimpleNamespace(
+            name="Visible",
+            _ensure_as_of_compatible=lambda: None,
+        )
+        resolver = create_normal_resolver("name")
+
+        async def resolve() -> object:
+            return resolver(parent, _resolver_info(OperationType.QUERY))
+
+        assert asyncio.run(resolve()) == "Visible"
 
     def test_list_resolver_validates_parent_before_base_getter(self) -> None:
         parent = mock.Mock()

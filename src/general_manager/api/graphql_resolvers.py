@@ -10,12 +10,22 @@ stable public import path.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Generic, TYPE_CHECKING, TypeAlias, TypeVar, TypedDict, cast
+from typing import (
+    Awaitable,
+    Generic,
+    TYPE_CHECKING,
+    TypeAlias,
+    TypeVar,
+    TypedDict,
+    cast,
+)
 
 import graphene
+from graphql import OperationType
 from graphql.language.ast import FieldNode, FragmentSpreadNode, InlineFragmentNode
 
 from general_manager.logging import get_logger
@@ -48,6 +58,7 @@ if TYPE_CHECKING:
     )
 
 GeneralManagerT = TypeVar("GeneralManagerT", bound=GeneralManager)
+ResolverValueT = TypeVar("ResolverValueT")
 GraphQLFilterInput = Mapping[str, object] | str | None
 GraphQLFilterMapping = dict[str, object]
 GraphQLSortInput: TypeAlias = (
@@ -686,6 +697,24 @@ def apply_grouping(
 # ---------------------------------------------------------------------------
 
 
+def check_read_permission_for_user(
+    instance: GeneralManager,
+    user: object,
+    field_name: str,
+) -> bool:
+    """
+    Return ``True`` if *user* may read *field_name* on *instance*.
+
+    When the manager defines a Permission class, this calls
+    ``Permission(instance, user).check_permission("read", field_name)``.
+    Managers without a Permission class default to allowing the field read.
+    """
+    PermissionClass: type[BasePermission] | None = getattr(instance, "Permission", None)
+    if PermissionClass:
+        return PermissionClass(instance, user).check_permission("read", field_name)
+    return True
+
+
 def check_read_permission(
     instance: GeneralManager,
     info: GraphQLResolveInfo,
@@ -698,12 +727,39 @@ def check_read_permission(
     ``Permission(instance, user).check_permission("read", field_name)``.
     Managers without a Permission class default to allowing the field read.
     """
-    PermissionClass: type[BasePermission] | None = getattr(instance, "Permission", None)
-    if PermissionClass:
-        return PermissionClass(instance, info.context.user).check_permission(
-            "read", field_name
+    return check_read_permission_for_user(instance, info.context.user, field_name)
+
+
+def resolve_with_read_permission(
+    instance: GeneralManager,
+    info: GraphQLResolveInfo,
+    field_name: str,
+    value_factory: Callable[[], ResolverValueT],
+) -> ResolverValueT | None | Awaitable[ResolverValueT | None]:
+    """Resolve a field after checking read permission.
+
+    Only subscription permission evaluation is offloaded to a worker thread;
+    query and mutation resolution remains synchronous.
+    """
+    user = info.context.user
+    operation = getattr(getattr(info, "operation", None), "operation", None)
+    if operation is not OperationType.SUBSCRIPTION:
+        if not check_read_permission_for_user(instance, user, field_name):
+            return None
+        return value_factory()
+
+    async def resolve_subscription_value() -> ResolverValueT | None:
+        allowed = await asyncio.to_thread(
+            check_read_permission_for_user,
+            instance,
+            user,
+            field_name,
         )
-    return True
+        if not allowed:
+            return None
+        return value_factory()
+
+    return resolve_subscription_value()
 
 
 def can_read_instance_for_user(
@@ -777,9 +833,12 @@ def create_normal_resolver(field_name: str) -> Resolver:
 
     def resolver(self: GeneralManager, info: GraphQLResolveInfo) -> object:
         _ensure_as_of_compatible(self)
-        if not check_read_permission(self, info, field_name):
-            return None
-        return getattr(self, field_name)
+        return resolve_with_read_permission(
+            self,
+            info,
+            field_name,
+            lambda: getattr(self, field_name),
+        )
 
     return resolver
 
