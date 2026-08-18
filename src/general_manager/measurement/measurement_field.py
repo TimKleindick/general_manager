@@ -528,6 +528,23 @@ class MeasurementField(MeasurementFieldBase):
             {self.name: ["Value must be a Measurement instance or None."]}
         )
 
+    def _from_stored_components(
+        self, value: object, unit: object
+    ) -> Measurement | None:
+        """Reconstruct a public measurement from its stored backing columns."""
+        if value is None or unit is None:
+            return None
+        try:
+            magnitude = convert_magnitude(
+                Decimal(str(value)),
+                self.base_unit,
+                str(unit),
+            )
+        except pint.errors.PintError:
+            magnitude = Decimal(str(value))
+            unit = self.base_unit
+        return Measurement(magnitude, str(unit))
+
     # ------------ Descriptor ------------
     def __get__(  # type: ignore
         self, instance: models.Model | None, owner: None = None
@@ -558,14 +575,7 @@ class MeasurementField(MeasurementFieldBase):
             return self
         val = getattr(instance, self.value_attr)
         unit = getattr(instance, self.unit_attr)
-        if val is None or unit is None:
-            return None
-        try:
-            magnitude = convert_magnitude(Decimal(str(val)), self.base_unit, unit)
-        except pint.errors.PintError:
-            magnitude = Decimal(str(val))
-            unit = self.base_unit
-        return Measurement(magnitude, str(unit))
+        return self._from_stored_components(val, unit)
 
     def __set__(
         self,

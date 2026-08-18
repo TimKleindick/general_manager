@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 from collections.abc import Callable, Hashable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import date, datetime
 from operator import attrgetter
-from typing import TYPE_CHECKING, Generator, TypeVar, cast
+from typing import TYPE_CHECKING, Generator, TypeGuard, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, FieldDoesNotExist, FieldError
 from django.db import models
@@ -19,6 +20,7 @@ from general_manager.as_of import (
     normalize_search_date,
     resolve_search_date,
 )
+from general_manager.bucket.projection import ProjectionRows
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import (
     Dependency,
@@ -26,6 +28,7 @@ from general_manager.cache.dependency_index import (
 )
 from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.measurement.measurement_field import MeasurementField
 from general_manager.utils.filter_parser import create_filter_function
 
 if TYPE_CHECKING:
@@ -45,6 +48,17 @@ MAX_RUN_SCOPED_BUCKET_RESULT_ROWS = 1000
 _QUERY_SIGNATURE_NOT_COMPUTED = object()
 _FIRST_ROW_CACHE_MISS = object()
 _FIRST_ROW_CACHE_NONE = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _DatabaseProjectionField:
+    """Describe how one public field is reconstructed from projected columns."""
+
+    name: str
+    value_index: int
+    unit_index: int | None = None
+    measurement_descriptor: object | None = None
+    normalize_file: bool = False
 
 
 class DatabaseBucketTypeMismatchError(TypeError):
@@ -790,6 +804,145 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                     "filter",
                     serialize_dependency_identifier({f"__sort__{sort_key}": payload}),
                 )
+
+    @staticmethod
+    def _projection_column_name(field: models.Field[object, object]) -> str:
+        """Return the queryset attribute used to select one concrete field."""
+        return cast(str, getattr(field, "attname", None) or field.name)
+
+    @staticmethod
+    def _is_concrete_scalar_field(
+        field: object,
+    ) -> TypeGuard[models.Field[object, object]]:
+        """Return whether a model field can be selected without relation hydration."""
+        return (
+            isinstance(field, models.Field)
+            and bool(getattr(field, "concrete", False))
+            and not bool(getattr(field, "is_relation", False))
+            and not bool(getattr(field, "many_to_many", False))
+        )
+
+    def _native_projection_plan(
+        self,
+        fields: tuple[str, ...],
+    ) -> tuple[tuple[_DatabaseProjectionField, ...], tuple[str, ...]] | None:
+        """Build an all-or-nothing plan for safe ORM-backed public fields."""
+        model = getattr(self._data, "model", None)
+        if not isinstance(model, type) or not issubclass(model, models.Model):
+            return None
+        interface = self._manager_class.Interface
+        graph_ql_properties = interface.get_graph_ql_properties()
+        try:
+            attribute_types = interface.get_attribute_types()
+        except (AttributeError, NotImplementedError):
+            attribute_types = {}
+
+        selected_columns = ["pk"]
+        selected_indexes: dict[str, int] = {"pk": 0}
+        plan: list[_DatabaseProjectionField] = []
+
+        def add_column(column: str, *, is_primary_key: bool = False) -> int:
+            key = "pk" if is_primary_key else column
+            existing = selected_indexes.get(key)
+            if existing is not None:
+                return existing
+            selected_indexes[key] = len(selected_columns)
+            selected_columns.append(column)
+            return len(selected_columns) - 1
+
+        for field_name in fields:
+            if field_name in graph_ql_properties:
+                return None
+            try:
+                field = model._meta.get_field(field_name)
+            except FieldDoesNotExist:
+                return None
+
+            field_info = attribute_types.get(field_name)
+            if isinstance(field_info, Mapping) and (
+                field_info.get("relation_kind") is not None
+                or bool(field_info.get("is_derived", False))
+            ):
+                return None
+
+            if isinstance(field, MeasurementField):
+                value_attr = getattr(field, "value_attr", None)
+                unit_attr = getattr(field, "unit_attr", None)
+                if not isinstance(value_attr, str) or not isinstance(unit_attr, str):
+                    return None
+                try:
+                    value_field = model._meta.get_field(value_attr)
+                    unit_field = model._meta.get_field(unit_attr)
+                except FieldDoesNotExist:
+                    return None
+                if not self._is_concrete_scalar_field(value_field) or not (
+                    self._is_concrete_scalar_field(unit_field)
+                ):
+                    return None
+                value_index = add_column(
+                    self._projection_column_name(value_field),
+                )
+                unit_index = add_column(self._projection_column_name(unit_field))
+                plan.append(
+                    _DatabaseProjectionField(
+                        name=field_name,
+                        value_index=value_index,
+                        unit_index=unit_index,
+                        measurement_descriptor=field,
+                    )
+                )
+                continue
+
+            source_field = field
+            if isinstance(field, models.ForeignKey) and field_name == field.attname:
+                source_field = field.target_field
+            if not self._is_concrete_scalar_field(source_field):
+                return None
+            is_primary_key = source_field is model._meta.pk
+            plan.append(
+                _DatabaseProjectionField(
+                    name=field_name,
+                    value_index=add_column(
+                        self._projection_column_name(field),
+                        is_primary_key=is_primary_key,
+                    ),
+                    normalize_file=isinstance(source_field, models.FileField),
+                )
+            )
+        return tuple(plan), tuple(selected_columns)
+
+    def _project_rows(self, fields: tuple[str, ...]) -> ProjectionRows:
+        """Project safe ORM fields without constructing manager instances."""
+        self._ensure_as_of_compatible()
+        native_plan = self._native_projection_plan(fields)
+        if native_plan is None:
+            return super()._project_rows(fields)
+
+        plan, selected_columns = native_plan
+        self._track_effective_dependencies()
+        rows: list[tuple[object, ...]] = []
+        for row in self._data.values_list(*selected_columns):
+            primary_key = row[0]
+            self._manager_class._track_identification_dependency({"id": primary_key})
+            projected: list[object] = []
+            for field_plan in plan:
+                value = row[field_plan.value_index]
+                if field_plan.measurement_descriptor is not None:
+                    measurement_field = cast(
+                        "MeasurementField",
+                        field_plan.measurement_descriptor,
+                    )
+                    unit_index = field_plan.unit_index
+                    assert unit_index is not None
+                    value = measurement_field._from_stored_components(
+                        value,
+                        row[unit_index],
+                    )
+                elif field_plan.normalize_file:
+                    value = "" if value is None else str(value)
+                projected.append(value)
+            rows.append(tuple(projected))
+        return tuple(rows)
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """

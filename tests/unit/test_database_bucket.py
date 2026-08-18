@@ -187,6 +187,58 @@ class UserManager(GeneralManager):
         return -len(User.objects.get(pk=self.identification["id"]).username)
 
 
+class NativeUserInterface(TrustedDummyInterface):
+    _model = User
+
+    @classmethod
+    def get_attributes(cls) -> dict[str, object]:
+        return {
+            "id": lambda interface: interface._instance.pk,
+            "username": lambda interface: interface._instance.username,
+        }
+
+    @classmethod
+    def get_attribute_types(cls) -> dict[str, dict[str, object]]:
+        return {
+            "id": {"type": int, "is_derived": False},
+            "username": {"type": str, "is_derived": False},
+        }
+
+
+class NativeUserManager(GeneralManager):
+    pass
+
+
+NativeUserManager.Interface = NativeUserInterface
+NativeUserInterface._parent_class = NativeUserManager
+
+
+class RelationUserInterface(NativeUserInterface):
+    @classmethod
+    def get_attributes(cls) -> dict[str, object]:
+        attributes = super().get_attributes()
+        attributes["groups"] = lambda interface: interface._instance.groups
+        return attributes
+
+    @classmethod
+    def get_attribute_types(cls) -> dict[str, dict[str, object]]:
+        attribute_types = super().get_attribute_types()
+        attribute_types["groups"] = {
+            "type": User,
+            "relation_kind": "collection",
+            "is_derived": True,
+        }
+        return attribute_types
+
+
+class RelationUserManager(GeneralManager):
+    pass
+
+
+RelationUserManager.Interface = RelationUserInterface
+RelationUserInterface._parent_class = RelationUserManager
+
+
 class AnotherManager(GeneralManager):
     """
     Another GeneralManager subclass to test type mismatches.
@@ -274,6 +326,93 @@ class DatabaseBucketTestCase(TestCase):
         # __len__ and count()
         self.assertEqual(len(self.bucket), 3)
         self.assertEqual(self.bucket.count(), 3)
+
+    def test_native_projection_avoids_manager_construction(self) -> None:
+        bucket = DatabaseBucket(
+            User.objects.order_by("username"),
+            NativeUserManager,
+        )
+
+        with patch.object(
+            NativeUserManager,
+            "__init__",
+            side_effect=AssertionError("native projection hydrated a manager"),
+        ):
+            self.assertEqual(
+                bucket.values_list("username", flat=True),
+                ("alice", "bob", "carol"),
+            )
+
+    def test_native_projection_preserves_queryset_shape_and_primary_key_values(
+        self,
+    ) -> None:
+        bucket = DatabaseBucket(
+            User.objects.filter(username__contains="o")
+            .exclude(username="bob")
+            .order_by("-username"),
+            NativeUserManager,
+        )[0:1]
+
+        with patch.object(
+            NativeUserManager,
+            "__init__",
+            side_effect=AssertionError("native projection hydrated a manager"),
+        ):
+            self.assertEqual(
+                bucket.values_list("id", "username"),
+                ((self.u3.id, "carol"),),
+            )
+
+    def test_native_projection_reuses_equivalent_query_and_dependencies(self) -> None:
+        first = DatabaseBucket(
+            User.objects.filter(username__startswith="a"),
+            NativeUserManager,
+        )
+        equivalent = DatabaseBucket(
+            User.objects.filter(username__startswith="a"),
+            NativeUserManager,
+        )
+
+        with CalculationRunContext():
+            with DependencyTracker() as first_dependencies:
+                with self.assertNumQueries(1):
+                    self.assertEqual(first.values_list("username"), (("alice",),))
+            with DependencyTracker() as cached_dependencies:
+                with self.assertNumQueries(0):
+                    self.assertEqual(
+                        equivalent.values("username"),
+                        ({"username": "alice"},),
+                    )
+
+        self.assertEqual(first_dependencies, cached_dependencies)
+
+    def test_graphql_property_projection_falls_back_to_manager_access(self) -> None:
+        expected = tuple(manager.username_length for manager in self.bucket)
+
+        with patch.object(
+            self.bucket,
+            "_build_manager_from_instance",
+            wraps=self.bucket._build_manager_from_instance,
+        ) as hydrate:
+            actual = self.bucket.values_list("username_length", flat=True)
+
+        self.assertEqual(actual, expected)
+        self.assertEqual(hydrate.call_count, 3)
+
+    def test_relation_projection_falls_back_without_returning_foreign_keys(
+        self,
+    ) -> None:
+        bucket = DatabaseBucket(User.objects.all(), RelationUserManager)
+
+        with patch.object(
+            bucket,
+            "_build_manager_from_instance",
+            wraps=bucket._build_manager_from_instance,
+        ) as hydrate:
+            projected = bucket.values_list("groups", flat=True)
+
+        self.assertEqual(tuple(group.count() for group in projected), (0, 0, 0))
+        self.assertEqual(hydrate.call_count, 3)
 
     def test_with_instances_retains_source_queryset_order(self):
         """Materialize only supplied managers while preserving source ordering."""
