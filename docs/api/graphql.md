@@ -153,6 +153,39 @@ targets continue. The [RemoteAPI websocket concept](../concepts/interfaces/remot
 explains the event model and the [end-to-end recipe](../examples/remote_manager_interface_end_to_end.md)
 shows the client/server setup.
 
+## Subscription field authorization
+
+Generated subscription payloads retain the existing GraphQL field names and
+arguments. For each selected normal, measurement, or stored-file field, the
+effective resolver contract is:
+
+- **Inputs:** the generated manager instance and GraphQL execution context; no
+  new client-visible arguments or stable Python export were added. Detail and
+  class-wide subscriptions retain their existing generated operation shapes;
+  measurement payload fields retain the optional `targetUnit: String` argument.
+- **Permission check:** `Permission(instance, info.context.user).check_permission(
+  "read", field_name)` runs before field value access. Managers without a
+  `Permission` class allow the field by default.
+- **Allowed result:** the existing scalar value, measurement payload, or
+  stored-file payload. Measurement conversion and stored-file formatting keep
+  their existing behavior.
+- **Denied result:** `null` for that nullable payload field only; sibling fields
+  and the subscription action remain available.
+- **Exceptions:** exceptions raised by the field permission checker propagate
+  through normal GraphQL subscription error handling. No new exception type or
+  error code is introduced.
+
+For subscription execution, the permission check runs in an async-safe worker;
+value access and formatting run in GraphQL's execution context after permission
+succeeds. Query and mutation field resolution remains synchronous. This
+behavior is compatible with the existing object-level class-subscription check,
+which runs before an identified event is yielded, and with aggregate `refresh`
+events, whose `item` remains `null`. The generated schema is unchanged; the
+async-safe field authorization behavior is available from GeneralManager 0.73.1.
+See the [subscription concept](../concepts/graphql/subscriptions.md#signals-and-channels),
+[how-to](../howto/expose_via_graphql.md#protect-subscription-payload-fields), and
+[cookbook recipe](../examples/graphql_queries.md#subscribe-to-fields-with-read-permissions).
+
 ## Relation annotation compatibility
 
 Generated GraphQL relation fields resolve annotations to one registered

@@ -143,6 +143,53 @@ Identified class-wide events are checked against the subscribing user's read
 permission in an async-safe worker after commit; unreadable objects are omitted.
 Aggregate `refresh` events have `item: null` and do not disclose a row ID.
 
+## Subscribe to fields with read permissions
+
+Field-level read rules also apply to the fields selected inside a subscription
+payload. This manager keeps `internalNote` visible only to staff users while
+leaving the public `name` field readable for any authenticated user:
+
+```python
+from general_manager import GeneralManager
+from general_manager.permission import AdditiveManagerPermission, register_permission
+
+
+@register_permission("isStaff")
+def is_staff(_instance, user, _config):
+    return bool(getattr(user, "is_staff", False))
+
+
+class Project(GeneralManager):
+    name: str
+    internal_note: str
+
+    class Permission(AdditiveManagerPermission):
+        __read__ = ["isAuthenticated"]
+        internal_note = {"read": ["isStaff"]}
+```
+
+Subscribe with the generated field names:
+
+```graphql
+subscription ProjectChangesWithFieldRules {
+  onProjectClassChange {
+    action
+    item {
+      id
+      name
+      internalNote
+    }
+  }
+}
+```
+
+For an authenticated non-staff subscriber, `internalNote` resolves to `null`
+while `name` and the event action remain available. The same rule applies to
+normal, measurement, and stored-file payload fields. See the
+[GraphQL how-to](../howto/expose_via_graphql.md#protect-subscription-payload-fields)
+and [API reference](../api/graphql.md#subscription-field-authorization) for
+execution and exception details.
+
 ## Bound run-scoped cache memory
 
 For a worker that serves long-lived GraphQL requests, configure the optional
