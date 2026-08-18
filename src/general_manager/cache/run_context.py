@@ -42,6 +42,7 @@ ORM_RELATION_MANAGER_PREFIX = "orm_relation_manager"
 ORM_QUERY_BUCKET_PREFIX = "orm_query_bucket"
 ORM_BUCKET_EXISTS_PREFIX = "orm_bucket_exists"
 BUCKET_INDEX_PREFIX = "bucket_index"
+BUCKET_PROJECTION_PREFIX = "bucket_projection"
 TRUSTED_ORM_MANAGER_PREFIX = "trusted_orm_manager"
 DEFAULT_DEPENDENCY_CACHE_PUBLISH_BATCH_SIZE = 1000
 RUN_CONTEXT_TOUCH_BATCH_SIZE = 64
@@ -53,6 +54,14 @@ PendingRunCacheTouch = tuple[RunCacheNamespace, Hashable]
 @dataclass(frozen=True)
 class BucketIndexRunCacheEntry:
     """Run-cache payload for a bucket index plus dependencies to replay on hits."""
+
+    value: object
+    dependencies: frozenset["Dependency"]
+
+
+@dataclass(frozen=True)
+class BucketProjectionRunCacheEntry:
+    """Run-cache payload for projected rows plus dependencies to replay."""
 
     value: object
     dependencies: frozenset["Dependency"]
@@ -868,6 +877,50 @@ class CalculationRunContext:
     def clear_bucket_indexes(self) -> None:
         """Discard all run-scoped bucket index entries."""
         self.discard_prefix((BUCKET_INDEX_PREFIX,))
+
+    def _bucket_projection_cache_key(
+        self,
+        source_signature: Hashable,
+        fields: tuple[str, ...],
+    ) -> tuple[Hashable, ...]:
+        """Return the full run-cache key for one bucket projection variant."""
+        return (BUCKET_PROJECTION_PREFIX, source_signature, fields)
+
+    def get_bucket_projection_result(
+        self,
+        source_signature: Hashable,
+        fields: tuple[str, ...],
+    ) -> object:
+        """Return cached projected rows and replay their source dependencies."""
+        entry = self.get(self._bucket_projection_cache_key(source_signature, fields))
+        if not isinstance(entry, BucketProjectionRunCacheEntry):
+            return None
+
+        from general_manager.cache.cache_tracker import DependencyTracker
+
+        for class_name, operation, identifier in entry.dependencies:
+            DependencyTracker._track_validated(class_name, operation, identifier)
+        return entry.value
+
+    def set_bucket_projection_result(
+        self,
+        source_signature: Hashable,
+        fields: tuple[str, ...],
+        value: object,
+        dependencies: Iterable["Dependency"],
+    ) -> None:
+        """Store projected rows and freeze dependencies captured during evaluation."""
+        self.set(
+            self._bucket_projection_cache_key(source_signature, fields),
+            BucketProjectionRunCacheEntry(
+                value=value,
+                dependencies=frozenset(dependencies),
+            ),
+        )
+
+    def clear_bucket_projections(self) -> None:
+        """Discard all run-scoped bucket projection entries."""
+        self.discard_prefix((BUCKET_PROJECTION_PREFIX,))
 
     def clear_trusted_orm_managers(self) -> None:
         """Discard run-scoped manager wrappers built from trusted ORM rows."""

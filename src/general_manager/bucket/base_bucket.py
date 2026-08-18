@@ -16,6 +16,7 @@ from typing import (
 from general_manager.bucket.projection import (
     ProjectionRows,
     project_values,
+    project_bucket_rows,
     project_values_list,
     validate_projection_fields,
     validate_projection_flat,
@@ -279,7 +280,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
             self._manager_class,
             cast(tuple[object, ...], fields),
         )
-        rows = self._project_rows(normalized_fields)
+        rows = project_bucket_rows(self, normalized_fields)
         return project_values(rows, normalized_fields)
 
     @overload
@@ -307,7 +308,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
             cast(tuple[object, ...], fields),
         )
         validate_projection_flat(flat, normalized_fields)
-        rows = self._project_rows(normalized_fields)
+        rows = project_bucket_rows(self, normalized_fields)
         return project_values_list(rows, normalized_fields, flat=flat)
 
     def _bucket_index_source_signature(self) -> Hashable:

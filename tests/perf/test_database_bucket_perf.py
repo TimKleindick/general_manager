@@ -18,6 +18,7 @@ from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.run_context import (
     BUCKET_INDEX_PREFIX,
+    BUCKET_PROJECTION_PREFIX,
     ORM_BUCKET_EXISTS_PREFIX,
     ORM_BUCKET_FIRST_ROW_PREFIX,
     ORM_BUCKET_MANAGER_RESULT_PREFIX,
@@ -66,6 +67,7 @@ RUN_CACHE_PREFIXES = (
     ORM_QUERY_BUCKET_PREFIX,
     ORM_BUCKET_EXISTS_PREFIX,
     BUCKET_INDEX_PREFIX,
+    BUCKET_PROJECTION_PREFIX,
     TRUSTED_ORM_MANAGER_PREFIX,
 )
 
@@ -89,8 +91,8 @@ def _assert_mixed_cache_observations(
 def test_mixed_cache_observations_accept_improvements_below_the_ceiling() -> None:
     budgets = PerfBudgets(
         {
-            "RUN_CACHE_MIXED_500_DISCARD_CALLS": 22,
-            "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 44_000,
+            "RUN_CACHE_MIXED_500_DISCARD_CALLS": 24,
+            "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 51_000,
         }
     )
 
@@ -508,8 +510,8 @@ def test_data_change_mixed_run_cache_invalidation_work(
             for key in context._values
             if isinstance(key, tuple) and key and key[0] in RUN_CACHE_PREFIXES
         )
-        assert initial_targeted_count == 5_500
-        assert len(context._values) == 6_000
+        assert initial_targeted_count == 6_000
+        assert len(context._values) == 6_500
 
         phase_snapshots: list[dict[Hashable, object]] = []
         original_discard_prefix = context.discard_prefix

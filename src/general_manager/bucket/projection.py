@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, cast
+from collections.abc import Hashable, Iterable
+from typing import TYPE_CHECKING, Protocol, cast
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
 
 
 type ProjectionRows = tuple[tuple[object, ...], ...]
+MAX_RUN_SCOPED_PROJECTION_ROWS = 10_000
+
+
+class _ProjectionBucket(Protocol):
+    def _project_rows(self, fields: tuple[str, ...]) -> ProjectionRows: ...
+
+    def _bucket_index_source_signature(self) -> Hashable: ...
 
 
 class EmptyProjectionFieldsError(ValueError):
@@ -67,6 +74,40 @@ def validate_projection_flat(flat: object, fields: tuple[str, ...]) -> None:
         raise TypeError("Projection flat must be a boolean.")  # noqa: TRY003
     if flat and len(fields) != 1:
         raise FlatProjectionFieldCountError()
+
+
+def project_bucket_rows(
+    bucket: _ProjectionBucket,
+    fields: tuple[str, ...],
+) -> ProjectionRows:
+    """Evaluate or reuse canonical rows for one bucket projection."""
+    historical_guard = getattr(bucket, "_ensure_as_of_compatible", None)
+    if callable(historical_guard):
+        historical_guard()
+
+    from general_manager.cache.cache_tracker import DependencyTracker
+    from general_manager.cache.run_context import current_calculation_run_context
+
+    context = current_calculation_run_context()
+    if context is None:
+        with DependencyTracker():
+            return bucket._project_rows(fields)
+
+    source_signature = bucket._bucket_index_source_signature()
+    cached = context.get_bucket_projection_result(source_signature, fields)
+    if cached is not None:
+        return cast(ProjectionRows, cached)
+
+    with DependencyTracker() as dependencies:
+        rows = bucket._project_rows(fields)
+    if len(rows) <= MAX_RUN_SCOPED_PROJECTION_ROWS:
+        context.set_bucket_projection_result(
+            source_signature,
+            fields,
+            rows,
+            dependencies,
+        )
+    return rows
 
 
 def project_values(
