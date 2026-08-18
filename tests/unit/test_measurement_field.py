@@ -170,6 +170,36 @@ class MeasurementFieldTests(TestCase):
         self.assertEqual(temperature.unit, "degree_Celsius")  # type: ignore[union-attr]
         self.assertAlmostEqual(float(temperature.magnitude), 25.0)  # type: ignore[union-attr]
 
+    def test_from_stored_components_reconstructs_measurement(self):
+        field = self.TestModel._meta.get_field("length")
+
+        measurement = field._from_stored_components(Decimal("5"), "centimeter")
+
+        self.assertIsNotNone(measurement)
+        self.assertEqual(measurement.magnitude, Decimal("500"))  # type: ignore[union-attr]
+        self.assertEqual(measurement.unit, "centimeter")  # type: ignore[union-attr]
+
+    def test_from_stored_components_returns_none_for_missing_parts(self):
+        field = self.TestModel._meta.get_field("length")
+
+        self.assertIsNone(field._from_stored_components(None, "meter"))
+        self.assertIsNone(field._from_stored_components(Decimal("5"), None))
+
+    def test_from_stored_components_falls_back_for_invalid_or_incompatible_units(
+        self,
+    ):
+        field = self.TestModel._meta.get_field("length")
+
+        invalid = field._from_stored_components(Decimal("5"), "not_a_unit")
+        incompatible = field._from_stored_components(Decimal("5"), "second")
+
+        self.assertIsNotNone(invalid)
+        self.assertEqual(invalid.magnitude, Decimal("5"))  # type: ignore[union-attr]
+        self.assertEqual(invalid.unit, "meter")  # type: ignore[union-attr]
+        self.assertIsNotNone(incompatible)
+        self.assertEqual(incompatible.magnitude, Decimal("5"))  # type: ignore[union-attr]
+        self.assertEqual(incompatible.unit, "meter")  # type: ignore[union-attr]
+
     @isolate_apps("tests")
     def test_count_measurement_field_preserves_count_after_scalar_arithmetic(self):
         class Inventory(models.Model):
