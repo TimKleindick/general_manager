@@ -1,7 +1,7 @@
 # type: ignore
 import pickle
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from datetime import date, datetime, UTC
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -11,10 +11,15 @@ from general_manager.as_of import (
     HistoricalContextConflictError,
     as_of,
 )
-from general_manager.cache.run_context import current_calculation_run_context
+from general_manager.cache.run_context import (
+    CalculationRunContext,
+    current_calculation_run_context,
+)
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface import CalculationInterface
 from general_manager.manager.input import DateRangeDomain, Input
 from general_manager.manager import GeneralManager
+from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.utils.filter_parser import parse_filters
 from tests.utils.simple_manager_interface import SimpleBucket
 from typing import ClassVar
@@ -181,6 +186,272 @@ class TestCalculationBucket(TestCase):
             ),
             attributes["normalized"](interface),
         )
+
+    def test_optional_input_projection_matches_manager_access(self, _mock_parse):
+        _mock_parse.return_value = {}
+
+        class OptionalInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "required": Input(int, possible_values=[1]),
+                "optional": Input(int, required=False),
+            }
+
+        class OptionalManager:
+            Interface = OptionalInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+                self.required = kwargs["required"]
+                self.optional = kwargs.get("optional")
+
+        OptionalInterface._parent_class = OptionalManager
+        bucket = CalculationBucket(OptionalManager)
+
+        self.assertEqual(
+            bucket.values_list("required", "optional"),
+            tuple((row.required, row.optional) for row in bucket),
+        )
+
+    def test_input_filter_and_exclude_projection_matches_manager_access(
+        self, _mock_parse
+    ):
+        _mock_parse.return_value = {}
+
+        class FilterInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "number": Input(int, possible_values=[1, 2, 3, 4]),
+            }
+
+        class FilterManager:
+            Interface = FilterInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+                self.number = kwargs["number"]
+
+        FilterInterface._parent_class = FilterManager
+        bucket = CalculationBucket(FilterManager)
+        bucket._filters = {
+            "number": {"filter_funcs": [lambda value: value >= 2]},
+        }
+        bucket._excludes = {
+            "number": {"filter_funcs": [lambda value: value == 3]},
+        }
+
+        self.assertEqual(
+            bucket.values_list("number"),
+            ((2,), (4,)),
+        )
+        self.assertEqual(
+            bucket.values_list("number"),
+            tuple((row.number,) for row in bucket),
+        )
+
+    def test_input_sort_and_reverse_projection_preserve_combination_order(
+        self, _mock_parse
+    ):
+        _mock_parse.return_value = {}
+
+        class SortedInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "number": Input(int, possible_values=[2, 1, 3]),
+            }
+
+        class SortedManager:
+            Interface = SortedInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+                self.number = kwargs["number"]
+
+        SortedInterface._parent_class = SortedManager
+        bucket = CalculationBucket(SortedManager, sort_key="number", reverse=True)
+
+        self.assertEqual(bucket.values_list("number", flat=True), (3, 2, 1))
+
+    def test_projection_honors_allowed_identifications_via_portable_fallback(
+        self, _mock_parse
+    ):
+        _mock_parse.return_value = {}
+        manager_constructions: list[dict[str, object]] = []
+
+        class AllowedInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "number": Input(int, possible_values=[1, 2, 3]),
+            }
+
+        class AllowedManager:
+            Interface = AllowedInterface
+
+            def __init__(self, **kwargs):
+                manager_constructions.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.number = kwargs["number"] * 10
+
+        AllowedInterface._parent_class = AllowedManager
+        bucket = CalculationBucket(AllowedManager)
+        bucket._allowed_identifications = [{"number": 2}]
+
+        projected = bucket.values_list("number", flat=True)
+
+        self.assertEqual(projected, tuple(row.number for row in bucket))
+        self.assertEqual(projected, (20,))
+        self.assertTrue(manager_constructions)
+
+    def test_projection_honors_property_filters_via_portable_fallback(
+        self, _mock_parse
+    ):
+        _mock_parse.return_value = {}
+        manager_constructions: list[dict[str, object]] = []
+
+        class PropertyFilterInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "number": Input(int, possible_values=[1, 2, 3]),
+            }
+
+        class PropertyFilterManager:
+            Interface = PropertyFilterInterface
+
+            def __init__(self, **kwargs):
+                manager_constructions.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.number = kwargs["number"] * 10
+
+            @GraphQLProperty
+            def doubled(self) -> int:
+                return self.number * 2
+
+        PropertyFilterInterface._parent_class = PropertyFilterManager
+        bucket = CalculationBucket(PropertyFilterManager)
+        bucket._filters = {
+            "doubled": {"filter_funcs": [lambda value: value >= 40]},
+        }
+
+        projected = bucket.values_list("number", flat=True)
+
+        self.assertEqual(projected, tuple(row.number for row in bucket))
+        self.assertEqual(projected, (20, 30))
+        self.assertTrue(manager_constructions)
+
+    def test_fresh_manager_input_projection_tracks_identification_dependency(
+        self, _mock_parse
+    ):
+        _mock_parse.return_value = {}
+
+        with override_settings(AUTOCREATE_GRAPHQL=False):
+
+            class RelatedInterface:
+                def __init__(self, manager_id=None, *, id=None):
+                    if id is not None:
+                        manager_id = id
+                    self.identification = {"id": manager_id}
+
+            class RelatedManager(GeneralManager):
+                pass
+
+        RelatedManager.Interface = RelatedInterface  # type: ignore[assignment]
+        RelatedManager.Permission = ManagerBasedPermission  # type: ignore[assignment]
+        RelatedManager._attributes = {}
+        related = RelatedManager(id="related-id")
+
+        class ManagerInputInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "related": Input(RelatedManager, possible_values=[related]),
+            }
+
+        class ManagerInputCalculation:
+            Interface = ManagerInputInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        ManagerInputInterface._parent_class = ManagerInputCalculation
+        bucket = CalculationBucket(ManagerInputCalculation)
+
+        with CalculationRunContext():
+            with DependencyTracker() as dependencies:
+                projected = bucket.values_list("related", flat=True)
+
+        self.assertEqual(projected, (related,))
+        self.assertIn(
+            (
+                RelatedManager.__name__,
+                "identification",
+                '{"id": "related-id"}',
+            ),
+            dependencies,
+        )
+
+    def test_reused_manager_input_projection_replays_identification_dependency(
+        self, _mock_parse
+    ):
+        _mock_parse.return_value = {}
+
+        with override_settings(AUTOCREATE_GRAPHQL=False):
+
+            class RelatedInterface:
+                def __init__(self, manager_id=None, *, id=None):
+                    if id is not None:
+                        manager_id = id
+                    self.identification = {"id": manager_id}
+
+            class RelatedManager(GeneralManager):
+                pass
+
+        RelatedManager.Interface = RelatedInterface  # type: ignore[assignment]
+        RelatedManager.Permission = ManagerBasedPermission  # type: ignore[assignment]
+        RelatedManager._attributes = {}
+        related = RelatedManager(id="related-id")
+
+        class ManagerDependencyInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "related": Input(RelatedManager, possible_values=[related]),
+                "label": Input(
+                    str,
+                    possible_values=["related-id"],
+                    depends_on=["related"],
+                    normalizer=lambda _value, related: related.identification["id"],
+                ),
+            }
+
+        class ManagerDependencyCalculation:
+            Interface = ManagerDependencyInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        ManagerDependencyInterface._parent_class = ManagerDependencyCalculation
+        bucket = CalculationBucket(ManagerDependencyCalculation)
+
+        with CalculationRunContext():
+            with DependencyTracker() as dependencies:
+                projected = bucket.values_list("related", "label")
+
+        self.assertEqual(projected, ((related, "related-id"),))
+        self.assertIn(
+            (
+                RelatedManager.__name__,
+                "identification",
+                '{"id": "related-id"}',
+            ),
+            dependencies,
+        )
+
+    def test_projection_historical_context_matches_bound_bucket_and_rejects_conflict(
+        self, _mock_parse
+    ):
+        _mock_parse.return_value = {}
+        snapshot = datetime(2022, 1, 1, tzinfo=UTC)
+        with as_of(snapshot):
+            bucket = CalculationBucket(InputCalculationManager)
+            self.assertEqual(
+                bucket.values_list("year", flat=True),
+                (2025, 2026),
+            )
+
+        with as_of(datetime(2022, 1, 2, tzinfo=UTC)):
+            with self.assertRaises(HistoricalContextConflictError):
+                bucket.values_list("year", flat=True)
 
     def test_binds_active_as_of_date_and_preserves_it_on_derived_buckets(
         self, _mock_parse

@@ -652,6 +652,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self._ensure_as_of_compatible()
         if not all(field in self.input_fields for field in fields):
             return super()._project_rows(fields)
+        if self._projection_requires_manager_access():
+            return super()._project_rows(fields)
 
         from general_manager.interface.capabilities.calculation.input_resolution import (
             resolve_calculation_input_value,
@@ -676,6 +678,16 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 )
             )
         return tuple(rows)
+
+    def _projection_requires_manager_access(self) -> bool:
+        """Return whether this plan needs portable manager evaluation."""
+        if self._allowed_identifications is not None:
+            return True
+
+        sorted_filters = self._sort_filters(self.topological_sort_inputs())
+        if sorted_filters["prop_filters"] or sorted_filters["prop_excludes"]:
+            return True
+        return not self._sort_uses_only_inputs(self._normalized_sort_key())
 
     def _sort_filters(self, sorted_inputs: List[str]) -> SortedFilters:
         """
