@@ -21,6 +21,8 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import AttributeEvaluationError
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.as_of import HistoricalReadNotSupportedError, as_of
+from general_manager.bucket.database_bucket import DatabaseBucket
+from general_manager.cache.cache_tracker import DependencyTracker
 from tests.utils.database import create_test_models, drop_test_models
 
 
@@ -433,6 +435,43 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
                 self.CustomerManager.filter(id=customer_id).first().name,
                 "Acme Corp",
             )
+
+    def test_historical_database_bucket_projection_uses_original_identifier(self):
+        customer_id = self.customer_a.identification["id"]
+        snapshot = timezone.now()
+        historical_queryset = self.LegacyCustomer.history.filter(
+            id=customer_id
+        ).order_by("history_date")[:1]
+        bucket = DatabaseBucket(
+            historical_queryset,
+            self.CustomerManager,
+            search_date=snapshot,
+        )
+
+        with (
+            patch.object(
+                self.CustomerManager,
+                "__init__",
+                side_effect=AssertionError("native projection hydrated a manager"),
+            ),
+            DependencyTracker() as dependencies,
+            self.assertNumQueries(1),
+            as_of(snapshot),
+        ):
+            projected = bucket.values_list("name", "id")
+
+        self.assertEqual(projected, (("Acme Corp", customer_id),))
+        self.assertEqual(
+            dependencies,
+            {
+                ("CustomerManager", "all", ""),
+                (
+                    "CustomerManager",
+                    "identification",
+                    f'{{"id": {customer_id}}}',
+                ),
+            },
+        )
 
     def test_filter_exclude_and_all(self) -> None:
         """

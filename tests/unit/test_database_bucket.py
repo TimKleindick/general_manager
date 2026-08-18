@@ -6,9 +6,11 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.contrib.auth.models import Group
+from django.db import connection, models
 from django.db.models import Prefetch, functions
 from django.db.models.query import QuerySet
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
+from django.apps import apps
 
 from general_manager.bucket.database_bucket import (
     DatabaseBucket,
@@ -22,6 +24,10 @@ from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.capabilities.orm_utils.field_descriptors import (
+    _instance_attribute_accessor,
+)
+from general_manager.measurement import Measurement, MeasurementField
 from general_manager.api.property import graph_ql_property
 from general_manager.as_of import HistoricalContextConflictError, as_of
 
@@ -193,8 +199,8 @@ class NativeUserInterface(TrustedDummyInterface):
     @classmethod
     def get_attributes(cls) -> dict[str, object]:
         return {
-            "id": lambda interface: interface._instance.pk,
-            "username": lambda interface: interface._instance.username,
+            "id": _instance_attribute_accessor("id"),
+            "username": _instance_attribute_accessor("username"),
         }
 
     @classmethod
@@ -211,6 +217,61 @@ class NativeUserManager(GeneralManager):
 
 NativeUserManager.Interface = NativeUserInterface
 NativeUserInterface._parent_class = NativeUserManager
+
+
+class TransformedUserInterface(NativeUserInterface):
+    @classmethod
+    def get_attributes(cls) -> dict[str, object]:
+        attributes = super().get_attributes()
+        attributes["username"] = lambda interface: interface._instance.username.upper()
+        return attributes
+
+
+class TransformedUserManager(GeneralManager):
+    pass
+
+
+TransformedUserManager.Interface = TransformedUserInterface
+TransformedUserInterface._parent_class = TransformedUserManager
+
+
+class NativeProjectionFixtureModel(models.Model):
+    amount = MeasurementField(base_unit="meter", null=True, blank=True)
+    document = models.FileField(upload_to="projection", null=True, blank=True)
+    photo = models.ImageField(upload_to="projection", null=True, blank=True)
+
+    class Meta:
+        app_label = "general_manager"
+
+
+class NativeProjectionFixtureInterface(TrustedDummyInterface):
+    _model = NativeProjectionFixtureModel
+
+    @classmethod
+    def get_attributes(cls) -> dict[str, object]:
+        return {
+            "id": _instance_attribute_accessor("id"),
+            "amount": _instance_attribute_accessor("amount"),
+            "document": _instance_attribute_accessor("document"),
+            "photo": _instance_attribute_accessor("photo"),
+        }
+
+    @classmethod
+    def get_attribute_types(cls) -> dict[str, dict[str, object]]:
+        return {
+            "id": {"type": int, "is_derived": False},
+            "amount": {"type": Measurement, "is_derived": False},
+            "document": {"type": str, "is_derived": False},
+            "photo": {"type": str, "is_derived": False},
+        }
+
+
+class NativeProjectionFixtureManager(GeneralManager):
+    pass
+
+
+NativeProjectionFixtureManager.Interface = NativeProjectionFixtureInterface
+NativeProjectionFixtureInterface._parent_class = NativeProjectionFixtureManager
 
 
 class RelationUserInterface(NativeUserInterface):
@@ -386,6 +447,97 @@ class DatabaseBucketTestCase(TestCase):
 
         self.assertEqual(first_dependencies, cached_dependencies)
 
+    def test_native_projection_proves_public_accessor_equivalence(self) -> None:
+        bucket = DatabaseBucket(
+            User.objects.order_by("username"), TransformedUserManager
+        )
+
+        with patch.object(
+            bucket,
+            "_build_manager_from_instance",
+            wraps=bucket._build_manager_from_instance,
+        ) as hydrate:
+            projected = bucket.values_list("id", "username")
+
+        self.assertEqual(
+            projected,
+            (
+                (self.u1.id, "ALICE"),
+                (self.u2.id, "BOB"),
+                (self.u3.id, "CAROL"),
+            ),
+        )
+        self.assertEqual(hydrate.call_count, 3)
+
+    def test_native_projection_preserves_alias_and_annotations(self) -> None:
+        bucket = DatabaseBucket(
+            User.objects.using("default")
+            .annotate(username_length=functions.Length("username"))
+            .order_by("-username"),
+            NativeUserManager,
+        )
+
+        with (
+            patch.object(
+                NativeUserManager,
+                "__init__",
+                side_effect=AssertionError("native projection hydrated a manager"),
+            ),
+            self.assertNumQueries(1),
+        ):
+            self.assertEqual(
+                bucket.values_list("username", flat=True),
+                ("carol", "bob", "alice"),
+            )
+
+    def test_native_projection_tracks_exact_effective_and_identification_dependencies(
+        self,
+    ) -> None:
+        bucket = DatabaseBucket(
+            User.objects.filter(username__startswith="a")
+            .exclude(username="bob")
+            .order_by("-username"),
+            NativeUserManager,
+            {"username__startswith": ["a"]},
+            {"username": ["bob"]},
+            sort_keys=("username",),
+            sort_reverse=True,
+        )
+
+        expected_sort_identifier = serialize_dependency_identifier(
+            {
+                "__sort__username": {
+                    "filters": {"username__startswith": "a"},
+                    "excludes": {"username": "bob"},
+                    "reverse": True,
+                }
+            }
+        )
+        with DependencyTracker() as dependencies:
+            self.assertEqual(bucket.values_list("username", flat=True), ("alice",))
+
+        self.assertEqual(
+            dependencies,
+            {
+                (
+                    "NativeUserManager",
+                    "filter",
+                    serialize_dependency_identifier({"username__startswith": "a"}),
+                ),
+                (
+                    "NativeUserManager",
+                    "exclude",
+                    serialize_dependency_identifier({"username": "bob"}),
+                ),
+                ("NativeUserManager", "filter", expected_sort_identifier),
+                (
+                    "NativeUserManager",
+                    "identification",
+                    f'{{"id": {self.u1.id}}}',
+                ),
+            },
+        )
+
     def test_graphql_property_projection_falls_back_to_manager_access(self) -> None:
         expected = tuple(manager.username_length for manager in self.bucket)
 
@@ -444,6 +596,45 @@ class DatabaseBucketTestCase(TestCase):
                 bool(bucket)
 
         exists.assert_not_called()
+
+    def test_native_projection_accepts_matching_historical_context(self) -> None:
+        snapshot = datetime(2024, 1, 1, tzinfo=UTC)
+        bucket = DatabaseBucket(
+            User.objects.order_by("username"),
+            NativeUserManager,
+            search_date=snapshot,
+        )
+
+        with (
+            as_of(snapshot),
+            patch.object(
+                NativeUserManager,
+                "__init__",
+                side_effect=AssertionError("native projection hydrated a manager"),
+            ),
+        ):
+            self.assertEqual(
+                bucket.values_list("username", flat=True),
+                ("alice", "bob", "carol"),
+            )
+
+    def test_native_projection_rejects_incompatible_historical_context_before_query(
+        self,
+    ) -> None:
+        snapshot = datetime(2024, 1, 1, tzinfo=UTC)
+        bucket = DatabaseBucket(
+            User.objects.all(), NativeUserManager, search_date=snapshot
+        )
+        conflicting = datetime(2024, 2, 1, tzinfo=UTC)
+
+        with (
+            as_of(conflicting),
+            patch.object(bucket._data, "values_list") as values_list,
+        ):
+            with self.assertRaises(HistoricalContextConflictError):
+                bucket.values_list("username", flat=True)
+
+        values_list.assert_not_called()
 
     def test_equality_accepts_buckets_from_active_as_of_date(self):
         snapshot = datetime(2024, 1, 1, tzinfo=UTC)
@@ -1711,3 +1902,67 @@ class DatabaseBucketTestCase(TestCase):
         asc_sorted = self.bucket.sort("username_length", reverse=False)
         ids_asc = [m.identification["id"] for m in asc_sorted]
         self.assertEqual(ids_asc[0], self.u2.id)
+
+
+class DatabaseBucketNativeFieldTestCase(TransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._app_config = apps.get_app_config("general_manager")
+        model_name = NativeProjectionFixtureModel._meta.model_name
+        cls._original_model = cls._app_config.models.get(model_name)
+        apps.all_models["general_manager"][model_name] = NativeProjectionFixtureModel
+        cls._app_config.models[model_name] = NativeProjectionFixtureModel
+        apps.clear_cache()
+        with connection.schema_editor() as schema:
+            schema.create_model(NativeProjectionFixtureModel)
+
+    @classmethod
+    def tearDownClass(cls):
+        with connection.schema_editor() as schema:
+            schema.delete_model(NativeProjectionFixtureModel)
+
+        model_name = NativeProjectionFixtureModel._meta.model_name
+        if cls._original_model is None:
+            cls._app_config.models.pop(model_name, None)
+            apps.all_models["general_manager"].pop(model_name, None)
+        else:
+            cls._app_config.models[model_name] = cls._original_model
+            apps.all_models["general_manager"][model_name] = cls._original_model
+        apps.clear_cache()
+        super().tearDownClass()
+
+    def setUp(self):
+        self.record = NativeProjectionFixtureModel.objects.create(
+            amount=Measurement(500, "centimeter"),
+            document="projection/report.pdf",
+            photo="projection/photo.png",
+        )
+
+    def test_native_projection_reconstructs_measurements_and_file_strings(self):
+        bucket = DatabaseBucket(
+            NativeProjectionFixtureModel.objects.order_by("id"),
+            NativeProjectionFixtureManager,
+        )
+
+        with (
+            patch.object(
+                NativeProjectionFixtureManager,
+                "__init__",
+                side_effect=AssertionError("native projection hydrated a manager"),
+            ),
+            self.assertNumQueries(1),
+        ):
+            projected = bucket.values_list("amount", "document", "photo")
+
+        expected_amount = self.record.amount
+        self.assertEqual(
+            projected,
+            (
+                (
+                    expected_amount,
+                    "projection/report.pdf",
+                    "projection/photo.png",
+                ),
+            ),
+        )
