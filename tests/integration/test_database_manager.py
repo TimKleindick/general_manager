@@ -650,9 +650,13 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_native_projection_accepts_matching_historical_model(self) -> None:
         historical_model = self.TestHuman.Interface._model.history.model
-        bucket = DatabaseBucket(historical_model.objects.all(), self.TestHuman)
+        historical_queryset = historical_model.objects.filter(
+            id=self.test_human1.identification["id"]
+        ).order_by("history_date", "history_id")[:1]
+        bucket = DatabaseBucket(historical_queryset, self.TestHuman)
 
         self.assertIsNotNone(bucket._native_projection_plan(("name",)))
+        self.assertEqual(bucket.values_list("name", flat=True), ("Alice",))
 
     def test_trusted_hydration_preserves_custom_interface_initializer(self):
         self.CustomInitRecord.create(
