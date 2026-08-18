@@ -156,13 +156,13 @@ class RequestBucket(Bucket[GeneralManagerType]):
                 )
                 for payload in self._raw_items
             )
-            for manager, payload in zip(self._data, self._raw_items, strict=False):
+            for manager, payload in zip(self._data, self._raw_items, strict=True):
                 _set_request_payload_cache(manager, payload)
         else:
             self._data = tuple()
         self._count_override = count_override
         self._materialized = (
-            items is not None or bool(self._raw_items) or request_plan is None
+            items is not None or raw_items is not None or request_plan is None
         )
 
     def __reduce__(self) -> str | tuple[object, ...]:
@@ -203,10 +203,10 @@ class RequestBucket(Bucket[GeneralManagerType]):
                 )
                 for payload in self._raw_items
             )
+            for manager, payload in zip(self._data, self._raw_items, strict=True):
+                _set_request_payload_cache(manager, payload)
         else:
             self._data = tuple(cast(tuple[GeneralManagerType, ...], state["items"]))
-        for manager, payload in zip(self._data, self._raw_items, strict=False):
-            _set_request_payload_cache(manager, payload)
         self._count_override = cast(int | None, state["count_override"])
         self._materialized = True
 
@@ -480,11 +480,31 @@ class RequestBucket(Bucket[GeneralManagerType]):
         if self._data:
             self._materialized = True
             return self._data
-        if self._materialized:
+        raw_items = self._ensure_raw_items()
+        if not raw_items:
             return self._data
+        self._data = tuple(
+            self._manager_class(**self._interface_cls.extract_identification(payload))
+            for payload in raw_items
+        )
+        for manager, payload in zip(self._data, raw_items, strict=True):
+            _set_request_payload_cache(manager, payload)
+        return self._data
+
+    def _ensure_raw_items(self) -> tuple[RequestPayload, ...]:
+        """Materialize request payloads without constructing manager instances."""
+        ensure_as_of_read_supported(self._interface_cls)
+        if self._raw_items:
+            self._materialized = True
+            return self._raw_items
+        if self._data:
+            self._materialized = True
+            return self._raw_items
+        if self._materialized:
+            return self._raw_items
         if self.request_plan is None:
             self._materialized = True
-            return self._data
+            return self._raw_items
 
         handler = self._query_handler()
         result = handler.execute_plan(self._interface_cls, self.request_plan)
@@ -508,14 +528,8 @@ class RequestBucket(Bucket[GeneralManagerType]):
         else:
             self._count_override = result.total_count
         self._raw_items = raw_items
-        self._data = tuple(
-            self._manager_class(**self._interface_cls.extract_identification(payload))
-            for payload in raw_items
-        )
-        for manager, payload in zip(self._data, raw_items, strict=False):
-            _set_request_payload_cache(manager, payload)
         self._materialized = True
-        return self._data
+        return self._raw_items
 
     def _from_items(
         self,
