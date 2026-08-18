@@ -2050,6 +2050,24 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(groups_by_country["US"]._data.count(), 1)
         self.assertEqual(groups_by_country[None]._data.count(), 1)
 
+    def test_group_by_foreign_key_id_collapses_repeated_relation(self):
+        country = self.TestCountry.filter(code="US").get()
+        second_human = self.TestHuman.create(
+            creator_id=None,
+            name="Grace",
+            country=country,
+            ignore_permission=True,
+        )
+
+        group = (
+            self.TestHuman.filter(id__in=[self.test_human1.id, second_human.id])
+            .group_by("country_id")
+            .get()
+        )
+
+        self.assertIsInstance(group.country, self.TestCountry)
+        self.assertEqual(group.country, country)
+
     def test_group_by_one_to_one_relation(self):
         first_request = self.ChangeRequest.create(
             title="First",
