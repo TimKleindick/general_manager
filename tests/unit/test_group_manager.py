@@ -9,6 +9,7 @@ from general_manager.manager.group_manager import (
 )
 from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.bucket.group_bucket import GroupBucketKeysMismatchError
+from general_manager.cache.run_context import CalculationRunContext
 from general_manager.measurement import Measurement
 
 
@@ -21,6 +22,8 @@ class DummyInterface:
         "date": {"type": date},
         "flag": {"type": bool},
         "items": {"type": dict},
+        "category": {"type": str},
+        "amount": {"type": int},
     }
 
     @staticmethod
@@ -30,6 +33,10 @@ class DummyInterface:
     @staticmethod
     def get_attribute_types():
         return DummyInterface.attr_types
+
+    @staticmethod
+    def get_graph_ql_properties():
+        return {}
 
 
 # Stub Manager to use with GroupBucket
@@ -79,7 +86,117 @@ class ListBucket(list):
         return ListBucket(list(self) + list(other))
 
 
+class CountingGroupBucket(GroupBucket):
+    def __init__(self, *args, **kwargs):
+        self.projection_calls = 0
+        super().__init__(*args, **kwargs)
+
+    def _project_rows(self, fields):
+        self.projection_calls += 1
+        return super()._project_rows(fields)
+
+
+class HistoricalContextMismatchError(RuntimeError):
+    pass
+
+
+class GuardedListBucket(ListBucket):
+    def __init__(self, items):
+        super().__init__(items)
+        self.reject_as_of = False
+
+    def _ensure_as_of_compatible(self):
+        if self.reject_as_of:
+            raise HistoricalContextMismatchError
+
+
 class GroupBucketTests(TestCase):
+    def test_group_bucket_projects_keys_and_aggregates(self):
+        items = [
+            DummyManager(category="A", amount=1),
+            DummyManager(category="A", amount=2),
+            DummyManager(category="B", amount=4),
+        ]
+        grouped = GroupBucket(DummyManager, ("category",), ListBucket(items))
+
+        self.assertEqual(
+            grouped.values("category", "amount"),
+            (
+                {"category": "A", "amount": 3},
+                {"category": "B", "amount": 4},
+            ),
+        )
+        self.assertEqual(grouped.values_list("category", flat=True), ("A", "B"))
+
+    def test_group_bucket_projection_preserves_sorted_and_sliced_order(self):
+        items = [
+            DummyManager(category="A", amount=1),
+            DummyManager(category="B", amount=2),
+            DummyManager(category="C", amount=3),
+        ]
+        grouped = GroupBucket(DummyManager, ("category",), ListBucket(items))
+
+        sorted_grouped = grouped.sort("category", reverse=True)
+        self.assertEqual(
+            sorted_grouped.values_list("category", "amount"),
+            (("C", 3), ("B", 2), ("A", 1)),
+        )
+        self.assertEqual(
+            sorted_grouped[1:].values_list("category", "amount"),
+            (("B", 2), ("A", 1)),
+        )
+
+    def test_group_bucket_projection_returns_fresh_dictionaries(self):
+        grouped = GroupBucket(
+            DummyManager,
+            ("category",),
+            ListBucket([DummyManager(category="A", amount=1)]),
+        )
+
+        first = grouped.values("category", "amount")
+        first[0]["amount"] = 99
+        second = grouped.values("category", "amount")
+
+        self.assertEqual(first, ({"category": "A", "amount": 99},))
+        self.assertEqual(second, ({"category": "A", "amount": 1},))
+        self.assertIsNot(first[0], second[0])
+
+    def test_group_bucket_projection_reuses_one_active_run_evaluation(self):
+        grouped = CountingGroupBucket(
+            DummyManager,
+            ("category",),
+            ListBucket([DummyManager(category="A", amount=1)]),
+        )
+
+        with CalculationRunContext():
+            self.assertEqual(
+                grouped.values("category", "amount"),
+                ({"category": "A", "amount": 1},),
+            )
+            self.assertEqual(grouped.values_list("category", "amount"), (("A", 1),))
+
+        self.assertEqual(grouped.projection_calls, 1)
+
+    def test_group_bucket_projection_delegates_historical_guard(self):
+        source = GuardedListBucket([DummyManager(category="A", amount=1)])
+        grouped = GroupBucket(DummyManager, ("category",), source)
+        source.reject_as_of = True
+
+        with self.assertRaises(HistoricalContextMismatchError):
+            grouped.values_list("category")
+
+    def test_group_bucket_projection_uses_conservative_source_identity(self):
+        grouped = GroupBucket(
+            DummyManager,
+            ("category",),
+            ListBucket([DummyManager(category="A", amount=1)]),
+        )
+
+        self.assertEqual(
+            grouped._bucket_index_source_signature(),
+            (GroupBucket, DummyManager, id(grouped)),
+        )
+
     # Test that non-string group_by arguments raise TypeError
     def test_invalid_group_by_type_raises(self):
         with self.assertRaises(TypeError):

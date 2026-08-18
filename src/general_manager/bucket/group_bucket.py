@@ -3,10 +3,18 @@
 from __future__ import annotations
 from collections.abc import Generator, Hashable, Mapping
 from operator import attrgetter
-from typing import Generic, cast
+from typing import Generic, Literal, cast, overload
 from general_manager.manager.group_manager import GroupManager
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
+from general_manager.bucket.projection import (
+    ProjectionRows,
+    project_bucket_rows,
+    project_values,
+    project_values_list,
+    validate_projection_fields,
+    validate_projection_flat,
+)
 
 type GroupLookup = dict[str, object]
 type GroupByValue = tuple[tuple[str, object], ...]
@@ -240,6 +248,51 @@ class GroupBucket(Generic[GeneralManagerType]):
         ensure = getattr(self._basis_data, "_ensure_as_of_compatible", None)
         if callable(ensure):
             ensure()
+
+    def _project_rows(self, fields: tuple[str, ...]) -> ProjectionRows:
+        """Materialize grouped attributes in the current group iteration order."""
+        return tuple(tuple(getattr(row, field) for field in fields) for row in self)
+
+    def values(self, *fields: str) -> tuple[dict[str, object], ...]:
+        """Return detached dictionaries for the requested grouped fields."""
+        normalized_fields = validate_projection_fields(
+            self._manager_class,
+            cast(tuple[object, ...], fields),
+        )
+        rows = project_bucket_rows(self, normalized_fields)
+        return project_values(rows, normalized_fields)
+
+    @overload
+    def values_list(
+        self,
+        *fields: str,
+        flat: Literal[False] = False,
+    ) -> ProjectionRows: ...
+
+    @overload
+    def values_list(
+        self,
+        *fields: str,
+        flat: Literal[True],
+    ) -> tuple[object, ...]: ...
+
+    def values_list(
+        self,
+        *fields: str,
+        flat: bool = False,
+    ) -> ProjectionRows | tuple[object, ...]:
+        """Return grouped tuple rows or a flat scalar tuple."""
+        normalized_fields = validate_projection_fields(
+            self._manager_class,
+            cast(tuple[object, ...], fields),
+        )
+        validate_projection_flat(flat, normalized_fields)
+        rows = project_bucket_rows(self, normalized_fields)
+        return project_values_list(rows, normalized_fields, flat=flat)
+
+    def _bucket_index_source_signature(self) -> Hashable:
+        """Return the conservative run-local source signature for grouped indexes."""
+        return (self.__class__, self._manager_class, id(self))
 
     def __eq__(self, other: object) -> bool:
         """
