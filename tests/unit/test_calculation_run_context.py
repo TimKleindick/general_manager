@@ -17,6 +17,7 @@ from general_manager.cache.dependency_publish import (
     CacheComputeLease,
     PendingDependencyCachePublication,
 )
+from general_manager.cache import run_context
 from general_manager.cache.run_context import (
     PendingRunCacheTouch,
     RUN_CONTEXT_TOUCH_BATCH_SIZE,
@@ -2154,6 +2155,80 @@ def test_bucket_index_helpers_distinguish_unique_and_many_indexes() -> None:
             True,
             1000,
         ) == {"A": ("project-a", "project-b")}
+
+
+def test_bucket_projection_helpers_store_replay_and_clear_dependencies() -> None:
+    """Store projection rows, replay dependencies on a hit, then clear them."""
+    dependencies: set[Dependency] = {
+        ("Project", "filter", '{"status": "active"}'),
+    }
+    fields = ("code", "amount")
+    rows = (("A", 1),)
+
+    with CalculationRunContext() as ctx:
+        ctx.set_bucket_projection_result(
+            ("source", "projects"),
+            fields,
+            rows,
+            dependencies,
+        )
+
+        with DependencyTracker() as tracked_dependencies:
+            result = ctx.get_bucket_projection_result(
+                ("source", "projects"),
+                fields,
+            )
+
+        assert result == rows
+        assert dependencies <= tracked_dependencies
+
+        ctx.clear_bucket_projections()
+
+        assert (
+            ctx.get_bucket_projection_result(
+                ("source", "projects"),
+                fields,
+            )
+            is None
+        )
+
+
+def test_bucket_projection_helpers_freeze_dependencies_and_reject_wrong_entries() -> (
+    None
+):
+    dependencies: set[Dependency] = {
+        ("Project", "identification", '{"id": 1}'),
+    }
+    fields = ("code",)
+    source_signature = ("source", "projects")
+
+    with CalculationRunContext() as ctx:
+        ctx.set_bucket_projection_result(
+            source_signature,
+            fields,
+            (("A",),),
+            dependencies,
+        )
+        dependencies.add(("Project", "identification", '{"id": 2}'))
+
+        entry = ctx.get(ctx._bucket_projection_cache_key(source_signature, fields))
+        assert isinstance(entry, run_context.BucketProjectionRunCacheEntry)
+        assert entry.dependencies == frozenset(
+            {("Project", "identification", '{"id": 1}')}
+        )
+
+        ctx.set(
+            ctx._bucket_projection_cache_key(source_signature, ("amount",)),
+            object(),
+        )
+        assert ctx.get_bucket_projection_result(source_signature, ("amount",)) is None
+
+
+def test_bucket_projection_cache_key_uses_projection_namespace() -> None:
+    with CalculationRunContext() as ctx:
+        key = ctx._bucket_projection_cache_key(("source", "projects"), ("code",))
+
+    assert key == ("bucket_projection", ("source", "projects"), ("code",))
 
 
 def test_index_loads_once_and_groups_by_key() -> None:

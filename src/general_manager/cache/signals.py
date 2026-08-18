@@ -156,6 +156,7 @@ def data_change(
         if context is not None:
             context.clear_orm_bucket_results()
             context.clear_bucket_indexes()
+            context.clear_bucket_projections()
             context.clear_trusted_orm_managers()
         try:
             transaction_context = (
@@ -235,6 +236,7 @@ def data_change(
                 if context is not None:
                     context.clear_orm_bucket_results()
                     context.clear_bucket_indexes()
+                    context.clear_bucket_projections()
                     context.clear_trusted_orm_managers()
 
                 instance = result

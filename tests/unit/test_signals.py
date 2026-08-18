@@ -13,6 +13,7 @@ from general_manager.cache.dependency_index import (
     is_dependency_data_change_active,
     record_invalidated_cache_keys_for_graphql_rewarm,
 )
+from general_manager.cache.run_context import CalculationRunContext
 from general_manager.cache.signals import (
     data_change,
     data_change_transaction_finished,
@@ -625,6 +626,22 @@ class DataChangeSignalTests(TestCase):
         self.assertIs(post["instance"], result)
         self.assertEqual(post["action"], "update")
         self.assertEqual(post["old_relevant_values"], {"key": "old"})
+
+    def test_data_change_clears_projection_cache_before_and_after_mutation(self):
+        """Active runs clear projections at both mutation boundaries."""
+        with CalculationRunContext() as context:
+            with (
+                patch.object(context, "clear_orm_bucket_results") as clear_orm,
+                patch.object(context, "clear_bucket_indexes") as clear_indexes,
+                patch.object(context, "clear_trusted_orm_managers") as clear_managers,
+                patch.object(context, "clear_bucket_projections") as clear_projections,
+            ):
+                Dummy.create("foo")
+
+        self.assertEqual(clear_orm.call_count, 2)
+        self.assertEqual(clear_indexes.call_count, 2)
+        self.assertEqual(clear_managers.call_count, 2)
+        self.assertEqual(clear_projections.call_count, 2)
 
     def test_wrapper_returns_original_result(self):
         """The data_change wrapper returns the wrapped function result."""
