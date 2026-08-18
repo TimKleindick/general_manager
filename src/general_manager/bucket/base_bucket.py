@@ -5,12 +5,21 @@ from abc import ABC, abstractmethod
 from collections.abc import Hashable, Iterable, Mapping
 from typing import (
     Generator,
+    Literal,
     TYPE_CHECKING,
     Generic,
     TypeVar,
     cast,
+    overload,
 )
 
+from general_manager.bucket.projection import (
+    ProjectionRows,
+    project_values,
+    project_values_list,
+    validate_projection_fields,
+    validate_projection_flat,
+)
 from general_manager.bucket.indexing import (
     BucketIndexKeySpec,
     build_multi_bucket_index,
@@ -259,6 +268,47 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         from general_manager.bucket.group_bucket import GroupBucket
 
         return GroupBucket(self._manager_class, group_by_keys, self)
+
+    def _project_rows(self, fields: tuple[str, ...]) -> ProjectionRows:
+        """Materialize requested manager attributes in bucket iteration order."""
+        return tuple(tuple(getattr(row, field) for field in fields) for row in self)
+
+    def values(self, *fields: str) -> tuple[dict[str, object], ...]:
+        """Return detached dictionaries for the requested public fields."""
+        normalized_fields = validate_projection_fields(
+            self._manager_class,
+            cast(tuple[object, ...], fields),
+        )
+        rows = self._project_rows(normalized_fields)
+        return project_values(rows, normalized_fields)
+
+    @overload
+    def values_list(
+        self,
+        *fields: str,
+        flat: Literal[False] = False,
+    ) -> ProjectionRows: ...
+
+    @overload
+    def values_list(
+        self,
+        *fields: str,
+        flat: Literal[True],
+    ) -> tuple[object, ...]: ...
+
+    def values_list(
+        self,
+        *fields: str,
+        flat: bool = False,
+    ) -> ProjectionRows | tuple[object, ...]:
+        """Return tuple rows or a flat scalar tuple for one requested field."""
+        normalized_fields = validate_projection_fields(
+            self._manager_class,
+            cast(tuple[object, ...], fields),
+        )
+        validate_projection_flat(flat, normalized_fields)
+        rows = self._project_rows(normalized_fields)
+        return project_values_list(rows, normalized_fields, flat=flat)
 
     def _bucket_index_source_signature(self) -> Hashable:
         """Return the conservative run-local source signature for bucket indexes."""
