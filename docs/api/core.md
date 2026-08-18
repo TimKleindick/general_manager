@@ -515,10 +515,12 @@ For example, `bucket.values("date", "revenue")` returns
 `bucket.values_list("date", "revenue")` returns
 `((date(...), Measurement(...)), ...)` and
 `bucket.values_list("date", flat=True)` returns `(date(...), ...)`. The
-`values()` dictionaries and tuple rows are newly shaped on every call,
-including a run-cache hit. They are shallow snapshots: attribute values are
-not deep-copied, so mutable domain values retain the identity and mutation
-semantics of normal manager access.
+`values()` dictionaries are newly created on every call, including a run-cache
+hit. `values_list()` returns materialized tuple containers; tuple-style rows
+are immutable tuples, and a same-run cache hit may reuse a canonical inner row
+tuple, so inner-tuple identity is not part of the contract. These are shallow
+snapshots: attribute values are not deep-copied, so mutable domain values retain
+the identity and mutation semantics of normal manager access.
 
 Fields must be explicit names from `manager_class.Interface.get_attributes()`
 or names of declared `GraphQLProperty` values. Backend column names, request
