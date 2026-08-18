@@ -898,6 +898,27 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
 
         self.assertEqual(historical_owner.name, "Secondary old owner")
 
+    def test_database_bucket_native_projection_preserves_secondary_alias(self):
+        record = self.MultiDatabaseRecord.objects.using("secondary").create(
+            name="secondary projection",
+        )
+        bucket = DatabaseBucket(
+            self.MultiDatabaseRecord.objects.using("secondary").filter(pk=record.pk),
+            self.MultiDatabaseManager,
+        )
+
+        with (
+            patch.object(
+                self.MultiDatabaseManager,
+                "__init__",
+                side_effect=AssertionError("native projection hydrated a manager"),
+            ),
+            self.assertNumQueries(1, using="secondary"),
+        ):
+            projected = bucket.values_list("name", flat=True)
+
+        self.assertEqual(projected, ("secondary projection",))
+
 
 class ExistingModelMultiDatabaseCleanupTests(SimpleTestCase):
     """Regression tests for secondary schema cleanup failures."""

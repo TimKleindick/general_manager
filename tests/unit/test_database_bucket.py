@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.contrib.auth.models import Group
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.db.models import Prefetch, functions
 from django.db.models.query import QuerySet
@@ -239,6 +241,14 @@ class NativeProjectionFixtureModel(models.Model):
     amount = MeasurementField(base_unit="meter", null=True, blank=True)
     document = models.FileField(upload_to="projection", null=True, blank=True)
     photo = models.ImageField(upload_to="projection", null=True, blank=True)
+    content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    object_id = models.PositiveIntegerField(null=True, blank=True)
+    content_object = GenericForeignKey("content_type", "object_id")
 
     class Meta:
         app_label = "general_manager"
@@ -254,6 +264,7 @@ class NativeProjectionFixtureInterface(TrustedDummyInterface):
             "amount": _instance_attribute_accessor("amount"),
             "document": _instance_attribute_accessor("document"),
             "photo": _instance_attribute_accessor("photo"),
+            "content_object": lambda interface: interface._instance.content_object,
         }
 
     @classmethod
@@ -263,6 +274,11 @@ class NativeProjectionFixtureInterface(TrustedDummyInterface):
             "amount": {"type": Measurement, "is_derived": False},
             "document": {"type": str, "is_derived": False},
             "photo": {"type": str, "is_derived": False},
+            "content_object": {
+                "type": User,
+                "relation_kind": "generic",
+                "is_derived": True,
+            },
         }
 
 
@@ -1933,10 +1949,13 @@ class DatabaseBucketNativeFieldTestCase(TransactionTestCase):
         super().tearDownClass()
 
     def setUp(self):
+        self.target = User.objects.create(username="generic-target")
         self.record = NativeProjectionFixtureModel.objects.create(
             amount=Measurement(500, "centimeter"),
             document="projection/report.pdf",
             photo="projection/photo.png",
+            content_type=ContentType.objects.get_for_model(self.target),
+            object_id=self.target.pk,
         )
 
     def test_native_projection_reconstructs_measurements_and_file_strings(self):
@@ -1966,3 +1985,19 @@ class DatabaseBucketNativeFieldTestCase(TransactionTestCase):
                 ),
             ),
         )
+
+    def test_generic_foreign_key_projection_falls_back_to_public_value(self):
+        bucket = DatabaseBucket(
+            NativeProjectionFixtureModel.objects.filter(pk=self.record.pk),
+            NativeProjectionFixtureManager,
+        )
+
+        with patch.object(
+            bucket,
+            "_build_manager_from_instance",
+            wraps=bucket._build_manager_from_instance,
+        ) as hydrate:
+            projected = bucket.values_list("content_object", flat=True)
+
+        self.assertEqual(projected, (self.target,))
+        self.assertEqual(hydrate.call_count, 1)
