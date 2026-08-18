@@ -609,6 +609,101 @@ class TestRequestInterface(SimpleTestCase):
 
         execute_plan.assert_called_once()
 
+    def test_raw_materialization_applies_local_predicates_and_preserves_count(
+        self,
+    ) -> None:
+        matching_payload = {
+            "id": 1,
+            "name": "Alpha",
+            "status": "active",
+            "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+            "local_name": "Alpha Local",
+        }
+        excluded_payload = {
+            "id": 2,
+            "name": "Beta",
+            "status": "inactive",
+            "updated_at": datetime(2026, 3, 10, 9, 0, 0),
+            "local_name": "Beta Local",
+        }
+        bucket = RemoteProject.filter(local_name__icontains="alpha")
+
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=RequestQueryResult(
+                items=(matching_payload, excluded_payload),
+                total_count=2,
+            ),
+        ) as execute_plan:
+            with patch.object(RemoteProject, "__init__", side_effect=AssertionError):
+                raw_items = bucket._ensure_raw_items()
+                self.assertEqual(raw_items, (matching_payload,))
+                self.assertIs(raw_items[0], matching_payload)
+                self.assertEqual(bucket._count_override, 1)
+
+        self.assertEqual(bucket.count(), 1)
+        execute_plan.assert_called_once()
+
+    def test_raw_materialization_rejects_partial_local_page_without_managers(
+        self,
+    ) -> None:
+        partial_payload = {
+            "id": 1,
+            "name": "Alpha",
+            "status": "active",
+            "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+            "local_name": "Alpha Local",
+        }
+        bucket = RemoteProject.filter(
+            local_name__icontains="alpha",
+            page=1,
+            page_size=1,
+        )
+
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=RequestQueryResult(
+                items=(partial_payload,),
+                total_count=2,
+            ),
+        ) as execute_plan:
+            with patch.object(RemoteProject, "__init__", side_effect=AssertionError):
+                with self.assertRaises(RequestLocalPaginationUnsupportedError):
+                    bucket._ensure_raw_items()
+
+        execute_plan.assert_called_once()
+
+    def test_nonempty_raw_materialization_reuses_one_request_for_raw_and_managers(
+        self,
+    ) -> None:
+        payload = {
+            "id": 1,
+            "name": "Alpha",
+            "status": "active",
+            "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+            "local_name": "Alpha Local",
+        }
+        bucket = RemoteProject.filter(status="active")
+
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=RequestQueryResult(items=(payload,), total_count=1),
+        ) as execute_plan:
+            first_raw_items = bucket._ensure_raw_items()
+            second_raw_items = bucket._ensure_raw_items()
+            first_items = bucket._ensure_items()
+            second_items = bucket._ensure_items()
+
+        self.assertIs(first_raw_items, second_raw_items)
+        self.assertEqual(first_raw_items, (payload,))
+        self.assertIs(first_raw_items[0], payload)
+        self.assertIs(first_items, second_items)
+        self.assertEqual([item.identification for item in first_items], [{"id": 1}])
+        execute_plan.assert_called_once()
+
     def test_request_bucket_hydrates_items_from_raw_items(self) -> None:
         payload = {
             "id": 1,
