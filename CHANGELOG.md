@@ -2,6 +2,79 @@
 
 <!-- version list -->
 
+## v0.74.0 (2026-08-18)
+
+### Bug Fixes
+
+- Address projected reads review feedback
+  ([`c196787`](https://github.com/TimKleindick/general_manager/commit/c1967875c89fc21c454853e691fbcdc4fd462793))
+
+- Harden database bucket native projections
+  ([`a19fb56`](https://github.com/TimKleindick/general_manager/commit/a19fb561bc2d47d499609104d927999498e259bc))
+
+- Preserve calculation projection semantics
+  ([`130749d`](https://github.com/TimKleindick/general_manager/commit/130749d80d7d4b8b30f1bffb62ce3a348b78b601))
+
+- Preserve request bucket source provenance
+  ([`5b3afa3`](https://github.com/TimKleindick/general_manager/commit/5b3afa3edb60c733b0cda18a538c7a1252a925ed))
+
+### Documentation
+
+- Clarify projection tuple reuse
+  ([`eadd987`](https://github.com/TimKleindick/general_manager/commit/eadd987740265c720ef54629e4c90f59c9b5c1ec))
+
+- Plan bucket projected reads
+  ([`830a29d`](https://github.com/TimKleindick/general_manager/commit/830a29d2ee4d3fb75cdac2f6ddb2d429cc758b17))
+
+- Publish bucket projection API
+  ([`b51e6e7`](https://github.com/TimKleindick/general_manager/commit/b51e6e7af2af57a83b3b32522f0988f2d54f19e0))
+
+- Specify bucket projected reads
+  ([`c524c44`](https://github.com/TimKleindick/general_manager/commit/c524c445ceb02c34233231213728be3ce37d1f51))
+
+### Features
+
+- Add portable bucket projections
+  ([`570c63a`](https://github.com/TimKleindick/general_manager/commit/570c63aede342883fdd146a54b8f7f078824d7da))
+
+- Cache bucket projections per run
+  ([`7d7a327`](https://github.com/TimKleindick/general_manager/commit/7d7a327c07ac71b1415568a3b7ed9724110bdcf0))
+
+- Optimize calculation bucket projections
+  ([`fe303f0`](https://github.com/TimKleindick/general_manager/commit/fe303f0e6d05e0eca62615a5079c31a1b01b43f1))
+
+- Optimize database bucket projections
+  ([`32db932`](https://github.com/TimKleindick/general_manager/commit/32db932df608ea25cb809e1b51a0c0873f42381b))
+
+- Optimize request bucket projections
+  ([`9c3f9f0`](https://github.com/TimKleindick/general_manager/commit/9c3f9f042ae4dc559aa98c158daaf74bc9c63cca))
+
+- Project grouped bucket values
+  ([`a7b2483`](https://github.com/TimKleindick/general_manager/commit/a7b24837b524ef03d3ec07b9089e8e717c876bb5))
+
+### Refactoring
+
+- Split request payload materialization
+  ([`487d390`](https://github.com/TimKleindick/general_manager/commit/487d3905f45b80829792d863cf5e77ae956f9b0f))
+
+### Testing
+
+- Cover calculation projection fallbacks
+  ([`14d3881`](https://github.com/TimKleindick/general_manager/commit/14d38818b8b21cc0f3e99b85963c068fbf6be86b))
+
+- Cover generic and secondary database projections
+  ([`0e6c81b`](https://github.com/TimKleindick/general_manager/commit/0e6c81b5b618c95d03061513654f5ce44c643b8f))
+
+- Cover request raw materialization stages
+  ([`16294a5`](https://github.com/TimKleindick/general_manager/commit/16294a50cb0ca4c0984d2aa802d5b280e84816c1))
+
+- Exercise historical native projection
+  ([`eb44629`](https://github.com/TimKleindick/general_manager/commit/eb4462992565d9a1aa58bef6b0a1745203160069))
+
+- Isolate projection fallback construction counts
+  ([`5a91a6e`](https://github.com/TimKleindick/general_manager/commit/5a91a6e05f61fe092cb869ae9105a7fc2d0801a0))
+
+
 ## v0.73.2 (2026-08-18)
 
 ### Bug Fixes
