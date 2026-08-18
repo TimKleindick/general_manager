@@ -50,5 +50,6 @@ def resolve_calculation_input_value(
         dependencies,
         cache_context=(interface_cls._parent_class, field_name),
     )
+    track_manager_input(value)
     resolved_values[field_name] = value
     return value
