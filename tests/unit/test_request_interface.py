@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import pickle
 from typing import Any, ClassVar
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
@@ -584,6 +585,29 @@ class TestRequestInterface(SimpleTestCase):
 
         self.assertEqual(bucket._ensure_items(), (project,))
         self.assertTrue(bucket._materialized)
+
+    def test_raw_materialization_executes_without_building_managers(self) -> None:
+        bucket = RemoteProject.filter(status="active")
+
+        with patch.object(RemoteProject, "__init__", side_effect=AssertionError):
+            raw_items = bucket._ensure_raw_items()
+
+        self.assertEqual([item["id"] for item in raw_items], [1, 2])
+        self.assertEqual(bucket.count(), 2)
+
+    def test_empty_raw_materialization_is_cached_without_rerunning_plan(self) -> None:
+        bucket = RemoteProject.all()
+
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=RequestQueryResult(items=()),
+        ) as execute_plan:
+            self.assertEqual(bucket._ensure_raw_items(), ())
+            self.assertTrue(bucket._materialized)
+            self.assertEqual(bucket._ensure_raw_items(), ())
+
+        execute_plan.assert_called_once()
 
     def test_request_bucket_hydrates_items_from_raw_items(self) -> None:
         payload = {
