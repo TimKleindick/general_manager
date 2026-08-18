@@ -287,6 +287,44 @@ permission exception propagates through the subscription error path. Aggregate
 `refresh` events have no identification and yield `item = null` without this
 object-level check.
 
+## Protect subscription payload fields
+
+Each selected normal, measurement, and stored-file field in a generated detail or
+class-wide subscription applies the manager's usual field-level read permission.
+For class-wide subscriptions, this happens after an identified event passes its
+object-level check. Configure a field-specific rule on the manager's `Permission`
+class as you would for a query:
+
+```python
+from general_manager import GeneralManager
+from general_manager.permission import AdditiveManagerPermission, register_permission
+
+
+@register_permission("isStaff")
+def is_staff(_instance, user, _config):
+    return bool(getattr(user, "is_staff", False))
+
+
+class Project(GeneralManager):
+    name: str
+    internal_note: str
+
+    class Permission(AdditiveManagerPermission):
+        __read__ = ["isAuthenticated"]
+        internal_note = {"read": ["isStaff"]}
+```
+
+With a subscription such as the one in the
+[field-permission recipe](../examples/graphql_queries.md#subscribe-to-fields-with-read-permissions),
+an authenticated non-staff user receives `name` and `internalNote: null`.
+The denial is limited to that field; sibling fields and the event action still
+resolve. Permission evaluation for subscription fields runs in an async-safe
+worker, while value access, measurement conversion, and stored-file formatting
+remain in GraphQL's execution context. Query and mutation field resolution stays
+synchronous. See the [subscription concept](../concepts/graphql/subscriptions.md#signals-and-channels)
+and [GraphQL API reference](../api/graphql.md#subscription-field-authorization)
+for the full compatibility and error contract.
+
 ## Expose authorization hints
 
 Use GraphQL permission capabilities when frontend code needs business-oriented authorization hints, such as whether the current user can rename a project. These fields are advisory only; backend permissions still enforce all reads and writes.
