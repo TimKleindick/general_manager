@@ -270,6 +270,35 @@ class and input name. The cache key uses the manager class, the input name, and
 only the input's declared `depends_on` values. Static domains and static
 iterables are returned directly and are not copied into the run cache.
 
+### Bucket projection reuse
+
+`Bucket.values()` and `Bucket.values_list()` are active-run snapshots. Outside
+an existing `CalculationRunContext`, each call evaluates the bucket normally
+and does not retain a projection for another call. Inside one run, dictionary,
+tuple-row, and flat-scalar modes share one canonical tuple-of-tuples entry for
+the same bucket source signature and ordered field tuple. Public result
+containers are reshaped afresh on every call, while their attribute values stay
+shallow and keep normal identity and mutation semantics.
+
+The projection miss records the full dependency set produced by the selected
+native or portable evaluation. A later hit replays that set into the active
+`DependencyTracker` before returning, so reuse does not weaken invalidation.
+Database mutations clear all projection entries in the active run together
+with ORM snapshots and bucket indexes, both at the mutation boundary and after
+the operation. This coarse clearing is deliberate: dependencies may cross
+manager and backend boundaries. Request projections retain the existing
+materialized request semantics because remote changes cannot currently clear
+local run state.
+
+Projection results up to 10,000 rows may be retained; a result with 10,001 or
+more rows still returns successfully but is not admitted to the run cache. This
+projection-specific retention rule is separate from the ORM snapshot and
+bucket-index guardrails. Admitted entries share the optional
+`RUN_CONTEXT_CACHE_MAX_BYTES` process-local byte budget with other run values,
+including insertion-time estimation, reserve-aware approximate LRU eviction,
+and pending-publication pinning. The byte budget can evict an admitted
+projection under pressure and is not a hard process-memory limit.
+
 ORM-backed managers use this explicit run context to deduplicate repeated row
 materialization for the same manager identity. The optimization is active only
 inside an existing `CalculationRunContext`; constructing managers outside a run

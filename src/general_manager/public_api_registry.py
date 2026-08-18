@@ -654,12 +654,28 @@ BUCKET_EXPORTS: LazyExportMap = {
         "general_manager.bucket.indexing",
         "DuplicateBucketIndexKeyError",
     ),
+    "DuplicateProjectionFieldError": (
+        "general_manager.bucket.projection",
+        "DuplicateProjectionFieldError",
+    ),
+    "EmptyProjectionFieldsError": (
+        "general_manager.bucket.projection",
+        "EmptyProjectionFieldsError",
+    ),
+    "FlatProjectionFieldCountError": (
+        "general_manager.bucket.projection",
+        "FlatProjectionFieldCountError",
+    ),
     "GroupBucket": ("general_manager.bucket.group_bucket", "GroupBucket"),
     "MissingBucketIndexKeyError": (
         "general_manager.bucket.indexing",
         "MissingBucketIndexKeyError",
     ),
     "RequestBucket": ("general_manager.bucket.request_bucket", "RequestBucket"),
+    "UnknownProjectionFieldError": (
+        "general_manager.bucket.projection",
+        "UnknownProjectionFieldError",
+    ),
     "UnhashableBucketIndexKeyError": (
         "general_manager.bucket.indexing",
         "UnhashableBucketIndexKeyError",

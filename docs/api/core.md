@@ -486,6 +486,77 @@ row-authorization flows. See the [bucket concept](../concepts/models_entities.md
 [authorization how-to](../howto/expose_via_graphql.md#preserve-an-exact-authorized-subset),
 and [permission recipe](../examples/permission_cookbook.md#preserve-an-authorized-bucket-subset).
 
+#### Projected reads
+
+`Bucket.values(*fields: str) -> tuple[dict[str, object], ...]` returns a fully
+materialized tuple of ordinary dictionaries in bucket iteration order. The
+tuple-style and flat forms of `values_list()` are:
+
+```python
+def values(self, *fields: str) -> tuple[dict[str, object], ...]: ...
+
+@overload
+def values_list(
+    self,
+    *fields: str,
+    flat: Literal[False] = False,
+) -> tuple[tuple[object, ...], ...]: ...
+
+@overload
+def values_list(
+    self,
+    *fields: str,
+    flat: Literal[True],
+) -> tuple[object, ...]: ...
+```
+
+For example, `bucket.values("date", "revenue")` returns
+`({"date": date(...), "revenue": Measurement(...)}, ...)`, while
+`bucket.values_list("date", "revenue")` returns
+`((date(...), Measurement(...)), ...)` and
+`bucket.values_list("date", flat=True)` returns `(date(...), ...)`. The
+`values()` dictionaries and tuple rows are newly shaped on every call,
+including a run-cache hit. They are shallow snapshots: attribute values are
+not deep-copied, so mutable domain values retain the identity and mutation
+semantics of normal manager access.
+
+Fields must be explicit names from `manager_class.Interface.get_attributes()`
+or names of declared `GraphQLProperty` values. Backend column names, request
+payload paths, arbitrary properties, and private attributes are not a public
+projection namespace. At least one field is required, and duplicate names are
+rejected. Validation runs before historical checks, cache access, or bucket
+evaluation, in this order: no fields (`EmptyProjectionFieldsError`),
+non-string fields (`TypeError`), duplicates
+(`DuplicateProjectionFieldError`), unknown names
+(`UnknownProjectionFieldError`), a non-boolean `flat` (`TypeError`), and
+`flat=True` with anything other than one field
+(`FlatProjectionFieldCountError`). The four semantic exception classes are
+stable imports from `general_manager.bucket`; their constructor details and
+message text are diagnostic rather than inspection contracts. After validation,
+normalizer, descriptor, property, ORM conversion, request-schema, and
+historical-check exceptions propagate unchanged.
+
+Eligible backends use an all-or-nothing native plan: `DatabaseBucket` can read
+safe concrete non-relation scalars and logical measurement fields,
+`CalculationBucket` can read declared calculation inputs, and `RequestBucket`
+can read declared input/request fields from a raw request plan or snapshot.
+Any relation, unsafe descriptor, `GraphQLProperty`, mixed field set, or
+manager-only materialized request bucket makes the whole call use portable
+manager iteration. Custom buckets and `GroupBucket` use that same portable
+behavior; grouped projections read existing `GroupManager` rows and never
+flatten group members. Native and portable paths preserve source order,
+ordinary attribute values, dependency tracking, and the bucket's historical
+context. Historical compatibility is checked before projection reuse, and a
+historical database bucket reads its selected historical rows rather than live
+data.
+
+Buckets are not independently permission-aware. GraphQL and other callers must
+authorize before terminal bucket operations; projection evaluates exactly the
+supplied bucket and does not rebuild a broader query or accept a `user`,
+`info`, permission object, or implicit authorization lookup. An authorized
+subset remains restricted, while an unrestricted bucket has the same
+authorization characteristics as iterating that bucket.
+
 ::: general_manager.bucket.database_bucket.DatabaseBucket
 
 `DatabaseBucket` is the ORM-backed collection returned by database and
