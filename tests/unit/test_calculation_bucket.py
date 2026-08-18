@@ -333,6 +333,72 @@ class TestCalculationBucket(TestCase):
         self.assertEqual(projected, (20, 30))
         self.assertTrue(manager_constructions)
 
+    def test_values_property_exclude_uses_portable_fallback(self, _mock_parse):
+        _mock_parse.return_value = {}
+        manager_constructions: list[dict[str, object]] = []
+
+        class PropertyExcludeInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "number": Input(int, possible_values=[1, 2, 3]),
+            }
+
+        class PropertyExcludeManager:
+            Interface = PropertyExcludeInterface
+
+            def __init__(self, **kwargs):
+                manager_constructions.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.number = kwargs["number"] * 10
+
+            @GraphQLProperty
+            def doubled(self) -> int:
+                return self.number * 2
+
+        PropertyExcludeInterface._parent_class = PropertyExcludeManager
+        bucket = CalculationBucket(PropertyExcludeManager)
+        bucket._excludes = {
+            "doubled": {"filter_funcs": [lambda value: value == 40]},
+        }
+
+        projected = bucket.values("number")
+
+        self.assertEqual(
+            projected,
+            tuple({"number": row.number} for row in bucket),
+        )
+        self.assertEqual(projected, ({"number": 10}, {"number": 30}))
+        self.assertGreaterEqual(len(manager_constructions), 3)
+
+    def test_values_list_property_sort_uses_portable_fallback(self, _mock_parse):
+        _mock_parse.return_value = {}
+        manager_constructions: list[dict[str, object]] = []
+
+        class PropertySortInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "number": Input(int, possible_values=[1, 2, 3]),
+            }
+
+        class PropertySortManager:
+            Interface = PropertySortInterface
+
+            def __init__(self, **kwargs):
+                manager_constructions.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.number = kwargs["number"] * 10
+
+            @GraphQLProperty
+            def descending(self) -> int:
+                return -self.number
+
+        PropertySortInterface._parent_class = PropertySortManager
+        bucket = CalculationBucket(PropertySortManager, sort_key="descending")
+
+        projected = bucket.values_list("number", flat=True)
+
+        self.assertEqual(projected, tuple(row.number for row in bucket))
+        self.assertEqual(projected, (30, 20, 10))
+        self.assertGreaterEqual(len(manager_constructions), 3)
+
     def test_fresh_manager_input_projection_tracks_identification_dependency(
         self, _mock_parse
     ):
