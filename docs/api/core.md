@@ -486,7 +486,7 @@ row-authorization flows. See the [bucket concept](../concepts/models_entities.md
 [authorization how-to](../howto/expose_via_graphql.md#preserve-an-exact-authorized-subset),
 and [permission recipe](../examples/permission_cookbook.md#preserve-an-authorized-bucket-subset).
 
-#### Projected reads
+## Projected reads
 
 `Bucket.values(*fields: str) -> tuple[dict[str, object], ...]` returns a fully
 materialized tuple of ordinary dictionaries in bucket iteration order. The

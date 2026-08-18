@@ -1,6 +1,7 @@
 # type: ignore
 from datetime import date
 from typing import ClassVar
+from unittest.mock import patch
 from django.test import TestCase
 from general_manager.api.property import GraphQLProperty
 from general_manager.manager.general_manager import GeneralManager
@@ -192,10 +193,33 @@ class GroupBucketTests(TestCase):
             ListBucket([DummyManager(category="A", amount=1)]),
         )
 
-        self.assertEqual(
-            grouped._bucket_index_source_signature(),
-            (GroupBucket, DummyManager, id(grouped)),
-        )
+        signature = grouped._bucket_index_source_signature()
+
+        self.assertEqual(signature[:2], (GroupBucket, DummyManager))
+        self.assertIs(signature[2], grouped._projection_source_token)
+
+    def test_group_bucket_projection_cache_does_not_depend_on_object_id(self):
+        with (
+            patch(
+                "general_manager.bucket.group_bucket.id",
+                return_value=1,
+                create=True,
+            ),
+            CalculationRunContext(),
+        ):
+            first = GroupBucket(
+                DummyManager,
+                ("category",),
+                ListBucket([DummyManager(category="A", amount=1)]),
+            )
+            second = GroupBucket(
+                DummyManager,
+                ("category",),
+                ListBucket([DummyManager(category="B", amount=2)]),
+            )
+
+            self.assertEqual(first.values_list("category", flat=True), ("A",))
+            self.assertEqual(second.values_list("category", flat=True), ("B",))
 
     # Test that non-string group_by arguments raise TypeError
     def test_invalid_group_by_type_raises(self):

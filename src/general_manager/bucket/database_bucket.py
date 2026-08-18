@@ -62,7 +62,7 @@ class _DatabaseProjectionField:
     value_index: int
     unit_index: int | None = None
     measurement_descriptor: object | None = None
-    normalize_file: bool = False
+    file_field: models.FileField | None = None
 
 
 class DatabaseBucketTypeMismatchError(TypeError):
@@ -867,6 +867,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if not isinstance(model, type) or not issubclass(model, models.Model):
             return None
         interface = self._manager_class.Interface
+        interface_model = getattr(interface, "_model", None)
+        is_matching_live_model = model is interface_model
+        is_matching_historical_model = (
+            issubclass(model, HistoricalChanges)
+            and getattr(model, "instance_type", None) is interface_model
+        )
+        if not (is_matching_live_model or is_matching_historical_model):
+            return None
         graph_ql_properties = interface.get_graph_ql_properties()
         try:
             attributes = interface.get_attributes()
@@ -962,7 +970,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                         self._projection_column_name(field),
                         is_primary_key=is_primary_key,
                     ),
-                    normalize_file=isinstance(field, models.FileField),
+                    file_field=(field if isinstance(field, models.FileField) else None),
                 )
             )
         return tuple(plan), tuple(selected_columns), identification_index
@@ -981,6 +989,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             primary_key = row[identification_index]
             self._manager_class._track_identification_dependency({"id": primary_key})
             projected: list[object] = []
+            file_instance: models.Model | None = None
             for field_plan in plan:
                 value = row[field_plan.value_index]
                 if field_plan.measurement_descriptor is not None:
@@ -994,8 +1003,12 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                         value,
                         row[unit_index],
                     )
-                elif field_plan.normalize_file:
-                    value = "" if value is None else str(value)
+                elif field_plan.file_field is not None:
+                    if file_instance is None:
+                        file_instance = self._data.model(pk=row[0])
+                    file_field = field_plan.file_field
+                    setattr(file_instance, file_field.attname, value)
+                    value = getattr(file_instance, file_field.name)
                 projected.append(value)
             rows.append(tuple(projected))
         return tuple(rows)

@@ -305,6 +305,7 @@ class TestRequestInterface(SimpleTestCase):
 
     def setUp(self) -> None:
         RemoteProject.Interface.calls.clear()
+        PayloadProject.Interface.calls.clear()
 
     def test_filter_returns_request_bucket(self) -> None:
         bucket = RemoteProject.filter(status="active")
