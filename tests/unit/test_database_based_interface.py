@@ -286,6 +286,38 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
         self.assertEqual(attrs["changed_by"](mgr._interface), self.user)
         self.assertEqual(list(attrs["tags_list"](mgr._interface)), [self.user])
 
+    def test_database_bucket_does_not_natively_project_foreign_key_attnames(self):
+        bucket = DatabaseBucket(
+            PersonModel.objects.filter(pk=self.person.pk),
+            DummyManager,
+        )
+
+        with patch.object(
+            bucket,
+            "_build_manager_from_instance",
+            wraps=bucket._build_manager_from_instance,
+        ) as hydrate:
+            projected = bucket.values_list("owner_id", flat=True)
+
+        self.assertEqual(projected, (self.user.pk,))
+        self.assertEqual(hydrate.call_count, 1)
+
+    def test_database_bucket_preserves_forward_foreign_key_public_value(self):
+        bucket = DatabaseBucket(
+            PersonModel.objects.filter(pk=self.person.pk),
+            DummyManager,
+        )
+
+        with patch.object(
+            bucket,
+            "_build_manager_from_instance",
+            wraps=bucket._build_manager_from_instance,
+        ) as hydrate:
+            projected = bucket.values_list("owner", flat=True)
+
+        self.assertEqual(projected, (self.user,))
+        self.assertEqual(hydrate.call_count, 1)
+
     def test_pre_and_post_create_and_handle_interface(self):
         """
         Verify handle_interface()'s pre and post hooks create and wire a manager subclass to the interface.
