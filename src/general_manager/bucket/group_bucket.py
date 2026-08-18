@@ -232,6 +232,7 @@ class GroupBucket(Generic[GeneralManagerType]):
             ValueError: If a group-by key is not a valid manager attribute.
         """
         self._manager_class = manager_class
+        self._projection_source_token = object()
         self._basis_data: Bucket[GeneralManagerType] = data
         self._effective_search_date = getattr(data, "_effective_search_date", None)
         self._ensure_as_of_compatible()
@@ -292,7 +293,7 @@ class GroupBucket(Generic[GeneralManagerType]):
 
     def _bucket_index_source_signature(self) -> Hashable:
         """Return the conservative run-local source signature for grouped indexes."""
-        return (self.__class__, self._manager_class, id(self))
+        return (self.__class__, self._manager_class, self._projection_source_token)
 
     def __eq__(self, other: object) -> bool:
         """

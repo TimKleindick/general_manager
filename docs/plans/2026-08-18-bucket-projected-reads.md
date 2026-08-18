@@ -65,7 +65,7 @@
 - Produces: `project_values_list(source, fields, *, flat) -> ProjectionRows | tuple[object, ...]`
 - Produces: `Bucket._project_rows(fields) -> ProjectionRows`, concrete `Bucket.values()`, and overloaded `Bucket.values_list()`
 
-- [ ] **Step 1: Write failing validation and result-shape tests**
+- [x] **Step 1: Write failing validation and result-shape tests**
 
 Create a focused dummy manager and bucket in `tests/unit/test_bucket_projection.py`. Cover validation order and all three shapes:
 
@@ -90,13 +90,13 @@ def test_values_list_returns_tuple_rows_and_flat_tuple() -> None:
 
 Use a bucket that raises on iteration to prove empty, non-string, duplicate, unknown, non-boolean `flat`, and invalid flat field-count errors occur before evaluation.
 
-- [ ] **Step 2: Run the new tests and confirm the red state**
+- [x] **Step 2: Run the new tests and confirm the red state**
 
 Run: `python -m pytest tests/unit/test_bucket_projection.py -q`
 
 Expected: import or collection failure because the projection module and methods do not exist.
 
-- [ ] **Step 3: Implement validation and non-cached shaping**
+- [x] **Step 3: Implement validation and non-cached shaping**
 
 Define the exact errors and validation in `projection.py`:
 
@@ -125,7 +125,7 @@ def validate_projection_fields(
 
 Validate `type(flat) is bool` before flat field count. `project_values()` creates dictionaries with `dict(zip(fields, row, strict=True))`; flat output uses `tuple(row[0] for row in rows)`.
 
-- [ ] **Step 4: Add base methods and portable evaluation**
+- [x] **Step 4: Add base methods and portable evaluation**
 
 In `Bucket`, add `Literal`/`overload`, both public signatures, and:
 
@@ -136,13 +136,13 @@ def _project_rows(self, fields: tuple[str, ...]) -> ProjectionRows:
 
 The public methods delegate to the shared functions. Do not make `_project_rows()` abstract.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run: `python -m pytest tests/unit/test_bucket_projection.py tests/unit/test_base_bucket.py -q`
 
 Expected: all selected tests pass and existing custom buckets require no changes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/general_manager/bucket/projection.py src/general_manager/bucket/base_bucket.py tests/unit/test_bucket_projection.py tests/unit/test_base_bucket.py
@@ -165,7 +165,7 @@ git commit -m "feat: add portable bucket projections"
 - Consumes: `ProjectionRows`, `_bucket_index_source_signature()`, and `_project_rows()`
 - Produces: `BUCKET_PROJECTION_PREFIX`, `BucketProjectionRunCacheEntry`, `get_bucket_projection_result()`, `set_bucket_projection_result()`, and `clear_bucket_projections()`
 
-- [ ] **Step 1: Write failing cache tests**
+- [x] **Step 1: Write failing cache tests**
 
 Test storage, misses, dependency replay, clearing, cross-mode reuse, field-order isolation, no-context behavior, fresh dictionaries, and the boundary:
 
@@ -189,13 +189,13 @@ def test_projection_cache_admission_limit(row_count: int, calls: int) -> None:
 
 Add a nested `DependencyTracker` parity test for a miss and hit.
 
-- [ ] **Step 2: Confirm failures**
+- [x] **Step 2: Confirm failures**
 
 Run: `python -m pytest tests/unit/test_bucket_projection.py tests/unit/test_calculation_run_context.py -q`
 
 Expected: new cache tests fail because projection context methods do not exist.
 
-- [ ] **Step 3: Implement run-context entries**
+- [x] **Step 3: Implement run-context entries**
 
 Mirror bucket-index storage:
 
@@ -217,21 +217,21 @@ def _bucket_projection_cache_key(
 
 `get_bucket_projection_result()` rejects wrong entry types and replays dependencies with `_track_validated()`. The setter freezes dependencies. Clearing discards the prefix.
 
-- [ ] **Step 4: Integrate cache orchestration**
+- [x] **Step 4: Integrate cache orchestration**
 
 Add `MAX_RUN_SCOPED_PROJECTION_ROWS = 10_000`. Validate, call the optional historical guard, then use `current_calculation_run_context()` without `ensure_calculation_run_context()`. Evaluate misses inside `DependencyTracker`; retain only results at or below the limit. Use `_bucket_index_source_signature()` for cache identity.
 
-- [ ] **Step 5: Add and satisfy mutation invalidation tests**
+- [x] **Step 5: Add and satisfy mutation invalidation tests**
 
 Extend pre/post mutation tests in `tests/unit/test_signals.py` to assert `clear_bucket_projections()` is called beside existing clears. Add that call at both active-context sites in `cache/signals.py`.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run: `python -m pytest tests/unit/test_bucket_projection.py tests/unit/test_calculation_run_context.py tests/unit/test_signals.py -q`
 
 Expected: all selected tests pass, including 10,000 retention, 10,001 bypass, dependency replay, and mutation clearing.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/general_manager/cache/run_context.py src/general_manager/cache/signals.py src/general_manager/bucket/projection.py tests/unit/test_bucket_projection.py tests/unit/test_calculation_run_context.py tests/unit/test_signals.py
@@ -250,7 +250,7 @@ git commit -m "feat: cache bucket projections per run"
 - Consumes: shared shaping and `ProjectionRows`
 - Produces: explicit grouped public methods, `_project_rows()`, and identity source signature
 
-- [ ] **Step 1: Write failing grouped tests**
+- [x] **Step 1: Write failing grouped tests**
 
 Cover keys, aggregates, sorted/sliced order, fresh dictionaries, active-run reuse, and delegated historical rejection:
 
@@ -264,13 +264,13 @@ def test_group_bucket_projects_keys_and_aggregates(self) -> None:
     assert grouped.values_list("category", flat=True) == ("A", "B")
 ```
 
-- [ ] **Step 2: Confirm missing-method failure**
+- [x] **Step 2: Confirm missing-method failure**
 
 Run: `python -m pytest tests/unit/test_group_manager.py -q`
 
 Expected: new tests fail because virtual registration does not inherit methods.
 
-- [ ] **Step 3: Implement grouped delegation**
+- [x] **Step 3: Implement grouped delegation**
 
 Add the same overloads as `Bucket`, a portable `_project_rows()` over `self`, and:
 
@@ -279,7 +279,7 @@ def _bucket_index_source_signature(self) -> Hashable:
     return (self.__class__, self._manager_class, id(self))
 ```
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 Run: `python -m pytest tests/unit/test_group_manager.py tests/unit/test_bucket_projection.py -q`
 
@@ -304,7 +304,7 @@ git commit -m "feat: project grouped bucket values"
 - Consumes: portable fallback and projection cache
 - Produces: `MeasurementField._from_stored_components(value, unit)` and `DatabaseBucket._project_rows(fields)`
 
-- [ ] **Step 1: Extract measurement reconstruction with failing tests**
+- [x] **Step 1: Extract measurement reconstruction with failing tests**
 
 Test normal values, `None`, invalid units, and incompatible units. Move descriptor logic into:
 
@@ -322,7 +322,7 @@ def _from_stored_components(self, value: object, unit: object) -> Measurement | 
 
 Run `python -m pytest tests/unit/test_measurement_field.py -q` before and after refactoring `__get__()` to delegate. Expected: missing-helper failure, then pass.
 
-- [ ] **Step 2: Write failing native database tests**
+- [x] **Step 2: Write failing native database tests**
 
 Cover scalar and measurement fields, PK privacy, file/image strings where fixtures permit, order, slice/filter/exclude/sort preservation, historical conflicts, dependencies, equivalent-query cache reuse, and fallback:
 
@@ -335,21 +335,21 @@ def test_native_projection_avoids_manager_construction(self) -> None:
 
 Add relation and `GraphQLProperty` cases that spy on manager hydration and compare against ordinary iteration.
 
-- [ ] **Step 3: Confirm native assertions fail**
+- [x] **Step 3: Confirm native assertions fail**
 
 Run: `python -m pytest tests/unit/test_database_bucket.py -q`
 
 Expected: manager-construction and query-count assertions fail through portable fallback.
 
-- [ ] **Step 4: Implement all-or-nothing ORM planning**
+- [x] **Step 4: Implement all-or-nothing ORM planning**
 
 Plan only concrete non-relation fields and logical `MeasurementField` values. Reject properties, relations, collections, generic relations, and unsafe descriptors. Deduplicate concrete columns while retaining caller field order. Select `pk` plus planned columns with `values_list()` from the existing queryset.
 
-- [ ] **Step 5: Reconstruct rows and dependencies**
+- [x] **Step 5: Reconstruct rows and dependencies**
 
 Call `_ensure_as_of_compatible()` and `_track_effective_dependencies()`. For each row track `{"id": primary_key}`, reconstruct measurements through the extracted helper, normalize file/image strings, and build canonical rows. If planning fails, delegate before issuing a projection query.
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 Run: `python -m pytest tests/unit/test_measurement_field.py tests/unit/test_database_bucket.py tests/unit/test_bucket_projection.py -q`
 
@@ -375,7 +375,7 @@ git commit -m "feat: optimize database bucket projections"
 - Produces: `resolve_calculation_input_value(interface_cls, identification, field_name, resolved_values) -> object`
 - Produces: `CalculationBucket._project_rows(fields) -> ProjectionRows`
 
-- [ ] **Step 1: Write failing resolver and native-projection tests**
+- [x] **Step 1: Write failing resolver and native-projection tests**
 
 Cover dependent normalization, optional inputs, manager-valued dependencies, filters/excludes, allowed identifications, input sorting/reversal, historical conflicts, no manager construction, and property fallback:
 
@@ -397,13 +397,13 @@ def test_mixed_property_projection_uses_portable_path(self, _mock_parse) -> None
 
 Add parity between the new resolver and the current interface accessor for an input normalizer with `depends_on`.
 
-- [ ] **Step 2: Confirm failures**
+- [x] **Step 2: Confirm failures**
 
 Run: `python -m pytest tests/unit/test_calculation_bucket.py -q`
 
 Expected: shared-resolver and no-manager tests fail.
 
-- [ ] **Step 3: Extract calculation input resolution**
+- [x] **Step 3: Extract calculation input resolution**
 
 Move recursive resolution and cached-manager tracking from the nested lifecycle closure into `input_resolution.py`:
 
@@ -436,11 +436,11 @@ def resolve_calculation_input_value(
 
 The lifecycle accessor passes its per-interface `_resolved_input_values` dictionary into this helper, preserving current caching.
 
-- [ ] **Step 4: Implement input-only projection**
+- [x] **Step 4: Implement input-only projection**
 
 If every field is in `self.input_fields`, call `generate_combinations()` once. Resolve requested inputs for each identification using one row-local `resolved_values` dictionary. If any field is not an input, delegate the complete call to `super()._project_rows(fields)`. Do not duplicate filtering or sorting logic outside `generate_combinations()`.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run: `python -m pytest tests/unit/test_calculation_bucket.py tests/unit/test_bucket_projection.py -q`
 
@@ -463,7 +463,7 @@ git commit -m "feat: optimize calculation bucket projections"
 - Produces: `RequestBucket._ensure_raw_items() -> tuple[RequestPayload, ...]`
 - Preserves: `RequestBucket._ensure_items() -> tuple[GeneralManagerType, ...]`
 
-- [ ] **Step 1: Write failing staged-materialization tests**
+- [x] **Step 1: Write failing staged-materialization tests**
 
 Prove raw materialization executes once, applies local predicates, retains count behavior, raises the existing partial-pagination error, and delays managers:
 
@@ -478,19 +478,19 @@ def test_raw_materialization_executes_without_building_managers(self) -> None:
 
 Add an empty-result test proving `_materialized=True` distinguishes an executed empty plan.
 
-- [ ] **Step 2: Confirm the missing stage**
+- [x] **Step 2: Confirm the missing stage**
 
 Run: `python -m pytest tests/unit/test_request_interface.py -q`
 
 Expected: `_ensure_raw_items()` is missing and current evaluation constructs managers.
 
-- [ ] **Step 3: Refactor without public behavior changes**
+- [x] **Step 3: Refactor without public behavior changes**
 
 Move execution, local predicates, pagination validation, count override, raw storage, and `_materialized=True` into `_ensure_raw_items()`. Make `_ensure_items()` call the raw stage, construct managers only when necessary, and attach payload caches with `zip(..., strict=True)`.
 
 Constructor-supplied items/raw items, pickle restoration, slices, unions, `none()`, and `with_instances()` must retain existing behavior.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 Run: `python -m pytest tests/unit/test_request_interface.py -q`
 
@@ -513,7 +513,7 @@ git commit -m "refactor: split request payload materialization"
 - Consumes: `_ensure_raw_items()` and portable fallback
 - Produces: `RequestBucket._project_rows(fields) -> ProjectionRows`
 
-- [ ] **Step 1: Write failing native request tests**
+- [x] **Step 1: Write failing native request tests**
 
 Cover inputs, source paths, defaults, required-field errors, normalizers, local predicates, lazy execution once, identification dependencies, unsupported historical reads, manager-only fallback, and property fallback:
 
@@ -534,13 +534,13 @@ def test_materialized_request_subset_uses_portable_projection(self) -> None:
 
 Compare dependency sets from native and portable evaluation.
 
-- [ ] **Step 2: Confirm native assertions fail**
+- [x] **Step 2: Confirm native assertions fail**
 
 Run: `python -m pytest tests/unit/test_request_interface.py -q`
 
 Expected: no-manager assertion fails through portable projection.
 
-- [ ] **Step 3: Implement raw-payload projection**
+- [x] **Step 3: Implement raw-payload projection**
 
 Use native projection only when every field is in `input_fields` or declared request `fields`, and the bucket has a request plan or raw snapshot. Manager-only buckets delegate completely.
 
@@ -555,7 +555,7 @@ else:
 
 Call `ensure_as_of_read_supported()` before raw materialization. Do not rerun an executed empty request.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 Run: `python -m pytest tests/unit/test_request_interface.py tests/unit/test_bucket_projection.py tests/unit/test_calculation_run_context.py -q`
 
@@ -583,7 +583,7 @@ git commit -m "feat: optimize request bucket projections"
 **Interfaces:**
 - Produces: stable `general_manager.bucket` imports for the four projection errors
 
-- [ ] **Step 1: Add registry entries and prove the snapshot is stale**
+- [x] **Step 1: Add registry entries and prove the snapshot is stale**
 
 Add all four exception targets to `BUCKET_EXPORTS` and run:
 
@@ -591,13 +591,13 @@ Add all four exception targets to `BUCKET_EXPORTS` and run:
 
 Expected: snapshot-registry mismatch.
 
-- [ ] **Step 2: Regenerate type modules and snapshot**
+- [x] **Step 2: Regenerate type modules and snapshot**
 
 Run: `python scripts/generate_public_api_types.py`
 
 Inspect the diff and retain only generator changes corresponding to the four bucket exceptions.
 
-- [ ] **Step 3: Document exact behavior**
+- [x] **Step 3: Document exact behavior**
 
 Document signatures, tuple/dict shapes, explicit field namespace, validation order, shallow snapshots, native/portable selection, historical behavior, and authorization boundary in `docs/api/core.md`.
 
@@ -611,19 +611,19 @@ daily_values = rows.values("volume_date", "quantity")
 daily_dates = rows.values_list("volume_date", flat=True)
 ```
 
-- [ ] **Step 4: Run export/docs tests**
+- [x] **Step 4: Run export/docs tests**
 
 Run: `python -m pytest tests/unit/test_public_api_init_modules.py tests/unit/test_generate_public_api_types.py tests/docs/test_public_api_docs_coverage.py -q`
 
 Expected: registry, snapshot, lazy exports, generated types, and docs coverage pass.
 
-- [ ] **Step 5: Re-run focused bucket matrix**
+- [x] **Step 5: Re-run focused bucket matrix**
 
 Run: `python -m pytest tests/unit/test_bucket_projection.py tests/unit/test_base_bucket.py tests/unit/test_database_bucket.py tests/unit/test_calculation_bucket.py tests/unit/test_request_interface.py tests/unit/test_group_manager.py -q`
 
 Expected: all selected tests pass against the documented contract.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/general_manager/public_api_registry.py src/general_manager/_types/bucket.py tests/snapshots/public_api_exports.json docs/api/core.md docs/api/cache.md docs/concepts/models_entities.md docs/concepts/caching.md docs/howto/cache_dependent_calculation.md
@@ -641,7 +641,7 @@ git commit -m "docs: publish bucket projection API"
 - Consumes: all prior tasks
 - Produces: evidence that the complete implementation meets the spec
 
-- [ ] **Step 1: Run the focused matrix**
+- [x] **Step 1: Run the focused matrix**
 
 ```bash
 python -m pytest \
@@ -661,7 +661,7 @@ python -m pytest \
 
 Expected: zero failures.
 
-- [ ] **Step 2: Run formatting and lint**
+- [x] **Step 2: Run formatting and lint**
 
 ```bash
 ruff format --check src/general_manager tests
@@ -670,13 +670,13 @@ ruff check src/general_manager tests
 
 Expected: both commands exit zero without changes.
 
-- [ ] **Step 3: Run strict typing**
+- [x] **Step 3: Run strict typing**
 
 Run: `mypy src/general_manager`
 
 Expected: zero type errors, including both overload branches.
 
-- [ ] **Step 4: Run the full suite and hooks**
+- [x] **Step 4: Run the full suite and hooks**
 
 ```bash
 python -m pytest -q
@@ -685,7 +685,7 @@ pre-commit run --all-files
 
 Expected: zero test failures and every hook passes.
 
-- [ ] **Step 5: Audit final scope**
+- [x] **Step 5: Audit final scope**
 
 ```bash
 git status --short
@@ -695,6 +695,6 @@ git log --oneline --decorate -10
 
 Confirm there is no dependency, migration, setting, version, changelog, lazy-result, partial-optimization, implicit-all-fields, public row-limit, or `values_index_many()` change.
 
-- [ ] **Step 6: Request code review**
+- [x] **Step 6: Request code review**
 
 Use `superpowers:requesting-code-review` against the complete implementation. Address only verified findings, rerun affected focused tests after corrections, and repeat Steps 1-5 before completion.

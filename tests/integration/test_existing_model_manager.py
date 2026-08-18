@@ -898,7 +898,7 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
 
         self.assertEqual(historical_owner.name, "Secondary old owner")
 
-    def test_database_bucket_native_projection_preserves_secondary_alias(self):
+    def test_database_bucket_native_projection_preserves_secondary_alias(self) -> None:
         record = self.MultiDatabaseRecord.objects.using("secondary").create(
             name="secondary projection",
         )
@@ -913,6 +913,7 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
                 "__init__",
                 side_effect=AssertionError("native projection hydrated a manager"),
             ),
+            self.assertNumQueries(0, using="default"),
             self.assertNumQueries(1, using="secondary"),
         ):
             projected = bucket.values_list("name", flat=True)

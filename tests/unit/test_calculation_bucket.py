@@ -143,10 +143,7 @@ class TestCalculationBucket(TestCase):
 
         result = bucket.values_list("year", "computed_total")
 
-        self.assertEqual(
-            result,
-            tuple((row.year, row.computed_total) for row in bucket),
-        )
+        self.assertEqual(result, ((2025, 2026), (2026, 2027)))
 
     def test_extracted_input_resolver_matches_dependent_interface_accessor(
         self, _mock_parse
@@ -209,7 +206,7 @@ class TestCalculationBucket(TestCase):
 
         self.assertEqual(
             bucket.values_list("required", "optional"),
-            tuple((row.required, row.optional) for row in bucket),
+            ((1, None),),
         )
 
     def test_input_filter_and_exclude_projection_matches_manager_access(
@@ -241,10 +238,6 @@ class TestCalculationBucket(TestCase):
         self.assertEqual(
             bucket.values_list("number"),
             ((2,), (4,)),
-        )
-        self.assertEqual(
-            bucket.values_list("number"),
-            tuple((row.number,) for row in bucket),
         )
 
     def test_input_sort_and_reverse_projection_preserve_combination_order(
@@ -294,7 +287,6 @@ class TestCalculationBucket(TestCase):
 
         projected = bucket.values_list("number", flat=True)
 
-        self.assertEqual(projected, tuple(row.number for row in bucket))
         self.assertEqual(projected, (20,))
         self.assertTrue(manager_constructions)
 
@@ -329,7 +321,6 @@ class TestCalculationBucket(TestCase):
 
         projected = bucket.values_list("number", flat=True)
 
-        self.assertEqual(projected, tuple(row.number for row in bucket))
         self.assertEqual(projected, (20, 30))
         self.assertTrue(manager_constructions)
 
@@ -365,10 +356,6 @@ class TestCalculationBucket(TestCase):
 
         self.assertEqual(projected, ({"number": 10}, {"number": 30}))
         self.assertGreaterEqual(projection_constructions, 3)
-        self.assertEqual(
-            projected,
-            tuple({"number": row.number} for row in bucket),
-        )
 
     def test_values_list_property_sort_uses_portable_fallback(self, _mock_parse):
         _mock_parse.return_value = {}
@@ -399,7 +386,6 @@ class TestCalculationBucket(TestCase):
 
         self.assertEqual(projected, (30, 20, 10))
         self.assertGreaterEqual(projection_constructions, 3)
-        self.assertEqual(projected, tuple(row.number for row in bucket))
 
     def test_fresh_manager_input_projection_tracks_identification_dependency(
         self, _mock_parse

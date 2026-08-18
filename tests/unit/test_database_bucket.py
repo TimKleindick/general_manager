@@ -9,6 +9,7 @@ from django.contrib.auth.models import Group
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
+from django.db.models.fields.files import FieldFile, ImageFieldFile
 from django.db.models import Prefetch, functions
 from django.db.models.query import QuerySet
 from django.test import TestCase, TransactionTestCase
@@ -1958,7 +1959,7 @@ class DatabaseBucketNativeFieldTestCase(TransactionTestCase):
             object_id=self.target.pk,
         )
 
-    def test_native_projection_reconstructs_measurements_and_file_strings(self):
+    def test_native_projection_reconstructs_measurements_and_file_objects(self):
         bucket = DatabaseBucket(
             NativeProjectionFixtureModel.objects.order_by("id"),
             NativeProjectionFixtureManager,
@@ -1975,16 +1976,41 @@ class DatabaseBucketNativeFieldTestCase(TransactionTestCase):
             projected = bucket.values_list("amount", "document", "photo")
 
         expected_amount = self.record.amount
+        document = projected[0][1]
+        photo = projected[0][2]
         self.assertEqual(
             projected,
             (
                 (
                     expected_amount,
-                    "projection/report.pdf",
-                    "projection/photo.png",
+                    self.record.document,
+                    self.record.photo,
                 ),
             ),
         )
+        self.assertIs(type(document), FieldFile)
+        self.assertIs(type(photo), ImageFieldFile)
+
+    def test_native_projection_rejects_live_queryset_for_another_model(self):
+        class MismatchedInterface(NativeUserInterface):
+            _model = User
+
+            @classmethod
+            def get_attributes(cls) -> dict[str, object]:
+                return {"name": _instance_attribute_accessor("name")}
+
+            @classmethod
+            def get_attribute_types(cls) -> dict[str, dict[str, object]]:
+                return {"name": {"type": str, "is_derived": False}}
+
+        class MismatchedManager(GeneralManager):
+            pass
+
+        MismatchedManager.Interface = MismatchedInterface
+        MismatchedInterface._parent_class = MismatchedManager
+        bucket = DatabaseBucket(Group.objects.all(), MismatchedManager)
+
+        self.assertIsNone(bucket._native_projection_plan(("name",)))
 
     def test_generic_foreign_key_projection_falls_back_to_public_value(self):
         bucket = DatabaseBucket(

@@ -685,6 +685,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             return True
 
         sorted_filters = self._sort_filters(self.topological_sort_inputs())
+        return self._filters_or_sort_require_manager_access(sorted_filters)
+
+    def _filters_or_sort_require_manager_access(
+        self,
+        sorted_filters: SortedFilters,
+    ) -> bool:
+        """Return whether property filters or sorting need manager values."""
         if sorted_filters["prop_filters"] or sorted_filters["prop_excludes"]:
             return True
         return not self._sort_uses_only_inputs(self._normalized_sort_key())
@@ -837,10 +844,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                         manager_combinations
                     )
                 sort_key = self._normalized_sort_key()
-                needs_manager_access = (
-                    bool(sorted_filters["prop_filters"])
-                    or bool(sorted_filters["prop_excludes"])
-                    or not self._sort_uses_only_inputs(sort_key)
+                needs_manager_access = self._filters_or_sort_require_manager_access(
+                    sorted_filters
                 )
 
                 if needs_manager_access:
