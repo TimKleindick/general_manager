@@ -276,9 +276,11 @@ iterables are returned directly and are not copied into the run cache.
 an existing `CalculationRunContext`, each call evaluates the bucket normally
 and does not retain a projection for another call. Inside one run, dictionary,
 tuple-row, and flat-scalar modes share one canonical tuple-of-tuples entry for
-the same bucket source signature and ordered field tuple. Public result
-containers are reshaped afresh on every call, while their attribute values stay
-shallow and keep normal identity and mutation semantics.
+the same bucket source signature and ordered field tuple. Public `values()`
+dictionaries and outer result tuples are freshly materialized on every call;
+tuple-style rows are immutable canonical tuples and may be reused on a cache
+hit, so inner-tuple identity is not part of the contract. Their attribute
+values stay shallow and keep normal identity and mutation semantics.
 
 The projection miss records the full dependency set produced by the selected
 native or portable evaluation. A later hit replays that set into the active
