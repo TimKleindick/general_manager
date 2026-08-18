@@ -854,21 +854,16 @@ class GeneralManagerTestCase(TestCase):
             pickle.loads(payload)  # noqa: S301
 
     def test_or_operator(self):
-        # Test the __or__ operator
         """
-        Tests that the bitwise OR operator combines two GeneralManager instances by invoking
-        the filter method with their IDs and returns a list of manager instances with correct identifications.
+        Test that manager union normalizes manager identifications for id lookups.
         """
         manager1 = self.manager()
         manager2 = self.manager()
-        result = manager1 | manager2
         with patch.object(
-            self.manager, "filter", return_value=[manager1, manager2]
+            DummyInterface, "filter", return_value=[manager1, manager2]
         ) as mock_filter:
             result = manager1 | manager2
-            mock_filter.assert_called_once_with(
-                id__in=[{"id": "dummy_id"}, {"id": "dummy_id"}]
-            )
+            mock_filter.assert_called_once_with(id__in=["dummy_id", "dummy_id"])
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0].identification, {"id": "dummy_id"})  # type: ignore
@@ -884,6 +879,26 @@ class GeneralManagerTestCase(TestCase):
             _ = manager | object()  # type: ignore[operator]
 
         self.assertIn("Unsupported type for union", str(context.exception))
+
+    def test_or_operator_preserves_composite_identification_mappings(self):
+        manager1 = self.manager()
+        manager2 = self.manager()
+        first_identification = {"country": "DE", "number": 1}
+        second_identification = {"country": "US", "number": 2}
+        manager1._GeneralManager__id = first_identification
+        manager2._GeneralManager__id = second_identification
+
+        with patch.object(DummyInterface, "filter", return_value=[]) as mock_filter:
+            result = manager1 | manager2
+
+        forwarded = mock_filter.call_args.kwargs["id__in"]
+        self.assertEqual(
+            forwarded,
+            [first_identification, second_identification],
+        )
+        self.assertIsNot(forwarded[0], first_identification)
+        self.assertIsNot(forwarded[1], second_identification)
+        self.assertEqual(result, [])
 
     def test_manager_core_errors_are_public_exports(self):
         from general_manager.manager import (

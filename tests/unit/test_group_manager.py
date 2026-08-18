@@ -3,6 +3,7 @@ from datetime import date
 from typing import ClassVar
 from django.test import TestCase
 from general_manager.api.property import GraphQLProperty
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.group_manager import (
     GroupManager,
 )
@@ -326,6 +327,35 @@ class GroupManagerCombineValueTests(TestCase):
         )
         result = gm.combine_value("field")
         self.assertEqual(result, Measurement(3, "m"))
+
+    def test_combine_distinct_managers_preserves_union_bucket(self):
+        class RelatedInterface:
+            def __init__(self, manager_id):
+                self.identification = {"id": manager_id}
+
+            @classmethod
+            def filter(cls, **kwargs):
+                return ListBucket(
+                    RelatedManager(manager_id)
+                    for manager_id in dict.fromkeys(kwargs["id__in"])
+                )
+
+        class RelatedManager(GeneralManager):
+            pass
+
+        RelatedManager.Interface = RelatedInterface
+        gm = self.helper_make_group_manager(
+            [RelatedManager(1), RelatedManager(2)],
+            RelatedManager,
+        )
+
+        result = gm.combine_value("field")
+
+        self.assertIsInstance(result, ListBucket)
+        self.assertEqual(
+            [manager.identification for manager in result],
+            [{"id": 2}, {"id": 1}],
+        )
 
     def test_iterate_group_manager(self):
         # Test that iterating over GroupManager yields correct items

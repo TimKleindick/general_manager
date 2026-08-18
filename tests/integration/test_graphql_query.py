@@ -261,6 +261,27 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         items = response.json()["data"]["projectList"]["items"]
         self.assertEqual([item["name"] for item in items], ["Able", "Zed", "Beta"])
 
+    def test_grouped_query_resolves_relation_grouped_by_scalar_id(self):
+        commercials = self.commercials.Factory.create(name="Shared")
+        self.project.Factory.create(name="First", commercials=commercials)
+        self.project.Factory.create(name="Second", commercials=commercials)
+        query = """
+        query {
+          projectList(groupBy: ["commercials_id"]) {
+            items { commercials { id name } }
+          }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["projectList"]["items"]
+        self.assertEqual(
+            items,
+            [{"commercials": {"id": commercials.id, "name": "Shared"}}],
+        )
+
     def test_grouped_compound_relation_sort_applies_pagination_after_sorting(self):
         self._create_projects_for_relation_sorting()
         query = """

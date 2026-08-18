@@ -411,7 +411,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         if isinstance(other, Bucket):
             return other | self
         elif isinstance(other, GeneralManager) and other.__class__ == self.__class__:
-            return self.filter(id__in=[self.__id, other.__id])
+            return self.filter(id__in=[self, other])
         else:
             raise UnsupportedUnionOperandError(type(other))
 

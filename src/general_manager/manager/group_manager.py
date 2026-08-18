@@ -189,11 +189,12 @@ class GroupManager(Generic[GeneralManagerType]):
 
         Returns:
             Aggregated value for `item`: group `"id"`, empty buckets, and
-            all-`None` values return `None`; bucket/manager values are unioned
-            with `|`; lists are concatenated; dicts are merged with later values
-            overwriting earlier keys; strings are deduplicated in encounter
-            order and joined by `", "`; booleans use `any()` before numeric
-            handling; numeric and `Measurement` values are summed;
+            all-`None` values return `None`; repeated identical manager values
+            collapse to that manager, while distinct managers and bucket values
+            are unioned with `|`; lists are concatenated; dicts are merged with
+            later values overwriting earlier keys; strings are deduplicated in
+            encounter order and joined by `", "`; booleans use `any()` before
+            numeric handling; numeric and `Measurement` values are summed;
             datetime/date/time values use `max()`. The aggregation branch is
             selected from interface metadata or a concrete `GraphQLProperty`
             return annotation, not from each runtime value, so mixed runtime
@@ -237,7 +238,21 @@ class GroupManager(Generic[GeneralManagerType]):
             return new_data
         total_data = [i for i in total_data if i is not None]
 
-        if issubclass(data_type, (Bucket, GeneralManager)):
+        if issubclass(data_type, GeneralManager):
+            first_manager = cast(GeneralManager, total_data[0])
+            if all(
+                value.__class__ == first_manager.__class__
+                and value.identification == first_manager.identification
+                for value in cast(list[GeneralManager], total_data)
+            ):
+                new_data = first_manager
+            else:
+                for value in total_data:
+                    if new_data is None:
+                        new_data = value
+                    else:
+                        new_data = value | new_data  # type: ignore[operator]
+        elif issubclass(data_type, Bucket):
             for value in total_data:
                 if new_data is None:
                     new_data = value
