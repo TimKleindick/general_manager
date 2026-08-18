@@ -746,6 +746,83 @@ class TestRequestInterface(SimpleTestCase):
 
         self.assertEqual(len(RemoteProject.Interface.calls), 1)
 
+    def test_equivalent_lazy_request_buckets_share_one_active_run_projection(
+        self,
+    ) -> None:
+        first = RemoteProject.filter(status="active")
+        second = RemoteProject.filter(status="active")
+
+        with CalculationRunContext():
+            self.assertEqual(
+                first.values_list("id", "name"),
+                ((1, "Alpha"), (2, "Beta")),
+            )
+            self.assertEqual(
+                second.values("id", "name"),
+                (
+                    {"id": 1, "name": "Alpha"},
+                    {"id": 2, "name": "Beta"},
+                ),
+            )
+
+        self.assertEqual(len(RemoteProject.Interface.calls), 1)
+
+    def test_serialized_manager_items_with_retained_plan_use_portable_projection(
+        self,
+    ) -> None:
+        source = RemoteProject.filter(status="active")
+        items = tuple(source)
+        serialized = RequestBucket(
+            RemoteProject,
+            RemoteProject.Interface,
+            request_plan=source.request_plan,
+            items=items,
+        )
+        restored = _trusted_pickle_loads(pickle.dumps(serialized))
+        calls_before_projection = len(RemoteProject.Interface.calls)
+
+        self.assertEqual(
+            restored.values_list("id"),
+            ((1,), (2,)),
+        )
+        self.assertEqual(len(RemoteProject.Interface.calls), calls_before_projection)
+
+    def test_serialized_empty_manager_items_with_retained_plan_do_not_collide(
+        self,
+    ) -> None:
+        broad = RemoteProject.all()
+        serialized = RequestBucket(
+            RemoteProject,
+            RemoteProject.Interface,
+            request_plan=broad.request_plan,
+            items=(),
+        )
+        restored = _trusted_pickle_loads(pickle.dumps(serialized))
+        self.assertNotEqual(
+            restored._bucket_index_source_signature(),
+            broad._bucket_index_source_signature(),
+        )
+
+        with CalculationRunContext():
+            self.assertEqual(restored.values_list("id", "name"), ())
+            self.assertEqual(
+                broad.values_list("id", "name"),
+                ((1, "Alpha"), (2, "Beta")),
+            )
+
+        self.assertEqual(len(RemoteProject.Interface.calls), 1)
+
+    def test_pickled_unmaterialized_plan_is_conservative_after_restore(self) -> None:
+        lazy = RemoteProject.all()
+        restored = _trusted_pickle_loads(pickle.dumps(lazy))
+        broad = RemoteProject.all()
+
+        with CalculationRunContext():
+            self.assertEqual(restored.values_list("id"), ())
+            self.assertEqual(broad.values_list("id"), ((1,), (2,)))
+
+        self.assertEqual(len(RemoteProject.Interface.calls), 1)
+
     def test_request_projection_rejects_unsupported_historical_reads_before_raw_access(
         self,
     ) -> None:

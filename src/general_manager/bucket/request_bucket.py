@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator, Hashable, Iterable, Mapping
 from operator import attrgetter
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
 from general_manager.bucket.projection import ProjectionRows
@@ -29,6 +29,14 @@ RequestLookupValues = tuple[object, ...]
 RequestLookupMap = Mapping[str, RequestLookupValues]
 RequestLookupDict = dict[str, RequestLookupValues]
 RequestBucketState = dict[str, object]
+RequestBucketSourceKind = Literal["manager", "plan", "snapshot"]
+
+# Keep source provenance separate from payload truthiness: an executed request
+# can legitimately have an empty raw snapshot, while serialized manager items
+# can retain the request plan as metadata.
+_MANAGER_SOURCE: RequestBucketSourceKind = "manager"
+_PLAN_SOURCE: RequestBucketSourceKind = "plan"
+_SNAPSHOT_SOURCE: RequestBucketSourceKind = "snapshot"
 
 
 class RequestQueryBucketCapability(Protocol[GeneralManagerType]):
@@ -147,6 +155,14 @@ class RequestBucket(Bucket[GeneralManagerType]):
         self.request_plan = request_plan
         self.filters: RequestLookupDict = dict(filters or {})
         self.excludes: RequestLookupDict = dict(excludes or {})
+        if items is not None:
+            self._raw_source_kind = _MANAGER_SOURCE
+        elif raw_items is not None:
+            self._raw_source_kind = _SNAPSHOT_SOURCE
+        elif request_plan is not None:
+            self._raw_source_kind = _PLAN_SOURCE
+        else:
+            self._raw_source_kind = _MANAGER_SOURCE
         self._raw_items = tuple(raw_items or ())
         if items is not None:
             self._data: tuple[GeneralManagerType, ...] = tuple(items)
@@ -182,6 +198,11 @@ class RequestBucket(Bucket[GeneralManagerType]):
                 "items": self._data,
                 "raw_items": self._raw_items,
                 "count_override": self._count_override,
+                "raw_source_kind": (
+                    _MANAGER_SOURCE
+                    if self._raw_source_kind == _PLAN_SOURCE
+                    else self._raw_source_kind
+                ),
             },
         )
 
@@ -197,6 +218,14 @@ class RequestBucket(Bucket[GeneralManagerType]):
         self.filters = dict(cast(RequestLookupMap, state["filters"]))
         self.excludes = dict(cast(RequestLookupMap, state["excludes"]))
         self._raw_items = tuple(cast(tuple[RequestPayload, ...], state["raw_items"]))
+        raw_source_kind = state.get("raw_source_kind")
+        if raw_source_kind not in (
+            _MANAGER_SOURCE,
+            _PLAN_SOURCE,
+            _SNAPSHOT_SOURCE,
+        ):
+            raw_source_kind = _SNAPSHOT_SOURCE if self._raw_items else _MANAGER_SOURCE
+        self._raw_source_kind = raw_source_kind
         if self._raw_items:
             self._data = tuple(
                 self._manager_class(
@@ -263,7 +292,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
 
     def _bucket_index_source_signature(self) -> Hashable:
         """Return a stable request signature, or object identity for materialized data."""
-        if self.request_plan is not None:
+        if self._raw_source_kind != _MANAGER_SOURCE and self.request_plan is not None:
             restore_func, restore_args = self.request_plan.__reduce__()
             return (
                 "request",
@@ -289,7 +318,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
         )
         if not set(fields) <= native_fields:
             return super()._project_rows(fields)
-        if self.request_plan is None and not self._raw_items:
+        if self._raw_source_kind == _MANAGER_SOURCE:
             return super()._project_rows(fields)
 
         rows: list[tuple[object, ...]] = []
@@ -504,6 +533,8 @@ class RequestBucket(Bucket[GeneralManagerType]):
     def _ensure_items(self) -> tuple[GeneralManagerType, ...]:
         ensure_as_of_read_supported(self._interface_cls)
         if self._data:
+            if self._raw_source_kind == _PLAN_SOURCE:
+                self._raw_source_kind = _MANAGER_SOURCE
             self._materialized = True
             return self._data
         raw_items = self._ensure_raw_items()
@@ -520,17 +551,18 @@ class RequestBucket(Bucket[GeneralManagerType]):
     def _ensure_raw_items(self) -> tuple[RequestPayload, ...]:
         """Materialize request payloads without constructing manager instances."""
         ensure_as_of_read_supported(self._interface_cls)
-        if self._raw_items:
+        if self._raw_source_kind == _MANAGER_SOURCE:
             self._materialized = True
-            return self._raw_items
-        if self._data:
+            return ()
+        if self._raw_source_kind == _SNAPSHOT_SOURCE:
             self._materialized = True
             return self._raw_items
         if self._materialized:
             return self._raw_items
         if self.request_plan is None:
+            self._raw_source_kind = _MANAGER_SOURCE
             self._materialized = True
-            return self._raw_items
+            return ()
 
         handler = self._query_handler()
         result = handler.execute_plan(self._interface_cls, self.request_plan)
@@ -554,6 +586,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
         else:
             self._count_override = result.total_count
         self._raw_items = raw_items
+        self._raw_source_kind = _SNAPSHOT_SOURCE
         self._materialized = True
         return self._raw_items
 
