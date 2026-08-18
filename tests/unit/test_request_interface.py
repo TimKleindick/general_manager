@@ -7,14 +7,17 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
+from general_manager.api.property import GraphQLProperty
 from general_manager.bucket.request_bucket import RequestBucket
 from general_manager.as_of import HistoricalReadNotSupportedError, as_of
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.bundles import REQUEST_CAPABILITIES
 from general_manager.interface.capabilities.request import RequestQueryCapability
 from general_manager.interface import RequestInterface
 from general_manager.interface.requests import (
     InvalidRequestFilterValueError,
+    MissingRequestPayloadFieldError,
     RequestExcludeNotSupportedError,
     RequestField,
     RequestFilter,
@@ -188,6 +191,61 @@ RemoteProject._attributes = RemoteProject.Interface.get_attributes()
 GeneralManagerMeta.create_at_properties_for_attributes(
     RemoteProject._attributes.keys(),
     RemoteProject,
+)
+
+
+class PayloadProject(GeneralManager):
+    class Interface(RequestInterface):
+        id = Input(type=int)
+
+        display_name = RequestField(
+            str,
+            source=("record", "name"),
+            normalizer=lambda value: str(value).upper(),
+        )
+        optional_label = RequestField(
+            str,
+            source=("record", "optional"),
+            default="UNKNOWN",
+            is_required=False,
+        )
+        required_label = RequestField(
+            str,
+            source=("record", "required"),
+        )
+
+        class Meta:
+            query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                "detail": RequestQueryOperation(
+                    name="detail",
+                    method="GET",
+                    path="/payload-projects/{id}",
+                ),
+                "list": RequestQueryOperation(
+                    name="list",
+                    method="GET",
+                    path="/payload-projects",
+                ),
+            }
+
+        calls: ClassVar[list[dict[str, Any]]] = []
+
+        @classmethod
+        def execute_request_plan(cls, plan: RequestQueryPlan) -> RequestQueryResult:
+            cls.calls.append({"plan": plan})
+            return RequestQueryResult(
+                items=(
+                    {"id": 1, "record": {"name": "alpha"}},
+                    {"id": 2, "record": {"name": "beta", "optional": "known"}},
+                ),
+                total_count=2,
+            )
+
+
+PayloadProject._attributes = PayloadProject.Interface.get_attributes()
+GeneralManagerMeta.create_at_properties_for_attributes(
+    PayloadProject._attributes.keys(),
+    PayloadProject,
 )
 
 
@@ -594,6 +652,167 @@ class TestRequestInterface(SimpleTestCase):
 
         self.assertEqual([item["id"] for item in raw_items], [1, 2])
         self.assertEqual(bucket.count(), 2)
+
+    def test_request_projection_uses_raw_payload_without_managers(self) -> None:
+        bucket = RemoteProject.filter(status="active")
+
+        with patch.object(RemoteProject, "__init__", side_effect=AssertionError):
+            result = bucket.values_list("id", "name")
+
+        self.assertEqual(result, ((1, "Alpha"), (2, "Beta")))
+
+    def test_request_projection_preserves_payload_resolution_semantics(self) -> None:
+        bucket = PayloadProject.all()
+
+        with patch.object(PayloadProject, "__init__", side_effect=AssertionError):
+            result = bucket.values("id", "display_name", "optional_label")
+
+        self.assertEqual(
+            result,
+            (
+                {"id": 1, "display_name": "ALPHA", "optional_label": "UNKNOWN"},
+                {"id": 2, "display_name": "BETA", "optional_label": "known"},
+            ),
+        )
+        self.assertEqual(len(PayloadProject.Interface.calls), 1)
+
+    def test_request_projection_preserves_required_payload_errors(self) -> None:
+        bucket = PayloadProject.all()
+        missing_required = RequestQueryResult(
+            items=({"id": 1, "record": {"name": "alpha"}},),
+        )
+
+        with patch.object(
+            PayloadProject.Interface,
+            "execute_request_plan",
+            return_value=missing_required,
+        ):
+            with patch.object(PayloadProject, "__init__", side_effect=AssertionError):
+                with self.assertRaises(MissingRequestPayloadFieldError):
+                    bucket.values_list("required_label")
+
+    def test_request_projection_applies_local_predicates_and_count_metadata(
+        self,
+    ) -> None:
+        bucket = RemoteProject.filter(local_name__icontains="alpha")
+
+        with patch.object(RemoteProject, "__init__", side_effect=AssertionError):
+            result = bucket.values_list("id", "name")
+
+        self.assertEqual(result, ((1, "Alpha"),))
+        self.assertEqual(bucket.count(), 1)
+
+    def test_request_projection_rejects_partial_local_pages(self) -> None:
+        bucket = RemoteProject.filter(
+            local_name__icontains="alpha",
+            page=1,
+            page_size=1,
+        )
+        partial_page = RequestQueryResult(
+            items=(
+                {
+                    "id": 1,
+                    "name": "Alpha",
+                    "status": "active",
+                    "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                    "local_name": "Alpha Local",
+                },
+            ),
+            total_count=2,
+        )
+
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=partial_page,
+        ):
+            with patch.object(RemoteProject, "__init__", side_effect=AssertionError):
+                with self.assertRaises(RequestLocalPaginationUnsupportedError):
+                    bucket.values_list("id")
+
+    def test_request_projection_reuses_one_request_in_active_run(self) -> None:
+        bucket = RemoteProject.filter(status="active")
+
+        with CalculationRunContext():
+            with patch.object(RemoteProject, "__init__", side_effect=AssertionError):
+                self.assertEqual(
+                    bucket.values("id", "name"),
+                    ({"id": 1, "name": "Alpha"}, {"id": 2, "name": "Beta"}),
+                )
+                self.assertEqual(
+                    bucket.values_list("id", "name"),
+                    ((1, "Alpha"), (2, "Beta")),
+                )
+
+        self.assertEqual(len(RemoteProject.Interface.calls), 1)
+
+    def test_request_projection_rejects_unsupported_historical_reads_before_raw_access(
+        self,
+    ) -> None:
+        bucket = RemoteProject.filter(status="active")
+
+        with as_of("2022-01-01"):
+            with patch.object(RemoteProject, "__init__", side_effect=AssertionError):
+                with self.assertRaises(HistoricalReadNotSupportedError):
+                    bucket.values_list("id")
+
+        self.assertEqual(RemoteProject.Interface.calls, [])
+
+    def test_request_native_dependencies_match_portable_projection(self) -> None:
+        with DependencyTracker() as native_dependencies:
+            native_bucket = RemoteProject.filter(status="active")
+            native_result = native_bucket.values_list("id", "name")
+
+        with DependencyTracker() as portable_dependencies:
+            portable_source = RemoteProject.filter(status="active")
+            portable_items = tuple(portable_source)
+            portable_bucket = portable_source.with_instances(portable_items)
+            portable_result = portable_bucket.values_list("id", "name")
+
+        self.assertEqual(native_result, portable_result)
+        self.assertEqual(native_dependencies, portable_dependencies)
+
+    def test_materialized_request_subset_uses_portable_projection(self) -> None:
+        source = RemoteProject.filter(status="active")
+        items = tuple(source)
+        subset = source.with_instances(items[:1])
+
+        self.assertEqual(subset.values("name"), ({"name": items[0].name},))
+
+    def test_request_property_projection_falls_back_to_managers(self) -> None:
+        class PropertyProject(GeneralManager):
+            class Interface(RemoteProject.Interface):
+                pass
+
+            @GraphQLProperty
+            def display_name(self) -> str:
+                return self.name.upper()
+
+        PropertyProject._attributes = PropertyProject.Interface.get_attributes()
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            PropertyProject._attributes.keys(),
+            PropertyProject,
+        )
+
+        bucket = PropertyProject.filter(status="active")
+        init_calls = 0
+        original_init = PropertyProject.__init__
+
+        def counting_init(instance: object, *args: object, **kwargs: object) -> None:
+            nonlocal init_calls
+            init_calls += 1
+            original_init(instance, *args, **kwargs)
+
+        with patch.object(
+            PropertyProject,
+            "__init__",
+            autospec=True,
+            side_effect=counting_init,
+        ):
+            result = bucket.values_list("id", "display_name")
+
+        self.assertEqual(result, ((1, "ALPHA"), (2, "BETA")))
+        self.assertEqual(init_calls, 2)
 
     def test_empty_raw_materialization_is_cached_without_rerunning_plan(self) -> None:
         bucket = RemoteProject.all()

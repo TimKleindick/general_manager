@@ -7,6 +7,7 @@ from operator import attrgetter
 from typing import TYPE_CHECKING, Protocol, cast
 
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
+from general_manager.bucket.projection import ProjectionRows
 from general_manager.as_of import ensure_as_of_read_supported
 from general_manager.bucket.indexing import freeze_bucket_index_value
 from general_manager.interface.requests import (
@@ -279,6 +280,31 @@ class RequestBucket(Bucket[GeneralManagerType]):
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """Yield materialized items, executing the request plan at most once."""
         yield from self._ensure_items()
+
+    def _project_rows(self, fields: tuple[str, ...]) -> ProjectionRows:
+        """Project request inputs and fields directly from normalized payloads."""
+        ensure_as_of_read_supported(self._interface_cls)
+        native_fields = set(self._interface_cls.input_fields) | set(
+            self._interface_cls.fields
+        )
+        if not set(fields) <= native_fields:
+            return super()._project_rows(fields)
+        if self.request_plan is None and not self._raw_items:
+            return super()._project_rows(fields)
+
+        rows: list[tuple[object, ...]] = []
+        for payload in self._ensure_raw_items():
+            identification = self._interface_cls.extract_identification(payload)
+            self._manager_class._track_identification_dependency(identification)
+            rows.append(
+                tuple(
+                    identification[field]
+                    if field in self._interface_cls.input_fields
+                    else self._interface_cls.resolve_payload_value(payload, field)
+                    for field in fields
+                )
+            )
+        return tuple(rows)
 
     def filter(self, **kwargs: object) -> "RequestBucket[GeneralManagerType]":
         """Return a bucket restricted by the supplied request or local lookups.
