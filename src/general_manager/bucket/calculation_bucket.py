@@ -30,6 +30,7 @@ from general_manager.interface.base_interface import (
 )
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.indexing import freeze_bucket_index_value
+from general_manager.bucket.projection import ProjectionRows
 from general_manager.manager.input import Input, InputDomain
 from general_manager.utils.filter_parser import (
     FilterFunction,
@@ -40,6 +41,7 @@ from general_manager.utils.filter_parser import (
 if TYPE_CHECKING:
     from general_manager.api.property import GraphQLProperty
     from general_manager.bucket.group_bucket import GroupBucket
+    from general_manager.interface.interfaces.calculation import CalculationInterface
     from general_manager.manager.general_manager import GeneralManager
 
 
@@ -644,6 +646,36 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         combinations = self.generate_combinations()
         for combo in combinations:
             yield self._manager_class(**combo)
+
+    def _project_rows(self, fields: tuple[str, ...]) -> ProjectionRows:
+        """Project normalized calculation inputs without manager instances."""
+        self._ensure_as_of_compatible()
+        if not all(field in self.input_fields for field in fields):
+            return super()._project_rows(fields)
+
+        from general_manager.interface.capabilities.calculation.input_resolution import (
+            resolve_calculation_input_value,
+        )
+
+        interface_class = cast(
+            "type[CalculationInterface]",
+            self._manager_class.Interface,
+        )
+        rows: list[tuple[object, ...]] = []
+        for identification in self.generate_combinations():
+            resolved_values: dict[str, object] = {}
+            rows.append(
+                tuple(
+                    resolve_calculation_input_value(
+                        interface_class,
+                        identification,
+                        field,
+                        resolved_values,
+                    )
+                    for field in fields
+                )
+            )
+        return tuple(rows)
 
     def _sort_filters(self, sorted_inputs: List[str]) -> SortedFilters:
         """
