@@ -5,6 +5,7 @@ from django.test import TestCase
 from datetime import date, datetime, UTC
 from types import SimpleNamespace
 from unittest.mock import patch
+from general_manager.api.property import GraphQLProperty
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.as_of import (
     HistoricalContextConflictError,
@@ -78,6 +79,29 @@ class InputIdentificationManager:
 InputIdentificationInterface._parent_class = InputIdentificationManager
 
 
+class InputCalculationInterface(CalculationInterface):
+    input_fields: ClassVar[dict[str, Input]] = {
+        "region": Input(str, possible_values=["EU"]),
+        "year": Input(int, possible_values=[2025, 2026]),
+    }
+
+
+class InputCalculationManager:
+    Interface = InputCalculationInterface
+
+    def __init__(self, **kwargs):
+        self.identification = dict(kwargs)
+        self.region = kwargs["region"]
+        self.year = kwargs["year"]
+
+    @GraphQLProperty
+    def computed_total(self) -> int:
+        return self.year + 1
+
+
+InputCalculationInterface._parent_class = InputCalculationManager
+
+
 class CountingIterable:
     def __init__(self, values):
         self.values = values
@@ -94,6 +118,70 @@ class CountingIterable:
     return_value={"dummy": {"filter_kwargs": {}}},
 )
 class TestCalculationBucket(TestCase):
+    def test_input_only_projection_does_not_construct_managers(self, _mock_parse):
+        _mock_parse.return_value = {}
+        bucket = CalculationBucket(InputCalculationManager)
+
+        with patch.object(
+            InputCalculationManager,
+            "__init__",
+            side_effect=AssertionError("input projection constructed a manager"),
+        ):
+            self.assertEqual(
+                bucket.values_list("region", "year"),
+                (("EU", 2025), ("EU", 2026)),
+            )
+
+    def test_mixed_property_projection_uses_portable_path(self, _mock_parse):
+        _mock_parse.return_value = {}
+        bucket = CalculationBucket(InputCalculationManager)
+
+        result = bucket.values_list("year", "computed_total")
+
+        self.assertEqual(
+            result,
+            tuple((row.year, row.computed_total) for row in bucket),
+        )
+
+    def test_extracted_input_resolver_matches_dependent_interface_accessor(
+        self, _mock_parse
+    ):
+        class DependentCalculationInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "base": Input(str, possible_values=["alpha"]),
+                "normalized": Input(
+                    str,
+                    possible_values=lambda base: [base.upper()],
+                    depends_on=["base"],
+                    normalizer=lambda value, base: f"{base}:{value.upper()}",
+                ),
+            }
+
+        class DependentCalculationManager:
+            Interface = DependentCalculationInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+
+        DependentCalculationInterface._parent_class = DependentCalculationManager
+        interface = DependentCalculationInterface(base="alpha", normalized="alpha")
+        attributes = DependentCalculationInterface.get_attributes()
+
+        from general_manager.interface.capabilities.calculation.input_resolution import (
+            resolve_calculation_input_value,
+        )
+
+        resolved_values: dict[str, object] = {}
+        self.assertEqual(
+            resolve_calculation_input_value(
+                DependentCalculationInterface,
+                interface.identification,
+                "normalized",
+                resolved_values,
+            ),
+            attributes["normalized"](interface),
+        )
+
     def test_binds_active_as_of_date_and_preserves_it_on_derived_buckets(
         self, _mock_parse
     ):

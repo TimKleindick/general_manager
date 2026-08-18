@@ -12,16 +12,12 @@ from general_manager.manager.input import Input
 from ..base import CapabilityName
 from ..builtin import BaseCapability
 from ._compat import call_with_observability
+from .input_resolution import resolve_calculation_input_value
 
 if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.interfaces.calculation import (
         CalculationInterface,
     )
-
-
-def _track_cached_manager(value: object) -> None:
-    if isinstance(value, GeneralManager):
-        value.__class__._track_identification_dependency(value.identification)
 
 
 class CalculationReadCapability(BaseCapability):
@@ -106,26 +102,12 @@ class CalculationReadCapability(BaseCapability):
             except AttributeError:
                 resolved_values = {}
                 interface_instance._resolved_input_values = resolved_values
-            if field_name in resolved_values:
-                cached_value = resolved_values[field_name]
-                _track_cached_manager(cached_value)
-                return cached_value
-
-            input_field = interface_cls.input_fields[field_name]
-            dependency_values = {
-                dependency_name: _resolve_input_value(
-                    interface_instance,
-                    dependency_name,
-                )
-                for dependency_name in input_field.depends_on
-            }
-            value = input_field.cast(
-                interface_instance.identification.get(field_name),
-                dependency_values,
-                cache_context=(interface_cls._parent_class, field_name),
+            return resolve_calculation_input_value(
+                interface_cls,
+                interface_instance.identification,
+                field_name,
+                resolved_values,
             )
-            resolved_values[field_name] = value
-            return value
 
         def _make_accessor(
             field_name: str,
