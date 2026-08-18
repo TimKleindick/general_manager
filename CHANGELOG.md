@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.73.2 (2026-08-18)
+
+### Bug Fixes
+
+- Normalize grouped relation unions
+  ([`e8c51fa`](https://github.com/TimKleindick/general_manager/commit/e8c51fa8bda5a2fefb883b0a6f7aee9f79d055ff))
+
+### Documentation
+
+- Document async-safe subscription field permissions
+  ([`6f931f2`](https://github.com/TimKleindick/general_manager/commit/6f931f2462f1020ff1bd8f43da5628813173a98a))
+
+
 ## v0.73.1 (2026-08-17)
 
 ### Bug Fixes
