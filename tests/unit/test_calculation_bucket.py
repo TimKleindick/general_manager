@@ -361,13 +361,14 @@ class TestCalculationBucket(TestCase):
         }
 
         projected = bucket.values("number")
+        projection_constructions = len(manager_constructions)
 
+        self.assertEqual(projected, ({"number": 10}, {"number": 30}))
+        self.assertGreaterEqual(projection_constructions, 3)
         self.assertEqual(
             projected,
             tuple({"number": row.number} for row in bucket),
         )
-        self.assertEqual(projected, ({"number": 10}, {"number": 30}))
-        self.assertGreaterEqual(len(manager_constructions), 3)
 
     def test_values_list_property_sort_uses_portable_fallback(self, _mock_parse):
         _mock_parse.return_value = {}
@@ -394,10 +395,11 @@ class TestCalculationBucket(TestCase):
         bucket = CalculationBucket(PropertySortManager, sort_key="descending")
 
         projected = bucket.values_list("number", flat=True)
+        projection_constructions = len(manager_constructions)
 
-        self.assertEqual(projected, tuple(row.number for row in bucket))
         self.assertEqual(projected, (30, 20, 10))
-        self.assertGreaterEqual(len(manager_constructions), 3)
+        self.assertGreaterEqual(projection_constructions, 3)
+        self.assertEqual(projected, tuple(row.number for row in bucket))
 
     def test_fresh_manager_input_projection_tracks_identification_dependency(
         self, _mock_parse
