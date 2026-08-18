@@ -615,6 +615,39 @@ values; cache hits replay stored source dependencies through
 `DependencyTracker.track()` before returning the cached value.
 `clear_bucket_indexes()` clears the bucket-index namespace.
 
+### Bucket projection namespace
+
+`Bucket.values()` and `Bucket.values_list()` use an internal projection
+namespace in the active `CalculationRunContext`. Calls outside an active run
+evaluate normally and do not create a temporary context or retain a projection
+for a later call. Inside one active run, the canonical rows for an equivalent
+source signature and ordered field tuple are shared by dictionary, tuple-row,
+and flat-scalar output modes; output shaping is not part of the cache identity.
+The canonical value is a tuple of tuple rows, and each public call creates its
+own dictionaries or result tuples, so callers cannot mutate the stored row
+containers through a returned `values()` result. Attribute values remain
+shallow and are not recursively copied.
+
+Projection cache hits replay the complete dependency set captured while the
+canonical rows were evaluated into the surrounding `DependencyTracker` before
+returning. A result with at most 10,000 rows is eligible for active-run
+retention. Larger results still succeed, but are intentionally not retained;
+this guardrail is separate from bucket-index and ORM snapshot limits. Database
+mutation hooks clear the projection namespace along with ORM bucket snapshots
+and bucket indexes before and after the mutation. This coarse invalidation is
+intentional because projection dependencies can cross manager and backend
+boundaries. Remote changes do not currently invalidate request data locally;
+request projections therefore follow the existing request-bucket snapshot
+semantics for the lifetime of that object and run.
+
+Retained projection entries participate in the same optional
+`RUN_CONTEXT_CACHE_MAX_BYTES` estimated-memory budget as other run-context
+values. Insertion-time estimates, reserve-aware approximate LRU eviction,
+pending-publication pinning, and the distinction between modeled cache memory
+and process RSS apply without a separate projection budget. The row-retention
+rule controls admission before byte-budget accounting; the byte budget may
+still evict an admitted projection entry under pressure.
+
 ::: general_manager.cache.run_context.current_calculation_run_context
 
 `current_calculation_run_context()` returns the context active in the current

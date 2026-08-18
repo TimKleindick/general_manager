@@ -367,6 +367,32 @@ the row guardrail is checked before key resolution for each row, so guardrail
 errors take precedence over duplicate, missing-field, or unhashable-key errors
 on the first row past the limit.
 
+### Project selected bucket fields
+
+Use projections when a calculation needs a few manager attributes rather than
+complete manager instances:
+
+```python
+rows = DerivativeVolume.filter(derivative=self.derivative)
+daily_values = rows.values("volume_date", "quantity")
+daily_dates = rows.values_list("volume_date", flat=True)
+```
+
+`daily_values` is a tuple of dictionaries keyed by the requested field names;
+`daily_dates` is a flat tuple because exactly one field was requested. The
+outer and row containers are detached shallow snapshots, and the bucket's
+iteration order is preserved. In an active `CalculationRunContext`, equivalent
+projection modes share one canonical evaluation and replay its dependencies;
+outside a run, calls evaluate normally.
+
+Native projection is all-or-nothing for each call. A database, calculation, or
+raw request bucket can avoid manager construction only when every requested
+field is safe for that backend. Including a computed `GraphQLProperty` forces
+the whole call to the portable manager-iteration path; the framework does not
+partially optimize the other fields in a mixed request. The same fallback
+applies to relations and other fields whose public value requires manager
+access.
+
 The stable public API is `Bucket.index_by(...)`, `Bucket.index_many(...)`, and
 the exported bucket-index exception classes. The lower-level
 `general_manager.bucket.indexing` helpers are importable support functions, not

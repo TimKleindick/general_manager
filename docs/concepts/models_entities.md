@@ -57,6 +57,34 @@ same bucket context while returning no rows.
 
 Most application code should depend on the shared bucket behavior returned by manager APIs. Reach for a concrete bucket type only when documenting source-specific behavior, testing evaluation semantics, or extending an interface.
 
+### Projected reads
+
+Every bucket exposes materialized `values(*fields)` and `values_list(*fields,
+flat=False)` reads for reporting and export code that needs attributes without
+manager behavior. Fields are explicit names from the manager interface's
+declared attributes or declared `GraphQLProperty` values; database columns,
+request payload paths, private attributes, and arbitrary properties are not
+implicitly available. `values()` returns a tuple of fresh dictionaries,
+`values_list()` returns a tuple of tuple rows, and `flat=True` returns a tuple
+of scalars for exactly one field. These are shallow snapshots: the containers
+are detached, but mutable attribute values are not deep-copied.
+
+The public contract is backend-neutral and preserves normal source order,
+attribute values, exceptions, dependency tracking, and historical behavior.
+Database, calculation, and raw request buckets use a native plan only when
+every requested field is safe for that backend; if any field needs manager
+access, the whole call falls back to portable manager iteration. Custom buckets
+and grouped buckets use portable behavior, and grouped projections expose the
+existing `GroupManager` rows rather than flattening their members. Historical
+compatibility is checked before evaluation, so a historical bucket cannot
+silently substitute current data.
+
+Projection does not add a permission layer. Authorization is applied by the
+caller before terminal bucket operations, and the projection evaluates exactly
+the bucket it receives. Use `with_instances()` when an authorization flow has
+already selected an exact subset; projection never broadens that subset or
+performs an implicit user or request-context lookup.
+
 When an integration has already selected the exact manager instances it should
 return, use `bucket.with_instances(instances)` to reconstruct that subset
 without changing the originating bucket's meaning. Pass instances in source
