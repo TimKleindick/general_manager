@@ -25,6 +25,11 @@ class DummyManager:
             """
             return {"a": None, "b": None, "c": None}
 
+        @staticmethod
+        def get_graph_ql_properties():
+            """Expose no GraphQL properties for the projection contract tests."""
+            return {}
+
 
 class DummyRow:
     def __init__(self, code: str | None, group: str, value: int) -> None:
@@ -268,6 +273,18 @@ class BucketTests(SimpleTestCase):
         Tests that iterating over the bucket yields the correct list of elements.
         """
         self.assertEqual(list(self.bucket), [3, 1, 2])
+
+    def test_project_rows_materializes_ordered_attribute_tuples(self):
+        """Project the requested attributes in source iteration order."""
+        bucket = DummyBucket(
+            self.manager_class,
+            [DummyRow("A", "x", 1), DummyRow("B", "y", 2)],
+        )
+
+        self.assertEqual(
+            bucket._project_rows(("code", "value")),
+            (("A", 1), ("B", 2)),
+        )
 
     def test_filter_and_exclude(self):
         """
