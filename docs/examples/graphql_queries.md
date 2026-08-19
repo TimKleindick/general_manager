@@ -41,6 +41,27 @@ query ProjectsByStatus {
 If the filter produces no groups, the same query shape returns `items: []` and
 page metadata rather than an empty-group slicing error.
 
+## Group by a related manager identity
+
+Grouping by a scalar foreign-key identifier preserves the related manager in
+the aggregated result. Repeated rows pointing to the same related manager
+collapse to one object; distinct managers remain available through their union
+bucket:
+
+```graphql
+query ProjectsByCommercial {
+  projectList(groupBy: ["commercials_id"]) {
+    items { commercials { id name } }
+  }
+}
+```
+
+The generated resolver applies the same bucket and `GroupManager` behavior as
+the Python API. See the [grouped-data concept](../concepts/models_entities.md#grouped-data),
+[GraphQL how-to](../howto/expose_via_graphql.md#query-generated-lists), and
+[core API reference](../api/core.md#general_manager.manager.group_manager.GroupManager)
+for the full grouping and error contract.
+
 ## Nested buckets
 
 ```graphql

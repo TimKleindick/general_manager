@@ -26,17 +26,14 @@ class DerivativeVolume(GeneralManager):
 ```
 
 ```python
-def project_volume_curve(project: Project) -> list[tuple[date, Measurement]]:
+def project_volume_curve(project: Project) -> tuple[tuple[date, Measurement], ...]:
     grouped = (
         project.derivative_volume_list
         .filter(project=project)
         .group_by("date")
         .sort("date")
     )
-    return [
-        (group.date, group.volume)
-        for group in grouped
-    ]
+    return grouped.values_list("date", "volume")
 ```
 
 Result:
@@ -48,3 +45,11 @@ for entry_date, volume in curve:
 ```
 
 Use this pattern to power charts in dashboards or export data to CSV.
+
+## Project selected fields
+
+`values_list()` materializes the grouped bucket in its existing order without
+constructing another list of manager objects. Use `values("date", "volume")`
+instead when a dictionary shape is more convenient for a serializer or CSV
+writer. Both forms keep the group values shallow and preserve the bucket's
+source and historical context.

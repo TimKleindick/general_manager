@@ -255,6 +255,20 @@ while sorting by another exposed field uses that field's aggregated group value.
 `totalCount` is computed after permission filtering, user filters, excludes,
 grouping, and sorting, but before page slicing.
 
+Grouping by a scalar foreign-key identifier also normalizes the aggregated
+manager value. Rows that point to the same related manager collapse to one
+object; a group containing distinct related managers returns their union bucket.
+For example, this groups projects by the related commercial identity while
+returning the generated relation field:
+
+```graphql
+query ProjectsByCommercial {
+  projectList(groupBy: ["commercials_id"]) {
+    items { commercials { id name } }
+  }
+}
+```
+
 ```graphql
 query ProjectsByDescendingStatus {
   projectList(groupBy: ["status"], sortBy: status, reverse: true) {
