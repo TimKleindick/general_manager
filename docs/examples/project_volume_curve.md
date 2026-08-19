@@ -51,5 +51,6 @@ Use this pattern to power charts in dashboards or export data to CSV.
 `values_list()` materializes the grouped bucket in its existing order without
 constructing another list of manager objects. Use `values("date", "volume")`
 instead when a dictionary shape is more convenient for a serializer or CSV
-writer. Both forms keep the group values shallow and preserve the bucket's
-source and historical context.
+writer. Both forms use the bucket's source and historical context during
+evaluation, then return detached shallow snapshots; the resulting tuples or
+dictionaries do not retain that bucket metadata.
