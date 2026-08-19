@@ -106,6 +106,13 @@ measurements. Group-by keys must be string attribute names exposed by the
 manager interface. Non-string keys raise `InvalidGroupByKeyTypeError`, and
 unknown keys raise `UnknownGroupByKeyError`.
 
+Manager-valued attributes use their manager class and identification mapping
+when they are aggregated. Repeated references to the same related manager
+collapse to one manager, while distinct related managers are combined with the
+normal bucket-union behavior. This keeps grouping by a foreign-key identifier
+from manufacturing duplicate related objects while preserving a bucket when a
+group contains more than one related manager.
+
 A `GroupBucket` is materialized from the source bucket at construction time.
 Each distinct tuple of group-by values becomes one group, emitted in
 `str(group_by_value)` order. Manager-valued group keys compare by manager class

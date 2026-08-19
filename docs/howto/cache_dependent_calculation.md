@@ -393,6 +393,9 @@ partially optimize the other fields in a mixed request. The same fallback
 applies to relations and other fields whose public value requires manager
 access.
 
+For a complete grouped-data example that turns projected rows into an
+export-ready result, see the [volume-curve cookbook recipe](../examples/project_volume_curve.md#project-selected-fields).
+
 The stable public API is `Bucket.index_by(...)`, `Bucket.index_many(...)`, and
 the exported bucket-index exception classes. The lower-level
 `general_manager.bucket.indexing` helpers are importable support functions, not

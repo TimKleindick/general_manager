@@ -488,6 +488,9 @@ and [permission recipe](../examples/permission_cookbook.md#preserve-an-authorize
 
 ## Projected reads
 
+The projected-read methods and their four validation exceptions are public from
+GeneralManager 0.74.0 onward.
+
 `Bucket.values(*fields: str) -> tuple[dict[str, object], ...]` returns a fully
 materialized tuple of ordinary dictionaries in bucket iteration order. The
 tuple-style and flat forms of `values_list()` are:
@@ -558,6 +561,14 @@ supplied bucket and does not rebuild a broader query or accept a `user`,
 `info`, permission object, or implicit authorization lookup. An authorized
 subset remains restricted, while an unrestricted bucket has the same
 authorization characteristics as iterating that bucket.
+
+::: general_manager.bucket.projection.EmptyProjectionFieldsError
+
+::: general_manager.bucket.projection.DuplicateProjectionFieldError
+
+::: general_manager.bucket.projection.UnknownProjectionFieldError
+
+::: general_manager.bucket.projection.FlatProjectionFieldCountError
 
 ::: general_manager.bucket.database_bucket.DatabaseBucket
 
