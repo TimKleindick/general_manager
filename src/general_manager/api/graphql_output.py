@@ -427,25 +427,59 @@ def resolve_output_type_hints(
     }
     localns.setdefault(owner_name, owner)
     try:
-        return get_type_hints(owner, globalns=globalns, localns=localns)
-    except (AttributeError, KeyError, NameError, TypeError, ValueError) as error:
-        missing = getattr(error, "name", None) or str(error)
-        raise _annotation_error(owner_name, "annotations", missing) from error
+        return get_type_hints(
+            owner,
+            globalns=globalns,
+            localns=localns,
+            include_extras=True,
+        )
+    except (AttributeError, KeyError, NameError, TypeError, ValueError):
+        raw_annotations: dict[str, object] = {}
+        if isinstance(owner, type):
+            for base in reversed(owner.__mro__):
+                raw_annotations.update(getattr(base, "__annotations__", {}))
+        else:
+            raw_annotations.update(getattr(owner, "__annotations__", {}))
+        if not raw_annotations:
+            raise _annotation_error(owner_name, "annotations", owner) from None
+
+        resolved: dict[str, object] = {}
+        for field_name, annotation in raw_annotations.items():
+            holder = type(
+                "_GraphQLOutputAnnotation",
+                (),
+                {"__annotations__": {"value": annotation}},
+            )
+            try:
+                resolved[field_name] = get_type_hints(
+                    holder,
+                    globalns=globalns,
+                    localns=localns,
+                    include_extras=True,
+                )["value"]
+            except (
+                AttributeError,
+                KeyError,
+                NameError,
+                TypeError,
+                ValueError,
+            ) as error:
+                raise _annotation_error(owner_name, field_name, annotation) from error
+        return resolved
 
 
 def _resolve_output_measurement(
     value: object,
     target_unit: str | None,
 ) -> object:
-    if isinstance(value, (list, tuple, set)):
-        converted = [
-            measurement_to_graphql_payload(item, target_unit) for item in value
-        ]
-        if isinstance(value, tuple):
-            return tuple(converted)
-        if isinstance(value, set):
-            return converted
-        return converted
+    if value is None or isinstance(value, Measurement):
+        return measurement_to_graphql_payload(value, target_unit)
+    if isinstance(value, list):
+        return [_resolve_output_measurement(item, target_unit) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_resolve_output_measurement(item, target_unit) for item in value)
+    if isinstance(value, set):
+        return [_resolve_output_measurement(item, target_unit) for item in value]
     return measurement_to_graphql_payload(value, target_unit)
 
 
