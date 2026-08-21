@@ -2671,6 +2671,9 @@ class GraphQLTests(TestCase):
         def literal_scalar(_instance) -> Literal["ProjectHour"]:
             return "literal"
 
+        annotated_scalar._graphql_type_hint = Annotated[str, ProjectHour]
+        literal_scalar._graphql_type_hint = Literal["ProjectHour"]
+
         @graph_ql_property(cache="none")
         def unknown(_instance) -> object:
             return object()
