@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.75.1 (2026-08-21)
+
+### Bug Fixes
+
+- Update vulnerable dependencies
+  ([`7e22518`](https://github.com/TimKleindick/general_manager/commit/7e225182a489e95cff40864ffaa8bc7bfbf7e574))
+
+
 ## v0.75.0 (2026-08-21)
 
 ### Bug Fixes
