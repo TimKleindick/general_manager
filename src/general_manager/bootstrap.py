@@ -44,6 +44,7 @@ from graphql import (
 from general_manager.api.graphql_as_of import build_as_of_directive
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql_type import get_registered_graphql_types
 from general_manager.api.remote_api import add_remote_api_urls
 from general_manager.api.remote_invalidation import ensure_remote_invalidation_route
 from general_manager.conf import get_setting
@@ -558,6 +559,9 @@ def handle_graph_ql(
         GraphQL.create_graphql_interface(general_manager_class)
         GraphQL.create_graphql_mutation(general_manager_class)
 
+    for output_class in get_registered_graphql_types():
+        GraphQL.create_graphql_output_type(output_class)
+
     GraphQL.register_file_upload_mutation()
     GraphQL.register_search_query()
     GraphQL.register_current_user_capabilities()
@@ -587,7 +591,10 @@ def handle_graph_ql(
 
     schema_kwargs: dict[str, object] = {
         "query": GraphQL._query_class,
-        "types": (graphene.DateTime,),
+        "types": (
+            graphene.DateTime,
+            *GraphQL.graphql_output_type_registry.values(),
+        ),
     }
     if GraphQL._mutation_class is not None:
         schema_kwargs["mutation"] = GraphQL._mutation_class

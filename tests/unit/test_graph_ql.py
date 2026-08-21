@@ -25,6 +25,7 @@ from general_manager import bootstrap as gm_bootstrap
 from general_manager.api.graphql import (
     BigIntScalar,
     MeasurementType,
+    MeasurementScalar,
     GraphQL,
     get_read_permission_filter,
 )
@@ -2327,6 +2328,91 @@ class GraphQLTests(TestCase):
             GraphQL.create_graphql_interface(TestManager)
             self.assertIn("TestManager", GraphQL.graphql_type_registry)
 
+    def test_legacy_graphql_property_shapes_remain_unchanged(self) -> None:
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        declarations = get_registered_graphql_types()
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        GraphQL.reset_registry()
+
+        class RelatedManager(GeneralManager):
+            pass
+
+        RelatedType = type(
+            "RelatedManagerType",
+            (graphene.ObjectType,),
+            {"name": graphene.String()},
+        )
+        GraphQL.manager_registry["RelatedManager"] = RelatedManager
+        GraphQL.graphql_type_registry["RelatedManager"] = RelatedType
+
+        @graph_ql_property(cache="none")
+        def scalar(_instance) -> str:
+            return "value"
+
+        @graph_ql_property(cache="none")
+        def measurement(_instance) -> Measurement:
+            return Measurement(1, "m")
+
+        @graph_ql_property(cache="none")
+        def measurements(_instance) -> list[Measurement]:
+            return []
+
+        @graph_ql_property(cache="none")
+        def related(_instance) -> RelatedManager:
+            return RelatedManager()
+
+        @graph_ql_property(cache="none")
+        def related_list(_instance) -> list[RelatedManager]:
+            return []
+
+        @graph_ql_property(cache="none")
+        def unknown(_instance) -> object:
+            return object()
+
+        properties = {
+            "scalar": scalar,
+            "measurement": measurement,
+            "measurements": measurements,
+            "related": related,
+            "related_list": related_list,
+            "unknown": unknown,
+        }
+
+        class LegacyInterface(InterfaceBase):
+            input_fields: ClassVar[dict] = {}
+
+            @staticmethod
+            def get_attribute_types():
+                return {}
+
+            @classmethod
+            def get_graph_ql_properties(cls):
+                return properties
+
+        class LegacyManager:
+            Interface = LegacyInterface
+
+        with (
+            patch.object(GraphQL, "_add_queries_to_schema"),
+            patch.object(GraphQL, "_add_subscription_field"),
+            patch(
+                "general_manager.api.graphql.get_graphql_capabilities",
+                return_value=(),
+            ),
+        ):
+            GraphQL.create_graphql_interface(LegacyManager)
+
+        fields = GraphQL.graphql_type_registry["LegacyManager"]._meta.fields
+        self.assertIs(fields["scalar"].type, graphene.String)
+        self.assertIs(fields["measurement"].type, MeasurementType)
+        self.assertIsInstance(fields["measurements"].type, graphene.List)
+        self.assertIs(fields["measurements"].type.of_type, MeasurementScalar)
+        self.assertIs(fields["related"].type, RelatedType)
+        self.assertIsInstance(fields["related_list"].type, graphene.List)
+        self.assertIs(fields["related_list"].type.of_type, RelatedType)
+        self.assertIs(fields["unknown"].type, graphene.String)
+
     def test_list_resolver_with_invalid_filter_exclude(self):
         """
         Test that the list resolver returns the original queryset when filter or exclude arguments are invalid JSON.
@@ -2882,6 +2968,39 @@ class GraphQLDirectiveRegistrationTests(TestCase):
             patch("general_manager.bootstrap.add_graphql_url"),
         ):
             gm_bootstrap.handle_graph_ql([FirstManager, SecondManager])
+
+    def test_bootstrap_registers_output_types_without_root_operations(self) -> None:
+        declarations = get_registered_graphql_types()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        GraphQL.reset_registry()
+
+        class BootstrapOutput(GraphQLType):
+            value: int
+
+        GraphQL._query_fields = {"ping": graphene.String()}
+        with (
+            patch.object(gm_bootstrap.GraphQL, "create_graphql_interface"),
+            patch.object(gm_bootstrap.GraphQL, "create_graphql_mutation"),
+            patch.object(gm_bootstrap.GraphQL, "register_file_upload_mutation"),
+            patch.object(gm_bootstrap.GraphQL, "register_search_query"),
+            patch.object(
+                gm_bootstrap.GraphQL,
+                "register_current_user_capabilities",
+            ),
+            patch("general_manager.uploads.urls.add_file_upload_urls"),
+            patch("general_manager.bootstrap.add_graphql_url"),
+        ):
+            gm_bootstrap.handle_graph_ql([])
+
+        generated = GraphQL.graphql_output_type_registry["BootstrapOutput"]
+        self.assertEqual(generated.__name__, "BootstrapOutputType")
+        self.assertIsNotNone(
+            GraphQL.get_schema().graphql_schema.get_type("BootstrapOutputType")
+        )
+        self.assertNotIn(
+            "bootstrapOutput",
+            GraphQL.get_schema().graphql_schema.query_type.fields,
+        )
 
     def test_build_schema_directives_uses_specified_directives_by_default(self) -> None:
         directives = gm_bootstrap._build_schema_directives()

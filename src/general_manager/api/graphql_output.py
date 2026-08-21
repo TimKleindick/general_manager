@@ -356,7 +356,10 @@ def _set_output_nullability(
         return mapped
     field_type = field.type
     if isinstance(field_type, graphene.NonNull):
-        field_type = field_type.of_type
+        # ``of_type`` resolves Graphene thunks immediately.  Output types are
+        # generated after manager interfaces, so keep a lazy output registry
+        # lookup unresolved until the schema is assembled.
+        field_type = field_type._of_type
     return replace(
         mapped,
         field=graphene.Field(
