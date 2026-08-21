@@ -475,20 +475,30 @@ def test_unresolved_callable_forward_reference_reports_owner_field() -> None:
     assert "MissingValue" in str(error.value)
 
 
-def test_empty_annotations_report_owner_and_annotations_field() -> None:
-    class EmptyCallable:
-        def __call__(self, *_args: object, **_kwargs: object) -> object:
-            return None
+def test_annotationless_callable_reports_error_when_hint_resolution_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def resolver():
+        return None
 
-    invalid_owner = EmptyCallable()
+    def fail_get_type_hints(
+        *_args: object,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        raise TypeError
+
+    monkeypatch.setattr(
+        "general_manager.api.graphql_output.get_type_hints",
+        fail_get_type_hints,
+    )
     with pytest.raises(GraphQLOutputAnnotationError) as error:
         resolve_output_type_hints(
-            invalid_owner,
+            resolver,
             manager_registry={"User": User},
             output_class_registry={"Summary": _CURRENT_SUMMARY},
         )
 
-    assert "EmptyCallable.annotations" in str(error.value)
+    assert "resolver.annotations" in str(error.value)
 
 
 def test_output_measurement_resolver_converts_without_manager_access_checks() -> None:
