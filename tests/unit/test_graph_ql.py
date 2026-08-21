@@ -1925,6 +1925,124 @@ class GraphQLTests(TestCase):
 
         self.assertEqual(GraphQL.get_registry_snapshot(), before)
 
+    def test_successful_output_generation_preserves_all_non_output_state(self) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class StableOutput(GraphQLType):
+            value: str
+
+        declaration_before = get_registered_graphql_types()
+
+        class ExistingQuery(graphene.ObjectType):
+            ping = graphene.String()
+
+        class ExistingMutation(graphene.ObjectType):
+            pass
+
+        class ExistingSubscription(graphene.ObjectType):
+            pass
+
+        class ExistingManagerType(graphene.ObjectType):
+            name = graphene.String()
+
+        class ExistingOutputType(graphene.ObjectType):
+            value = graphene.String()
+
+        class ExistingFilterType(graphene.InputObjectType):
+            value = graphene.String()
+
+        class ExistingCapabilityType(graphene.ObjectType):
+            enabled = graphene.Boolean()
+
+        existing_union = type(
+            "ExistingSearchUnion",
+            (graphene.Union,),
+            {"Meta": type("Meta", (), {"types": (ExistingManagerType,)})},
+        )
+        existing_schema = graphene.Schema(query=ExistingQuery)
+
+        GraphQL._query_class = ExistingQuery
+        GraphQL._mutation_class = ExistingMutation
+        GraphQL._subscription_class = ExistingSubscription
+        GraphQL._mutations = {"existingMutation": ExistingMutation}
+        GraphQL._query_fields = {"existingQuery": graphene.String()}
+        GraphQL._subscription_fields = {"existingSubscription": graphene.String()}
+        GraphQL._page_type_registry = {"ExistingManagerPage": ExistingManagerType}
+        GraphQL._subscription_payload_registry = {
+            "ExistingManagerSubscription": ExistingManagerType
+        }
+        GraphQL.graphql_type_registry = {"ExistingManager": ExistingManagerType}
+        GraphQL.graphql_output_type_registry = {"ExistingOutput": ExistingOutputType}
+        GraphQL.graphql_filter_type_registry = {"ExistingManager": ExistingFilterType}
+        GraphQL.graphql_capability_type_registry = {
+            "ExistingManager": ExistingCapabilityType
+        }
+        GraphQL.manager_registry = {"ExistingManager": GeneralManager}
+        GraphQL._search_union = existing_union
+        GraphQL._search_result_type = ExistingManagerType
+        GraphQL._schema = existing_schema
+
+        live_registry_refs = {
+            registry_name: getattr(GraphQL, registry_name)
+            for registry_name in (
+                "_mutations",
+                "_query_fields",
+                "_subscription_fields",
+                "_page_type_registry",
+                "_subscription_payload_registry",
+                "graphql_type_registry",
+                "graphql_filter_type_registry",
+                "graphql_capability_type_registry",
+                "manager_registry",
+                "graphql_output_type_registry",
+            )
+        }
+        before = GraphQL.get_registry_snapshot()
+        generated = GraphQL.create_graphql_output_type(StableOutput)
+        after = GraphQL.get_registry_snapshot()
+
+        self.assertEqual(get_registered_graphql_types(), declaration_before)
+        self.assertIs(after.query_class, before.query_class)
+        self.assertIs(after.mutation_class, before.mutation_class)
+        self.assertIs(after.subscription_class, before.subscription_class)
+        self.assertIs(after.schema, before.schema)
+        self.assertIs(after.search_union, before.search_union)
+        self.assertIs(after.search_result_type, before.search_result_type)
+        for registry_name in (
+            "mutations",
+            "query_fields",
+            "subscription_fields",
+            "page_type_registry",
+            "subscription_payload_registry",
+            "graphql_type_registry",
+            "graphql_filter_type_registry",
+            "graphql_capability_type_registry",
+            "manager_registry",
+        ):
+            self.assertEqual(
+                getattr(after, registry_name),
+                getattr(before, registry_name),
+                registry_name,
+            )
+        for registry_name, registry in live_registry_refs.items():
+            self.assertIs(getattr(GraphQL, registry_name), registry, registry_name)
+
+        expected_outputs = dict(before.graphql_output_type_registry)
+        expected_outputs["StableOutput"] = generated
+        self.assertIs(
+            GraphQL.graphql_output_type_registry,
+            live_registry_refs["graphql_output_type_registry"],
+        )
+        self.assertEqual(after.graphql_output_type_registry, expected_outputs)
+        self.assertIs(
+            after.graphql_output_type_registry["ExistingOutput"],
+            ExistingOutputType,
+        )
+
     def test_mutually_referring_output_types_generate_and_resolve(self) -> None:
         declarations = get_registered_graphql_types()
         registry_snapshot = GraphQL.get_registry_snapshot()
