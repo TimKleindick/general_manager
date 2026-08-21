@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable, ForwardRef, cast
 
 import graphene
 import pytest
@@ -144,6 +144,81 @@ def test_direct_manager_uses_live_generated_type_registry() -> None:
     assert isinstance(mapped.field.type, graphene.NonNull)
     assert mapped.field.type.of_type is UserType
     assert mapped.resolver_type is User
+
+
+def test_registered_manager_alias_uses_identity_lookup() -> None:
+    mapped = map_graphql_output_annotation(
+        User,
+        owner_name="Envelope",
+        field_name="value",
+        manager_registry={"Owner": User},
+        manager_type_registry={"Owner": UserType},
+        output_class_registry={"Summary": _CURRENT_SUMMARY},
+        output_type_registry={"Summary": SummaryType},
+        measurement_type=MeasurementType,
+        scalar_mapper=GraphQL._map_field_to_graphene_base_type,
+    )
+
+    assert mapped.field.type.of_type is UserType
+    assert mapped.resolver_type is User
+
+
+@pytest.mark.parametrize("annotation", [ForwardRef("User"), "'User'", '"User"'])
+def test_forward_reference_names_resolve_through_live_manager_registry(
+    annotation: object,
+) -> None:
+    mapped = map_annotation(annotation)
+
+    assert mapped.field.type.of_type is UserType
+    assert mapped.resolver_type is User
+
+
+def test_forward_reference_name_collision_is_rejected() -> None:
+    with pytest.raises(GraphQLOutputAnnotationError) as error:
+        map_graphql_output_annotation(
+            "Shared",
+            owner_name="Envelope",
+            field_name="value",
+            manager_registry={"Shared": User},
+            manager_type_registry={"Shared": UserType},
+            output_class_registry={"Shared": _CURRENT_SUMMARY},
+            output_type_registry={"Shared": SummaryType},
+            measurement_type=MeasurementType,
+            scalar_mapper=GraphQL._map_field_to_graphene_base_type,
+        )
+
+    assert "Envelope.value" in str(error.value)
+    assert repr("Shared") in str(error.value)
+
+
+def test_unregistered_forward_reference_name_is_rejected() -> None:
+    with pytest.raises(GraphQLOutputAnnotationError) as error:
+        map_annotation("MissingValue")
+
+    assert "Envelope.value" in str(error.value)
+    assert repr("MissingValue") in str(error.value)
+
+
+def test_unregistered_output_type_is_rejected() -> None:
+    class UnregisteredOutput(GraphQLType):
+        title: str
+
+    with pytest.raises(GraphQLOutputAnnotationError) as error:
+        map_annotation(UnregisteredOutput)
+
+    assert "Envelope.value" in str(error.value)
+    assert repr(UnregisteredOutput) in str(error.value)
+
+
+def test_unregistered_manager_type_is_rejected() -> None:
+    class UnregisteredManager(GeneralManager):
+        pass
+
+    with pytest.raises(GraphQLOutputAnnotationError) as error:
+        map_annotation(UnregisteredManager)
+
+    assert "Envelope.value" in str(error.value)
+    assert repr(UnregisteredManager) in str(error.value)
 
 
 def test_nested_output_type_uses_output_registry_and_value_resolver_type(
@@ -288,7 +363,10 @@ def test_measurement_maps_to_measurement_object_with_target_unit_argument() -> N
         list,
         set,
         tuple,
+        list[int, str],
         tuple[int, str],
+        None,
+        type(None),
         list[Any],
         list[Annotated[int, "metadata"]],
         int | str,
@@ -374,6 +452,33 @@ def test_unresolved_forward_reference_names_first_owner_field() -> None:
     assert "MissingOther" not in str(error.value)
 
 
+def test_unresolved_callable_forward_reference_reports_owner_field() -> None:
+    def resolver(value: "MissingValue") -> "Summary":  # noqa: F821
+        return value
+
+    with pytest.raises(GraphQLOutputAnnotationError) as error:
+        resolve_output_type_hints(
+            resolver,
+            manager_registry={"User": User},
+            output_class_registry={"Summary": _CURRENT_SUMMARY},
+        )
+
+    assert "resolver.value" in str(error.value)
+    assert "MissingValue" in str(error.value)
+
+
+def test_empty_annotations_report_owner_and_annotations_field() -> None:
+    invalid_owner = cast(Callable[..., object], object())
+    with pytest.raises(GraphQLOutputAnnotationError) as error:
+        resolve_output_type_hints(
+            invalid_owner,
+            manager_registry={"User": User},
+            output_class_registry={"Summary": _CURRENT_SUMMARY},
+        )
+
+    assert "object.annotations" in str(error.value)
+
+
 def test_output_measurement_resolver_converts_without_manager_access_checks() -> None:
     parent = SimpleNamespace(
         amount=Measurement(1000, "meter"),
@@ -408,3 +513,10 @@ def test_output_normal_resolver_reads_dataclass_value_without_info() -> None:
     resolver = create_output_field_resolver("title", str)
 
     assert resolver(parent, None) == "Summary"
+
+
+def test_output_measurement_resolver_returns_none_for_non_measurement_value() -> None:
+    parent = SimpleNamespace(amount={"value": 1, "unit": "meter"})
+    resolver = create_output_field_resolver("amount", Measurement)
+
+    assert resolver(parent, None) is None
