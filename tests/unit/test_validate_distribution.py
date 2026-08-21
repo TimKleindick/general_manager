@@ -47,13 +47,17 @@ def test_dependency_metadata_keeps_security_patched_versions() -> None:
         pyproject = tomllib.load(pyproject_file)
 
     assert "setuptools>=83.0.0" in pyproject["build-system"]["requires"]
-    assert "GitPython>=3.1.55" in pyproject["project"]["dependencies"]
+    assert "Django>=5.2.16" in pyproject["project"]["dependencies"]
+    assert "GitPython>=3.1.58" in pyproject["project"]["dependencies"]
+    assert "sqlparse>=0.6.0" in pyproject["project"]["dependencies"]
 
     base_requirements = (repository_root / "requirements" / "base.txt").read_text(
         encoding="utf-8"
     )
-    assert "GitPython==3.1.55\n" in base_requirements
+    assert "Django==5.2.16\n" in base_requirements
+    assert "GitPython==3.1.58\n" in base_requirements
     assert "setuptools==83.0.0\n" in base_requirements
+    assert "sqlparse==0.6.0\n" in base_requirements
 
 
 def _write_wheel(
