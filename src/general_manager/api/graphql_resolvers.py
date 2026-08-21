@@ -792,6 +792,28 @@ def can_read_instance(
 # ---------------------------------------------------------------------------
 
 
+def measurement_to_graphql_payload(
+    value: object,
+    target_unit: str | None = None,
+) -> dict[str, object] | None:
+    """Convert a measurement value to the payload consumed by ``MeasurementType``.
+
+    This helper deliberately performs no manager permission or historical-context
+    checks.  Those checks belong to the resolver that owns the value; output
+    dataclasses are already materialized values and must not be treated as
+    managers.  ``target_unit`` is applied before the magnitude/unit payload is
+    built so manager and output resolvers share one conversion implementation.
+    """
+    if not isinstance(value, Measurement):
+        return None
+    if target_unit:
+        value = value.to(target_unit)
+    return {
+        "value": value.quantity.magnitude,
+        "unit": value.unit,
+    }
+
+
 def create_measurement_resolver(field_name: str) -> Resolver:
     """
     Return a resolver for a :class:`~general_manager.measurement.Measurement` field.
@@ -810,15 +832,10 @@ def create_measurement_resolver(field_name: str) -> Resolver:
         _ensure_as_of_compatible(self)
 
         def resolve_measurement() -> dict[str, object] | None:
-            result = getattr(self, field_name)
-            if not isinstance(result, Measurement):
-                return None
-            if target_unit:
-                result = result.to(target_unit)
-            return {
-                "value": result.quantity.magnitude,
-                "unit": result.unit,
-            }
+            return measurement_to_graphql_payload(
+                getattr(self, field_name),
+                target_unit,
+            )
 
         return resolve_with_read_permission(
             self,
