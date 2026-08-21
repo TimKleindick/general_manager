@@ -64,6 +64,9 @@ class GraphQLRegistry:
     graphql_type_registry: dict[str, type[graphene.ObjectType]] = field(
         default_factory=dict
     )
+    graphql_output_type_registry: dict[str, type[graphene.ObjectType]] = field(
+        default_factory=dict
+    )
     graphql_filter_type_registry: dict[str, type[graphene.InputObjectType]] = field(
         default_factory=dict
     )

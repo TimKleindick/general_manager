@@ -2577,6 +2577,9 @@ class GraphQLAddSubscriptionFieldTests(unittest.TestCase):
             self._snapshot.subscription_payload_registry
         )
         GraphQL.graphql_type_registry = self._snapshot.graphql_type_registry
+        GraphQL.graphql_output_type_registry = (
+            self._snapshot.graphql_output_type_registry
+        )
         GraphQL.graphql_filter_type_registry = (
             self._snapshot.graphql_filter_type_registry
         )
