@@ -205,6 +205,48 @@ def test_live_generated_type_thunk_reads_entry_added_and_replaced_after_mapping(
     assert mapped.field.type.of_type is SecondUserType
 
 
+def test_nullable_output_type_defers_live_registry_thunk_until_schema_assembly() -> (
+    None
+):
+    output_type_registry: dict[str, type[graphene.ObjectType]] = {}
+    mapped = map_graphql_output_annotation(
+        Summary | None,
+        owner_name="Envelope",
+        field_name="summary",
+        manager_registry={"User": User},
+        manager_type_registry={"User": UserType},
+        output_class_registry={"Summary": Summary},
+        output_type_registry=output_type_registry,
+        measurement_type=MeasurementType,
+        scalar_mapper=GraphQL._map_field_to_graphene_base_type,
+    )
+
+    assert mapped.field is not None
+
+    GeneratedSummaryType = type(
+        "SummaryType",
+        (graphene.ObjectType,),
+        {"title": graphene.String()},
+    )
+    output_type_registry["Summary"] = GeneratedSummaryType
+
+    assert not isinstance(mapped.field.type, graphene.NonNull)
+
+    class Query(graphene.ObjectType):
+        summary = mapped.field
+
+        @staticmethod
+        def resolve_summary(_root: object, _info: object) -> SimpleNamespace:
+            return SimpleNamespace(title="ready")
+
+    schema = graphene.Schema(query=Query)
+    response = schema.execute("{ summary { title } }")
+
+    assert response.errors is None
+    assert response.data == {"summary": {"title": "ready"}}
+    assert schema.graphql_schema.get_type("SummaryType") is not None
+
+
 def test_measurement_maps_to_measurement_object_with_target_unit_argument() -> None:
     mapped = map_annotation(Measurement)
 
