@@ -40,5 +40,8 @@ def get_registered_graphql_types() -> tuple[type[GraphQLType], ...]:
 def _restore_registered_graphql_types(
     types: tuple[type[GraphQLType], ...],
 ) -> None:
-    """Restore the declaration registry to a previously captured snapshot."""
+    """Restore a declaration registry snapshot for test/integration cleanup.
+
+    This is test infrastructure, not a public registry-reset API.
+    """
     GraphQLTypeMeta._registered_types[:] = types

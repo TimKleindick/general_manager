@@ -29,6 +29,7 @@ from general_manager.api.graphql import (
     GraphQL,
     get_read_permission_filter,
 )
+from general_manager.api.registry import GraphQLRegistry
 from general_manager.api.graphql_type import (
     GraphQLType,
     _restore_registered_graphql_types,
@@ -89,31 +90,23 @@ from graphql.language import StringValueNode
 from graphql.validation import ASTValidationRule
 
 
-def _restore_graphql_registry(snapshot: object) -> None:
-    GraphQL._query_class = snapshot.query_class  # type: ignore[attr-defined]
-    GraphQL._mutation_class = snapshot.mutation_class  # type: ignore[attr-defined]
-    GraphQL._subscription_class = snapshot.subscription_class  # type: ignore[attr-defined]
-    GraphQL._schema = snapshot.schema  # type: ignore[attr-defined]
-    GraphQL._mutations = snapshot.mutations  # type: ignore[attr-defined]
-    GraphQL._query_fields = snapshot.query_fields  # type: ignore[attr-defined]
-    GraphQL._subscription_fields = snapshot.subscription_fields  # type: ignore[attr-defined]
-    GraphQL._page_type_registry = snapshot.page_type_registry  # type: ignore[attr-defined]
-    GraphQL._subscription_payload_registry = (  # type: ignore[attr-defined]
-        snapshot.subscription_payload_registry  # type: ignore[attr-defined]
-    )
-    GraphQL.graphql_type_registry = snapshot.graphql_type_registry  # type: ignore[attr-defined]
-    GraphQL.graphql_output_type_registry = (  # type: ignore[attr-defined]
-        snapshot.graphql_output_type_registry  # type: ignore[attr-defined]
-    )
-    GraphQL.graphql_filter_type_registry = (  # type: ignore[attr-defined]
-        snapshot.graphql_filter_type_registry  # type: ignore[attr-defined]
-    )
-    GraphQL.graphql_capability_type_registry = (  # type: ignore[attr-defined]
-        snapshot.graphql_capability_type_registry  # type: ignore[attr-defined]
-    )
-    GraphQL.manager_registry = snapshot.manager_registry  # type: ignore[attr-defined]
-    GraphQL._search_union = snapshot.search_union  # type: ignore[attr-defined]
-    GraphQL._search_result_type = snapshot.search_result_type  # type: ignore[attr-defined]
+def _restore_graphql_registry(snapshot: GraphQLRegistry) -> None:
+    GraphQL._query_class = snapshot.query_class
+    GraphQL._mutation_class = snapshot.mutation_class
+    GraphQL._subscription_class = snapshot.subscription_class
+    GraphQL._schema = snapshot.schema
+    GraphQL._mutations = snapshot.mutations
+    GraphQL._query_fields = snapshot.query_fields
+    GraphQL._subscription_fields = snapshot.subscription_fields
+    GraphQL._page_type_registry = snapshot.page_type_registry
+    GraphQL._subscription_payload_registry = snapshot.subscription_payload_registry
+    GraphQL.graphql_type_registry = snapshot.graphql_type_registry
+    GraphQL.graphql_output_type_registry = snapshot.graphql_output_type_registry
+    GraphQL.graphql_filter_type_registry = snapshot.graphql_filter_type_registry
+    GraphQL.graphql_capability_type_registry = snapshot.graphql_capability_type_registry
+    GraphQL.manager_registry = snapshot.manager_registry
+    GraphQL._search_union = snapshot.search_union
+    GraphQL._search_result_type = snapshot.search_result_type
 
 
 def _make_graphql_output_declaration(

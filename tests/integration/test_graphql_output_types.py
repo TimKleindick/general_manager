@@ -2,19 +2,25 @@ from __future__ import annotations
 
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal, cast
 from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser
 from django.test import SimpleTestCase
+from graphql import ExecutionResult
 
-from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql import GraphQL, GraphQLMutationMap
+from general_manager.api.registry import GraphQLRegistry
 from general_manager.api.graphql_type import (
     GraphQLType,
     _restore_registered_graphql_types,
     get_registered_graphql_types,
 )
-from general_manager.api.property import _TYPE_HINT_UNRESOLVED, graph_ql_property
+from general_manager.api.property import (
+    GraphQLProperty,
+    _TYPE_HINT_UNRESOLVED,
+    graph_ql_property,
+)
 from general_manager.bootstrap import handle_graph_ql
 from general_manager.interface import CalculationInterface
 from general_manager.manager.general_manager import GeneralManager
@@ -24,6 +30,21 @@ from general_manager.permission.base_permission import (
     BasePermission,
     ReadPermissionPlan,
 )
+
+if TYPE_CHECKING:
+
+    class IntegrationProjectHour(GraphQLType):
+        task_id: int
+        total_hours: Measurement
+        users: list[str]
+
+    class IntegrationProjectDetails(GraphQLType):
+        hour: IntegrationProjectHour
+        label: str
+
+    class IntegrationPermissionDetails(GraphQLType):
+        label: str
+        related: PermissionedRelatedManager
 
 
 class PermissionedRelatedManager(GeneralManager):
@@ -103,8 +124,11 @@ class PermissionedProjectSummary(GeneralManager):
         project_id = Input(int)
 
     @graph_ql_property(cache="none")
-    def details(self) -> "IntegrationPermissionDetails | None":  # noqa: F821
-        details_type = globals()["IntegrationPermissionDetails"]
+    def details(self) -> "IntegrationPermissionDetails | None":
+        details_type = cast(
+            type[IntegrationPermissionDetails],
+            globals()["IntegrationPermissionDetails"],
+        )
         return details_type(
             label="permissioned",
             related=PermissionedRelatedManager(related_id=7),
@@ -116,8 +140,11 @@ class ProjectSummary(GeneralManager):
         project_id = Input(int)
 
     @graph_ql_property(cache="none")
-    def hours(self) -> "list[IntegrationProjectHour]":  # noqa: F821
-        project_hour_type = globals()["IntegrationProjectHour"]
+    def hours(self) -> "list[IntegrationProjectHour]":
+        project_hour_type = cast(
+            type[IntegrationProjectHour],
+            globals()["IntegrationProjectHour"],
+        )
         return [
             project_hour_type(
                 task_id=3,
@@ -127,53 +154,75 @@ class ProjectSummary(GeneralManager):
         ]
 
     @graph_ql_property(cache="none")
-    def optional_hour(self) -> "IntegrationProjectHour | None":  # noqa: F821
+    def optional_hour(self) -> "IntegrationProjectHour | None":
         return None
 
     @graph_ql_property(cache="none")
     def optional_hours(
         self,
-    ) -> "list[IntegrationProjectHour | None]":  # noqa: F821
+    ) -> "list[IntegrationProjectHour | None]":
         return [None, self.hours[0]]
 
     @graph_ql_property(cache="none")
-    def details(self) -> "IntegrationProjectDetails":  # noqa: F821
-        details_type = globals()["IntegrationProjectDetails"]
+    def details(self) -> "IntegrationProjectDetails":
+        details_type = cast(
+            type[IntegrationProjectDetails],
+            globals()["IntegrationProjectDetails"],
+        )
         return details_type(
             hour=self.hours[0],
             label="summary",
         )
 
 
-def _restore_graphql_registry(snapshot: object) -> None:
-    GraphQL._query_class = snapshot.query_class  # type: ignore[attr-defined]
-    GraphQL._mutation_class = snapshot.mutation_class  # type: ignore[attr-defined]
-    GraphQL._subscription_class = snapshot.subscription_class  # type: ignore[attr-defined]
-    GraphQL._schema = snapshot.schema  # type: ignore[attr-defined]
-    GraphQL._mutations = snapshot.mutations  # type: ignore[attr-defined]
-    GraphQL._query_fields = snapshot.query_fields  # type: ignore[attr-defined]
-    GraphQL._subscription_fields = snapshot.subscription_fields  # type: ignore[attr-defined]
-    GraphQL._page_type_registry = snapshot.page_type_registry  # type: ignore[attr-defined]
-    GraphQL._subscription_payload_registry = (  # type: ignore[attr-defined]
-        snapshot.subscription_payload_registry  # type: ignore[attr-defined]
+GraphQLPropertyHintSnapshot = tuple[tuple[GraphQLProperty, object], ...]
+
+
+def _snapshot_graphql_property_hints(
+    manager_classes: tuple[type[GeneralManager], ...],
+) -> GraphQLPropertyHintSnapshot:
+    return tuple(
+        (property_value, property_value._graphql_type_hint)
+        for manager_class in manager_classes
+        for property_value in manager_class.Interface.get_graph_ql_properties().values()
     )
-    GraphQL.graphql_type_registry = snapshot.graphql_type_registry  # type: ignore[attr-defined]
-    GraphQL.graphql_output_type_registry = (  # type: ignore[attr-defined]
-        snapshot.graphql_output_type_registry  # type: ignore[attr-defined]
-    )
-    GraphQL.graphql_filter_type_registry = (  # type: ignore[attr-defined]
-        snapshot.graphql_filter_type_registry  # type: ignore[attr-defined]
-    )
-    GraphQL.graphql_capability_type_registry = (  # type: ignore[attr-defined]
-        snapshot.graphql_capability_type_registry  # type: ignore[attr-defined]
-    )
-    GraphQL.manager_registry = snapshot.manager_registry  # type: ignore[attr-defined]
-    GraphQL._search_union = snapshot.search_union  # type: ignore[attr-defined]
-    GraphQL._search_result_type = snapshot.search_result_type  # type: ignore[attr-defined]
+
+
+def _assert_graphql_property_hints(
+    snapshot: GraphQLPropertyHintSnapshot,
+) -> None:
+    for property_value, expected_hint in snapshot:
+        assert property_value._graphql_type_hint is expected_hint
+
+
+def _restore_graphql_property_hints(
+    snapshot: GraphQLPropertyHintSnapshot,
+) -> None:
+    for property_value, expected_hint in snapshot:
+        property_value._graphql_type_hint = expected_hint
+
+
+def _restore_graphql_registry(snapshot: GraphQLRegistry) -> None:
+    GraphQL._query_class = snapshot.query_class
+    GraphQL._mutation_class = snapshot.mutation_class
+    GraphQL._subscription_class = snapshot.subscription_class
+    GraphQL._schema = snapshot.schema
+    GraphQL._mutations = cast(GraphQLMutationMap, snapshot.mutations)
+    GraphQL._query_fields = snapshot.query_fields
+    GraphQL._subscription_fields = snapshot.subscription_fields
+    GraphQL._page_type_registry = snapshot.page_type_registry
+    GraphQL._subscription_payload_registry = snapshot.subscription_payload_registry
+    GraphQL.graphql_type_registry = snapshot.graphql_type_registry
+    GraphQL.graphql_output_type_registry = snapshot.graphql_output_type_registry
+    GraphQL.graphql_filter_type_registry = snapshot.graphql_filter_type_registry
+    GraphQL.graphql_capability_type_registry = snapshot.graphql_capability_type_registry
+    GraphQL.manager_registry = snapshot.manager_registry
+    GraphQL._search_union = snapshot.search_union
+    GraphQL._search_result_type = snapshot.search_result_type
 
 
 def _restore_and_assert_registries(
-    graphql_snapshot: object,
+    graphql_snapshot: GraphQLRegistry,
     declaration_snapshot: tuple[type[GraphQLType], ...],
 ) -> None:
     _restore_graphql_registry(graphql_snapshot)
@@ -208,6 +257,8 @@ def _activate_declarations(
 
 
 class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
+    _expected_property_hints: GraphQLPropertyHintSnapshot | None = None
+
     def setUp(self) -> None:
         super().setUp()
         graphql_registry = GraphQL.get_registry_snapshot()
@@ -224,6 +275,16 @@ class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
         self.addCleanup(_restore_module_bindings, previous_bindings)
         GraphQL.reset_registry()
 
+        property_hints = _snapshot_graphql_property_hints(
+            (ProjectSummary, PermissionedProjectSummary)
+        )
+        if self.__class__._expected_property_hints is not None:
+            _assert_graphql_property_hints(self.__class__._expected_property_hints)
+        self.__class__._expected_property_hints = property_hints
+        self.addCleanup(_restore_graphql_property_hints, property_hints)
+
+        # Keep declarations test-local to avoid module-import registry leaks;
+        # temporary module globals let postponed string hints resolve.
         project_hour = type(
             "IntegrationProjectHour",
             (GraphQLType,),
@@ -259,11 +320,8 @@ class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
             get_registered_graphql_types()[-2:],
             (project_hour, project_details),
         )
-        for manager_class in (ProjectSummary, PermissionedProjectSummary):
-            for (
-                property_value
-            ) in manager_class.Interface.get_graph_ql_properties().values():
-                property_value._graphql_type_hint = _TYPE_HINT_UNRESOLVED
+        for property_value, _ in property_hints:
+            property_value._graphql_type_hint = _TYPE_HINT_UNRESOLVED
         _activate_declarations(
             declaration_registry,
             project_hour,
@@ -280,6 +338,7 @@ class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
 
         schema = GraphQL.get_schema()
         self.assertIsNotNone(schema)
+        assert schema is not None
         self.schema = schema
 
     def test_graphql_properties_expose_output_objects_without_root_operations(
@@ -347,6 +406,9 @@ class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
 
 
 class PermissionedGraphQLOutputIntegrationTests(SimpleTestCase):
+    _expected_property_hints: GraphQLPropertyHintSnapshot | None = None
+    _expected_allow_details: bool | None = None
+
     def setUp(self) -> None:
         super().setUp()
         graphql_registry = GraphQL.get_registry_snapshot()
@@ -362,6 +424,28 @@ class PermissionedGraphQLOutputIntegrationTests(SimpleTestCase):
             {"IntegrationPermissionDetails": previous_binding},
         )
         GraphQL.reset_registry()
+
+        property_hints = _snapshot_graphql_property_hints((PermissionedProjectSummary,))
+        if self.__class__._expected_property_hints is not None:
+            _assert_graphql_property_hints(self.__class__._expected_property_hints)
+        self.__class__._expected_property_hints = property_hints
+        self.addCleanup(_restore_graphql_property_hints, property_hints)
+        previous_allow_details = PermissionedProjectSummary.Permission.allow_details
+        if self.__class__._expected_allow_details is not None:
+            self.assertEqual(
+                PermissionedProjectSummary.Permission.allow_details,
+                self.__class__._expected_allow_details,
+            )
+        self.__class__._expected_allow_details = previous_allow_details
+        self.addCleanup(
+            setattr,
+            PermissionedProjectSummary.Permission,
+            "allow_details",
+            previous_allow_details,
+        )
+
+        # Keep declarations test-local to avoid module-import registry leaks;
+        # temporary module globals let postponed string hints resolve.
         permission_details = type(
             "IntegrationPermissionDetails",
             (GraphQLType,),
@@ -376,9 +460,7 @@ class PermissionedGraphQLOutputIntegrationTests(SimpleTestCase):
         globals()["IntegrationPermissionDetails"] = permission_details
         self.permission_details = permission_details
         self.assertIs(get_registered_graphql_types()[-1], permission_details)
-        for (
-            property_value
-        ) in PermissionedProjectSummary.Interface.get_graph_ql_properties().values():
+        for property_value, _ in property_hints:
             property_value._graphql_type_hint = _TYPE_HINT_UNRESOLVED
         _activate_declarations(declaration_registry, permission_details)
         PermissionedRelatedManager.Permission.checks.clear()
@@ -395,13 +477,20 @@ class PermissionedGraphQLOutputIntegrationTests(SimpleTestCase):
 
         schema = GraphQL.get_schema()
         self.assertIsNotNone(schema)
+        assert schema is not None
         self.schema = schema
 
-    def _execute(self, query: str):
-        return self.schema.execute(
-            query,
-            context_value=SimpleNamespace(user=AnonymousUser()),
+    def _execute(self, query: str) -> ExecutionResult:
+        return cast(
+            ExecutionResult,
+            self.schema.execute(
+                query,
+                context_value=SimpleNamespace(user=AnonymousUser()),
+            ),
         )
+
+    def test_setup_restores_shared_state_for_the_next_schema_build(self) -> None:
+        self.assertTrue(PermissionedProjectSummary.Permission.allow_details)
 
     def test_nested_manager_permissions_and_owner_property_permissions_are_preserved(
         self,
@@ -455,11 +544,12 @@ class PermissionedGraphQLOutputIntegrationTests(SimpleTestCase):
             ["allowed", "denied"],
         )
 
+        PermissionedProjectSummary.Permission.allow_details = False
+
         query_fields = self.schema.graphql_schema.query_type.fields
         self.assertNotIn("integrationPermissionDetails", query_fields)
         self.assertNotIn("integrationPermissionDetailsList", query_fields)
 
-        PermissionedProjectSummary.Permission.allow_details = False
         denied = self._execute(
             """
             query {

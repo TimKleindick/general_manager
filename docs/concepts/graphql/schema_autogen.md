@@ -26,10 +26,13 @@ operations. Import the module that declares each output type during startup so
 the declaration is registered before the schema is built:
 
 ```python
+from __future__ import annotations
+
 from dataclasses import field
 
 from general_manager import GraphQLType
 from general_manager.measurement import Measurement
+from your_app.managers import Task, User  # application-specific registered managers
 
 
 class ProjectHour(GraphQLType):
@@ -39,6 +42,13 @@ class ProjectHour(GraphQLType):
     notes: str | None = None
     tags: list[str] = field(default_factory=list)
 ```
+
+`User` and `Task` in this illustrative import are application-defined
+`GeneralManager` subclasses registered by your application; replace the import
+with the module used by your project. The `user` and `task` values in the
+property example below are likewise supplied by application-specific
+calculation logic. The `GraphQLType` declaration describes their output shape;
+it does not look them up or inject them.
 
 Concrete subclasses automatically behave as frozen dataclasses; an explicit
 `@dataclass` decorator is not needed. Dataclass defaults and
