@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
+import dataclasses
 import re
 from time import perf_counter
 from types import UnionType
@@ -90,6 +91,11 @@ from general_manager.api.graphql_mutations import (
     generate_update_mutation_class as _generate_update_mutation_class_fn,
     generate_delete_mutation_class as _generate_delete_mutation_class_fn,
 )
+from general_manager.api.graphql_output import (
+    create_output_field_resolver,
+    map_graphql_output_annotation,
+    resolve_output_type_hints,
+)
 from general_manager.api.graphql_resolvers import (
     GraphQLSortInput,
     parse_input as _parse_input_fn,
@@ -119,6 +125,10 @@ from general_manager.api.graphql_search import (
     normalize_filter_input as _normalize_filter_input_fn,
 )
 from general_manager.api.notification_batching import _queue_notification
+from general_manager.api.graphql_type import (
+    GraphQLType,
+    get_registered_graphql_types,
+)
 from general_manager.api.graphql_subscriptions import (
     get_channel_layer_safe as _get_channel_layer_fn,
     group_name as _group_name_fn,
@@ -166,6 +176,43 @@ GraphQLMutationMap = dict[str, type[graphene.Mutation]]
 _SUBSCRIPTION_CLEANUP_FAILURE_MESSAGE = "subscription cleanup failed"
 _SUBSCRIPTION_ROLLBACK_FAILURE_MESSAGE = "subscription setup and rollback failed"
 _SUBSCRIPTION_STREAM_CLEANUP_FAILURE_MESSAGE = "subscription stream and cleanup failed"
+
+
+class GraphQLOutputTypeError(ValueError):
+    """Raised when an output declaration cannot be registered safely."""
+
+    @classmethod
+    def duplicate_declaration(cls, name: str) -> GraphQLOutputTypeError:
+        return cls(
+            f"Duplicate GraphQL output declaration name '{name}' is not allowed."
+        )
+
+    @classmethod
+    def already_registered(cls, generated_name: str) -> GraphQLOutputTypeError:
+        return cls(f"GraphQL output type '{generated_name}' is already registered.")
+
+    @classmethod
+    def registry_collision(
+        cls,
+        generated_name: str,
+        source_name: str,
+        registered_name: str,
+    ) -> GraphQLOutputTypeError:
+        return cls(
+            f"GraphQL output type '{generated_name}' collides with the "
+            f"registered {source_name} '{registered_name}'."
+        )
+
+    @classmethod
+    def schema_collision(
+        cls,
+        generated_name: str,
+        registered_name: str,
+    ) -> GraphQLOutputTypeError:
+        return cls(
+            f"GraphQL output type '{generated_name}' collides with the "
+            f"existing schema type '{registered_name}'."
+        )
 
 
 async def _cleanup_subscription_resources(
@@ -272,6 +319,7 @@ class GraphQL:
     _page_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     _subscription_payload_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     graphql_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
+    graphql_output_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     graphql_filter_type_registry: ClassVar[
         dict[str, type[graphene.InputObjectType]]
     ] = {}
@@ -319,6 +367,7 @@ class GraphQL:
         cls._page_type_registry = {}
         cls._subscription_payload_registry = {}
         cls.graphql_type_registry = {}
+        cls.graphql_output_type_registry = {}
         cls.graphql_filter_type_registry = {}
         cls.graphql_capability_type_registry = {}
         cls.manager_registry = {}
@@ -356,12 +405,143 @@ class GraphQL:
             page_type_registry=dict(cls._page_type_registry),
             subscription_payload_registry=dict(cls._subscription_payload_registry),
             graphql_type_registry=dict(cls.graphql_type_registry),
+            graphql_output_type_registry=dict(cls.graphql_output_type_registry),
             graphql_filter_type_registry=dict(cls.graphql_filter_type_registry),
             graphql_capability_type_registry=dict(cls.graphql_capability_type_registry),
             manager_registry=dict(cls.manager_registry),
             search_union=cls._search_union,
             search_result_type=cls._search_result_type,
         )
+
+    @classmethod
+    def create_graphql_output_type(
+        cls,
+        output_class: type[GraphQLType],
+    ) -> type[graphene.ObjectType]:
+        """Generate and register a Graphene type for an output declaration.
+
+        Output declarations are value objects only: generating one never adds
+        query, mutation, or subscription fields and never registers a manager.
+        The declaration registry is process-wide, while generated types belong
+        to the current GraphQL registry lifecycle and are therefore reset by
+        :meth:`reset_registry`.
+        """
+        declarations = get_registered_graphql_types()
+        declaration_names = [declaration.__name__ for declaration in declarations]
+        duplicate_names = {
+            name for name in declaration_names if declaration_names.count(name) > 1
+        }
+        if duplicate_names:
+            duplicate_name = sorted(duplicate_names)[0]
+            raise GraphQLOutputTypeError.duplicate_declaration(duplicate_name)
+
+        output_classes = dict(zip(declaration_names, declarations, strict=True))
+        output_name = output_class.__name__
+        generated_name = f"{output_name}Type"
+        existing = cls.graphql_output_type_registry.get(output_name)
+        if existing is not None:
+            source = getattr(existing, "__graphql_output_declaration__", None)
+            if source is output_class:
+                return existing
+            raise GraphQLOutputTypeError.already_registered(generated_name)
+
+        cls._validate_graphql_output_type_name(
+            output_name=output_name,
+            generated_name=generated_name,
+        )
+
+        hints = resolve_output_type_hints(
+            output_class,
+            manager_registry=cls.manager_registry,
+            output_class_registry=output_classes,
+        )
+        fields: GraphQLFieldMap = {}
+        for declared_field in dataclasses.fields(output_class):
+            mapped = map_graphql_output_annotation(
+                hints[declared_field.name],
+                owner_name=output_name,
+                field_name=declared_field.name,
+                manager_registry=cls.manager_registry,
+                manager_type_registry=cls.graphql_type_registry,
+                output_class_registry=output_classes,
+                output_type_registry=cls.graphql_output_type_registry,
+                measurement_type=MeasurementType,
+                scalar_mapper=cls._map_field_to_graphene_base_type,
+            )
+            fields[declared_field.name] = mapped.field
+            fields[f"resolve_{declared_field.name}"] = create_output_field_resolver(
+                declared_field.name,
+                mapped.resolver_type,
+            )
+
+        generated = type(
+            generated_name,
+            (graphene.ObjectType,),
+            {
+                "__graphql_output_declaration__": output_class,
+                **fields,
+            },
+        )
+        cls.graphql_output_type_registry[output_name] = generated
+        return generated
+
+    @classmethod
+    def _validate_graphql_output_type_name(
+        cls,
+        *,
+        output_name: str,
+        generated_name: str,
+    ) -> None:
+        """Reject known GraphQL type-name collisions before registry mutation."""
+
+        def _type_name(value: object) -> str | None:
+            name = getattr(value, "_meta", None)
+            if name is not None:
+                name = getattr(name, "name", None)
+            if isinstance(name, str):
+                return name
+            name = getattr(value, "name", None)
+            return name if isinstance(name, str) else getattr(value, "__name__", None)
+
+        registry_sources: tuple[tuple[str, Mapping[str, object]], ...] = (
+            ("manager", cls.manager_registry),
+            ("manager GraphQL type", cls.graphql_type_registry),
+            ("output GraphQL type", cls.graphql_output_type_registry),
+            ("page GraphQL type", cls._page_type_registry),
+            (
+                "subscription payload GraphQL type",
+                cls._subscription_payload_registry,
+            ),
+            (
+                "capability GraphQL type",
+                cls.graphql_capability_type_registry,
+            ),
+        )
+        for source_name, registry in registry_sources:
+            for registered_name, registered_type in registry.items():
+                if (
+                    registered_name in {output_name, generated_name}
+                    or _type_name(registered_type) == generated_name
+                ):
+                    raise GraphQLOutputTypeError.registry_collision(
+                        generated_name,
+                        source_name,
+                        registered_name,
+                    )
+
+        schema = cls._schema
+        graphql_schema = getattr(schema, "graphql_schema", None)
+        type_map = getattr(graphql_schema, "type_map", None)
+        if isinstance(type_map, Mapping):
+            for registered_name, registered_type in type_map.items():
+                if (
+                    registered_name == generated_name
+                    or _type_name(registered_type) == generated_name
+                ):
+                    raise GraphQLOutputTypeError.schema_collision(
+                        generated_name,
+                        registered_name,
+                    )
 
     @staticmethod
     def _group_name(

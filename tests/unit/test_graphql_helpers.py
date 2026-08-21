@@ -741,6 +741,7 @@ class GraphQLHelperTests(SimpleTestCase):
             "_page_type_registry": GraphQL._page_type_registry,
             "_subscription_payload_registry": GraphQL._subscription_payload_registry,
             "graphql_type_registry": GraphQL.graphql_type_registry,
+            "graphql_output_type_registry": GraphQL.graphql_output_type_registry,
             "graphql_filter_type_registry": GraphQL.graphql_filter_type_registry,
             "graphql_capability_type_registry": GraphQL.graphql_capability_type_registry,
             "manager_registry": GraphQL.manager_registry,
@@ -754,6 +755,7 @@ class GraphQLHelperTests(SimpleTestCase):
             GraphQL._page_type_registry = {"page": object_type}
             GraphQL._subscription_payload_registry = {"payload": object_type}
             GraphQL.graphql_type_registry = {"manager": object_type}
+            GraphQL.graphql_output_type_registry = {"output": object_type}
             GraphQL.graphql_filter_type_registry = {"filter": input_type}
             GraphQL.graphql_capability_type_registry = {"capability": object_type}
             GraphQL.manager_registry = {"manager": _DummyManager}
@@ -772,6 +774,10 @@ class GraphQLHelperTests(SimpleTestCase):
                     GraphQL._subscription_payload_registry,
                 ),
                 (snapshot.graphql_type_registry, GraphQL.graphql_type_registry),
+                (
+                    snapshot.graphql_output_type_registry,
+                    GraphQL.graphql_output_type_registry,
+                ),
                 (
                     snapshot.graphql_filter_type_registry,
                     GraphQL.graphql_filter_type_registry,
@@ -798,6 +804,9 @@ class GraphQLHelperTests(SimpleTestCase):
                 "_subscription_payload_registry"
             ]
             GraphQL.graphql_type_registry = original_values["graphql_type_registry"]
+            GraphQL.graphql_output_type_registry = original_values[
+                "graphql_output_type_registry"
+            ]
             GraphQL.graphql_filter_type_registry = original_values[
                 "graphql_filter_type_registry"
             ]

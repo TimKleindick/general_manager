@@ -27,6 +27,11 @@ from general_manager.api.graphql import (
     GraphQL,
     get_read_permission_filter,
 )
+from general_manager.api.graphql_type import (
+    GraphQLType,
+    _restore_registered_graphql_types,
+    get_registered_graphql_types,
+)
 from general_manager.api.graphql_mutations import (
     _graphql_mutation_field_name,
     _normalize_mutation_kwargs_for_manager,
@@ -77,6 +82,43 @@ from graphql import (
 )
 from graphql.language import StringValueNode
 from graphql.validation import ASTValidationRule
+
+
+def _restore_graphql_registry(snapshot: object) -> None:
+    GraphQL._query_class = snapshot.query_class  # type: ignore[attr-defined]
+    GraphQL._mutation_class = snapshot.mutation_class  # type: ignore[attr-defined]
+    GraphQL._subscription_class = snapshot.subscription_class  # type: ignore[attr-defined]
+    GraphQL._schema = snapshot.schema  # type: ignore[attr-defined]
+    GraphQL._mutations = snapshot.mutations  # type: ignore[attr-defined]
+    GraphQL._query_fields = snapshot.query_fields  # type: ignore[attr-defined]
+    GraphQL._subscription_fields = snapshot.subscription_fields  # type: ignore[attr-defined]
+    GraphQL._page_type_registry = snapshot.page_type_registry  # type: ignore[attr-defined]
+    GraphQL._subscription_payload_registry = (  # type: ignore[attr-defined]
+        snapshot.subscription_payload_registry  # type: ignore[attr-defined]
+    )
+    GraphQL.graphql_type_registry = snapshot.graphql_type_registry  # type: ignore[attr-defined]
+    GraphQL.graphql_output_type_registry = (  # type: ignore[attr-defined]
+        snapshot.graphql_output_type_registry  # type: ignore[attr-defined]
+    )
+    GraphQL.graphql_filter_type_registry = (  # type: ignore[attr-defined]
+        snapshot.graphql_filter_type_registry  # type: ignore[attr-defined]
+    )
+    GraphQL.graphql_capability_type_registry = (  # type: ignore[attr-defined]
+        snapshot.graphql_capability_type_registry  # type: ignore[attr-defined]
+    )
+    GraphQL.manager_registry = snapshot.manager_registry  # type: ignore[attr-defined]
+    GraphQL._search_union = snapshot.search_union  # type: ignore[attr-defined]
+    GraphQL._search_result_type = snapshot.search_result_type  # type: ignore[attr-defined]
+
+
+def _make_graphql_output_declaration(
+    name: str,
+) -> type[GraphQLType]:
+    return type(
+        name,
+        (GraphQLType,),
+        {"__module__": __name__, "__annotations__": {"task_id": int}},
+    )
 
 
 class GraphQLAsOfExecutionTests(unittest.TestCase):
@@ -1543,6 +1585,112 @@ class GraphQLTests(TestCase):
         self.general_manager_class.__name__ = "TestManager"
         self.info = MagicMock()
         self.info.context.user = AnonymousUser()
+
+    def test_create_graphql_output_type_has_no_operations(self) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class ProjectHour(GraphQLType):
+            task_id: int
+            users: list[str]
+
+        before = (
+            dict(GraphQL._query_fields),
+            dict(GraphQL._mutations),
+            dict(GraphQL._subscription_fields),
+        )
+        generated = GraphQL.create_graphql_output_type(ProjectHour)
+
+        assert generated.__name__ == "ProjectHourType"
+        assert set(generated._meta.fields) == {"task_id", "users"}
+        assert GraphQL.graphql_output_type_registry["ProjectHour"] is generated
+        assert "ProjectHour" not in GraphQL.manager_registry
+        assert before == (
+            GraphQL._query_fields,
+            GraphQL._mutations,
+            GraphQL._subscription_fields,
+        )
+
+    def test_create_graphql_output_type_is_idempotent_for_same_declaration(
+        self,
+    ) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class ProjectHour(GraphQLType):
+            task_id: int
+
+        generated = GraphQL.create_graphql_output_type(ProjectHour)
+
+        assert GraphQL.create_graphql_output_type(ProjectHour) is generated
+        assert GraphQL.graphql_output_type_registry == {"ProjectHour": generated}
+
+    def test_reset_registry_clears_generated_outputs_not_declarations(self) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class ProjectHour(GraphQLType):
+            task_id: int
+
+        GraphQL.create_graphql_output_type(ProjectHour)
+        GraphQL.reset_registry()
+
+        assert GraphQL.graphql_output_type_registry == {}
+        assert get_registered_graphql_types()[-1] is ProjectHour
+
+    def test_duplicate_output_declaration_names_fail_before_registry_mutation(
+        self,
+    ) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        FirstDuplicate = _make_graphql_output_declaration("DuplicateOutput")
+        _make_graphql_output_declaration("DuplicateOutput")
+        sentinel = type("SentinelType", (graphene.ObjectType,), {})
+        GraphQL.graphql_output_type_registry["Existing"] = sentinel
+        before = dict(GraphQL.graphql_output_type_registry)
+
+        with self.assertRaises(ValueError):
+            GraphQL.create_graphql_output_type(FirstDuplicate)
+
+        self.assertEqual(GraphQL.graphql_output_type_registry, before)
+
+    def test_output_type_rejects_manager_schema_name_collision_without_mutation(
+        self,
+    ) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class SharedName(GraphQLType):
+            task_id: int
+
+        class SharedNameManager(GeneralManager):
+            pass
+
+        manager_type = type("SharedNameType", (graphene.ObjectType,), {})
+        GraphQL.manager_registry["SharedName"] = SharedNameManager
+        GraphQL.graphql_type_registry["SharedName"] = manager_type
+        before = dict(GraphQL.graphql_output_type_registry)
+
+        with self.assertRaises(ValueError):
+            GraphQL.create_graphql_output_type(SharedName)
+
+        self.assertEqual(GraphQL.graphql_output_type_registry, before)
 
     def test_sort_options_include_direct_manager_and_related_scalars(self) -> None:
         related_computed = SimpleNamespace(sortable=True, graphql_type_hint=str)
