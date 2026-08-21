@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import FrozenInstanceError, field, fields
 from typing import ClassVar
 
@@ -13,7 +14,7 @@ from general_manager.api.graphql_type import (
 
 
 @pytest.fixture(autouse=True)
-def restore_graphql_type_registry() -> None:
+def restore_graphql_type_registry() -> Iterator[None]:
     snapshot = get_registered_graphql_types()
     yield
     _restore_registered_graphql_types(snapshot)

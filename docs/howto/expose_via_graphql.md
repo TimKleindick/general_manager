@@ -17,6 +17,7 @@ from dataclasses import field
 
 from general_manager import GeneralManager, GraphQLType, graph_ql_property
 from general_manager.measurement import Measurement
+from your_app.managers import Task, User  # application-specific registered managers
 
 
 class ProjectHour(GraphQLType):
@@ -38,6 +39,12 @@ class ProjectHoursSummary(GeneralManager):
             )
         ]
 ```
+
+`User` and `Task` are application-defined `GeneralManager` subclasses in this
+illustrative example; replace the import with your registered manager module.
+The `user` and `task` values passed to `ProjectHour` must be produced by the
+owning property's application-specific calculation logic. `GraphQLType` only
+describes the nested response shape and does not fetch or inject those values.
 
 No explicit `@dataclass` decorator is required. Standard dataclass defaults
 and `field(default_factory=...)` work, and construction is frozen after the

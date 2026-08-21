@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from contextlib import asynccontextmanager
 from copy import deepcopy
 import dataclasses
@@ -449,11 +450,11 @@ class GraphQL:
         """
         declarations = get_registered_graphql_types()
         declaration_names = [declaration.__name__ for declaration in declarations]
-        duplicate_names = {
-            name for name in declaration_names if declaration_names.count(name) > 1
-        }
+        duplicate_names = sorted(
+            name for name, count in Counter(declaration_names).items() if count > 1
+        )
         if duplicate_names:
-            duplicate_name = sorted(duplicate_names)[0]
+            duplicate_name = duplicate_names[0]
             raise GraphQLOutputTypeError.duplicate_declaration(duplicate_name)
 
         output_classes = dict(zip(declaration_names, declarations, strict=True))
