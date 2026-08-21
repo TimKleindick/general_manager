@@ -18,6 +18,8 @@ from typing import (
     Generator,
     Iterable,
     Mapping,
+    Annotated,
+    Literal,
     TYPE_CHECKING,
     SupportsIndex,
     SupportsInt,
@@ -192,6 +194,12 @@ def _contains_graphql_output_type(
         if len(name) >= 2 and name[0] == name[-1] and name[0] in {"'", '"'}:
             name = name[1:-1].strip()
         return name in output_classes
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        args = get_args(annotation)
+        return bool(args) and _contains_graphql_output_type(args[0], output_classes)
+    if origin is Literal:
+        return False
     if safe_issubclass(annotation, GraphQLType):
         return True
     return any(
