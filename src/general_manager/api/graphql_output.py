@@ -321,8 +321,9 @@ def _map_non_optional_annotation(
     output_type_registry: Mapping[str, type[graphene.ObjectType]],
     measurement_type: type[graphene.ObjectType],
     scalar_mapper: Callable[[type], type],
+    required: bool,
 ) -> MappedGraphQLOutput:
-    """Map one non-optional annotation to a required Graphene field."""
+    """Map one non-optional annotation to a Graphene field."""
     mapped = _map_non_optional_value(
         annotation,
         owner_name=owner_name,
@@ -338,40 +339,8 @@ def _map_non_optional_annotation(
     if mapped.contains_measurement:
         field_kwargs["target_unit"] = graphene.String()
     return MappedGraphQLOutput(
-        graphene.Field(mapped.graphene_type, required=True, **field_kwargs),
+        graphene.Field(mapped.graphene_type, required=required, **field_kwargs),
         mapped.resolver_type,
-    )
-
-
-def _set_output_nullability(
-    mapped: MappedGraphQLOutput,
-    *,
-    nullable: bool,
-) -> MappedGraphQLOutput:
-    """Apply the outer field's nullability while preserving field arguments."""
-    if not nullable:
-        return mapped
-    field = mapped.field
-    if not isinstance(field, graphene.Field):
-        return mapped
-    field_type = field.type
-    if isinstance(field_type, graphene.NonNull):
-        # ``of_type`` resolves Graphene thunks immediately.  Output types are
-        # generated after manager interfaces, so keep a lazy output registry
-        # lookup unresolved until the schema is assembled.
-        field_type = field_type._of_type
-    return replace(
-        mapped,
-        field=graphene.Field(
-            field_type,
-            args=field.args,
-            resolver=field.resolver,
-            deprecation_reason=field.deprecation_reason,
-            name=field.name,
-            description=field.description,
-            required=False,
-            default_value=field.default_value,
-        ),
     )
 
 
@@ -404,6 +373,7 @@ def map_graphql_output_annotation(
             output_type_registry=output_type_registry,
             measurement_type=measurement_type,
             scalar_mapper=scalar_mapper,
+            required=not nullable,
         )
     except GraphQLOutputAnnotationError as error:
         # Preserve the annotation written on the owning field in diagnostics,
@@ -411,7 +381,7 @@ def map_graphql_output_annotation(
         if error.annotation is not annotation:
             raise _annotation_error(owner_name, field_name, annotation) from error
         raise
-    return _set_output_nullability(mapped, nullable=nullable)
+    return mapped
 
 
 def resolve_output_type_hints(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import ClassVar, Literal
 from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser
@@ -19,6 +20,13 @@ from general_manager.interface import CalculationInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.measurement.measurement import Measurement
+from general_manager.permission.base_permission import (
+    BasePermission,
+    ReadPermissionPlan,
+)
+
+
+_PRE_MODULE_DECLARATIONS = get_registered_graphql_types()
 
 
 class IntegrationProjectHour(GraphQLType):
@@ -30,6 +38,95 @@ class IntegrationProjectHour(GraphQLType):
 class IntegrationProjectDetails(GraphQLType):
     hour: IntegrationProjectHour
     label: str
+
+
+class PermissionedRelatedManager(GeneralManager):
+    class Permission(BasePermission):
+        checks: ClassVar[list[str]] = []
+
+        def check_permission(
+            self,
+            action: Literal["create", "read", "update", "delete"],
+            attribute: str,
+        ) -> bool:
+            del action
+            type(self).checks.append(attribute)
+            return attribute == "allowed"
+
+        def check_operation_permission(
+            self,
+            action: Literal["create", "read", "update", "delete"],
+        ) -> bool:
+            del action
+            return True
+
+        def describe_operation_permissions(
+            self,
+            action: Literal["create", "read", "update", "delete"],
+        ) -> tuple[str, ...]:
+            del action
+            return ()
+
+        def get_read_permission_plan(self) -> ReadPermissionPlan:
+            return ReadPermissionPlan(filters=[], requires_instance_check=False)
+
+    class Interface(CalculationInterface):
+        related_id = Input(int)
+
+    @graph_ql_property(cache="none")
+    def allowed(self) -> str:
+        return "visible"
+
+    @graph_ql_property(cache="none")
+    def denied(self) -> str:
+        return "hidden"
+
+
+class IntegrationPermissionDetails(GraphQLType):
+    label: str
+    related: PermissionedRelatedManager
+
+
+class PermissionedProjectSummary(GeneralManager):
+    class Permission(BasePermission):
+        checks: ClassVar[list[str]] = []
+        allow_details: ClassVar[bool] = True
+
+        def check_permission(
+            self,
+            action: Literal["create", "read", "update", "delete"],
+            attribute: str,
+        ) -> bool:
+            del action
+            type(self).checks.append(attribute)
+            return attribute != "details" or type(self).allow_details
+
+        def check_operation_permission(
+            self,
+            action: Literal["create", "read", "update", "delete"],
+        ) -> bool:
+            del action
+            return True
+
+        def describe_operation_permissions(
+            self,
+            action: Literal["create", "read", "update", "delete"],
+        ) -> tuple[str, ...]:
+            del action
+            return ()
+
+        def get_read_permission_plan(self) -> ReadPermissionPlan:
+            return ReadPermissionPlan(filters=[], requires_instance_check=False)
+
+    class Interface(CalculationInterface):
+        project_id = Input(int)
+
+    @graph_ql_property(cache="none")
+    def details(self) -> IntegrationPermissionDetails | None:
+        return IntegrationPermissionDetails(
+            label="permissioned",
+            related=PermissionedRelatedManager(related_id=7),
+        )
 
 
 class ProjectSummary(GeneralManager):
@@ -62,6 +159,9 @@ class ProjectSummary(GeneralManager):
         )
 
 
+_restore_registered_graphql_types(_PRE_MODULE_DECLARATIONS)
+
+
 def _restore_graphql_registry(snapshot: object) -> None:
     GraphQL._query_class = snapshot.query_class  # type: ignore[attr-defined]
     GraphQL._mutation_class = snapshot.mutation_class  # type: ignore[attr-defined]
@@ -89,14 +189,35 @@ def _restore_graphql_registry(snapshot: object) -> None:
     GraphQL._search_result_type = snapshot.search_result_type  # type: ignore[attr-defined]
 
 
+def _restore_and_assert_registries(
+    graphql_snapshot: object,
+    declaration_snapshot: tuple[type[GraphQLType], ...],
+) -> None:
+    _restore_graphql_registry(graphql_snapshot)
+    _restore_registered_graphql_types(declaration_snapshot)
+    assert GraphQL.get_registry_snapshot() == graphql_snapshot
+    assert get_registered_graphql_types() == declaration_snapshot
+
+
+def _activate_declarations(
+    *required: type[GraphQLType],
+) -> None:
+    _restore_registered_graphql_types((*_PRE_MODULE_DECLARATIONS, *required))
+
+
 class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
     def setUp(self) -> None:
         super().setUp()
         graphql_registry = GraphQL.get_registry_snapshot()
-        declaration_registry = get_registered_graphql_types()
-        self.addCleanup(_restore_graphql_registry, graphql_registry)
-        self.addCleanup(_restore_registered_graphql_types, declaration_registry)
+        self.addCleanup(
+            _restore_and_assert_registries,
+            graphql_registry,
+            _PRE_MODULE_DECLARATIONS,
+        )
         GraphQL.reset_registry()
+        _restore_registered_graphql_types(_PRE_MODULE_DECLARATIONS)
+        self.assertEqual(get_registered_graphql_types(), _PRE_MODULE_DECLARATIONS)
+        _activate_declarations(IntegrationProjectHour, IntegrationProjectDetails)
 
         with (
             patch.object(GraphQL, "register_file_upload_mutation"),
@@ -151,8 +272,127 @@ class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
 
         query_fields = self.schema.graphql_schema.query_type.fields
         self.assertIn("projectSummary", query_fields)
-        self.assertNotIn("projectHour", query_fields)
-        self.assertNotIn("projectHourList", query_fields)
+        self.assertNotIn("integrationProjectHour", query_fields)
+        self.assertNotIn("integrationProjectHourList", query_fields)
+        self.assertNotIn("integrationProjectDetails", query_fields)
+        self.assertNotIn("integrationProjectDetailsList", query_fields)
         self.assertIsNotNone(
             self.schema.graphql_schema.get_type("IntegrationProjectHourType")
+        )
+
+
+class PermissionedGraphQLOutputIntegrationTests(SimpleTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        graphql_registry = GraphQL.get_registry_snapshot()
+        self.addCleanup(
+            _restore_and_assert_registries,
+            graphql_registry,
+            _PRE_MODULE_DECLARATIONS,
+        )
+        GraphQL.reset_registry()
+        _restore_registered_graphql_types(_PRE_MODULE_DECLARATIONS)
+        self.assertEqual(get_registered_graphql_types(), _PRE_MODULE_DECLARATIONS)
+        _activate_declarations(IntegrationPermissionDetails)
+        PermissionedRelatedManager.Permission.checks.clear()
+        PermissionedProjectSummary.Permission.checks.clear()
+        PermissionedProjectSummary.Permission.allow_details = True
+
+        with (
+            patch.object(GraphQL, "register_file_upload_mutation"),
+            patch.object(GraphQL, "register_search_query"),
+            patch("general_manager.uploads.urls.add_file_upload_urls"),
+            patch("general_manager.bootstrap.add_graphql_url"),
+        ):
+            handle_graph_ql([PermissionedRelatedManager, PermissionedProjectSummary])
+
+        schema = GraphQL.get_schema()
+        self.assertIsNotNone(schema)
+        self.schema = schema
+
+    def _execute(self, query: str):
+        return self.schema.execute(
+            query,
+            context_value=SimpleNamespace(user=AnonymousUser()),
+        )
+
+    def test_nested_manager_permissions_and_owner_property_permissions_are_preserved(
+        self,
+    ) -> None:
+        ordinary = self._execute(
+            """
+            query {
+                permissionedProjectSummary(projectId: 3) {
+                    details { label }
+                }
+            }
+            """
+        )
+
+        self.assertIsNone(ordinary.errors)
+        self.assertEqual(
+            ordinary.data,
+            {"permissionedProjectSummary": {"details": {"label": "permissioned"}}},
+        )
+        self.assertEqual(PermissionedProjectSummary.Permission.checks, ["details"])
+        self.assertEqual(PermissionedRelatedManager.Permission.checks, [])
+
+        nested = self._execute(
+            """
+            query {
+                permissionedProjectSummary(projectId: 3) {
+                    details { label related { allowed denied } }
+                }
+            }
+            """
+        )
+
+        self.assertIsNone(nested.errors)
+        self.assertEqual(
+            nested.data,
+            {
+                "permissionedProjectSummary": {
+                    "details": {
+                        "label": "permissioned",
+                        "related": {"allowed": "visible", "denied": None},
+                    }
+                }
+            },
+        )
+        self.assertEqual(
+            PermissionedProjectSummary.Permission.checks,
+            ["details", "details"],
+        )
+        self.assertEqual(
+            PermissionedRelatedManager.Permission.checks,
+            ["allowed", "denied"],
+        )
+
+        query_fields = self.schema.graphql_schema.query_type.fields
+        self.assertNotIn("integrationPermissionDetails", query_fields)
+        self.assertNotIn("integrationPermissionDetailsList", query_fields)
+
+        PermissionedProjectSummary.Permission.allow_details = False
+        denied = self._execute(
+            """
+            query {
+                permissionedProjectSummary(projectId: 3) {
+                    details { label related { allowed } }
+                }
+            }
+            """
+        )
+
+        self.assertIsNone(denied.errors)
+        self.assertEqual(
+            denied.data,
+            {"permissionedProjectSummary": {"details": None}},
+        )
+        self.assertEqual(
+            PermissionedProjectSummary.Permission.checks,
+            ["details", "details", "details"],
+        )
+        self.assertEqual(
+            PermissionedRelatedManager.Permission.checks,
+            ["allowed", "denied"],
         )
