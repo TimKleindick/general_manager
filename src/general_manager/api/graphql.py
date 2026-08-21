@@ -503,25 +503,45 @@ class GraphQL:
             name = getattr(value, "name", None)
             return name if isinstance(name, str) else getattr(value, "__name__", None)
 
-        registry_sources: tuple[tuple[str, Mapping[str, object]], ...] = (
-            ("manager", cls.manager_registry),
-            ("manager GraphQL type", cls.graphql_type_registry),
-            ("output GraphQL type", cls.graphql_output_type_registry),
-            ("page GraphQL type", cls._page_type_registry),
+        registry_sources: tuple[
+            tuple[str, Mapping[str, object], frozenset[str], bool], ...
+        ] = (
+            ("manager", cls.manager_registry, frozenset((output_name,)), False),
+            (
+                "manager GraphQL type",
+                cls.graphql_type_registry,
+                frozenset((output_name,)),
+                True,
+            ),
+            (
+                "output GraphQL type",
+                cls.graphql_output_type_registry,
+                frozenset(),
+                True,
+            ),
+            (
+                "page GraphQL type",
+                cls._page_type_registry,
+                frozenset((generated_name,)),
+                True,
+            ),
             (
                 "subscription payload GraphQL type",
                 cls._subscription_payload_registry,
+                frozenset(),
+                True,
             ),
             (
                 "capability GraphQL type",
                 cls.graphql_capability_type_registry,
+                frozenset((generated_name,)),
+                True,
             ),
         )
-        for source_name, registry in registry_sources:
+        for source_name, registry, schema_keys, check_type_name in registry_sources:
             for registered_name, registered_type in registry.items():
-                if (
-                    registered_name in {output_name, generated_name}
-                    or _type_name(registered_type) == generated_name
+                if registered_name in schema_keys or (
+                    check_type_name and _type_name(registered_type) == generated_name
                 ):
                     raise GraphQLOutputTypeError.registry_collision(
                         generated_name,

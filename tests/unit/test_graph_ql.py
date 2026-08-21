@@ -2,6 +2,7 @@
 
 import json
 import asyncio
+from dataclasses import field as dataclass_field
 import subprocess
 import sys
 import unittest
@@ -32,6 +33,7 @@ from general_manager.api.graphql_type import (
     _restore_registered_graphql_types,
     get_registered_graphql_types,
 )
+from general_manager.api.graphql_output import GraphQLOutputAnnotationError
 from general_manager.api.graphql_mutations import (
     _graphql_mutation_field_name,
     _normalize_mutation_kwargs_for_manager,
@@ -1691,6 +1693,121 @@ class GraphQLTests(TestCase):
             GraphQL.create_graphql_output_type(SharedName)
 
         self.assertEqual(GraphQL.graphql_output_type_registry, before)
+
+    def test_output_type_rejects_true_known_schema_collisions_without_mutation(
+        self,
+    ) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class Collision(GraphQLType):
+            task_id: int
+
+        colliding_type = type("CollisionType", (graphene.ObjectType,), {})
+        sources = (
+            ("graphql_output_type_registry", "output-key"),
+            ("_page_type_registry", "page-key"),
+            ("_subscription_payload_registry", "subscription-key"),
+            ("graphql_capability_type_registry", "capability-key"),
+        )
+
+        for registry_name, registered_name in sources:
+            with self.subTest(registry_name=registry_name):
+                GraphQL.reset_registry()
+                registry = getattr(GraphQL, registry_name)
+                registry[registered_name] = colliding_type
+                before = dict(GraphQL.graphql_output_type_registry)
+
+                with self.assertRaises(ValueError):
+                    GraphQL.create_graphql_output_type(Collision)
+
+                self.assertEqual(GraphQL.graphql_output_type_registry, before)
+
+        GraphQL.reset_registry()
+        GraphQL._schema = SimpleNamespace(
+            graphql_schema=SimpleNamespace(
+                type_map={"schema-key": SimpleNamespace(name="CollisionType")}
+            )
+        )
+        before = dict(GraphQL.graphql_output_type_registry)
+
+        with self.assertRaises(ValueError):
+            GraphQL.create_graphql_output_type(Collision)
+
+        self.assertEqual(GraphQL.graphql_output_type_registry, before)
+
+    def test_auxiliary_key_matching_output_name_without_schema_collision_is_allowed(
+        self,
+    ) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class Collision(GraphQLType):
+            task_id: int
+
+        unrelated_type = type("UnrelatedPageType", (graphene.ObjectType,), {})
+        for registry_name in (
+            "_page_type_registry",
+            "_subscription_payload_registry",
+            "graphql_capability_type_registry",
+        ):
+            with self.subTest(registry_name=registry_name):
+                GraphQL.reset_registry()
+                registry = getattr(GraphQL, registry_name)
+                registry["Collision"] = unrelated_type
+
+                generated = GraphQL.create_graphql_output_type(Collision)
+
+                self.assertIs(
+                    GraphQL.graphql_output_type_registry["Collision"], generated
+                )
+
+    def test_output_type_mounts_inherited_and_derived_dataclass_fields(self) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class ProjectHour(GraphQLType):
+            task_id: int
+            users: list[str]
+
+        class DetailedProjectHour(ProjectHour):
+            label: str = dataclass_field(init=False, default="hours")
+
+        generated = GraphQL.create_graphql_output_type(DetailedProjectHour)
+
+        self.assertEqual(
+            set(generated._meta.fields),
+            {"task_id", "users", "label"},
+        )
+
+    def test_output_type_mapping_failure_preserves_prepopulated_registry(self) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class InvalidOutput(GraphQLType):
+            value: object
+
+        sentinel = type("ExistingOutputType", (graphene.ObjectType,), {})
+        GraphQL.graphql_output_type_registry["Existing"] = sentinel
+        before = GraphQL.graphql_output_type_registry
+
+        with self.assertRaises(GraphQLOutputAnnotationError):
+            GraphQL.create_graphql_output_type(InvalidOutput)
+
+        self.assertIs(GraphQL.graphql_output_type_registry, before)
+        self.assertEqual(GraphQL.graphql_output_type_registry, {"Existing": sentinel})
 
     def test_sort_options_include_direct_manager_and_related_scalars(self) -> None:
         related_computed = SimpleNamespace(sortable=True, graphql_type_hint=str)
