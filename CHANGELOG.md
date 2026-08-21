@@ -2,6 +2,80 @@
 
 <!-- version list -->
 
+## v0.75.0 (2026-08-21)
+
+### Bug Fixes
+
+- Address GraphQL output type review findings
+  ([`94aa767`](https://github.com/TimKleindick/general_manager/commit/94aa767a635812502913cb1e404d4705dd8c35e4))
+
+- Harden GraphQL output annotation mapper
+  ([`15ce934`](https://github.com/TimKleindick/general_manager/commit/15ce9343d004c3a39c4901b47fd359f7309fe7aa))
+
+- Harden GraphQL output property integration
+  ([`20c8c07`](https://github.com/TimKleindick/general_manager/commit/20c8c07e71715de2da5b5719aaa653123ae6b629))
+
+- Harden GraphQL output test isolation
+  ([`4cc65bf`](https://github.com/TimKleindick/general_manager/commit/4cc65bfa387efc0d2afa70056fc5f645f3b38a9c))
+
+- Preserve legacy GraphQL property annotations
+  ([`a84b202`](https://github.com/TimKleindick/general_manager/commit/a84b2026da8e63983c0682944c79be4e08d582c7))
+
+- Refine GraphQL output type collision checks
+  ([`23606e0`](https://github.com/TimKleindick/general_manager/commit/23606e0faf6672568fd39055c0bd3e4c32ab130c))
+
+### Documentation
+
+- Clarify bucket projection snapshots
+  ([`b7dc09c`](https://github.com/TimKleindick/general_manager/commit/b7dc09c6651e1f726f8c9e182c8bafce57e5958c))
+
+- Clarify GraphQL output annotation contract
+  ([`eafdf70`](https://github.com/TimKleindick/general_manager/commit/eafdf70e4480349781376c0db46a2ae3a59c41a0))
+
+- Document bucket projections and grouped relation unions
+  ([`a2b2ddd`](https://github.com/TimKleindick/general_manager/commit/a2b2ddde18ec434f182e51dddfabba6036a92eff))
+
+- Publish GraphQL output type API
+  ([`e0e76f4`](https://github.com/TimKleindick/general_manager/commit/e0e76f430202cfded525da3914f596d1726478fa))
+
+### Features
+
+- Add GraphQL output value declarations
+  ([`3b43f27`](https://github.com/TimKleindick/general_manager/commit/3b43f27f5fb940438095cfde6da68a6e6b83c7ab))
+
+- Expose output types from GraphQL properties
+  ([`e229618`](https://github.com/TimKleindick/general_manager/commit/e22961827818aa97f08185a899db8b838e48730a))
+
+- Generate GraphQL output object types
+  ([`101e166`](https://github.com/TimKleindick/general_manager/commit/101e1669180a89d043b5a8043c221c7628008daf))
+
+- Map GraphQL output annotations
+  ([`fc0ff73`](https://github.com/TimKleindick/general_manager/commit/fc0ff733b8aca1489327a40604a9cb551f098e89))
+
+### Testing
+
+- Cover GraphQL declaration inheritance
+  ([`c01aeaf`](https://github.com/TimKleindick/general_manager/commit/c01aeaf089d95e2558625a63633d86e6b088daf9))
+
+- Exercise GraphQL annotation routing
+  ([`64ea29b`](https://github.com/TimKleindick/general_manager/commit/64ea29ba282cc3e0be79ad267c9acb9f7a800e54))
+
+- Improve GraphQL output patch coverage
+  ([`c29b048`](https://github.com/TimKleindick/general_manager/commit/c29b048d6d1bbf6b16eef8f8d8d1629a6db34335))
+
+- Isolate GraphQL output coverage fixtures
+  ([`36be371`](https://github.com/TimKleindick/general_manager/commit/36be371daa8c92d6962d2b848bdd9c3a8ed399a2))
+
+- Isolate GraphQL output declaration snapshots
+  ([`ee65da7`](https://github.com/TimKleindick/general_manager/commit/ee65da700101c9ec18d4d44ba3ff9f666c7529c9))
+
+- Stabilize GraphQL hint fallback coverage
+  ([`b8e48b9`](https://github.com/TimKleindick/general_manager/commit/b8e48b93f063899ace684fa29beeefcf1118970c))
+
+- Verify GraphQL output registry isolation
+  ([`4102e0b`](https://github.com/TimKleindick/general_manager/commit/4102e0b08f915754b8f2f1eb1a286532ba4c40ce))
+
+
 ## v0.74.0 (2026-08-18)
 
 ### Bug Fixes
