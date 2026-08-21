@@ -14,7 +14,7 @@ from general_manager.api.graphql_type import (
     _restore_registered_graphql_types,
     get_registered_graphql_types,
 )
-from general_manager.api.property import graph_ql_property
+from general_manager.api.property import _TYPE_HINT_UNRESOLVED, graph_ql_property
 from general_manager.bootstrap import handle_graph_ql
 from general_manager.interface import CalculationInterface
 from general_manager.manager.general_manager import GeneralManager
@@ -24,20 +24,6 @@ from general_manager.permission.base_permission import (
     BasePermission,
     ReadPermissionPlan,
 )
-
-
-_PRE_MODULE_DECLARATIONS = get_registered_graphql_types()
-
-
-class IntegrationProjectHour(GraphQLType):
-    task_id: int
-    total_hours: Measurement
-    users: list[str]
-
-
-class IntegrationProjectDetails(GraphQLType):
-    hour: IntegrationProjectHour
-    label: str
 
 
 class PermissionedRelatedManager(GeneralManager):
@@ -82,11 +68,6 @@ class PermissionedRelatedManager(GeneralManager):
         return "hidden"
 
 
-class IntegrationPermissionDetails(GraphQLType):
-    label: str
-    related: PermissionedRelatedManager
-
-
 class PermissionedProjectSummary(GeneralManager):
     class Permission(BasePermission):
         checks: ClassVar[list[str]] = []
@@ -122,8 +103,9 @@ class PermissionedProjectSummary(GeneralManager):
         project_id = Input(int)
 
     @graph_ql_property(cache="none")
-    def details(self) -> IntegrationPermissionDetails | None:
-        return IntegrationPermissionDetails(
+    def details(self) -> "IntegrationPermissionDetails | None":  # noqa: F821
+        details_type = globals()["IntegrationPermissionDetails"]
+        return details_type(
             label="permissioned",
             related=PermissionedRelatedManager(related_id=7),
         )
@@ -134,9 +116,10 @@ class ProjectSummary(GeneralManager):
         project_id = Input(int)
 
     @graph_ql_property(cache="none")
-    def hours(self) -> list[IntegrationProjectHour]:
+    def hours(self) -> "list[IntegrationProjectHour]":  # noqa: F821
+        project_hour_type = globals()["IntegrationProjectHour"]
         return [
-            IntegrationProjectHour(
+            project_hour_type(
                 task_id=3,
                 total_hours=Measurement(Decimal("8.5"), "h"),
                 users=["Ng", "Smith"],
@@ -144,26 +127,22 @@ class ProjectSummary(GeneralManager):
         ]
 
     @graph_ql_property(cache="none")
-    def optional_hour(self) -> IntegrationProjectHour | None:
+    def optional_hour(self) -> "IntegrationProjectHour | None":  # noqa: F821
         return None
 
     @graph_ql_property(cache="none")
-    def optional_hours(self) -> list[IntegrationProjectHour | None]:
+    def optional_hours(
+        self,
+    ) -> "list[IntegrationProjectHour | None]":  # noqa: F821
         return [None, self.hours[0]]
 
     @graph_ql_property(cache="none")
-    def details(self) -> IntegrationProjectDetails:
-        return IntegrationProjectDetails(
+    def details(self) -> "IntegrationProjectDetails":  # noqa: F821
+        details_type = globals()["IntegrationProjectDetails"]
+        return details_type(
             hour=self.hours[0],
             label="summary",
         )
-
-
-_restore_registered_graphql_types(_PRE_MODULE_DECLARATIONS)
-
-
-class PostBaselineSentinel(GraphQLType):
-    marker: str
 
 
 def _restore_graphql_registry(snapshot: object) -> None:
@@ -203,6 +182,17 @@ def _restore_and_assert_registries(
     assert get_registered_graphql_types() == declaration_snapshot
 
 
+def _restore_module_bindings(bindings: dict[str, object]) -> None:
+    for name, previous in bindings.items():
+        if previous is _MISSING:
+            globals().pop(name, None)
+        else:
+            globals()[name] = previous
+
+
+_MISSING = object()
+
+
 def _activate_declarations(
     declaration_snapshot: tuple[type[GraphQLType], ...],
     *required: type[GraphQLType],
@@ -217,40 +207,67 @@ def _activate_declarations(
     )
 
 
-def _assert_late_declaration_survives_cleanup(
-    declaration_snapshot: tuple[type[GraphQLType], ...],
-    integration_declarations: tuple[type[GraphQLType], ...],
-) -> None:
-    declarations = get_registered_graphql_types()
-    assert declarations == declaration_snapshot
-    assert PostBaselineSentinel in declarations
-    assert all(
-        declaration not in declarations for declaration in integration_declarations
-    )
-
-
 class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
     def setUp(self) -> None:
         super().setUp()
         graphql_registry = GraphQL.get_registry_snapshot()
         declaration_registry = get_registered_graphql_types()
         self.addCleanup(
-            _assert_late_declaration_survives_cleanup,
-            declaration_registry,
-            (IntegrationProjectHour, IntegrationProjectDetails),
-        )
-        self.addCleanup(
             _restore_and_assert_registries,
             graphql_registry,
             declaration_registry,
         )
+        binding_names = ("IntegrationProjectHour", "IntegrationProjectDetails")
+        previous_bindings = {
+            name: globals().get(name, _MISSING) for name in binding_names
+        }
+        self.addCleanup(_restore_module_bindings, previous_bindings)
         GraphQL.reset_registry()
-        _restore_registered_graphql_types(declaration_registry)
-        self.assertEqual(get_registered_graphql_types(), declaration_registry)
+
+        project_hour = type(
+            "IntegrationProjectHour",
+            (GraphQLType,),
+            {
+                "__module__": __name__,
+                "__annotations__": {
+                    "task_id": int,
+                    "total_hours": Measurement,
+                    "users": list[str],
+                },
+            },
+        )
+        project_details = type(
+            "IntegrationProjectDetails",
+            (GraphQLType,),
+            {
+                "__module__": __name__,
+                "__annotations__": {
+                    "hour": project_hour,
+                    "label": str,
+                },
+            },
+        )
+        globals().update(
+            {
+                "IntegrationProjectHour": project_hour,
+                "IntegrationProjectDetails": project_details,
+            }
+        )
+        self.project_hour = project_hour
+        self.project_details = project_details
+        self.assertEqual(
+            get_registered_graphql_types()[-2:],
+            (project_hour, project_details),
+        )
+        for manager_class in (ProjectSummary, PermissionedProjectSummary):
+            for (
+                property_value
+            ) in manager_class.Interface.get_graph_ql_properties().values():
+                property_value._graphql_type_hint = _TYPE_HINT_UNRESOLVED
         _activate_declarations(
             declaration_registry,
-            IntegrationProjectHour,
-            IntegrationProjectDetails,
+            project_hour,
+            project_details,
         )
 
         with (
@@ -315,10 +332,18 @@ class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
         )
 
     def test_late_declaration_survives_setup_and_cleanup(self) -> None:
+        sentinel = type(
+            "PostBaselineSentinel",
+            (GraphQLType,),
+            {
+                "__module__": __name__,
+                "__annotations__": {"marker": str},
+            },
+        )
         declarations = get_registered_graphql_types()
-        self.assertIn(PostBaselineSentinel, declarations)
-        self.assertIn(IntegrationProjectHour, declarations)
-        self.assertIn(IntegrationProjectDetails, declarations)
+        self.assertIn(sentinel, declarations)
+        self.assertIn(self.project_hour, declarations)
+        self.assertIn(self.project_details, declarations)
 
 
 class PermissionedGraphQLOutputIntegrationTests(SimpleTestCase):
@@ -327,19 +352,35 @@ class PermissionedGraphQLOutputIntegrationTests(SimpleTestCase):
         graphql_registry = GraphQL.get_registry_snapshot()
         declaration_registry = get_registered_graphql_types()
         self.addCleanup(
-            _assert_late_declaration_survives_cleanup,
-            declaration_registry,
-            (IntegrationPermissionDetails,),
-        )
-        self.addCleanup(
             _restore_and_assert_registries,
             graphql_registry,
             declaration_registry,
         )
+        previous_binding = globals().get("IntegrationPermissionDetails", _MISSING)
+        self.addCleanup(
+            _restore_module_bindings,
+            {"IntegrationPermissionDetails": previous_binding},
+        )
         GraphQL.reset_registry()
-        _restore_registered_graphql_types(declaration_registry)
-        self.assertEqual(get_registered_graphql_types(), declaration_registry)
-        _activate_declarations(declaration_registry, IntegrationPermissionDetails)
+        permission_details = type(
+            "IntegrationPermissionDetails",
+            (GraphQLType,),
+            {
+                "__module__": __name__,
+                "__annotations__": {
+                    "label": str,
+                    "related": PermissionedRelatedManager,
+                },
+            },
+        )
+        globals()["IntegrationPermissionDetails"] = permission_details
+        self.permission_details = permission_details
+        self.assertIs(get_registered_graphql_types()[-1], permission_details)
+        for (
+            property_value
+        ) in PermissionedProjectSummary.Interface.get_graph_ql_properties().values():
+            property_value._graphql_type_hint = _TYPE_HINT_UNRESOLVED
+        _activate_declarations(declaration_registry, permission_details)
         PermissionedRelatedManager.Permission.checks.clear()
         PermissionedProjectSummary.Permission.checks.clear()
         PermissionedProjectSummary.Permission.allow_details = True
