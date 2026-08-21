@@ -28,6 +28,10 @@
       "general_manager.api.graphql",
       "GraphQL"
     ],
+    "GraphQLType": [
+      "general_manager.api.graphql_type",
+      "GraphQLType"
+    ],
     "IndexConfig": [
       "general_manager.search.config",
       "IndexConfig"

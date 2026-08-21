@@ -10,6 +10,7 @@ __all__ = [
     "FieldConfig",
     "GeneralManager",
     "GraphQL",
+    "GraphQLType",
     "IndexConfig",
     "Input",
     "ManagerBasedPermission",
@@ -45,6 +46,7 @@ from general_manager.interface.interfaces.existing_model import ExistingModelInt
 from general_manager.search.config import FieldConfig
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql_type import GraphQLType
 from general_manager.search.config import IndexConfig
 from general_manager.manager.input import Input
 from general_manager.permission.manager_based_permission import ManagerBasedPermission

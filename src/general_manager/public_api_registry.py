@@ -14,6 +14,7 @@ LazyExportMap = Mapping[str, str | tuple[str, str]]
 
 GENERAL_MANAGER_EXPORTS: LazyExportMap = {
     "GraphQL": ("general_manager.api.graphql", "GraphQL"),
+    "GraphQLType": ("general_manager.api.graphql_type", "GraphQLType"),
     "graph_ql_property": ("general_manager.api.property", "graph_ql_property"),
     "graph_ql_mutation": ("general_manager.api.mutation", "graph_ql_mutation"),
     "GeneralManager": ("general_manager.manager.general_manager", "GeneralManager"),

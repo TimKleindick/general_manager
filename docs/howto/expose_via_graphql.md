@@ -2,6 +2,66 @@
 
 Managers with an `Interface` are registered during GeneralManager startup and receive generated query, mutation, and subscription fields based on their interface capabilities.
 
+## Return output-only GraphQL types
+
+Use `GraphQLType` for a response value that needs a GraphQL object shape but
+does not need a manager identity, lifecycle, or root operation. Import the
+declaration at startup (normally from an application module imported during
+app initialization) so GeneralManager discovers it before building the
+schema. Concrete subclasses are automatically frozen dataclasses:
+
+```python
+from __future__ import annotations
+
+from dataclasses import field
+
+from general_manager import GeneralManager, GraphQLType, graph_ql_property
+from general_manager.measurement import Measurement
+
+
+class ProjectHour(GraphQLType):
+    user: list[User]
+    total_hours: Measurement
+    task: Task
+    notes: str | None = None
+    tags: list[str] = field(default_factory=list)
+
+
+class ProjectHoursSummary(GeneralManager):
+    @graph_ql_property
+    def project_hours(self) -> list[ProjectHour]:
+        return [
+            ProjectHour(
+                user=[user],
+                total_hours=Measurement(8, "h"),
+                task=task,
+            )
+        ]
+```
+
+No explicit `@dataclass` decorator is required. Standard dataclass defaults
+and `field(default_factory=...)` work, and construction is frozen after the
+instance is created. The declaration above becomes the GraphQL object
+`ProjectHourType`; it does not create a query, mutation, subscription, filter,
+capability field, or manager lifecycle. It is available only through a field
+that references it, such as `projectHours` in the example.
+
+The output mapper accepts built-in scalar annotations, `Measurement`, registered
+managers, registered output types, and `list[T]`, `tuple[T, ...]`, or `set[T]`.
+Use `T | None` for nullable values. Required annotations become non-null
+GraphQL fields, while optional annotations become nullable fields; collection
+elements follow the same rule. Bare collections, heterogeneous tuples,
+`Any`, `Annotated[...]`, unresolved references, and multi-target unions are
+invalid output annotations and fail schema generation with a field-specific
+error. Output declarations themselves are output-only: input objects and
+automatic root operations are not generated.
+
+The `@graph_ql_property` on the owning manager remains the authorization
+boundary. A nested manager field still uses that manager's normal GraphQL
+read permissions. Plain scalar fields and nested `GraphQLType` fields do not
+receive an independent permission check, so omit or pre-authorize sensitive
+values in the owning property.
+
 ## Declare manager relations
 
 Annotate related fields with the manager class that should appear in generated

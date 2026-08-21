@@ -8,6 +8,8 @@
 
 ::: general_manager.api.graphql.BigIntScalar
 
+::: general_manager.api.graphql_type.GraphQLType
+
 ::: general_manager.api.graphql_errors.PublicGraphQLError
 
 `PublicGraphQLError(message: str, *, code: str)` constructs a GraphQL error for
@@ -42,6 +44,26 @@ are not stable import paths. Some internal types may still appear in generated
 reference pages or type-checker-visible implementation annotations when they are
 part of generated GraphQL plumbing; that visibility does not make them public
 import targets.
+
+`GraphQLType` is the stable package-root export for output-only response values:
+
+```python
+from general_manager import GraphQLType
+```
+
+Its concrete subclasses are frozen dataclass-style values whose annotated
+fields become GraphQL output fields. Python required/optional annotations and
+the supported `list`, `tuple[T, ...]`, and `set` shapes determine GraphQL
+nullability. They may be used as direct, optional, or collection return values
+from `@graph_ql_property`, but they never generate queries, mutations,
+subscriptions, filters, capabilities, or input objects. Import declarations
+during startup so they are registered before schema construction.
+
+The manager owning the `@graph_ql_property` controls access to the returned
+value. A nested `GeneralManager` field keeps its manager-level read permission
+checks, while plain scalar fields and nested `GraphQLType` fields have no
+independent permission boundary. Applications should omit or pre-authorize
+sensitive values before returning an output value.
 
 ## Historical queries with `@asOf`
 
