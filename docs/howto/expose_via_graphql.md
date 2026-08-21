@@ -46,15 +46,19 @@ instance is created. The declaration above becomes the GraphQL object
 capability field, or manager lifecycle. It is available only through a field
 that references it, such as `projectHours` in the example.
 
-The output mapper accepts built-in scalar annotations, `Measurement`, registered
+For scalar fields, the strict allowlist is `str`, `bool`, `int`, `float`,
+`Decimal`, `datetime`, `date`, and subclasses of those types. Unknown
+scalar-like classes are rejected and do not receive the legacy mapper's
+fallback to `String`. The other supported values are `Measurement`, registered
 managers, registered output types, and `list[T]`, `tuple[T, ...]`, or `set[T]`.
 Use `T | None` for nullable values. Required annotations become non-null
 GraphQL fields, while optional annotations become nullable fields; collection
-elements follow the same rule. Bare collections, heterogeneous tuples,
-`Any`, `Annotated[...]`, unresolved references, and multi-target unions are
-invalid output annotations and fail schema generation with a field-specific
-error. Output declarations themselves are output-only: input objects and
-automatic root operations are not generated.
+elements follow the same rule. Bare collections, every fixed-length tuple such
+as `tuple[int, int]`, `Any`, `Annotated[...]`, unresolved references, and
+multi-target unions are invalid output annotations and fail schema generation
+with a field-specific error. Only homogeneous variadic tuples written as
+`tuple[T, ...]` are supported. Output declarations themselves are output-only:
+input objects and automatic root operations are not generated.
 
 The `@graph_ql_property` on the owning manager remains the authorization
 boundary. A nested manager field still uses that manager's normal GraphQL
