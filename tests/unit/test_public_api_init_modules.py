@@ -127,3 +127,11 @@ def test_invalid_error_template_error_is_exported_from_rule() -> None:
         is implementation_module.InvalidErrorTemplateError
     )
     assert "InvalidErrorTemplateError" in public_module.__all__
+
+
+def test_graphql_type_is_a_package_root_export() -> None:
+    public_module = import_module("general_manager")
+    implementation_module = import_module("general_manager.api.graphql_type")
+
+    assert "GraphQLType" in public_module.__all__
+    assert public_module.GraphQLType is implementation_module.GraphQLType

@@ -18,6 +18,73 @@ Single-valued manager relations are exposed as object fields. Relation fields
 whose Python-side name ends with `_list` are exposed as paginated list fields
 with filtering, grouping, sorting, and pagination arguments.
 
+## Output-only value types
+
+Use the package-root `GraphQLType` when a response needs a nested object shape
+but does not represent a manager with identity, lifecycle, or independent
+operations. Import the module that declares each output type during startup so
+the declaration is registered before the schema is built:
+
+```python
+from dataclasses import field
+
+from general_manager import GraphQLType
+from general_manager.measurement import Measurement
+
+
+class ProjectHour(GraphQLType):
+    user: list[User]
+    total_hours: Measurement
+    task: Task
+    notes: str | None = None
+    tags: list[str] = field(default_factory=list)
+```
+
+Concrete subclasses automatically behave as frozen dataclasses; an explicit
+`@dataclass` decorator is not needed. Dataclass defaults and
+`default_factory` are supported, and `ClassVar` declarations are not exposed
+as fields. The generated Graphene object is named `ProjectHourType`.
+
+Python annotations define nullability and collection element nullability:
+
+| Python annotation | GraphQL field |
+| --- | --- |
+| `str` | `String!` |
+| `str \| None` | `String` |
+| `list[User]` | `[UserType!]!` |
+| `list[User \| None]` | `[UserType]!` |
+| `list[User] \| None` | `[UserType!]` |
+
+Supported values are built-in GraphQL scalar annotations, `Measurement`,
+registered `GeneralManager` classes, registered `GraphQLType` classes, and
+`list[T]`, `tuple[T, ...]`, or `set[T]` collections. Optional forms use
+`T | None`. Bare collections, fixed heterogeneous tuples, `Any`,
+`Annotated[...]`, unresolved references, and unions containing more than one
+non-null type are rejected during schema generation.
+
+An output type can be returned by any `@graph_ql_property` using a direct,
+optional, or collection annotation:
+
+```python
+class ProjectHoursSummary(GeneralManager):
+    @graph_ql_property
+    def project_hours(self) -> list[ProjectHour]:
+        return [
+            ProjectHour(
+                user=[user],
+                total_hours=Measurement(8, "h"),
+                task=task,
+            )
+        ]
+```
+
+`GraphQLType` declarations add only schema object types. They do not create
+root queries, list queries, mutations, subscriptions, filters, capabilities,
+or manager lifecycle behavior. The owning manager controls access to the
+property. Nested manager fields retain that manager's normal read resolvers
+and permissions; plain scalar and nested output fields have no independent
+permission check.
+
 ### Relation annotation compatibility
 
 Before mapping a relation, schema generation resolves its annotation to one
