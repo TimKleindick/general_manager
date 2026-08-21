@@ -55,12 +55,15 @@ Python annotations define nullability and collection element nullability:
 | `list[User \| None]` | `[UserType]!` |
 | `list[User] \| None` | `[UserType!]` |
 
-Supported values are built-in GraphQL scalar annotations, `Measurement`,
-registered `GeneralManager` classes, registered `GraphQLType` classes, and
-`list[T]`, `tuple[T, ...]`, or `set[T]` collections. Optional forms use
-`T | None`. Bare collections, fixed heterogeneous tuples, `Any`,
-`Annotated[...]`, unresolved references, and unions containing more than one
-non-null type are rejected during schema generation.
+For scalar fields, the strict allowlist is `str`, `bool`, `int`, `float`,
+`Decimal`, `datetime`, `date`, and subclasses of those types. Unknown
+scalar-like classes are rejected; output declarations do not use the legacy
+manager mapper's fallback to `String`. Other supported values are
+`Measurement`, registered `GeneralManager` classes, registered `GraphQLType`
+classes, and `list[T]`, `tuple[T, ...]`, or `set[T]` collections. Optional forms
+use `T | None`. Bare collections, every fixed-length tuple (including
+`tuple[int, int]`), `Any`, `Annotated[...]`, unresolved references, and unions
+containing more than one non-null type are rejected during schema generation.
 
 An output type can be returned by any `@graph_ql_property` using a direct,
 optional, or collection annotation:
@@ -84,6 +87,12 @@ or manager lifecycle behavior. The owning manager controls access to the
 property. Nested manager fields retain that manager's normal read resolvers
 and permissions; plain scalar and nested output fields have no independent
 permission check.
+
+Output declarations and generated output `ObjectType` classes use registries
+separate from manager declarations and generated manager types. Manager-only
+roots, filters, subscriptions, search, capabilities, and lifecycle tooling
+continue to consume the manager registries; an output declaration is never
+added to those manager operation paths.
 
 ### Relation annotation compatibility
 

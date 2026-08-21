@@ -177,6 +177,14 @@ def test_set_and_tuple_preserve_container_and_item_nullability(
     assert isinstance(item_type, graphene.NonNull) is not nullable_item
 
 
+def test_fixed_length_homogeneous_tuple_is_rejected() -> None:
+    with pytest.raises(GraphQLOutputAnnotationError) as error:
+        map_annotation(tuple[int, int])
+
+    assert "Envelope.value" in str(error.value)
+    assert repr(tuple[int, int]) in str(error.value)
+
+
 def test_live_generated_type_thunk_reads_entry_added_and_replaced_after_mapping() -> (
     None
 ):
