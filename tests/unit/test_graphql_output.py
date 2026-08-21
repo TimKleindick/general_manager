@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Annotated, Any, Callable, ForwardRef, cast
+from typing import Annotated, Any, ForwardRef
 
 import graphene
 import pytest
+from django.test import override_settings
 
 from general_manager.api.graphql import GraphQL, MeasurementType
 from general_manager.api.graphql_output import (
@@ -21,6 +22,7 @@ from general_manager.api.graphql_type import (
     get_registered_graphql_types,
 )
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.measurement.measurement import Measurement
 
 
@@ -211,14 +213,20 @@ def test_unregistered_output_type_is_rejected() -> None:
 
 
 def test_unregistered_manager_type_is_rejected() -> None:
-    class UnregisteredManager(GeneralManager):
-        pass
+    pending_before = list(GeneralManagerMeta.pending_graphql_interfaces)
+    with override_settings(GENERAL_MANAGER={"AUTOCREATE_GRAPHQL": False}):
+
+        class UnregisteredManager(GeneralManager):
+            pass
+
+        assert GeneralManagerMeta.pending_graphql_interfaces == pending_before
 
     with pytest.raises(GraphQLOutputAnnotationError) as error:
         map_annotation(UnregisteredManager)
 
     assert "Envelope.value" in str(error.value)
     assert repr(UnregisteredManager) in str(error.value)
+    assert GeneralManagerMeta.pending_graphql_interfaces == pending_before
 
 
 def test_nested_output_type_uses_output_registry_and_value_resolver_type(
@@ -468,7 +476,11 @@ def test_unresolved_callable_forward_reference_reports_owner_field() -> None:
 
 
 def test_empty_annotations_report_owner_and_annotations_field() -> None:
-    invalid_owner = cast(Callable[..., object], object())
+    class EmptyCallable:
+        def __call__(self, *_args: object, **_kwargs: object) -> object:
+            return None
+
+    invalid_owner = EmptyCallable()
     with pytest.raises(GraphQLOutputAnnotationError) as error:
         resolve_output_type_hints(
             invalid_owner,
@@ -476,7 +488,7 @@ def test_empty_annotations_report_owner_and_annotations_field() -> None:
             output_class_registry={"Summary": _CURRENT_SUMMARY},
         )
 
-    assert "object.annotations" in str(error.value)
+    assert "EmptyCallable.annotations" in str(error.value)
 
 
 def test_output_measurement_resolver_converts_without_manager_access_checks() -> None:
