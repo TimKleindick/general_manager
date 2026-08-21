@@ -13,6 +13,7 @@ from typing import (
     AsyncIterator,
     Callable,
     ClassVar,
+    ForwardRef,
     Generator,
     Iterable,
     Mapping,
@@ -176,6 +177,26 @@ GraphQLMutationMap = dict[str, type[graphene.Mutation]]
 _SUBSCRIPTION_CLEANUP_FAILURE_MESSAGE = "subscription cleanup failed"
 _SUBSCRIPTION_ROLLBACK_FAILURE_MESSAGE = "subscription setup and rollback failed"
 _SUBSCRIPTION_STREAM_CLEANUP_FAILURE_MESSAGE = "subscription stream and cleanup failed"
+
+
+def _contains_graphql_output_type(
+    annotation: object,
+    output_classes: Mapping[str, type[GraphQLType]],
+) -> bool:
+    """Return whether an annotation contains a registered GraphQL output class."""
+    if isinstance(annotation, ForwardRef):
+        annotation = annotation.__forward_arg__
+    if isinstance(annotation, str):
+        name = annotation.strip()
+        if len(name) >= 2 and name[0] == name[-1] and name[0] in {"'", '"'}:
+            name = name[1:-1].strip()
+        return name in output_classes
+    if safe_issubclass(annotation, GraphQLType):
+        return True
+    return any(
+        _contains_graphql_output_type(argument, output_classes)
+        for argument in get_args(annotation)
+    )
 
 
 class GraphQLOutputTypeError(ValueError):
@@ -790,12 +811,37 @@ class GraphQL:
                     resolved_field_type,
                 )
 
+        output_classes = {
+            output_class.__name__: output_class
+            for output_class in get_registered_graphql_types()
+        }
+
         # handle GraphQLProperty attributes
         for (
             attr_name,
             attr_value,
         ) in generalManagerClass.Interface.get_graph_ql_properties().items():
             raw_hint = attr_value.graphql_type_hint
+
+            if _contains_graphql_output_type(raw_hint, output_classes):
+                mapped = map_graphql_output_annotation(
+                    raw_hint,
+                    owner_name=generalManagerClass.__name__,
+                    field_name=attr_name,
+                    manager_registry=cls.manager_registry,
+                    manager_type_registry=cls.graphql_type_registry,
+                    output_class_registry=output_classes,
+                    output_type_registry=cls.graphql_output_type_registry,
+                    measurement_type=MeasurementType,
+                    scalar_mapper=cls._map_field_to_graphene_base_type,
+                )
+                fields[attr_name] = mapped.field
+                fields[f"resolve_{attr_name}"] = cls._create_resolver(
+                    attr_name,
+                    cast(type, mapped.resolver_type),
+                )
+                continue
+
             origin = get_origin(raw_hint)
             type_args = [t for t in get_args(raw_hint) if t is not type(None)]
 
