@@ -19,7 +19,7 @@ from django.test import RequestFactory
 from django.db.models import NOT_PROVIDED
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
-from typing import Any, ClassVar, get_args
+from typing import Annotated, Any, ClassVar, Literal, get_args
 
 from general_manager import bootstrap as gm_bootstrap
 from general_manager.api.graphql import (
@@ -2629,6 +2629,9 @@ class GraphQLTests(TestCase):
         self.addCleanup(_restore_registered_graphql_types, declarations)
         GraphQL.reset_registry()
 
+        class ProjectHour(GraphQLType):
+            marker: str
+
         class RelatedManager(GeneralManager):
             pass
 
@@ -2661,6 +2664,14 @@ class GraphQLTests(TestCase):
             return []
 
         @graph_ql_property(cache="none")
+        def annotated_scalar(_instance) -> Annotated[str, ProjectHour]:
+            return "annotated"
+
+        @graph_ql_property(cache="none")
+        def literal_scalar(_instance) -> Literal["ProjectHour"]:
+            return "literal"
+
+        @graph_ql_property(cache="none")
         def unknown(_instance) -> object:
             return object()
 
@@ -2670,6 +2681,8 @@ class GraphQLTests(TestCase):
             "measurements": measurements,
             "related": related,
             "related_list": related_list,
+            "annotated_scalar": annotated_scalar,
+            "literal_scalar": literal_scalar,
             "unknown": unknown,
         }
 
@@ -2697,8 +2710,23 @@ class GraphQLTests(TestCase):
         ):
             GraphQL.create_graphql_interface(LegacyManager)
 
-        fields = GraphQL.graphql_type_registry["LegacyManager"]._meta.fields
+        LegacyManagerType = GraphQL.graphql_type_registry["LegacyManager"]
+        fields = LegacyManagerType._meta.fields
         self.assertIs(fields["scalar"].type, graphene.String)
+        self.assertIs(fields["annotated_scalar"].type, graphene.String)
+        self.assertIs(fields["literal_scalar"].type, graphene.String)
+        legacy_instance = SimpleNamespace(
+            annotated_scalar="annotated",
+            literal_scalar="literal",
+        )
+        self.assertEqual(
+            LegacyManagerType.resolve_annotated_scalar(legacy_instance, self.info),
+            "annotated",
+        )
+        self.assertEqual(
+            LegacyManagerType.resolve_literal_scalar(legacy_instance, self.info),
+            "literal",
+        )
         self.assertIs(fields["measurement"].type, MeasurementType)
         self.assertIsInstance(fields["measurements"].type, graphene.List)
         self.assertIs(fields["measurements"].type.of_type, MeasurementScalar)
