@@ -32,10 +32,6 @@ class UserType(graphene.ObjectType):
     name = graphene.String()
 
 
-class Summary(GraphQLType):
-    title: str
-
-
 class SummaryType(graphene.ObjectType):
     title = graphene.String()
 
@@ -60,21 +56,41 @@ class CustomDate(date):
     pass
 
 
+_CURRENT_SUMMARY: type[GraphQLType] | None = None
+
+
 @pytest.fixture(autouse=True)
 def restore_graphql_type_registry() -> None:
+    global _CURRENT_SUMMARY
     snapshot = get_registered_graphql_types()
+    _CURRENT_SUMMARY = type(
+        "Summary",
+        (GraphQLType,),
+        {
+            "__module__": __name__,
+            "__annotations__": {"title": str},
+        },
+    )
     yield
+    _CURRENT_SUMMARY = None
     _restore_registered_graphql_types(snapshot)
 
 
+@pytest.fixture
+def summary_type() -> type[GraphQLType]:
+    assert _CURRENT_SUMMARY is not None
+    return _CURRENT_SUMMARY
+
+
 def map_annotation(annotation: object):
+    assert _CURRENT_SUMMARY is not None
     return map_graphql_output_annotation(
         annotation,
         owner_name="Envelope",
         field_name="value",
         manager_registry={"User": User},
         manager_type_registry={"User": UserType},
-        output_class_registry={"Summary": Summary},
+        output_class_registry={"Summary": _CURRENT_SUMMARY},
         output_type_registry={"Summary": SummaryType},
         measurement_type=MeasurementType,
         scalar_mapper=GraphQL._map_field_to_graphene_base_type,
@@ -130,10 +146,12 @@ def test_direct_manager_uses_live_generated_type_registry() -> None:
     assert mapped.resolver_type is User
 
 
-def test_nested_output_type_uses_output_registry_and_value_resolver_type() -> None:
-    mapped = map_annotation(list[Summary | None])
+def test_nested_output_type_uses_output_registry_and_value_resolver_type(
+    summary_type: type[GraphQLType],
+) -> None:
+    mapped = map_annotation(list[summary_type | None])
 
-    assert mapped.resolver_type is Summary
+    assert mapped.resolver_type is summary_type
     assert isinstance(mapped.field.type, graphene.NonNull)
     assert isinstance(mapped.field.type.of_type, graphene.List)
     assert not isinstance(mapped.field.type.of_type.of_type, graphene.NonNull)
@@ -195,7 +213,7 @@ def test_live_generated_type_thunk_reads_entry_added_and_replaced_after_mapping(
         field_name="value",
         manager_registry={"User": User},
         manager_type_registry=manager_type_registry,
-        output_class_registry={"Summary": Summary},
+        output_class_registry={"Summary": _CURRENT_SUMMARY},
         output_type_registry={"Summary": SummaryType},
         measurement_type=MeasurementType,
         scalar_mapper=GraphQL._map_field_to_graphene_base_type,
@@ -213,17 +231,17 @@ def test_live_generated_type_thunk_reads_entry_added_and_replaced_after_mapping(
     assert mapped.field.type.of_type is SecondUserType
 
 
-def test_nullable_output_type_defers_live_registry_thunk_until_schema_assembly() -> (
-    None
-):
+def test_nullable_output_type_defers_live_registry_thunk_until_schema_assembly(
+    summary_type: type[GraphQLType],
+) -> None:
     output_type_registry: dict[str, type[graphene.ObjectType]] = {}
     mapped = map_graphql_output_annotation(
-        Summary | None,
+        summary_type | None,
         owner_name="Envelope",
         field_name="summary",
         manager_registry={"User": User},
         manager_type_registry={"User": UserType},
-        output_class_registry={"Summary": Summary},
+        output_class_registry={"Summary": summary_type},
         output_type_registry=output_type_registry,
         measurement_type=MeasurementType,
         scalar_mapper=GraphQL._map_field_to_graphene_base_type,
@@ -292,28 +310,32 @@ def test_unsupported_annotations_name_owner_field_and_annotation(
     assert repr(annotation) in message
 
 
-def test_registered_names_resolve_in_type_hints() -> None:
+def test_registered_names_resolve_in_type_hints(
+    summary_type: type[GraphQLType],
+) -> None:
     class Envelope:
-        value: "Summary"
+        value: "Summary"  # noqa: F821
         users: list["User"]
 
     hints = resolve_output_type_hints(
         Envelope,
         manager_registry={"User": User},
-        output_class_registry={"Summary": Summary},
+        output_class_registry={"Summary": summary_type},
     )
 
-    assert hints == {"value": Summary, "users": list[User]}
+    assert hints == {"value": summary_type, "users": list[User]}
 
 
-def test_resolved_annotated_hint_reaches_mapper_and_is_rejected() -> None:
+def test_resolved_annotated_hint_reaches_mapper_and_is_rejected(
+    summary_type: type[GraphQLType],
+) -> None:
     class Envelope:
         value: Annotated[int, "metadata"]
 
     hints = resolve_output_type_hints(
         Envelope,
         manager_registry={"User": User},
-        output_class_registry={"Summary": Summary},
+        output_class_registry={"Summary": summary_type},
     )
 
     assert hints["value"] == Annotated[int, "metadata"]
@@ -324,7 +346,7 @@ def test_resolved_annotated_hint_reaches_mapper_and_is_rejected() -> None:
             field_name="value",
             manager_registry={"User": User},
             manager_type_registry={"User": UserType},
-            output_class_registry={"Summary": Summary},
+            output_class_registry={"Summary": summary_type},
             output_type_registry={"Summary": SummaryType},
             measurement_type=MeasurementType,
             scalar_mapper=GraphQL._map_field_to_graphene_base_type,
@@ -343,7 +365,7 @@ def test_unresolved_forward_reference_names_first_owner_field() -> None:
         resolve_output_type_hints(
             Envelope,
             manager_registry={"User": User},
-            output_class_registry={"Summary": Summary},
+            output_class_registry={"Summary": _CURRENT_SUMMARY},
         )
 
     assert "Envelope" in str(error.value)

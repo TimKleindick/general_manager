@@ -58,6 +58,8 @@ from general_manager.as_of import (
 )
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.measurement.measurement import Measurement
+
+FrameworkMeasurement = Measurement
 from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.api.property import (
@@ -1634,6 +1636,53 @@ class GraphQLTests(TestCase):
         assert GraphQL.create_graphql_output_type(ProjectHour) is generated
         assert GraphQL.graphql_output_type_registry == {"ProjectHour": generated}
 
+    def test_output_fields_can_use_graphene_reserved_and_resolver_like_names(
+        self,
+    ) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class ReservedOutput(GraphQLType):
+            amount: Measurement
+            resolve_amount: str
+            Meta: str
+
+        generated = GraphQL.create_graphql_output_type(ReservedOutput)
+        value = ReservedOutput(
+            amount=Measurement(2, "hour"),
+            resolve_amount="resolver-shaped field",
+            Meta="reserved field",
+        )
+
+        class Query(graphene.ObjectType):
+            value = graphene.Field(generated)
+
+            @staticmethod
+            def resolve_value(_root: object, _info: object) -> ReservedOutput:
+                return value
+
+        schema = graphene.Schema(query=Query, types=(generated,))
+        response = schema.execute(
+            """
+            { value { amount { value unit } resolveAmount Meta } }
+            """
+        )
+
+        self.assertIsNone(response.errors)
+        self.assertEqual(
+            response.data,
+            {
+                "value": {
+                    "amount": {"value": 2, "unit": "hour"},
+                    "resolveAmount": "resolver-shaped field",
+                    "Meta": "reserved field",
+                }
+            },
+        )
+
     def test_reset_registry_clears_generated_outputs_not_declarations(self) -> None:
         declarations = get_registered_graphql_types()
         registry_snapshot = GraphQL.get_registry_snapshot()
@@ -1740,6 +1789,36 @@ class GraphQLTests(TestCase):
 
         self.assertEqual(GraphQL.graphql_output_type_registry, before)
 
+    def test_output_type_rejects_framework_measurement_type_collision_without_mutation(
+        self,
+    ) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class Measurement(GraphQLType):
+            value: int
+
+        framework_measurement_field = GraphQL._map_field_to_graphene_read(
+            FrameworkMeasurement,
+            "measurement",
+        )
+        self.assertIs(framework_measurement_field.type, MeasurementType)
+        framework_type = type(
+            "FrameworkMeasurementOwnerType",
+            (graphene.ObjectType,),
+            {"measurement": framework_measurement_field},
+        )
+        GraphQL.graphql_type_registry["FrameworkMeasurementOwner"] = framework_type
+        before = GraphQL.get_registry_snapshot()
+
+        with self.assertRaisesRegex(ValueError, "MeasurementType"):
+            GraphQL.create_graphql_output_type(Measurement)
+
+        self.assertEqual(GraphQL.get_registry_snapshot(), before)
+
     def test_auxiliary_key_matching_output_name_without_schema_collision_is_allowed(
         self,
     ) -> None:
@@ -1809,6 +1888,110 @@ class GraphQLTests(TestCase):
 
         self.assertIs(GraphQL.graphql_output_type_registry, before)
         self.assertEqual(GraphQL.graphql_output_type_registry, {"Existing": sentinel})
+
+    def test_output_type_mapping_failure_preserves_every_graphql_registry(self) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        class InvalidOutput(GraphQLType):
+            value: object
+
+        object_type = type("RegistryObjectType", (graphene.ObjectType,), {})
+        input_type = type("RegistryInputType", (graphene.InputObjectType,), {})
+        union_type = type(
+            "RegistryUnion",
+            (graphene.Union,),
+            {"Meta": type("Meta", (), {"types": (object_type,)})},
+        )
+        GraphQL._mutations["mutation"] = object_type
+        GraphQL._query_fields["query"] = graphene.String()
+        GraphQL._subscription_fields["subscription"] = graphene.String()
+        GraphQL._page_type_registry["page"] = object_type
+        GraphQL._subscription_payload_registry["subscription"] = object_type
+        GraphQL.graphql_type_registry["manager"] = object_type
+        GraphQL.graphql_output_type_registry["output"] = object_type
+        GraphQL.graphql_filter_type_registry["filter"] = input_type
+        GraphQL.graphql_capability_type_registry["capability"] = object_type
+        GraphQL.manager_registry["manager"] = GeneralManager
+        GraphQL._search_union = union_type
+        GraphQL._search_result_type = object_type
+        before = GraphQL.get_registry_snapshot()
+
+        with self.assertRaises(GraphQLOutputAnnotationError):
+            GraphQL.create_graphql_output_type(InvalidOutput)
+
+        self.assertEqual(GraphQL.get_registry_snapshot(), before)
+
+    def test_mutually_referring_output_types_generate_and_resolve(self) -> None:
+        declarations = get_registered_graphql_types()
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_registered_graphql_types, declarations)
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        GraphQL.reset_registry()
+
+        Left = type(
+            "MutualLeft",
+            (GraphQLType,),
+            {
+                "__module__": __name__,
+                "__annotations__": {
+                    "right": "MutualRight | None",
+                    "label": str,
+                },
+            },
+        )
+        Right = type(
+            "MutualRight",
+            (GraphQLType,),
+            {
+                "__module__": __name__,
+                "__annotations__": {
+                    "left": "MutualLeft | None",
+                    "label": str,
+                },
+            },
+        )
+
+        left_type = GraphQL.create_graphql_output_type(Left)
+        right_type = GraphQL.create_graphql_output_type(Right)
+
+        class Query(graphene.ObjectType):
+            left = graphene.Field(left_type)
+
+            @staticmethod
+            def resolve_left(_root: object, _info: object) -> object:
+                return Left(
+                    right=Right(
+                        left=Left(right=None, label="leaf"),
+                        label="right",
+                    ),
+                    label="root",
+                )
+
+        schema = graphene.Schema(query=Query, types=(left_type, right_type))
+        response = schema.execute(
+            "{ left { label right { label left { label right { label } } } } }"
+        )
+
+        self.assertIsNone(response.errors)
+        self.assertEqual(
+            response.data,
+            {
+                "left": {
+                    "label": "root",
+                    "right": {
+                        "label": "right",
+                        "left": {
+                            "label": "leaf",
+                            "right": None,
+                        },
+                    },
+                }
+            },
+        )
 
     def test_sort_options_include_direct_manager_and_related_scalars(self) -> None:
         related_computed = SimpleNamespace(sortable=True, graphql_type_hint=str)

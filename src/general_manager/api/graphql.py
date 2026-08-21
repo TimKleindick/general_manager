@@ -476,7 +476,7 @@ class GraphQL:
             manager_registry=cls.manager_registry,
             output_class_registry=output_classes,
         )
-        fields: GraphQLFieldMap = {}
+        fields: dict[str, graphene.Field] = {}
         for declared_field in dataclasses.fields(output_class):
             mapped = map_graphql_output_annotation(
                 hints[declared_field.name],
@@ -489,20 +489,24 @@ class GraphQL:
                 measurement_type=MeasurementType,
                 scalar_mapper=cls._map_field_to_graphene_base_type,
             )
-            fields[declared_field.name] = mapped.field
-            fields[f"resolve_{declared_field.name}"] = create_output_field_resolver(
+            field = cast(graphene.Field, mapped.field)
+            field.resolver = create_output_field_resolver(
                 declared_field.name,
                 mapped.resolver_type,
             )
+            fields[declared_field.name] = field
 
         generated = type(
             generated_name,
             (graphene.ObjectType,),
-            {
-                "__graphql_output_declaration__": output_class,
-                **fields,
-            },
+            {"__graphql_output_declaration__": output_class},
         )
+        # Graphene reserves class attributes such as ``Meta`` and interprets
+        # ``resolve_<field>`` attributes as resolver methods.  Mounting fields
+        # directly in the generated options keeps the GraphQL field namespace
+        # independent from those class-level namespaces; each Field carries
+        # its resolver explicitly.
+        generated._meta.fields.update(fields)  # type: ignore[attr-defined]
         cls.graphql_output_type_registry[output_name] = generated
         return generated
 
@@ -523,6 +527,15 @@ class GraphQL:
                 return name
             name = getattr(value, "name", None)
             return name if isinstance(name, str) else getattr(value, "__name__", None)
+
+        for framework_type in (MeasurementType, PageInfo, StoredFile, StoredImage):
+            framework_name = _type_name(framework_type)
+            if framework_name == generated_name:
+                raise GraphQLOutputTypeError.registry_collision(
+                    generated_name,
+                    "framework GraphQL type",
+                    framework_name,
+                )
 
         registry_sources: tuple[
             tuple[str, Mapping[str, object], frozenset[str], bool], ...
