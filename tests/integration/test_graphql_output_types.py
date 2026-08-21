@@ -162,6 +162,10 @@ class ProjectSummary(GeneralManager):
 _restore_registered_graphql_types(_PRE_MODULE_DECLARATIONS)
 
 
+class PostBaselineSentinel(GraphQLType):
+    marker: str
+
+
 def _restore_graphql_registry(snapshot: object) -> None:
     GraphQL._query_class = snapshot.query_class  # type: ignore[attr-defined]
     GraphQL._mutation_class = snapshot.mutation_class  # type: ignore[attr-defined]
@@ -200,24 +204,54 @@ def _restore_and_assert_registries(
 
 
 def _activate_declarations(
+    declaration_snapshot: tuple[type[GraphQLType], ...],
     *required: type[GraphQLType],
 ) -> None:
-    _restore_registered_graphql_types((*_PRE_MODULE_DECLARATIONS, *required))
+    _restore_registered_graphql_types(
+        declaration_snapshot
+        + tuple(
+            declaration
+            for declaration in required
+            if declaration not in declaration_snapshot
+        )
+    )
+
+
+def _assert_late_declaration_survives_cleanup(
+    declaration_snapshot: tuple[type[GraphQLType], ...],
+    integration_declarations: tuple[type[GraphQLType], ...],
+) -> None:
+    declarations = get_registered_graphql_types()
+    assert declarations == declaration_snapshot
+    assert PostBaselineSentinel in declarations
+    assert all(
+        declaration not in declarations for declaration in integration_declarations
+    )
 
 
 class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
     def setUp(self) -> None:
         super().setUp()
         graphql_registry = GraphQL.get_registry_snapshot()
+        declaration_registry = get_registered_graphql_types()
+        self.addCleanup(
+            _assert_late_declaration_survives_cleanup,
+            declaration_registry,
+            (IntegrationProjectHour, IntegrationProjectDetails),
+        )
         self.addCleanup(
             _restore_and_assert_registries,
             graphql_registry,
-            _PRE_MODULE_DECLARATIONS,
+            declaration_registry,
         )
         GraphQL.reset_registry()
-        _restore_registered_graphql_types(_PRE_MODULE_DECLARATIONS)
-        self.assertEqual(get_registered_graphql_types(), _PRE_MODULE_DECLARATIONS)
-        _activate_declarations(IntegrationProjectHour, IntegrationProjectDetails)
+        _restore_registered_graphql_types(declaration_registry)
+        self.assertEqual(get_registered_graphql_types(), declaration_registry)
+        _activate_declarations(
+            declaration_registry,
+            IntegrationProjectHour,
+            IntegrationProjectDetails,
+        )
 
         with (
             patch.object(GraphQL, "register_file_upload_mutation"),
@@ -280,20 +314,32 @@ class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
             self.schema.graphql_schema.get_type("IntegrationProjectHourType")
         )
 
+    def test_late_declaration_survives_setup_and_cleanup(self) -> None:
+        declarations = get_registered_graphql_types()
+        self.assertIn(PostBaselineSentinel, declarations)
+        self.assertIn(IntegrationProjectHour, declarations)
+        self.assertIn(IntegrationProjectDetails, declarations)
+
 
 class PermissionedGraphQLOutputIntegrationTests(SimpleTestCase):
     def setUp(self) -> None:
         super().setUp()
         graphql_registry = GraphQL.get_registry_snapshot()
+        declaration_registry = get_registered_graphql_types()
+        self.addCleanup(
+            _assert_late_declaration_survives_cleanup,
+            declaration_registry,
+            (IntegrationPermissionDetails,),
+        )
         self.addCleanup(
             _restore_and_assert_registries,
             graphql_registry,
-            _PRE_MODULE_DECLARATIONS,
+            declaration_registry,
         )
         GraphQL.reset_registry()
-        _restore_registered_graphql_types(_PRE_MODULE_DECLARATIONS)
-        self.assertEqual(get_registered_graphql_types(), _PRE_MODULE_DECLARATIONS)
-        _activate_declarations(IntegrationPermissionDetails)
+        _restore_registered_graphql_types(declaration_registry)
+        self.assertEqual(get_registered_graphql_types(), declaration_registry)
+        _activate_declarations(declaration_registry, IntegrationPermissionDetails)
         PermissionedRelatedManager.Permission.checks.clear()
         PermissionedProjectSummary.Permission.checks.clear()
         PermissionedProjectSummary.Permission.allow_details = True
