@@ -20,6 +20,8 @@ def restore_graphql_type_registry() -> None:
 
 
 def test_graphql_type_is_frozen_and_uses_dataclass_fields() -> None:
+    baseline = get_registered_graphql_types()
+
     class ProjectHour(GraphQLType):
         task_id: int
         users: list[str] = field(default_factory=list)
@@ -28,9 +30,42 @@ def test_graphql_type_is_frozen_and_uses_dataclass_fields() -> None:
     value = ProjectHour(task_id=7)
     assert value.users == []
     assert [item.name for item in fields(ProjectHour)] == ["task_id", "users"]
-    assert get_registered_graphql_types() == (ProjectHour,)
+    assert get_registered_graphql_types() == (*baseline, ProjectHour)
     with pytest.raises(FrozenInstanceError):
         value.task_id = 8  # type: ignore[misc]
+
+
+def test_graphql_type_supports_inheritance_and_init_false_fields() -> None:
+    baseline = get_registered_graphql_types()
+
+    class ProjectHour(GraphQLType):
+        task_id: int
+        users: list[str] = field(init=False, default_factory=list)
+
+    class DetailedProjectHour(ProjectHour):
+        label: str = "hours"
+
+    value = DetailedProjectHour(task_id=7)
+    sibling = DetailedProjectHour(task_id=8)
+
+    assert value.task_id == 7
+    assert value.users == []
+    assert value.label == "hours"
+    assert value.users is not sibling.users
+    assert [item.name for item in fields(DetailedProjectHour)] == [
+        "task_id",
+        "users",
+        "label",
+    ]
+    assert get_registered_graphql_types() == (
+        *baseline,
+        ProjectHour,
+        DetailedProjectHour,
+    )
+    with pytest.raises(FrozenInstanceError):
+        value.task_id = 8  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        value.users = ["alice"]  # type: ignore[misc]
 
 
 def test_graphql_type_construction_matches_dataclass_defaults() -> None:
