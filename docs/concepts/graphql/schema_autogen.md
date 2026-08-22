@@ -104,6 +104,9 @@ roots, filters, subscriptions, search, capabilities, and lifecycle tooling
 continue to consume the manager registries; an output declaration is never
 added to those manager operation paths.
 
+For a complete declaration, property, startup, and query example, see the
+[typed output-object recipe](../../examples/graphql_output_types.md).
+
 ### Relation annotation compatibility
 
 Before mapping a relation, schema generation resolves its annotation to one
