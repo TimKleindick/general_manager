@@ -108,13 +108,14 @@ class DevSearchBackend:
         is idempotent and replaces the stored settings mapping for the index.
         Operations are not transactional; mutations completed before an
         exception remain in memory. Queries are lowercased and split on
-        whitespace. Indexed tokens are built from every top-level
+        whitespace, with duplicate query tokens removed in first-seen order.
+        Indexed tokens are built from every top-level
         `SearchDocument.data` value: `None` yields no tokens, strings split on
         whitespace, lists/tuples/sets are processed recursively, and all other
         values become `str(value).lower().split()`. Dict values are not
         traversed; they are tokenized from their string representation. A
-        document matches when each query token equals or prefixes a token
-        extracted from any indexed field. Empty queries match every document
+        document matches when every distinct query token equals or prefixes a
+        token extracted from any indexed field. Empty queries match every document
         that passes type and structured filters. The operation
         order is type filtering, structured filtering, query scoring/matching,
         sorting, and then pagination with `results[offset:offset + limit]`;
@@ -230,9 +231,9 @@ class DevSearchBackend:
             query (str): The input query string to tokenize.
 
         Returns:
-            list[str]: A list of lowercase tokens extracted from the query; empty tokens are omitted.
+            list[str]: Distinct lowercase tokens extracted from the query in first-seen order.
         """
-        return [token for token in query.lower().split() if token]
+        return list(dict.fromkeys(query.lower().split()))
 
     def _tokenize_document(self, document: SearchDocument) -> dict[str, set[str]]:
         """
@@ -284,7 +285,11 @@ class DevSearchBackend:
         """
         Compute a relevance score for a document based on matching query tokens and configured boosts.
 
-        Each time a token from `tokens` is present in a field's token set (or is a prefix of a field token) the field's boost is added to the score. After summing matches across all fields, the total is multiplied by `document.index_boost` when it is set.
+        Every distinct query token must be present in at least one field's token
+        set (or be a prefix of a field token). For each matching token, the
+        boosts of all matching fields are added to the score. After summing
+        matches across all fields, the total is multiplied by
+        `document.index_boost` when it is set.
 
         Parameters:
             tokens: The list of query tokens to match against the document's token index.
@@ -297,13 +302,17 @@ class DevSearchBackend:
             return 0.0
         token_index = token_index or {}
         score = 0.0
-        for field_name, field_tokens in token_index.items():
-            field_boost = document.field_boosts.get(field_name, 1.0)
-            for token in tokens:
+        for token in tokens:
+            token_score = 0.0
+            for field_name, field_tokens in token_index.items():
+                field_boost = document.field_boosts.get(field_name, 1.0)
                 if token in field_tokens or any(
                     field_token.startswith(token) for field_token in field_tokens
                 ):
-                    score += field_boost
+                    token_score += field_boost
+            if token_score <= 0:
+                return 0.0
+            score += token_score
         if document.index_boost:
             score *= document.index_boost
         return score
