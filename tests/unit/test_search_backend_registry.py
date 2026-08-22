@@ -113,8 +113,8 @@ class BackendRegistryTests(SimpleTestCase):
         backend = get_search_backend()
         assert isinstance(backend, DevSearchBackend)
 
-    def test_dev_auto_reindex_requires_setting_and_debug(self) -> None:
-        """The settings-selected DevSearch enables hydration only in DEBUG."""
+    def test_dev_auto_reindex_requires_setting(self) -> None:
+        """The settings-selected DevSearch honors its truthy lifecycle setting."""
         enabled = SimpleNamespace(
             DEBUG=True,
             GENERAL_MANAGER={
@@ -127,9 +127,9 @@ class BackendRegistryTests(SimpleTestCase):
 
         assert get_search_backend().auto_reindex_enabled is True
 
-    def test_dev_auto_reindex_is_disabled_outside_debug(self) -> None:
-        """A production-mode settings object cannot enable DevSearch hydration."""
-        disabled = SimpleNamespace(
+    def test_dev_auto_reindex_is_enabled_outside_debug(self) -> None:
+        """DevSearch hydration follows its explicit setting outside DEBUG."""
+        enabled = SimpleNamespace(
             DEBUG=False,
             GENERAL_MANAGER={
                 "SEARCH_BACKEND": DevSearchBackend,
@@ -137,7 +137,32 @@ class BackendRegistryTests(SimpleTestCase):
             },
         )
 
-        configure_search_backend_from_settings(disabled)
+        configure_search_backend_from_settings(enabled)
+
+        assert get_search_backend().auto_reindex_enabled is True
+
+    def test_dev_auto_reindex_is_disabled_when_setting_is_missing(self) -> None:
+        """DevSearch remains inert unless auto-reindex is explicitly configured."""
+        django_settings = SimpleNamespace(
+            DEBUG=False,
+            GENERAL_MANAGER={"SEARCH_BACKEND": DevSearchBackend},
+        )
+
+        configure_search_backend_from_settings(django_settings)
+
+        assert get_search_backend().auto_reindex_enabled is False
+
+    def test_dev_auto_reindex_is_disabled_when_setting_is_false(self) -> None:
+        """A false lifecycle setting disables hydration in every environment."""
+        django_settings = SimpleNamespace(
+            DEBUG=True,
+            GENERAL_MANAGER={
+                "SEARCH_BACKEND": DevSearchBackend,
+                "SEARCH_AUTO_REINDEX": False,
+            },
+        )
+
+        configure_search_backend_from_settings(django_settings)
 
         assert get_search_backend().auto_reindex_enabled is False
 
@@ -166,6 +191,13 @@ class BackendRegistryTests(SimpleTestCase):
         backend = get_search_backend()
         assert isinstance(backend, _ExternalProtocolBackend)
         assert not hasattr(backend, "auto_reindex_enabled")
+
+    @override_settings(DEBUG=False, SEARCH_AUTO_REINDEX=True, GENERAL_MANAGER={})
+    def test_dev_fallback_honors_auto_reindex_outside_debug(self) -> None:
+        """The settings fallback follows the same DevSearch lifecycle setting."""
+        configure_search_backend(None)
+
+        assert get_search_backend().auto_reindex_enabled is True
 
     def test_configure_search_backend_from_settings_nested_none_disables(self) -> None:
         from general_manager.search import backend_registry

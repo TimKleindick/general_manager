@@ -4,7 +4,7 @@
 
 **Goal:** Make the process-local DevSearch backend hydrate itself from configured managers on first use in development and require every distinct query term to match.
 
-**Architecture:** Keep DevSearch as a disposable in-memory projection. First implement all-term eligibility inside its existing scorer, then add opt-in, per-index lazy hydration using `SearchIndexer.reindex_manager_index()` and enable it through the existing `SEARCH_AUTO_REINDEX` plus `DEBUG` settings path.
+**Architecture:** Keep DevSearch as a disposable in-memory projection. First implement all-term eligibility inside its existing scorer, then add opt-in, per-index lazy hydration using `SearchIndexer.reindex_manager_index()` and enable it through the existing `SEARCH_AUTO_REINDEX` setting for DevSearch.
 
 **Tech Stack:** Python 3.12+, Django, pytest/pytest-django, standard-library threading.
 
@@ -15,7 +15,7 @@
 - `DevSearchBackend` remains process-local and uses no persistent runtime files.
 - Add no models, migrations, dependencies, or cross-process coordination.
 - External backend lifecycle and query behavior remain unchanged.
-- Automatic hydration requires both `SEARCH_AUTO_REINDEX` and Django `DEBUG`.
+- Automatic hydration requires `SEARCH_AUTO_REINDEX` and a selected `DevSearchBackend`.
 - Directly constructed DevSearch instances remain isolated unless explicitly opted in.
 - Hydration failures propagate and remain retryable.
 - Existing synchronous invalidation remains the only post-hydration maintenance mechanism.
@@ -214,19 +214,19 @@ In `tests/unit/test_search_backend_registry.py`, test the setting boundary
 through configured backend state rather than restored request signals:
 
 ```python
-def test_dev_auto_reindex_requires_setting_and_debug() -> None:
+def test_dev_auto_reindex_requires_setting() -> None:
     enabled = SimpleNamespace(
-        DEBUG=True,
+        DEBUG=False,
         GENERAL_MANAGER={"SEARCH_BACKEND": DevSearchBackend, "SEARCH_AUTO_REINDEX": True},
     )
     configure_search_backend_from_settings(enabled)
     assert get_search_backend().auto_reindex_enabled is True
 
 
-def test_dev_auto_reindex_is_disabled_outside_debug() -> None:
+def test_dev_auto_reindex_is_disabled_when_setting_is_false() -> None:
     disabled = SimpleNamespace(
-        DEBUG=False,
-        GENERAL_MANAGER={"SEARCH_BACKEND": DevSearchBackend, "SEARCH_AUTO_REINDEX": True},
+        DEBUG=True,
+        GENERAL_MANAGER={"SEARCH_BACKEND": DevSearchBackend, "SEARCH_AUTO_REINDEX": False},
     )
     configure_search_backend_from_settings(disabled)
     assert get_search_backend().auto_reindex_enabled is False
@@ -313,7 +313,7 @@ def _dev_auto_reindex_enabled(django_settings: object) -> bool:
         configured = config_candidate["SEARCH_AUTO_REINDEX"]
     else:
         configured = getattr(django_settings, "SEARCH_AUTO_REINDEX", False)
-    return bool(getattr(django_settings, "DEBUG", False)) and bool(configured)
+    return bool(configured)
 ```
 
 After resolving a settings-supplied backend, call
@@ -347,10 +347,10 @@ Expected: all tests pass and no explicit pre-search reindex appears in the test.
 
 - [ ] **Step 8: Update user-facing lifecycle documentation**
 
-In `docs/howto/search.md`, explain that `SEARCH_AUTO_REINDEX=True` with
-`DEBUG=True` lazily fills each DevSearch index on first search in that serving
-process. State that `search_index --reindex` in another process cannot fill a
-running DevSearch backend.
+In `docs/howto/search.md`, explain that `SEARCH_AUTO_REINDEX=True` lazily fills
+each DevSearch index on first search in that serving process. State that
+`search_index --reindex` in another process cannot fill a running DevSearch
+backend.
 
 In `docs/concepts/search.md`, replace the claim that DevSearch is only a manually
 filled process-local store with the approved lifecycle: disposable per-process

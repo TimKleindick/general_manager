@@ -26,8 +26,8 @@ projection immediately.
 ## Configuration
 
 The existing `SEARCH_AUTO_REINDEX` setting controls lazy hydration. It is
-effective only when Django `DEBUG` is true and the selected backend is
-`DevSearchBackend`. It remains disabled by default unless explicitly enabled.
+effective when the selected backend is `DevSearchBackend` and remains disabled
+by default unless explicitly enabled.
 
 Backend instances constructed directly remain isolated unless their caller
 explicitly opts into automatic hydration. This prevents ordinary unit tests and
