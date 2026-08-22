@@ -103,8 +103,8 @@ Tests will verify:
 - opted-in DevSearch hydrates an index once on its first search;
 - hydration is tracked independently per index;
 - hydration failures propagate and remain retryable;
-- disabled, non-debug, directly constructed, and non-Dev backends do not
-  auto-hydrate;
+- missing or false `SEARCH_AUTO_REINDEX`, directly constructed non-opted-in,
+  and non-Dev backends do not auto-hydrate; DEBUG is irrelevant;
 - a database-backed integration search works without an earlier management
   command reindex; and
 - existing synchronous invalidation keeps an already hydrated backend current.
