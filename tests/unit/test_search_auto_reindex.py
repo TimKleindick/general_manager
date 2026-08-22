@@ -1,8 +1,60 @@
 from __future__ import annotations
 
-from django.test import SimpleTestCase, TestCase
+import pytest
+from django.test import SimpleTestCase, override_settings
 
 from general_manager import apps as gm_apps
+from general_manager.apps import GeneralmanagerConfig
+from general_manager.manager.meta import GeneralManagerMeta
+from general_manager.search.async_tasks import dispatch_index_update
+from general_manager.search.backend import SearchDocument
+from general_manager.search.backend_registry import configure_search_backend
+from general_manager.search.backends.dev import DevSearchBackend
+from tests.unit.test_search_indexer import Project, ProjectInterface
+
+
+def _search_document(index_name: str) -> SearchDocument:
+    """Build one document whose query behavior proves hydration completed."""
+    return SearchDocument(
+        id=f"Project:{index_name}",
+        type="Project",
+        identification={"id": 1},
+        index=index_name,
+        data={"name": "Dockmaster"},
+        field_boosts={"name": 1.0},
+    )
+
+
+class HydrationSourceUnavailableError(RuntimeError):
+    """Raised by the test hydration source when its first read is unavailable."""
+
+    def __init__(self) -> None:
+        super().__init__("source unavailable")
+
+
+class RecordingHydrationBackend(DevSearchBackend):
+    """DevSearch double that populates a real document while hydrating."""
+
+    def __init__(self, *, fail_once: bool = False) -> None:
+        super().__init__(auto_reindex=True)
+        self.hydrated_indexes: list[str] = []
+        self.fail_once = fail_once
+
+    def _reindex_configured_managers(self, index_name: str) -> None:
+        self.hydrated_indexes.append(index_name)
+        if self.fail_once:
+            self.fail_once = False
+            raise HydrationSourceUnavailableError
+        self.upsert(index_name, [_search_document(index_name)])
+
+
+class NestedHydrationBackend(RecordingHydrationBackend):
+    """Exercise the guarded reentrant search path during hydration."""
+
+    def _reindex_configured_managers(self, index_name: str) -> None:
+        self.hydrated_indexes.append(index_name)
+        assert self.search(index_name, "Dock").total == 0
+        self.upsert(index_name, [_search_document(index_name)])
 
 
 class SearchAutoReindexRemovedTests(SimpleTestCase):
@@ -14,35 +66,86 @@ class SearchAutoReindexRemovedTests(SimpleTestCase):
         assert not hasattr(gm_apps.GeneralmanagerConfig, "install_search_auto_reindex")
 
 
-class DevSearchPrefixTests(TestCase):
-    def test_dev_search_prefix_match(self) -> None:
-        """Match documents when the query is a prefix of an indexed token."""
-        from general_manager.search.backends.dev import DevSearchBackend
-        from general_manager.search.backend import SearchDocument
+def test_first_search_hydrates_index_once() -> None:
+    """An opted-in index is populated once and its first query sees documents."""
+    backend = RecordingHydrationBackend()
 
-        backend = DevSearchBackend()
-        backend.ensure_index(
-            "global",
-            {
-                "searchable_fields": ["name"],
-                "filterable_fields": [],
-                "sortable_fields": [],
-                "field_boosts": {},
-            },
+    assert backend.search("global", "Dock").total == 1
+    assert backend.search("global", "Dock").total == 1
+    assert backend.hydrated_indexes == ["global"]
+
+
+def test_hydration_is_tracked_per_index() -> None:
+    """Hydrating one logical index leaves another index pending."""
+    backend = RecordingHydrationBackend()
+
+    assert backend.search("global", "Dock").total == 1
+    assert backend.search("private", "Dock").total == 1
+    assert backend.hydrated_indexes == ["global", "private"]
+
+
+def test_failed_hydration_propagates_and_retries() -> None:
+    """A source failure is visible and does not mark the index complete."""
+    backend = RecordingHydrationBackend(fail_once=True)
+
+    with pytest.raises(RuntimeError, match="source unavailable"):
+        backend.search("global", "Dock")
+
+    assert backend.search("global", "Dock").total == 1
+    assert backend.hydrated_indexes == ["global", "global"]
+
+
+def test_nested_hydration_is_guarded() -> None:
+    """Hydration can query its own index without recursively rebuilding it."""
+    backend = NestedHydrationBackend()
+
+    assert backend.search("global", "Dock").total == 1
+    assert backend.hydrated_indexes == ["global"]
+
+
+def test_direct_backend_does_not_hydrate_without_opt_in() -> None:
+    """Direct development backends retain their inert, isolated default."""
+    backend = DevSearchBackend()
+
+    assert backend.search("global", "").total == 0
+
+
+class DevSearchLifecycleIntegrationTests(SimpleTestCase):
+    """Exercise hydration and the synchronous update path with real managers."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
+        self.original_manager_classes = list(GeneralManagerMeta.all_classes)
+        GeneralManagerMeta.all_classes[:] = [Project]
+        self.backend = DevSearchBackend(auto_reindex=True)
+        self.original_data_store = ProjectInterface.data_store.copy()
+        configure_search_backend(self.backend)
+
+    def tearDown(self) -> None:
+        ProjectInterface.data_store = self.original_data_store
+        GeneralManagerMeta.all_classes[:] = self.original_manager_classes
+        configure_search_backend(None)
+        super().tearDown()
+
+    @override_settings(SEARCH_ASYNC=False)
+    def test_hydration_then_synchronous_update_finds_new_source_record(self) -> None:
+        """A hydrated serving backend receives later inline lifecycle writes."""
+        initial = self.backend.search("global", "Alpha")
+        assert [hit.identification for hit in initial.hits] == [{"id": 1}]
+
+        ProjectInterface.data_store[3] = {
+            "name": "Gamma",
+            "status": "public",
+            "secret": "hidden",
+        }
+        dispatch_index_update(
+            action="index",
+            manager_path="tests.unit.test_search_indexer.Project",
+            identification={"id": 3},
+            instance=Project(id=3),
+            index_name="global",
         )
-        backend.upsert(
-            "global",
-            [
-                SearchDocument(
-                    id="JobRoleCatalog:1",
-                    type="JobRoleCatalog",
-                    identification={"id": 1},
-                    index="global",
-                    data={"name": "Dockmaster"},
-                    field_boosts={"name": 1.0},
-                    index_boost=1.0,
-                )
-            ],
-        )
-        result = backend.search("global", "Dock")
-        assert result.total == 1
+
+        updated = self.backend.search("global", "Gamma")
+        assert [hit.identification for hit in updated.hits] == [{"id": 3}]

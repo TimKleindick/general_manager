@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from threading import RLock
 
 from general_manager.search.backend import SearchDocument, SearchHit, SearchResult
 from general_manager.utils.filter_parser import apply_lookup
@@ -18,13 +19,32 @@ class _IndexStore:
 
 
 class DevSearchBackend:
-    """Simple process-local in-memory search backend intended for development."""
+    """Process-local development search with optional lazy per-index hydration."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, auto_reindex: bool = False) -> None:
         """
-        Initialize the backend with an empty registry that maps index names (str) to _IndexStore instances.
+        Initialize an empty in-memory registry and optional hydration lifecycle.
+
+        Automatic hydration is disabled for directly constructed backends unless
+        explicitly opted in. When enabled, each index hydrates on its first
+        search in this process. Failed hydration propagates and remains
+        retryable. The lock coordinates only first-search hydration; ordinary
+        reads and writes retain the backend's existing unsynchronized behavior.
         """
         self._indexes: dict[str, _IndexStore] = {}
+        self._auto_reindex = auto_reindex
+        self._hydrated_indexes: set[str] = set()
+        self._hydrating_indexes: set[str] = set()
+        self._hydration_lock = RLock()
+
+    @property
+    def auto_reindex_enabled(self) -> bool:
+        """Return whether first-search hydration is enabled for this backend."""
+        return self._auto_reindex
+
+    def configure_auto_reindex(self, enabled: bool) -> None:
+        """Enable or disable first-search hydration for this backend instance."""
+        self._auto_reindex = enabled
 
     def ensure_index(self, index_name: str, settings: Mapping[str, object]) -> None:
         """
@@ -100,6 +120,10 @@ class DevSearchBackend:
         """
         Search an index for documents matching a query and return scored, optionally filtered and sorted hits.
 
+        When auto-reindex is enabled, the first search for an index lazily
+        hydrates that index in this process before evaluating the query. The
+        hydration guard coordinates concurrent and nested first searches only;
+        a failed source error propagates and the next search can retry.
         The backend reads and writes documents under the `index_name` argument;
         `SearchDocument.index` is stored but not validated. Document IDs are
         unique only inside one in-memory index. Duplicate IDs inside one
@@ -131,8 +155,8 @@ class DevSearchBackend:
         keys, including equal-score default ordering. The backend stores
         document and settings objects by reference, returns hit data from the
         stored `SearchDocument.data` mapping, is
-        process-local memory only, and does not provide persistence or
-        synchronization for concurrent reads/writes.
+        process-local memory only, and does not provide persistence or ordinary
+        read/write synchronization beyond first-search hydration.
 
         Parameters:
             index_name (str): Name of the index to search.
@@ -167,6 +191,7 @@ class DevSearchBackend:
                 operational failures are not normalized and may surface as
                 ordinary Python exceptions.
         """
+        self._ensure_hydrated(index_name)
         if filter_expression is not None:
             raise NotImplementedError(
                 "filter_expression is not supported by the dev backend."
@@ -221,6 +246,31 @@ class DevSearchBackend:
 
         took_ms = int((time.perf_counter() - start) * 1000)
         return SearchResult(hits=hits, total=len(results), took_ms=took_ms)
+
+    def _ensure_hydrated(self, index_name: str) -> None:
+        """Hydrate one index once when this backend has opted into the lifecycle."""
+        if not self._auto_reindex or index_name in self._hydrated_indexes:
+            return
+        with self._hydration_lock:
+            if index_name in self._hydrated_indexes:
+                return
+            if index_name in self._hydrating_indexes:
+                return
+            self._hydrating_indexes.add(index_name)
+            try:
+                self._reindex_configured_managers(index_name)
+                self._hydrated_indexes.add(index_name)
+            finally:
+                self._hydrating_indexes.discard(index_name)
+
+    def _reindex_configured_managers(self, index_name: str) -> None:
+        """Reindex every manager configured for one index into this process."""
+        from general_manager.search.indexer import SearchIndexer
+        from general_manager.search.registry import iter_index_configs
+
+        indexer = SearchIndexer(self)
+        for manager_class, _index_config in iter_index_configs(index_name):
+            indexer.reindex_manager_index(manager_class, index_name)
 
     @staticmethod
     def _tokenize_query(query: str) -> list[str]:

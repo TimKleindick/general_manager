@@ -34,6 +34,30 @@ the backend is implemented and available in your environment.
 dotted import path, or the mapping form shown above. Leave it unset to use the
 in-memory `DevSearchBackend` fallback in local development.
 
+### Use lazy DevSearch hydration in development
+
+For a local development server, enable the disposable DevSearch projection with
+both `DEBUG=True` and `SEARCH_AUTO_REINDEX=True`:
+
+```python
+GENERAL_MANAGER = {
+    **GENERAL_MANAGER,
+    "SEARCH_AUTO_REINDEX": True,
+}
+```
+
+When the selected backend is `DevSearchBackend`, the first search for each
+index in that serving process lazily rebuilds that index from configured
+managers. If that rebuild fails, the search raises the source error and the
+next search retries it. Subsequent synchronous manager lifecycle updates in the
+same process upsert or delete the relevant documents normally.
+
+DevSearch is process-local. Running `python manage.py search_index --reindex`
+in another process cannot fill the in-memory backend of an already running
+server; restart that server so its next search hydrates its own projection.
+Directly constructed `DevSearchBackend` instances stay inert unless constructed
+with `auto_reindex=True`.
+
 ## Step 2: Add SearchConfig to a manager
 
 Define searchable, filterable, and sortable fields:
@@ -138,6 +162,9 @@ index setup, manager discovery, and reindexing errors propagate so CI or deploy
 scripts fail visibly.
 
 If you add or remove fields, filters, or sorts later, re-run with `--reindex`.
+For DevSearch, run this command in the same process only when manually managing
+that process's in-memory projection; a separate command process cannot populate
+a running server's DevSearch backend.
 
 ## Step 4: Query via GraphQL
 
