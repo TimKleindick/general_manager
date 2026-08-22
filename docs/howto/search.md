@@ -36,12 +36,15 @@ in-memory `DevSearchBackend` fallback in local development.
 
 ### Use lazy DevSearch hydration in development
 
-For a local development server, enable the disposable DevSearch projection with
-`SEARCH_AUTO_REINDEX=True`:
+For a local development server, replace the Meilisearch configuration above
+with this complete disposable DevSearch configuration:
 
 ```python
 GENERAL_MANAGER = {
-    **GENERAL_MANAGER,
+    "SEARCH_BACKEND": {
+        "class": "general_manager.search.backends.dev.DevSearchBackend",
+        "options": {},
+    },
     "SEARCH_AUTO_REINDEX": True,
 }
 ```
