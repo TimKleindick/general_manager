@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from threading import RLock
 
 from general_manager.search.backend import SearchDocument, SearchHit, SearchResult
 from general_manager.utils.filter_parser import apply_lookup
@@ -18,13 +19,32 @@ class _IndexStore:
 
 
 class DevSearchBackend:
-    """Simple process-local in-memory search backend intended for development."""
+    """Process-local development search with optional lazy per-index hydration."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, auto_reindex: bool = False) -> None:
         """
-        Initialize the backend with an empty registry that maps index names (str) to _IndexStore instances.
+        Initialize an empty in-memory registry and optional hydration lifecycle.
+
+        Automatic hydration is disabled for directly constructed backends unless
+        explicitly opted in. When enabled, each index hydrates on its first
+        search in this process. Failed hydration propagates and remains
+        retryable. The lock coordinates only first-search hydration; ordinary
+        reads and writes retain the backend's existing unsynchronized behavior.
         """
         self._indexes: dict[str, _IndexStore] = {}
+        self._auto_reindex = auto_reindex
+        self._hydrated_indexes: set[str] = set()
+        self._hydrating_indexes: set[str] = set()
+        self._hydration_lock = RLock()
+
+    @property
+    def auto_reindex_enabled(self) -> bool:
+        """Return whether first-search hydration is enabled for this backend."""
+        return self._auto_reindex
+
+    def configure_auto_reindex(self, enabled: bool) -> None:
+        """Enable or disable first-search hydration for this backend instance."""
+        self._auto_reindex = enabled
 
     def ensure_index(self, index_name: str, settings: Mapping[str, object]) -> None:
         """
@@ -100,6 +120,10 @@ class DevSearchBackend:
         """
         Search an index for documents matching a query and return scored, optionally filtered and sorted hits.
 
+        When auto-reindex is enabled, the first search for an index lazily
+        hydrates that index in this process before evaluating the query. The
+        hydration guard coordinates concurrent and nested first searches only;
+        a failed source error propagates and the next search can retry.
         The backend reads and writes documents under the `index_name` argument;
         `SearchDocument.index` is stored but not validated. Document IDs are
         unique only inside one in-memory index. Duplicate IDs inside one
@@ -108,13 +132,14 @@ class DevSearchBackend:
         is idempotent and replaces the stored settings mapping for the index.
         Operations are not transactional; mutations completed before an
         exception remain in memory. Queries are lowercased and split on
-        whitespace. Indexed tokens are built from every top-level
+        whitespace, with duplicate query tokens removed in first-seen order.
+        Indexed tokens are built from every top-level
         `SearchDocument.data` value: `None` yields no tokens, strings split on
         whitespace, lists/tuples/sets are processed recursively, and all other
         values become `str(value).lower().split()`. Dict values are not
         traversed; they are tokenized from their string representation. A
-        document matches when each query token equals or prefixes a token
-        extracted from any indexed field. Empty queries match every document
+        document matches when every distinct query token equals or prefixes a
+        token extracted from any indexed field. Empty queries match every document
         that passes type and structured filters. The operation
         order is type filtering, structured filtering, query scoring/matching,
         sorting, and then pagination with `results[offset:offset + limit]`;
@@ -130,8 +155,8 @@ class DevSearchBackend:
         keys, including equal-score default ordering. The backend stores
         document and settings objects by reference, returns hit data from the
         stored `SearchDocument.data` mapping, is
-        process-local memory only, and does not provide persistence or
-        synchronization for concurrent reads/writes.
+        process-local memory only, and does not provide persistence or ordinary
+        read/write synchronization beyond first-search hydration.
 
         Parameters:
             index_name (str): Name of the index to search.
@@ -166,6 +191,7 @@ class DevSearchBackend:
                 operational failures are not normalized and may surface as
                 ordinary Python exceptions.
         """
+        self._ensure_hydrated(index_name)
         if filter_expression is not None:
             raise NotImplementedError(
                 "filter_expression is not supported by the dev backend."
@@ -221,6 +247,31 @@ class DevSearchBackend:
         took_ms = int((time.perf_counter() - start) * 1000)
         return SearchResult(hits=hits, total=len(results), took_ms=took_ms)
 
+    def _ensure_hydrated(self, index_name: str) -> None:
+        """Hydrate one index once when this backend has opted into the lifecycle."""
+        if not self._auto_reindex or index_name in self._hydrated_indexes:
+            return
+        with self._hydration_lock:
+            if index_name in self._hydrated_indexes:
+                return
+            if index_name in self._hydrating_indexes:
+                return
+            self._hydrating_indexes.add(index_name)
+            try:
+                self._reindex_configured_managers(index_name)
+                self._hydrated_indexes.add(index_name)
+            finally:
+                self._hydrating_indexes.discard(index_name)
+
+    def _reindex_configured_managers(self, index_name: str) -> None:
+        """Reindex every manager configured for one index into this process."""
+        from general_manager.search.indexer import SearchIndexer
+        from general_manager.search.registry import iter_index_configs
+
+        indexer = SearchIndexer(self)
+        for manager_class, _index_config in iter_index_configs(index_name):
+            indexer.reindex_manager_index(manager_class, index_name)
+
     @staticmethod
     def _tokenize_query(query: str) -> list[str]:
         """
@@ -230,9 +281,9 @@ class DevSearchBackend:
             query (str): The input query string to tokenize.
 
         Returns:
-            list[str]: A list of lowercase tokens extracted from the query; empty tokens are omitted.
+            list[str]: Distinct lowercase tokens extracted from the query in first-seen order.
         """
-        return [token for token in query.lower().split() if token]
+        return list(dict.fromkeys(query.lower().split()))
 
     def _tokenize_document(self, document: SearchDocument) -> dict[str, set[str]]:
         """
@@ -284,7 +335,11 @@ class DevSearchBackend:
         """
         Compute a relevance score for a document based on matching query tokens and configured boosts.
 
-        Each time a token from `tokens` is present in a field's token set (or is a prefix of a field token) the field's boost is added to the score. After summing matches across all fields, the total is multiplied by `document.index_boost` when it is set.
+        Every distinct query token must be present in at least one field's token
+        set (or be a prefix of a field token). For each matching token, the
+        boosts of all matching fields are added to the score. After summing
+        matches across all fields, the total is multiplied by
+        `document.index_boost` when it is set.
 
         Parameters:
             tokens: The list of query tokens to match against the document's token index.
@@ -297,13 +352,17 @@ class DevSearchBackend:
             return 0.0
         token_index = token_index or {}
         score = 0.0
-        for field_name, field_tokens in token_index.items():
-            field_boost = document.field_boosts.get(field_name, 1.0)
-            for token in tokens:
+        for token in tokens:
+            token_score = 0.0
+            for field_name, field_tokens in token_index.items():
+                field_boost = document.field_boosts.get(field_name, 1.0)
                 if token in field_tokens or any(
                     field_token.startswith(token) for field_token in field_tokens
                 ):
-                    score += field_boost
+                    token_score += field_boost
+            if token_score <= 0:
+                return 0.0
+            score += token_score
         if document.index_boost:
             score *= document.index_boost
         return score

@@ -69,6 +69,19 @@ class DevSearchBackendTests(SimpleTestCase):
         assert data is not None
         assert data["name"] == "Beta Project"
 
+    def test_search_requires_every_distinct_query_term(self) -> None:
+        result = self.backend.search("global", "Alpha missing")
+        assert result.total == 0
+
+    def test_search_allows_query_terms_to_match_different_fields(self) -> None:
+        result = self.backend.search("global", "Alpha public")
+        assert [hit.id for hit in result.hits] == ["Project:1"]
+
+    def test_repeated_query_terms_do_not_inflate_score(self) -> None:
+        single = self.backend.search("global", "Alpha")
+        repeated = self.backend.search("global", "Alpha Alpha")
+        assert repeated.hits[0].score == single.hits[0].score
+
     def test_list_document_ids_filters_by_type(self) -> None:
         """Return indexed document IDs restricted to requested type labels."""
         assert self.backend.list_document_ids("global", types=["Project"]) == {
