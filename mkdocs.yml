@@ -158,6 +158,7 @@ nav:
       - examples/project_volume_curve.md
       - examples/derivatives_groups.md
       - examples/graphql_queries.md
+      - examples/graphql_output_types.md
       - examples/graphql_preferred_item_order.md
       - examples/historical_queries.md
       - examples/bulk_data_change_notifications.md

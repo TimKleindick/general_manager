@@ -65,6 +65,27 @@ checks, while plain scalar fields and nested `GraphQLType` fields have no
 independent permission boundary. Applications should omit or pre-authorize
 sensitive values before returning an output value.
 
+Concrete subclasses use the dataclass-generated constructor: each annotated
+field with `init=True` is a constructor parameter, defaults follow standard
+dataclass rules, and `ClassVar` fields are not constructor or GraphQL fields.
+Instances are frozen; assigning to a field raises `dataclasses.FrozenInstanceError`.
+Invalid annotations fail schema generation with a field-specific `TypeError`,
+and duplicate or colliding output declarations fail with `ValueError` before
+the live GraphQL registries are mutated. The output-type contract is available
+from GeneralManager 0.75.0. See the [concept](../concepts/graphql/schema_autogen.md#output-only-value-types),
+[how-to](../howto/expose_via_graphql.md#return-output-only-graphql-types), and
+[cookbook recipe](../examples/graphql_output_types.md) for directly usable
+examples.
+
+During schema assembly, `GraphQL.create_graphql_output_type(output_class: type[GraphQLType]) -> type[graphene.ObjectType]` generates and
+registers the Graphene object for one declaration. It returns the existing
+generated type when the same declaration is already registered. Invalid
+annotations raise `TypeError`; duplicate declarations and registry or schema
+name collisions raise `ValueError` before registry state is changed. This is
+bootstrap plumbing rather than the application-facing registration API: define
+`GraphQLType` subclasses and import their module before startup schema
+construction.
+
 ## Historical queries with `@asOf`
 
 The [Historical Context API reference](historical_context.md) contains the
@@ -527,7 +548,10 @@ live `GraphQL` registries. The generated Graphene classes, fields, and resolver
 objects stored inside those dictionaries are shared with the live registry.
 Use `GraphQL.reset_registry()` in tests before rebuilding a schema; it clears
 generated query, mutation, subscription, search, capability, and manager
-registries. Generated registry entries are Graphene classes, fields, and
+registries as well as the output-type registry. The
+`graphql_output_type_registry` snapshot field maps `GraphQLType` declaration
+names to generated Graphene output classes and remains separate from the
+manager registry. Generated registry entries are Graphene classes, fields, and
 callables, so treat them as opaque objects unless you are writing integration
 tests around schema assembly.
 

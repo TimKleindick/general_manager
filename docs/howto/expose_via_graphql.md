@@ -73,6 +73,10 @@ read permissions. Plain scalar fields and nested `GraphQLType` fields do not
 receive an independent permission check, so omit or pre-authorize sensitive
 values in the owning property.
 
+The [typed output-object recipe](../examples/graphql_output_types.md) shows the
+same contract with a complete startup import, calculation property, and
+GraphQL query.
+
 ## Declare manager relations
 
 Annotate related fields with the manager class that should appear in generated
