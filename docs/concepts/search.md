@@ -513,8 +513,21 @@ The backend registry functions `configure_search_backend`, `configure_search_bac
 ### DevSearch backend (service-free)
 
 For local development, the built-in DevSearch backend stores documents in
-memory and supports basic term matching with per-field boosts. It does **not**
-provide typo tolerance and should not be used in production.
+memory and supports basic term matching with per-field boosts. It is a
+disposable per-process projection, does **not** provide typo tolerance, and
+should not be used in production. When Django `DEBUG=True`,
+`SEARCH_AUTO_REINDEX=True`, and the selected backend is DevSearch, each index
+is populated from configured managers by its first search in that process.
+Hydration is tracked per index and guarded against concurrent or nested first
+searches. A hydration error reaches the caller and leaves that index retryable
+on a later search. Directly constructed DevSearch instances remain inert unless
+their caller passes `auto_reindex=True`.
+
+After an index hydrates, the existing synchronous search invalidation path
+keeps that same process's projection current with normal upserts and deletes.
+Writes, asynchronous invalidation, or `search_index --reindex` work performed
+in another process cannot update a running DevSearch backend. Restart the
+serving process so its next search builds a fresh projection.
 Structured filters use AND within one mapping and OR across a sequence of
 mappings. For `exact` and `in` checks against list/tuple/set document fields,
 collection filter values match on intersection; scalar `in` filter values do
@@ -530,8 +543,9 @@ strings on whitespace. It does not stem, parse phrases, or perform fuzzy matchin
 tokens are built from every top-level `SearchDocument.data` value: `None`
 produces no tokens, strings split on whitespace, lists/tuples/sets are processed
 recursively, and all other values become `str(value).lower().split()`. Dict
-values are not traversed and are tokenized from their string representation. A
-token matches when it equals or prefixes an indexed field token. Empty queries
+values are not traversed and are tokenized from their string representation.
+Every distinct query term must equal or prefix an indexed field token for a
+document to match; different terms may match different fields. Empty queries
 match every document that passes type and structured filters. The operation
 order is type filtering, structured filtering, query scoring/matching, sorting,
 and pagination. Structured filter keys target `SearchDocument.data` field names
@@ -555,8 +569,8 @@ before pagination, slices as `results[offset:offset + limit]` with negative
 values intentionally following Python slice behavior, stores document and
 settings objects by reference, returns hit data from the stored
 `SearchDocument.data` mapping, and keeps state only in the current process with
-no persistence or synchronization for concurrent reads/writes. Mutating returned
-DevSearch hit data can mutate the stored document payload.
+no persistence or cross-process synchronization for ordinary reads/writes.
+Mutating returned DevSearch hit data can mutate the stored document payload.
 DevSearch raises `NotImplementedError` for `filter_expression`; other
 operational failures are not normalized and may surface as ordinary Python
 exceptions.

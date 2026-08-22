@@ -27,6 +27,19 @@ class InvalidSearchBackendOptionsError(TypeError):
         super().__init__("SEARCH_BACKEND options must be a mapping.")
 
 
+def _dev_auto_reindex_enabled(django_settings: object) -> bool:
+    """Return whether settings enable DevSearch first-search hydration."""
+    config_candidate = getattr(django_settings, _SETTINGS_KEY, None)
+    if (
+        isinstance(config_candidate, Mapping)
+        and "SEARCH_AUTO_REINDEX" in config_candidate
+    ):
+        configured = config_candidate["SEARCH_AUTO_REINDEX"]
+    else:
+        configured = getattr(django_settings, "SEARCH_AUTO_REINDEX", False)
+    return bool(getattr(django_settings, "DEBUG", False)) and bool(configured)
+
+
 def configure_search_backend(backend: SearchBackend | None) -> None:
     """
     Set the active search backend instance.
@@ -128,6 +141,10 @@ def configure_search_backend_from_settings(django_settings: object) -> None:
     backend_instance = _resolve_backend(backend_setting)
     if backend_setting is not None and backend_instance is None:
         raise SearchBackendNotConfiguredError.from_setting(backend_setting)
+    if isinstance(backend_instance, DevSearchBackend):
+        backend_instance.configure_auto_reindex(
+            _dev_auto_reindex_enabled(django_settings)
+        )
     configure_search_backend(backend_instance)
 
 
@@ -139,7 +156,8 @@ def get_search_backend() -> SearchBackend:
     `configure_search_backend_from_settings(django.conf.settings)`. If settings
     still leave the backend unset, it creates one `DevSearchBackend`, stores it
     as the process-local active backend, and returns that same fallback instance
-    on later calls.
+    on later calls. The fallback enables first-search hydration only when both
+    `DEBUG` and `SEARCH_AUTO_REINDEX` are enabled in Django settings.
 
     Returns:
         The configured or development fallback search backend.
@@ -154,7 +172,7 @@ def get_search_backend() -> SearchBackend:
 
     configure_search_backend_from_settings(settings)
     if _backend is None:
-        _backend = DevSearchBackend()
+        _backend = DevSearchBackend(auto_reindex=_dev_auto_reindex_enabled(settings))
     if _backend is None:
         raise SearchBackendNotConfiguredError()
     return _backend
