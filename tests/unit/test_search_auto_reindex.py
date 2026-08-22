@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event
+
 import pytest
 from django.test import SimpleTestCase, override_settings
 
@@ -11,6 +14,8 @@ from general_manager.search.backend import SearchDocument
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.backends.dev import DevSearchBackend
 from tests.unit.test_search_indexer import Project, ProjectInterface
+
+TEST_TIMEOUT_SECONDS = 2.0
 
 
 def _search_document(index_name: str) -> SearchDocument:
@@ -57,6 +62,21 @@ class NestedHydrationBackend(RecordingHydrationBackend):
         self.upsert(index_name, [_search_document(index_name)])
 
 
+class ConcurrentHydrationBackend(RecordingHydrationBackend):
+    """Hold one rebuild open while another search waits for the same index."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hydration_started = Event()
+        self.release_hydration = Event()
+
+    def _reindex_configured_managers(self, index_name: str) -> None:
+        self.hydrated_indexes.append(index_name)
+        self.hydration_started.set()
+        assert self.release_hydration.wait(timeout=TEST_TIMEOUT_SECONDS)
+        self.upsert(index_name, [_search_document(index_name)])
+
+
 class SearchAutoReindexRemovedTests(SimpleTestCase):
     def test_legacy_auto_reindex_helpers_are_removed(self) -> None:
         """Keep removed request-triggered auto-reindex helpers unavailable."""
@@ -100,6 +120,29 @@ def test_nested_hydration_is_guarded() -> None:
     backend = NestedHydrationBackend()
 
     assert backend.search("global", "Dock").total == 1
+    assert backend.hydrated_indexes == ["global"]
+
+
+def test_concurrent_first_searches_share_one_completed_hydration() -> None:
+    """Competing first searches wait for one rebuild and see its documents."""
+    backend = ConcurrentHydrationBackend()
+    searches_ready = Barrier(3)
+
+    def search() -> int:
+        searches_ready.wait(timeout=TEST_TIMEOUT_SECONDS)
+        return backend.search("global", "Dock").total
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(search) for _index in range(2)]
+        searches_ready.wait(timeout=TEST_TIMEOUT_SECONDS)
+        try:
+            assert backend.hydration_started.wait(timeout=TEST_TIMEOUT_SECONDS)
+            assert not any(future.done() for future in futures)
+        finally:
+            backend.release_hydration.set()
+        totals = [future.result(timeout=TEST_TIMEOUT_SECONDS) for future in futures]
+
+    assert totals == [1, 1]
     assert backend.hydrated_indexes == ["global"]
 
 

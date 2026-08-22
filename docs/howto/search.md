@@ -58,8 +58,9 @@ same process upsert or delete the relevant documents normally.
 DevSearch is process-local. Running `python manage.py search_index --reindex`
 in another process cannot fill the in-memory backend of an already running
 server; restart that server so its next search hydrates its own projection.
-Directly constructed `DevSearchBackend` instances stay inert unless constructed
-with `auto_reindex=True`.
+Directly constructed `DevSearchBackend` instances stay inert until constructed
+with `auto_reindex=True` or enabled later with
+`backend.configure_auto_reindex(True)`.
 
 ## Step 2: Add SearchConfig to a manager
 
