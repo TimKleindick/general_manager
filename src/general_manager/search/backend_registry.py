@@ -37,7 +37,7 @@ def _dev_auto_reindex_enabled(django_settings: object) -> bool:
         configured = config_candidate["SEARCH_AUTO_REINDEX"]
     else:
         configured = getattr(django_settings, "SEARCH_AUTO_REINDEX", False)
-    return bool(getattr(django_settings, "DEBUG", False)) and bool(configured)
+    return bool(configured)
 
 
 def configure_search_backend(backend: SearchBackend | None) -> None:
@@ -156,8 +156,8 @@ def get_search_backend() -> SearchBackend:
     `configure_search_backend_from_settings(django.conf.settings)`. If settings
     still leave the backend unset, it creates one `DevSearchBackend`, stores it
     as the process-local active backend, and returns that same fallback instance
-    on later calls. The fallback enables first-search hydration only when both
-    `DEBUG` and `SEARCH_AUTO_REINDEX` are enabled in Django settings.
+    on later calls. The fallback enables first-search hydration when
+    `SEARCH_AUTO_REINDEX` is enabled in Django settings.
 
     Returns:
         The configured or development fallback search backend.

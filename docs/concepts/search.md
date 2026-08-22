@@ -515,9 +515,9 @@ The backend registry functions `configure_search_backend`, `configure_search_bac
 For local development, the built-in DevSearch backend stores documents in
 memory and supports basic term matching with per-field boosts. It is a
 disposable per-process projection, does **not** provide typo tolerance, and
-should not be used in production. When Django `DEBUG=True`,
-`SEARCH_AUTO_REINDEX=True`, and the selected backend is DevSearch, each index
-is populated from configured managers by its first search in that process.
+should not be used in production. When `SEARCH_AUTO_REINDEX=True` and the
+selected backend is DevSearch, each index is populated from configured managers
+by its first search in that process.
 Hydration is tracked per index and guarded against concurrent or nested first
 searches. A hydration error reaches the caller and leaves that index retryable
 on a later search. Directly constructed DevSearch instances remain inert unless

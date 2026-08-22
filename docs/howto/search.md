@@ -37,7 +37,7 @@ in-memory `DevSearchBackend` fallback in local development.
 ### Use lazy DevSearch hydration in development
 
 For a local development server, enable the disposable DevSearch projection with
-both `DEBUG=True` and `SEARCH_AUTO_REINDEX=True`:
+`SEARCH_AUTO_REINDEX=True`:
 
 ```python
 GENERAL_MANAGER = {
