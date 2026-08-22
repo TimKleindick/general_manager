@@ -520,8 +520,9 @@ selected backend is DevSearch, each index is populated from configured managers
 by its first search in that process.
 Hydration is tracked per index and guarded against concurrent or nested first
 searches. A hydration error reaches the caller and leaves that index retryable
-on a later search. Directly constructed DevSearch instances remain inert unless
-their caller passes `auto_reindex=True`.
+on a later search. Directly constructed DevSearch instances remain inert until
+their caller passes `auto_reindex=True` to the constructor or calls
+`configure_auto_reindex(True)` on the instance.
 
 After an index hydrates, the existing synchronous search invalidation path
 keeps that same process's projection current with normal upserts and deletes.

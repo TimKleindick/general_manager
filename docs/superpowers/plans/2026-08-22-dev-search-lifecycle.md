@@ -284,7 +284,6 @@ def _ensure_hydrated(self, index_name: str) -> None:
         self._hydrating_indexes.add(index_name)
         try:
             self._reindex_configured_managers(index_name)
-        else:
             self._hydrated_indexes.add(index_name)
         finally:
             self._hydrating_indexes.discard(index_name)
