@@ -49,11 +49,12 @@ GENERAL_MANAGER = {
 }
 ```
 
-When the selected backend is `DevSearchBackend`, the first search for each
-index in that serving process lazily rebuilds that index from configured
-managers. If that rebuild fails, the search raises the source error and the
-next search retries it. Subsequent synchronous manager lifecycle updates in the
-same process upsert or delete the relevant documents normally.
+When the selected backend is `DevSearchBackend` and
+`SEARCH_AUTO_REINDEX=True`, the first search for each index in that serving
+process lazily rebuilds that index from configured managers. If that rebuild
+fails, the search raises the source error and the next search retries it.
+Subsequent synchronous manager lifecycle updates in the same process upsert or
+delete the relevant documents normally.
 
 DevSearch is process-local. Running `python manage.py search_index --reindex`
 in another process cannot fill the in-memory backend of an already running
