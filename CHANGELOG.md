@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v0.76.0 (2026-08-23)
+
+### Bug Fixes
+
+- Enable dev search reindex outside debug
+  ([`83574a6`](https://github.com/TimKleindick/general_manager/commit/83574a69d0614e53e660a4d9fba2f0318d590171))
+
+- Require all dev search query terms
+  ([`1ab017b`](https://github.com/TimKleindick/general_manager/commit/1ab017bd1f50e77a934cc7f861f341265973ae02))
+
+### Documentation
+
+- Align dev search reindex contract
+  ([`9eba317`](https://github.com/TimKleindick/general_manager/commit/9eba31731768aff8ba34101152ade878afdb6680))
+
+- Clarify dev search hydration condition
+  ([`c168bf1`](https://github.com/TimKleindick/general_manager/commit/c168bf12d1987538801f3b537995ab9a41edf616))
+
+- Correct dev search configuration example
+  ([`fd0319b`](https://github.com/TimKleindick/general_manager/commit/fd0319b9399e7d8d7d8f999bad587cd5c967068a))
+
+- Design dev search lazy hydration
+  ([`9d70f1c`](https://github.com/TimKleindick/general_manager/commit/9d70f1c0a1f9fba89eaa834df2049833f334ab1f))
+
+- Document GraphQL output types
+  ([`ee56419`](https://github.com/TimKleindick/general_manager/commit/ee56419792e1e65c31a54ba38fc600072ddfd8ea))
+
+- Plan dev search lifecycle implementation
+  ([`7094037`](https://github.com/TimKleindick/general_manager/commit/7094037c294f6c41682199bda55e13445420d6fb))
+
+### Features
+
+- Lazily hydrate development search
+  ([`b3c4e17`](https://github.com/TimKleindick/general_manager/commit/b3c4e17b1e1863573f95d27038fb86395e606c45))
+
+### Testing
+
+- Strengthen dev search hydration coverage
+  ([`5f8d4c1`](https://github.com/TimKleindick/general_manager/commit/5f8d4c108e27fc4eb091a83474aa4fed261c6f5f))
+
+
 ## v0.75.1 (2026-08-21)
 
 ### Bug Fixes
