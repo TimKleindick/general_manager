@@ -372,6 +372,15 @@ socket.addEventListener("message", ({data}) => {
   const event = JSON.parse(data);
   if (event.type === "text_chunk") {
     renderAssistantText(event.content);
+  } else if (event.type === "confirm_mutation") {
+    const confirmed = window.confirm(
+      `Allow ${event.mutation} with input ${JSON.stringify(event.input)}?`,
+    );
+    socket.send(JSON.stringify({
+      type: "confirm",
+      confirmation_id: event.id,
+      confirmed,
+    }));
   } else if (event.type === "error") {
     renderChatError(event.message);
   }
@@ -400,16 +409,9 @@ GENERAL_MANAGER["CHAT"].update(
 
 Every confirmed mutation must also be allowed. Mutations require an
 authenticated user. When the model requests `createPart`, WebSocket or SSE
-emits a `confirm_mutation` event instead of executing it. A WebSocket client
-answers with:
-
-```javascript
-socket.send(JSON.stringify({
-  type: "confirm",
-  confirmation_id: event.id,
-  confirmed: true,
-}));
-```
+emits a `confirm_mutation` event instead of executing it. The WebSocket handler
+above shows the requested mutation and input, then returns the event's `id` as
+the `confirmation_id` together with the user's decision.
 
 The plain HTTP endpoint cannot pause for confirmation. Use WebSocket or SSE for
 workflows that include `confirm_mutations`.
