@@ -415,26 +415,30 @@ the `confirmation_id` together with the user's decision.
 
 For SSE, post the decision when the stream emits `confirm_mutation`:
 
-```javascript
-async function confirmSseMutation(confirmationId, confirmed) {
-  return fetch("/chat/confirm/", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRFToken": csrfToken,
-    },
-    body: JSON.stringify({confirmation_id: confirmationId, confirmed}),
-  });
-}
+    const chatBaseUrl = new URL("../", response.url);
 
-// Inside the SSE event handler:
-const confirmed = window.confirm("Allow this mutation?");
-await confirmSseMutation(event.id, confirmed);
-```
+    async function confirmSseMutation(confirmationId, confirmed) {
+      return fetch(new URL("confirm/", chatBaseUrl), {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+        },
+        body: JSON.stringify({confirmation_id: confirmationId, confirmed}),
+      });
+    }
+
+    // Inside the SSE event handler:
+    if (event.type === "confirm_mutation") {
+      const confirmed = window.confirm("Allow this mutation?");
+      await confirmSseMutation(event.id, confirmed);
+    }
 
 Using `credentials: "same-origin"` sends the same Django session cookie used by
 the `/chat/stream/` request, so the confirmation resolves the same conversation.
+Deriving `chatBaseUrl` from that request also preserves a customized `CHAT["url"]`
+base path.
 
 The plain HTTP endpoint cannot pause for confirmation. Use WebSocket or SSE for
 workflows that include `confirm_mutations`.
