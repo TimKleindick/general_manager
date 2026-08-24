@@ -40,9 +40,9 @@ Install an extra only when the application uses that integration:
 | S3 uploads | `python -m pip install "GeneralManager[file-upload-s3]"` | S3 storage adapters |
 
 Provider credentials, storage policies, and production security settings remain
-application responsibilities. See the [chat](concepts/chat_prompting.md) and
-[file-upload](concepts/graphql/file_uploads.md) guides before enabling those
-features.
+application responsibilities. Follow [Add LLM chat to a GeneralManager
+project](howto/install_llm_chat.md) before enabling a chat provider, and see the
+[file-upload](concepts/graphql/file_uploads.md) guide before enabling uploads.
 
 ## Configure Django
 

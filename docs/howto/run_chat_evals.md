@@ -5,6 +5,11 @@ datasets shipped in the GeneralManager wheel. The command runs inside a Django
 project, so it must load that project's settings before it imports providers or
 registers fixtures.
 
+Configure the provider first by following [Add LLM chat to a GeneralManager
+project](install_llm_chat.md). The eval runner uses the same provider adapter and
+model configuration as the runtime chat API unless command options override
+them.
+
 ## 1. Choose the Django settings module
 
 Pass the module explicitly:
