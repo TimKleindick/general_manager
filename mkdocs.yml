@@ -82,6 +82,7 @@ nav:
           - concepts/caching.md
           - concepts/historical_context.md
           - concepts/search.md
+          - concepts/chat.md
           - concepts/chat_prompting.md
           - concepts/rules_validation.md
           - concepts/workflow.md
@@ -135,6 +136,7 @@ nav:
       - howto/expose_via_graphql.md
       - howto/historical_queries.md
       - howto/bulk_data_change_notifications.md
+      - howto/install_llm_chat.md
       - howto/run_chat_evals.md
       - howto/orm_atomic_writes.md
       - howto/write_validation_rules.md

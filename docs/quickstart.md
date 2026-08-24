@@ -207,4 +207,4 @@ application writes and restart the development server after permission changes.
 - Configure [search](howto/search.md).
 - Model operations with [workflows](concepts/workflow.md).
 - Add optional [GraphQL file uploads](howto/graphql_file_uploads.md).
-- Configure optional [provider-based chat](concepts/chat_prompting.md).
+- Add optional [LLM chat](howto/install_llm_chat.md) to the generated managers.

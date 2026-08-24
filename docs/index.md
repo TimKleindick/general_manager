@@ -16,6 +16,7 @@ The documentation is organised around the developer workflows you follow when bu
 - **Multiple interfaces**: combine database-backed, read-only, and computed managers without changing your business logic.
 - **Attribute-based permissions**: secure operations through reusable permission rules and contextual checks.
 - **GraphQL integration**: expose managers, relationships, and custom mutations automatically, with fine-grained security controls.
+- **Grounded LLM chat**: let tool-capable models discover and query explicitly exposed managers through HTTP, SSE, or WebSocket APIs.
 - **Measurement support**: work with physical units and currencies using intuitive arithmetic and Django model fields.
 
 ## Getting help

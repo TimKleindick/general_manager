@@ -5,6 +5,10 @@ manager. This keeps the prompt small enough for projects with hundreds of
 managers, but it means prompt changes must be tested against tool-choice and
 answer-quality evals before they are treated as reliable.
 
+This page is for prompt and eval contributors. Application developers should
+start with [Add LLM chat to a GeneralManager project](../howto/install_llm_chat.md)
+and [How LLM chat works](chat.md).
+
 ## Prompt contract
 
 The system prompt is built in `general_manager.chat.system_prompt` and is split
