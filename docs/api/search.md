@@ -207,6 +207,31 @@ index-rename migrations.
 
 ::: general_manager.search.async_tasks.dispatch_index_update
 
+### DevSearch compatibility and lifecycle notes
+
+`DevSearchBackend` is the built-in process-local backend for development. Its
+existing no-argument construction remains inert and compatible with callers
+that manage indexes explicitly. The new keyword-only
+`DevSearchBackend(*, auto_reindex: bool = False)` option opts a directly
+constructed backend into first-search hydration. The public
+`auto_reindex_enabled: bool` property reports the current setting, and
+`configure_auto_reindex(enabled: bool) -> None` changes it for later searches.
+
+When `SEARCH_AUTO_REINDEX` is truthy in the nested `GENERAL_MANAGER` mapping,
+or in the top-level setting when the nested key is absent, a selected
+`DevSearchBackend` hydrates each index on its first search. The setting is
+ignored for external backends and does not require Django `DEBUG=True`. Each
+configured manager is reindexed in the serving process; source and reindexing
+exceptions propagate to the triggering search, and a failed index remains
+retryable. Same-process synchronous invalidation continues to update a hydrated
+projection, while writes or `search_index --reindex` in another process cannot
+populate a running DevSearch instance.
+
+Multi-term DevSearch queries now require every distinct lowercased query term to
+equal or prefix a token from at least one indexed field. Terms may match
+different fields, repeated terms do not inflate the score, and empty-query
+behavior is unchanged. External backend query semantics are unaffected.
+
 ::: general_manager.search.backends.dev.DevSearchBackend
 
 ::: general_manager.search.backends.meilisearch.MeilisearchBackend
