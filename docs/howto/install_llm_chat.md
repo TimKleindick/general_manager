@@ -413,6 +413,29 @@ emits a `confirm_mutation` event instead of executing it. The WebSocket handler
 above shows the requested mutation and input, then returns the event's `id` as
 the `confirmation_id` together with the user's decision.
 
+For SSE, post the decision when the stream emits `confirm_mutation`:
+
+```javascript
+async function confirmSseMutation(confirmationId, confirmed) {
+  return fetch("/chat/confirm/", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRFToken": csrfToken,
+    },
+    body: JSON.stringify({confirmation_id: confirmationId, confirmed}),
+  });
+}
+
+// Inside the SSE event handler:
+const confirmed = window.confirm("Allow this mutation?");
+await confirmSseMutation(event.id, confirmed);
+```
+
+Using `credentials: "same-origin"` sends the same Django session cookie used by
+the `/chat/stream/` request, so the confirmation resolves the same conversation.
+
 The plain HTTP endpoint cannot pause for confirmation. Use WebSocket or SSE for
 workflows that include `confirm_mutations`.
 
