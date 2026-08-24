@@ -207,7 +207,7 @@ index-rename migrations.
 
 ::: general_manager.search.async_tasks.dispatch_index_update
 
-### DevSearch compatibility and lifecycle notes
+## DevSearch compatibility and lifecycle notes
 
 `DevSearchBackend` is the built-in process-local backend for development. Its
 existing no-argument construction remains inert and compatible with callers
