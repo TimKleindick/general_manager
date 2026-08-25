@@ -14,14 +14,17 @@ from general_manager.chat.planned.models import EvidenceRequirement
 EvidenceKind: TypeAlias = Literal["schema", "path", "query", "calculation"]
 _EVIDENCE_KINDS = frozenset(("schema", "path", "query", "calculation"))
 _REDACTED = "[redacted]"
-_SENSITIVE_PROVENANCE_PARTS = (
-    "authorization",
-    "credential",
-    "password",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
+_SAFE_PROVENANCE_KEYS = frozenset(
+    {
+        "tool",
+        "manager",
+        "operation",
+        "calculator",
+        "kind",
+        "relation",
+        "direction",
+        "field",
+    }
 )
 
 
@@ -113,12 +116,8 @@ def _provenance(value: Mapping[str, str] | None) -> Mapping[str, str]:
     for key, item in value.items():
         if not isinstance(key, str) or not isinstance(item, str):
             _invalid("provenance keys and values must be strings.")
-        normalized_key = key.lower()
-        sanitized[key] = (
-            _REDACTED
-            if any(part in normalized_key for part in _SENSITIVE_PROVENANCE_PARTS)
-            else item
-        )
+        normalized_key = key.casefold()
+        sanitized[key] = item if normalized_key in _SAFE_PROVENANCE_KEYS else _REDACTED
     return MappingProxyType(dict(sorted(sanitized.items())))
 
 

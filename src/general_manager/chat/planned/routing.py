@@ -14,6 +14,10 @@ def _type_error(message: str) -> NoReturn:
     raise TypeError(message)
 
 
+def _value_error(message: str) -> NoReturn:
+    raise ValueError(message)
+
+
 def select_executor_role(
     task: PlannedTask,
     *,
@@ -24,6 +28,15 @@ def select_executor_role(
     """Choose the simple executor only when every approved fact is simple."""
     if not isinstance(task, PlannedTask):
         _type_error("task must be a PlannedTask.")
+    if not isinstance(unique_manager, bool):
+        _type_error("unique_manager must be a bool.")
+    if not isinstance(prior_failure, bool):
+        _type_error("prior_failure must be a bool.")
+    if path_depth is not None:
+        if isinstance(path_depth, bool) or not isinstance(path_depth, int):
+            _type_error("path_depth must be None or a non-negative integer.")
+        if path_depth < 0:
+            _value_error("path_depth must be None or a non-negative integer.")
     has_dependency = bool(task.depends_on)
     requires_calculation = any(
         requirement.kind == "calculation" for requirement in task.requirements

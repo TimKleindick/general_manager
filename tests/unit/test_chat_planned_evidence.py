@@ -54,6 +54,47 @@ def test_evidence_record_is_frozen_and_provenance_is_snapshot() -> None:
         evidence.provenance["task"] = "not allowed"  # type: ignore[index]
 
 
+@pytest.mark.parametrize(
+    "key",
+    ["cookie", "set-cookie", "session", "session_id", "private_key", "unknown_secret"],
+)
+def test_provenance_redacts_unallowlisted_or_secret_like_values(key: str) -> None:
+    evidence = EvidenceRecord.create(
+        "ev-1",
+        "task-1",
+        "query",
+        "call",
+        {key: "sensitive-value"},
+        {"data": []},
+    )
+
+    assert evidence.provenance[key] == "[redacted]"
+
+
+def test_provenance_preserves_allowlisted_framework_values() -> None:
+    evidence = EvidenceRecord.create(
+        "ev-1",
+        "task-1",
+        "query",
+        "call",
+        {
+            "tool": "query",
+            "manager": "PartManager",
+            "operation": "sum",
+            "calculator": "framework",
+            "kind": "query",
+            "relation": "parts",
+            "direction": "forward",
+            "field": "quantity",
+        },
+        {"data": []},
+    )
+
+    assert evidence.provenance["tool"] == "query"
+    assert evidence.provenance["manager"] == "PartManager"
+    assert evidence.provenance["field"] == "quantity"
+
+
 def test_call_identity_is_canonical_across_argument_order() -> None:
     left = canonical_call_identity("query", {"b": 2, "a": {"d": 4, "c": 3}})
     right = canonical_call_identity("query", {"a": {"c": 3, "d": 4}, "b": 2})
