@@ -424,6 +424,7 @@ def test_child_failure_blocks_parent_but_not_an_independent_root() -> None:
     assert prepared.result.statuses["task_2"] == "resolved"
     assert [event["type"] for event in events].count("done") == 1
     assert [event["type"] for event in events].count("error") == 0
+    assert events[-1]["type"] == "done"
     assert events[-1]["orchestration"] == {
         "status": "partial",
         "coverage": {"resolved": 1, "total": 2},
