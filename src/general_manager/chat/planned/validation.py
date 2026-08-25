@@ -382,6 +382,33 @@ def _validate_child_graph(
         depth(child.task_id)
 
 
+def _validate_dynamic_graph(records: Collection[PlannedTask]) -> None:
+    """Validate every root subtree represented by dynamic task records."""
+    task_records = tuple(records)
+    for task_record in task_records:
+        _validate_task_record(task_record)
+
+    task_ids = [task.task_id for task in task_records]
+    if len(task_ids) != len(set(task_ids)):
+        _invalid("existing task IDs must be globally unique.")
+
+    root_ids = {task.task_id for task in task_records if task.parent_id is None}
+    children_by_root: dict[str, list[PlannedTask]] = {
+        root_id: [] for root_id in root_ids
+    }
+    for task in task_records:
+        if task.parent_id is None:
+            continue
+        if task.parent_id not in root_ids:
+            _invalid("dynamic child parent must resolve to an existing root.")
+        children_by_root[task.parent_id].append(task)
+
+    for root_id, children in children_by_root.items():
+        if len(children) > MAX_CHILDREN_PER_ROOT:
+            _invalid("a root may create at most two dynamic children.")
+        _validate_child_graph(tuple(children), root_id)
+
+
 def validate_dynamic_children(
     parent: PlannedTask,
     payload: object,
@@ -395,19 +422,12 @@ def validate_dynamic_children(
         existing = tuple(existing_tasks)
     except TypeError:
         _invalid("existing tasks must be a collection.")
-    for task_record in existing:
-        _validate_task_record(task_record)
-    existing_ids = [task.task_id for task in existing]
-    if len(existing_ids) != len(set(existing_ids)):
-        _invalid("existing task IDs must be globally unique.")
-    if any(
-        task_record.task_id == parent.task_id and task_record != parent
-        for task_record in existing
-    ):
-        _invalid("existing task IDs must be globally unique.")
-    existing_id_set = set(existing_ids)
+    records = list(existing)
+    if not any(task_record == parent for task_record in records):
+        records.append(parent)
+    _validate_dynamic_graph(records)
     existing_children = tuple(
-        task for task in existing if task.parent_id == parent.task_id
+        task for task in records if task.parent_id == parent.task_id
     )
 
     _ensure_json_compatible(payload)
@@ -421,8 +441,7 @@ def validate_dynamic_children(
     if len(existing_children) + len(raw_children) > MAX_CHILDREN_PER_ROOT:
         _invalid("a root may create at most two dynamic children.")
 
-    seen_ids = set(existing_id_set)
-    seen_ids.add(parent.task_id)
+    seen_ids = {task.task_id for task in records}
     children: list[PlannedTask] = []
     for raw_child in raw_children:
         child = _parse_task(
@@ -435,13 +454,5 @@ def validate_dynamic_children(
         seen_ids.add(child.task_id)
         children.append(child)
     validated_children = tuple(children)
-    existing_sibling_ids = {task.task_id for task in existing_children}
-    if any(task_record.parent_id in existing_sibling_ids for task_record in existing):
-        _invalid("dynamic children cannot be created recursively.")
-    _validate_child_graph(existing_children, parent.task_id)
-    _validate_child_graph(
-        validated_children,
-        parent.task_id,
-        existing_sibling_ids,
-    )
+    _validate_dynamic_graph((*records, *validated_children))
     return validated_children
