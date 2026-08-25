@@ -8,6 +8,7 @@ import json
 import re
 from typing import NoReturn
 
+from general_manager.chat.audit import emit_planned_audit_event
 from general_manager.chat.planned.budget import RoundBudget, RoundBudgetExhausted
 from general_manager.chat.planned.config import (
     PlannedChatSettings,
@@ -30,6 +31,7 @@ class InvalidPlanError(ValueError):
 
     reason = "invalid_plan"
     code = "invalid_plan"
+    public_reason = "invalid_plan"
 
     def __init__(
         self,
@@ -311,6 +313,15 @@ async def plan_request(
     total_usage = TokenUsage()
     attempt_usages: list[TokenUsage] = []
     for role, correction in attempts:
+        emit_planned_audit_event(
+            "route",
+            {
+                "role": role,
+                "route": "escalated" if role == "fallback_executor" else "selected",
+                "escalated": role == "fallback_executor",
+                "trust_group_valid": True,
+            },
+        )
         try:
             result = await _attempt(
                 role,
@@ -321,17 +332,40 @@ async def plan_request(
                 catalog_summary,
                 correction=correction,
             )
+            emit_planned_audit_event(
+                "budget",
+                {
+                    "global_rounds_used": budget.global_used,
+                    "global_rounds_remaining": budget.global_remaining,
+                },
+            )
         except RoundBudgetExhausted:
             raise
         except InvalidProviderRoundError as exc:
             total_usage = _add_usage(total_usage, exc.usage)
             attempt_usages.append(exc.usage)
+            emit_planned_audit_event(
+                "usage",
+                {
+                    "role": role,
+                    "input_tokens": exc.usage.input_tokens,
+                    "output_tokens": exc.usage.output_tokens,
+                },
+            )
             continue
         except Exception:  # noqa: BLE001, S112
             # Planner/provider detail is intentionally not exposed as plan output.
             continue
         total_usage = _add_usage(total_usage, result.usage)
         attempt_usages.append(result.usage)
+        emit_planned_audit_event(
+            "usage",
+            {
+                "role": role,
+                "input_tokens": result.usage.input_tokens,
+                "output_tokens": result.usage.output_tokens,
+            },
+        )
         try:
             if result.tool_call is not None:
                 continue
@@ -341,9 +375,18 @@ async def plan_request(
         except Exception:  # noqa: BLE001, S112
             continue
         else:
+            emit_planned_audit_event(
+                "plan",
+                {
+                    "task_count": len(plan.tasks),
+                    "role": role,
+                    "trust_group_valid": True,
+                },
+            )
             return PlanningResult(
                 plan=plan, usage=total_usage, attempt_usages=tuple(attempt_usages)
             )
+    emit_planned_audit_event("terminal", {"terminal_reason": "invalid_plan"})
     raise InvalidPlanError(total_usage, tuple(attempt_usages))
 
 

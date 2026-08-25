@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+import hashlib
 import inspect
 import json
 import math
@@ -17,6 +18,7 @@ from typing import Any, cast
 
 from asgiref.sync import sync_to_async
 
+from general_manager.chat.audit import emit_planned_audit_event
 from general_manager.chat.planned.budget import RoundBudget, RoundBudgetExhausted
 from general_manager.chat.planned.calculations import (
     CalculationError,
@@ -457,6 +459,7 @@ class _TaskRuntime:
     candidates: tuple[str, ...] = ()
     path_depth: int | None = None
     resolved_anchors: set[str] = field(default_factory=set)
+    started_at: float | None = None
 
 
 @dataclass
@@ -486,18 +489,48 @@ class _Runner:
         await self.events.put(event)
 
     async def audit(self, event_type: str, payload: Mapping[str, object]) -> None:
-        """Use the caller's audit seam with only stable, non-private metadata."""
-        if self.callbacks.emit_audit_event is not None:
-            try:
-                await _call_sync(
-                    self.callbacks,
-                    self.callbacks.emit_audit_event,
-                    event_type,
-                    dict(payload),
-                )
-            except Exception:  # noqa: BLE001, S110
-                # Audit is observational; its sink cannot change client state.
-                pass
+        """Send planned telemetry through its allowlisted audit boundary."""
+        try:
+            emit_planned_audit_event(event_type, dict(payload))
+        except Exception:  # noqa: BLE001, S110
+            # Audit is observational; its sink cannot change client state.
+            pass
+
+    async def legacy_tool_audit(
+        self, event_type: str, payload: Mapping[str, object]
+    ) -> None:
+        """Retain the existing callback seam with its pre-sanitized tool metadata."""
+        if self.callbacks.emit_audit_event is None:
+            return
+        try:
+            await _call_sync(
+                self.callbacks,
+                self.callbacks.emit_audit_event,
+                event_type,
+                dict(payload),
+            )
+        except Exception:  # noqa: BLE001, S110
+            # Audit is observational; its sink cannot change client state.
+            pass
+
+    def _task_audit_payload(self, runtime: _TaskRuntime) -> dict[str, object]:
+        return {
+            "task_id": runtime.task.task_id,
+            "root_task_id": runtime.root_id,
+            "parent_task_id": runtime.task.parent_id,
+            "subtree_rounds_used": self.prepared.budget.subtree_count(runtime.root_id),
+            "subtree_rounds_remaining": self.prepared.budget.subtree_remaining[
+                runtime.root_id
+            ],
+            "global_rounds_used": self.prepared.budget.global_used,
+            "global_rounds_remaining": self.prepared.budget.global_remaining,
+        }
+
+    def _evidence_counts(self) -> dict[str, int]:
+        return {
+            kind: sum(record.kind == kind for record in self.evidence.records)
+            for kind in ("schema", "path", "query", "calculation")
+        }
 
     async def account_usage(self, usage: TokenUsage) -> None:
         self.usage = _add_usage(self.usage, usage)
@@ -522,6 +555,9 @@ class _Runner:
             "budget_exhausted" if reason == "budget_exhausted" else "blocked"
         )
         runtime.reason = reason
+        payload = self._task_audit_payload(runtime)
+        payload.update({"progress": "task_blocked", "terminal_reason": reason})
+        await self.audit("task_progress", payload)
 
     async def execute_tool(
         self, runtime: _TaskRuntime, call: ToolCallEvent
@@ -538,6 +574,14 @@ class _Runner:
             planned_tool_call_event(runtime.task.task_id, call.id, call.name, call.args)
         )
         await self.audit(
+            "tool_call",
+            {
+                **self._task_audit_payload(runtime),
+                "canonical_call_identity": identity,
+                "duplicate": identity in self.call_cache,
+            },
+        )
+        await self.legacy_tool_audit(
             "planned_tool_call",
             {"task_id": runtime.task.task_id, "tool_name": call.name},
         )
@@ -577,6 +621,16 @@ class _Runner:
             planned_tool_result_event(runtime.task.task_id, call.id, call.name, result)
         )
         await self.audit(
+            "tool_result",
+            {
+                **self._task_audit_payload(runtime),
+                "call_hash": hashlib.sha256(identity.encode()).hexdigest(),
+                "duplicate": cached,
+                "progress": "evidence_added" if not cached else "duplicate_rejected",
+                "evidence_counts": self._evidence_counts(),
+            },
+        )
+        await self.legacy_tool_audit(
             "planned_tool_result",
             {
                 "task_id": runtime.task.task_id,
@@ -644,6 +698,14 @@ class _Runner:
                 result,
             )
             self.evidence.add(record, requirement=requirement)
+            await self.audit(
+                "evidence",
+                {
+                    **self._task_audit_payload(runtime),
+                    "progress": "evidence_added",
+                    "evidence_counts": self._evidence_counts(),
+                },
+            )
             manager = call.args.get("manager")
             if call.name in {"get_manager_schema", "query"} and isinstance(
                 manager, str
@@ -758,6 +820,8 @@ class _Runner:
         except RoundBudgetExhausted:
             await self.set_blocked(runtime, "budget_exhausted")
             return None
+        await self.audit("budget", self._task_audit_payload(runtime))
+        started = self.clock()
         try:
             provider = build_profile_provider(
                 profile_for_role(self.prepared.settings, runtime.role)
@@ -774,6 +838,27 @@ class _Runner:
                 _stage_remaining(self.deadline, self.clock),
             )
             await self.account_usage(result.usage)
+            await self.audit(
+                "usage",
+                {
+                    **self._task_audit_payload(runtime),
+                    "role": runtime.role,
+                    "input_tokens": result.usage.input_tokens,
+                    "output_tokens": result.usage.output_tokens,
+                },
+            )
+            await self.audit(
+                "latency",
+                {
+                    **self._task_audit_payload(runtime),
+                    "stage": "evidence",
+                    "stage_latency_ms": max(0, int((self.clock() - started) * 1000)),
+                    "task_latency_ms": max(
+                        0,
+                        int((self.clock() - (runtime.started_at or started)) * 1000),
+                    ),
+                },
+            )
         except asyncio.CancelledError:
             raise
         except InvalidProviderRoundError as exc:
@@ -802,6 +887,9 @@ class _Runner:
             )
             if valid_ids and self.requirements_satisfied(runtime):
                 runtime.status = "resolved"
+                payload = self._task_audit_payload(runtime)
+                payload.update({"progress": "task_resolved"})
+                await self.audit("task_progress", payload)
                 return None
             return "provider_failed"
         if kind == "block":
@@ -945,6 +1033,7 @@ class _Runner:
             await self.set_blocked(runtime, "deadline_exceeded")
             return
         runtime.status = "running"
+        runtime.started_at = self.clock()
         while runtime.status == "running":
             if _stage_remaining(self.deadline, self.clock) <= 0:
                 await self.set_blocked(runtime, "deadline_exceeded")
@@ -952,6 +1041,34 @@ class _Runner:
             before = self._progress_signature(runtime)
             candidates, _candidates_changed = self.resolve_candidates(runtime)
             runtime.local_passes += 1
+            source_categories = {
+                "exact manager name": "exact_name",
+                "exact catalog alias": "exact_alias",
+                "catalog domain": "catalog_domain",
+                "catalog aliases": "catalog_alias",
+                "catalog use_when": "catalog_use_when",
+                "schema description": "schema_description",
+                "schema fields": "schema_field",
+                "schema filters": "schema_filter",
+                "schema relations": "schema_relation",
+            }
+            sources: set[str] = set()
+            for candidate in candidates:
+                matches = candidate["matches"]
+                if not isinstance(matches, list):
+                    continue
+                for source in matches:
+                    if isinstance(source, str) and source in source_categories:
+                        sources.add(source_categories[source])
+            await self.audit(
+                "candidate",
+                {
+                    **self._task_audit_payload(runtime),
+                    "candidate_count": len(candidates),
+                    "match_sources": sorted(sources),
+                    "local_passes": runtime.local_passes,
+                },
+            )
             if runtime.local_passes >= 10:
                 await self.set_blocked(runtime, "manager_unresolved")
                 return
@@ -963,6 +1080,16 @@ class _Runner:
                     path_depth=runtime.path_depth,
                     prior_failure=False,
                 )
+            await self.audit(
+                "route",
+                {
+                    **self._task_audit_payload(runtime),
+                    "role": runtime.role,
+                    "route": "escalated" if runtime.fallback_used else "selected",
+                    "escalated": runtime.fallback_used,
+                    "trust_group_valid": True,
+                },
+            )
             failure_reason = await self._execute_one_pass(runtime, candidates)
             after = self._progress_signature(runtime)
             await self._apply_pass_outcome(
@@ -1129,8 +1256,16 @@ async def iter_planned_read_events(
         await asyncio.gather(execution, return_exceptions=True)
     result = runner.result()
     prepared.result = result
+    coverage = {
+        "resolved": result.coverage.resolved,
+        "total": result.coverage.total,
+    }
+    await runner.audit("coverage", {"coverage": coverage})
     if result.coverage.resolved == 0:
         reason = next(iter(result.reasons.values()), "provider_failed")
+        await runner.audit(
+            "terminal", {"coverage": coverage, "terminal_reason": reason}
+        )
         yield planned_error_event(reason)
         return
     try:
@@ -1150,19 +1285,36 @@ async def iter_planned_read_events(
         )
         for usage in synthesis.attempt_usages:
             await runner.account_usage(usage)
+            await runner.audit(
+                "usage",
+                {
+                    "role": "synthesizer",
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                },
+            )
     except SynthesisFailedError as exc:
         for usage in exc.attempt_usages:
             await runner.account_usage(usage)
+        await runner.audit(
+            "terminal", {"coverage": coverage, "terminal_reason": "synthesis_failed"}
+        )
         yield planned_error_event("synthesis_failed")
         return
     except RoundBudgetExhausted as exc:
         for usage in getattr(exc, "attempt_usages", ()):
             await runner.account_usage(usage)
+        await runner.audit(
+            "terminal", {"coverage": coverage, "terminal_reason": "synthesis_failed"}
+        )
         yield planned_error_event("synthesis_failed")
         return
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001
+        await runner.audit(
+            "terminal", {"coverage": coverage, "terminal_reason": "synthesis_failed"}
+        )
         yield planned_error_event("synthesis_failed")
         return
     if conversation is not None:

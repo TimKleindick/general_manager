@@ -5,18 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from general_manager.chat.errors import PLANNED_PUBLIC_MESSAGES, planned_public_error
 from general_manager.chat.providers.base import TokenUsage
-
-
-PLANNED_PUBLIC_MESSAGES = {
-    "invalid_plan": "I could not prepare a safe plan for that request.",
-    "manager_unresolved": "I could not resolve the required application data.",
-    "dependency_blocked": "A required part of the request could not be completed.",
-    "budget_exhausted": "The request reached its execution limit.",
-    "deadline_exceeded": "The request reached its time limit.",
-    "provider_failed": "The provider could not complete the request.",
-    "synthesis_failed": "I could not produce a grounded answer from the available data.",
-}
 
 
 def _valid_reason(reason: object) -> str:
@@ -84,7 +74,7 @@ def planned_done_event(
 def planned_error_event(reason: str) -> dict[str, str]:
     """Build the sole terminal event when no grounded answer exists."""
     reason = _valid_reason(reason)
-    return {"type": "error", "code": reason, "message": PLANNED_PUBLIC_MESSAGES[reason]}
+    return planned_public_error(reason).as_event()
 
 
 def planned_tool_call_event(
