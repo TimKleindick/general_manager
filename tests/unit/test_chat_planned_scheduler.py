@@ -305,15 +305,18 @@ class _StableExactResolver:
         return (ManagerCandidate("PartManager", ("exact manager name",), True),)
 
 
-def _run_failure_sequence(failure_mode: str, *, attempts: int) -> tuple[Any, list[str]]:
-    failure = {
+def _failure_response(failure_mode: str) -> object:
+    return {
         "provider_none": _ProviderFailure(),
         "malformed_action": {"unexpected": "action"},
         "failed_tool": ToolCallEvent(
             "query", "query", {"manager": "PartManager", "fields": ["name"]}
         ),
     }[failure_mode]
-    _Executor.responses = [failure] * attempts
+
+
+def _run_failure_modes(failure_modes: tuple[str, ...]) -> tuple[Any, list[str]]:
+    _Executor.responses = [_failure_response(mode) for mode in failure_modes]
     _Executor.responses_by_task = {}
     _Executor.roles = []
     prepared = PreparedPlannedTurn.for_plan(
@@ -343,12 +346,18 @@ def _run_failure_sequence(failure_mode: str, *, attempts: int) -> tuple[Any, lis
 
 
 @pytest.mark.parametrize(
-    "failure_mode", ["provider_none", "malformed_action", "failed_tool"]
+    ("failure_mode", "expected_reason"),
+    [
+        ("provider_none", "provider_failed"),
+        ("malformed_action", "provider_failed"),
+        ("failed_tool", "manager_unresolved"),
+    ],
 )
 def test_two_normal_failures_then_two_fallback_failures_block(
     failure_mode: str,
+    expected_reason: str,
 ) -> None:
-    result, roles = _run_failure_sequence(failure_mode, attempts=4)
+    result, roles = _run_failure_modes((failure_mode,) * 4)
 
     assert roles == [
         "simple_executor",
@@ -356,7 +365,31 @@ def test_two_normal_failures_then_two_fallback_failures_block(
         "fallback_executor",
         "fallback_executor",
     ]
-    assert result.reasons["task_1"] in {"manager_unresolved", "provider_failed"}
+    assert result.reasons["task_1"] == expected_reason
+
+
+@pytest.mark.parametrize(
+    ("fallback_pair", "expected_reason"),
+    [
+        (("provider_none", "malformed_action"), "provider_failed"),
+        (("failed_tool", "failed_tool"), "manager_unresolved"),
+        (("failed_tool", "provider_none"), "manager_unresolved"),
+        (("provider_none", "failed_tool"), "manager_unresolved"),
+    ],
+)
+def test_fallback_terminal_reason_requires_two_provider_failures(
+    fallback_pair: tuple[str, str],
+    expected_reason: str,
+) -> None:
+    result, roles = _run_failure_modes(("failed_tool", "failed_tool", *fallback_pair))
+
+    assert roles == [
+        "simple_executor",
+        "simple_executor",
+        "fallback_executor",
+        "fallback_executor",
+    ]
+    assert result.reasons["task_1"] == expected_reason
 
 
 def test_real_progress_resets_consecutive_failure_count() -> None:
