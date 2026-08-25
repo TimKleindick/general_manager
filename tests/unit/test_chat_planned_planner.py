@@ -147,9 +147,65 @@ def test_write_families_are_conservatively_guarded(user_text: str) -> None:
     assert _is_requested_write(user_text) is True
 
 
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "insert a part",
+        "please deactivate the part",
+        "would like you to insert a part",
+        "show parts then merge these records",
+        "show parts; also purge the old record",
+    ],
+)
+def test_command_shaped_write_requests_are_guarded(user_text: str) -> None:
+    assert _is_requested_write(user_text) is True
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "show the update history for this part",
+        "show archive status",
+        "why was this cancelled?",
+    ],
+)
+def test_read_mentions_of_write_words_do_not_force_mutation(user_text: str) -> None:
+    assert _is_requested_write(user_text) is False
+
+
 @override_settings(GENERAL_MANAGER={"CHAT": {"allowed_mutations": ["archivePart"]}})
 def test_configured_mutation_identifier_is_conservatively_guarded() -> None:
     assert _is_requested_write("run archivePart for the obsolete item") is True
+
+
+@override_settings(GENERAL_MANAGER={"CHAT": {"allowed_mutations": ["archivePart"]}})
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "execute archivePart for the obsolete item",
+        "RUN ARCHIVEPART for the obsolete item",
+        "archivePart the obsolete item",
+    ],
+)
+def test_configured_mutation_identifier_requires_command_context(
+    user_text: str,
+) -> None:
+    assert _is_requested_write(user_text) is True
+
+
+@override_settings(GENERAL_MANAGER={"CHAT": {"allowed_mutations": ["archivePart"]}})
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "what does archivePart do?",
+        "show archivePart usage",
+        "show notarchivePartly status",
+    ],
+)
+def test_configured_mutation_identifier_mentions_do_not_force_mutation(
+    user_text: str,
+) -> None:
+    assert _is_requested_write(user_text) is False
 
 
 def test_planner_keeps_untrusted_context_and_reference_data_out_of_system_messages() -> (
