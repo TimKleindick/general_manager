@@ -244,8 +244,8 @@ def validate_chat_settings() -> dict[str, Any]:
         from general_manager.chat.planned.config import get_planned_chat_settings
 
         planned_settings = get_planned_chat_settings()
-        from general_manager.chat.planned.config import build_profile_provider
+        from general_manager.chat.planned.config import validate_profile_provider
 
         for profile in planned_settings.profiles.values():
-            build_profile_provider(profile)
+            validate_profile_provider(profile)
     return settings

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
+from inspect import signature
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -33,6 +35,7 @@ _PLANNED_MAPPING = "planned must be a mapping."
 _ROLES_MAPPING = "roles must be a mapping."
 _REQUIRED_ROLES_MESSAGE = "roles must define all required roles: {roles}."
 _ROLE_PROFILE = "roles must map role names to profile names."
+_UNKNOWN_ROLES = "roles contain unknown roles: {roles}."
 _UNKNOWN_PROFILE = "role {role!r} references unknown profile {profile_name!r}."
 _ONE_TRUST_GROUP = "all mapped profiles must use one trust_group."
 _UNKNOWN_ROLE = "unknown role {role!r}."
@@ -94,7 +97,7 @@ def _implicit_profile(settings: Mapping[str, Any]) -> ProviderProfile:
     return ProviderProfile(
         name="default",
         provider_path=str(settings["provider"]),
-        provider_config=MappingProxyType(dict(provider_config)),
+        provider_config=MappingProxyType(deepcopy(dict(provider_config))),
         trust_group="default",
     )
 
@@ -129,7 +132,7 @@ def _normalize_profiles(
         profiles[name] = ProviderProfile(
             name=name,
             provider_path=provider_path,
-            provider_config=MappingProxyType(dict(provider_config)),
+            provider_config=MappingProxyType(deepcopy(dict(provider_config))),
             trust_group=trust_group,
         )
     return MappingProxyType(profiles), True
@@ -165,6 +168,9 @@ def get_planned_chat_settings() -> PlannedChatSettings:
     missing_roles = [role for role in REQUIRED_ROLES if role not in raw_roles]
     if missing_roles:
         raise _error(_detail(_REQUIRED_ROLES_MESSAGE, roles=", ".join(missing_roles)))
+    unknown_roles = sorted(set(raw_roles) - set(REQUIRED_ROLES))
+    if unknown_roles:
+        raise _error(_detail(_UNKNOWN_ROLES, roles=", ".join(unknown_roles)))
     roles: dict[str, str] = {}
     for role, profile_name in raw_roles.items():
         if not isinstance(role, str) or not isinstance(profile_name, str):
@@ -214,3 +220,18 @@ def build_profile_provider(profile: ProviderProfile) -> BaseLLMProvider:
             raise _error(_detail(_CONFIGURED_CONSTRUCTION, profile_name=profile.name))
         return cast(BaseLLMProvider, from_config(profile.provider_config))
     return cast(BaseLLMProvider, provider_cls())
+
+
+def validate_profile_provider(profile: ProviderProfile) -> BaseLLMProvider:
+    """Build a profile provider and run its supported configuration check."""
+    provider = build_profile_provider(profile)
+    check_configuration = getattr(provider, "check_configuration", None)
+    if not callable(check_configuration):
+        return provider
+    try:
+        signature(check_configuration).bind(profile.provider_config)
+    except TypeError:
+        check_configuration()
+    else:
+        check_configuration(profile.provider_config)
+    return provider
