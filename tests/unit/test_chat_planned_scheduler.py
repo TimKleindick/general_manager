@@ -25,12 +25,14 @@ from general_manager.chat.providers.base import DoneEvent, TokenUsage, ToolCallE
 class _Executor:
     responses: ClassVar[list[object]] = []
     responses_by_task: ClassVar[dict[str, list[object]]] = {}
+    calls: ClassVar[list[list[object]]] = []
 
     @classmethod
     def from_config(cls, _config: object) -> _Executor:
         return cls()
 
     async def complete(self, _messages: list[object], _tools: list[object]):
+        type(self).calls.append(_messages)
         content = _messages[-1].content
         reference = json.loads(
             content.removeprefix("REFERENCE_DATA=").removeprefix(
@@ -175,6 +177,83 @@ def test_failed_dependency_blocks_only_its_dependent_task() -> None:
 
 async def _collect(iterator: Any) -> list[dict[str, Any]]:
     return [event async for event in iterator]
+
+
+class _ExactResolver:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def resolve(self, query: str, anchors: tuple[str, ...] = ()) -> tuple[Any, ...]:
+        from general_manager.chat.planned.resolver import ManagerCandidate
+
+        self.calls.append((query, anchors))
+        return (
+            ManagerCandidate(
+                f"PartManager{len(self.calls)}", ("exact manager name",), True
+            ),
+        )
+
+
+def test_resolver_passes_are_free_and_cap_at_ten_before_provider_budget() -> None:
+    task = _task("task_1")
+    _Executor.responses = [{"action": "complete", "evidence_ids": ["missing"]}] * 12
+    _Executor.responses_by_task = {}
+    resolver = _ExactResolver()
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (task,)),
+        _settings(),
+        user_text="show parts",
+        resolver=resolver,
+    )
+
+    asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(execute_tool=lambda *_args: {}),
+            )
+        )
+    )
+
+    assert len(resolver.calls) == 10
+    assert prepared.budget.subtree_count("task_1") == 9
+
+
+def test_executor_reference_includes_the_declared_requirement_operation() -> None:
+    task = PlannedTask(
+        task_id="task_1",
+        objective="find ratio",
+        depends_on=(),
+        requirements=(EvidenceRequirement("ratio", "calculation", "ratio", "ratio"),),
+        completion_criteria=("ratio",),
+        routing_features=("requires_calculation",),
+    )
+    _Executor.responses = [{"action": "block", "reason": "manager_unresolved"}]
+    _Executor.responses_by_task = {}
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (task,)), _settings(), user_text="ratio"
+    )
+    asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(execute_tool=lambda *_args: {}),
+            )
+        )
+    )
+
+    reference = json.loads(
+        _Executor.calls[-1][-1].content.removeprefix("REFERENCE_DATA=")
+    )
+    assert reference["task"]["requirements"] == [
+        {"requirement_id": "ratio", "kind": "calculation", "operation": "ratio"}
+    ]
 
 
 def test_executor_rejects_mutate_before_any_public_or_private_callback() -> None:
