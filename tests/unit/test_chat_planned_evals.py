@@ -133,6 +133,8 @@ def test_planned_mutation_case_falls_back_to_unchanged_legacy_turn() -> None:
     assert result.diagnostics["orchestration"] == {
         "strategy": "legacy",
         "reason": "mutation",
+        "coverage": {"resolved": 0, "total": 0},
+        "terminal_reason": "mutation",
     }
     assert provider.calls[0]["messages"][-1].content == "Update the Apollo record."
     assert provider.calls[0]["tools"][0].name == "query"
@@ -207,11 +209,13 @@ def test_every_planned_dataset_case_executes_its_declared_contract(
 
     assert result.error is None
     if case_name == "mutation_fallback":
-        assert result.diagnostics["orchestration"] == {
-            "strategy": "legacy",
-            "reason": "mutation",
-        }
-        assert result.answer == "Apollo"
+        assert result.diagnostics["orchestration"]["coverage"] == expected["coverage"]
+        assert (
+            result.diagnostics["orchestration"]["terminal_reason"]
+            == expected["terminal_reason"]
+        )
+        assert [call["name"] for call in result.tool_calls] == expected["tool_sequence"]
+        assert all(token in result.answer for token in expected["answer_tokens"])
         return
     assert result.diagnostics["orchestration"]["coverage"] == expected["coverage"]
     assert (

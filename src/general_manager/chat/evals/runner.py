@@ -2979,7 +2979,12 @@ async def _run_planned_case(
                     run_metadata=run_metadata,
                 )
                 result.diagnostics = {
-                    "orchestration": {"strategy": "legacy", "reason": "mutation"}
+                    "orchestration": {
+                        "strategy": "legacy",
+                        "reason": "mutation",
+                        "coverage": {"resolved": 0, "total": 0},
+                        "terminal_reason": "mutation",
+                    }
                 }
                 result.fingerprint = stable_hash(
                     {"case": case.name, "strategy": "legacy", "answer": result.answer}
