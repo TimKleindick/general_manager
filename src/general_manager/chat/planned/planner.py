@@ -48,16 +48,26 @@ class PlanningResult:
     usage: TokenUsage
 
 
-_WRITE_VERB = re.compile(
-    r"\b(?:create|update|delete|modify|remove|rename|archive|publish|assign|"
+_WRITE_COMMAND = re.compile(
+    r"^(?:create|update|delete|modify|remove|rename|archive|publish|assign|"
     r"replace|write|mutate|cancel|insert|deactivate|activate|enable|disable|"
     r"merge|upsert|purge|erase|destroy|revoke|grant|attach|detach)\b",
     re.IGNORECASE,
 )
 _ADD_OR_CHANGE_RECORD = re.compile(
-    r"\b(?:add|change|set)\s+(?:a|an|the|this|that|new)?\s*"
+    r"^(?:add|change|set)\s+(?:a|an|the|this|that|new)?\s*"
     r"(?:record|item|part|manager|user|field|value|entry)\b",
     re.IGNORECASE,
+)
+_COMMAND_PREFIX = re.compile(
+    r"^\s*(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+|"
+    r"i\s+(?:want|need)(?:\s+you)?(?:\s+to)?\s+|"
+    r"(?:i\s+)?would\s+like\s+you\s+to\s+|let's\s+)",
+    re.IGNORECASE,
+)
+_CLAUSE_SPLIT = re.compile(r"\s*(?:;|\b(?:and|then|also)\b)\s*", re.IGNORECASE)
+_MUTATION_INVOCATION = re.compile(
+    r"^(?:run|execute|call|perform|trigger)\s+", re.IGNORECASE
 )
 
 _PLAN_SCHEMA: dict[str, object] = {
@@ -176,21 +186,50 @@ def _is_requested_write(user_text: str) -> bool:
     and configured GraphQL mutation identifiers.  A false positive remains
     safer than exposing planned read-only execution to a requested write.
     """
-    if _WRITE_VERB.search(user_text) or _ADD_OR_CHANGE_RECORD.search(user_text):
-        return True
+    mutation_identifiers = _configured_mutation_identifiers()
+    for clause in _CLAUSE_SPLIT.split(user_text):
+        command = _strip_command_prefix(clause)
+        if _WRITE_COMMAND.match(command) or _ADD_OR_CHANGE_RECORD.match(command):
+            return True
+        if _invokes_configured_mutation(command, mutation_identifiers):
+            return True
+    return False
+
+
+def _configured_mutation_identifiers() -> tuple[str, ...]:
+    """Return configured mutation names without trusting arbitrary settings shapes."""
     chat_settings = get_chat_settings()
-    mutation_identifiers: list[object] = []
+    identifiers: list[str] = []
     for key in ("allowed_mutations", "confirm_mutations"):
         configured = chat_settings.get(key, ())
         if isinstance(configured, (list, tuple)):
-            mutation_identifiers.extend(configured)
-    normalized_request = user_text.casefold()
-    return any(
-        isinstance(identifier, str)
-        and identifier
-        and identifier.casefold() in normalized_request
-        for identifier in mutation_identifiers
-    )
+            identifiers.extend(
+                identifier
+                for identifier in configured
+                if isinstance(identifier, str) and identifier
+            )
+    return tuple(identifiers)
+
+
+def _strip_command_prefix(clause: str) -> str:
+    """Remove only leading polite or intent prefixes from one request clause."""
+    command = clause.strip()
+    while match := _COMMAND_PREFIX.match(command):
+        command = command[match.end() :].lstrip()
+    return command
+
+
+def _invokes_configured_mutation(command: str, identifiers: tuple[str, ...]) -> bool:
+    """Match configured mutation identifiers only as command targets, not mentions."""
+    invocation = _MUTATION_INVOCATION.sub("", command, count=1)
+    for identifier in identifiers:
+        if re.match(
+            rf"{re.escape(identifier)}(?=$|[^0-9A-Za-z_])",
+            invocation,
+            re.IGNORECASE,
+        ):
+            return True
+    return False
 
 
 def _request_messages(
