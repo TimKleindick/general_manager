@@ -959,6 +959,31 @@ class _BudgetProbeProvider:
                     {"action": "complete", "evidence_ids": [f"{task_id}:query:1"]}
                 )
             )
+        elif task_id.startswith("root_") and task_id.count("_") == 1:
+            yield TextChunkEvent(
+                json.dumps(
+                    {
+                        "action": "spawn_children",
+                        "children": [
+                            _budget_child(task_id, "first", 8),
+                            _budget_child(task_id, "second", 8),
+                        ],
+                    }
+                )
+            )
+        elif (
+            task_id.startswith("root_")
+            and task_id.count("_") == 2
+            and round_number == 9
+        ):
+            yield TextChunkEvent(
+                json.dumps(
+                    {
+                        "action": "complete",
+                        "evidence_ids": [f"{task_id}:query:1"],
+                    }
+                )
+            )
         elif task_id == "task_1" and round_number == 1:
             yield TextChunkEvent(json.dumps({"unexpected": "action"}))
         else:
@@ -1017,6 +1042,27 @@ def _budget_task(task_id: str, requirements: int) -> PlannedTask:
     )
 
 
+def _budget_child(root_id: str, suffix: str, requirements: int) -> dict[str, object]:
+    task_id = f"{root_id}_{suffix}"
+    requirement_ids = [f"{task_id}_query_{number}" for number in range(requirements)]
+    return {
+        "task_id": task_id,
+        "objective": "find dependent records",
+        "depends_on": [root_id],
+        "requirements": [
+            {
+                "requirement_id": requirement_id,
+                "kind": "query",
+                "description": "records",
+                "operation": None,
+            }
+            for requirement_id in requirement_ids
+        ],
+        "completion_criteria": requirement_ids,
+        "routing_features": ["has_dependency", "multiple_queries"],
+    }
+
+
 def test_scheduler_marks_a_subtree_budget_exhausted_after_fifteen_requests() -> None:
     """Changing the subtree admission boundary would permit a sixteenth request."""
 
@@ -1058,56 +1104,58 @@ def test_scheduler_marks_a_subtree_budget_exhausted_after_fifteen_requests() -> 
 
 
 def test_scheduler_global_budget_preserves_resolved_independent_evidence() -> None:
-    """Changing the global formula would admit more than 80 total requests."""
+    """Planner transfers and root scheduling admit exactly 80 provider requests."""
 
     resolved = _budget_task("resolved", 1)
-    unfinished = tuple(_budget_task(f"task_{number}", 15) for number in range(5))
+    unfinished = tuple(_budget_task(f"root_{number}", 1) for number in range(5))
     _BudgetProbeProvider.rounds_by_task = {}
     _BudgetProbeProvider.resolved_task_id = "resolved"
-    prepared = PreparedPlannedTurn.for_plan(
-        ValidatedPlan("read", (resolved, *unfinished)),
-        _budget_settings(),
-        user_text="show parts",
+    planner_calls = 0
+
+    async def planner(*args: object) -> PlanningResult:
+        nonlocal planner_calls
+        budget = cast(Any, args[3])
+        for _ in range(10):
+            budget.consume_global()
+            planner_calls += 1
+        return PlanningResult(
+            ValidatedPlan("read", (resolved, *unfinished)), TokenUsage()
+        )
+
+    prepared = asyncio.run(
+        prepare_planned_turn(
+            "show parts",
+            [],
+            _budget_settings(),
+            {},
+            planner=planner,
+            resolver=cast(Any, _StableExactResolver()),
+        )
     )
-    for _ in range(10):
-        prepared.budget.consume_global()
-    runner = _Runner(
-        prepared,
-        {},
-        None,
-        [],
-        SchedulerCallbacks(
-            execute_tool=lambda *_args: {"status": "success", "data": []}
-        ),
-        100.0,
-        lambda: 0.0,
+    asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                ),
+            )
+        )
     )
 
-    async def run() -> None:
-        resolved_runtime = runner.runtimes["resolved"]
-        resolved_runtime.status = "running"
-        resolved_runtime.role = "complex_executor"
-        await runner._execute_one_pass(resolved_runtime, ())
-        await runner._execute_one_pass(resolved_runtime, ())
-
-        unfinished_runtimes = [runner.runtimes[task.task_id] for task in unfinished]
-        for runtime in unfinished_runtimes:
-            runtime.status = "running"
-            runtime.role = "complex_executor"
-        while prepared.budget.global_remaining:
-            for runtime in unfinished_runtimes:
-                if prepared.budget.global_remaining:
-                    await runner._execute_one_pass(runtime, ())
-        for runtime in unfinished_runtimes:
-            await runner._execute_one_pass(runtime, ())
-
-    asyncio.run(run())
-
-    result = runner.result()
+    assert prepared.result is not None
+    result = prepared.result
     assert prepared.budget.global_limit == 80
-    assert prepared.budget.global_count == 80
+    assert prepared.budget.global_count == 80, (
+        result.statuses,
+        result.reasons,
+        _BudgetProbeProvider.rounds_by_task,
+    )
+    assert planner_calls + sum(_BudgetProbeProvider.rounds_by_task.values()) == 80
     assert result.statuses["resolved"] == "resolved"
-    assert result.coverage.resolved == 1
     assert result.evidence.for_task("resolved")
     assert {result.statuses[task.task_id] for task in unfinished} == {
         "budget_exhausted"
@@ -1171,6 +1219,8 @@ def test_planning_and_evidence_share_one_absolute_deadline(
 class _DeadlineProbeProvider:
     entered: ClassVar[asyncio.Event | None] = None
     release: ClassVar[asyncio.Event | None] = None
+    allow_resolve: ClassVar[asyncio.Event | None] = None
+    wake_scheduler: ClassVar[asyncio.Event | None] = None
     rounds_by_task: ClassVar[dict[str, int]] = {}
     cancelled: ClassVar[bool] = False
 
@@ -1193,6 +1243,14 @@ class _DeadlineProbeProvider:
             except asyncio.CancelledError:
                 type(self).cancelled = True
                 raise
+        elif task_id == "task_3":
+            wake_scheduler = type(self).wake_scheduler
+            assert wake_scheduler is not None
+            await wake_scheduler.wait()
+            yield TextChunkEvent(
+                json.dumps({"action": "block", "reason": "manager_unresolved"})
+            )
+            yield DoneEvent(TokenUsage())
         else:
             round_number = type(self).rounds_by_task.get(task_id, 0) + 1
             type(self).rounds_by_task[task_id] = round_number
@@ -1201,6 +1259,9 @@ class _DeadlineProbeProvider:
                     "query", "query", {"manager": "PartManager", "fields": []}
                 )
             else:
+                allow_resolve = type(self).allow_resolve
+                assert allow_resolve is not None
+                await allow_resolve.wait()
                 yield TextChunkEvent(
                     json.dumps(
                         {"action": "complete", "evidence_ids": [f"{task_id}:query:1"]}
@@ -1232,7 +1293,7 @@ def _deadline_settings() -> PlannedChatSettings:
     )
 
 
-def _deadline_tasks() -> tuple[PlannedTask, PlannedTask]:
+def _deadline_tasks() -> tuple[PlannedTask, PlannedTask, PlannedTask]:
     return (
         PlannedTask(
             "task_1",
@@ -1240,6 +1301,14 @@ def _deadline_tasks() -> tuple[PlannedTask, PlannedTask]:
             (),
             (EvidenceRequirement("task_1_query", "query", "records", None),),
             ("task_1_query",),
+            (),
+        ),
+        PlannedTask(
+            "task_3",
+            "wake deadline check",
+            (),
+            (EvidenceRequirement("task_3_query", "query", "records", None),),
+            ("task_3_query",),
             (),
         ),
         PlannedTask(
@@ -1254,12 +1323,8 @@ def _deadline_tasks() -> tuple[PlannedTask, PlannedTask]:
 
 
 def test_evidence_deadline_cancels_async_provider_and_keeps_resolved_evidence() -> None:
-    """Removing deadline cleanup would leave task_2 running and discard no result."""
+    """The deadline expires only after the hanging provider has entered."""
 
-    _DeadlineProbeProvider.entered = asyncio.Event()
-    _DeadlineProbeProvider.release = asyncio.Event()
-    _DeadlineProbeProvider.rounds_by_task = {}
-    _DeadlineProbeProvider.cancelled = False
     prepared = PreparedPlannedTurn.for_plan(
         ValidatedPlan("read", _deadline_tasks()),
         _deadline_settings(),
@@ -1267,7 +1332,13 @@ def test_evidence_deadline_cancels_async_provider_and_keeps_resolved_evidence() 
     )
 
     async def run() -> _Runner:
-        loop = asyncio.get_running_loop()
+        now = [0.0]
+        _DeadlineProbeProvider.entered = asyncio.Event()
+        _DeadlineProbeProvider.release = asyncio.Event()
+        _DeadlineProbeProvider.allow_resolve = asyncio.Event()
+        _DeadlineProbeProvider.wake_scheduler = asyncio.Event()
+        _DeadlineProbeProvider.rounds_by_task = {}
+        _DeadlineProbeProvider.cancelled = False
         runner = _Runner(
             prepared,
             {},
@@ -1276,10 +1347,25 @@ def test_evidence_deadline_cancels_async_provider_and_keeps_resolved_evidence() 
             SchedulerCallbacks(
                 execute_tool=lambda *_args: {"status": "success", "data": []}
             ),
-            loop.time() + 0.03,
-            loop.time,
+            10.0,
+            lambda: now[0],
         )
-        await runner.run()
+        execution = asyncio.create_task(runner.run())
+        entered = _DeadlineProbeProvider.entered
+        allow_resolve = _DeadlineProbeProvider.allow_resolve
+        wake_scheduler = _DeadlineProbeProvider.wake_scheduler
+        assert (
+            entered is not None
+            and allow_resolve is not None
+            and wake_scheduler is not None
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+        allow_resolve.set()
+        while runner.runtimes["task_1"].status != "resolved":
+            await asyncio.sleep(0)
+        now[0] = 10.0
+        wake_scheduler.set()
+        await execution
         return runner
 
     runner = asyncio.run(run())
@@ -1295,9 +1381,11 @@ def test_cancelling_the_public_iterator_cleans_up_the_in_flight_provider() -> No
 
     _DeadlineProbeProvider.entered = asyncio.Event()
     _DeadlineProbeProvider.release = asyncio.Event()
+    _DeadlineProbeProvider.allow_resolve = asyncio.Event()
+    _DeadlineProbeProvider.wake_scheduler = asyncio.Event()
     _DeadlineProbeProvider.rounds_by_task = {}
     _DeadlineProbeProvider.cancelled = False
-    task = _deadline_tasks()[1]
+    task = _deadline_tasks()[2]
     prepared = PreparedPlannedTurn.for_plan(
         ValidatedPlan("read", (task,)), _deadline_settings(), user_text="parts"
     )

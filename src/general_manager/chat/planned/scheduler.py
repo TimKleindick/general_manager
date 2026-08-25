@@ -232,7 +232,10 @@ async def prepare_planned_turn(
     """Plan once and preserve all planner usage for later terminal accounting."""
     started = (clock or asyncio.get_running_loop().time)()
     deadline = started + settings.evidence_timeout_seconds
-    budget = RoundBudget(())
+    # The plan has not declared its roots yet.  Use the smallest possible
+    # final-turn global capacity while planner requests are being counted, then
+    # transfer those charges into the validated plan's exact root-sized ledger.
+    budget = RoundBudget(("planning",))
     remaining = _stage_remaining(deadline, clock)
     if remaining <= 0:
         raise TimeoutError("planned evidence deadline elapsed")  # noqa: TRY003
@@ -866,7 +869,12 @@ class _Runner:
             child_runtime = self.runtimes[child_id]
             await self.run_task(child_runtime)
             if child_runtime.status != "resolved":
-                await self.set_blocked(runtime, "dependency_blocked")
+                await self.set_blocked(
+                    runtime,
+                    "budget_exhausted"
+                    if child_runtime.status == "budget_exhausted"
+                    else "dependency_blocked",
+                )
                 return None
             # A child is evidence work owned by its root.  Relink a detached
             # immutable snapshot to compatible still-open parent requirements,
