@@ -62,7 +62,7 @@ _ADD_OR_CHANGE_RECORD = re.compile(
 _COMMAND_PREFIX = re.compile(
     r"^\s*(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+|"
     r"i\s+(?:want|need)(?:\s+you)?(?:\s+to)?\s+|"
-    r"(?:i\s+)?would\s+like\s+you\s+to\s+|let's\s+)",
+    r"(?:i\s+)?would\s+like\s+(?:you\s+)?to\s+|let's\s+)",
     re.IGNORECASE,
 )
 _CLAUSE_SPLIT = re.compile(r"\s*(?:;|\b(?:and|then|also)\b)\s*", re.IGNORECASE)
