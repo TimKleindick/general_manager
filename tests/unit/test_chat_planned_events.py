@@ -7,12 +7,16 @@ import json
 import pytest
 
 from general_manager.chat.planned.events import (
+    PLANNED_PUBLIC_MESSAGES,
     planned_done_event,
     planned_error_event,
     planned_tool_call_event,
     planned_tool_result_event,
 )
 from general_manager.chat.providers.base import TokenUsage
+
+
+PRIVATE_MARKERS = ("profile", "trust_group", "raw_plan", "Traceback", "catalog")
 
 
 def test_partial_done_event_contains_coverage_without_private_data() -> None:
@@ -32,7 +36,12 @@ def test_partial_done_event_contains_coverage_without_private_data() -> None:
             "unresolved": [{"task_id": "task_3", "reason": "deadline_exceeded"}],
         },
     }
-    assert "profile" not in json.dumps(event)
+    payload = json.dumps(event)
+    assert all(marker not in payload for marker in PRIVATE_MARKERS)
+    assert all(
+        item["reason"] in PLANNED_PUBLIC_MESSAGES
+        for item in event["orchestration"]["unresolved"]
+    )
 
 
 def test_complete_done_event_omits_unresolved_tasks() -> None:
@@ -63,6 +72,8 @@ def test_error_event_uses_only_stable_reason(reason: str) -> None:
     assert event["type"] == "error"
     assert event["code"] == reason
     assert isinstance(event["message"], str)
+    assert set(event) == {"type", "code", "message"}
+    assert all(marker not in json.dumps(event) for marker in PRIVATE_MARKERS)
 
 
 def test_tool_event_builders_add_task_id_and_preserve_legacy_fields() -> None:
