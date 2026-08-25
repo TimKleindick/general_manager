@@ -1024,13 +1024,24 @@ class _Runner:
             for task_id, runtime in self.runtimes.items()
             if runtime.reason is not None
         }
+        root_runtimes = {
+            task_id: runtime
+            for task_id, runtime in self.runtimes.items()
+            if runtime.task.parent_id is None
+        }
         resolved_ids = [
-            task_id for task_id, status in statuses.items() if status == "resolved"
+            task_id
+            for task_id, runtime in root_runtimes.items()
+            if runtime.status == "resolved"
         ]
         coverage = PlannedCoverage(
             resolved=len(resolved_ids),
-            total=len(self.runtimes),
-            unresolved=tuple((task_id, reason) for task_id, reason in reasons.items()),
+            total=len(root_runtimes),
+            unresolved=tuple(
+                (task_id, reason)
+                for task_id, reason in reasons.items()
+                if task_id in root_runtimes
+            ),
         )
         return PlannedExecutionResult(
             statuses, reasons, self.evidence, coverage, self.usage
@@ -1099,6 +1110,7 @@ async def iter_planned_read_events(
                     task_id
                     for task_id, status in result.statuses.items()
                     if status == "resolved"
+                    and runner.runtimes[task_id].task.parent_id is None
                 ]
             ),
             prepared.settings,
