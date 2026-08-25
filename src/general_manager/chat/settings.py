@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from difflib import get_close_matches
 from importlib import import_module
+from collections.abc import Mapping
 from typing import Any, cast
 
 from django.utils.module_loading import import_string
@@ -74,6 +75,11 @@ class ChatConfigurationError(ValueError):
     def invalid_confirm_mutations(cls, names: str) -> ChatConfigurationError:
         """Build the error for confirmed mutations not allowed for chat."""
         return cls(f"confirm_mutations must also be in allowed_mutations: {names}")
+
+    @classmethod
+    def invalid_planned_settings(cls, detail: str) -> ChatConfigurationError:
+        """Build an error for invalid planned-chat configuration."""
+        return cls(f"Invalid planned chat settings: {detail}")
 
 
 class ProviderDependencyError(Exception):
@@ -233,4 +239,13 @@ def validate_chat_settings() -> dict[str, Any]:
     if unknown_confirmations:
         joined = ", ".join(unknown_confirmations)
         raise ChatConfigurationError.invalid_confirm_mutations(joined)
+    planned = settings.get("planned", {})
+    if isinstance(planned, Mapping) and bool(planned.get("enabled", False)):
+        from general_manager.chat.planned.config import get_planned_chat_settings
+
+        planned_settings = get_planned_chat_settings()
+        from general_manager.chat.planned.config import build_profile_provider
+
+        for profile in planned_settings.profiles.values():
+            build_profile_provider(profile)
     return settings

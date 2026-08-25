@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from importlib.util import find_spec
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Self
 
 from general_manager.chat.providers._shared import (
     AsyncIterator,
@@ -32,6 +34,20 @@ class OpenAIProvider(BaseLLMProvider):
 
     required_extra = "chat-openai"
 
+    def __init__(self, config: Mapping[str, Any] | None = None) -> None:
+        """Create a provider with explicit config or legacy chat settings."""
+        self._instance_provider_config = MappingProxyType(self._provider_config(config))
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> Self:
+        """Create a provider with a copied profile configuration."""
+        return cls(config)
+
+    @property
+    def provider_config(self) -> Mapping[str, Any]:
+        """Return the read-only configuration for this provider instance."""
+        return self._instance_provider_config
+
     @classmethod
     def check_configuration(cls) -> None:
         """Validate that the OpenAI SDK is available before use."""
@@ -39,20 +55,21 @@ class OpenAIProvider(BaseLLMProvider):
             raise OpenAIDependencyImportError()
 
     @staticmethod
-    def _provider_config() -> dict[str, Any]:
-        settings = get_chat_settings()
-        configured = settings.get("provider_config", {})
-        config = dict(configured if isinstance(configured, dict) else {})
+    def _provider_config(configured: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        if configured is None:
+            settings = get_chat_settings()
+            configured = settings.get("provider_config", {})
+        config = dict(configured if isinstance(configured, Mapping) else {})
         config.setdefault("model", "gpt-4.1-mini")
         config.setdefault("timeout_seconds", 60)
         return config
 
     @classmethod
-    def _build_async_client(cls) -> Any:
-        config = cls._provider_config()
-        from openai import AsyncOpenAI  # type: ignore[import-not-found]
+    def _build_async_client(cls, config: Mapping[str, Any] | None = None) -> Any:
+        config = cls._provider_config(config)
+        from openai import AsyncOpenAI
 
-        kwargs: dict[str, object] = {"timeout": float(config["timeout_seconds"])}
+        kwargs: dict[str, Any] = {"timeout": float(config["timeout_seconds"])}
         base_url = config.get("base_url")
         if base_url:
             kwargs["base_url"] = str(base_url)
@@ -67,8 +84,8 @@ class OpenAIProvider(BaseLLMProvider):
         tools: list[ToolDefinition],
     ) -> AsyncIterator[ChatEvent]:
         """Stream OpenAI text, tool calls, and usage events for one chat turn."""
-        client = self._build_async_client()
-        config = self._provider_config()
+        config = self.provider_config
+        client = self._build_async_client(config)
         stream = await client.chat.completions.create(
             model=config["model"],
             stream=True,

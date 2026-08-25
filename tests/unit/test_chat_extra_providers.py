@@ -325,6 +325,14 @@ class _GeminiFunctionCallClient:
 
 
 class AdditionalProviderTests(unittest.TestCase):
+    def test_openai_from_config_uses_instance_model_without_changing_legacy_settings(
+        self,
+    ) -> None:
+        provider = OpenAIProvider.from_config({"model": "profile-model"})
+
+        assert provider.provider_config["model"] == "profile-model"
+        assert OpenAIProvider().provider_config["model"] == "gpt-4.1-mini"
+
     def test_provider_modules_export_same_public_classes(self) -> None:
         ollama_module = import_module("general_manager.chat.providers.ollama")
         openai_module = import_module("general_manager.chat.providers.openai")
