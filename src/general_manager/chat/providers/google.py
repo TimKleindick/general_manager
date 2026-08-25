@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from importlib.util import find_spec
 from types import MappingProxyType
 from typing import Any, Self
@@ -50,7 +51,9 @@ class GeminiProvider(BaseLLMProvider):
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         """Create a provider with explicit config or legacy chat settings."""
-        self._instance_provider_config = MappingProxyType(self._provider_config(config))
+        self._instance_provider_config = MappingProxyType(
+            deepcopy(self._provider_config(config))
+        )
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> Self:
@@ -63,8 +66,9 @@ class GeminiProvider(BaseLLMProvider):
         return self._instance_provider_config
 
     @classmethod
-    def check_configuration(cls) -> None:
+    def check_configuration(cls, config: Mapping[str, Any] | None = None) -> None:
         """Validate that the Google GenAI SDK is available before use."""
+        del config
         if find_spec("google.genai") is None:
             raise GoogleDependencyImportError()
 

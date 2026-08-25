@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from importlib import import_module
 from importlib.util import find_spec
 from types import MappingProxyType
@@ -44,7 +45,9 @@ class OllamaProvider(BaseLLMProvider):
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         """Create a provider with explicit config or legacy chat settings."""
-        self._instance_provider_config = MappingProxyType(self._provider_config(config))
+        self._instance_provider_config = MappingProxyType(
+            deepcopy(self._provider_config(config))
+        )
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> Self:
@@ -57,11 +60,11 @@ class OllamaProvider(BaseLLMProvider):
         return self._instance_provider_config
 
     @classmethod
-    def check_configuration(cls) -> None:
+    def check_configuration(cls, config: Mapping[str, Any] | None = None) -> None:
         """Validate that the Ollama SDK and base URL are usable."""
         if find_spec("ollama") is None:
             raise OllamaDependencyImportError()
-        cls._validate_base_url(cls._provider_config()["base_url"])
+        cls._validate_base_url(cls._provider_config(config)["base_url"])
 
     @staticmethod
     def _provider_config(configured: Mapping[str, Any] | None = None) -> dict[str, Any]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
 import graphene
 import pytest
 from django.test import SimpleTestCase
@@ -12,10 +14,30 @@ from general_manager.chat.planned.config import (
     get_planned_chat_settings,
     profile_for_role,
 )
+from general_manager.chat.providers.ollama import OllamaBaseUrlError
 from general_manager.chat.settings import ChatConfigurationError, validate_chat_settings
 
 
 class ZeroArgumentProvider:
+    def complete(self, messages: list[object], tools: list[object]):
+        del messages, tools
+        yield from ()
+
+
+class CheckedConfiguredProvider:
+    checked_configs: ClassVar[list[object]] = []
+
+    def __init__(self, config: object) -> None:
+        self.config = config
+
+    @classmethod
+    def from_config(cls, config: object) -> CheckedConfiguredProvider:
+        return cls(config)
+
+    @classmethod
+    def check_configuration(cls, config: object) -> None:
+        cls.checked_configs.append(config)
+
     def complete(self, messages: list[object], tools: list[object]):
         del messages, tools
         yield from ()
@@ -33,6 +55,7 @@ def _complete_roles(profile: str) -> dict[str, str]:
 
 class PlannedChatSettingsTests(SimpleTestCase):
     def tearDown(self) -> None:
+        CheckedConfiguredProvider.checked_configs.clear()
         GraphQL.reset_registry()
         super().tearDown()
 
@@ -120,6 +143,57 @@ class PlannedChatSettingsTests(SimpleTestCase):
     @override_settings(
         GENERAL_MANAGER={
             "CHAT": {
+                "provider_profiles": {
+                    "fast": {
+                        "provider": "tests.unit.test_chat_planned_config.ZeroArgumentProvider",
+                        "provider_config": {},
+                        "trust_group": "local",
+                    },
+                    "outside": {
+                        "provider": "tests.unit.test_chat_planned_config.ZeroArgumentProvider",
+                        "provider_config": {},
+                        "trust_group": "outside",
+                    },
+                },
+                "planned": {
+                    "enabled": True,
+                    "roles": {
+                        **_complete_roles("fast"),
+                        "unrecognized_role": "outside",
+                    },
+                },
+            }
+        }
+    )
+    def test_enabled_planned_settings_reject_unknown_role(self) -> None:
+        with pytest.raises(ChatConfigurationError, match="unknown roles"):
+            get_planned_chat_settings()
+
+    def test_planned_profile_config_is_deeply_copied(self) -> None:
+        configured_provider_config = {"headers": {"x-tenant": "initial"}}
+        chat_settings = {
+            "provider_profiles": {
+                "fast": {
+                    "provider": "tests.unit.test_chat_planned_config.ZeroArgumentProvider",
+                    "provider_config": configured_provider_config,
+                    "trust_group": "local",
+                }
+            },
+            "planned": {"enabled": True, "roles": _complete_roles("fast")},
+        }
+
+        with override_settings(GENERAL_MANAGER={"CHAT": chat_settings}):
+            settings = get_planned_chat_settings()
+            configured_provider_config["headers"]["x-tenant"] = "changed"
+
+        assert (
+            settings.profiles["fast"].provider_config["headers"]["x-tenant"]
+            == "initial"
+        )
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
                 "planned": {"enabled": True},
             }
         }
@@ -171,6 +245,59 @@ class PlannedChatSettingsTests(SimpleTestCase):
 
         with pytest.raises(ChatConfigurationError, match="one trust_group"):
             validate_chat_settings()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider": "tests.unit.test_chat_planned_config.ZeroArgumentProvider",
+                "provider_profiles": {
+                    "checked": {
+                        "provider": "tests.unit.test_chat_planned_config.CheckedConfiguredProvider",
+                        "provider_config": {"model": "profile-model"},
+                        "trust_group": "local",
+                    }
+                },
+                "planned": {"enabled": True, "roles": _complete_roles("checked")},
+            }
+        }
+    )
+    def test_startup_validates_planned_profile_configuration(self) -> None:
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        GraphQL._schema = graphene.Schema(query=Query)
+
+        validate_chat_settings()
+
+        assert CheckedConfiguredProvider.checked_configs == [{"model": "profile-model"}]
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider": "tests.unit.test_chat_planned_config.ZeroArgumentProvider",
+                "provider_profiles": {
+                    "ollama": {
+                        "provider": "general_manager.chat.providers.OllamaProvider",
+                        "provider_config": {"base_url": "ftp://ollama.local"},
+                        "trust_group": "local",
+                    }
+                },
+                "planned": {"enabled": True, "roles": _complete_roles("ollama")},
+            }
+        }
+    )
+    def test_startup_validates_profile_specific_ollama_configuration(self) -> None:
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        GraphQL._schema = graphene.Schema(query=Query)
+
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                "general_manager.chat.providers.ollama.find_spec", lambda _: True
+            )
+            with pytest.raises(OllamaBaseUrlError, match="http or https"):
+                validate_chat_settings()
 
     @override_settings(
         GENERAL_MANAGER={
