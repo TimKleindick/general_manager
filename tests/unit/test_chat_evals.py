@@ -316,6 +316,7 @@ class DatasetLoadingTests(SimpleTestCase):
         assert "multi_hop" in names
         assert "follow_ups" in names
         assert "edge_cases" in names
+        assert "planned_orchestration" in names
 
     def test_load_basic_queries(self) -> None:
         cases = load_dataset("basic_queries")

@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+import json
+from collections.abc import AsyncIterator, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, NoReturn, cast
 
 import graphene
 
 from general_manager.api.graphql import GraphQL
 from general_manager.chat.schema_index import clear_schema_index_cache
+from general_manager.chat.evals.runner import EvalCase, PlannedEvalRoleOverride
+from general_manager.chat.providers.base import (
+    DoneEvent,
+    TextChunkEvent,
+    TokenUsage,
+    ToolCallEvent,
+)
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.utils.path_mapping import PathMap
 
@@ -379,4 +388,119 @@ def setup_large_schema(*, manager_count: int = 150, chain_length: int = 8) -> No
     clear_schema_index_cache()
 
 
-__all__ = ["setup_large_schema", "setup_toy_schema"]
+class DeterministicPlannedProvider:
+    """Role-pinned in-process provider for planned eval cases only."""
+
+    scripts: ClassVar[dict[str, dict[str, list[dict[str, Any]]]]] = {}
+    positions: ClassVar[dict[tuple[str, str], set[int]]] = {}
+    case_name: str
+    role: str
+
+    @classmethod
+    def configure(cls, case: EvalCase) -> None:
+        """Reset the deterministic scripts for one eval run."""
+        planned = case.expectations.get("planned", {})
+        raw_scripts = planned.get("scripts", {}) if isinstance(planned, dict) else {}
+        cls.scripts[case.name] = {
+            str(role): [dict(item) for item in entries]
+            for role, entries in raw_scripts.items()
+            if isinstance(entries, list)
+        }
+        cls.positions = {
+            key: value for key, value in cls.positions.items() if key[0] != case.name
+        }
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "DeterministicPlannedProvider":
+        provider = cls()
+        provider.case_name = str(config["case_name"])
+        provider.role = str(config["role"])
+        return provider
+
+    async def complete(
+        self, messages: list[object], _tools: list[object]
+    ) -> AsyncIterator[TextChunkEvent | ToolCallEvent | DoneEvent]:
+        key = (self.case_name, self.role)
+        scripts = type(self).scripts[self.case_name][self.role]
+        task_id = _planned_task_id(messages)
+        consumed = type(self).positions.setdefault(key, set())
+        position = next(
+            (
+                index
+                for index, candidate in enumerate(scripts)
+                if index not in consumed and candidate.get("task_id") in (None, task_id)
+            ),
+            None,
+        )
+        if position is None:
+            _script_exhausted(self.role)
+        consumed.add(position)
+        step = scripts[position]
+        usage = step.get("usage", {})
+        if "tool" in step:
+            yield ToolCallEvent(
+                id=f"{self.role}-{position}",
+                name=str(step["tool"]),
+                args=dict(step.get("args", {})),
+            )
+        else:
+            payload = step.get("text", step)
+            yield TextChunkEvent(json.dumps(payload, separators=(",", ":")))
+        yield DoneEvent(
+            TokenUsage(
+                input_tokens=int(usage.get("input_tokens", 1)),
+                output_tokens=int(usage.get("output_tokens", 1)),
+            )
+        )
+
+
+def _script_exhausted(role: str) -> NoReturn:
+    raise RuntimeError(  # noqa: TRY003
+        f"deterministic script exhausted for {role}"
+    )
+
+
+def _planned_task_id(messages: list[object]) -> str | None:
+    """Read the task ID from a planned executor's reference-data message."""
+    if not messages:
+        return None
+    content = getattr(messages[-1], "content", "")
+    if not isinstance(content, str) or not content.startswith("REFERENCE_DATA="):
+        return None
+    try:
+        reference = json.loads(content.removeprefix("REFERENCE_DATA="))
+    except json.JSONDecodeError:
+        return None
+    task = reference.get("task") if isinstance(reference, dict) else None
+    task_id = task.get("task_id") if isinstance(task, dict) else None
+    return task_id if isinstance(task_id, str) else None
+
+
+def planned_role_overrides(
+    case: EvalCase,
+) -> dict[str, PlannedEvalRoleOverride]:
+    """Return one deterministic fake provider profile for every planned role."""
+    DeterministicPlannedProvider.configure(case)
+    provider_path = "general_manager.chat.evals.fixtures.DeterministicPlannedProvider"
+    return {
+        role: PlannedEvalRoleOverride(
+            provider_path=provider_path,
+            provider_config={"case_name": case.name, "role": role},
+            trust_group="local",
+        )
+        for role in (
+            "planner",
+            "simple_executor",
+            "complex_executor",
+            "synthesizer",
+            "fallback_executor",
+        )
+    }
+
+
+__all__ = [
+    "DeterministicPlannedProvider",
+    "planned_role_overrides",
+    "setup_large_schema",
+    "setup_toy_schema",
+]

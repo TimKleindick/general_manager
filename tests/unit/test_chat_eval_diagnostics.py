@@ -3,6 +3,8 @@ from __future__ import annotations
 from general_manager.chat.evals.diagnostics import (
     FailureDiagnostic,
     classify_result,
+    planned_eval_diagnostics,
+    sanitize_planned_trace,
     summarize_diagnostics,
 )
 from general_manager.chat.evals.judges.answer_quality import AnswerQualityScore
@@ -245,3 +247,36 @@ def test_summarize_diagnostics_groups_by_owner_and_category() -> None:
 
     assert summary["prompt"]["missing_required_tool"] == 2
     assert summary["runtime"]["forbidden_tool"] == 1
+
+
+def test_planned_eval_diagnostics_exposes_only_public_coverage_and_role_labels() -> (
+    None
+):
+    events = [
+        {
+            "type": "done",
+            "usage": {"input_tokens": 4, "output_tokens": 4},
+            "orchestration": {
+                "coverage": {"resolved": 1, "total": 2},
+                "unresolved": [{"task_id": "task_2", "reason": "manager_unresolved"}],
+            },
+            "profile": "private-profile",
+            "trust_group": "private-trust-group",
+        }
+    ]
+
+    diagnostics = planned_eval_diagnostics(
+        events,
+        {"planner": "planner", "synthesizer": "synthesizer"},
+    )
+    trace = sanitize_planned_trace(events)
+
+    assert diagnostics == {
+        "roles": {"planner": "planner", "synthesizer": "synthesizer"},
+        "orchestration": {
+            "coverage": {"resolved": 1, "total": 2},
+            "unresolved": [{"task_id": "task_2", "reason": "manager_unresolved"}],
+        },
+    }
+    assert "private-profile" not in str(trace)
+    assert "private-trust-group" not in str(trace)

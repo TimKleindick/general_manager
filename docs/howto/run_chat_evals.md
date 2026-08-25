@@ -36,8 +36,8 @@ against a development-only configuration.
 ## 2. Run a shipped dataset
 
 The wheel includes `basic_queries`, `demo_readiness`, `edge_cases`,
-`follow_ups`, `large_schema`, and `multi_hop`. The `basic_queries` dataset can
-use the built-in toy schema and data:
+`follow_ups`, `large_schema`, `multi_hop`, and `planned_orchestration`. The
+`basic_queries` dataset can use the built-in toy schema and data:
 
 ```bash
 python -m general_manager.chat.evals \
@@ -122,3 +122,25 @@ migration. If an evaluation or operational check regresses, disable planned
 mode; the next request uses the compatible legacy strategy. Mutation requests
 already use that legacy safety path, including its authentication, mutation
 allow-listing, confirmation, persistence, and transport behavior.
+
+## 6. Run deterministic planned orchestration evaluations
+
+The shipped `planned_orchestration` dataset is exercised by deterministic
+role-pinned fake providers in the test suite, not by a network provider. It
+covers alias resolution, a one-edge dependency, dynamic children, calculation,
+partial answers, budget and deadline exhaustion, duplicate calls, no-progress
+termination, and mutation fallback. Run it with the legacy eval regressions and
+sanitized-diagnostic checks:
+
+```bash
+python -m pytest \
+  tests/unit/test_chat_planned_evals.py \
+  tests/unit/test_chat_evals.py \
+  tests/unit/test_chat_eval_diagnostics.py -q
+```
+
+These tests require a role override for every planned role and reject mixed
+trust groups. They assert deterministic fingerprints, aggregate provider usage,
+public coverage, and traces with profile and trust-group values removed. The
+legacy strategy remains a separate adapter, so existing `_run_turn` behavior
+and event shape remain covered independently.

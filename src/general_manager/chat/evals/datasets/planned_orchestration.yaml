@@ -1,0 +1,173 @@
+# Deterministic planned scheduler evaluations.  Provider scripts are consumed
+# only by the planned eval adapter; no network provider or application tool runs.
+
+- name: multi_manager_alias_discovery
+  description: "Resolve two alias-backed managers and synthesize grounded results."
+  tier: 1
+  tags: [planned, aliases, deterministic]
+  conversation:
+    - user: "Show the parts and materials."
+  expectations:
+    planned:
+      coverage: {resolved: 2, total: 2}
+      terminal_reason: null
+      tool_sequence: [query, query]
+      answer_tokens: [Bolt, Steel]
+      tool_results:
+        PartManager: {status: success, data: [{name: Bolt}]}
+        MaterialManager: {status: success, data: [{name: Steel}]}
+      scripts:
+        planner:
+          - text:
+              intent: read
+              tasks:
+                - task_id: task_1
+                  objective: parts
+                  depends_on: []
+                  requirements: [{requirement_id: parts, kind: query, description: "parts", operation: null}]
+                  completion_criteria: [parts]
+                  routing_features: []
+                - task_id: task_2
+                  objective: "materials after parts"
+                  depends_on: [task_1]
+                  requirements: [{requirement_id: materials, kind: query, description: "materials", operation: null}]
+                  completion_criteria: [materials]
+                  routing_features: [has_dependency]
+        simple_executor:
+          - {task_id: task_1, tool: query, args: {manager: PartManager, fields: [name]}}
+          - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1"]}}
+        complex_executor:
+          - {task_id: task_2, tool: query, args: {manager: MaterialManager, fields: [name]}}
+          - {task_id: task_2, text: {action: complete, evidence_ids: ["task_2:query:1"]}}
+        synthesizer:
+          - text: {answer: "Bolt and Steel", evidence_ids: ["task_1:query:1", "task_2:query:1"]}
+        fallback_executor: []
+
+- name: one_edge_dependency
+  description: "A dependent root waits for one earlier root."
+  tier: 1
+  tags: [planned, dependency]
+  conversation: [{user: "Find a parent and one dependent result."}]
+  expectations:
+    planned: {coverage: {resolved: 2, total: 2}, terminal_reason: null, tool_sequence: [query, query], answer_tokens: [parent, dependent]}
+
+- name: dynamic_child_creation
+  description: "A root creates a bounded child and receives its evidence."
+  tier: 1
+  tags: [planned, dynamic_child]
+  conversation: [{user: "Find a record and its missing dependent evidence."}]
+  expectations:
+    planned: {coverage: {resolved: 1, total: 1}, terminal_reason: null, tool_sequence: [query], answer_tokens: [dependent]}
+
+- name: deterministic_calculation
+  description: "A calculation uses only resolved query evidence."
+  tier: 1
+  tags: [planned, calculation]
+  conversation: [{user: "Calculate the average value from the records."}]
+  expectations:
+    planned: {coverage: {resolved: 1, total: 1}, terminal_reason: null, tool_sequence: [query], answer_tokens: [average]}
+
+- name: partial_independent_answer
+  description: "Keep independent grounded evidence when another root is unresolved."
+  tier: 1
+  tags: [planned, partial]
+  conversation:
+    - user: "Show known parts and an unavailable category."
+  expectations:
+    planned:
+      coverage: {resolved: 1, total: 2}
+      terminal_reason: manager_unresolved
+      tool_sequence: [query]
+      answer_tokens: [Bolt]
+      tool_results:
+        PartManager: {status: success, data: [{name: Bolt}]}
+      scripts:
+        planner:
+          - text:
+              intent: read
+              tasks:
+                - task_id: task_1
+                  objective: "known parts"
+                  depends_on: []
+                  requirements: [{requirement_id: parts, kind: query, description: "parts", operation: null}]
+                  completion_criteria: [parts]
+                  routing_features: []
+                - task_id: task_2
+                  objective: "unavailable category"
+                  depends_on: []
+                  requirements: [{requirement_id: missing, kind: query, description: "missing", operation: null}]
+                  completion_criteria: [missing]
+                  routing_features: []
+        simple_executor: []
+        complex_executor:
+          - {task_id: task_2, text: {action: block, reason: manager_unresolved}}
+          - {task_id: task_1, tool: query, args: {manager: PartManager, fields: [name]}}
+          - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1"]}}
+        synthesizer:
+          - text: {answer: "Bolt is available; the other category is unresolved.", evidence_ids: ["task_1:query:1"]}
+        fallback_executor: []
+
+- name: budget_exhaustion
+  description: "Unfinished work reaches the hard round budget."
+  tier: 1
+  tags: [planned, budget]
+  conversation: [{user: "Use the budgeted planned path."}]
+  expectations:
+    planned: {coverage: {resolved: 0, total: 1}, terminal_reason: budget_exhausted, tool_sequence: [query], answer_tokens: []}
+
+- name: deadline_exhaustion
+  description: "Evidence-stage deadline produces the public deadline reason."
+  tier: 1
+  tags: [planned, deadline]
+  conversation: [{user: "Use the deadline-limited planned path."}]
+  expectations:
+    planned: {coverage: {resolved: 0, total: 1}, terminal_reason: deadline_exceeded, tool_sequence: [], answer_tokens: []}
+
+- name: duplicate_rejection
+  description: "Canonical duplicate calls return cached results without re-execution."
+  tier: 1
+  tags: [planned, duplicate]
+  conversation: [{user: "Reject the duplicate planned query."}]
+  expectations:
+    planned: {coverage: {resolved: 1, total: 1}, terminal_reason: null, tool_sequence: [query, query], answer_tokens: [cached]}
+
+- name: two_pass_no_progress
+  description: "Two resolver passes with no progress terminate manager resolution."
+  tier: 1
+  tags: [planned, no_progress]
+  conversation: [{user: "Resolve an unknown manager twice."}]
+  expectations:
+    planned: {coverage: {resolved: 0, total: 1}, terminal_reason: manager_unresolved, tool_sequence: [], answer_tokens: []}
+
+- name: mutation_fallback
+  description: "A write intent returns to the unchanged legacy evaluation turn."
+  tier: 1
+  tags: [planned, mutation]
+  conversation:
+    - user: "Update the Apollo record."
+  expectations:
+    planned:
+      coverage: {resolved: 0, total: 0}
+      terminal_reason: mutation
+      tool_sequence: []
+      answer_tokens: [Apollo]
+      scripts:
+        planner:
+          - text: {intent: mutation, tasks: []}
+        simple_executor: []
+        complex_executor: []
+        synthesizer: []
+        fallback_executor: []
+
+- name: legacy_stability
+  description: "The explicit legacy strategy keeps the established eval result shape."
+  tier: 1
+  tags: [legacy, compatibility]
+  conversation:
+    - user: "What is the project?"
+  expectations:
+    planned:
+      coverage: {resolved: 0, total: 0}
+      terminal_reason: legacy
+      tool_sequence: []
+      answer_tokens: [Apollo]
