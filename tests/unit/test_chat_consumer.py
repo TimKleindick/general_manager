@@ -17,6 +17,7 @@ from general_manager.chat.consumer import ChatConsumer, _has_tool_after_last_use
 from general_manager.chat.models import ChatConversation, ChatPendingConfirmation
 from general_manager.chat.providers.base import (
     DoneEvent,
+    Message,
     TextChunkEvent,
     TokenUsage,
     ToolCallEvent,
@@ -510,6 +511,157 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 assert provider_messages[0].role == "system"
                 assert provider_messages[0].content == "system prompt text"
                 assert provider_messages[-1].content == "hello"
+
+        asyncio.run(run())
+
+    def test_receive_json_default_strategy_skips_planned_preparation(self) -> None:
+        """Routing the default websocket turn through planning changes its contract."""
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _Provider()
+        consumer.channel_name = "chat.test"
+
+        async def run() -> None:
+            with (
+                patch.object(consumer, "send_json", new_callable=AsyncMock) as send,
+                patch(
+                    "general_manager.chat.consumer.get_planned_chat_settings",
+                    return_value=SimpleNamespace(enabled=False),
+                ),
+                patch(
+                    "general_manager.chat.consumer.prepare_planned_turn",
+                    new_callable=AsyncMock,
+                ) as prepare,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+            ):
+                await consumer.receive_json({"type": "message", "text": "hello"})
+
+            assert [call.args[0]["type"] for call in send.await_args_list] == [
+                "text_chunk",
+                "done",
+            ]
+            assert "orchestration" not in send.await_args_list[-1].args[0]
+            prepare.assert_not_awaited()
+
+        asyncio.run(run())
+
+    def test_receive_json_streams_planned_read_events(self) -> None:
+        """Calling the legacy loop for a read plan would hide planned task IDs."""
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _Provider()
+        consumer.channel_name = "chat.test"
+        planned_turn = SimpleNamespace(mutation_plan=None)
+
+        async def planned_events(*_args: object, **_kwargs: object):
+            yield {"type": "tool_call", "task_id": "task_1", "id": "call_1"}
+            yield {"type": "tool_result", "task_id": "task_1", "id": "call_1"}
+            yield {"type": "text_chunk", "content": "planned synthesis"}
+            yield {
+                "type": "done",
+                "usage": {"input_tokens": 3, "output_tokens": 4},
+                "orchestration": {"status": "complete"},
+            }
+
+        async def fail_legacy(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError
+
+        async def run() -> None:
+            with (
+                patch.object(consumer, "send_json", new_callable=AsyncMock) as send,
+                patch(
+                    "general_manager.chat.consumer.get_planned_chat_settings",
+                    return_value=SimpleNamespace(enabled=True),
+                ),
+                patch(
+                    "general_manager.chat.consumer.prepare_planned_turn",
+                    new=AsyncMock(return_value=planned_turn),
+                ),
+                patch(
+                    "general_manager.chat.consumer.iter_planned_read_events",
+                    new=planned_events,
+                ),
+                patch.object(consumer, "_stream_provider_turn", new=fail_legacy),
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+            ):
+                await consumer.receive_json({"type": "message", "text": "hello"})
+
+            events = [call.args[0] for call in send.await_args_list]
+            assert [event["type"] for event in events] == [
+                "tool_call",
+                "tool_result",
+                "text_chunk",
+                "done",
+            ]
+            assert all("task_id" in event for event in events[:2])
+            assert events[-1]["orchestration"]["status"] == "complete"
+
+        asyncio.run(run())
+
+    def test_disconnect_cancels_active_planned_scheduler_turn(self) -> None:
+        """Leaving the scheduler task alive would continue provider work after disconnect."""
+        consumer = ChatConsumer()
+        consumer.scope = {"user": AnonymousUser(), "session": _Session("key")}
+        consumer.conversation = None
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def prepare(*_args: object, **_kwargs: object) -> object:
+            return SimpleNamespace(mutation_plan=None)
+
+        async def stream(*_args: object, **_kwargs: object):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            yield {"type": "done"}
+
+        async def run() -> None:
+            with (
+                patch(
+                    "general_manager.chat.consumer.get_planned_chat_settings",
+                    return_value=SimpleNamespace(enabled=True),
+                ),
+                patch(
+                    "general_manager.chat.consumer.prepare_planned_turn", new=prepare
+                ),
+                patch(
+                    "general_manager.chat.consumer.iter_planned_read_events",
+                    new=stream,
+                ),
+                patch(
+                    "general_manager.chat.consumer.AsyncJsonWebsocketConsumer.disconnect",
+                    new_callable=AsyncMock,
+                ),
+            ):
+                task = asyncio.create_task(
+                    consumer._stream_message_turn(
+                        "show parts", [Message(role="user", content="show parts")], []
+                    )
+                )
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                assert consumer._provider_task is task
+                await consumer.disconnect(1000)
+                await asyncio.gather(task, return_exceptions=True)
+
+            assert cancelled.is_set()
+            assert consumer._provider_task is None
 
         asyncio.run(run())
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
+from types import SimpleNamespace
 
 import graphene
 from asgiref.testing import ApplicationCommunicator
@@ -116,6 +117,136 @@ class ChatTransportIntegrationTests(TestCase):
                 }
 
                 await self._disconnect(communicator)
+
+        asyncio.run(run_test())
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.integration.test_chat_transport.IntegrationProvider",
+                "url": "/chat/",
+            }
+        },
+        ALLOWED_HOSTS=["testserver"],
+    )
+    def test_websocket_streams_same_planned_read_contract_as_http_and_sse(self) -> None:
+        """Bypassing the neutral iterator would omit planned task ownership metadata."""
+        expected_events = [
+            {"type": "tool_call", "task_id": "task_1", "id": "call_1"},
+            {"type": "tool_result", "task_id": "task_1", "id": "call_1"},
+            {"type": "text_chunk", "content": "planned synthesis"},
+            {
+                "type": "done",
+                "usage": {"input_tokens": 3, "output_tokens": 4},
+                "orchestration": {"status": "complete"},
+            },
+        ]
+
+        async def prepare(*_args: object, **_kwargs: object) -> object:
+            return SimpleNamespace(mutation_plan=None)
+
+        async def stream(*_args: object, **_kwargs: object):
+            for event in expected_events:
+                yield event
+
+        async def run_test() -> None:
+            from unittest.mock import AsyncMock, patch
+
+            with (
+                patch.object(
+                    ChatConsumer,
+                    "_get_persistent_conversation",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch(
+                    "general_manager.chat.consumer.get_planned_chat_settings",
+                    return_value=SimpleNamespace(enabled=True),
+                ),
+                patch(
+                    "general_manager.chat.consumer.prepare_planned_turn", new=prepare
+                ),
+                patch(
+                    "general_manager.chat.consumer.iter_planned_read_events",
+                    new=stream,
+                ),
+            ):
+                ensure_chat_route()
+                communicator = await self._connect()
+                await self._send_json(
+                    communicator, {"type": "message", "text": "show parts"}
+                )
+                events = [
+                    json.loads((await communicator.receive_output())["text"])
+                    for _ in expected_events
+                ]
+                await self._disconnect(communicator)
+
+            assert events == expected_events
+            assert [event["type"] for event in events][-2:] == ["text_chunk", "done"]
+            assert all("task_id" in event for event in events[:2])
+
+        asyncio.run(run_test())
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.integration.test_chat_transport.IntegrationProvider",
+                "url": "/chat/",
+                "allowed_mutations": ["createPart"],
+                "confirm_mutations": ["createPart"],
+            }
+        },
+        ALLOWED_HOSTS=["testserver"],
+    )
+    def test_websocket_planned_mutation_preserves_confirmation_flow(self) -> None:
+        """A planned mutation must still be handled by the legacy confirmation loop."""
+
+        async def prepare(*_args: object, **_kwargs: object) -> object:
+            return SimpleNamespace(mutation_plan=object())
+
+        async def run_test() -> None:
+            from unittest.mock import AsyncMock, patch
+
+            with (
+                patch.object(
+                    ChatConsumer,
+                    "_get_persistent_conversation",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch(
+                    "general_manager.chat.consumer.get_planned_chat_settings",
+                    return_value=SimpleNamespace(enabled=True),
+                ),
+                patch(
+                    "general_manager.chat.consumer.prepare_planned_turn", new=prepare
+                ),
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    return_value={
+                        "status": "confirmation_required",
+                        "mutation": "createPart",
+                        "input": {"name": "Bolt"},
+                    },
+                ),
+            ):
+                ensure_chat_route()
+                communicator = await self._connect()
+                await self._send_json(
+                    communicator, {"type": "message", "text": "create a part"}
+                )
+                events = [
+                    json.loads((await communicator.receive_output())["text"])
+                    for _ in range(2)
+                ]
+                await self._disconnect(communicator)
+
+            assert [event["type"] for event in events] == [
+                "tool_call",
+                "confirm_mutation",
+            ]
+            assert all("orchestration" not in event for event in events)
 
         asyncio.run(run_test())
 

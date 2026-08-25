@@ -40,6 +40,14 @@ from general_manager.chat.views import (
 EXECUTE_TOOL_EVENT_LOOP_ERROR = "execute_chat_tool ran in the event loop"
 
 
+def _iter_events_from(events: list[dict[str, Any]]):
+    async def _iterator(*_args: object, **_kwargs: object):
+        for event in events:
+            yield event
+
+    return _iterator
+
+
 def _unwrap_view(view):  # type: ignore[no-untyped-def]
     while hasattr(view, "__wrapped__"):
         view = view.__wrapped__
@@ -206,6 +214,90 @@ class ChatViewHelperTests(SimpleTestCase):
 
         update.assert_called_once_with(conversation, summary_text="summary")
         assert [message.role for message in messages] == ["system", "assistant"]
+
+    def test_build_messages_planned_mode_reuses_summary_without_provider_call(
+        self,
+    ) -> None:
+        """Removing the admission guard would spend an unbudgeted provider round."""
+        conversation = SimpleNamespace(summary_text="stored summary")
+        old_message = SimpleNamespace(role="user", content="old", tool_name="")
+        recent_message = SimpleNamespace(
+            role="assistant", content="recent", tool_name=""
+        )
+        summary_message = SimpleNamespace(
+            role="system", content="stored summary", tool_name=""
+        )
+
+        with (
+            patch(
+                "general_manager.chat.views.get_chat_settings",
+                return_value={"summarize_after": 1, "max_recent_messages": 1},
+            ),
+            patch(
+                "general_manager.chat.views.get_conversation_messages",
+                return_value=[old_message, recent_message],
+            ),
+            patch(
+                "general_manager.chat.views._summarize_messages_with_provider",
+                new=AsyncMock(),
+            ) as summarize,
+            patch(
+                "general_manager.chat.views.build_conversation_context",
+                return_value=[summary_message, recent_message],
+            ),
+            patch(
+                "general_manager.chat.views.build_system_prompt",
+                return_value="system",
+            ),
+        ):
+            messages = async_to_sync(_build_messages)(
+                conversation, object(), allow_summarization=False
+            )
+
+        summarize.assert_not_awaited()
+        assert [message.content for message in messages] == [
+            "system",
+            "stored summary",
+            "recent",
+        ]
+
+    def test_build_messages_planned_mode_suppresses_empty_summary_provider_call(
+        self,
+    ) -> None:
+        """Dropping the flag would add an unbudgeted legacy-provider call."""
+        conversation = SimpleNamespace(summary_text="")
+        old_message = SimpleNamespace(role="user", content="old", tool_name="")
+        recent_message = SimpleNamespace(
+            role="assistant", content="recent", tool_name=""
+        )
+
+        with (
+            patch(
+                "general_manager.chat.views.get_chat_settings",
+                return_value={"summarize_after": 1, "max_recent_messages": 1},
+            ),
+            patch(
+                "general_manager.chat.views.get_conversation_messages",
+                return_value=[old_message, recent_message],
+            ),
+            patch(
+                "general_manager.chat.views._summarize_messages_with_provider",
+                new=AsyncMock(),
+            ) as summarize,
+            patch(
+                "general_manager.chat.views.build_conversation_context",
+                return_value=[recent_message],
+            ),
+            patch(
+                "general_manager.chat.views.build_system_prompt",
+                return_value="system",
+            ),
+        ):
+            async_to_sync(_build_messages)(
+                conversation, object(), allow_summarization=False
+            )
+
+        summarize.assert_not_awaited()
 
     def test_parse_json_body_returns_empty_for_empty_and_non_object_body(self) -> None:
         empty = HttpRequest()
@@ -423,6 +515,175 @@ class ChatViewHelperTests(SimpleTestCase):
 
         assert returned is conversation
         assert events == []
+
+    def test_execute_message_request_default_strategy_skips_planned_preparation(
+        self,
+    ) -> None:
+        """Selecting planned code for the default path would alter legacy events."""
+        request = self.factory.post(
+            "/chat/", data=b"{}", content_type="application/json"
+        )
+        conversation = object()
+        legacy_events = [
+            {"type": "text_chunk", "content": "legacy answer"},
+            {"type": "done", "usage": {"input_tokens": 1, "output_tokens": 2}},
+        ]
+        with (
+            patch(
+                "general_manager.chat.views._prepare_message_request",
+                new=AsyncMock(
+                    return_value=_PreparedMessageRequest(
+                        conversation=conversation,
+                        scope={},
+                        provider=object(),
+                        messages=[Message(role="user", content="hello")],
+                        early_events=None,
+                    )
+                ),
+            ),
+            patch(
+                "general_manager.chat.views.get_planned_chat_settings",
+                return_value=SimpleNamespace(enabled=False),
+            ),
+            patch(
+                "general_manager.chat.views.prepare_planned_turn",
+                new_callable=AsyncMock,
+            ) as prepare,
+            patch(
+                "general_manager.chat.views._iter_provider_turn_events",
+                new=_iter_events_from(legacy_events),
+            ),
+        ):
+            _conversation, events = async_to_sync(_execute_message_request)(
+                request, transport="http"
+            )
+
+        assert events == legacy_events
+        assert "orchestration" not in events[-1]
+        prepare.assert_not_awaited()
+
+    def test_execute_message_request_streams_planned_read_events(self) -> None:
+        """Replacing the neutral iterator with the legacy loop loses task metadata."""
+        request = self.factory.post(
+            "/chat/", data=b"{}", content_type="application/json"
+        )
+        conversation = object()
+        planned_turn = SimpleNamespace(mutation_plan=None)
+
+        async def planned_events(*_args: object, **_kwargs: object):
+            yield {"type": "tool_call", "task_id": "task_1", "id": "call_1"}
+            yield {"type": "tool_result", "task_id": "task_1", "id": "call_1"}
+            yield {"type": "text_chunk", "content": "planned synthesis"}
+            yield {
+                "type": "done",
+                "usage": {"input_tokens": 3, "output_tokens": 4},
+                "orchestration": {"status": "complete"},
+            }
+
+        with (
+            patch(
+                "general_manager.chat.views._prepare_message_request",
+                new=AsyncMock(
+                    return_value=_PreparedMessageRequest(
+                        conversation=conversation,
+                        scope={},
+                        provider=object(),
+                        messages=[Message(role="user", content="hello")],
+                        early_events=None,
+                    )
+                ),
+            ),
+            patch(
+                "general_manager.chat.views.get_planned_chat_settings",
+                return_value=SimpleNamespace(enabled=True),
+            ),
+            patch(
+                "general_manager.chat.views.prepare_planned_turn",
+                new=AsyncMock(return_value=planned_turn),
+            ),
+            patch(
+                "general_manager.chat.views.iter_planned_read_events",
+                new=planned_events,
+            ),
+            patch(
+                "general_manager.chat.views._run_provider_turn",
+                new=AsyncMock(side_effect=AssertionError("legacy loop selected")),
+            ),
+        ):
+            _conversation, events = async_to_sync(_execute_message_request)(
+                request, transport="http"
+            )
+
+        assert [event["type"] for event in events] == [
+            "tool_call",
+            "tool_result",
+            "text_chunk",
+            "done",
+        ]
+        assert all("task_id" in event for event in events[:2])
+        assert (
+            "".join(
+                event["content"] for event in events if event["type"] == "text_chunk"
+            )
+            == "planned synthesis"
+        )
+
+    def test_execute_message_request_uses_legacy_events_for_planned_mutation(
+        self,
+    ) -> None:
+        """Sending a mutation plan into the scheduler would bypass confirmation."""
+        request = self.factory.post(
+            "/chat/", data=b"{}", content_type="application/json"
+        )
+        conversation = object()
+        legacy_events = [
+            {"type": "tool_call", "id": "mutation_1", "name": "mutate", "args": {}},
+            {
+                "type": "confirm_mutation",
+                "id": "mutation_1",
+                "mutation": "createPart",
+                "input": {"name": "Bolt"},
+            },
+        ]
+        with (
+            patch(
+                "general_manager.chat.views._prepare_message_request",
+                new=AsyncMock(
+                    return_value=_PreparedMessageRequest(
+                        conversation=conversation,
+                        scope={},
+                        provider=object(),
+                        messages=[Message(role="user", content="create a part")],
+                        early_events=None,
+                    )
+                ),
+            ),
+            patch(
+                "general_manager.chat.views.get_planned_chat_settings",
+                return_value=SimpleNamespace(enabled=True),
+            ),
+            patch(
+                "general_manager.chat.views.prepare_planned_turn",
+                new=AsyncMock(return_value=SimpleNamespace(mutation_plan=object())),
+            ),
+            patch(
+                "general_manager.chat.views._iter_provider_turn_events",
+                new=_iter_events_from(legacy_events),
+            ),
+            patch(
+                "general_manager.chat.views.iter_planned_read_events",
+                new=_iter_events_from([]),
+            ),
+        ):
+            _conversation, events = async_to_sync(_execute_message_request)(
+                request, transport="sse"
+            )
+
+        assert [event["type"] for event in events] == [
+            "tool_call",
+            "confirm_mutation",
+        ]
+        assert all("orchestration" not in event for event in events)
 
     def test_prepare_message_request_validates_text_before_conversation(
         self,

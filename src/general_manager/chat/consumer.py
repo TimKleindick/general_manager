@@ -20,6 +20,12 @@ from general_manager.chat.grounding import (
     should_recover_answer_without_query,
     should_recover_missing_tool_call,
 )
+from general_manager.chat.planned.catalog import load_manager_catalog
+from general_manager.chat.planned.config import get_planned_chat_settings
+from general_manager.chat.planned.scheduler import (
+    iter_planned_read_events,
+    prepare_planned_turn,
+)
 from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
@@ -27,6 +33,7 @@ from general_manager.chat.providers.base import (
     ToolCallEvent,
     ToolDefinition,
 )
+from general_manager.chat.schema_index import build_schema_index
 from general_manager.chat.rate_limits import enforce_chat_rate_limit
 from general_manager.chat.signals import (
     emit_chat_error,
@@ -357,7 +364,7 @@ class ChatConsumer(_ChatConsumerBase):
                 message=text,
                 conversation_id=getattr(self.conversation, "pk", None),
             )
-            await self._stream_provider_turn(messages, history, tool_retries=0)
+            await self._stream_message_turn(text, messages, history)
         except Exception as exc:  # noqa: BLE001
             emit_chat_error(
                 user=self.scope.get("user"),
@@ -523,6 +530,68 @@ class ChatConsumer(_ChatConsumerBase):
                             },
                         }
                     )
+        finally:
+            self._provider_task = None
+
+    @staticmethod
+    def _planned_catalog_summary(settings: Any) -> dict[str, Any]:
+        """Build inert catalog/schema reference data for the planner request."""
+        schema_index = build_schema_index()
+        catalog = load_manager_catalog(
+            getattr(settings, "catalog_source", None), schema_index
+        )
+        return {
+            "catalog": {
+                name: {
+                    "domain": entry.domain,
+                    "aliases": list(entry.aliases),
+                    "use_when": entry.use_when,
+                    "distinguish_from": list(entry.distinguish_from),
+                }
+                for name, entry in catalog.entries.items()
+            },
+            "schema": schema_index,
+        }
+
+    async def _stream_message_turn(
+        self,
+        text: str,
+        messages: list[Message],
+        history: list[dict[str, str]],
+    ) -> None:
+        """Plan after admission, retaining the unchanged legacy turn as fallback."""
+        planned_settings = get_planned_chat_settings()
+        if not planned_settings.enabled:
+            await self._stream_provider_turn(messages, history, tool_retries=0)
+            return
+        planned_messages = messages
+        if self.conversation is not None:
+            from general_manager.chat.models import build_conversation_context
+
+            context = await sync_to_async(build_conversation_context)(self.conversation)
+            planned_messages = [
+                Message(role="system", content=build_system_prompt()),
+                *(Message(role=item.role, content=item.content) for item in context),
+            ]
+        planned_turn = await prepare_planned_turn(
+            text,
+            planned_messages,
+            planned_settings,
+            self._planned_catalog_summary(planned_settings),
+            scope=self.scope,
+        )
+        if planned_turn.mutation_plan is not None:
+            await self._stream_provider_turn(messages, history, tool_retries=0)
+            return
+        self._provider_task = asyncio.current_task()
+        try:
+            async for event in iter_planned_read_events(
+                planned_turn,
+                scope=self.scope,
+                conversation=self.conversation,
+                messages=planned_messages,
+            ):
+                await self.send_json(event)
         finally:
             self._provider_task = None
 

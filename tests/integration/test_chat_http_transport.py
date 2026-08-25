@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import patch
 
@@ -344,6 +345,87 @@ class ChatHttpTransportTests(TestCase):
         payload = response.json()
         assert payload["answer"] == "hello back"
         assert payload["events"][-1]["type"] == "done"
+
+    def test_http_and_sse_share_planned_read_logical_events(self) -> None:
+        """A transport-local planned loop would diverge from the scheduler contract."""
+        planned_turn = SimpleNamespace(mutation_plan=None)
+        expected_events = [
+            {"type": "tool_call", "task_id": "task_1", "id": "call_1"},
+            {"type": "tool_result", "task_id": "task_1", "id": "call_1"},
+            {"type": "text_chunk", "content": "planned synthesis"},
+            {
+                "type": "done",
+                "usage": {"input_tokens": 3, "output_tokens": 4},
+                "orchestration": {"status": "complete"},
+            },
+        ]
+
+        async def prepare(*_args: object, **_kwargs: object) -> object:
+            return planned_turn
+
+        async def stream(*_args: object, **_kwargs: object):
+            for event in expected_events:
+                yield event
+
+        with (
+            patch(
+                "general_manager.chat.views.get_planned_chat_settings",
+                return_value=SimpleNamespace(enabled=True),
+            ),
+            patch("general_manager.chat.views.prepare_planned_turn", new=prepare),
+            patch("general_manager.chat.views.iter_planned_read_events", new=stream),
+        ):
+            http_response = self.client.post(
+                "/chat/",
+                data=json.dumps({"text": "show parts"}),
+                content_type="application/json",
+            )
+            sse_response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "show parts"}),
+                content_type="application/json",
+            )
+            sse_body = async_to_sync(_collect_streaming_content)(sse_response).decode()
+
+        http_payload = http_response.json()
+        sse_events = [
+            json.loads(line.removeprefix("data: "))
+            for line in sse_body.splitlines()
+            if line.startswith("data: ")
+        ]
+        assert http_payload["events"] == expected_events
+        assert sse_events == expected_events
+        assert http_payload["answer"] == "planned synthesis"
+        assert [event["type"] for event in sse_events][-2:] == ["text_chunk", "done"]
+        assert all("task_id" in event for event in sse_events[:2])
+
+    def test_planned_mutation_keeps_http_confirmation_transport_error(self) -> None:
+        """Routing mutation plans to planned execution would skip the HTTP safeguard."""
+
+        async def prepare(*_args: object, **_kwargs: object) -> object:
+            return SimpleNamespace(mutation_plan=object())
+
+        with (
+            patch(
+                "general_manager.chat.views.get_planned_chat_settings",
+                return_value=SimpleNamespace(enabled=True),
+            ),
+            patch("general_manager.chat.views.prepare_planned_turn", new=prepare),
+            patch(
+                "general_manager.chat.views.import_provider",
+                return_value=HttpIntegrationProvider,
+            ),
+        ):
+            response = self.client.post(
+                "/chat/",
+                data=json.dumps({"text": "create a part"}),
+                content_type="application/json",
+            )
+
+        events = response.json()["events"]
+        assert [event["type"] for event in events] == ["tool_call", "error"]
+        assert events[-1]["code"] == "confirmation_required_transport"
+        assert all("orchestration" not in event for event in events)
 
     def test_http_errors_use_public_message(self) -> None:
         with patch(
