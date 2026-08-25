@@ -153,7 +153,9 @@ def test_write_families_are_conservatively_guarded(user_text: str) -> None:
         "insert a part",
         "please deactivate the part",
         "would like you to insert a part",
+        "I would like to delete this part",
         "show parts then merge these records",
+        "show parts and then delete the obsolete part",
         "show parts; also purge the old record",
     ],
 )
@@ -185,6 +187,8 @@ def test_configured_mutation_identifier_is_conservatively_guarded() -> None:
         "execute archivePart for the obsolete item",
         "RUN ARCHIVEPART for the obsolete item",
         "archivePart the obsolete item",
+        "show parts and then execute archivePart",
+        "I would like to execute archivePart",
     ],
 )
 def test_configured_mutation_identifier_requires_command_context(
