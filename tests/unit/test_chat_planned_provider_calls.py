@@ -86,6 +86,15 @@ def test_provider_round_rejects_text_and_tool_ambiguity() -> None:
         asyncio.run(complete_provider_round(provider, [], [], 1.0))
 
 
+def test_provider_round_rejects_empty_text_chunk_before_a_tool_call() -> None:
+    provider = _Provider(
+        [TextChunkEvent(""), ToolCallEvent("one", "query", {}), DoneEvent(TokenUsage())]
+    )
+
+    with pytest.raises(InvalidProviderRoundError):
+        asyncio.run(complete_provider_round(provider, [], [], 1.0))
+
+
 def test_provider_round_caps_timeout_to_stage_remaining() -> None:
     with pytest.raises(TimeoutError):
         asyncio.run(complete_provider_round(_StallingProvider(), [], [], 0.01))
@@ -96,6 +105,27 @@ def test_provider_round_rejects_no_usable_output_and_duplicate_done() -> None:
         asyncio.run(
             complete_provider_round(_Provider([DoneEvent(TokenUsage())]), [], [], 1.0)
         )
+
+
+def test_provider_round_accepts_one_tool_call_and_rejects_events_after_done() -> None:
+    tool = ToolCallEvent("one", "query", {})
+    result = asyncio.run(
+        complete_provider_round(_Provider([tool, DoneEvent(TokenUsage())]), [], [], 1.0)
+    )
+
+    assert result.tool_call == tool
+    for event in (TextChunkEvent("late"), tool):
+        with pytest.raises(InvalidProviderRoundError):
+            asyncio.run(
+                complete_provider_round(
+                    _Provider([DoneEvent(TokenUsage()), event]), [], [], 1.0
+                )
+            )
+
+
+def test_provider_round_rejects_a_stream_without_events() -> None:
+    with pytest.raises(InvalidProviderRoundError):
+        asyncio.run(complete_provider_round(_Provider([]), [], [], 1.0))
     with pytest.raises(InvalidProviderRoundError):
         asyncio.run(
             complete_provider_round(
