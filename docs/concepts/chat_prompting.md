@@ -180,3 +180,41 @@ Before enabling chat for production traffic:
   `PYTHONPATH=src python scripts/run_chat_readiness_loop.py --gate large --model glm-4.7-flash:q4_K_M --output-dir /tmp/gm-chat-readiness-large --skip-tests`
 
 A gate may pass with generic prompt/tool retries, but it must not pass with forbidden recovery or harness-synthesized answers.
+
+## Planned orchestration bounds and grounding
+
+The optional planned strategy converts a complex read into a validated graph of
+one to six root tasks. Roots can depend only on earlier roots, the longest root
+dependency chain has one edge, and a root can create at most two non-recursive
+children. The task runtime states are `pending`, `running`, `resolved`,
+`blocked`, and `budget_exhausted`; only committed compatible evidence resolves a
+task. Failed calls, candidate lists, provider prose, and raw plans are
+diagnostics rather than facts.
+
+Every provider request consumes a round, including failed, duplicate, cached,
+planner, and synthesis requests. A root and its children share 15 rounds. The
+whole turn has `min(5 + 13 * root_task_count, 80)` rounds. Local resolver passes
+are free but are limited to ten; after two consecutive no-progress passes an
+executor must select, escalate within its trust group, or block with
+`manager_unresolved`.
+
+The 120-second default response budget has a 90-second planning/evidence stage
+and a 30-second synthesis stage. Each provider request is capped by its stage's
+remaining time. At the evidence deadline, no new round starts, async provider
+work is cancelled, and unfinished tasks become `deadline_exceeded`; synthesis
+uses only already committed evidence. PostgreSQL queries receive a statement
+timeout bounded by the smaller of query timeout and remaining evidence time.
+Other database backends have best-effort cancellation: a synchronous query can
+finish in its worker thread after the response stops awaiting it.
+
+Derived evidence permits only `count`, `sum`, `average`, `minimum`, `maximum`,
+`difference`, `ratio`, and `percentage`. Operands reference resolved query
+evidence; arbitrary expressions, imports, callbacks, and code execution are
+not allowed. An invalid, missing, incompatible, or nonnumeric operand blocks
+that requirement rather than becoming a synthesized fact.
+
+Plans, routes, budgets, candidates, and evidence lineage stay in memory for the
+request. A disconnect or process restart ends the turn; planned execution is
+not resumable and introduces no persistence table or migration. This is
+compatible with legacy chat: disabling `planned.enabled` immediately restores
+the legacy strategy and its event behavior.

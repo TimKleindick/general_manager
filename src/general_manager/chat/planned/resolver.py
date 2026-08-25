@@ -8,6 +8,7 @@ from hashlib import sha256
 import json
 from typing import Any
 
+from general_manager.chat.audit import emit_planned_audit_event
 from general_manager.chat.planned.catalog import (
     ManagerCatalog,
     ManagerCatalogEntry,
@@ -19,6 +20,17 @@ from general_manager.chat.schema_index import find_exposed_path
 _NO_PATH_DISTANCE = 1_000_000
 _MAX_CANDIDATES = 5
 _MAX_EXPLANATIONS = 3
+_AUDIT_MATCH_SOURCES = {
+    "exact manager name": "exact_name",
+    "exact catalog alias": "exact_alias",
+    "catalog domain": "catalog_domain",
+    "catalog aliases": "catalog_alias",
+    "catalog use_when": "catalog_use_when",
+    "schema description": "schema_description",
+    "schema fields": "schema_field",
+    "schema filters": "schema_filter",
+    "schema relations": "schema_relation",
+}
 PathFinder = Callable[[str, str], list[str] | None]
 
 
@@ -127,6 +139,7 @@ class ManagerResolver:
         )
         cached = self.cache.get(cache_key)
         if cached is not None:
+            self._audit_candidates(cached)
             return cached
 
         query_terms = _matching_terms(normalized_query)
@@ -151,7 +164,24 @@ class ManagerResolver:
         scored.sort(key=lambda item: item.rank)
         result = tuple(item.candidate for item in scored[:_MAX_CANDIDATES])
         self.cache[cache_key] = result
+        self._audit_candidates(result)
         return result
+
+    @staticmethod
+    def _audit_candidates(candidates: Sequence[ManagerCandidate]) -> None:
+        """Report only source categories, never candidate manager identities."""
+        sources = sorted(
+            {
+                category
+                for candidate in candidates
+                for explanation in candidate.explanations
+                if (category := _AUDIT_MATCH_SOURCES.get(explanation)) is not None
+            }
+        )
+        emit_planned_audit_event(
+            "candidate",
+            {"candidate_count": len(candidates), "match_sources": sources},
+        )
 
     def _exact_manager_counts(self, normalized_query: str) -> Mapping[str, int]:
         return {

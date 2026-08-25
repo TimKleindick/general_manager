@@ -455,3 +455,88 @@ single-provider selection.
 Application automation should prefer the module CLI rather than import eval
 runner internals. See the [task guide](../howto/run_chat_evals.md) and
 [command cookbook](../examples/chat_eval_cli.md).
+
+## Planned read orchestration
+
+Planned orchestration is opt-in. Legacy `provider` and `provider_config` keep
+their existing behavior; when `planned.enabled` is false, GeneralManager selects
+the legacy loop before it creates a planner. A planned read that the planner
+classifies as a mutation is sent through that unchanged legacy loop, so planned
+executors never receive the `mutate` tool.
+
+```python
+GENERAL_MANAGER = {
+    "CHAT": {
+        "provider": "myproject.providers.LegacyProvider",
+        "provider_config": {},
+        "provider_profiles": {
+            "fast_local": {
+                "provider": "myproject.providers.LocalProvider",
+                "provider_config": {"model": "small"},
+                "trust_group": "local",
+            },
+            "strong_local": {
+                "provider": "myproject.providers.StrongProvider",
+                "provider_config": {"model": "large"},
+                "trust_group": "local",
+            },
+        },
+        "planned": {
+            "enabled": True,
+            "catalog": "myproject.chat.get_manager_catalog",
+            "roles": {
+                "planner": "strong_local",
+                "simple_executor": "fast_local",
+                "complex_executor": "strong_local",
+                "synthesizer": "strong_local",
+                "fallback_executor": "strong_local",
+            },
+            "max_concurrent_tasks": 3,
+            "evidence_timeout_seconds": 90,
+            "synthesis_timeout_seconds": 30,
+        },
+    },
+}
+```
+
+The required role names are `planner`, `simple_executor`, `complex_executor`,
+`synthesizer`, and `fallback_executor`. If `provider_profiles` is omitted,
+planned mode creates the implicit `default` profile from the legacy provider and
+configuration, assigns every role to it, and uses trust group `default`. Every
+profile used by a normal turn must share one `trust_group`; client HTTP, SSE,
+and WebSocket payloads cannot choose a profile or trust group. `planned.catalog`
+may be a mapping, callable, or dotted callable path. A catalog entry has the
+exact chat-exposed manager name as its key and `domain`, `aliases`, `use_when`,
+and `distinguish_from` fields:
+
+```python
+{
+    "PartManager": {
+        "domain": "manufacturing",
+        "aliases": ["part", "component", "item"],
+        "use_when": "The question concerns designed or purchased components.",
+        "distinguish_from": ["MaterialManager"],
+    },
+}
+```
+
+Catalog metadata only ranks candidates; it never changes schema visibility,
+permissions, field access, or query authorization.
+
+Planned mode keeps the normal transport vocabulary. Actual tool events add
+`task_id`; final synthesis produces `text_chunk`; exactly one `done` reports
+complete or partial coverage; and an `error` is terminal only when no grounded
+answer is available. Stable planned error codes are `invalid_plan`,
+`manager_unresolved`, `dependency_blocked`, `budget_exhausted`,
+`deadline_exceeded`, `provider_failed`, and `synthesis_failed`. Their messages
+are stable and do not include profiles, trust groups, catalog data, plans, or
+exceptions. Other exceptions remain the generic `chat_error` mapping.
+
+Planned audit events use the existing `audit` setting and are allowlisted before
+the generic audit sink. They can record plan/task lineage, role (never profile),
+trust-group validation outcome, match-source categories, a SHA-256 canonical
+call hash, duplicate/progress state, round budgets, latency, reported token
+usage/cost, evidence-kind counts, coverage, and terminal reason. Raw tool
+results, manager names, plans, credentials, and exceptions are excluded; the
+existing configured field redaction and result-size limits still apply to the
+generic audit layer.

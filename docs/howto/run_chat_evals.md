@@ -95,3 +95,30 @@ when you need the full per-case trace.
 See the [chat prompt and eval model](../concepts/chat_prompting.md), the
 [copy-ready command recipes](../examples/chat_eval_cli.md), and the complete
 [chat eval CLI reference](../api/chat.md).
+
+## 5. Roll out planned chat safely
+
+Keep planned chat disabled by default while you validate the application's
+catalog, profile construction, role mappings, and single trust group. Start
+with the implicit `default` profile (the existing legacy provider and
+configuration) or configure explicit `planner`, `simple_executor`,
+`complex_executor`, `synthesizer`, and `fallback_executor` roles. Use one
+non-production environment first; public requests must never select profiles or
+trust groups.
+
+Add deterministic fake-provider cases for graph validation, manager resolution,
+round exhaustion, 90-second evidence and 30-second synthesis deadlines,
+calculation evidence, partial coverage, and every stable terminal reason. Run
+those cases together with the existing legacy WebSocket, SSE, and HTTP tests.
+Then enable `GENERAL_MANAGER["CHAT"]["planned"]["enabled"]` for the
+non-production environment and inspect the allowlisted audit events: role,
+match-source category, hashed canonical call identity, progress, budgets,
+latency, usage/cost, evidence counts, coverage, and terminal reason. Do not
+add raw results, profile names, trust groups, plans, hidden manager metadata,
+credentials, or provider exceptions to an audit sink.
+
+Production rollout is an application-owned settings change and requires no
+migration. If an evaluation or operational check regresses, disable planned
+mode; the next request uses the compatible legacy strategy. Mutation requests
+already use that legacy safety path, including its authentication, mutation
+allow-listing, confirmation, persistence, and transport behavior.
