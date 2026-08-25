@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,16 @@ ChatEvent = TextChunkEvent | ToolCallEvent | DoneEvent
 
 class BaseLLMProvider(Protocol):
     """Minimal streaming protocol implemented by chat LLM adapters."""
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> Self:
+        """Construct a provider using an instance-scoped configuration."""
+        ...
+
+    @property
+    def provider_config(self) -> Mapping[str, Any]:
+        """Return the read-only configuration used by this provider instance."""
+        ...
 
     def complete(
         self,

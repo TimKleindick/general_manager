@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from importlib import import_module
 from importlib.util import find_spec
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Self
 from urllib.parse import urlparse
 
 from general_manager.chat.providers._shared import (
@@ -40,6 +42,20 @@ class OllamaBaseUrlError(ValueError):
 class OllamaProvider(BaseLLMProvider):
     """Streaming provider backed by the official Ollama Python client."""
 
+    def __init__(self, config: Mapping[str, Any] | None = None) -> None:
+        """Create a provider with explicit config or legacy chat settings."""
+        self._instance_provider_config = MappingProxyType(self._provider_config(config))
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> Self:
+        """Create a provider with a copied profile configuration."""
+        return cls(config)
+
+    @property
+    def provider_config(self) -> Mapping[str, Any]:
+        """Return the read-only configuration for this provider instance."""
+        return self._instance_provider_config
+
     @classmethod
     def check_configuration(cls) -> None:
         """Validate that the Ollama SDK and base URL are usable."""
@@ -48,10 +64,11 @@ class OllamaProvider(BaseLLMProvider):
         cls._validate_base_url(cls._provider_config()["base_url"])
 
     @staticmethod
-    def _provider_config() -> dict[str, Any]:
-        settings = get_chat_settings()
-        configured = settings.get("provider_config", {})
-        config = dict(configured if isinstance(configured, dict) else {})
+    def _provider_config(configured: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        if configured is None:
+            settings = get_chat_settings()
+            configured = settings.get("provider_config", {})
+        config = dict(configured if isinstance(configured, Mapping) else {})
         config.setdefault("model", "gemma4:e4b")
         config.setdefault("base_url", "http://127.0.0.1:11434")
         config.setdefault("timeout_seconds", 60)
@@ -79,8 +96,9 @@ class OllamaProvider(BaseLLMProvider):
         cls,
         messages: list[Message],
         tools: list[ToolDefinition],
+        config: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        config = cls._provider_config()
+        config = cls._provider_config(config)
         return {
             "model": config["model"],
             "stream": True,
@@ -102,8 +120,8 @@ class OllamaProvider(BaseLLMProvider):
         }
 
     @classmethod
-    def _build_async_client(cls) -> Any:
-        config = cls._provider_config()
+    def _build_async_client(cls, config: Mapping[str, Any] | None = None) -> Any:
+        config = cls._provider_config(config)
         base_url = cls._validate_base_url(config["base_url"])
         ollama = import_module("ollama")
         return ollama.AsyncClient(
@@ -117,8 +135,9 @@ class OllamaProvider(BaseLLMProvider):
         tools: list[ToolDefinition],
     ) -> AsyncIterator[ChatEvent]:
         """Stream Ollama text, tool calls, and usage events for one chat turn."""
-        client = self._build_async_client()
-        stream = await client.chat(**self._build_request_body(messages, tools))
+        config = self.provider_config
+        client = self._build_async_client(config)
+        stream = await client.chat(**self._build_request_body(messages, tools, config))
         async for chunk in stream:
             message = chunk.get("message", {})
             content = message.get("content")
