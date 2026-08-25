@@ -429,6 +429,7 @@ class _TaskRuntime:
     role: str | None = None
     fallback_used: bool = False
     no_progress: int = 0
+    phase_failure_reason: StableReason | None = None
     local_passes: int = 0
     child_count: int = 0
     candidates: tuple[str, ...] = ()
@@ -690,7 +691,10 @@ class _Runner:
             return
         if made_progress:
             runtime.no_progress = 0
+            runtime.phase_failure_reason = None
             return
+        if runtime.no_progress == 0:
+            runtime.phase_failure_reason = failure_reason
         runtime.no_progress += 1
         if runtime.no_progress < 2:
             return
@@ -698,11 +702,13 @@ class _Runner:
             runtime.fallback_used = True
             runtime.role = "fallback_executor"
             runtime.no_progress = 0
+            runtime.phase_failure_reason = None
             return
         await self.set_blocked(
             runtime,
             "provider_failed"
-            if failure_reason == "provider_failed"
+            if runtime.phase_failure_reason == "provider_failed"
+            and failure_reason == "provider_failed"
             else "manager_unresolved",
         )
 
