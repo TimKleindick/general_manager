@@ -39,6 +39,11 @@ def dotted_catalog_source() -> Mapping[str, Mapping[str, object]]:
     return {"PartManager": catalog_entry()}
 
 
+dotted_catalog_mapping: Mapping[str, Mapping[str, object]] = {
+    "PartManager": catalog_entry()
+}
+
+
 def failing_catalog_source() -> Mapping[str, Mapping[str, object]]:
     raise RuntimeError(_CATALOG_BACKEND_UNAVAILABLE)
 
@@ -144,6 +149,7 @@ def test_catalog_loads_mapping_callable_and_dotted_callable(
     "source",
     [
         "tests.unit.test_chat_planned_catalog.missing_catalog_source",
+        "tests.unit.test_chat_planned_catalog.dotted_catalog_mapping",
         failing_catalog_source,
         ["not", "a", "catalog"],
     ],
@@ -201,5 +207,28 @@ def test_enabled_planned_settings_validate_catalog_source_at_startup() -> None:
     try:
         with pytest.raises(ChatConfigurationError, match="catalog"):
             validate_chat_settings()
+    finally:
+        GraphQL.reset_registry()
+
+
+@override_settings(
+    GENERAL_MANAGER={
+        "CHAT": {
+            "provider": "tests.unit.test_chat_planned_catalog.CatalogSettingsProvider",
+            "provider_profiles": {"invalid": "not-a-profile"},
+            "planned": {
+                "enabled": False,
+                "catalog": "tests.unit.test_chat_planned_catalog.missing_catalog_source",
+            },
+        }
+    }
+)
+def test_disabled_planned_settings_do_not_import_invalid_catalog_source() -> None:
+    class Query(graphene.ObjectType):
+        ping = graphene.String()
+
+    GraphQL._schema = graphene.Schema(query=Query)
+    try:
+        validate_chat_settings()
     finally:
         GraphQL.reset_registry()
