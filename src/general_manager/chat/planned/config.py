@@ -102,6 +102,13 @@ def _implicit_profile(settings: Mapping[str, Any]) -> ProviderProfile:
     )
 
 
+def _copy_catalog_source(source: object) -> object:
+    """Detach mapping-backed catalog configuration from mutable settings."""
+    if isinstance(source, Mapping):
+        return deepcopy(dict(source))
+    return source
+
+
 def _normalize_profiles(
     configured_profiles: object,
     settings: Mapping[str, Any],
@@ -154,7 +161,7 @@ def get_planned_chat_settings() -> PlannedChatSettings:
             enabled=False,
             profiles=MappingProxyType({implicit_profile.name: implicit_profile}),
             roles=MappingProxyType(_required_roles(implicit_profile.name)),
-            catalog_source=raw_planned.get("catalog"),
+            catalog_source=_copy_catalog_source(raw_planned.get("catalog")),
         )
 
     profiles, has_explicit_profiles = _normalize_profiles(
@@ -188,7 +195,7 @@ def get_planned_chat_settings() -> PlannedChatSettings:
         enabled=True,
         profiles=profiles,
         roles=MappingProxyType(roles),
-        catalog_source=raw_planned.get("catalog"),
+        catalog_source=_copy_catalog_source(raw_planned.get("catalog")),
         max_concurrent_tasks=_positive_int(
             raw_planned.get("max_concurrent_tasks", 3), "max_concurrent_tasks"
         ),

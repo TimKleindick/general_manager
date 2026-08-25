@@ -241,11 +241,14 @@ def validate_chat_settings() -> dict[str, Any]:
         raise ChatConfigurationError.invalid_confirm_mutations(joined)
     planned = settings.get("planned", {})
     if isinstance(planned, Mapping) and bool(planned.get("enabled", False)):
+        from general_manager.chat.planned.catalog import load_manager_catalog
         from general_manager.chat.planned.config import get_planned_chat_settings
+        from general_manager.chat.schema_index import build_schema_index
 
         planned_settings = get_planned_chat_settings()
         from general_manager.chat.planned.config import validate_profile_provider
 
         for profile in planned_settings.profiles.values():
             validate_profile_provider(profile)
+        load_manager_catalog(planned_settings.catalog_source, build_schema_index())
     return settings
