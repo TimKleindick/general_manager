@@ -346,7 +346,11 @@ def _executor_messages(
             "task_id": task.task_id,
             "objective": task.objective,
             "requirements": [
-                {"requirement_id": req.requirement_id, "kind": req.kind}
+                {
+                    "requirement_id": req.requirement_id,
+                    "kind": req.kind,
+                    "operation": req.operation,
+                }
                 for req in task.requirements
             ],
         },
@@ -429,6 +433,7 @@ class _TaskRuntime:
     child_count: int = 0
     candidates: tuple[str, ...] = ()
     path_depth: int | None = None
+    progress_signature: tuple[object, ...] | None = None
 
 
 @dataclass
@@ -651,22 +656,23 @@ class _Runner:
             if _stage_remaining(self.deadline, self.clock) <= 0:
                 await self.set_blocked(runtime, "deadline_exceeded")
                 return
+            candidates, _candidates_changed = self.resolve_candidates(runtime)
+            runtime.local_passes += 1
             if runtime.local_passes >= 10:
                 await self.set_blocked(runtime, "manager_unresolved")
                 return
-            try:
-                self.prepared.budget.consume_subtree(runtime.root_id)
-            except RoundBudgetExhausted:
-                await self.set_blocked(runtime, "budget_exhausted")
-                return
-            candidates, candidates_changed = self.resolve_candidates(runtime)
-            if candidates_changed:
-                runtime.local_passes = 0
-            else:
-                runtime.local_passes += 1
-            if runtime.local_passes > 10:
-                await self.set_blocked(runtime, "manager_unresolved")
-                return
+            signature = (
+                tuple((item["manager"], item["exact"]) for item in candidates),
+                tuple(sorted(self.resolved_anchors)),
+                tuple(
+                    record.evidence_id
+                    for record in self.evidence.for_task(runtime.task.task_id)
+                ),
+                runtime.path_depth,
+            )
+            if signature != runtime.progress_signature:
+                runtime.progress_signature = signature
+                runtime.no_progress = 0
             unique_manager = len(candidates) == 1 and bool(candidates[0]["exact"])
             if runtime.role != "fallback_executor":
                 runtime.role = select_executor_role(
@@ -676,6 +682,13 @@ class _Runner:
                     prior_failure=runtime.no_progress > 0,
                 )
             role = runtime.role
+            try:
+                # Resolution is free; charge only immediately before a real
+                # provider request can start.
+                self.prepared.budget.consume_subtree(runtime.root_id)
+            except RoundBudgetExhausted:
+                await self.set_blocked(runtime, "budget_exhausted")
+                return
             try:
                 provider = build_profile_provider(
                     profile_for_role(self.prepared.settings, role)
