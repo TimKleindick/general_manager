@@ -73,10 +73,10 @@ def test_planned_diagnostics_allow_only_safe_progress_fields(
     assert audit_sink == [
         {
             "event_type": "planned_task_progress",
-            "plan_id": "plan_7",
-            "task_id": "task_2",
-            "root_task_id": "task_1",
-            "parent_task_id": "task_1",
+            "plan_id": hashlib.sha256(b"plan_7").hexdigest(),
+            "task_id": hashlib.sha256(b"task_2").hexdigest(),
+            "root_task_id": hashlib.sha256(b"task_1").hexdigest(),
+            "parent_task_id": hashlib.sha256(b"task_1").hexdigest(),
             "role": "complex_executor",
             "match_sources": ["catalog_alias", "schema_field"],
             "call_hash": hashlib.sha256(canonical_identity.encode()).hexdigest(),
@@ -107,6 +107,9 @@ def test_planned_diagnostics_allow_only_safe_progress_fields(
         "raw_plan",
         "Traceback",
         canonical_identity,
+        "plan_7",
+        "task_2",
+        "task_1",
     ):
         assert marker not in serialized
 
