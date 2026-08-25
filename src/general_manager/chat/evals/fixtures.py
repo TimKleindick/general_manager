@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 import json
 from collections.abc import AsyncIterator, Mapping
@@ -402,7 +403,7 @@ class DeterministicPlannedProvider:
         planned = case.expectations.get("planned", {})
         raw_scripts = planned.get("scripts", {}) if isinstance(planned, dict) else {}
         cls.scripts[case.name] = {
-            str(role): [dict(item) for item in entries]
+            str(role): _expand_planned_script(entries)
             for role, entries in raw_scripts.items()
             if isinstance(entries, list)
         }
@@ -436,6 +437,9 @@ class DeterministicPlannedProvider:
             _script_exhausted(self.role)
         consumed.add(position)
         step = scripts[position]
+        sleep_seconds = step.get("sleep_seconds")
+        if isinstance(sleep_seconds, (int, float)) and sleep_seconds > 0:
+            await asyncio.sleep(sleep_seconds)
         usage = step.get("usage", {})
         if "tool" in step:
             yield ToolCallEvent(
@@ -458,6 +462,35 @@ def _script_exhausted(role: str) -> NoReturn:
     raise RuntimeError(  # noqa: TRY003
         f"deterministic script exhausted for {role}"
     )
+
+
+def _expand_planned_script(entries: list[Any]) -> list[dict[str, Any]]:
+    """Expand concise repeated fake tool steps into concrete provider rounds."""
+    expanded: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        repeat = entry.get("repeat_tool")
+        if not isinstance(repeat, dict):
+            expanded.append(dict(entry))
+            continue
+        count = repeat.get("count")
+        if not isinstance(count, int) or count < 1:
+            continue
+        base_args = repeat.get("args", {})
+        for index in range(count):
+            args = dict(base_args) if isinstance(base_args, dict) else {}
+            args["eval_round"] = index + 1
+            if isinstance(entry.get("task_id"), str):
+                args["eval_task"] = entry["task_id"]
+            expanded.append(
+                {
+                    "task_id": entry.get("task_id"),
+                    "tool": repeat.get("tool"),
+                    "args": args,
+                }
+            )
+    return expanded
 
 
 def _planned_task_id(messages: list[object]) -> str | None:

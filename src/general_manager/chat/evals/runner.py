@@ -2865,6 +2865,7 @@ _PLANNED_EVAL_ROLES = (
 
 def _planned_eval_settings(
     role_overrides: dict[str, PlannedEvalRoleOverride] | None,
+    planned: dict[str, Any],
 ) -> PlannedChatSettings:
     """Build isolated planned settings from explicit evaluation-only role pins."""
     if role_overrides is None:
@@ -2895,6 +2896,7 @@ def _planned_eval_settings(
         roles=MappingProxyType({role: role for role in _PLANNED_EVAL_ROLES}),
         catalog_source=None,
         max_concurrent_tasks=1,
+        evidence_timeout_seconds=float(planned.get("evidence_timeout_seconds", 90)),
     )
 
 
@@ -2906,12 +2908,15 @@ def _invalid_strategy() -> NoReturn:
     raise ValueError("strategy must be 'legacy' or 'planned'.")  # noqa: TRY003
 
 
-def _planned_tool_callback(case: EvalCase) -> Callable[[str, Any, Any], Any]:
+def _planned_tool_callback(
+    case: EvalCase, executions: list[tuple[str, Any]]
+) -> Callable[[str, Any, Any], Any]:
     """Return fixed tool outcomes; planned evals never use application tools."""
     planned = case.expectations.get("planned", {})
     configured = planned.get("tool_results", {}) if isinstance(planned, dict) else {}
 
     def execute(name: str, args: Any, _context: Any) -> Any:
+        executions.append((name, args))
         manager = args.get("manager") if isinstance(args, dict) else None
         if isinstance(configured, dict):
             result = configured.get(str(manager), configured.get(name))
@@ -2926,17 +2931,23 @@ async def _run_planned_case(
     provider: Any,
     case: EvalCase,
     *,
+    tool_defs: list[dict[str, Any]],
     stream: IO[str] | None,
     trace_writer: EvalTraceWriter | None,
     run_metadata: dict[str, Any] | None,
     role_overrides: dict[str, PlannedEvalRoleOverride] | None,
 ) -> EvalResult:
     """Run one planned case through the scheduler with deterministic providers."""
-    settings = _planned_eval_settings(role_overrides)
+    planned = case.expectations.get("planned", {})
+    if not isinstance(planned, dict):
+        _planned_eval_error("planned eval expectations must be a mapping.")
+    settings = _planned_eval_settings(role_overrides, planned)
     resolver = _planned_eval_resolver()
     history = [Message(role="system", content=build_system_prompt())]
     records: list[TurnRecord] = []
     events: list[dict[str, Any]] = []
+    execution_results = []
+    tool_executions: list[tuple[str, Any]] = []
     try:
         for turn in case.conversation:
             user_text = turn.get("user", "")
@@ -2951,21 +2962,25 @@ async def _run_planned_case(
                 resolver=resolver,
                 callbacks=SchedulerCallbacks(enforce_rate_limit=None),
             )
+            subtree_round_limit = planned.get("subtree_round_limit")
+            if isinstance(subtree_round_limit, int) and subtree_round_limit > 0:
+                prepared.budget.subtree_limit = subtree_round_limit
             if prepared.mutation_plan is not None:
                 if provider is None:
                     _planned_eval_error(
                         "mutation fallback requires a legacy eval provider."
                     )
-                legacy_record = await _run_turn(provider, [], [], stream=stream)
-                result = _score_case(case, [legacy_record])
-                result.tool_calls = list(legacy_record.tool_calls)
-                result.tool_results = list(legacy_record.tool_results)
-                result.answer = legacy_record.answer
+                result = await _run_legacy_case(
+                    provider,
+                    case,
+                    tool_defs,
+                    stream=stream,
+                    trace_writer=trace_writer,
+                    run_metadata=run_metadata,
+                )
                 result.diagnostics = {
                     "orchestration": {"strategy": "legacy", "reason": "mutation"}
                 }
-                result.usage = {}
-                result.trace = {"events": []}
                 result.fingerprint = stable_hash(
                     {"case": case.name, "strategy": "legacy", "answer": result.answer}
                 )
@@ -2978,12 +2993,14 @@ async def _run_planned_case(
                     conversation=None,
                     messages=history,
                     callbacks=SchedulerCallbacks(
-                        execute_tool=_planned_tool_callback(case),
+                        execute_tool=_planned_tool_callback(case, tool_executions),
                         enforce_rate_limit=None,
                     ),
                 )
             ]
             events.extend(turn_events)
+            if prepared.result is not None:
+                execution_results.append(prepared.result)
             record = TurnRecord()
             for event in turn_events:
                 if event["type"] == "tool_call":
@@ -3013,6 +3030,33 @@ async def _run_planned_case(
     result.diagnostics = planned_eval_diagnostics(
         events, {role: settings.roles[role] for role in _PLANNED_EVAL_ROLES}
     )
+    if execution_results:
+        execution = execution_results[-1]
+        terminal = next(
+            (
+                event.get("code")
+                for event in reversed(events)
+                if event["type"] == "error"
+            ),
+            None,
+        )
+        result.diagnostics["orchestration"] = {
+            "coverage": {
+                "resolved": execution.coverage.resolved,
+                "total": execution.coverage.total,
+            },
+            "unresolved": [
+                {"task_id": task_id, "reason": reason}
+                for task_id, reason in execution.coverage.unresolved
+            ],
+            "terminal_reason": terminal
+            or (
+                execution.coverage.unresolved[0][1]
+                if len(execution.coverage.unresolved) == 1
+                else None
+            ),
+        }
+    result.diagnostics["tool_executions"] = len(tool_executions)
     total_usage = TokenUsage()
     for event in events:
         raw_usage = event.get("usage")
@@ -3073,7 +3117,7 @@ def _planned_eval_resolver() -> ManagerResolver:
 # ---------------------------------------------------------------------------
 
 
-async def run_case(
+async def _run_legacy_case(
     provider: Any,
     case: EvalCase,
     tool_defs: list[dict[str, Any]],
@@ -3081,21 +3125,8 @@ async def run_case(
     trace_writer: EvalTraceWriter | None = None,
     run_metadata: dict[str, Any] | None = None,
     recover_missing_tools: bool = False,
-    strategy: str = "legacy",
-    role_overrides: dict[str, PlannedEvalRoleOverride] | None = None,
 ) -> EvalResult:
-    """Run a single eval case and return scored results."""
-    if strategy == "planned":
-        return await _run_planned_case(
-            provider,
-            case,
-            stream=stream,
-            trace_writer=trace_writer,
-            run_metadata=run_metadata,
-            role_overrides=role_overrides,
-        )
-    if strategy != "legacy":
-        _invalid_strategy()
+    """Run the established legacy eval path without planned orchestration."""
     system_prompt = build_system_prompt()
     history: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
     records: list[TurnRecord] = []
@@ -3146,6 +3177,41 @@ async def run_case(
         run_metadata=run_metadata,
     )
     return result
+
+
+async def run_case(
+    provider: Any,
+    case: EvalCase,
+    tool_defs: list[dict[str, Any]],
+    stream: IO[str] | None = None,
+    trace_writer: EvalTraceWriter | None = None,
+    run_metadata: dict[str, Any] | None = None,
+    recover_missing_tools: bool = False,
+    strategy: str = "legacy",
+    role_overrides: dict[str, PlannedEvalRoleOverride] | None = None,
+) -> EvalResult:
+    """Run one case with either the legacy or planned evaluation strategy."""
+    if strategy == "planned":
+        return await _run_planned_case(
+            provider,
+            case,
+            tool_defs=tool_defs,
+            stream=stream,
+            trace_writer=trace_writer,
+            run_metadata=run_metadata,
+            role_overrides=role_overrides,
+        )
+    if strategy != "legacy":
+        _invalid_strategy()
+    return await _run_legacy_case(
+        provider,
+        case,
+        tool_defs,
+        stream=stream,
+        trace_writer=trace_writer,
+        run_metadata=run_metadata,
+        recover_missing_tools=recover_missing_tools,
+    )
 
 
 async def run_eval_suite(
