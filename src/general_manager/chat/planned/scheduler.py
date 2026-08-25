@@ -434,6 +434,7 @@ class _TaskRuntime:
     candidates: tuple[str, ...] = ()
     path_depth: int | None = None
     progress_signature: tuple[object, ...] | None = None
+    resolved_anchors: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -453,7 +454,6 @@ class _Runner:
     events: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
     runtimes: dict[str, _TaskRuntime] = field(default_factory=dict)
     usage: TokenUsage = field(default_factory=TokenUsage)
-    resolved_anchors: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.usage = self.prepared.usage
@@ -592,9 +592,7 @@ class _Runner:
             ),
             None,
         )
-        successful = not (
-            isinstance(result, Mapping) and result.get("status") == "error"
-        )
+        successful = self._valid_tool_evidence(call.name, result)
         if kind is not None and requirement is not None and successful:
             evidence_id = f"{runtime.task.task_id}:{kind}:{len(self.evidence.for_task(runtime.task.task_id)) + 1}"
             record = EvidenceRecord.create(
@@ -602,7 +600,15 @@ class _Runner:
                 runtime.task.task_id,
                 cast(EvidenceKind, kind),
                 identity,
-                {"tool": call.name, "kind": kind},
+                {
+                    "tool": call.name,
+                    "kind": kind,
+                    **(
+                        {"manager": call.args["manager"]}
+                        if isinstance(call.args.get("manager"), str)
+                        else {}
+                    ),
+                },
                 result,
             )
             self.evidence.add(record, requirement=requirement)
@@ -610,15 +616,27 @@ class _Runner:
             if call.name in {"get_manager_schema", "query"} and isinstance(
                 manager, str
             ):
-                self.resolved_anchors.add(manager)
+                runtime.resolved_anchors.add(manager)
             if (
                 call.name == "find_path"
                 and isinstance(result, Sequence)
                 and not isinstance(result, (str, bytes, bytearray))
             ):
-                runtime.path_depth = max(0, len(result) - 1)
+                runtime.path_depth = len(result)
             return result, True
         return result, False
+
+    @staticmethod
+    def _valid_tool_evidence(name: str, result: object) -> bool:
+        if name == "query":
+            return isinstance(result, Mapping) and result.get("status") != "error"
+        if name == "get_manager_schema":
+            return isinstance(result, Mapping) and bool(result)
+        if name == "find_path":
+            return isinstance(result, list) and all(
+                isinstance(segment, str) and segment for segment in result
+            )
+        return False
 
     def requirements_satisfied(self, runtime: _TaskRuntime) -> bool:
         return all(
@@ -632,7 +650,7 @@ class _Runner:
         if resolver is None:
             return (), False
         candidates = resolver.resolve(
-            runtime.task.objective, tuple(sorted(self.resolved_anchors))
+            runtime.task.objective, tuple(sorted(runtime.resolved_anchors))
         )
         names = tuple(candidate.manager for candidate in candidates)
         changed = names != runtime.candidates
@@ -663,7 +681,7 @@ class _Runner:
                 return
             signature = (
                 tuple((item["manager"], item["exact"]) for item in candidates),
-                tuple(sorted(self.resolved_anchors)),
+                tuple(sorted(runtime.resolved_anchors)),
                 tuple(
                     record.evidence_id
                     for record in self.evidence.for_task(runtime.task.task_id)
