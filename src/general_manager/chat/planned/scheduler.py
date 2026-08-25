@@ -526,12 +526,13 @@ class _Runner:
             try:
                 from general_manager.chat.tools import ScopeChatContext
 
-                tool_scope = dict(self.scope)
-                tool_scope["planned_query_timeout_ms"] = max(
-                    1, math.ceil(_stage_remaining(self.deadline, self.clock) * 1000)
-                )
-                context = ScopeChatContext.from_scope(tool_scope)
                 async with self.tool_semaphore:
+                    tool_scope = dict(self.scope)
+                    tool_scope["planned_query_timeout_ms"] = max(
+                        1,
+                        math.ceil(_stage_remaining(self.deadline, self.clock) * 1000),
+                    )
+                    context = ScopeChatContext.from_scope(tool_scope)
                     result = await _call_sync(
                         self.callbacks,
                         self.callbacks.execute_tool,
