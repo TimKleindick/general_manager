@@ -350,6 +350,11 @@ def test_dynamic_children_handoff_parent_owned_snapshots_only_to_synthesis() -> 
     )
 
     assert events[-1]["type"] == "done"
+    assert events[-1]["orchestration"] == {
+        "status": "complete",
+        "coverage": {"resolved": 1, "total": 1},
+        "unresolved": [],
+    }
     assert prepared.result is not None
     result = prepared.result
     assert result.statuses == {
@@ -419,6 +424,11 @@ def test_child_failure_blocks_parent_but_not_an_independent_root() -> None:
     assert prepared.result.statuses["task_2"] == "resolved"
     assert [event["type"] for event in events].count("done") == 1
     assert [event["type"] for event in events].count("error") == 0
+    assert events[-1]["orchestration"] == {
+        "status": "partial",
+        "coverage": {"resolved": 1, "total": 2},
+        "unresolved": [{"task_id": "task_1", "reason": "dependency_blocked"}],
+    }
 
 
 def test_scheduler_rejects_a_third_dynamic_child_across_repeated_actions() -> None:
