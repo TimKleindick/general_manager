@@ -133,6 +133,92 @@ def _string_list(value: object, label: str) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _string_tuple(value: object, label: str) -> tuple[str, ...]:
+    if not isinstance(value, tuple):
+        _invalid(f"{label} must be a tuple.")
+    result: list[str] = []
+    for item in value:
+        result.append(_required_text(item, label))
+    if len(result) != len(set(result)):
+        _invalid(f"{label} must not contain duplicates.")
+    return tuple(result)
+
+
+def _validate_requirement_record(
+    value: object,
+    seen_requirement_ids: set[str],
+) -> EvidenceRequirement:
+    if not isinstance(value, EvidenceRequirement):
+        _invalid("requirements must contain EvidenceRequirement records.")
+    requirement_id = _required_text(value.requirement_id, "requirement_id")
+    if requirement_id in seen_requirement_ids:
+        _invalid(f"duplicate requirement_id {requirement_id!r}.")
+    seen_requirement_ids.add(requirement_id)
+    if not isinstance(value.kind, str) or value.kind not in _REQUIREMENT_KINDS:
+        _invalid("requirement kind is not supported.")
+    _required_text(value.description, "description")
+    operation = value.operation
+    if operation is not None and not isinstance(operation, str):
+        _invalid("requirement operation must be a string or null.")
+    if value.kind == "calculation":
+        if operation not in CALCULATION_OPERATIONS:
+            _invalid("calculation operation is not supported.")
+    elif operation is not None:
+        _invalid("only calculation requirements may define operation.")
+    return value
+
+
+def _expected_routing_features(
+    depends_on: tuple[str, ...],
+    requirements: tuple[EvidenceRequirement, ...],
+) -> tuple[RoutingFeature, ...]:
+    expected: list[RoutingFeature] = []
+    if depends_on:
+        expected.append("has_dependency")
+    if any(requirement.kind == "calculation" for requirement in requirements):
+        expected.append("requires_calculation")
+    if sum(requirement.kind == "query" for requirement in requirements) > 1:
+        expected.append("multiple_queries")
+    return tuple(expected)
+
+
+def _validate_task_record(value: object) -> PlannedTask:
+    """Validate a runtime task record before using it as trusted graph state."""
+    if not isinstance(value, PlannedTask):
+        _invalid("existing tasks must be planned task records.")
+    _required_text(value.task_id, "task_id")
+    _required_text(value.objective, "objective")
+    depends_on = _string_tuple(value.depends_on, "depends_on")
+    if value.task_id in depends_on:
+        _invalid(f"task {value.task_id!r} cannot depend on itself.")
+    if not isinstance(value.requirements, tuple):
+        _invalid("requirements must be a tuple.")
+    seen_requirement_ids: set[str] = set()
+    requirements = tuple(
+        _validate_requirement_record(item, seen_requirement_ids)
+        for item in value.requirements
+    )
+    completion_criteria = _string_tuple(
+        value.completion_criteria, "completion_criteria"
+    )
+    requirement_ids = {requirement.requirement_id for requirement in requirements}
+    if (
+        len(completion_criteria) != len(requirements)
+        or set(completion_criteria) != requirement_ids
+    ):
+        _invalid("completion_criteria must list every requirement exactly once.")
+    routing_features = _string_tuple(value.routing_features, "routing_features")
+    if any(feature not in _ROUTING_FEATURES for feature in routing_features):
+        _invalid("routing_features contains an unsupported feature.")
+    if tuple(routing_features) != _expected_routing_features(depends_on, requirements):
+        _invalid("routing_features must match task structure.")
+    if value.parent_id is not None:
+        _required_text(value.parent_id, "parent_id")
+        if value.parent_id == value.task_id:
+            _invalid("a task cannot own itself.")
+    return value
+
+
 def _parse_requirement(
     value: object,
     seen_requirement_ids: set[str],
@@ -140,28 +226,20 @@ def _parse_requirement(
     mapping = _mapping(value, "requirement")
     _exact_keys(mapping, _REQUIREMENT_KEYS, "requirement")
     requirement_id = _required_text(mapping["requirement_id"], "requirement_id")
-    if requirement_id in seen_requirement_ids:
-        _invalid(f"duplicate requirement_id {requirement_id!r}.")
-    seen_requirement_ids.add(requirement_id)
-
     kind = mapping["kind"]
     if not isinstance(kind, str) or kind not in _REQUIREMENT_KINDS:
         _invalid("requirement kind is not supported.")
     description = _required_text(mapping["description"], "description")
     operation = mapping["operation"]
-    if kind == "calculation":
-        if operation not in CALCULATION_OPERATIONS:
-            _invalid("calculation operation is not supported.")
-    elif operation is not None:
-        _invalid("only calculation requirements may define operation.")
     if operation is not None and not isinstance(operation, str):
         _invalid("requirement operation must be a string or null.")
-    return EvidenceRequirement(
+    parsed = EvidenceRequirement(
         requirement_id=requirement_id,
         kind=cast(RequirementKind, kind),
         description=description,
         operation=operation,
     )
+    return _validate_requirement_record(parsed, seen_requirement_ids)
 
 
 def _parse_task(
@@ -184,26 +262,8 @@ def _parse_task(
     completion_criteria = _string_list(
         mapping["completion_criteria"], "completion_criteria"
     )
-    requirement_ids = {requirement.requirement_id for requirement in requirements}
-    if (
-        len(completion_criteria) != len(requirements)
-        or set(completion_criteria) != requirement_ids
-    ):
-        _invalid("completion_criteria must list every requirement exactly once.")
-
     routing_features = _string_list(mapping["routing_features"], "routing_features")
-    if any(feature not in _ROUTING_FEATURES for feature in routing_features):
-        _invalid("routing_features contains an unsupported feature.")
-    expected_features: list[RoutingFeature] = []
-    if depends_on:
-        expected_features.append("has_dependency")
-    if any(requirement.kind == "calculation" for requirement in requirements):
-        expected_features.append("requires_calculation")
-    if sum(requirement.kind == "query" for requirement in requirements) > 1:
-        expected_features.append("multiple_queries")
-    if tuple(routing_features) != tuple(expected_features):
-        _invalid("routing_features must match task structure.")
-    return PlannedTask(
+    parsed = PlannedTask(
         task_id=task_id,
         objective=objective,
         depends_on=depends_on,
@@ -214,6 +274,7 @@ def _parse_task(
         ),
         parent_id=parent_id,
     )
+    return _validate_task_record(parsed)
 
 
 def _validate_root_graph(tasks: tuple[PlannedTask, ...]) -> None:
@@ -327,15 +388,22 @@ def validate_dynamic_children(
     existing_tasks: Collection[PlannedTask],
 ) -> tuple[PlannedTask, ...]:
     """Validate at most two non-recursive children owned by one root."""
-    if not isinstance(parent, PlannedTask):
-        _invalid("dynamic children require a planned task parent.")
+    parent = _validate_task_record(parent)
     if parent.parent_id is not None:
         _invalid("dynamic children cannot be created recursively.")
-    existing = tuple(existing_tasks)
-    if any(not isinstance(task, PlannedTask) for task in existing):
-        _invalid("existing tasks must be planned task records.")
+    try:
+        existing = tuple(existing_tasks)
+    except TypeError:
+        _invalid("existing tasks must be a collection.")
+    for task_record in existing:
+        _validate_task_record(task_record)
     existing_ids = [task.task_id for task in existing]
     if len(existing_ids) != len(set(existing_ids)):
+        _invalid("existing task IDs must be globally unique.")
+    if any(
+        task_record.task_id == parent.task_id and task_record != parent
+        for task_record in existing
+    ):
         _invalid("existing task IDs must be globally unique.")
     existing_id_set = set(existing_ids)
     existing_children = tuple(
@@ -354,6 +422,7 @@ def validate_dynamic_children(
         _invalid("a root may create at most two dynamic children.")
 
     seen_ids = set(existing_id_set)
+    seen_ids.add(parent.task_id)
     children: list[PlannedTask] = []
     for raw_child in raw_children:
         child = _parse_task(
@@ -367,6 +436,8 @@ def validate_dynamic_children(
         children.append(child)
     validated_children = tuple(children)
     existing_sibling_ids = {task.task_id for task in existing_children}
+    if any(task_record.parent_id in existing_sibling_ids for task_record in existing):
+        _invalid("dynamic children cannot be created recursively.")
     _validate_child_graph(existing_children, parent.task_id)
     _validate_child_graph(
         validated_children,
