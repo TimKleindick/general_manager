@@ -1361,11 +1361,25 @@ def test_evidence_deadline_cancels_async_provider_and_keeps_resolved_evidence() 
         )
         await asyncio.wait_for(entered.wait(), timeout=1.0)
         allow_resolve.set()
-        while runner.runtimes["task_1"].status != "resolved":
-            await asyncio.sleep(0)
+
+        async def wait_for_resolution() -> None:
+            while runner.runtimes["task_1"].status != "resolved":
+                await asyncio.sleep(0)
+
+        try:
+            await asyncio.wait_for(wait_for_resolution(), timeout=1.0)
+        except TimeoutError:
+            execution.cancel()
+            await asyncio.gather(execution, return_exceptions=True)
+            pytest.fail("task_1 did not resolve after its provider was released")
         now[0] = 10.0
         wake_scheduler.set()
-        await execution
+        try:
+            await asyncio.wait_for(execution, timeout=1.0)
+        except TimeoutError:
+            execution.cancel()
+            await asyncio.gather(execution, return_exceptions=True)
+            pytest.fail("scheduler did not finish after the evidence deadline")
         return runner
 
     runner = asyncio.run(run())
