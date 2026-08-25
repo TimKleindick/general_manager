@@ -49,7 +49,30 @@
   tags: [planned, dependency]
   conversation: [{user: "Find a parent and one dependent result."}]
   expectations:
-    planned: {coverage: {resolved: 2, total: 2}, terminal_reason: null, tool_sequence: [query, query], answer_tokens: [parent, dependent]}
+    planned:
+      coverage: {resolved: 2, total: 2}
+      terminal_reason: null
+      tool_sequence: [query, query]
+      answer_tokens: [parent, dependent]
+      tool_results:
+        PartManager: {status: success, data: [{name: parent}]}
+        MaterialManager: {status: success, data: [{name: dependent}]}
+      scripts:
+        planner:
+          - text:
+              intent: read
+              tasks:
+                - {task_id: task_1, objective: parts, depends_on: [], requirements: [{requirement_id: parent, kind: query, description: parent, operation: null}], completion_criteria: [parent], routing_features: []}
+                - {task_id: task_2, objective: materials, depends_on: [task_1], requirements: [{requirement_id: dependent, kind: query, description: dependent, operation: null}], completion_criteria: [dependent], routing_features: [has_dependency]}
+        simple_executor:
+          - {task_id: task_1, tool: query, args: {manager: PartManager}}
+          - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1"]}}
+        complex_executor:
+          - {task_id: task_2, tool: query, args: {manager: MaterialManager}}
+          - {task_id: task_2, text: {action: complete, evidence_ids: ["task_2:query:1"]}}
+        synthesizer:
+          - text: {answer: "parent dependent", evidence_ids: ["task_1:query:1", "task_2:query:1"]}
+        fallback_executor: []
 
 - name: dynamic_child_creation
   description: "A root creates a bounded child and receives its evidence."
@@ -57,7 +80,31 @@
   tags: [planned, dynamic_child]
   conversation: [{user: "Find a record and its missing dependent evidence."}]
   expectations:
-    planned: {coverage: {resolved: 1, total: 1}, terminal_reason: null, tool_sequence: [query], answer_tokens: [dependent]}
+    planned:
+      coverage: {resolved: 1, total: 1}
+      terminal_reason: null
+      tool_sequence: [query]
+      answer_tokens: [dependent]
+      tool_results: {PartManager: {status: success, data: [{name: dependent}]}}
+      scripts:
+        planner:
+          - text:
+              intent: read
+              tasks:
+                - {task_id: task_1, objective: "child evidence", depends_on: [], requirements: [{requirement_id: dependent, kind: query, description: dependent, operation: null}], completion_criteria: [dependent], routing_features: []}
+        simple_executor: []
+        complex_executor:
+          - task_id: task_1
+            text:
+              action: spawn_children
+              children:
+                - {task_id: task_1_child, objective: parts, depends_on: [task_1], requirements: [{requirement_id: child_query, kind: query, description: dependent, operation: null}], completion_criteria: [child_query], routing_features: [has_dependency]}
+          - {task_id: task_1_child, tool: query, args: {manager: PartManager}}
+          - {task_id: task_1_child, text: {action: complete, evidence_ids: ["task_1_child:query:1"]}}
+          - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:child:task_1_child:query:1"]}}
+        synthesizer:
+          - text: {answer: dependent, evidence_ids: ["task_1:child:task_1_child:query:1"]}
+        fallback_executor: []
 
 - name: deterministic_calculation
   description: "A calculation uses only resolved query evidence."
@@ -65,7 +112,26 @@
   tags: [planned, calculation]
   conversation: [{user: "Calculate the average value from the records."}]
   expectations:
-    planned: {coverage: {resolved: 1, total: 1}, terminal_reason: null, tool_sequence: [query], answer_tokens: [average]}
+    planned:
+      coverage: {resolved: 1, total: 1}
+      terminal_reason: null
+      tool_sequence: [query]
+      answer_tokens: [average]
+      tool_results: {PartManager: {status: success, data: [{value: 4}]}}
+      scripts:
+        planner:
+          - text:
+              intent: read
+              tasks:
+                - {task_id: task_1, objective: parts, depends_on: [], requirements: [{requirement_id: source, kind: query, description: source, operation: null}, {requirement_id: average, kind: calculation, description: average, operation: average}], completion_criteria: [source, average], routing_features: [requires_calculation]}
+        simple_executor: []
+        complex_executor:
+          - {task_id: task_1, tool: query, args: {manager: PartManager}}
+          - {task_id: task_1, text: {action: calculate, requirement_id: average, operation: average, operands: [{evidence_id: "task_1:query:1", path: [data, 0, value]}]}}
+          - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1", "task_1:calculation:2"]}}
+        synthesizer:
+          - text: {answer: "average is 4", evidence_ids: ["task_1:query:1", "task_1:calculation:2"]}
+        fallback_executor: []
 
 - name: partial_independent_answer
   description: "Keep independent grounded evidence when another root is unresolved."
@@ -113,7 +179,34 @@
   tags: [planned, budget]
   conversation: [{user: "Use the budgeted planned path."}]
   expectations:
-    planned: {coverage: {resolved: 0, total: 1}, terminal_reason: budget_exhausted, tool_sequence: [query], answer_tokens: []}
+    planned:
+      coverage: {resolved: 0, total: 1}
+      terminal_reason: budget_exhausted
+      tool_sequence: [query, query, query]
+      answer_tokens: []
+      subtree_round_limit: 3
+      tool_results: {PartManager: {status: success, data: []}}
+      scripts:
+        planner:
+          - text:
+              intent: read
+              tasks:
+                - task_id: task_1
+                  objective: budget
+                  depends_on: []
+                  requirements:
+                    - {requirement_id: q01, kind: query, description: q01, operation: null}
+                    - {requirement_id: q02, kind: query, description: q02, operation: null}
+                    - {requirement_id: q03, kind: query, description: q03, operation: null}
+                    - {requirement_id: q04, kind: query, description: q04, operation: null}
+                  completion_criteria: [q01, q02, q03, q04]
+                  routing_features: [multiple_queries]
+        simple_executor: []
+        complex_executor:
+          - task_id: task_1
+            repeat_tool: {count: 3, tool: query, args: {manager: PartManager}}
+        synthesizer: []
+        fallback_executor: []
 
 - name: deadline_exhaustion
   description: "Evidence-stage deadline produces the public deadline reason."
@@ -121,7 +214,23 @@
   tags: [planned, deadline]
   conversation: [{user: "Use the deadline-limited planned path."}]
   expectations:
-    planned: {coverage: {resolved: 0, total: 1}, terminal_reason: deadline_exceeded, tool_sequence: [], answer_tokens: []}
+    planned:
+      coverage: {resolved: 0, total: 1}
+      terminal_reason: deadline_exceeded
+      tool_sequence: []
+      answer_tokens: []
+      evidence_timeout_seconds: 0.1
+      scripts:
+        planner:
+          - text:
+              intent: read
+              tasks:
+                - {task_id: task_1, objective: parts, depends_on: [], requirements: [{requirement_id: q, kind: query, description: q, operation: null}], completion_criteria: [q], routing_features: []}
+        simple_executor:
+          - {task_id: task_1, sleep_seconds: 0.2, text: {action: block, reason: manager_unresolved}}
+        complex_executor: []
+        synthesizer: []
+        fallback_executor: []
 
 - name: duplicate_rejection
   description: "Canonical duplicate calls return cached results without re-execution."
@@ -129,7 +238,26 @@
   tags: [planned, duplicate]
   conversation: [{user: "Reject the duplicate planned query."}]
   expectations:
-    planned: {coverage: {resolved: 1, total: 1}, terminal_reason: null, tool_sequence: [query, query], answer_tokens: [cached]}
+    planned:
+      coverage: {resolved: 1, total: 1}
+      terminal_reason: null
+      tool_sequence: [query, query]
+      answer_tokens: [cached]
+      tool_results: {PartManager: {status: success, data: [{name: cached}]}}
+      scripts:
+        planner:
+          - text:
+              intent: read
+              tasks:
+                - {task_id: task_1, objective: parts, depends_on: [], requirements: [{requirement_id: q, kind: query, description: q, operation: null}], completion_criteria: [q], routing_features: []}
+        simple_executor:
+          - {task_id: task_1, tool: query, args: {manager: PartManager, fields: [name]}}
+          - {task_id: task_1, tool: query, args: {fields: [name], manager: PartManager}}
+          - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1"]}}
+        complex_executor: []
+        synthesizer:
+          - text: {answer: cached, evidence_ids: ["task_1:query:1"]}
+        fallback_executor: []
 
 - name: two_pass_no_progress
   description: "Two resolver passes with no progress terminate manager resolution."
@@ -137,7 +265,26 @@
   tags: [planned, no_progress]
   conversation: [{user: "Resolve an unknown manager twice."}]
   expectations:
-    planned: {coverage: {resolved: 0, total: 1}, terminal_reason: manager_unresolved, tool_sequence: [], answer_tokens: []}
+    planned:
+      coverage: {resolved: 0, total: 1}
+      terminal_reason: manager_unresolved
+      tool_sequence: [search_managers, search_managers, search_managers, search_managers]
+      answer_tokens: []
+      tool_results: {search_managers: {status: error, code: unresolved}}
+      scripts:
+        planner:
+          - text:
+              intent: read
+              tasks:
+                - {task_id: task_1, objective: unknown, depends_on: [], requirements: [{requirement_id: q, kind: query, description: q, operation: null}], completion_criteria: [q], routing_features: []}
+        simple_executor: []
+        complex_executor:
+          - {task_id: task_1, tool: search_managers, args: {query: unknown}}
+          - {task_id: task_1, tool: search_managers, args: {query: unknown}}
+        synthesizer: []
+        fallback_executor:
+          - {task_id: task_1, tool: search_managers, args: {query: unknown}}
+          - {task_id: task_1, tool: search_managers, args: {query: unknown}}
 
 - name: mutation_fallback
   description: "A write intent returns to the unchanged legacy evaluation turn."

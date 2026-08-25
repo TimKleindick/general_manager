@@ -262,14 +262,32 @@ def sanitize_planned_trace(events: Sequence[Mapping[str, Any]]) -> dict[str, Any
     """Return deterministic public planned events without routing internals."""
     safe_events: list[dict[str, Any]] = []
     for event in events:
-        item = {
-            key: value
-            for key, value in event.items()
-            if key not in {"profile", "result", "trust_group"}
-        }
-        if "result" in event:
-            item["result_type"] = type(event["result"]).__name__
-        safe_events.append(item)
+        event_type = event.get("type")
+        if event_type == "tool_call":
+            safe_events.append({"type": "tool_call", "name": event.get("name")})
+        elif event_type == "tool_result":
+            safe_events.append({"type": "tool_result", "name": event.get("name")})
+        elif event_type == "text_chunk":
+            safe_events.append({"type": "text_chunk", "content": event.get("content")})
+        elif event_type == "done":
+            orchestration = event.get("orchestration")
+            safe_orchestration = (
+                {
+                    "status": orchestration.get("status"),
+                    "coverage": orchestration.get("coverage"),
+                }
+                if isinstance(orchestration, Mapping)
+                else None
+            )
+            safe_events.append(
+                {
+                    "type": "done",
+                    "usage": event.get("usage"),
+                    "orchestration": safe_orchestration,
+                }
+            )
+        elif event_type == "error":
+            safe_events.append({"type": "error", "code": event.get("code")})
     return {"events": safe_events}
 
 
