@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Mapping
 import json
 import threading
 import time
+from dataclasses import replace
 from types import MappingProxyType
 from typing import Any, ClassVar, cast
 
@@ -2194,13 +2195,50 @@ def test_sync_tool_cancellation_is_best_effort_for_the_worker_thread() -> None:
 
 
 PRIVATE_MARKERS = ("profile", "trust_group", "raw_plan", "Traceback", "catalog")
+PRIVATE_SENTINELS = (
+    "private-profile-sentinel-71e5",
+    "private-trust-sentinel-82f6",
+    "private-raw-plan-sentinel-93a7",
+    "private-exception-sentinel-a4b8",
+    "private-catalog-sentinel-b5c9",
+    "private-routing-sentinel-c6da",
+)
+
+
+def _assert_public_event_schema(event: dict[str, Any]) -> None:
+    event_type = event["type"]
+    if event_type == "tool_call":
+        assert set(event) == {"type", "task_id", "id", "name", "args"}
+    elif event_type == "tool_result":
+        assert set(event) == {"type", "task_id", "id", "name", "result"}
+    elif event_type == "text_chunk":
+        assert set(event) == {"type", "content"}
+    elif event_type == "done":
+        assert set(event) == {"type", "usage", "orchestration"}
+        assert set(event["usage"]) == {"input_tokens", "output_tokens"}
+        assert set(event["orchestration"]) == {
+            "status",
+            "coverage",
+            "unresolved",
+        }
+        assert set(event["orchestration"]["coverage"]) == {"resolved", "total"}
+        assert all(
+            set(item) == {"task_id", "reason"}
+            for item in event["orchestration"]["unresolved"]
+        )
+    elif event_type == "error":
+        assert set(event) == {"type", "code", "message"}
+    else:
+        pytest.fail("unexpected planned public event type")
 
 
 def _assert_public_terminal_matrix(events: list[dict[str, Any]]) -> None:
     payload = json.dumps(events)
     assert all(marker not in payload for marker in PRIVATE_MARKERS)
+    assert all(sentinel not in payload for sentinel in PRIVATE_SENTINELS)
     assert len([event for event in events if event["type"] in {"done", "error"}]) == 1
     for event in events:
+        _assert_public_event_schema(event)
         if event["type"] == "error":
             assert event["code"] in PLANNED_PUBLIC_MESSAGES
         if event["type"] == "done":
@@ -2212,23 +2250,28 @@ def _assert_public_terminal_matrix(events: list[dict[str, Any]]) -> None:
 
 
 def _assert_tool_pairs_are_ordered(events: list[dict[str, Any]]) -> None:
-    calls: dict[tuple[str, str], dict[str, Any]] = {}
-    results: set[tuple[str, str]] = set()
+    pending: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    call_count = 0
+    result_count = 0
     for event in events:
         key = (event.get("task_id", ""), event.get("id", ""))
         if event["type"] == "tool_call":
-            calls[key] = event
+            pending.setdefault(key, []).append(event)
+            call_count += 1
         elif event["type"] == "tool_result":
-            assert key in calls
-            assert event["task_id"] == calls[key]["task_id"]
-            assert event["name"] == calls[key]["name"]
-            results.add(key)
-    assert set(calls) == results
+            assert pending.get(key)
+            call = pending[key].pop(0)
+            assert event["task_id"] == call["task_id"]
+            assert event["name"] == call["name"]
+            result_count += 1
+    assert call_count == result_count
+    assert not any(pending.values())
 
 
 class _MatrixDeadlineProvider:
     entered: ClassVar[asyncio.Event | None] = None
     first_ready: ClassVar[asyncio.Event | None] = None
+    late_waiting: ClassVar[asyncio.Event | None] = None
     release: ClassVar[asyncio.Event | None] = None
     wake: ClassVar[asyncio.Event | None] = None
     rounds: ClassVar[dict[str, int]] = {}
@@ -2244,11 +2287,13 @@ class _MatrixDeadlineProvider:
         task_id = json.loads(content.removeprefix("REFERENCE_DATA="))["task"]["task_id"]
         entered = type(self).entered
         first_ready = type(self).first_ready
+        late_waiting = type(self).late_waiting
         release = type(self).release
         wake = type(self).wake
         assert (
             entered is not None
             and first_ready is not None
+            and late_waiting is not None
             and release is not None
             and wake is not None
         )
@@ -2277,6 +2322,7 @@ class _MatrixDeadlineProvider:
             await release.wait()
             await asyncio.Future()
         else:
+            late_waiting.set()
             await wake.wait()
             yield ToolCallEvent(
                 "deadline-late-query",
@@ -2288,16 +2334,28 @@ class _MatrixDeadlineProvider:
 
 def _matrix_deadline_settings() -> PlannedChatSettings:
     executor = ProviderProfile(
-        "matrix_deadline",
+        PRIVATE_SENTINELS[0],
         "tests.unit.test_chat_planned_scheduler._MatrixDeadlineProvider",
-        MappingProxyType({"role": "executor"}),
-        "local",
+        MappingProxyType(
+            {
+                "role": "executor",
+                "profile_diagnostic": PRIVATE_SENTINELS[0],
+                "routing_diagnostic": PRIVATE_SENTINELS[5],
+            }
+        ),
+        PRIVATE_SENTINELS[1],
     )
     synthesizer = ProviderProfile(
-        "matrix_synthesizer",
+        f"{PRIVATE_SENTINELS[0]}-synth",
         "tests.unit.test_chat_planned_scheduler._Executor",
-        MappingProxyType({"role": "synthesizer"}),
-        "local",
+        MappingProxyType(
+            {
+                "role": "synthesizer",
+                "profile_diagnostic": PRIVATE_SENTINELS[0],
+                "routing_diagnostic": PRIVATE_SENTINELS[5],
+            }
+        ),
+        PRIVATE_SENTINELS[1],
     )
     return PlannedChatSettings(
         enabled=True,
@@ -2311,8 +2369,37 @@ def _matrix_deadline_settings() -> PlannedChatSettings:
                 "planner": "synthesizer",
             }
         ),
-        catalog_source=None,
+        catalog_source={"manager": PRIVATE_SENTINELS[4]},
         evidence_timeout_seconds=10.0,
+    )
+
+
+def _matrix_settings() -> PlannedChatSettings:
+    profile = ProviderProfile(
+        PRIVATE_SENTINELS[0],
+        "tests.unit.test_chat_planned_scheduler._Executor",
+        MappingProxyType(
+            {
+                "model": "test",
+                "profile_diagnostic": PRIVATE_SENTINELS[0],
+                "routing_diagnostic": PRIVATE_SENTINELS[5],
+            }
+        ),
+        PRIVATE_SENTINELS[1],
+    )
+    return PlannedChatSettings(
+        enabled=True,
+        profiles=MappingProxyType({PRIVATE_SENTINELS[0]: profile}),
+        roles=MappingProxyType(
+            {
+                "simple_executor": PRIVATE_SENTINELS[0],
+                "complex_executor": PRIVATE_SENTINELS[0],
+                "fallback_executor": PRIVATE_SENTINELS[0],
+                "synthesizer": PRIVATE_SENTINELS[0],
+                "planner": PRIVATE_SENTINELS[0],
+            }
+        ),
+        catalog_source={"manager": PRIVATE_SENTINELS[4]},
     )
 
 
@@ -2320,7 +2407,7 @@ def _matrix_tasks() -> tuple[PlannedTask, PlannedTask, PlannedTask]:
     return tuple(
         PlannedTask(
             task_id,
-            "find records",
+            f"find records {PRIVATE_SENTINELS[2]}",
             (),
             (EvidenceRequirement(f"{task_id}_query", "query", "records", None),),
             (f"{task_id}_query",),
@@ -2336,7 +2423,10 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
     _Executor.calls = []
     _Executor.roles = []
     if scenario == "complete":
-        parent = _dynamic_parent()
+        parent = replace(
+            _dynamic_parent(),
+            objective=f"find dependent records {PRIVATE_SENTINELS[2]}",
+        )
         first_id, second_id = "task_1_child_1", "task_1_child_2"
         _Executor.responses = [
             {
@@ -2382,7 +2472,9 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
             ],
         }
         prepared = PreparedPlannedTurn.for_plan(
-            ValidatedPlan("read", (parent,)), _settings(), user_text="show parts"
+            ValidatedPlan("read", (parent,)),
+            _matrix_settings(),
+            user_text="show parts",
         )
         return await _collect(
             iter_planned_read_events(
@@ -2399,7 +2491,7 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
         resolved = _task("resolved")
         budget = PlannedTask(
             "budget",
-            "find records and dependent records",
+            f"find records and dependent records {PRIVATE_SENTINELS[2]}",
             (),
             (
                 EvidenceRequirement("budget_first", "query", "records", None),
@@ -2489,7 +2581,7 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
         }
         prepared = PreparedPlannedTurn.for_plan(
             ValidatedPlan("read", (resolved, budget)),
-            _settings(),
+            _matrix_settings(),
             user_text="show parts",
         )
         return await _collect(
@@ -2512,6 +2604,7 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
         ]
         _MatrixDeadlineProvider.entered = asyncio.Event()
         _MatrixDeadlineProvider.first_ready = asyncio.Event()
+        _MatrixDeadlineProvider.late_waiting = asyncio.Event()
         _MatrixDeadlineProvider.release = asyncio.Event()
         _MatrixDeadlineProvider.wake = asyncio.Event()
         _MatrixDeadlineProvider.rounds = {}
@@ -2524,40 +2617,60 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
         prepared.evidence_deadline = 10.0
 
         async def collect() -> list[dict[str, Any]]:
+            late_tool_done = asyncio.Event()
+
+            def execute_tool(
+                _name: str, args: Mapping[str, Any], _context: object
+            ) -> dict[str, Any]:
+                if args.get("fields") == ["late"]:
+                    now[0] = 10.0
+                    late_tool_done.set()
+                return {"status": "success", "data": []}
+
+            async def run_sync(
+                fn: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+            ) -> Any:
+                return fn(*args, **kwargs)
+
             iterator = iter_planned_read_events(
                 prepared,
                 scope={},
                 conversation=None,
                 messages=[],
                 callbacks=SchedulerCallbacks(
-                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                    execute_tool=execute_tool,
+                    run_sync=run_sync,
                 ),
                 clock=lambda: now[0],
             )
             result = asyncio.create_task(_collect(iterator))
             entered = _MatrixDeadlineProvider.entered
             first_ready = _MatrixDeadlineProvider.first_ready
+            late_waiting = _MatrixDeadlineProvider.late_waiting
             release = _MatrixDeadlineProvider.release
             wake = _MatrixDeadlineProvider.wake
             assert (
                 entered is not None
                 and first_ready is not None
+                and late_waiting is not None
                 and release is not None
                 and wake is not None
             )
             await asyncio.wait_for(entered.wait(), timeout=1.0)
+            await asyncio.wait_for(late_waiting.wait(), timeout=1.0)
             release.set()
             await asyncio.wait_for(first_ready.wait(), timeout=1.0)
-            now[0] = 10.0
             wake.set()
+            await asyncio.wait_for(late_tool_done.wait(), timeout=1.0)
             return await result
 
         return await collect()
     if scenario == "no_evidence_provider":
-        _Executor.responses = [_ProviderFailure()] * 4
+        _Executor.responses = [_ProviderFailure(PRIVATE_SENTINELS[3])] * 4
+        task = replace(_task("task_1"), objective=PRIVATE_SENTINELS[2])
         prepared = PreparedPlannedTurn.for_plan(
-            ValidatedPlan("read", (_task("task_1"),)),
-            _settings(),
+            ValidatedPlan("read", (task,)),
+            _matrix_settings(),
             user_text="show parts",
         )
         return await _collect(
@@ -2584,9 +2697,10 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
                 {"action": "complete", "evidence_ids": ["task_1:query:1"]},
             ]
         }
+        task = replace(_task("task_1"), objective=PRIVATE_SENTINELS[2])
         prepared = PreparedPlannedTurn.for_plan(
-            ValidatedPlan("read", (_task("task_1"),)),
-            _settings(),
+            ValidatedPlan("read", (task,)),
+            _matrix_settings(),
             user_text="show parts",
         )
         return await _collect(
@@ -2621,6 +2735,7 @@ def test_planned_terminal_event_matrix(
     terminals = [event for event in events if event["type"] in {"done", "error"}]
     assert len(terminals) == 1
     assert terminals[0]["type"] == terminal
+    assert events[-1] is terminals[0]
     if status is not None:
         assert terminals[0]["orchestration"]["status"] == status
     if reason is not None:
@@ -2629,6 +2744,7 @@ def test_planned_terminal_event_matrix(
         _assert_tool_pairs_are_ordered(events)
         text_chunks = [event for event in events if event["type"] == "text_chunk"]
         assert len(text_chunks) == 1
+        assert events[-2] is text_chunks[0]
         assert events[-2]["type"] == "text_chunk"
         assert "executor prose" not in text_chunks[0]["content"]
         if scenario == "complete":
@@ -2664,6 +2780,10 @@ def test_planned_terminal_event_matrix(
             assert {
                 item["task_id"] for item in terminals[0]["orchestration"]["unresolved"]
             } == {"deadline_late", "deadline_wait"}
+            assert terminals[0]["usage"] == {
+                "input_tokens": 4,
+                "output_tokens": 4,
+            }
     else:
         assert not any(event["type"] == "done" for event in events)
         assert not any(event["type"] == "text_chunk" for event in events)
