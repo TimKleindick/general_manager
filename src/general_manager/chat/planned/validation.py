@@ -12,6 +12,7 @@ from general_manager.chat.planned.models import (
     PlanIntent,
     PlannedTask,
     RequirementKind,
+    RoutingFeature,
     ValidatedPlan,
 )
 
@@ -21,11 +22,25 @@ MAX_CHILDREN_PER_ROOT = 2
 MAX_ROOT_DEPENDENCY_DEPTH = 1
 
 _PLAN_KEYS = frozenset(("intent", "tasks"))
-_TASK_KEYS = frozenset(("task_id", "objective", "depends_on", "requirements"))
+_TASK_KEYS = frozenset(
+    (
+        "task_id",
+        "objective",
+        "depends_on",
+        "requirements",
+        "completion_criteria",
+        "routing_features",
+    )
+)
 _REQUIREMENT_KEYS = frozenset(("requirement_id", "kind", "description", "operation"))
 _CHILDREN_KEYS = frozenset(("children",))
 _INTENTS = frozenset(("read", "mutation"))
 _REQUIREMENT_KINDS = frozenset(("schema", "path", "query", "calculation"))
+_ROUTING_FEATURES: tuple[RoutingFeature, ...] = (
+    "has_dependency",
+    "requires_calculation",
+    "multiple_queries",
+)
 
 
 class PlanValidationError(ValueError):
@@ -166,11 +181,37 @@ def _parse_task(
     requirements = tuple(
         _parse_requirement(item, seen_requirement_ids) for item in raw_requirements
     )
+    completion_criteria = _string_list(
+        mapping["completion_criteria"], "completion_criteria"
+    )
+    requirement_ids = {requirement.requirement_id for requirement in requirements}
+    if (
+        len(completion_criteria) != len(requirements)
+        or set(completion_criteria) != requirement_ids
+    ):
+        _invalid("completion_criteria must list every requirement exactly once.")
+
+    routing_features = _string_list(mapping["routing_features"], "routing_features")
+    if any(feature not in _ROUTING_FEATURES for feature in routing_features):
+        _invalid("routing_features contains an unsupported feature.")
+    expected_features: list[RoutingFeature] = []
+    if depends_on:
+        expected_features.append("has_dependency")
+    if any(requirement.kind == "calculation" for requirement in requirements):
+        expected_features.append("requires_calculation")
+    if sum(requirement.kind == "query" for requirement in requirements) > 1:
+        expected_features.append("multiple_queries")
+    if tuple(routing_features) != tuple(expected_features):
+        _invalid("routing_features must match task structure.")
     return PlannedTask(
         task_id=task_id,
         objective=objective,
         depends_on=depends_on,
         requirements=requirements,
+        completion_criteria=completion_criteria,
+        routing_features=tuple(
+            cast(RoutingFeature, feature) for feature in routing_features
+        ),
         parent_id=parent_id,
     )
 
@@ -241,9 +282,14 @@ def validate_plan(payload: object) -> ValidatedPlan:
     return ValidatedPlan(intent=cast(PlanIntent, intent), tasks=validated_tasks)
 
 
-def _validate_child_graph(children: tuple[PlannedTask, ...], parent_id: str) -> None:
+def _validate_child_graph(
+    children: tuple[PlannedTask, ...],
+    parent_id: str,
+    existing_sibling_ids: Collection[str] = (),
+) -> None:
     child_ids = {child.task_id for child in children}
-    allowed_dependencies = child_ids | {parent_id}
+    existing_ids = set(existing_sibling_ids)
+    allowed_dependencies = child_ids | existing_ids | {parent_id}
     for child in children:
         if child.task_id in child.depends_on:
             _invalid(f"child {child.task_id!r} cannot depend on itself.")
@@ -256,7 +302,7 @@ def _validate_child_graph(children: tuple[PlannedTask, ...], parent_id: str) -> 
     visiting: set[str] = set()
 
     def depth(task_id: str) -> int:
-        if task_id == parent_id:
+        if task_id == parent_id or task_id in existing_ids:
             return 0
         if task_id in visiting:
             _invalid("dynamic child dependencies must be acyclic.")
@@ -278,16 +324,23 @@ def _validate_child_graph(children: tuple[PlannedTask, ...], parent_id: str) -> 
 def validate_dynamic_children(
     parent: PlannedTask,
     payload: object,
-    existing_ids: Collection[str],
+    existing_tasks: Collection[PlannedTask],
 ) -> tuple[PlannedTask, ...]:
     """Validate at most two non-recursive children owned by one root."""
     if not isinstance(parent, PlannedTask):
         _invalid("dynamic children require a planned task parent.")
     if parent.parent_id is not None:
         _invalid("dynamic children cannot be created recursively.")
-    if any(not isinstance(task_id, str) for task_id in existing_ids):
-        _invalid("existing task IDs must be strings.")
-    existing = set(existing_ids)
+    existing = tuple(existing_tasks)
+    if any(not isinstance(task, PlannedTask) for task in existing):
+        _invalid("existing tasks must be planned task records.")
+    existing_ids = [task.task_id for task in existing]
+    if len(existing_ids) != len(set(existing_ids)):
+        _invalid("existing task IDs must be globally unique.")
+    existing_id_set = set(existing_ids)
+    existing_children = tuple(
+        task for task in existing if task.parent_id == parent.task_id
+    )
 
     _ensure_json_compatible(payload)
     mapping = _mapping(payload, "dynamic children")
@@ -297,8 +350,10 @@ def validate_dynamic_children(
         _invalid("children must be an array.")
     if len(raw_children) > MAX_CHILDREN_PER_ROOT:
         _invalid("a root may create at most two dynamic children.")
+    if len(existing_children) + len(raw_children) > MAX_CHILDREN_PER_ROOT:
+        _invalid("a root may create at most two dynamic children.")
 
-    seen_ids = set(existing)
+    seen_ids = set(existing_id_set)
     children: list[PlannedTask] = []
     for raw_child in raw_children:
         child = _parse_task(
@@ -311,5 +366,11 @@ def validate_dynamic_children(
         seen_ids.add(child.task_id)
         children.append(child)
     validated_children = tuple(children)
-    _validate_child_graph(validated_children, parent.task_id)
+    existing_sibling_ids = {task.task_id for task in existing_children}
+    _validate_child_graph(existing_children, parent.task_id)
+    _validate_child_graph(
+        validated_children,
+        parent.task_id,
+        existing_sibling_ids,
+    )
     return validated_children

@@ -25,6 +25,11 @@ TerminalReason: TypeAlias = Literal[
 ]
 
 RequirementKind: TypeAlias = Literal["schema", "path", "query", "calculation"]
+RoutingFeature: TypeAlias = Literal[
+    "has_dependency",
+    "requires_calculation",
+    "multiple_queries",
+]
 PlanIntent: TypeAlias = Literal["read", "mutation"]
 
 CALCULATION_OPERATIONS: tuple[str, ...] = (
@@ -57,6 +62,8 @@ class PlannedTask:
     objective: str
     depends_on: tuple[str, ...]
     requirements: tuple[EvidenceRequirement, ...]
+    completion_criteria: tuple[str, ...]
+    routing_features: tuple[RoutingFeature, ...]
     parent_id: str | None = None
 
 
