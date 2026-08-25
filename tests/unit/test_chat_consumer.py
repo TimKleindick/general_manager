@@ -599,6 +599,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 ),
             ):
                 await consumer.receive_json({"type": "message", "text": "hello"})
+                provider_task = consumer._provider_task
+                assert provider_task is not None
+                await provider_task
 
             events = [call.args[0] for call in send.await_args_list]
             assert [event["type"] for event in events] == [
@@ -652,11 +655,15 @@ class ChatConsumerMessageTests(unittest.TestCase):
             ):
                 task = asyncio.create_task(
                     consumer._stream_message_turn(
-                        "show parts", [Message(role="user", content="show parts")], []
+                        "show parts",
+                        [Message(role="user", content="show parts")],
+                        [],
                     )
                 )
                 await asyncio.wait_for(entered.wait(), timeout=1)
-                assert consumer._provider_task is task
+                provider_task = consumer._provider_task
+                assert provider_task is not None
+                assert provider_task is not task
                 await consumer.disconnect(1000)
                 await asyncio.gather(task, return_exceptions=True)
 
