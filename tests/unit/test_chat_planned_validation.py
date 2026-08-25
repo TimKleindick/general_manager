@@ -457,6 +457,64 @@ def test_dynamic_children_have_globally_unique_ids() -> None:
         )
 
 
+def test_dynamic_children_reserve_parent_id_without_parent_history() -> None:
+    parent = parent_task()
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(
+            parent,
+            child_payload(task(parent.task_id)),
+            (),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("task_id", ""),
+        ("objective", ""),
+        ("depends_on", ["task_1"]),
+        ("requirements", ("not-a-requirement",)),
+        ("completion_criteria", ("missing",)),
+        ("routing_features", ("requires_calculation",)),
+    ],
+)
+def test_dynamic_children_validate_existing_task_record_invariants(
+    field: str,
+    value: object,
+) -> None:
+    parent = parent_task()
+    malformed = replace(parent, **{field: value})
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(parent, child_payload(task("child_1")), [malformed])
+
+
+def test_dynamic_children_validate_existing_requirement_invariants() -> None:
+    parent = parent_task()
+    malformed_requirement = replace(parent.requirements[0], description="")
+    malformed = replace(
+        parent,
+        requirements=(malformed_requirement,),
+        completion_criteria=(malformed_requirement.requirement_id,),
+    )
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(parent, child_payload(task("child_1")), [malformed])
+
+
+def test_dynamic_children_validate_parent_runtime_invariants() -> None:
+    parent = parent_task()
+    malformed_parent = replace(parent, parent_id="another_root")
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(
+            malformed_parent,
+            child_payload(task("child_1")),
+            (),
+        )
+
+
 def test_dynamic_children_cannot_depend_on_another_subtree() -> None:
     parent = parent_task()
     other_root = validate_plan(plan([task("other_root")])).tasks[0]
