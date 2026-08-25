@@ -272,7 +272,11 @@ async def synthesize_answer(
         except InvalidProviderRoundError as exc:
             total_usage = _add_usage(total_usage, exc.usage)
             attempt_usages.append(exc.usage)
-        except RoundBudgetExhausted:
+        except RoundBudgetExhausted as exc:
+            # Preserve already reported attempts for the scheduler's token
+            # accounting even though the next attempt could not be admitted.
+            exc.attempt_usages = tuple(attempt_usages)
+            exc.usage = total_usage
             raise
         except Exception:  # noqa: BLE001, S110
             # Provider and parse diagnostics are never exposed as grounding input.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import NoReturn
+from typing import Any, NoReturn
 
 
 class RoundBudgetExhausted(RuntimeError):
@@ -11,6 +11,10 @@ class RoundBudgetExhausted(RuntimeError):
 
     def __init__(self, message: str, *, root_id: str | None = None) -> None:
         self.root_id = root_id
+        # Callers that have already completed provider attempts attach their
+        # immutable usage snapshots before re-raising this admission failure.
+        self.attempt_usages: tuple[Any, ...] = ()
+        self.usage: Any | None = None
         super().__init__(message)
 
 
