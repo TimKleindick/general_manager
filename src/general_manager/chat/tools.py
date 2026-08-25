@@ -34,12 +34,19 @@ class ChatToolContext(Protocol):
 class ScopeChatContext:
     """Adapter that exposes only the attributes chat tools need."""
 
-    def __init__(self, *, user: Any) -> None:
+    def __init__(
+        self, *, user: Any, planned_query_timeout_ms: int | None = None
+    ) -> None:
         self.user = user
+        self.planned_query_timeout_ms = planned_query_timeout_ms
 
     @classmethod
     def from_scope(cls, scope: Mapping[str, Any]) -> ScopeChatContext:
-        return cls(user=scope.get("user"))
+        timeout = scope.get("planned_query_timeout_ms")
+        return cls(
+            user=scope.get("user"),
+            planned_query_timeout_ms=timeout if isinstance(timeout, int) else None,
+        )
 
 
 class InvalidFieldSelectionError(TypeError):
@@ -601,6 +608,13 @@ def query(
     )
 
     timeout_ms = get_query_timeout_ms()
+    planned_timeout_ms = getattr(context, "planned_query_timeout_ms", None)
+    if isinstance(planned_timeout_ms, int) and planned_timeout_ms > 0:
+        timeout_ms = (
+            planned_timeout_ms
+            if timeout_ms is None
+            else min(timeout_ms, planned_timeout_ms)
+        )
     if timeout_ms is not None and getattr(connection, "vendor", None) == "postgresql":
         with transaction.atomic():
             with connection.cursor() as cursor:

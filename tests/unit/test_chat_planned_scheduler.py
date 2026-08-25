@@ -17,6 +17,7 @@ from general_manager.chat.planned.scheduler import (
     PreparedPlannedTurn,
     SchedulerCallbacks,
     iter_planned_read_events,
+    _parse_action,
 )
 from general_manager.chat.providers.base import DoneEvent, TokenUsage, ToolCallEvent
 
@@ -174,3 +175,103 @@ def test_failed_dependency_blocks_only_its_dependent_task() -> None:
 
 async def _collect(iterator: Any) -> list[dict[str, Any]]:
     return [event async for event in iterator]
+
+
+def test_executor_rejects_mutate_before_any_public_or_private_callback() -> None:
+    task = _task("task_1")
+    _Executor.responses = [
+        ToolCallEvent("unsafe", "mutate", {"mutation": "deletePart", "input": {}}),
+        {"action": "block", "reason": "manager_unresolved"},
+    ]
+    _Executor.responses_by_task = {}
+    calls: list[str] = []
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (task,)), _settings(), user_text="show parts"
+    )
+
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: calls.append("tool"),
+                    emit_tool_called=lambda **_kwargs: calls.append("signal"),
+                    emit_audit_event=lambda *_args: calls.append("audit"),
+                ),
+            )
+        )
+    )
+
+    assert calls == []
+    assert [event["type"] for event in events] == ["error"]
+
+
+def test_executor_action_parser_rejects_duplicate_keys_trailing_data_and_extra_fields() -> (
+    None
+):
+    assert _parse_action('{"action":"complete","evidence_ids":["e"],"x":1}') is None
+    assert (
+        _parse_action('{"action":"block","reason":"manager_unresolved"} trailing')
+        is None
+    )
+    assert _parse_action('{"action":"block","reason":"x","reason":"y"}') is None
+
+
+def test_calculate_action_is_schema_bound_to_query_evidence() -> None:
+    task = PlannedTask(
+        task_id="task_1",
+        objective="calculate total",
+        depends_on=(),
+        requirements=(
+            EvidenceRequirement("query", "query", "records", None),
+            EvidenceRequirement("total", "calculation", "sum", "sum"),
+        ),
+        completion_criteria=("query", "total"),
+        routing_features=("requires_calculation",),
+    )
+    _Executor.responses = [
+        ToolCallEvent(
+            "query", "query", {"manager": "PartManager", "fields": ["value"]}
+        ),
+        {
+            "action": "calculate",
+            "requirement_id": "total",
+            "operation": "sum",
+            "operands": [
+                {"evidence_id": "task_1:query:1", "path": ["data", 0, "value"]}
+            ],
+        },
+        {
+            "action": "complete",
+            "evidence_ids": ["task_1:query:1", "task_1:calculation:2"],
+        },
+        {"answer": "Total is 3.", "evidence_ids": ["task_1:calculation:2"]},
+    ]
+    _Executor.responses_by_task = {}
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (task,)), _settings(), user_text="total"
+    )
+
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {
+                        "status": "success",
+                        "data": [{"value": 3}],
+                    }
+                ),
+            )
+        )
+    )
+
+    assert events[-1]["type"] == "done"
+    assert prepared.result is not None
+    assert prepared.result.evidence.get("task_1:calculation:2") is not None

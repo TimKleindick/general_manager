@@ -28,8 +28,13 @@ class SynthesisFailedError(ValueError):
     reason = "synthesis_failed"
     code = "synthesis_failed"
 
-    def __init__(self, usage: TokenUsage | None = None) -> None:
+    def __init__(
+        self,
+        usage: TokenUsage | None = None,
+        attempt_usages: tuple[TokenUsage, ...] = (),
+    ) -> None:
         self.usage = usage if usage is not None else TokenUsage()
+        self.attempt_usages = attempt_usages
         super().__init__(self.reason)
 
 
@@ -44,6 +49,7 @@ class SynthesisResult:
     answer: str
     evidence_ids: tuple[str, ...]
     usage: TokenUsage
+    attempt_usages: tuple[TokenUsage, ...] = ()
 
 
 _TERMINAL_REASONS = frozenset(
@@ -247,26 +253,31 @@ async def synthesize_answer(
     except Exception as exc:
         raise SynthesisFailedError() from exc
     total_usage = TokenUsage()
+    attempt_usages: list[TokenUsage] = []
     if not records:
-        raise SynthesisFailedError(total_usage)
+        raise SynthesisFailedError(total_usage, tuple(attempt_usages))
     eligible_ids = frozenset(record.evidence_id for record in records)
     messages = _messages(user_text, records, coverage)
     for role in ("synthesizer", "fallback_executor"):
         try:
             result = await _attempt(role, messages, settings, budget)
             total_usage = _add_usage(total_usage, result.usage)
+            attempt_usages.append(result.usage)
             if result.tool_call is not None:
                 continue
             answer, evidence_ids = _parse_result(result.text, eligible_ids)
-            return SynthesisResult(answer, evidence_ids, total_usage)
+            return SynthesisResult(
+                answer, evidence_ids, total_usage, tuple(attempt_usages)
+            )
         except InvalidProviderRoundError as exc:
             total_usage = _add_usage(total_usage, exc.usage)
+            attempt_usages.append(exc.usage)
         except RoundBudgetExhausted:
             raise
         except Exception:  # noqa: BLE001, S110
             # Provider and parse diagnostics are never exposed as grounding input.
             pass
-    raise SynthesisFailedError(total_usage)
+    raise SynthesisFailedError(total_usage, tuple(attempt_usages))
 
 
 __all__ = ["SynthesisFailedError", "SynthesisResult", "synthesize_answer"]
