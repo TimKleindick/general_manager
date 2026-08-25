@@ -19,7 +19,10 @@ from general_manager.chat.planned.models import (
     ValidatedPlan,
 )
 from general_manager.chat.planned.planner import PlanningResult
-from general_manager.chat.planned.provider_calls import ProviderRoundResult
+from general_manager.chat.planned.provider_calls import (
+    InvalidProviderRoundError,
+    ProviderRoundResult,
+)
 from general_manager.chat.planned.scheduler import (
     PreparedPlannedTurn,
     SchedulerCallbacks,
@@ -28,6 +31,7 @@ from general_manager.chat.planned.scheduler import (
     _parse_action,
     prepare_planned_turn,
 )
+from general_manager.chat.planned.synthesis import SynthesisResult
 from general_manager.chat.providers.base import (
     DoneEvent,
     TextChunkEvent,
@@ -242,6 +246,700 @@ def test_duplicate_query_consumes_a_round_but_executes_once() -> None:
         "done",
     ]
     assert events[1]["result"] == events[3]["result"]
+
+
+def _dynamic_child(task_id: str, *, depends_on: list[str]) -> dict[str, object]:
+    """Return a hand-written dynamic child accepted by the graph validator."""
+
+    requirement_id = f"{task_id}_query"
+    return {
+        "task_id": task_id,
+        "objective": "find dependent records",
+        "depends_on": depends_on,
+        "requirements": [
+            {
+                "requirement_id": requirement_id,
+                "kind": "query",
+                "description": "records",
+                "operation": None,
+            }
+        ],
+        "completion_criteria": [requirement_id],
+        "routing_features": ["has_dependency"],
+    }
+
+
+def _dynamic_parent() -> PlannedTask:
+    return PlannedTask(
+        task_id="task_1",
+        objective="find records and their dependencies",
+        depends_on=(),
+        requirements=(
+            EvidenceRequirement("parent_first", "query", "first records", None),
+            EvidenceRequirement("parent_second", "query", "second records", None),
+        ),
+        completion_criteria=("parent_first", "parent_second"),
+        routing_features=("multiple_queries",),
+    )
+
+
+def test_dynamic_children_handoff_parent_owned_snapshots_only_to_synthesis() -> None:
+    """Leaking original child records to synthesis bypasses their parent handoff."""
+
+    parent = _dynamic_parent()
+    first_id, second_id = "task_1_child_1", "task_1_child_2"
+    _Executor.responses = [
+        {
+            "answer": "Both dependent record sets are empty.",
+            "evidence_ids": [
+                f"task_1:child:{first_id}:query:1",
+                f"task_1:child:{second_id}:query:1",
+            ],
+        }
+    ]
+    _Executor.responses_by_task = {
+        "task_1": [
+            {
+                "action": "spawn_children",
+                "children": [
+                    _dynamic_child(first_id, depends_on=[parent.task_id]),
+                    _dynamic_child(second_id, depends_on=[parent.task_id]),
+                ],
+            },
+            {
+                "action": "complete",
+                "evidence_ids": [
+                    f"task_1:child:{first_id}:query:1",
+                    f"task_1:child:{second_id}:query:1",
+                ],
+            },
+        ],
+        first_id: [
+            ToolCallEvent(
+                "first-query",
+                "query",
+                {"manager": "PartManager", "fields": ["first"]},
+            ),
+            {"action": "complete", "evidence_ids": [f"{first_id}:query:1"]},
+        ],
+        second_id: [
+            ToolCallEvent(
+                "second-query",
+                "query",
+                {"manager": "PartManager", "fields": ["second"]},
+            ),
+            {"action": "complete", "evidence_ids": [f"{second_id}:query:1"]},
+        ],
+    }
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (parent,)), _settings(), user_text="show dependencies"
+    )
+
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                ),
+            )
+        )
+    )
+
+    assert events[-1]["type"] == "done"
+    assert prepared.result is not None
+    result = prepared.result
+    assert result.statuses == {
+        "task_1": "resolved",
+        first_id: "resolved",
+        second_id: "resolved",
+    }
+    parent_evidence = result.evidence.for_task("task_1")
+    assert len(parent_evidence) == 2
+    assert all(record.task_id == "task_1" for record in parent_evidence)
+    synthesis_reference = json.loads(
+        _Executor.calls[-1][-1].content.removeprefix("RESOLVED_REFERENCE_DATA=")
+    )
+    assert {item["task_id"] for item in synthesis_reference["resolved_evidence"]} == {
+        "task_1"
+    }
+
+
+def test_child_failure_blocks_parent_but_not_an_independent_root() -> None:
+    """A failed child must not turn a sibling root's grounded answer into an error."""
+
+    parent = _dynamic_parent()
+    independent = _task("task_2")
+    child_id = "task_1_child"
+    _Executor.responses = [
+        {"answer": "No independent records found.", "evidence_ids": ["task_2:query:1"]}
+    ]
+    _Executor.responses_by_task = {
+        "task_1": [
+            {
+                "action": "spawn_children",
+                "children": [_dynamic_child(child_id, depends_on=[parent.task_id])],
+            }
+        ],
+        child_id: [{"action": "block", "reason": "manager_unresolved"}],
+        "task_2": [
+            ToolCallEvent(
+                "independent-query",
+                "query",
+                {"manager": "PartManager", "fields": ["name"]},
+            ),
+            {"action": "complete", "evidence_ids": ["task_2:query:1"]},
+        ],
+    }
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (parent, independent)),
+        _settings(max_concurrent_tasks=1),
+        user_text="show records",
+    )
+
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                ),
+            )
+        )
+    )
+
+    assert prepared.result is not None
+    assert prepared.result.reasons["task_1"] == "dependency_blocked"
+    assert prepared.result.statuses["task_2"] == "resolved"
+    assert [event["type"] for event in events].count("done") == 1
+    assert [event["type"] for event in events].count("error") == 0
+
+
+def test_scheduler_rejects_a_third_dynamic_child_across_repeated_actions() -> None:
+    """Removing existing-child validation would schedule the third child."""
+
+    parent = _task("task_1")
+    first_id, second_id = "task_1_first", "task_1_second"
+    third_child = _dynamic_child("task_1_third", depends_on=[parent.task_id])
+    _Executor.responses = []
+    _Executor.responses_by_task = {
+        "task_1": [
+            {
+                "action": "spawn_children",
+                "children": [
+                    _dynamic_child(first_id, depends_on=[parent.task_id]),
+                    _dynamic_child(second_id, depends_on=[parent.task_id]),
+                ],
+            },
+            *[{"action": "spawn_children", "children": [third_child]}] * 4,
+        ],
+        first_id: [
+            ToolCallEvent(
+                "first-query", "query", {"manager": "PartManager", "fields": []}
+            ),
+            {"action": "complete", "evidence_ids": [f"{first_id}:query:1"]},
+        ],
+        second_id: [
+            ToolCallEvent(
+                "second-query", "query", {"manager": "PartManager", "fields": []}
+            ),
+            {"action": "complete", "evidence_ids": [f"{second_id}:query:1"]},
+        ],
+    }
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (parent,)), _settings(), user_text="show records"
+    )
+
+    asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                ),
+            )
+        )
+    )
+
+    assert prepared.result is not None
+    assert set(prepared.result.statuses) == {"task_1", first_id, second_id}
+    assert prepared.result.reasons["task_1"] == "provider_failed"
+
+
+def test_scheduler_rejects_recursive_dynamic_child_actions() -> None:
+    """Allowing a child to spawn would bypass the one-level subtree bound."""
+
+    parent = _task("task_1")
+    child_id = "task_1_child"
+    grandchild = _dynamic_child("task_1_grandchild", depends_on=[child_id])
+    _Executor.responses = []
+    _Executor.responses_by_task = {
+        "task_1": [
+            {
+                "action": "spawn_children",
+                "children": [_dynamic_child(child_id, depends_on=[parent.task_id])],
+            }
+        ],
+        child_id: [{"action": "spawn_children", "children": [grandchild]}] * 4,
+    }
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (parent,)), _settings(), user_text="show records"
+    )
+
+    asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(execute_tool=lambda *_args: {}),
+            )
+        )
+    )
+
+    assert prepared.result is not None
+    assert "task_1_grandchild" not in prepared.result.statuses
+    assert prepared.result.reasons["task_1"] == "dependency_blocked"
+
+
+def test_scheduler_rejects_dynamic_child_dependency_on_another_root() -> None:
+    """A cross-subtree dependency must not add the child to either root's graph."""
+
+    parent, other_root = _task("task_1"), _task("task_2")
+    invalid_child = _dynamic_child("task_1_child", depends_on=[other_root.task_id])
+    _Executor.responses = []
+    _Executor.responses_by_task = {
+        "task_1": [{"action": "spawn_children", "children": [invalid_child]}] * 4,
+        "task_2": [{"action": "block", "reason": "manager_unresolved"}],
+    }
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (parent, other_root)),
+        _settings(max_concurrent_tasks=1),
+        user_text="show records",
+    )
+
+    asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(execute_tool=lambda *_args: {}),
+            )
+        )
+    )
+
+    assert prepared.result is not None
+    assert set(prepared.result.statuses) == {"task_1", "task_2"}
+    assert prepared.result.reasons["task_1"] == "provider_failed"
+
+
+def test_dynamic_child_rounds_exhaust_the_owning_root_budget() -> None:
+    """Giving children an independent ledger would leave the root below 15 rounds."""
+
+    parent = _dynamic_parent()
+    first_id, second_id = "task_1_first", "task_1_second"
+
+    def child_with_queries(task_id: str, count: int) -> dict[str, object]:
+        requirement_ids = [f"{task_id}_query_{number}" for number in range(count)]
+        return {
+            "task_id": task_id,
+            "objective": "find all dependent records",
+            "depends_on": [parent.task_id],
+            "requirements": [
+                {
+                    "requirement_id": requirement_id,
+                    "kind": "query",
+                    "description": "records",
+                    "operation": None,
+                }
+                for requirement_id in requirement_ids
+            ],
+            "completion_criteria": requirement_ids,
+            "routing_features": ["has_dependency", "multiple_queries"],
+        }
+
+    _Executor.responses = []
+    _Executor.responses_by_task = {
+        "task_1": [
+            {
+                "action": "spawn_children",
+                "children": [child_with_queries(first_id, 8)],
+            },
+            {
+                "action": "spawn_children",
+                "children": [child_with_queries(second_id, 2)],
+            },
+            {
+                "action": "complete",
+                "evidence_ids": [
+                    f"task_1:child:{first_id}:query:1",
+                    f"task_1:child:{second_id}:query:1",
+                ],
+            },
+        ],
+        first_id: [
+            ToolCallEvent(
+                f"query-{number}",
+                "query",
+                {"manager": "PartManager", "fields": [str(number)]},
+            )
+            for number in range(8)
+        ]
+        + [
+            {
+                "action": "complete",
+                "evidence_ids": [
+                    f"{first_id}:query:{number + 1}" for number in range(8)
+                ],
+            }
+        ],
+        second_id: [
+            ToolCallEvent(
+                f"second-query-{number}",
+                "query",
+                {"manager": "PartManager", "fields": [str(number)]},
+            )
+            for number in range(2)
+        ]
+        + [
+            {
+                "action": "complete",
+                "evidence_ids": [
+                    f"{second_id}:query:{number + 1}" for number in range(2)
+                ],
+            }
+        ],
+    }
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (parent,)), _settings(), user_text="show records"
+    )
+
+    asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                ),
+            )
+        )
+    )
+
+    assert prepared.result is not None
+    assert prepared.result.statuses[first_id] == "resolved"
+    assert prepared.result.statuses[second_id] == "resolved"
+    assert prepared.result.statuses[parent.task_id] == "budget_exhausted"
+    assert prepared.budget.subtree_count(parent.task_id) == 15
+
+
+def _resolved_executor_responses() -> None:
+    _Executor.responses = [
+        {"answer": "No parts found.", "evidence_ids": ["task_1:query:1"]}
+    ]
+    _Executor.responses_by_task = {
+        "task_1": [
+            ToolCallEvent(
+                "query", "query", {"manager": "PartManager", "fields": ["name"]}
+            ),
+            {"action": "complete", "evidence_ids": ["task_1:query:1"]},
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    "callback_name",
+    ["append_message", "emit_tool_called", "emit_audit_event", "enforce_rate_limit"],
+)
+def test_callback_failure_does_not_change_a_committed_planned_result(
+    callback_name: str,
+) -> None:
+    """Any optional persistence, signal, audit, or limiter failure stays private."""
+
+    _resolved_executor_responses()
+    tool_calls: list[str] = []
+
+    def raise_callback(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError
+
+    callback_values: dict[str, Any] = {
+        "execute_tool": lambda name, *_args: tool_calls.append(name)
+        or {"status": "success", "data": []},
+        "append_message": lambda *_args, **_kwargs: None,
+        "emit_tool_called": lambda **_kwargs: None,
+        "emit_audit_event": lambda *_args, **_kwargs: None,
+        "enforce_rate_limit": lambda *_args, **_kwargs: None,
+    }
+    callback_values[callback_name] = raise_callback
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (_task("task_1"),)), _settings(), user_text="show parts"
+    )
+
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=object(),
+                messages=[],
+                callbacks=SchedulerCallbacks(**callback_values),
+            )
+        )
+    )
+
+    assert [event["type"] for event in events].count("done") == 1
+    assert [event["type"] for event in events].count("error") == 0
+    assert tool_calls == ["query"]
+    assert prepared.result is not None
+    assert len(prepared.result.evidence.for_task("task_1")) == 1
+
+
+def test_uncached_tool_result_and_synthesized_answer_are_persisted_once() -> None:
+    """Persisting duplicate tool calls would create misleading conversation history."""
+
+    _Executor.responses = [
+        {"answer": "No parts found.", "evidence_ids": ["task_1:query:1"]}
+    ]
+    _Executor.responses_by_task = {
+        "task_1": [
+            ToolCallEvent(
+                "one", "query", {"manager": "PartManager", "fields": ["name"]}
+            ),
+            ToolCallEvent(
+                "two", "query", {"fields": ["name"], "manager": "PartManager"}
+            ),
+            {"action": "complete", "evidence_ids": ["task_1:query:1"]},
+        ]
+    }
+    persisted: list[dict[str, object]] = []
+    executions: list[str] = []
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (_task("task_1"),)), _settings(), user_text="show parts"
+    )
+
+    def append_message(*_args: object, **kwargs: object) -> None:
+        persisted.append(dict(kwargs))
+
+    asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=object(),
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda name, *_args: executions.append(name)
+                    or {"status": "success", "data": []},
+                    append_message=append_message,
+                    emit_tool_called=lambda **_kwargs: None,
+                    enforce_rate_limit=lambda *_args, **_kwargs: None,
+                ),
+            )
+        )
+    )
+
+    assert executions == ["query"]
+    assert [record["role"] for record in persisted] == ["tool", "assistant"]
+    assert persisted[0]["tool_name"] == "query"
+    assert "tool_name" not in persisted[1]
+
+
+@pytest.mark.parametrize(
+    ("synthesis_responses", "terminal_type", "attempt_count"),
+    [
+        (
+            [{"answer": "No parts found.", "evidence_ids": ["task_1:query:1"]}],
+            "done",
+            3,
+        ),
+        (
+            [
+                {"answer": "Ungrounded.", "evidence_ids": ["missing"]},
+                {"answer": "No parts found.", "evidence_ids": ["task_1:query:1"]},
+            ],
+            "done",
+            4,
+        ),
+        (
+            [
+                {"answer": "Ungrounded.", "evidence_ids": ["missing"]},
+                {"answer": "Still ungrounded.", "evidence_ids": ["missing"]},
+            ],
+            "error",
+            4,
+        ),
+    ],
+)
+def test_reported_usage_is_limited_once_for_executor_and_synthesis_attempts(
+    synthesis_responses: list[dict[str, object]],
+    terminal_type: str,
+    attempt_count: int,
+) -> None:
+    """Dropping a failed/fallback usage report makes public and limiter totals diverge."""
+
+    _Executor.responses = synthesis_responses
+    _Executor.responses_by_task = {
+        "task_1": [
+            ToolCallEvent(
+                "query", "query", {"manager": "PartManager", "fields": ["name"]}
+            ),
+            {"action": "complete", "evidence_ids": ["task_1:query:1"]},
+        ]
+    }
+    limiter_calls: list[dict[str, object]] = []
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (_task("task_1"),)), _settings(), user_text="show parts"
+    )
+
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []},
+                    enforce_rate_limit=lambda _scope, **kwargs: limiter_calls.append(
+                        dict(kwargs)
+                    ),
+                ),
+            )
+        )
+    )
+
+    assert [event["type"] for event in events][-1] == terminal_type
+    assert (
+        limiter_calls
+        == [{"input_tokens": 1, "output_tokens": 1, "count_request": False}]
+        * attempt_count
+    )
+    if terminal_type == "done":
+        assert events[-1]["usage"] == {
+            "input_tokens": attempt_count,
+            "output_tokens": attempt_count,
+        }
+
+
+@pytest.mark.parametrize(
+    "reported_usage",
+    [TokenUsage(), TokenUsage(input_tokens=3, output_tokens=5)],
+)
+def test_malformed_executor_attempt_usage_is_recorded_before_private_limiter_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    reported_usage: TokenUsage,
+) -> None:
+    """A missing or malformed provider result still has one known usage boundary."""
+
+    async def malformed_round(*_args: object, **_kwargs: object) -> ProviderRoundResult:
+        raise InvalidProviderRoundError("malformed", usage=reported_usage)
+
+    monkeypatch.setattr(
+        "general_manager.chat.planned.scheduler.complete_provider_round",
+        malformed_round,
+    )
+    limiter_calls: list[dict[str, object]] = []
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (_task("task_1"),)), _settings(), user_text="show parts"
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        None,
+        [],
+        SchedulerCallbacks(
+            execute_tool=lambda *_args: {},
+            enforce_rate_limit=lambda _scope, **kwargs: limiter_calls.append(
+                dict(kwargs)
+            ),
+        ),
+        100.0,
+        lambda: 0.0,
+    )
+    runtime = runner.runtimes["task_1"]
+    runtime.status = "running"
+    runtime.role = "complex_executor"
+
+    failure_reason = asyncio.run(runner._execute_one_pass(runtime, ()))
+
+    assert failure_reason == "provider_failed"
+    assert runner.usage == reported_usage
+    assert limiter_calls == [
+        {
+            "input_tokens": reported_usage.input_tokens,
+            "output_tokens": reported_usage.output_tokens,
+            "count_request": False,
+        }
+    ]
+
+
+def test_synthesis_usage_is_accounted_from_its_immutable_attempt_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Using only aggregate synthesis usage would double-charge fallback attempts."""
+
+    _resolved_executor_responses()
+
+    async def synthesis_with_two_attempts(
+        *_args: object, **_kwargs: object
+    ) -> SynthesisResult:
+        return SynthesisResult(
+            "No parts found.",
+            ("task_1:query:1",),
+            TokenUsage(input_tokens=12, output_tokens=16),
+            (
+                TokenUsage(input_tokens=5, output_tokens=7),
+                TokenUsage(input_tokens=7, output_tokens=9),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "general_manager.chat.planned.scheduler.synthesize_answer",
+        synthesis_with_two_attempts,
+    )
+    limiter_calls: list[dict[str, object]] = []
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (_task("task_1"),)), _settings(), user_text="show parts"
+    )
+
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []},
+                    enforce_rate_limit=lambda _scope, **kwargs: limiter_calls.append(
+                        dict(kwargs)
+                    ),
+                ),
+            )
+        )
+    )
+
+    assert limiter_calls == [
+        {"input_tokens": 1, "output_tokens": 1, "count_request": False},
+        {"input_tokens": 1, "output_tokens": 1, "count_request": False},
+        {"input_tokens": 5, "output_tokens": 7, "count_request": False},
+        {"input_tokens": 7, "output_tokens": 9, "count_request": False},
+    ]
+    assert events[-1]["usage"] == {"input_tokens": 14, "output_tokens": 18}
 
 
 def test_failed_dependency_blocks_only_its_dependent_task() -> None:
