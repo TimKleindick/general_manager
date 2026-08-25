@@ -23,6 +23,7 @@ from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
     ProviderRoundResult,
 )
+from general_manager.chat.planned.events import PLANNED_PUBLIC_MESSAGES
 from general_manager.chat.planned.scheduler import (
     PreparedPlannedTurn,
     SchedulerCallbacks,
@@ -2190,3 +2191,480 @@ def test_sync_tool_cancellation_is_best_effort_for_the_worker_thread() -> None:
         await asyncio.wait_for(asyncio.to_thread(finished.wait), timeout=0.2)
 
     asyncio.run(run())
+
+
+PRIVATE_MARKERS = ("profile", "trust_group", "raw_plan", "Traceback", "catalog")
+
+
+def _assert_public_terminal_matrix(events: list[dict[str, Any]]) -> None:
+    payload = json.dumps(events)
+    assert all(marker not in payload for marker in PRIVATE_MARKERS)
+    assert len([event for event in events if event["type"] in {"done", "error"}]) == 1
+    for event in events:
+        if event["type"] == "error":
+            assert event["code"] in PLANNED_PUBLIC_MESSAGES
+        if event["type"] == "done":
+            assert event["orchestration"]["status"] in {"complete", "partial"}
+            assert all(
+                item["reason"] in PLANNED_PUBLIC_MESSAGES
+                for item in event["orchestration"]["unresolved"]
+            )
+
+
+def _assert_tool_pairs_are_ordered(events: list[dict[str, Any]]) -> None:
+    calls: dict[tuple[str, str], dict[str, Any]] = {}
+    results: set[tuple[str, str]] = set()
+    for event in events:
+        key = (event.get("task_id", ""), event.get("id", ""))
+        if event["type"] == "tool_call":
+            calls[key] = event
+        elif event["type"] == "tool_result":
+            assert key in calls
+            assert event["task_id"] == calls[key]["task_id"]
+            assert event["name"] == calls[key]["name"]
+            results.add(key)
+    assert set(calls) == results
+
+
+class _MatrixDeadlineProvider:
+    entered: ClassVar[asyncio.Event | None] = None
+    first_ready: ClassVar[asyncio.Event | None] = None
+    release: ClassVar[asyncio.Event | None] = None
+    wake: ClassVar[asyncio.Event | None] = None
+    rounds: ClassVar[dict[str, int]] = {}
+
+    @classmethod
+    def from_config(cls, _config: object) -> _MatrixDeadlineProvider:
+        return cls()
+
+    async def complete(
+        self, messages: list[object], _tools: list[object]
+    ) -> AsyncIterator[ToolCallEvent | TextChunkEvent | DoneEvent]:
+        content = cast(Any, messages[-1]).content
+        task_id = json.loads(content.removeprefix("REFERENCE_DATA="))["task"]["task_id"]
+        entered = type(self).entered
+        first_ready = type(self).first_ready
+        release = type(self).release
+        wake = type(self).wake
+        assert (
+            entered is not None
+            and first_ready is not None
+            and release is not None
+            and wake is not None
+        )
+        round_number = type(self).rounds.get(task_id, 0) + 1
+        type(self).rounds[task_id] = round_number
+        if task_id == "deadline_first":
+            if round_number == 1:
+                yield ToolCallEvent(
+                    "deadline-first-query",
+                    "query",
+                    {"manager": "PartManager", "fields": ["first"]},
+                )
+            else:
+                await release.wait()
+                first_ready.set()
+                yield TextChunkEvent(
+                    json.dumps(
+                        {
+                            "action": "complete",
+                            "evidence_ids": ["deadline_first:query:1"],
+                        }
+                    )
+                )
+        elif task_id == "deadline_wait":
+            entered.set()
+            await release.wait()
+            await asyncio.Future()
+        else:
+            await wake.wait()
+            yield ToolCallEvent(
+                "deadline-late-query",
+                "query",
+                {"manager": "PartManager", "fields": ["late"]},
+            )
+        yield DoneEvent(TokenUsage(input_tokens=1, output_tokens=1))
+
+
+def _matrix_deadline_settings() -> PlannedChatSettings:
+    executor = ProviderProfile(
+        "matrix_deadline",
+        "tests.unit.test_chat_planned_scheduler._MatrixDeadlineProvider",
+        MappingProxyType({"role": "executor"}),
+        "local",
+    )
+    synthesizer = ProviderProfile(
+        "matrix_synthesizer",
+        "tests.unit.test_chat_planned_scheduler._Executor",
+        MappingProxyType({"role": "synthesizer"}),
+        "local",
+    )
+    return PlannedChatSettings(
+        enabled=True,
+        profiles=MappingProxyType({"executor": executor, "synthesizer": synthesizer}),
+        roles=MappingProxyType(
+            {
+                "simple_executor": "executor",
+                "complex_executor": "executor",
+                "fallback_executor": "executor",
+                "synthesizer": "synthesizer",
+                "planner": "synthesizer",
+            }
+        ),
+        catalog_source=None,
+        evidence_timeout_seconds=10.0,
+    )
+
+
+def _matrix_tasks() -> tuple[PlannedTask, PlannedTask, PlannedTask]:
+    return tuple(
+        PlannedTask(
+            task_id,
+            "find records",
+            (),
+            (EvidenceRequirement(f"{task_id}_query", "query", "records", None),),
+            (f"{task_id}_query",),
+            (),
+        )
+        for task_id in ("deadline_first", "deadline_late", "deadline_wait")
+    )
+
+
+async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
+    _Executor.responses = []
+    _Executor.responses_by_task = {}
+    _Executor.calls = []
+    _Executor.roles = []
+    if scenario == "complete":
+        parent = _dynamic_parent()
+        first_id, second_id = "task_1_child_1", "task_1_child_2"
+        _Executor.responses = [
+            {
+                "answer": "Grounded dynamic result.",
+                "evidence_ids": [
+                    f"task_1:child:{first_id}:query:1",
+                    f"task_1:child:{second_id}:query:1",
+                ],
+            }
+        ]
+        _Executor.responses_by_task = {
+            "task_1": [
+                {
+                    "action": "spawn_children",
+                    "children": [
+                        _dynamic_child(first_id, depends_on=[parent.task_id]),
+                        _dynamic_child(second_id, depends_on=[parent.task_id]),
+                    ],
+                },
+                {
+                    "action": "complete",
+                    "evidence_ids": [
+                        f"task_1:child:{first_id}:query:1",
+                        f"task_1:child:{second_id}:query:1",
+                    ],
+                },
+            ],
+            first_id: [
+                ToolCallEvent(
+                    "first-query",
+                    "query",
+                    {"manager": "PartManager", "fields": ["first"]},
+                ),
+                {"action": "complete", "evidence_ids": [f"{first_id}:query:1"]},
+            ],
+            second_id: [
+                ToolCallEvent(
+                    "second-query",
+                    "query",
+                    {"manager": "PartManager", "fields": ["second"]},
+                ),
+                {"action": "complete", "evidence_ids": [f"{second_id}:query:1"]},
+            ],
+        }
+        prepared = PreparedPlannedTurn.for_plan(
+            ValidatedPlan("read", (parent,)), _settings(), user_text="show parts"
+        )
+        return await _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                ),
+            )
+        )
+    if scenario == "partial_budget":
+        resolved = _task("resolved")
+        budget = PlannedTask(
+            "budget",
+            "find records and dependent records",
+            (),
+            (
+                EvidenceRequirement("budget_first", "query", "records", None),
+                EvidenceRequirement("budget_second", "query", "records", None),
+            ),
+            ("budget_first", "budget_second"),
+            ("multiple_queries",),
+        )
+        first_id, second_id = "budget_first_child", "budget_second_child"
+
+        def child_with_queries(task_id: str, count: int) -> dict[str, object]:
+            requirement_ids = [f"{task_id}_query_{number}" for number in range(count)]
+            return {
+                "task_id": task_id,
+                "objective": "find dependent records",
+                "depends_on": [budget.task_id],
+                "requirements": [
+                    {
+                        "requirement_id": requirement_id,
+                        "kind": "query",
+                        "description": "records",
+                        "operation": None,
+                    }
+                    for requirement_id in requirement_ids
+                ],
+                "completion_criteria": requirement_ids,
+                "routing_features": ["has_dependency", "multiple_queries"],
+            }
+
+        _Executor.responses = [
+            {
+                "answer": "One grounded root resolved.",
+                "evidence_ids": ["resolved:query:1"],
+            }
+        ]
+        _Executor.responses_by_task = {
+            "resolved": [
+                ToolCallEvent(
+                    "resolved-query",
+                    "query",
+                    {"manager": "PartManager", "fields": ["resolved"]},
+                ),
+                {"action": "complete", "evidence_ids": ["resolved:query:1"]},
+            ],
+            "budget": [
+                {
+                    "action": "spawn_children",
+                    "children": [child_with_queries(first_id, 8)],
+                },
+                {
+                    "action": "spawn_children",
+                    "children": [child_with_queries(second_id, 2)],
+                },
+            ],
+            first_id: [
+                *(
+                    ToolCallEvent(
+                        f"budget-first-query-{number}",
+                        "query",
+                        {"manager": "PartManager", "fields": [str(number)]},
+                    )
+                    for number in range(8)
+                ),
+                {
+                    "action": "complete",
+                    "evidence_ids": [
+                        f"{first_id}:query:{number + 1}" for number in range(8)
+                    ],
+                },
+            ],
+            second_id: [
+                *(
+                    ToolCallEvent(
+                        f"budget-second-query-{number}",
+                        "query",
+                        {"manager": "PartManager", "fields": [str(number)]},
+                    )
+                    for number in range(2)
+                ),
+                {
+                    "action": "complete",
+                    "evidence_ids": [
+                        f"{second_id}:query:{number + 1}" for number in range(2)
+                    ],
+                },
+            ],
+        }
+        prepared = PreparedPlannedTurn.for_plan(
+            ValidatedPlan("read", (resolved, budget)),
+            _settings(),
+            user_text="show parts",
+        )
+        return await _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                ),
+            )
+        )
+    if scenario == "partial_deadline":
+        _Executor.responses = [
+            {
+                "answer": "One grounded deadline result.",
+                "evidence_ids": ["deadline_first:query:1"],
+            }
+        ]
+        _MatrixDeadlineProvider.entered = asyncio.Event()
+        _MatrixDeadlineProvider.first_ready = asyncio.Event()
+        _MatrixDeadlineProvider.release = asyncio.Event()
+        _MatrixDeadlineProvider.wake = asyncio.Event()
+        _MatrixDeadlineProvider.rounds = {}
+        now = [0.0]
+        prepared = PreparedPlannedTurn.for_plan(
+            ValidatedPlan("read", _matrix_tasks()),
+            _matrix_deadline_settings(),
+            user_text="show parts",
+        )
+        prepared.evidence_deadline = 10.0
+
+        async def collect() -> list[dict[str, Any]]:
+            iterator = iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                ),
+                clock=lambda: now[0],
+            )
+            result = asyncio.create_task(_collect(iterator))
+            entered = _MatrixDeadlineProvider.entered
+            first_ready = _MatrixDeadlineProvider.first_ready
+            release = _MatrixDeadlineProvider.release
+            wake = _MatrixDeadlineProvider.wake
+            assert (
+                entered is not None
+                and first_ready is not None
+                and release is not None
+                and wake is not None
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            release.set()
+            await asyncio.wait_for(first_ready.wait(), timeout=1.0)
+            now[0] = 10.0
+            wake.set()
+            return await result
+
+        return await collect()
+    if scenario == "no_evidence_provider":
+        _Executor.responses = [_ProviderFailure()] * 4
+        prepared = PreparedPlannedTurn.for_plan(
+            ValidatedPlan("read", (_task("task_1"),)),
+            _settings(),
+            user_text="show parts",
+        )
+        return await _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(execute_tool=lambda *_args: {}),
+            )
+        )
+    if scenario == "synthesis_failure":
+        _Executor.responses = [
+            {"answer": "Ungrounded executor prose.", "evidence_ids": ["missing"]},
+            {"answer": "Still ungrounded.", "evidence_ids": ["missing"]},
+        ]
+        _Executor.responses_by_task = {
+            "task_1": [
+                ToolCallEvent(
+                    "query",
+                    "query",
+                    {"manager": "PartManager", "fields": ["name"]},
+                ),
+                {"action": "complete", "evidence_ids": ["task_1:query:1"]},
+            ]
+        }
+        prepared = PreparedPlannedTurn.for_plan(
+            ValidatedPlan("read", (_task("task_1"),)),
+            _settings(),
+            user_text="show parts",
+        )
+        return await _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                ),
+            )
+        )
+    pytest.fail("unknown matrix scenario")
+
+
+@pytest.mark.parametrize(
+    ("scenario", "terminal", "status", "reason"),
+    [
+        ("complete", "done", "complete", None),
+        ("partial_budget", "done", "partial", "budget_exhausted"),
+        ("partial_deadline", "done", "partial", "deadline_exceeded"),
+        ("no_evidence_provider", "error", None, "provider_failed"),
+        ("synthesis_failure", "error", None, "synthesis_failed"),
+    ],
+)
+def test_planned_terminal_event_matrix(
+    scenario: str, terminal: str, status: str | None, reason: str | None
+) -> None:
+    events = asyncio.run(_run_matrix_scenario(scenario))
+    _assert_public_terminal_matrix(events)
+    terminals = [event for event in events if event["type"] in {"done", "error"}]
+    assert len(terminals) == 1
+    assert terminals[0]["type"] == terminal
+    if status is not None:
+        assert terminals[0]["orchestration"]["status"] == status
+    if reason is not None:
+        assert reason in json.dumps(terminals[0])
+    if terminal == "done":
+        _assert_tool_pairs_are_ordered(events)
+        text_chunks = [event for event in events if event["type"] == "text_chunk"]
+        assert len(text_chunks) == 1
+        assert events[-2]["type"] == "text_chunk"
+        assert "executor prose" not in text_chunks[0]["content"]
+        if scenario == "complete":
+            assert terminals[0]["orchestration"]["coverage"] == {
+                "resolved": 1,
+                "total": 1,
+            }
+            assert terminals[0]["usage"] == {
+                "input_tokens": 7,
+                "output_tokens": 7,
+            }
+        elif scenario == "partial_budget":
+            assert terminals[0]["orchestration"]["coverage"] == {
+                "resolved": 1,
+                "total": 2,
+            }
+            assert terminals[0]["orchestration"]["unresolved"] == [
+                {"task_id": "budget", "reason": "budget_exhausted"}
+            ]
+            assert terminals[0]["usage"] == {
+                "input_tokens": 17,
+                "output_tokens": 17,
+            }
+        else:
+            assert terminals[0]["orchestration"]["coverage"] == {
+                "resolved": 1,
+                "total": 3,
+            }
+            assert all(
+                item["reason"] == "deadline_exceeded"
+                for item in terminals[0]["orchestration"]["unresolved"]
+            )
+            assert {
+                item["task_id"] for item in terminals[0]["orchestration"]["unresolved"]
+            } == {"deadline_late", "deadline_wait"}
+    else:
+        assert not any(event["type"] == "done" for event in events)
+        assert not any(event["type"] == "text_chunk" for event in events)
+        assert "Ungrounded" not in json.dumps(events)
