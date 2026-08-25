@@ -82,6 +82,8 @@ async def complete_provider_round(
 
     async with asyncio.timeout(timeout):
         async for event in provider.complete(messages, tools):
+            if done_count:
+                _invalid("a done event must be terminal.", usage)
             if isinstance(event, TextChunkEvent):
                 if tool_call is not None:
                     _invalid(
@@ -95,7 +97,7 @@ async def complete_provider_round(
                     _invalid(
                         "a provider round may contain at most one tool call.", usage
                     )
-                if "".join(text_parts).strip():
+                if text_parts:
                     _invalid(
                         "a provider round cannot contain text and a tool call.", usage
                     )

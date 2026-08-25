@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 import json
 import re
 from typing import NoReturn
 
-from general_manager.chat.planned.budget import RoundBudget
+from general_manager.chat.planned.budget import RoundBudget, RoundBudgetExhausted
 from general_manager.chat.planned.config import (
     PlannedChatSettings,
     build_profile_provider,
@@ -15,11 +16,13 @@ from general_manager.chat.planned.config import (
 )
 from general_manager.chat.planned.models import ValidatedPlan
 from general_manager.chat.planned.provider_calls import (
+    InvalidProviderRoundError,
     ProviderRoundResult,
     complete_provider_round,
 )
 from general_manager.chat.planned.validation import validate_plan
-from general_manager.chat.providers.base import Message
+from general_manager.chat.providers.base import Message, TokenUsage
+from general_manager.chat.settings import get_chat_settings
 
 
 class InvalidPlanError(ValueError):
@@ -28,7 +31,8 @@ class InvalidPlanError(ValueError):
     reason = "invalid_plan"
     code = "invalid_plan"
 
-    def __init__(self) -> None:
+    def __init__(self, usage: TokenUsage | None = None) -> None:
+        self.usage = usage if usage is not None else TokenUsage()
         super().__init__(self.reason)
 
 
@@ -36,9 +40,18 @@ class _InvalidStructuredResponseError(ValueError):
     """Internal JSON parsing failure; its detail is never sent to clients."""
 
 
+@dataclass(frozen=True)
+class PlanningResult:
+    """A validated plan and all known usage from its provider attempts."""
+
+    plan: ValidatedPlan
+    usage: TokenUsage
+
+
 _WRITE_VERB = re.compile(
     r"\b(?:create|update|delete|modify|remove|rename|archive|publish|assign|"
-    r"replace|write|mutate|cancel)\b",
+    r"replace|write|mutate|cancel|insert|deactivate|activate|enable|disable|"
+    r"merge|upsert|purge|erase|destroy|revoke|grant|attach|detach)\b",
     re.IGNORECASE,
 )
 _ADD_OR_CHANGE_RECORD = re.compile(
@@ -156,8 +169,27 @@ def _parse_object(text: str) -> Mapping[str, object]:
 
 
 def _is_requested_write(user_text: str) -> bool:
-    return bool(
-        _WRITE_VERB.search(user_text) or _ADD_OR_CHANGE_RECORD.search(user_text)
+    """Conservatively detect write intent as a defense in depth safeguard.
+
+    The planner's structured intent remains authoritative for normal language,
+    while this guard forces legacy mutation handling for common write families
+    and configured GraphQL mutation identifiers.  A false positive remains
+    safer than exposing planned read-only execution to a requested write.
+    """
+    if _WRITE_VERB.search(user_text) or _ADD_OR_CHANGE_RECORD.search(user_text):
+        return True
+    chat_settings = get_chat_settings()
+    mutation_identifiers: list[object] = []
+    for key in ("allowed_mutations", "confirm_mutations"):
+        configured = chat_settings.get(key, ())
+        if isinstance(configured, (list, tuple)):
+            mutation_identifiers.extend(configured)
+    normalized_request = user_text.casefold()
+    return any(
+        isinstance(identifier, str)
+        and identifier
+        and identifier.casefold() in normalized_request
+        for identifier in mutation_identifiers
     )
 
 
@@ -176,14 +208,7 @@ def _request_messages(
         "catalog_and_schema_summary": catalog_summary,
         "required_json_schema": _PLAN_SCHEMA,
     }
-    result = [
-        Message(role="system", content=_PLANNER_INSTRUCTION),
-        Message(
-            role="system",
-            content="REFERENCE_DATA="
-            + json.dumps(reference, ensure_ascii=False, separators=(",", ":")),
-        ),
-    ]
+    result = [Message(role="system", content=_PLANNER_INSTRUCTION)]
     if correction:
         result.append(
             Message(
@@ -191,8 +216,21 @@ def _request_messages(
                 content="Your previous response was invalid. Return only one corrected JSON object.",
             )
         )
-    result.append(Message(role="user", content=user_text))
+    result.append(
+        Message(
+            role="user",
+            content="REFERENCE_DATA="
+            + json.dumps(reference, ensure_ascii=False, separators=(",", ":")),
+        )
+    )
     return result
+
+
+def _add_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
+    return TokenUsage(
+        input_tokens=left.input_tokens + right.input_tokens,
+        output_tokens=left.output_tokens + right.output_tokens,
+    )
 
 
 async def _attempt(
@@ -221,10 +259,11 @@ async def plan_request(
     settings: PlannedChatSettings,
     budget: RoundBudget,
     catalog_summary: object,
-) -> ValidatedPlan:
+) -> PlanningResult:
     """Request, correct once, then fall back once to a validated plan."""
     requested_write = _is_requested_write(user_text)
     attempts = (("planner", False), ("planner", True), ("fallback_executor", False))
+    total_usage = TokenUsage()
     for role, correction in attempts:
         try:
             result = await _attempt(
@@ -236,17 +275,26 @@ async def plan_request(
                 catalog_summary,
                 correction=correction,
             )
+        except RoundBudgetExhausted:
+            raise
+        except InvalidProviderRoundError as exc:
+            total_usage = _add_usage(total_usage, exc.usage)
+            continue
+        except Exception:  # noqa: BLE001, S112
+            # Planner/provider detail is intentionally not exposed as plan output.
+            continue
+        total_usage = _add_usage(total_usage, result.usage)
+        try:
             if result.tool_call is not None:
                 continue
             plan = validate_plan(_parse_object(result.text))
             if requested_write and plan.intent != "mutation":
                 continue
-        except Exception:  # noqa: BLE001, S110
-            # Planner/provider detail is intentionally not exposed as plan output.
-            pass
+        except Exception:  # noqa: BLE001, S112
+            continue
         else:
-            return plan
-    raise InvalidPlanError()
+            return PlanningResult(plan=plan, usage=total_usage)
+    raise InvalidPlanError(total_usage)
 
 
-__all__ = ["InvalidPlanError", "plan_request"]
+__all__ = ["InvalidPlanError", "PlanningResult", "plan_request"]

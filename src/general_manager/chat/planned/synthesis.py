@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import json
 from typing import NoReturn
 
-from general_manager.chat.planned.budget import RoundBudget
+from general_manager.chat.planned.budget import RoundBudget, RoundBudgetExhausted
 from general_manager.chat.planned.config import (
     PlannedChatSettings,
     build_profile_provider,
@@ -28,7 +28,8 @@ class SynthesisFailedError(ValueError):
     reason = "synthesis_failed"
     code = "synthesis_failed"
 
-    def __init__(self) -> None:
+    def __init__(self, usage: TokenUsage | None = None) -> None:
+        self.usage = usage if usage is not None else TokenUsage()
         super().__init__(self.reason)
 
 
@@ -170,11 +171,10 @@ def _messages(
     return [
         Message(role="system", content=_SYNTHESIS_INSTRUCTION),
         Message(
-            role="system",
+            role="user",
             content="RESOLVED_REFERENCE_DATA="
             + json.dumps(reference, ensure_ascii=False, separators=(",", ":")),
         ),
-        Message(role="user", content=user_text),
     ]
 
 
@@ -210,8 +210,10 @@ def _parse_result(
             "synthesis evidence_ids must be an array of strings"
         )
     evidence_ids = tuple(raw_ids)
-    if len(evidence_ids) != len(set(evidence_ids)) or any(
-        evidence_id not in eligible_ids for evidence_id in evidence_ids
+    if (
+        not evidence_ids
+        or len(evidence_ids) != len(set(evidence_ids))
+        or any(evidence_id not in eligible_ids for evidence_id in evidence_ids)
     ):
         raise _InvalidSynthesisResponseError(  # noqa: TRY003
             "synthesis references ineligible evidence"
@@ -244,9 +246,11 @@ async def synthesize_answer(
         records = _eligible_records(_records(resolved_evidence), coverage)
     except Exception as exc:
         raise SynthesisFailedError() from exc
+    total_usage = TokenUsage()
+    if not records:
+        raise SynthesisFailedError(total_usage)
     eligible_ids = frozenset(record.evidence_id for record in records)
     messages = _messages(user_text, records, coverage)
-    total_usage = TokenUsage()
     for role in ("synthesizer", "fallback_executor"):
         try:
             result = await _attempt(role, messages, settings, budget)
@@ -257,10 +261,12 @@ async def synthesize_answer(
             return SynthesisResult(answer, evidence_ids, total_usage)
         except InvalidProviderRoundError as exc:
             total_usage = _add_usage(total_usage, exc.usage)
+        except RoundBudgetExhausted:
+            raise
         except Exception:  # noqa: BLE001, S110
             # Provider and parse diagnostics are never exposed as grounding input.
             pass
-    raise SynthesisFailedError()
+    raise SynthesisFailedError(total_usage)
 
 
 __all__ = ["SynthesisFailedError", "SynthesisResult", "synthesize_answer"]
