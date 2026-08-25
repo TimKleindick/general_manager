@@ -20,6 +20,7 @@ from general_manager.chat.planned.models import (
     ValidatedPlan,
 )
 from general_manager.chat.planned.planner import PlanningResult
+from general_manager.chat.planned.budget import RoundBudgetExhausted
 from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
     ProviderRoundResult,
@@ -432,6 +433,110 @@ def test_child_failure_blocks_parent_but_not_an_independent_root() -> None:
         "coverage": {"resolved": 1, "total": 2},
         "unresolved": [{"task_id": "task_1", "reason": "dependency_blocked"}],
     }
+
+
+class _ChildDeadlineProvider:
+    clock: ClassVar[list[float]] = []
+    rounds: ClassVar[dict[str, int]] = {}
+
+    @classmethod
+    def from_config(cls, _config: object) -> _ChildDeadlineProvider:
+        return cls()
+
+    async def complete(
+        self, messages: list[object], _tools: list[object]
+    ) -> AsyncIterator[ToolCallEvent | TextChunkEvent | DoneEvent]:
+        content = cast(Any, messages[-1]).content
+        task_id = json.loads(content.removeprefix("REFERENCE_DATA="))["task"]["task_id"]
+        round_number = type(self).rounds.get(task_id, 0) + 1
+        type(self).rounds[task_id] = round_number
+        if task_id == "task_1":
+            yield TextChunkEvent(
+                json.dumps(
+                    {
+                        "action": "spawn_children",
+                        "children": [
+                            _dynamic_child("task_1_child", depends_on=["task_1"])
+                        ],
+                    }
+                )
+            )
+            yield DoneEvent(TokenUsage())
+            type(self).clock[0] = 10.0
+            return
+        if round_number == 1:
+            yield ToolCallEvent(
+                "independent-query",
+                "query",
+                {"manager": "PartManager", "fields": []},
+            )
+        else:
+            yield TextChunkEvent(
+                json.dumps({"action": "complete", "evidence_ids": ["task_2:query:1"]})
+            )
+        yield DoneEvent(TokenUsage())
+
+
+def _child_deadline_settings() -> PlannedChatSettings:
+    profile = ProviderProfile(
+        "child_deadline",
+        "tests.unit.test_chat_planned_scheduler._ChildDeadlineProvider",
+        MappingProxyType({"probe": True}),
+        "local",
+    )
+    return PlannedChatSettings(
+        enabled=True,
+        profiles=MappingProxyType({"child_deadline": profile}),
+        roles=MappingProxyType(
+            {
+                "simple_executor": "child_deadline",
+                "complex_executor": "child_deadline",
+                "fallback_executor": "child_deadline",
+                "synthesizer": "child_deadline",
+                "planner": "child_deadline",
+            }
+        ),
+        catalog_source=None,
+    )
+
+
+def test_child_deadline_marks_parent_and_preserves_independent_root_coverage() -> None:
+    """Flattening every child failure loses the parent deadline reason."""
+
+    now = [0.0]
+    parent = _dynamic_parent()
+    independent = _task("task_2")
+    _ChildDeadlineProvider.clock = now
+    _ChildDeadlineProvider.rounds = {}
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (parent, independent)),
+        _child_deadline_settings(),
+        user_text="show records",
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        None,
+        [],
+        SchedulerCallbacks(
+            execute_tool=lambda *_args: {"status": "success", "data": []}
+        ),
+        10.0,
+        lambda: now[0],
+    )
+
+    async def run() -> None:
+        await runner.run_task(runner.runtimes["task_2"])
+        await runner.run_task(runner.runtimes["task_1"])
+
+    asyncio.run(run())
+    result = runner.result()
+
+    assert result.statuses["task_2"] == "resolved"
+    assert result.reasons["task_1"] == "deadline_exceeded"
+    assert result.coverage.resolved == 1
+    assert result.coverage.total == 2
+    assert result.coverage.unresolved == (("task_1", "deadline_exceeded"),)
 
 
 def test_scheduler_rejects_a_third_dynamic_child_across_repeated_actions() -> None:
@@ -1406,7 +1511,7 @@ def test_query_timeout_is_capped_when_the_serialized_tool_call_starts() -> None:
     prepared = PreparedPlannedTurn.for_plan(
         ValidatedPlan("read", (task,)), _settings(), user_text="show parts"
     )
-    now = [99.979]
+    now = [99.97]
     seen_timeouts: list[int] = []
 
     def execute(
@@ -1436,13 +1541,13 @@ def test_query_timeout_is_capped_when_the_serialized_tool_call_starts() -> None:
             )
         )
         await asyncio.sleep(0)
-        now[0] = 100.0
+        now[0] = 99.98
         runner.tool_semaphore.release()
         await executing
 
     asyncio.run(run())
 
-    assert seen_timeouts == [1]
+    assert seen_timeouts == [20]
 
 
 class _RoundProbe:
@@ -1815,7 +1920,7 @@ def test_scheduler_marks_a_subtree_budget_exhausted_after_fifteen_requests() -> 
 
 
 def test_scheduler_global_budget_preserves_resolved_independent_evidence() -> None:
-    """Planner transfers and root scheduling admit exactly 80 provider requests."""
+    """Three planner and 77 executor requests fill the six-root ledger."""
 
     resolved = _budget_task("resolved", 1)
     unfinished = tuple(_budget_task(f"root_{number}", 1) for number in range(5))
@@ -1826,7 +1931,7 @@ def test_scheduler_global_budget_preserves_resolved_independent_evidence() -> No
     async def planner(*args: object) -> PlanningResult:
         nonlocal planner_calls
         budget = cast(Any, args[3])
-        for _ in range(10):
+        for _ in range(3):
             budget.consume_global()
             planner_calls += 1
         return PlanningResult(
@@ -1865,12 +1970,72 @@ def test_scheduler_global_budget_preserves_resolved_independent_evidence() -> No
         result.reasons,
         _BudgetProbeProvider.rounds_by_task,
     )
-    assert planner_calls + sum(_BudgetProbeProvider.rounds_by_task.values()) == 80
+    assert planner_calls == 3
+    assert sum(_BudgetProbeProvider.rounds_by_task.values()) == 77
     assert result.statuses["resolved"] == "resolved"
     assert result.evidence.for_task("resolved")
     assert {result.statuses[task.task_id] for task in unfinished} == {
         "budget_exhausted"
     }
+
+
+@pytest.mark.parametrize(
+    ("plan", "expected_limit"),
+    [
+        (ValidatedPlan("read", (_task("task_1"),)), 18),
+        (ValidatedPlan("mutation", ()), 5),
+    ],
+)
+def test_three_planner_rounds_transfer_to_read_and_zero_root_mutation_ledgers(
+    plan: ValidatedPlan, expected_limit: int
+) -> None:
+    """Changing the transfer ledger would reject a valid three-attempt plan."""
+
+    provisional_limits: list[int] = []
+
+    async def planner(*args: object) -> PlanningResult:
+        budget = cast(Any, args[3])
+        provisional_limits.append(budget.global_limit)
+        for _ in range(3):
+            budget.consume_global()
+        return PlanningResult(plan, TokenUsage())
+
+    prepared = asyncio.run(
+        prepare_planned_turn(
+            "show parts",
+            [],
+            _budget_settings(),
+            {},
+            planner=planner,
+            resolver=cast(Any, _StableExactResolver()),
+        )
+    )
+
+    assert provisional_limits == [5]
+    assert prepared.budget.global_limit == expected_limit
+    assert prepared.budget.global_count == 3
+
+
+def test_planner_fourth_round_is_rejected_by_provisional_admission() -> None:
+    """Removing the planner-attempt guard lets untransferable usage escape admission."""
+
+    async def planner(*args: object) -> PlanningResult:
+        budget = cast(Any, args[3])
+        for _ in range(4):
+            budget.consume_global()
+        return PlanningResult(ValidatedPlan("mutation", ()), TokenUsage())
+
+    with pytest.raises(RoundBudgetExhausted):
+        asyncio.run(
+            prepare_planned_turn(
+                "show parts",
+                [],
+                _budget_settings(),
+                {},
+                planner=planner,
+                resolver=cast(Any, _StableExactResolver()),
+            )
+        )
 
 
 def test_planning_and_evidence_share_one_absolute_deadline(
@@ -2101,8 +2266,8 @@ def test_evidence_deadline_cancels_async_provider_and_keeps_resolved_evidence() 
     assert result.reasons["task_2"] == "deadline_exceeded"
 
 
-def test_cancelling_the_public_iterator_cleans_up_the_in_flight_provider() -> None:
-    """Removing iterator cleanup would leak the provider task after disconnect."""
+def test_closing_public_iterator_after_tool_call_cancels_in_flight_work() -> None:
+    """Removing generator-close cleanup leaks provider and tool work after disconnect."""
 
     _DeadlineProbeProvider.entered = asyncio.Event()
     _DeadlineProbeProvider.release = asyncio.Event()
@@ -2110,12 +2275,24 @@ def test_cancelling_the_public_iterator_cleans_up_the_in_flight_provider() -> No
     _DeadlineProbeProvider.wake_scheduler = asyncio.Event()
     _DeadlineProbeProvider.rounds_by_task = {}
     _DeadlineProbeProvider.cancelled = False
-    task = _deadline_tasks()[2]
     prepared = PreparedPlannedTurn.for_plan(
-        ValidatedPlan("read", (task,)), _deadline_settings(), user_text="parts"
+        ValidatedPlan("read", _deadline_tasks()),
+        _deadline_settings(),
+        user_text="parts",
     )
 
     async def run() -> None:
+        tool_cancelled = asyncio.Event()
+
+        async def run_sync(
+            _fn: Any, _args: tuple[Any, ...], _kwargs: dict[str, Any]
+        ) -> Any:
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                tool_cancelled.set()
+                raise
+
         iterator = cast(
             Any,
             iter_planned_read_events(
@@ -2123,23 +2300,79 @@ def test_cancelling_the_public_iterator_cleans_up_the_in_flight_provider() -> No
                 scope={},
                 conversation=None,
                 messages=[],
+                callbacks=SchedulerCallbacks(
+                    run_sync=run_sync, enforce_rate_limit=None
+                ),
             ),
         )
-        next_event: asyncio.Task[dict[str, Any]] = asyncio.create_task(
-            iterator.__anext__()
-        )
+        event = await asyncio.wait_for(iterator.__anext__(), timeout=0.2)
+        assert event["type"] == "tool_call"
         entered = _DeadlineProbeProvider.entered
         assert entered is not None
         await asyncio.wait_for(entered.wait(), timeout=0.2)
-        next_event.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await next_event
         await iterator.aclose()
+        await iterator.aclose()
+
+        assert tool_cancelled.is_set()
+        assert _DeadlineProbeProvider.cancelled is True
+        assert prepared.result is None
 
     asyncio.run(run())
 
-    assert _DeadlineProbeProvider.cancelled is True
-    assert prepared.result is None
+
+def test_serialized_tool_at_deadline_skips_callback_and_commits_paired_failure() -> (
+    None
+):
+    """Replacing the post-semaphore deadline guard would execute an expired tool."""
+
+    now = [0.0]
+    tool_calls: list[object] = []
+    persisted: list[object] = []
+    task = _task("task_1")
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (task,)), _settings(), user_text="show parts"
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        object(),
+        [],
+        SchedulerCallbacks(
+            execute_tool=lambda *_args: tool_calls.append(object()),
+            emit_tool_called=lambda *_args, **_kwargs: tool_calls.append(object()),
+            append_message=lambda *_args, **_kwargs: persisted.append(object()),
+        ),
+        10.0,
+        lambda: now[0],
+    )
+
+    async def run() -> tuple[tuple[Any, bool], list[dict[str, Any]]]:
+        await runner.tool_semaphore.acquire()
+        execution = asyncio.create_task(
+            runner.execute_tool(
+                runner.runtimes[task.task_id],
+                ToolCallEvent(
+                    "late-query", "query", {"manager": "PartManager", "fields": []}
+                ),
+            )
+        )
+        first = await asyncio.wait_for(runner.events.get(), timeout=0.2)
+        now[0] = 10.0
+        runner.tool_semaphore.release()
+        result = await asyncio.wait_for(execution, timeout=0.2)
+        second = await asyncio.wait_for(runner.events.get(), timeout=0.2)
+        return result, [first, second]
+
+    result, events = asyncio.run(run())
+
+    assert result == ({"status": "error", "code": "deadline_exceeded"}, False)
+    assert [event["type"] for event in events] == ["tool_call", "tool_result"]
+    assert events[1]["result"] == {"status": "error", "code": "deadline_exceeded"}
+    assert tool_calls == []
+    assert persisted == []
+    assert not runner.evidence.for_task(task.task_id)
+    runtime = runner.runtimes[task.task_id]
+    assert (runtime.status, runtime.reason) == ("blocked", "deadline_exceeded")
 
 
 def test_sync_tool_cancellation_is_best_effort_for_the_worker_thread() -> None:
