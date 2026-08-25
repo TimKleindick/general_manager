@@ -23,6 +23,13 @@ from general_manager.chat.models import (
     get_conversation_messages,
     update_conversation_summary,
 )
+from general_manager.chat.planned.catalog import load_manager_catalog
+from general_manager.chat.planned.config import get_planned_chat_settings
+from general_manager.chat.planned.scheduler import (
+    iter_planned_read_events,
+    prepare_planned_turn,
+)
+from general_manager.chat.schema_index import build_schema_index
 from general_manager.chat.consumer import (
     _has_tool_after_last_user,
     _iter_provider_events,
@@ -68,6 +75,8 @@ class _PreparedMessageRequest:
     provider: Any | None
     messages: list[Message] | None
     early_events: list[dict[str, Any]] | None
+    user_text: str | None = None
+    planned_settings: Any | None = None
 
 
 def _ensure_session_key(request: HttpRequest) -> str | None:
@@ -118,14 +127,18 @@ async def _summarize_messages_with_provider(
 
 
 async def _build_messages(
-    conversation: ChatConversation, provider: Any
+    conversation: ChatConversation,
+    provider: Any,
+    *,
+    allow_summarization: bool = True,
 ) -> list[Message]:
     settings = get_chat_settings()
     summarize_after = int(settings.get("summarize_after", 20))
     max_recent_messages = int(settings.get("max_recent_messages", 12))
     conversation_messages = await sync_to_async(get_conversation_messages)(conversation)
     if (
-        len(conversation_messages) > summarize_after
+        allow_summarization
+        and len(conversation_messages) > summarize_after
         and not conversation.summary_text.strip()
     ):
         older_messages = conversation_messages[:-max_recent_messages]
@@ -140,6 +153,26 @@ async def _build_messages(
     for item in await sync_to_async(build_conversation_context)(conversation):
         messages.append(Message(role=item.role, content=item.content))
     return messages
+
+
+def _planned_catalog_summary(settings: Any) -> dict[str, Any]:
+    """Build the planner's inert catalog/schema reference data for one turn."""
+    schema_index = build_schema_index()
+    catalog = load_manager_catalog(
+        getattr(settings, "catalog_source", None), schema_index
+    )
+    return {
+        "catalog": {
+            name: {
+                "domain": entry.domain,
+                "aliases": list(entry.aliases),
+                "use_when": entry.use_when,
+                "distinguish_from": list(entry.distinguish_from),
+            }
+            for name, entry in catalog.entries.items()
+        },
+        "schema": schema_index,
+    }
 
 
 def _answer_from_events(events: list[dict[str, Any]]) -> str:
@@ -514,7 +547,12 @@ async def _prepare_message_request(
         provider_importer() if provider_importer is not None else import_provider()
     )
     provider = provider_cls()
-    messages = await _build_messages(conversation, provider)
+    planned_settings = get_planned_chat_settings()
+    messages = await _build_messages(
+        conversation,
+        provider,
+        allow_summarization=not planned_settings.enabled,
+    )
     emit_chat_message_received(
         user=getattr(request, "user", None),
         message=text,
@@ -526,7 +564,67 @@ async def _prepare_message_request(
         provider=provider,
         messages=messages,
         early_events=None,
+        user_text=text,
+        planned_settings=planned_settings,
     )
+
+
+async def _iter_prepared_message_events(
+    prepared: _PreparedMessageRequest,
+    *,
+    transport: str,
+) -> AsyncIterator[dict[str, Any]]:
+    """Select one post-admission transport strategy without changing legacy loops."""
+    if (
+        prepared.provider is None
+        or prepared.messages is None
+        or prepared.conversation is None
+    ):
+        return
+    planned_settings = prepared.planned_settings or get_planned_chat_settings()
+    if not planned_settings.enabled:
+        async for event in _iter_provider_turn_events(
+            scope=prepared.scope,
+            conversation=prepared.conversation,
+            provider=prepared.provider,
+            messages=prepared.messages,
+            transport=transport,
+        ):
+            yield event
+        return
+
+    planned_turn = await prepare_planned_turn(
+        prepared.user_text
+        or next(
+            (
+                message.content
+                for message in reversed(prepared.messages)
+                if message.role == "user"
+            ),
+            "",
+        ),
+        prepared.messages,
+        planned_settings,
+        _planned_catalog_summary(planned_settings),
+        scope=prepared.scope,
+    )
+    if planned_turn.mutation_plan is not None:
+        async for event in _iter_provider_turn_events(
+            scope=prepared.scope,
+            conversation=prepared.conversation,
+            provider=prepared.provider,
+            messages=prepared.messages,
+            transport=transport,
+        ):
+            yield event
+        return
+    async for event in iter_planned_read_events(
+        planned_turn,
+        scope=prepared.scope,
+        conversation=prepared.conversation,
+        messages=prepared.messages,
+    ):
+        yield event
 
 
 async def _execute_message_request(
@@ -538,19 +636,12 @@ async def _execute_message_request(
         prepared = await _prepare_message_request(request)
         if prepared.early_events is not None:
             return prepared.conversation, prepared.early_events
-        if (
-            prepared.provider is None
-            or prepared.messages is None
-            or prepared.conversation is None
-        ):
-            return prepared.conversation, []
-        events = await _run_provider_turn(
-            scope=prepared.scope,
-            conversation=prepared.conversation,
-            provider=prepared.provider,
-            messages=prepared.messages,
-            transport=transport,
-        )
+        events = [
+            event
+            async for event in _iter_prepared_message_events(
+                prepared, transport=transport
+            )
+        ]
     except Exception as exc:  # noqa: BLE001
         events = _chat_error_events(exc, request, transport=transport)
         return None, events
@@ -572,19 +663,7 @@ async def _stream_message_events(
             for event in prepared.early_events:
                 yield event
             return
-        if (
-            prepared.provider is None
-            or prepared.messages is None
-            or prepared.conversation is None
-        ):
-            return
-        async for event in _iter_provider_turn_events(
-            scope=prepared.scope,
-            conversation=prepared.conversation,
-            provider=prepared.provider,
-            messages=prepared.messages,
-            transport=transport,
-        ):
+        async for event in _iter_prepared_message_events(prepared, transport=transport):
             yield event
     except Exception as exc:  # noqa: BLE001
         for event in _chat_error_events(exc, request, transport=transport):
