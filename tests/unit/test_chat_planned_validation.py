@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
@@ -50,12 +50,31 @@ def task(
     objective: str = "Find the requested records.",
     depends_on: list[str] | None = None,
     requirements: list[dict[str, object]] | None = None,
+    completion_criteria: list[str] | None = None,
+    routing_features: list[str] | None = None,
 ) -> dict[str, object]:
+    raw_dependencies = [] if depends_on is None else depends_on
+    raw_requirements = [requirement()] if requirements is None else requirements
+    derived_features: list[str] = []
+    if raw_dependencies:
+        derived_features.append("has_dependency")
+    if any(item.get("kind") == "calculation" for item in raw_requirements):
+        derived_features.append("requires_calculation")
+    if sum(item.get("kind") == "query" for item in raw_requirements) > 1:
+        derived_features.append("multiple_queries")
     return {
         "task_id": task_id,
         "objective": objective,
-        "depends_on": [] if depends_on is None else depends_on,
-        "requirements": ([requirement()] if requirements is None else requirements),
+        "depends_on": raw_dependencies,
+        "requirements": raw_requirements,
+        "completion_criteria": (
+            [item.get("requirement_id", "") for item in raw_requirements]
+            if completion_criteria is None
+            else completion_criteria
+        ),
+        "routing_features": (
+            derived_features if routing_features is None else routing_features
+        ),
     }
 
 
@@ -79,6 +98,7 @@ def child_payload(*children: dict[str, object]) -> dict[str, object]:
 def test_read_plan_accepts_six_roots_with_one_edge_dependencies() -> None:
     tasks = [task(f"task_{index}") for index in range(1, 7)]
     tasks[1]["depends_on"] = ["task_1"]
+    tasks[1]["routing_features"] = ["has_dependency"]
 
     validated = validate_plan(plan(tasks))
 
@@ -131,7 +151,14 @@ def test_plan_requires_exact_top_level_keys_and_values(
 
 @pytest.mark.parametrize(
     "missing",
-    ["task_id", "objective", "depends_on", "requirements"],
+    [
+        "task_id",
+        "objective",
+        "depends_on",
+        "requirements",
+        "completion_criteria",
+        "routing_features",
+    ],
 )
 def test_task_requires_every_structural_field(missing: str) -> None:
     raw_task = task()
@@ -143,7 +170,7 @@ def test_task_requires_every_structural_field(missing: str) -> None:
 
 def test_task_rejects_unknown_structural_keys() -> None:
     raw_task = task()
-    raw_task["completion_criteria"] = ["requirement_1"]
+    raw_task["provider_role"] = "simple_executor"
 
     with pytest.raises(PlanValidationError):
         validate_plan(plan([raw_task]))
@@ -206,6 +233,72 @@ def test_root_dependency_depth_allows_multiple_roots_on_one_parent() -> None:
     ]
 
     assert len(validate_plan(plan(tasks)).tasks) == 3
+
+
+def test_completion_criteria_must_list_every_requirement_exactly_once() -> None:
+    requirements = [
+        requirement("requirement_1"),
+        requirement("requirement_2", kind="schema"),
+    ]
+    valid = validate_plan(
+        plan(
+            [
+                task(
+                    requirements=requirements,
+                    completion_criteria=["requirement_2", "requirement_1"],
+                )
+            ]
+        )
+    )
+    assert valid.tasks[0].completion_criteria == (
+        "requirement_2",
+        "requirement_1",
+    )
+
+    for criteria in (
+        ["requirement_1"],
+        ["requirement_1", "requirement_1"],
+        ["requirement_1", "missing"],
+    ):
+        with pytest.raises(PlanValidationError):
+            validate_plan(
+                plan([task(requirements=requirements, completion_criteria=criteria)])
+            )
+
+
+def test_routing_features_are_exact_deterministic_structural_facts() -> None:
+    requirements = [
+        requirement("query_1"),
+        requirement("query_2"),
+        requirement("calculation", kind="calculation", operation="sum"),
+    ]
+    payload = task(
+        "task_2",
+        depends_on=["task_1"],
+        requirements=requirements,
+        routing_features=[
+            "has_dependency",
+            "requires_calculation",
+            "multiple_queries",
+        ],
+    )
+
+    validated = validate_plan(plan([task("task_1"), payload]))
+
+    assert validated.tasks[1].routing_features == (
+        "has_dependency",
+        "requires_calculation",
+        "multiple_queries",
+    )
+    for features in (
+        [],
+        ["has_dependency"],
+        ["requires_calculation", "multiple_queries"],
+        ["has_dependency", "requires_calculation", "multiple_queries", "role"],
+    ):
+        payload["routing_features"] = features
+        with pytest.raises(PlanValidationError):
+            validate_plan(plan([task("task_1"), payload]))
 
 
 @pytest.mark.parametrize(
@@ -322,7 +415,7 @@ def test_dynamic_children_are_bounded_owned_and_non_recursive() -> None:
     children = validate_dynamic_children(
         parent,
         child_payload(task("child_1"), task("child_2")),
-        {parent.task_id},
+        {parent},
     )
 
     assert all(child.parent_id == parent.task_id for child in children)
@@ -330,7 +423,7 @@ def test_dynamic_children_are_bounded_owned_and_non_recursive() -> None:
         validate_dynamic_children(
             children[0],
             child_payload(task("grandchild")),
-            {child.task_id for child in children},
+            {parent, *children},
         )
 
 
@@ -338,12 +431,12 @@ def test_dynamic_children_require_exact_children_key_and_are_capped_at_two() -> 
     parent = parent_task()
 
     with pytest.raises(PlanValidationError):
-        validate_dynamic_children(parent, {"tasks": [task("child_1")]}, {"task_1"})
+        validate_dynamic_children(parent, {"tasks": [task("child_1")]}, {parent})
     with pytest.raises(PlanValidationError):
         validate_dynamic_children(
             parent,
             child_payload(task("child_1"), task("child_2"), task("child_3")),
-            {parent.task_id},
+            {parent},
         )
 
 
@@ -351,23 +444,28 @@ def test_dynamic_children_have_globally_unique_ids() -> None:
     parent = parent_task()
 
     with pytest.raises(PlanValidationError):
-        validate_dynamic_children(parent, child_payload(task("task_2")), {"task_2"})
+        validate_dynamic_children(
+            parent,
+            child_payload(task("task_2")),
+            {parent, validate_plan(plan([task("task_2")])).tasks[0]},
+        )
     with pytest.raises(PlanValidationError):
         validate_dynamic_children(
             parent,
             child_payload(task("child_1"), task("child_1")),
-            {parent.task_id},
+            {parent},
         )
 
 
 def test_dynamic_children_cannot_depend_on_another_subtree() -> None:
     parent = parent_task()
+    other_root = validate_plan(plan([task("other_root")])).tasks[0]
 
     with pytest.raises(PlanValidationError):
         validate_dynamic_children(
             parent,
             child_payload(task("child_1", depends_on=["other_root"])),
-            {parent.task_id, "other_root"},
+            {parent, other_root},
         )
 
 
@@ -376,7 +474,7 @@ def test_dynamic_children_may_depend_only_on_their_parent_or_siblings() -> None:
     children = validate_dynamic_children(
         parent,
         child_payload(task("child_1"), task("child_2", depends_on=[parent.task_id])),
-        {parent.task_id},
+        {parent},
     )
 
     assert children[1].depends_on == (parent.task_id,)
@@ -388,4 +486,53 @@ def test_dynamic_child_cannot_supply_its_own_parent() -> None:
     raw_child["parent_id"] = "other_root"
 
     with pytest.raises(PlanValidationError):
-        validate_dynamic_children(parent, child_payload(raw_child), {parent.task_id})
+        validate_dynamic_children(parent, child_payload(raw_child), {parent})
+
+
+def test_dynamic_children_allow_positive_dependency_on_existing_sibling() -> None:
+    parent = parent_task()
+    first = validate_dynamic_children(parent, child_payload(task("child_1")), {parent})
+
+    second = validate_dynamic_children(
+        parent,
+        child_payload(task("child_2", depends_on=["child_1"])),
+        {parent, *first},
+    )
+
+    assert second[0].depends_on == ("child_1",)
+
+
+def test_existing_sibling_records_cannot_have_cross_root_dependencies() -> None:
+    parent = parent_task()
+    child = validate_dynamic_children(parent, child_payload(task("child_1")), {parent})[
+        0
+    ]
+    other_root = validate_plan(plan([task("other_root")])).tasks[0]
+    invalid_existing_child = replace(
+        child,
+        depends_on=(other_root.task_id,),
+        routing_features=("has_dependency",),
+    )
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(
+            parent,
+            child_payload(task("child_2")),
+            {parent, invalid_existing_child, other_root},
+        )
+
+
+def test_dynamic_children_limit_is_cumulative_across_repeated_calls() -> None:
+    parent = parent_task()
+    first = validate_dynamic_children(
+        parent,
+        child_payload(task("child_1"), task("child_2")),
+        {parent},
+    )
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(
+            parent,
+            child_payload(task("child_3"), task("child_4")),
+            {parent, *first},
+        )
