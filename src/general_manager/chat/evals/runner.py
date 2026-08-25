@@ -10,14 +10,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 from typing import Any
+from typing import NoReturn
 from typing import Protocol
 
 import yaml
 
 from general_manager.chat.evals.diagnostics import (
     classify_result,
+    planned_eval_diagnostics,
+    sanitize_planned_trace,
     summarize_diagnostics,
 )
+from general_manager.chat.evals.fingerprints import stable_hash
 from general_manager.chat.evals.judges.answer_quality import (
     AnswerQualityScore,
     judge_answer_quality,
@@ -38,9 +42,20 @@ from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
     TextChunkEvent,
+    TokenUsage,
     ToolCallEvent,
     ToolDefinition,
 )
+from general_manager.chat.planned.catalog import ManagerCatalog, ManagerCatalogEntry
+from general_manager.chat.planned.config import PlannedChatSettings, ProviderProfile
+from general_manager.chat.planned.resolver import ManagerResolver
+from general_manager.chat.planned.scheduler import (
+    SchedulerCallbacks,
+    iter_planned_read_events,
+    prepare_planned_turn,
+)
+from general_manager.chat.planned.validation import PlanValidationError
+from types import MappingProxyType
 from general_manager.chat.grounding import (
     build_empty_response_recovery_message,
     build_missing_tool_recovery_message,
@@ -212,6 +227,25 @@ class EvalCase:
     tags: list[str] = field(default_factory=list)
 
 
+class PlannedEvalConfigurationError(ValueError):
+    """Raised when deterministic planned-eval role pinning is invalid."""
+
+
+@dataclass(frozen=True)
+class PlannedEvalRoleOverride:
+    """One role-pinned provider used only by the deterministic eval adapter."""
+
+    provider_path: str
+    provider_config: dict[str, Any]
+    trust_group: str
+
+    def with_trust_group(self, trust_group: str) -> "PlannedEvalRoleOverride":
+        """Return a test override with a different trust group."""
+        return PlannedEvalRoleOverride(
+            self.provider_path, dict(self.provider_config), trust_group
+        )
+
+
 @dataclass
 class EvalResult:
     case: EvalCase
@@ -221,6 +255,13 @@ class EvalResult:
     answer_score: AnswerQualityScore | None = None
     error: str | None = None
     recovery_events: list[str] = field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    tool_results: list[dict[str, Any]] = field(default_factory=list)
+    answer: str = ""
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+    fingerprint: str = ""
+    trace: dict[str, Any] = field(default_factory=dict)
+    usage: dict[str, int] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
@@ -2809,6 +2850,225 @@ def _write_trace(
 
 
 # ---------------------------------------------------------------------------
+# Deterministic planned evaluation adapter
+# ---------------------------------------------------------------------------
+
+
+_PLANNED_EVAL_ROLES = (
+    "planner",
+    "simple_executor",
+    "complex_executor",
+    "synthesizer",
+    "fallback_executor",
+)
+
+
+def _planned_eval_settings(
+    role_overrides: dict[str, PlannedEvalRoleOverride] | None,
+) -> PlannedChatSettings:
+    """Build isolated planned settings from explicit evaluation-only role pins."""
+    if role_overrides is None:
+        _planned_eval_error("planned evals require role overrides.")
+    missing = [role for role in _PLANNED_EVAL_ROLES if role not in role_overrides]
+    if missing:
+        _planned_eval_error("missing role overrides: " + ", ".join(missing))
+    unexpected = sorted(set(role_overrides) - set(_PLANNED_EVAL_ROLES))
+    if unexpected:
+        _planned_eval_error("unknown role overrides: " + ", ".join(unexpected))
+    trust_groups = {role_overrides[role].trust_group for role in _PLANNED_EVAL_ROLES}
+    if len(trust_groups) != 1:
+        _planned_eval_error("planned eval role overrides must use one trust_group.")
+    profiles = {
+        role: ProviderProfile(
+            name=role,
+            provider_path=role_overrides[role].provider_path,
+            provider_config=MappingProxyType(
+                dict(role_overrides[role].provider_config)
+            ),
+            trust_group=role_overrides[role].trust_group,
+        )
+        for role in _PLANNED_EVAL_ROLES
+    }
+    return PlannedChatSettings(
+        enabled=True,
+        profiles=MappingProxyType(profiles),
+        roles=MappingProxyType({role: role for role in _PLANNED_EVAL_ROLES}),
+        catalog_source=None,
+        max_concurrent_tasks=1,
+    )
+
+
+def _planned_eval_error(detail: str) -> NoReturn:
+    raise PlannedEvalConfigurationError(detail)
+
+
+def _invalid_strategy() -> NoReturn:
+    raise ValueError("strategy must be 'legacy' or 'planned'.")  # noqa: TRY003
+
+
+def _planned_tool_callback(case: EvalCase) -> Callable[[str, Any, Any], Any]:
+    """Return fixed tool outcomes; planned evals never use application tools."""
+    planned = case.expectations.get("planned", {})
+    configured = planned.get("tool_results", {}) if isinstance(planned, dict) else {}
+
+    def execute(name: str, args: Any, _context: Any) -> Any:
+        manager = args.get("manager") if isinstance(args, dict) else None
+        if isinstance(configured, dict):
+            result = configured.get(str(manager), configured.get(name))
+            if result is not None:
+                return result
+        return {"status": "success", "data": []}
+
+    return execute
+
+
+async def _run_planned_case(
+    provider: Any,
+    case: EvalCase,
+    *,
+    stream: IO[str] | None,
+    trace_writer: EvalTraceWriter | None,
+    run_metadata: dict[str, Any] | None,
+    role_overrides: dict[str, PlannedEvalRoleOverride] | None,
+) -> EvalResult:
+    """Run one planned case through the scheduler with deterministic providers."""
+    settings = _planned_eval_settings(role_overrides)
+    resolver = _planned_eval_resolver()
+    history = [Message(role="system", content=build_system_prompt())]
+    records: list[TurnRecord] = []
+    events: list[dict[str, Any]] = []
+    try:
+        for turn in case.conversation:
+            user_text = turn.get("user", "")
+            if not user_text:
+                continue
+            history.append(Message(role="user", content=user_text))
+            prepared = await prepare_planned_turn(
+                user_text,
+                history,
+                settings,
+                {},
+                resolver=resolver,
+                callbacks=SchedulerCallbacks(enforce_rate_limit=None),
+            )
+            if prepared.mutation_plan is not None:
+                if provider is None:
+                    _planned_eval_error(
+                        "mutation fallback requires a legacy eval provider."
+                    )
+                legacy_record = await _run_turn(provider, [], [], stream=stream)
+                result = _score_case(case, [legacy_record])
+                result.tool_calls = list(legacy_record.tool_calls)
+                result.tool_results = list(legacy_record.tool_results)
+                result.answer = legacy_record.answer
+                result.diagnostics = {
+                    "orchestration": {"strategy": "legacy", "reason": "mutation"}
+                }
+                result.usage = {}
+                result.trace = {"events": []}
+                result.fingerprint = stable_hash(
+                    {"case": case.name, "strategy": "legacy", "answer": result.answer}
+                )
+                return result
+            turn_events = [
+                event
+                async for event in iter_planned_read_events(
+                    prepared,
+                    scope={},
+                    conversation=None,
+                    messages=history,
+                    callbacks=SchedulerCallbacks(
+                        execute_tool=_planned_tool_callback(case),
+                        enforce_rate_limit=None,
+                    ),
+                )
+            ]
+            events.extend(turn_events)
+            record = TurnRecord()
+            for event in turn_events:
+                if event["type"] == "tool_call":
+                    record.tool_calls.append(
+                        {"name": event["name"], "args": dict(event["args"])}
+                    )
+                elif event["type"] == "tool_result":
+                    record.tool_results.append(event["result"])
+                elif event["type"] == "text_chunk":
+                    record.answer_chunks.append(str(event["content"]))
+            records.append(record)
+            if record.answer:
+                history.append(Message(role="assistant", content=record.answer))
+    except (
+        PlanValidationError,
+        PlannedEvalConfigurationError,
+        ValueError,
+        TypeError,
+        KeyError,
+        OSError,
+    ) as exc:
+        return EvalResult(case=case, error=str(exc))
+
+    result = _score_case(case, records)
+    result.tool_calls, result.tool_results, result.answer = _aggregate_records(records)
+    result.trace = sanitize_planned_trace(events)
+    result.diagnostics = planned_eval_diagnostics(
+        events, {role: settings.roles[role] for role in _PLANNED_EVAL_ROLES}
+    )
+    total_usage = TokenUsage()
+    for event in events:
+        raw_usage = event.get("usage")
+        if isinstance(raw_usage, dict):
+            total_usage = TokenUsage(
+                input_tokens=total_usage.input_tokens
+                + int(raw_usage.get("input_tokens", 0)),
+                output_tokens=total_usage.output_tokens
+                + int(raw_usage.get("output_tokens", 0)),
+            )
+    result.usage = {
+        "input_tokens": total_usage.input_tokens,
+        "output_tokens": total_usage.output_tokens,
+    }
+    result.fingerprint = stable_hash(
+        {"case": case.name, "strategy": "planned", "trace": result.trace}
+    )
+    _write_trace(
+        trace_writer,
+        case=case,
+        records=records,
+        result=result,
+        run_metadata=run_metadata,
+    )
+    return result
+
+
+def _planned_eval_resolver() -> ManagerResolver:
+    """Build a fixed two-manager catalog that exercises alias-based routing."""
+    schema_index = {
+        "MaterialManager": {"description": "materials", "fields": []},
+        "PartManager": {"description": "parts", "fields": []},
+    }
+    catalog = ManagerCatalog(
+        entries=MappingProxyType(
+            {
+                "MaterialManager": ManagerCatalogEntry(
+                    domain="manufacturing",
+                    aliases=("materials",),
+                    use_when="find materials",
+                    distinguish_from=(),
+                ),
+                "PartManager": ManagerCatalogEntry(
+                    domain="manufacturing",
+                    aliases=("parts",),
+                    use_when="find parts",
+                    distinguish_from=(),
+                ),
+            }
+        ),
+        fingerprint="planned-eval-catalog",
+    )
+    return ManagerResolver(schema_index, catalog)
+
+
+# ---------------------------------------------------------------------------
 # Suite execution
 # ---------------------------------------------------------------------------
 
@@ -2821,8 +3081,21 @@ async def run_case(
     trace_writer: EvalTraceWriter | None = None,
     run_metadata: dict[str, Any] | None = None,
     recover_missing_tools: bool = False,
+    strategy: str = "legacy",
+    role_overrides: dict[str, PlannedEvalRoleOverride] | None = None,
 ) -> EvalResult:
     """Run a single eval case and return scored results."""
+    if strategy == "planned":
+        return await _run_planned_case(
+            provider,
+            case,
+            stream=stream,
+            trace_writer=trace_writer,
+            run_metadata=run_metadata,
+            role_overrides=role_overrides,
+        )
+    if strategy != "legacy":
+        _invalid_strategy()
     system_prompt = build_system_prompt()
     history: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
     records: list[TurnRecord] = []
@@ -2864,6 +3137,7 @@ async def run_case(
         return result
 
     result = _score_case(case, records)
+    result.tool_calls, result.tool_results, result.answer = _aggregate_records(records)
     _write_trace(
         trace_writer,
         case=case,

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 if TYPE_CHECKING:
     from general_manager.chat.evals.runner import EvalResult
@@ -257,3 +256,37 @@ def summarize_failure_class_cases(
         if diagnostic.case not in cases:
             cases.append(diagnostic.case)
     return dict(sorted(grouped.items(), key=lambda item: item[0]))
+
+
+def sanitize_planned_trace(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Return deterministic public planned events without routing internals."""
+    safe_events: list[dict[str, Any]] = []
+    for event in events:
+        item = {
+            key: value
+            for key, value in event.items()
+            if key not in {"profile", "result", "trust_group"}
+        }
+        if "result" in event:
+            item["result_type"] = type(event["result"]).__name__
+        safe_events.append(item)
+    return {"events": safe_events}
+
+
+def planned_eval_diagnostics(
+    events: Sequence[Mapping[str, Any]], roles: Mapping[str, str]
+) -> dict[str, Any]:
+    """Extract only public coverage plus reproducible eval role labels."""
+    diagnostics: dict[str, Any] = {"roles": dict(sorted(roles.items()))}
+    terminal = next(
+        (event for event in reversed(events) if event.get("type") in {"done", "error"}),
+        None,
+    )
+    if terminal is not None and isinstance(terminal.get("orchestration"), Mapping):
+        orchestration = terminal["orchestration"]
+        coverage = orchestration.get("coverage")
+        diagnostics["orchestration"] = {
+            "coverage": dict(coverage) if isinstance(coverage, Mapping) else {},
+            "unresolved": list(orchestration.get("unresolved", [])),
+        }
+    return diagnostics
