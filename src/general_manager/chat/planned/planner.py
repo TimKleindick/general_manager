@@ -31,8 +31,13 @@ class InvalidPlanError(ValueError):
     reason = "invalid_plan"
     code = "invalid_plan"
 
-    def __init__(self, usage: TokenUsage | None = None) -> None:
+    def __init__(
+        self,
+        usage: TokenUsage | None = None,
+        attempt_usages: tuple[TokenUsage, ...] = (),
+    ) -> None:
         self.usage = usage if usage is not None else TokenUsage()
+        self.attempt_usages = attempt_usages
         super().__init__(self.reason)
 
 
@@ -46,6 +51,7 @@ class PlanningResult:
 
     plan: ValidatedPlan
     usage: TokenUsage
+    attempt_usages: tuple[TokenUsage, ...] = ()
 
 
 _WRITE_COMMAND = re.compile(
@@ -303,6 +309,7 @@ async def plan_request(
     requested_write = _is_requested_write(user_text)
     attempts = (("planner", False), ("planner", True), ("fallback_executor", False))
     total_usage = TokenUsage()
+    attempt_usages: list[TokenUsage] = []
     for role, correction in attempts:
         try:
             result = await _attempt(
@@ -318,11 +325,13 @@ async def plan_request(
             raise
         except InvalidProviderRoundError as exc:
             total_usage = _add_usage(total_usage, exc.usage)
+            attempt_usages.append(exc.usage)
             continue
         except Exception:  # noqa: BLE001, S112
             # Planner/provider detail is intentionally not exposed as plan output.
             continue
         total_usage = _add_usage(total_usage, result.usage)
+        attempt_usages.append(result.usage)
         try:
             if result.tool_call is not None:
                 continue
@@ -332,8 +341,10 @@ async def plan_request(
         except Exception:  # noqa: BLE001, S112
             continue
         else:
-            return PlanningResult(plan=plan, usage=total_usage)
-    raise InvalidPlanError(total_usage)
+            return PlanningResult(
+                plan=plan, usage=total_usage, attempt_usages=tuple(attempt_usages)
+            )
+    raise InvalidPlanError(total_usage, tuple(attempt_usages))
 
 
 __all__ = ["InvalidPlanError", "PlanningResult", "plan_request"]

@@ -12,11 +12,17 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from dataclasses import dataclass, field
 import inspect
 import json
+import math
 from typing import Any, cast
 
 from asgiref.sync import sync_to_async
 
 from general_manager.chat.planned.budget import RoundBudget, RoundBudgetExhausted
+from general_manager.chat.planned.calculations import (
+    CalculationError,
+    CalculationOperand,
+    calculate_evidence,
+)
 from general_manager.chat.planned.config import (
     PlannedChatSettings,
     build_profile_provider,
@@ -36,7 +42,13 @@ from general_manager.chat.planned.evidence import (
     canonical_call_identity,
 )
 from general_manager.chat.planned.models import PlannedTask, TaskStatus, ValidatedPlan
-from general_manager.chat.planned.planner import PlanningResult, plan_request
+from general_manager.chat.planned.planner import (
+    InvalidPlanError,
+    PlanningResult,
+    plan_request,
+)
+from general_manager.chat.planned.catalog import load_manager_catalog
+from general_manager.chat.planned.resolver import ManagerResolver
 from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
     complete_provider_round,
@@ -65,7 +77,10 @@ _TOOL_EVIDENCE_KIND = {
     "find_path": "path",
     "query": "query",
 }
-_EXECUTOR_ACTIONS = frozenset(("complete", "block", "spawn_children"))
+_ALLOWED_TOOL_NAMES = frozenset(
+    ("search_managers", "get_manager_schema", "find_path", "query")
+)
+_EXECUTOR_ACTIONS = frozenset(("complete", "block", "spawn_children", "calculate"))
 
 
 def _add_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
@@ -166,6 +181,9 @@ class PreparedPlannedTurn:
     settings: PlannedChatSettings
     user_text: str
     catalog_summary: object = None
+    resolver: ManagerResolver | None = None
+    evidence_deadline: float | None = None
+    attempt_usages: tuple[TokenUsage, ...] = ()
     result: PlannedExecutionResult | None = None
 
     @classmethod
@@ -177,6 +195,9 @@ class PreparedPlannedTurn:
         user_text: str,
         usage: TokenUsage | None = None,
         catalog_summary: object = None,
+        resolver: ManagerResolver | None = None,
+        evidence_deadline: float | None = None,
+        attempt_usages: tuple[TokenUsage, ...] = (),
     ) -> "PreparedPlannedTurn":
         return cls(
             plan=plan,
@@ -185,6 +206,9 @@ class PreparedPlannedTurn:
             settings=settings,
             user_text=user_text,
             catalog_summary=catalog_summary,
+            resolver=resolver,
+            evidence_deadline=evidence_deadline,
+            attempt_usages=attempt_usages,
         )
 
     @property
@@ -200,14 +224,62 @@ async def prepare_planned_turn(
     catalog_summary: object,
     *,
     planner: Callable[..., Awaitable[PlanningResult]] = plan_request,
+    resolver: ManagerResolver | None = None,
+    clock: Callable[[], float] | None = None,
+    callbacks: SchedulerCallbacks | None = None,
+    scope: Mapping[str, Any] | None = None,
 ) -> PreparedPlannedTurn:
     """Plan once and preserve all planner usage for later terminal accounting."""
+    started = (clock or asyncio.get_running_loop().time)()
+    deadline = started + settings.evidence_timeout_seconds
     budget = RoundBudget(())
-    planned = await planner(user_text, messages, settings, budget, catalog_summary)
+    remaining = _stage_remaining(deadline, clock)
+    if remaining <= 0:
+        raise TimeoutError("planned evidence deadline elapsed")  # noqa: TRY003
+    callbacks = callbacks or SchedulerCallbacks()
+    try:
+        planned = await asyncio.wait_for(
+            planner(user_text, messages, settings, budget, catalog_summary), remaining
+        )
+    except InvalidPlanError as exc:
+        if callbacks.enforce_rate_limit is not None:
+            for usage in exc.attempt_usages:
+                try:
+                    await _call_sync(
+                        callbacks,
+                        callbacks.enforce_rate_limit,
+                        dict(scope or {}),
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        count_request=False,
+                    )
+                except Exception:  # noqa: BLE001, S110
+                    pass
+        raise
     # A planner needs the task-sized ledger; retain its already spent global rounds.
     task_budget = RoundBudget(tuple(task.task_id for task in planned.plan.tasks))
     for _ in range(budget.global_used):
         task_budget.consume_global()
+    if resolver is None:
+        from general_manager.chat.schema_index import build_schema_index
+
+        schema_index = build_schema_index()
+        resolver = ManagerResolver(
+            schema_index, load_manager_catalog(settings.catalog_source, schema_index)
+        )
+    if callbacks.enforce_rate_limit is not None:
+        for usage in planned.attempt_usages:
+            try:
+                await _call_sync(
+                    callbacks,
+                    callbacks.enforce_rate_limit,
+                    dict(scope or {}),
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    count_request=False,
+                )
+            except Exception:  # noqa: BLE001, S110
+                pass
     return PreparedPlannedTurn(
         plan=planned.plan,
         budget=task_budget,
@@ -215,6 +287,9 @@ async def prepare_planned_turn(
         settings=settings,
         user_text=user_text,
         catalog_summary=catalog_summary,
+        resolver=resolver,
+        evidence_deadline=deadline,
+        attempt_usages=planned.attempt_usages,
     )
 
 
@@ -227,7 +302,7 @@ def _tool_definitions() -> list[ToolDefinition]:
             input_schema=dict(TOOL_INPUT_SCHEMAS[name]),
         )
         for name, description in TOOL_DESCRIPTIONS.items()
-        if name != "mutate"
+        if name in _ALLOWED_TOOL_NAMES
     ]
 
 
@@ -246,7 +321,10 @@ def _reason(value: object, default: StableReason = "provider_failed") -> StableR
 
 
 def _executor_messages(
-    user_text: str, task: PlannedTask, evidence: EvidenceStore
+    user_text: str,
+    task: PlannedTask,
+    evidence: EvidenceStore,
+    candidates: Sequence[Mapping[str, object]] = (),
 ) -> list[Message]:
     task_evidence = [
         {"evidence_id": item.evidence_id, "kind": item.kind, "payload": item.payload()}
@@ -269,6 +347,7 @@ def _executor_messages(
             ],
         },
         "task_evidence": task_evidence,
+        "manager_candidates": list(candidates),
     }
     return [
         Message(role="system", content=instruction),
@@ -280,18 +359,44 @@ def _executor_messages(
 
 
 def _parse_action(text: str) -> Mapping[str, object] | None:
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate action key")  # noqa: TRY003
+            result[key] = value
+        return result
+
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(text, object_pairs_hook=unique_object)
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
-    if not isinstance(parsed, Mapping) or set(parsed) - {
-        "action",
-        "evidence_ids",
-        "reason",
-        "children",
-    }:
+    if not isinstance(parsed, Mapping) or not isinstance(parsed.get("action"), str):
         return None
-    if parsed.get("action") not in _EXECUTOR_ACTIONS:
+    action = parsed["action"]
+    allowed = {
+        "complete": {"action", "evidence_ids"},
+        "block": {"action", "reason"},
+        "spawn_children": {"action", "children"},
+        "calculate": {"action", "requirement_id", "operation", "operands"},
+    }
+    if action not in _EXECUTOR_ACTIONS or set(parsed) != allowed[action]:
+        return None
+    if action == "complete" and (
+        not isinstance(parsed["evidence_ids"], list)
+        or not parsed["evidence_ids"]
+        or not all(isinstance(item, str) and item for item in parsed["evidence_ids"])
+    ):
+        return None
+    if action == "block" and not isinstance(parsed["reason"], str):
+        return None
+    if action == "spawn_children" and not isinstance(parsed["children"], list):
+        return None
+    if action == "calculate" and (
+        not isinstance(parsed["requirement_id"], str)
+        or not isinstance(parsed["operation"], str)
+        or not isinstance(parsed["operands"], list)
+    ):
         return None
     return parsed
 
@@ -318,6 +423,7 @@ class _TaskRuntime:
     no_progress: int = 0
     local_passes: int = 0
     child_count: int = 0
+    candidates: tuple[str, ...] = ()
 
 
 @dataclass
@@ -349,24 +455,32 @@ class _Runner:
     async def audit(self, event_type: str, payload: Mapping[str, object]) -> None:
         """Use the caller's audit seam with only stable, non-private metadata."""
         if self.callbacks.emit_audit_event is not None:
-            await _call_sync(
-                self.callbacks,
-                self.callbacks.emit_audit_event,
-                event_type,
-                dict(payload),
-            )
+            try:
+                await _call_sync(
+                    self.callbacks,
+                    self.callbacks.emit_audit_event,
+                    event_type,
+                    dict(payload),
+                )
+            except Exception:  # noqa: BLE001, S110
+                # Audit is observational; its sink cannot change client state.
+                pass
 
     async def account_usage(self, usage: TokenUsage) -> None:
         self.usage = _add_usage(self.usage, usage)
         if self.callbacks.enforce_rate_limit is not None:
-            await _call_sync(
-                self.callbacks,
-                self.callbacks.enforce_rate_limit,
-                dict(self.scope),
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                count_request=False,
-            )
+            try:
+                await _call_sync(
+                    self.callbacks,
+                    self.callbacks.enforce_rate_limit,
+                    dict(self.scope),
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    count_request=False,
+                )
+            except Exception:  # noqa: BLE001, S110
+                # Usage is already committed locally; a limiter outage is private.
+                pass
 
     async def set_blocked(self, runtime: _TaskRuntime, reason: StableReason) -> None:
         if runtime.status in ("resolved", "blocked", "budget_exhausted"):
@@ -379,6 +493,10 @@ class _Runner:
     async def execute_tool(
         self, runtime: _TaskRuntime, call: ToolCallEvent
     ) -> tuple[Any, bool]:
+        # Reject unadvertised calls before any public side effect.  A model can
+        # still fabricate tool names despite the provider tool definition.
+        if call.name not in _ALLOWED_TOOL_NAMES:
+            return {"status": "error", "code": "invalid_tool_call"}, False
         try:
             identity = canonical_call_identity(call.name, call.args)
         except (TypeError, ValueError):
@@ -397,7 +515,11 @@ class _Runner:
             try:
                 from general_manager.chat.tools import ScopeChatContext
 
-                context = ScopeChatContext.from_scope(dict(self.scope))
+                tool_scope = dict(self.scope)
+                tool_scope["planned_query_timeout_ms"] = max(
+                    1, math.ceil(_stage_remaining(self.deadline, self.clock) * 1000)
+                )
+                context = ScopeChatContext.from_scope(tool_scope)
                 async with self.tool_semaphore:
                     result = await _call_sync(
                         self.callbacks,
@@ -423,14 +545,17 @@ class _Runner:
             },
         )
         if not cached:
-            await _call_sync(
-                self.callbacks,
-                self.callbacks.emit_tool_called,
-                user=self.scope.get("user"),
-                tool_name=call.name,
-                args=call.args,
-                result=result,
-            )
+            try:
+                await _call_sync(
+                    self.callbacks,
+                    self.callbacks.emit_tool_called,
+                    user=self.scope.get("user"),
+                    tool_name=call.name,
+                    args=call.args,
+                    result=result,
+                )
+            except Exception:  # noqa: BLE001, S110
+                pass
         if not cached and self.conversation is not None:
             try:
                 content = json.dumps(result, sort_keys=True, default=str)
@@ -478,6 +603,26 @@ class _Runner:
             self.evidence.for_requirement(req) for req in runtime.task.requirements
         )
 
+    def resolve_candidates(
+        self, runtime: _TaskRuntime
+    ) -> tuple[tuple[dict[str, object], ...], bool]:
+        resolver = self.prepared.resolver
+        if resolver is None:
+            return (), False
+        candidates = resolver.resolve(runtime.task.objective)
+        names = tuple(candidate.manager for candidate in candidates)
+        changed = names != runtime.candidates
+        if changed:
+            runtime.candidates = names
+        return tuple(
+            {
+                "manager": candidate.manager,
+                "exact": candidate.exact,
+                "matches": list(candidate.explanations),
+            }
+            for candidate in candidates
+        ), changed
+
     async def run_task(self, runtime: _TaskRuntime) -> None:
         if _stage_remaining(self.deadline, self.clock) <= 0:
             await self.set_blocked(runtime, "deadline_exceeded")
@@ -495,9 +640,18 @@ class _Runner:
             except RoundBudgetExhausted:
                 await self.set_blocked(runtime, "budget_exhausted")
                 return
+            candidates, candidates_changed = self.resolve_candidates(runtime)
+            if candidates_changed:
+                runtime.local_passes = 0
+            else:
+                runtime.local_passes += 1
+            if runtime.local_passes > 10:
+                await self.set_blocked(runtime, "manager_unresolved")
+                return
+            unique_manager = len(candidates) == 1 and bool(candidates[0]["exact"])
             role = runtime.role or select_executor_role(
                 runtime.task,
-                unique_manager=False,
+                unique_manager=unique_manager,
                 path_depth=None,
                 prior_failure=runtime.no_progress > 0,
             )
@@ -509,7 +663,10 @@ class _Runner:
                 result = await complete_provider_round(
                     provider,
                     _executor_messages(
-                        self.prepared.user_text, runtime.task, self.evidence
+                        self.prepared.user_text,
+                        runtime.task,
+                        self.evidence,
+                        candidates,
                     ),
                     _tool_definitions(),
                     _stage_remaining(self.deadline, self.clock),
@@ -558,6 +715,10 @@ class _Runner:
                     isinstance(item, str)
                     and (record := self.evidence.get(item)) is not None
                     and record.task_id == runtime.task.task_id
+                    and any(
+                        record in self.evidence.for_requirement(requirement)
+                        for requirement in runtime.task.requirements
+                    )
                     for item in ids
                 )
                 if valid_ids and self.requirements_satisfied(runtime):
@@ -569,6 +730,52 @@ class _Runner:
                     runtime, _reason(action.get("reason"), "manager_unresolved")
                 )
                 return
+            elif kind == "calculate":
+                requirement = next(
+                    (
+                        item
+                        for item in runtime.task.requirements
+                        if item.requirement_id == action["requirement_id"]
+                        and item.kind == "calculation"
+                        and item.operation == action["operation"]
+                    ),
+                    None,
+                )
+                try:
+                    raw_operands = action["operands"]
+                    operation = action["operation"]
+                    if not isinstance(raw_operands, list) or not isinstance(
+                        operation, str
+                    ):
+                        raise CalculationError("invalid calculation action")  # noqa: TRY003, TRY301
+                    operands = tuple(
+                        CalculationOperand(
+                            evidence_id=item["evidence_id"],
+                            path=tuple(item["path"]),
+                        )
+                        for item in raw_operands
+                        if isinstance(item, Mapping)
+                        and isinstance(item.get("evidence_id"), str)
+                        and isinstance(item.get("path"), list)
+                    )
+                    if requirement is None or len(operands) != len(raw_operands):
+                        raise CalculationError("invalid calculation action")  # noqa: TRY003, TRY301
+                    evidence_id = (
+                        f"{runtime.task.task_id}:calculation:"
+                        f"{len(self.evidence.for_task(runtime.task.task_id)) + 1}"
+                    )
+                    record = calculate_evidence(
+                        evidence_id,
+                        runtime.task.task_id,
+                        operation,
+                        operands,
+                        self.evidence,
+                    )
+                    self.evidence.add(record, requirement=requirement)
+                except (CalculationError, KeyError, TypeError, ValueError):
+                    runtime.no_progress += 1
+                else:
+                    runtime.no_progress = 0
             else:
                 children_payload = {"children": action.get("children")}
                 try:
@@ -588,12 +795,55 @@ class _Runner:
                         )
                     runtime.child_count += len(children)
                     runtime.no_progress = 0
-                    for child in children:
-                        child_runtime = self.runtimes[child.task_id]
+                    pending_children = {child.task_id for child in children}
+                    while pending_children:
+                        child_id = next(
+                            (
+                                candidate
+                                for candidate in pending_children
+                                if all(
+                                    dependency == runtime.task.task_id
+                                    or self.runtimes[dependency].status == "resolved"
+                                    for dependency in self.runtimes[
+                                        candidate
+                                    ].task.depends_on
+                                )
+                            ),
+                            None,
+                        )
+                        if child_id is None:
+                            await self.set_blocked(runtime, "dependency_blocked")
+                            return
+                        pending_children.remove(child_id)
+                        child_runtime = self.runtimes[child_id]
                         await self.run_task(child_runtime)
                         if child_runtime.status != "resolved":
                             await self.set_blocked(runtime, "dependency_blocked")
                             return
+                        # A child is evidence work owned by its root.  Relink a
+                        # detached immutable snapshot to compatible still-open
+                        # parent requirements, never by mutating child evidence.
+                        for child_record in self.evidence.for_task(child_id):
+                            requirement = next(
+                                (
+                                    item
+                                    for item in runtime.task.requirements
+                                    if item.kind == child_record.kind
+                                    and not self.evidence.for_requirement(item)
+                                ),
+                                None,
+                            )
+                            if requirement is None:
+                                continue
+                            parent_record = EvidenceRecord.create(
+                                f"{runtime.task.task_id}:child:{child_record.evidence_id}",
+                                runtime.task.task_id,
+                                child_record.kind,
+                                child_record.call_identity,
+                                child_record.provenance,
+                                child_record.payload(),
+                            )
+                            self.evidence.add(parent_record, requirement=requirement)
             if runtime.no_progress >= 2:
                 if not runtime.fallback_used:
                     runtime.fallback_used = True
@@ -608,7 +858,12 @@ class _Runner:
 
         async def run_root(runtime: _TaskRuntime) -> None:
             async with semaphore:
-                await self.run_task(runtime)
+                try:
+                    await self.run_task(runtime)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001
+                    await self.set_blocked(runtime, "provider_failed")
 
         pending = set(self.runtimes)
         active: dict[asyncio.Task[None], str] = {}
@@ -720,7 +975,9 @@ async def iter_planned_read_events(
         conversation,
         messages,
         callbacks,
-        now() + prepared.settings.evidence_timeout_seconds,
+        prepared.evidence_deadline
+        if prepared.evidence_deadline is not None
+        else now() + prepared.settings.evidence_timeout_seconds,
         now,
     )
     execution = asyncio.create_task(runner.run())
@@ -759,7 +1016,8 @@ async def iter_planned_read_events(
             prepared.settings,
             prepared.budget,
         )
-        await runner.account_usage(synthesis.usage)
+        for usage in synthesis.attempt_usages:
+            await runner.account_usage(usage)
     except (SynthesisFailedError, RoundBudgetExhausted):
         yield planned_error_event("synthesis_failed")
         return
