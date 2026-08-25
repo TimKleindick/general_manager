@@ -194,6 +194,76 @@ class ChatTransportIntegrationTests(TestCase):
                 "enabled": True,
                 "provider": "tests.integration.test_chat_transport.IntegrationProvider",
                 "url": "/chat/",
+            }
+        },
+        ALLOWED_HOSTS=["testserver"],
+    )
+    def test_websocket_disconnect_cancels_active_planned_iterator(self) -> None:
+        """Awaiting the iterator in receive_json prevents disconnect dispatch."""
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def prepare(*_args: object, **_kwargs: object) -> object:
+            return SimpleNamespace(mutation_plan=None)
+
+        async def stream(*_args: object, **_kwargs: object):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            yield {"type": "done"}
+
+        async def run_test() -> None:
+            from unittest.mock import AsyncMock, patch
+
+            communicator: ApplicationCommunicator | None = None
+            try:
+                with (
+                    patch.object(
+                        ChatConsumer,
+                        "_get_persistent_conversation",
+                        new=AsyncMock(return_value=None),
+                    ),
+                    patch(
+                        "general_manager.chat.consumer.get_planned_chat_settings",
+                        return_value=SimpleNamespace(enabled=True),
+                    ),
+                    patch(
+                        "general_manager.chat.consumer.prepare_planned_turn",
+                        new=prepare,
+                    ),
+                    patch(
+                        "general_manager.chat.consumer.iter_planned_read_events",
+                        new=stream,
+                    ),
+                ):
+                    ensure_chat_route()
+                    communicator = await self._connect()
+                    await self._send_json(
+                        communicator, {"type": "message", "text": "show parts"}
+                    )
+                    await asyncio.wait_for(entered.wait(), timeout=1)
+                    await communicator.send_input(
+                        {"type": "websocket.disconnect", "code": 1000}
+                    )
+                    await asyncio.wait_for(cancelled.wait(), timeout=0.2)
+                    await communicator.wait()
+            finally:
+                if communicator is not None:
+                    communicator.stop()
+
+            assert cancelled.is_set()
+
+        asyncio.run(run_test())
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.integration.test_chat_transport.IntegrationProvider",
+                "url": "/chat/",
                 "allowed_mutations": ["createPart"],
                 "confirm_mutations": ["createPart"],
             }

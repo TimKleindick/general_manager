@@ -334,6 +334,7 @@ class ChatConsumer(_ChatConsumerBase):
             return
         loop = asyncio.get_running_loop()
         self._active_turn = loop.create_future()
+        started_background_turn = False
         try:
             if self.conversation is None:
                 self.conversation = await self._get_persistent_conversation()
@@ -364,7 +365,9 @@ class ChatConsumer(_ChatConsumerBase):
                 message=text,
                 conversation_id=getattr(self.conversation, "pk", None),
             )
-            await self._stream_message_turn(text, messages, history)
+            started_background_turn = await self._stream_message_turn(
+                text, messages, history
+            )
         except Exception as exc:  # noqa: BLE001
             emit_chat_error(
                 user=self.scope.get("user"),
@@ -373,7 +376,11 @@ class ChatConsumer(_ChatConsumerBase):
             )
             await self.send_json(public_chat_error(exc).as_event())
         finally:
-            if self._active_turn is not None and not self._active_turn.done():
+            if (
+                not started_background_turn
+                and self._active_turn is not None
+                and not self._active_turn.done()
+            ):
                 self._active_turn.set_result(None)
 
     async def _stream_provider_turn(
@@ -558,12 +565,12 @@ class ChatConsumer(_ChatConsumerBase):
         text: str,
         messages: list[Message],
         history: list[dict[str, str]],
-    ) -> None:
+    ) -> bool:
         """Plan after admission, retaining the unchanged legacy turn as fallback."""
         planned_settings = get_planned_chat_settings()
         if not planned_settings.enabled:
             await self._stream_provider_turn(messages, history, tool_retries=0)
-            return
+            return False
         planned_messages = messages
         if self.conversation is not None:
             from general_manager.chat.models import build_conversation_context
@@ -582,18 +589,39 @@ class ChatConsumer(_ChatConsumerBase):
         )
         if planned_turn.mutation_plan is not None:
             await self._stream_provider_turn(messages, history, tool_retries=0)
-            return
-        self._provider_task = asyncio.current_task()
+            return False
+        self._provider_task = asyncio.create_task(
+            self._stream_planned_read_turn(planned_turn, planned_messages)
+        )
+        return True
+
+    async def _stream_planned_read_turn(
+        self,
+        planned_turn: Any,
+        messages: list[Message],
+    ) -> None:
+        """Own planned streaming separately so Channels can dispatch disconnect."""
         try:
             async for event in iter_planned_read_events(
                 planned_turn,
                 scope=self.scope,
                 conversation=self.conversation,
-                messages=planned_messages,
+                messages=messages,
             ):
                 await self.send_json(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            emit_chat_error(
+                user=self.scope.get("user"),
+                error=exc,
+                context={"transport": "websocket", "session_key": self.session_key},
+            )
+            await self.send_json(public_chat_error(exc).as_event())
         finally:
             self._provider_task = None
+            if self._active_turn is not None and not self._active_turn.done():
+                self._active_turn.set_result(None)
 
     async def _handle_tool_call(
         self,
