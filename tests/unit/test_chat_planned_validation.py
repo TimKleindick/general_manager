@@ -580,6 +580,115 @@ def test_existing_sibling_records_cannot_have_cross_root_dependencies() -> None:
         )
 
 
+def test_existing_other_subtree_child_cannot_depend_on_selected_parent() -> None:
+    parent = parent_task()
+    other_root = validate_plan(plan([task("other_root")])).tasks[0]
+    other_child = validate_dynamic_children(
+        other_root,
+        child_payload(task("other_child")),
+        [other_root],
+    )[0]
+    invalid_other_child = replace(
+        other_child,
+        depends_on=(parent.task_id,),
+        routing_features=("has_dependency",),
+    )
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(
+            parent,
+            child_payload(task("child_1")),
+            [parent, other_root, invalid_other_child],
+        )
+
+
+def test_existing_orphan_child_is_rejected_even_when_another_root_is_selected() -> None:
+    parent = parent_task()
+    other_root = validate_plan(plan([task("other_root")])).tasks[0]
+    other_child = validate_dynamic_children(
+        other_root,
+        child_payload(task("other_child")),
+        [other_root],
+    )[0]
+    orphan = replace(other_child, parent_id="missing_root")
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(
+            parent,
+            child_payload(task("child_1")),
+            [parent, other_root, orphan],
+        )
+
+
+def test_existing_grandchild_is_rejected_in_an_unselected_subtree() -> None:
+    parent = parent_task()
+    other_root = validate_plan(plan([task("other_root")])).tasks[0]
+    other_child = validate_dynamic_children(
+        other_root,
+        child_payload(task("other_child")),
+        [other_root],
+    )[0]
+    grandchild = replace(
+        other_child,
+        task_id="grandchild",
+        parent_id=other_child.task_id,
+    )
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(
+            parent,
+            child_payload(task("child_1")),
+            [parent, other_root, other_child, grandchild],
+        )
+
+
+def test_existing_other_subtree_cannot_exceed_child_limit() -> None:
+    parent = parent_task()
+    other_root = validate_plan(plan([task("other_root")])).tasks[0]
+    other_children = validate_dynamic_children(
+        other_root,
+        child_payload(task("other_child_1"), task("other_child_2")),
+        [other_root],
+    )
+    overfull_child = replace(other_children[0], task_id="other_child_3")
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(
+            parent,
+            child_payload(task("child_1")),
+            [parent, other_root, *other_children, overfull_child],
+        )
+
+
+def test_existing_other_subtree_child_cycle_is_rejected() -> None:
+    parent = parent_task()
+    other_root = validate_plan(plan([task("other_root")])).tasks[0]
+    other_children = validate_dynamic_children(
+        other_root,
+        child_payload(task("other_child_1"), task("other_child_2")),
+        [other_root],
+    )
+    cyclic_children = (
+        replace(
+            other_children[0],
+            depends_on=(other_children[1].task_id,),
+            routing_features=("has_dependency",),
+        ),
+        replace(
+            other_children[1],
+            depends_on=(other_children[0].task_id,),
+            routing_features=("has_dependency",),
+        ),
+    )
+
+    with pytest.raises(PlanValidationError):
+        validate_dynamic_children(
+            parent,
+            child_payload(task("child_1")),
+            [parent, other_root, *cyclic_children],
+        )
+
+
 def test_dynamic_children_limit_is_cumulative_across_repeated_calls() -> None:
     parent = parent_task()
     first = validate_dynamic_children(
