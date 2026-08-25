@@ -72,6 +72,8 @@ def _load_source(source: object) -> Mapping[object, object]:
             resolved = import_string(source)
         except Exception as exc:
             raise _error(_SOURCE_INVALID) from exc
+        if not callable(resolved):
+            raise _error(_SOURCE_INVALID)
     if callable(resolved):
         try:
             resolved = resolved()
