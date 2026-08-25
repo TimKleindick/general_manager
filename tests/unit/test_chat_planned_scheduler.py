@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 import json
 from types import MappingProxyType
 from typing import Any, ClassVar
+
+import pytest
 
 from general_manager.chat.planned.config import PlannedChatSettings, ProviderProfile
 from general_manager.chat.planned.models import (
@@ -16,6 +19,7 @@ from general_manager.chat.planned.models import (
 from general_manager.chat.planned.scheduler import (
     PreparedPlannedTurn,
     SchedulerCallbacks,
+    _Runner,
     iter_planned_read_events,
     _parse_action,
 )
@@ -26,13 +30,19 @@ class _Executor:
     responses: ClassVar[list[object]] = []
     responses_by_task: ClassVar[dict[str, list[object]]] = {}
     calls: ClassVar[list[list[object]]] = []
+    roles: ClassVar[list[str]] = []
 
     @classmethod
-    def from_config(cls, _config: object) -> _Executor:
-        return cls()
+    def from_config(cls, config: object) -> _Executor:
+        executor = cls()
+        executor.role = (
+            config.get("role", "unknown") if isinstance(config, Mapping) else "unknown"
+        )
+        return executor
 
     async def complete(self, _messages: list[object], _tools: list[object]):
         type(self).calls.append(_messages)
+        type(self).roles.append(self.role)
         content = _messages[-1].content
         reference = json.loads(
             content.removeprefix("REFERENCE_DATA=").removeprefix(
@@ -42,6 +52,8 @@ class _Executor:
         task_id = reference.get("task", {}).get("task_id", "synthesis")
         responses = type(self).responses_by_task.get(task_id, type(self).responses)
         response = responses.pop(0)
+        if isinstance(response, _ProviderFailure):
+            raise response
         if isinstance(response, ToolCallEvent):
             yield response
         else:
@@ -75,6 +87,35 @@ def _settings(*, max_concurrent_tasks: int = 3) -> PlannedChatSettings:
     )
 
 
+def _role_settings() -> PlannedChatSettings:
+    roles = (
+        "simple_executor",
+        "complex_executor",
+        "fallback_executor",
+        "synthesizer",
+        "planner",
+    )
+    profiles = {
+        role: ProviderProfile(
+            role,
+            "tests.unit.test_chat_planned_scheduler._Executor",
+            MappingProxyType({"role": role}),
+            "local",
+        )
+        for role in roles
+    }
+    return PlannedChatSettings(
+        enabled=True,
+        profiles=MappingProxyType(profiles),
+        roles=MappingProxyType({role: role for role in roles}),
+        catalog_source=None,
+    )
+
+
+class _ProviderFailure(Exception):
+    pass
+
+
 def _task(task_id: str, *, depends_on: tuple[str, ...] = ()) -> PlannedTask:
     requirement = EvidenceRequirement("query", "query", "records", None)
     return PlannedTask(
@@ -85,6 +126,69 @@ def _task(task_id: str, *, depends_on: tuple[str, ...] = ()) -> PlannedTask:
         completion_criteria=("query",),
         routing_features=(),
     )
+
+
+def _tool_runtime(tool_name: str) -> tuple[_Runner, Any]:
+    kind = {"get_manager_schema": "schema", "find_path": "path"}[tool_name]
+    requirement = EvidenceRequirement(kind, kind, kind, None)
+    task = PlannedTask("task_1", "part", (), (requirement,), (kind,), ())
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (task,)), _settings(), user_text="part"
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        None,
+        [],
+        SchedulerCallbacks(execute_tool=lambda *_args: None),
+        100.0,
+        lambda: 0.0,
+    )
+    return runner, runner.runtimes[task.task_id]
+
+
+def _run_one_tool_result(tool_name: str, result: object) -> tuple[bool, Any, _Runner]:
+    runner, runtime = _tool_runtime(tool_name)
+    args = (
+        {"manager": "PartManager"}
+        if tool_name == "get_manager_schema"
+        else {"from_manager": "PartManager", "to_manager": "PartManager"}
+    )
+    runner.callbacks = SchedulerCallbacks(execute_tool=lambda *_args: result)
+    _, progress = asyncio.run(
+        runner.execute_tool(runtime, ToolCallEvent("tool", tool_name, args))
+    )
+    return progress, runtime, runner
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "result", "expected_progress", "expected_path_depth"),
+    [
+        ("get_manager_schema", None, False, None),
+        ("get_manager_schema", {}, False, None),
+        ("get_manager_schema", {"status": "error", "code": "tool_failed"}, False, None),
+        ("get_manager_schema", {"status": "success", "fields": []}, True, None),
+        ("find_path", None, False, None),
+        ("find_path", {"status": "error"}, False, None),
+        ("find_path", [], True, 0),
+        ("find_path", ["PartManager"], True, 1),
+        ("find_path", ["PartManager", "ProjectManager"], True, 2),
+    ],
+)
+def test_tool_evidence_gate_rejects_failures_and_accepts_valid_zero_hop_paths(
+    tool_name: str,
+    result: object,
+    expected_progress: bool,
+    expected_path_depth: int | None,
+) -> None:
+    progress, runtime, runner = _run_one_tool_result(tool_name, result)
+
+    assert progress is expected_progress
+    assert bool(runner.evidence.for_task(runtime.task.task_id)) is expected_progress
+    assert ("PartManager" in runtime.resolved_anchors) is (
+        expected_progress and tool_name == "get_manager_schema"
+    )
+    assert runtime.path_depth == expected_path_depth
 
 
 def test_duplicate_query_consumes_a_round_but_executes_once() -> None:
@@ -192,6 +296,133 @@ class _ExactResolver:
                 f"PartManager{len(self.calls)}", ("exact manager name",), True
             ),
         )
+
+
+class _StableExactResolver:
+    def resolve(self, _query: str, _anchors: tuple[str, ...] = ()) -> tuple[Any, ...]:
+        from general_manager.chat.planned.resolver import ManagerCandidate
+
+        return (ManagerCandidate("PartManager", ("exact manager name",), True),)
+
+
+def _run_failure_sequence(failure_mode: str, *, attempts: int) -> tuple[Any, list[str]]:
+    failure = {
+        "provider_none": _ProviderFailure(),
+        "malformed_action": {"unexpected": "action"},
+        "failed_tool": ToolCallEvent(
+            "query", "query", {"manager": "PartManager", "fields": ["name"]}
+        ),
+    }[failure_mode]
+    _Executor.responses = [failure] * attempts
+    _Executor.responses_by_task = {}
+    _Executor.roles = []
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (_task("task_1"),)),
+        _role_settings(),
+        user_text="show parts",
+        resolver=_StableExactResolver(),
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        None,
+        [],
+        SchedulerCallbacks(
+            execute_tool=lambda *_args: {
+                "status": "error",
+                "code": "tool_failed",
+            }
+        ),
+        100.0,
+        lambda: 0.0,
+    )
+    runtime = runner.runtimes["task_1"]
+    runtime.candidates = ("PartManager",)
+    asyncio.run(runner.run_task(runtime))
+    return runner.result(), _Executor.roles
+
+
+@pytest.mark.parametrize(
+    "failure_mode", ["provider_none", "malformed_action", "failed_tool"]
+)
+def test_two_normal_failures_then_two_fallback_failures_block(
+    failure_mode: str,
+) -> None:
+    result, roles = _run_failure_sequence(failure_mode, attempts=4)
+
+    assert roles == [
+        "simple_executor",
+        "simple_executor",
+        "fallback_executor",
+        "fallback_executor",
+    ]
+    assert result.reasons["task_1"] in {"manager_unresolved", "provider_failed"}
+
+
+def test_real_progress_resets_consecutive_failure_count() -> None:
+    requirement = EvidenceRequirement("schema", "schema", "schema", None)
+    task = PlannedTask("task_1", "part", (), (requirement,), ("schema",), ())
+    _Executor.responses = [
+        {"unexpected": "action"},
+        ToolCallEvent("schema", "get_manager_schema", {"manager": "PartManager"}),
+        {"unexpected": "action"},
+        {"unexpected": "action"},
+        {"action": "complete", "evidence_ids": ["task_1:schema:1"]},
+        {"answer": "Part schema found.", "evidence_ids": ["task_1:schema:1"]},
+    ]
+    _Executor.responses_by_task = {}
+    _Executor.roles = []
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (task,)),
+        _role_settings(),
+        user_text="show parts",
+        resolver=_StableExactResolver(),
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        None,
+        [],
+        SchedulerCallbacks(
+            execute_tool=lambda *_args: {"status": "success", "fields": []}
+        ),
+        100.0,
+        lambda: 0.0,
+    )
+    runtime = runner.runtimes["task_1"]
+    runtime.candidates = ("PartManager",)
+    asyncio.run(runner.run_task(runtime))
+
+    assert _Executor.roles[:4] == ["simple_executor"] * 4
+    assert runner.result().statuses["task_1"] == "resolved"
+
+
+def test_candidate_churn_cannot_bypass_ten_local_pass_cap() -> None:
+    _Executor.responses = [{"unexpected": "action"}] * 12
+    _Executor.responses_by_task = {}
+    _Executor.roles = []
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (_task("task_1"),)),
+        _role_settings(),
+        user_text="show parts",
+        resolver=_ExactResolver(),
+    )
+
+    asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(execute_tool=lambda *_args: {}),
+            )
+        )
+    )
+
+    assert prepared.result is not None
+    assert len(_Executor.roles) <= 9
+    assert prepared.result.reasons["task_1"] == "manager_unresolved"
 
 
 def test_resolver_passes_are_free_and_cap_at_ten_before_provider_budget() -> None:

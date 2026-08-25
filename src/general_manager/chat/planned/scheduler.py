@@ -433,7 +433,6 @@ class _TaskRuntime:
     child_count: int = 0
     candidates: tuple[str, ...] = ()
     path_depth: int | None = None
-    progress_signature: tuple[object, ...] | None = None
     resolved_anchors: set[str] = field(default_factory=set)
 
 
@@ -628,6 +627,10 @@ class _Runner:
 
     @staticmethod
     def _valid_tool_evidence(name: str, result: object) -> bool:
+        if not isinstance(result, (Mapping, list)):
+            return False
+        if isinstance(result, Mapping) and result.get("status") == "error":
+            return False
         if name == "query":
             return isinstance(result, Mapping) and result.get("status") != "error"
         if name == "get_manager_schema":
@@ -665,6 +668,233 @@ class _Runner:
             for candidate in candidates
         ), changed
 
+    def _progress_signature(self, runtime: _TaskRuntime) -> tuple[object, ...]:
+        return (
+            runtime.candidates,
+            tuple(sorted(runtime.resolved_anchors)),
+            tuple(
+                record.evidence_id
+                for record in self.evidence.for_task(runtime.task.task_id)
+            ),
+            runtime.path_depth,
+        )
+
+    async def _apply_pass_outcome(
+        self,
+        runtime: _TaskRuntime,
+        *,
+        made_progress: bool,
+        failure_reason: StableReason | None,
+    ) -> None:
+        if runtime.status != "running":
+            return
+        if made_progress:
+            runtime.no_progress = 0
+            return
+        runtime.no_progress += 1
+        if runtime.no_progress < 2:
+            return
+        if not runtime.fallback_used:
+            runtime.fallback_used = True
+            runtime.role = "fallback_executor"
+            runtime.no_progress = 0
+            return
+        await self.set_blocked(
+            runtime,
+            "provider_failed"
+            if failure_reason == "provider_failed"
+            else "manager_unresolved",
+        )
+
+    async def _execute_one_pass(
+        self,
+        runtime: _TaskRuntime,
+        candidates: tuple[dict[str, object], ...],
+    ) -> StableReason | None:
+        if runtime.role is None:
+            return "provider_failed"
+        try:
+            # Resolution is free; charge only immediately before a real
+            # provider request can start.
+            self.prepared.budget.consume_subtree(runtime.root_id)
+        except RoundBudgetExhausted:
+            await self.set_blocked(runtime, "budget_exhausted")
+            return None
+        try:
+            provider = build_profile_provider(
+                profile_for_role(self.prepared.settings, runtime.role)
+            )
+            result = await complete_provider_round(
+                provider,
+                _executor_messages(
+                    self.prepared.user_text,
+                    runtime.task,
+                    self.evidence,
+                    candidates,
+                ),
+                _tool_definitions(),
+                _stage_remaining(self.deadline, self.clock),
+            )
+            await self.account_usage(result.usage)
+        except asyncio.CancelledError:
+            raise
+        except InvalidProviderRoundError as exc:
+            await self.account_usage(exc.usage)
+            return "provider_failed"
+        except Exception:  # noqa: BLE001
+            return "provider_failed"
+        if result.tool_call is not None:
+            _tool_result, progress = await self.execute_tool(runtime, result.tool_call)
+            return None if progress else "manager_unresolved"
+        action = _parse_action(result.text)
+        if action is None:
+            return "provider_failed"
+        kind = action["action"]
+        if kind == "complete":
+            ids = action.get("evidence_ids")
+            valid_ids = isinstance(ids, list) and all(
+                isinstance(item, str)
+                and (record := self.evidence.get(item)) is not None
+                and record.task_id == runtime.task.task_id
+                and any(
+                    record in self.evidence.for_requirement(requirement)
+                    for requirement in runtime.task.requirements
+                )
+                for item in ids
+            )
+            if valid_ids and self.requirements_satisfied(runtime):
+                runtime.status = "resolved"
+                return None
+            return "provider_failed"
+        if kind == "block":
+            await self.set_blocked(
+                runtime, _reason(action.get("reason"), "manager_unresolved")
+            )
+            return None
+        if kind == "calculate":
+            requirement = next(
+                (
+                    item
+                    for item in runtime.task.requirements
+                    if item.requirement_id == action["requirement_id"]
+                    and item.kind == "calculation"
+                    and item.operation == action["operation"]
+                ),
+                None,
+            )
+            try:
+                raw_operands = action["operands"]
+                operation = action["operation"]
+                if not isinstance(raw_operands, list) or not isinstance(operation, str):
+                    raise CalculationError("invalid calculation action")  # noqa: TRY003, TRY301
+                if any(
+                    not isinstance(item, Mapping)
+                    or set(item) != {"evidence_id", "path"}
+                    or not isinstance(item.get("evidence_id"), str)
+                    or not isinstance(item.get("path"), list)
+                    or any(
+                        not isinstance(part, (str, int)) or isinstance(part, bool)
+                        for part in item["path"]
+                    )
+                    for item in raw_operands
+                ):
+                    raise CalculationError("invalid calculation operands")  # noqa: TRY003, TRY301
+                operands = tuple(
+                    CalculationOperand(
+                        evidence_id=item["evidence_id"],
+                        path=tuple(item["path"]),
+                    )
+                    for item in raw_operands
+                    if isinstance(item, Mapping)
+                )
+                if requirement is None or len(operands) != len(raw_operands):
+                    raise CalculationError("invalid calculation action")  # noqa: TRY003, TRY301
+                evidence_id = (
+                    f"{runtime.task.task_id}:calculation:"
+                    f"{len(self.evidence.for_task(runtime.task.task_id)) + 1}"
+                )
+                record = calculate_evidence(
+                    evidence_id,
+                    runtime.task.task_id,
+                    operation,
+                    operands,
+                    self.evidence,
+                )
+                self.evidence.add(record, requirement=requirement)
+            except (CalculationError, KeyError, TypeError, ValueError):
+                return "provider_failed"
+            return None
+        children_payload = {"children": action.get("children")}
+        try:
+            children = validate_dynamic_children(
+                runtime.task,
+                children_payload,
+                tuple(item.task for item in self.runtimes.values()),
+            )
+        except PlanValidationError:
+            return "provider_failed"
+        # The validator enforces cumulative two-child ownership and no
+        # recursion.  Children remain in their root's round ledger.
+        for child in children:
+            self.runtimes[child.task_id] = _TaskRuntime(child, runtime.root_id)
+        runtime.child_count += len(children)
+        pending_children = {child.task_id for child in children}
+        while pending_children:
+            child_id = next(
+                (
+                    candidate
+                    for candidate in pending_children
+                    if all(
+                        dependency == runtime.task.task_id
+                        or self.runtimes[dependency].status == "resolved"
+                        for dependency in self.runtimes[candidate].task.depends_on
+                    )
+                ),
+                None,
+            )
+            if child_id is None:
+                await self.set_blocked(runtime, "dependency_blocked")
+                return None
+            pending_children.remove(child_id)
+            child_runtime = self.runtimes[child_id]
+            await self.run_task(child_runtime)
+            if child_runtime.status != "resolved":
+                await self.set_blocked(runtime, "dependency_blocked")
+                return None
+            # A child is evidence work owned by its root.  Relink a detached
+            # immutable snapshot to compatible still-open parent requirements,
+            # never by mutating child evidence.
+            for child_record in self.evidence.for_task(child_id):
+                requirement = next(
+                    (
+                        item
+                        for item in runtime.task.requirements
+                        if item.kind == child_record.kind
+                        and (
+                            item.kind != "calculation"
+                            or (
+                                isinstance(child_record.payload(), Mapping)
+                                and child_record.payload().get("operation")
+                                == item.operation
+                            )
+                        )
+                        and not self.evidence.for_requirement(item)
+                    ),
+                    None,
+                )
+                if requirement is None:
+                    continue
+                parent_record = EvidenceRecord.create(
+                    f"{runtime.task.task_id}:child:{child_record.evidence_id}",
+                    runtime.task.task_id,
+                    child_record.kind,
+                    child_record.call_identity,
+                    child_record.provenance,
+                    child_record.payload(),
+                )
+                self.evidence.add(parent_record, requirement=requirement)
+        return None
+
     async def run_task(self, runtime: _TaskRuntime) -> None:
         if _stage_remaining(self.deadline, self.clock) <= 0:
             await self.set_blocked(runtime, "deadline_exceeded")
@@ -674,253 +904,27 @@ class _Runner:
             if _stage_remaining(self.deadline, self.clock) <= 0:
                 await self.set_blocked(runtime, "deadline_exceeded")
                 return
+            before = self._progress_signature(runtime)
             candidates, _candidates_changed = self.resolve_candidates(runtime)
             runtime.local_passes += 1
             if runtime.local_passes >= 10:
                 await self.set_blocked(runtime, "manager_unresolved")
                 return
-            signature = (
-                tuple((item["manager"], item["exact"]) for item in candidates),
-                tuple(sorted(runtime.resolved_anchors)),
-                tuple(
-                    record.evidence_id
-                    for record in self.evidence.for_task(runtime.task.task_id)
-                ),
-                runtime.path_depth,
-            )
-            if signature != runtime.progress_signature:
-                runtime.progress_signature = signature
-                runtime.no_progress = 0
             unique_manager = len(candidates) == 1 and bool(candidates[0]["exact"])
             if runtime.role != "fallback_executor":
                 runtime.role = select_executor_role(
                     runtime.task,
                     unique_manager=unique_manager,
                     path_depth=runtime.path_depth,
-                    prior_failure=runtime.no_progress > 0,
+                    prior_failure=False,
                 )
-            role = runtime.role
-            try:
-                # Resolution is free; charge only immediately before a real
-                # provider request can start.
-                self.prepared.budget.consume_subtree(runtime.root_id)
-            except RoundBudgetExhausted:
-                await self.set_blocked(runtime, "budget_exhausted")
-                return
-            try:
-                provider = build_profile_provider(
-                    profile_for_role(self.prepared.settings, role)
-                )
-                result = await complete_provider_round(
-                    provider,
-                    _executor_messages(
-                        self.prepared.user_text,
-                        runtime.task,
-                        self.evidence,
-                        candidates,
-                    ),
-                    _tool_definitions(),
-                    _stage_remaining(self.deadline, self.clock),
-                )
-                await self.account_usage(result.usage)
-            except asyncio.CancelledError:
-                raise
-            except InvalidProviderRoundError as exc:
-                await self.account_usage(exc.usage)
-                result = None
-            except Exception:  # noqa: BLE001
-                result = None
-            if result is None:
-                if not runtime.fallback_used:
-                    runtime.fallback_used = True
-                    runtime.role = "fallback_executor"
-                    continue
-                await self.set_blocked(runtime, "provider_failed")
-                return
-            if result.tool_call is not None:
-                _tool_result, progress = await self.execute_tool(
-                    runtime, result.tool_call
-                )
-                runtime.no_progress = 0 if progress else runtime.no_progress + 1
-                if runtime.no_progress >= 2:
-                    if not runtime.fallback_used:
-                        runtime.fallback_used = True
-                        runtime.role = "fallback_executor"
-                        runtime.no_progress = 0
-                    else:
-                        await self.set_blocked(runtime, "manager_unresolved")
-                        return
-                continue
-            action = _parse_action(result.text)
-            if action is None:
-                if not runtime.fallback_used:
-                    runtime.fallback_used = True
-                    runtime.role = "fallback_executor"
-                    continue
-                await self.set_blocked(runtime, "provider_failed")
-                return
-            kind = action["action"]
-            if kind == "complete":
-                ids = action.get("evidence_ids")
-                valid_ids = isinstance(ids, list) and all(
-                    isinstance(item, str)
-                    and (record := self.evidence.get(item)) is not None
-                    and record.task_id == runtime.task.task_id
-                    and any(
-                        record in self.evidence.for_requirement(requirement)
-                        for requirement in runtime.task.requirements
-                    )
-                    for item in ids
-                )
-                if valid_ids and self.requirements_satisfied(runtime):
-                    runtime.status = "resolved"
-                    return
-                runtime.no_progress += 1
-            elif kind == "block":
-                await self.set_blocked(
-                    runtime, _reason(action.get("reason"), "manager_unresolved")
-                )
-                return
-            elif kind == "calculate":
-                requirement = next(
-                    (
-                        item
-                        for item in runtime.task.requirements
-                        if item.requirement_id == action["requirement_id"]
-                        and item.kind == "calculation"
-                        and item.operation == action["operation"]
-                    ),
-                    None,
-                )
-                try:
-                    raw_operands = action["operands"]
-                    operation = action["operation"]
-                    if not isinstance(raw_operands, list) or not isinstance(
-                        operation, str
-                    ):
-                        raise CalculationError("invalid calculation action")  # noqa: TRY003, TRY301
-                    if any(
-                        not isinstance(item, Mapping)
-                        or set(item) != {"evidence_id", "path"}
-                        or not isinstance(item.get("evidence_id"), str)
-                        or not isinstance(item.get("path"), list)
-                        or any(
-                            not isinstance(part, (str, int)) or isinstance(part, bool)
-                            for part in item["path"]
-                        )
-                        for item in raw_operands
-                    ):
-                        raise CalculationError("invalid calculation operands")  # noqa: TRY003, TRY301
-                    operands = tuple(
-                        CalculationOperand(
-                            evidence_id=item["evidence_id"],
-                            path=tuple(item["path"]),
-                        )
-                        for item in raw_operands
-                        if isinstance(item, Mapping)
-                    )
-                    if requirement is None or len(operands) != len(raw_operands):
-                        raise CalculationError("invalid calculation action")  # noqa: TRY003, TRY301
-                    evidence_id = (
-                        f"{runtime.task.task_id}:calculation:"
-                        f"{len(self.evidence.for_task(runtime.task.task_id)) + 1}"
-                    )
-                    record = calculate_evidence(
-                        evidence_id,
-                        runtime.task.task_id,
-                        operation,
-                        operands,
-                        self.evidence,
-                    )
-                    self.evidence.add(record, requirement=requirement)
-                except (CalculationError, KeyError, TypeError, ValueError):
-                    runtime.no_progress += 1
-                else:
-                    runtime.no_progress = 0
-            else:
-                children_payload = {"children": action.get("children")}
-                try:
-                    children = validate_dynamic_children(
-                        runtime.task,
-                        children_payload,
-                        tuple(item.task for item in self.runtimes.values()),
-                    )
-                except PlanValidationError:
-                    runtime.no_progress += 1
-                else:
-                    # The validator enforces cumulative two-child ownership and no
-                    # recursion.  Children remain in their root's round ledger.
-                    for child in children:
-                        self.runtimes[child.task_id] = _TaskRuntime(
-                            child, runtime.root_id
-                        )
-                    runtime.child_count += len(children)
-                    runtime.no_progress = 0
-                    pending_children = {child.task_id for child in children}
-                    while pending_children:
-                        child_id = next(
-                            (
-                                candidate
-                                for candidate in pending_children
-                                if all(
-                                    dependency == runtime.task.task_id
-                                    or self.runtimes[dependency].status == "resolved"
-                                    for dependency in self.runtimes[
-                                        candidate
-                                    ].task.depends_on
-                                )
-                            ),
-                            None,
-                        )
-                        if child_id is None:
-                            await self.set_blocked(runtime, "dependency_blocked")
-                            return
-                        pending_children.remove(child_id)
-                        child_runtime = self.runtimes[child_id]
-                        await self.run_task(child_runtime)
-                        if child_runtime.status != "resolved":
-                            await self.set_blocked(runtime, "dependency_blocked")
-                            return
-                        # A child is evidence work owned by its root.  Relink a
-                        # detached immutable snapshot to compatible still-open
-                        # parent requirements, never by mutating child evidence.
-                        for child_record in self.evidence.for_task(child_id):
-                            requirement = next(
-                                (
-                                    item
-                                    for item in runtime.task.requirements
-                                    if item.kind == child_record.kind
-                                    and (
-                                        item.kind != "calculation"
-                                        or (
-                                            isinstance(child_record.payload(), Mapping)
-                                            and child_record.payload().get("operation")
-                                            == item.operation
-                                        )
-                                    )
-                                    and not self.evidence.for_requirement(item)
-                                ),
-                                None,
-                            )
-                            if requirement is None:
-                                continue
-                            parent_record = EvidenceRecord.create(
-                                f"{runtime.task.task_id}:child:{child_record.evidence_id}",
-                                runtime.task.task_id,
-                                child_record.kind,
-                                child_record.call_identity,
-                                child_record.provenance,
-                                child_record.payload(),
-                            )
-                            self.evidence.add(parent_record, requirement=requirement)
-            if runtime.no_progress >= 2:
-                if not runtime.fallback_used:
-                    runtime.fallback_used = True
-                    runtime.role = "fallback_executor"
-                    runtime.no_progress = 0
-                else:
-                    await self.set_blocked(runtime, "manager_unresolved")
-                    return
+            failure_reason = await self._execute_one_pass(runtime, candidates)
+            after = self._progress_signature(runtime)
+            await self._apply_pass_outcome(
+                runtime,
+                made_progress=after != before,
+                failure_reason=failure_reason,
+            )
 
     async def run(self) -> None:
         semaphore = asyncio.Semaphore(self.prepared.settings.max_concurrent_tasks)
