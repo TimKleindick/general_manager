@@ -231,6 +231,14 @@ def _planned_identifier(value: object) -> str | None:
     return value
 
 
+def planned_audit_lineage_id(value: object) -> str | None:
+    """Return a deterministic opaque audit identifier for planner-controlled IDs."""
+    identifier = _planned_identifier(value)
+    if identifier is None:
+        return None
+    return hashlib.sha256(identifier.encode()).hexdigest()
+
+
 def _planned_count_mapping(value: object, allowed: set[str]) -> dict[str, int] | None:
     if not isinstance(value, dict):
         return None
@@ -267,7 +275,7 @@ def _sanitize_planned_audit_payload(
     for key in ("plan_id", "task_id", "root_task_id", "parent_task_id"):
         if (
             key in allowed
-            and (value := _planned_identifier(payload.get(key))) is not None
+            and (value := planned_audit_lineage_id(payload.get(key))) is not None
         ):
             sanitized[key] = value
     if "role" in allowed and payload.get("role") in _PLANNED_ROLES:

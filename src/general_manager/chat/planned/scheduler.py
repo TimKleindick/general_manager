@@ -18,7 +18,10 @@ from typing import Any, cast
 
 from asgiref.sync import sync_to_async
 
-from general_manager.chat.audit import emit_planned_audit_event
+from general_manager.chat.audit import (
+    emit_planned_audit_event,
+    planned_audit_lineage_id,
+)
 from general_manager.chat.planned.budget import RoundBudget, RoundBudgetExhausted
 from general_manager.chat.planned.calculations import (
     CalculationError,
@@ -583,7 +586,10 @@ class _Runner:
         )
         await self.legacy_tool_audit(
             "planned_tool_call",
-            {"task_id": runtime.task.task_id, "tool_name": call.name},
+            {
+                "task_id": planned_audit_lineage_id(runtime.task.task_id),
+                "tool_name": call.name,
+            },
         )
         cached = identity in self.call_cache
         deadline_rejected = False
@@ -633,7 +639,7 @@ class _Runner:
         await self.legacy_tool_audit(
             "planned_tool_result",
             {
-                "task_id": runtime.task.task_id,
+                "task_id": planned_audit_lineage_id(runtime.task.task_id),
                 "tool_name": call.name,
                 "duplicate": cached,
             },
@@ -1305,9 +1311,9 @@ async def iter_planned_read_events(
         for usage in getattr(exc, "attempt_usages", ()):
             await runner.account_usage(usage)
         await runner.audit(
-            "terminal", {"coverage": coverage, "terminal_reason": "synthesis_failed"}
+            "terminal", {"coverage": coverage, "terminal_reason": "budget_exhausted"}
         )
-        yield planned_error_event("synthesis_failed")
+        yield planned_error_event("budget_exhausted")
         return
     except asyncio.CancelledError:
         raise

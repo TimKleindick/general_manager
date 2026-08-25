@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Any, ClassVar, cast
 
 import pytest
+from django.test.utils import override_settings
 
 from general_manager.chat.planned.config import PlannedChatSettings, ProviderProfile
 from general_manager.chat.planned.models import (
@@ -41,6 +42,13 @@ from general_manager.chat.providers.base import (
     TokenUsage,
     ToolCallEvent,
 )
+
+
+PLANNED_AUDIT_EVENTS: list[dict[str, object]] = []
+
+
+def _capture_planned_audit_event(event: dict[str, object]) -> None:
+    PLANNED_AUDIT_EVENTS.append(event)
 
 
 class _Executor:
@@ -162,6 +170,147 @@ def _tool_runtime(tool_name: str) -> tuple[_Runner, Any]:
         lambda: 0.0,
     )
     return runner, runner.runtimes[task.task_id]
+
+
+@override_settings(
+    GENERAL_MANAGER={
+        "CHAT": {
+            "audit": {
+                "enabled": True,
+                "level": "tool_calls",
+                "logger": "tests.unit.test_chat_planned_scheduler._capture_planned_audit_event",
+            }
+        }
+    }
+)
+def test_scheduler_audit_hashes_planner_task_lineage_for_every_sink() -> None:
+    """Raw planner task IDs must never reach generic or legacy audit sinks."""
+    import hashlib
+
+    root_id = "HiddenManagerRoot"
+    child_id = "HiddenManagerChild"
+    root = _task(root_id)
+    child = _dynamic_child(child_id, depends_on=[root_id])
+    _Executor.responses = [
+        {
+            "answer": "The requested record is available.",
+            "evidence_ids": [f"{root_id}:child:{child_id}:query:1"],
+        }
+    ]
+    _Executor.responses_by_task = {
+        root_id: [
+            {"action": "spawn_children", "children": [child]},
+            {
+                "action": "complete",
+                "evidence_ids": [f"{root_id}:child:{child_id}:query:1"],
+            },
+        ],
+        child_id: [
+            ToolCallEvent(
+                "child-query",
+                "query",
+                {"manager": "PartManager", "fields": ["name"]},
+            ),
+            {"action": "complete", "evidence_ids": [f"{child_id}:query:1"]},
+        ],
+    }
+    PLANNED_AUDIT_EVENTS.clear()
+    legacy_audit_events: list[tuple[str, dict[str, object]]] = []
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (root,)), _settings(), user_text="show parts"
+    )
+
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []},
+                    emit_audit_event=lambda event_type,
+                    payload: legacy_audit_events.append((event_type, payload)),
+                ),
+            )
+        )
+    )
+
+    root_hash = hashlib.sha256(root_id.encode()).hexdigest()
+    child_hash = hashlib.sha256(child_id.encode()).hexdigest()
+    serialized = json.dumps([PLANNED_AUDIT_EVENTS, legacy_audit_events])
+    assert events[-1]["type"] == "done"
+    assert root_id not in serialized
+    assert child_id not in serialized
+    assert root_hash in serialized
+    assert child_hash in serialized
+    assert {
+        payload["task_id"]
+        for event_type, payload in legacy_audit_events
+        if event_type in {"planned_tool_call", "planned_tool_result"}
+    } == {child_hash}
+
+
+@override_settings(
+    GENERAL_MANAGER={
+        "CHAT": {
+            "audit": {
+                "enabled": True,
+                "level": "tool_calls",
+                "logger": "tests.unit.test_chat_planned_scheduler._capture_planned_audit_event",
+            }
+        }
+    }
+)
+def test_synthesis_round_budget_exhaustion_has_budget_terminal_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hard synthesis admission limit is public/audited as budget exhaustion."""
+    _Executor.responses = []
+    _Executor.responses_by_task = {
+        "task_1": [
+            ToolCallEvent(
+                "query", "query", {"manager": "PartManager", "fields": ["name"]}
+            ),
+            {"action": "complete", "evidence_ids": ["task_1:query:1"]},
+        ]
+    }
+
+    async def exhausted_synthesis(*_args: object, **_kwargs: object) -> SynthesisResult:
+        raise RoundBudgetExhausted("")
+
+    monkeypatch.setattr(
+        "general_manager.chat.planned.scheduler.synthesize_answer", exhausted_synthesis
+    )
+    PLANNED_AUDIT_EVENTS.clear()
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (_task("task_1"),)), _settings(), user_text="show parts"
+    )
+
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(
+                    execute_tool=lambda *_args: {"status": "success", "data": []}
+                ),
+            )
+        )
+    )
+
+    assert events[-1] == {
+        "type": "error",
+        "code": "budget_exhausted",
+        "message": PLANNED_PUBLIC_MESSAGES["budget_exhausted"],
+    }
+    assert {
+        "event_type": "planned_terminal",
+        "coverage": {"resolved": 1, "total": 1},
+        "terminal_reason": "budget_exhausted",
+    } in PLANNED_AUDIT_EVENTS
 
 
 def _run_one_tool_result(tool_name: str, result: object) -> tuple[bool, Any, _Runner]:

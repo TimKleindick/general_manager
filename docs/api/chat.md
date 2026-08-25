@@ -533,10 +533,10 @@ are stable and do not include profiles, trust groups, catalog data, plans, or
 exceptions. Other exceptions remain the generic `chat_error` mapping.
 
 Planned audit events use the existing `audit` setting and are allowlisted before
-the generic audit sink. They can record plan/task lineage, role (never profile),
-trust-group validation outcome, match-source categories, a SHA-256 canonical
-call hash, duplicate/progress state, round budgets, latency, reported token
-usage/cost, evidence-kind counts, coverage, and terminal reason. Raw tool
-results, manager names, plans, credentials, and exceptions are excluded; the
-existing configured field redaction and result-size limits still apply to the
-generic audit layer.
+the generic audit sink. They can record deterministic opaque hashes of plan/task
+lineage, role (never profile), trust-group validation outcome, match-source
+categories, a SHA-256 canonical call hash, duplicate/progress state, round
+budgets, latency, reported token usage/cost, evidence-kind counts, coverage,
+and terminal reason. Raw tool results, manager names, plans, credentials, and
+exceptions are excluded; the existing configured field redaction and result-size
+limits still apply to the generic audit layer.
