@@ -256,6 +256,64 @@ def test_executor_reference_includes_the_declared_requirement_operation() -> Non
     ]
 
 
+def test_none_schema_result_never_becomes_evidence() -> None:
+    requirement = EvidenceRequirement("schema", "schema", "schema", None)
+    task = PlannedTask("task_1", "part", (), (requirement,), ("schema",), ())
+    _Executor.responses = [
+        ToolCallEvent("schema", "get_manager_schema", {"manager": "PartManager"}),
+        {"action": "complete", "evidence_ids": ["task_1:schema:1"]},
+        {"action": "block", "reason": "manager_unresolved"},
+    ]
+    _Executor.responses_by_task = {}
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (task,)), _settings(), user_text="part"
+    )
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(execute_tool=lambda *_args: None),
+            )
+        )
+    )
+    assert [event["type"] for event in events] == ["tool_call", "tool_result", "error"]
+    assert prepared.result is not None
+    assert prepared.result.evidence.get("task_1:schema:1") is None
+
+
+def test_empty_path_is_evidence_but_none_path_is_not() -> None:
+    requirement = EvidenceRequirement("path", "path", "path", None)
+    task = PlannedTask("task_1", "path", (), (requirement,), ("path",), ())
+    _Executor.responses = [
+        ToolCallEvent(
+            "path",
+            "find_path",
+            {"from_manager": "PartManager", "to_manager": "PartManager"},
+        ),
+        {"action": "complete", "evidence_ids": ["task_1:path:1"]},
+        {"answer": "same manager", "evidence_ids": ["task_1:path:1"]},
+    ]
+    _Executor.responses_by_task = {}
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (task,)), _settings(), user_text="path"
+    )
+    events = asyncio.run(
+        _collect(
+            iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=[],
+                callbacks=SchedulerCallbacks(execute_tool=lambda *_args: []),
+            )
+        )
+    )
+    assert events[-1]["type"] == "done"
+
+
 def test_executor_rejects_mutate_before_any_public_or_private_callback() -> None:
     task = _task("task_1")
     _Executor.responses = [
