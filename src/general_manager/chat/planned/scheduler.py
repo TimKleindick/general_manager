@@ -217,6 +217,25 @@ class PreparedPlannedTurn:
         return self.plan if self.plan.intent == "mutation" else None
 
 
+class _PlanningRoundBudget(RoundBudget):
+    """Bound provisional planner accounting to its three validated attempts."""
+
+    _maximum_attempts = 3
+
+    def __init__(self) -> None:
+        # No roots is the smallest final-plan capacity, including mutation
+        # plans.  Admission below is stricter because the planner contract has
+        # initial, correction, and fallback attempts only.
+        super().__init__(())
+
+    def consume_global(self) -> None:
+        if self.global_used >= self._maximum_attempts:
+            raise RoundBudgetExhausted(  # noqa: TRY003
+                "planner attempt limit is exhausted."
+            )
+        super().consume_global()
+
+
 async def prepare_planned_turn(
     user_text: str,
     messages: list[Message],
@@ -235,7 +254,7 @@ async def prepare_planned_turn(
     # The plan has not declared its roots yet.  Use the smallest possible
     # final-turn global capacity while planner requests are being counted, then
     # transfer those charges into the validated plan's exact root-sized ledger.
-    budget = RoundBudget(("planning",))
+    budget = _PlanningRoundBudget()
     remaining = _stage_remaining(deadline, clock)
     if remaining <= 0:
         raise TimeoutError("planned evidence deadline elapsed")  # noqa: TRY003
@@ -523,6 +542,7 @@ class _Runner:
             {"task_id": runtime.task.task_id, "tool_name": call.name},
         )
         cached = identity in self.call_cache
+        deadline_rejected = False
         if cached:
             result = self.call_cache[identity]
         else:
@@ -530,20 +550,25 @@ class _Runner:
                 from general_manager.chat.tools import ScopeChatContext
 
                 async with self.tool_semaphore:
-                    tool_scope = dict(self.scope)
-                    tool_scope["planned_query_timeout_ms"] = max(
-                        1,
-                        math.ceil(_stage_remaining(self.deadline, self.clock) * 1000),
-                    )
-                    context = ScopeChatContext.from_scope(tool_scope)
-                    result = await _call_sync(
-                        self.callbacks,
-                        self.callbacks.execute_tool,
-                        call.name,
-                        call.args,
-                        context,
-                    )
-                self.call_cache[identity] = result
+                    remaining = _stage_remaining(self.deadline, self.clock)
+                    if remaining <= 0:
+                        deadline_rejected = True
+                        result = {"status": "error", "code": "deadline_exceeded"}
+                    else:
+                        tool_scope = dict(self.scope)
+                        tool_scope["planned_query_timeout_ms"] = math.ceil(
+                            remaining * 1000
+                        )
+                        context = ScopeChatContext.from_scope(tool_scope)
+                        result = await _call_sync(
+                            self.callbacks,
+                            self.callbacks.execute_tool,
+                            call.name,
+                            call.args,
+                            context,
+                        )
+                if not deadline_rejected:
+                    self.call_cache[identity] = result
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
@@ -559,6 +584,9 @@ class _Runner:
                 "duplicate": cached,
             },
         )
+        if deadline_rejected:
+            await self.set_blocked(runtime, "deadline_exceeded")
+            return result, False
         if not cached:
             try:
                 await _call_sync(
@@ -873,6 +901,8 @@ class _Runner:
                     runtime,
                     "budget_exhausted"
                     if child_runtime.status == "budget_exhausted"
+                    else "deadline_exceeded"
+                    if child_runtime.reason == "deadline_exceeded"
                     else "dependency_blocked",
                 )
                 return None
@@ -1089,11 +1119,13 @@ async def iter_planned_read_events(
             yield event
         await execution
     except asyncio.CancelledError:
-        execution.cancel()
-        await asyncio.gather(execution, return_exceptions=True)
         raise
-    except Exception:  # noqa: BLE001
-        execution.cancel()
+    except Exception:  # noqa: BLE001, S110
+        # The runner records stable task failures for the terminal event below.
+        pass
+    finally:
+        if not execution.done():
+            execution.cancel()
         await asyncio.gather(execution, return_exceptions=True)
     result = runner.result()
     prepared.result = result
