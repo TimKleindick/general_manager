@@ -74,7 +74,7 @@ def test_dependency_calculation_and_multiple_queries_require_complex_role(
     )
 
 
-@pytest.mark.parametrize("path_depth", [-1, 2, 3])
+@pytest.mark.parametrize("path_depth", [2, 3])
 def test_deep_or_invalid_relationship_path_requires_complex_role(
     path_depth: int,
 ) -> None:
@@ -105,3 +105,43 @@ def test_prior_provider_or_no_progress_failure_requires_complex_role() -> None:
         )
         == "complex_executor"
     )
+
+
+@pytest.mark.parametrize("value", [1, 0.0, "yes", None])
+def test_routing_rejects_non_boolean_unique_manager(value: object) -> None:
+    with pytest.raises(TypeError):
+        select_executor_role(
+            simple_task(),
+            unique_manager=value,
+            path_depth=0,
+            prior_failure=False,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("value", [1, 0.0, "yes", None])
+def test_routing_rejects_non_boolean_prior_failure(value: object) -> None:
+    with pytest.raises(TypeError):
+        select_executor_role(
+            simple_task(),
+            unique_manager=True,
+            path_depth=0,
+            prior_failure=value,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("value", [True, 1.0, "1", object()])
+def test_routing_rejects_invalid_path_depth_types(value: object) -> None:
+    with pytest.raises(TypeError):
+        select_executor_role(
+            simple_task(),
+            unique_manager=True,
+            path_depth=value,
+            prior_failure=False,  # type: ignore[arg-type]
+        )
+
+
+def test_routing_rejects_negative_path_depth() -> None:
+    with pytest.raises(ValueError):
+        select_executor_role(
+            simple_task(), unique_manager=True, path_depth=-1, prior_failure=False
+        )

@@ -56,6 +56,19 @@ def test_calculations_reject_wrong_operand_counts_or_operations(
         calculate(operation, operands)
 
 
+@pytest.mark.parametrize("operation", ["sum", "average", "minimum", "maximum"])
+@pytest.mark.parametrize("operands", [[[]], [()]], ids=["empty-list", "empty-tuple"])
+def test_numeric_reductions_reject_empty_single_sequence(
+    operation: str, operands: list[object]
+) -> None:
+    with pytest.raises(CalculationError):
+        calculate(operation, operands)
+
+
+def test_count_empty_single_sequence_is_zero() -> None:
+    assert calculate("count", [[]]) == 0
+
+
 @pytest.mark.parametrize("value", [None, True, object(), "not-a-number"])
 def test_numeric_calculations_reject_nonnumeric_operands(value: object) -> None:
     with pytest.raises(CalculationError):
@@ -101,6 +114,44 @@ def test_calculate_evidence_reads_only_query_evidence_by_structured_path() -> No
             {"evidence_id": "ev-query", "path": ["data", 1, "value"]},
         ],
     }
+
+
+@pytest.mark.parametrize("operation", ["sum", "average", "minimum", "maximum"])
+def test_calculate_evidence_rejects_empty_selected_query_values(operation: str) -> None:
+    store = EvidenceStore()
+    store.add(
+        EvidenceRecord.create(
+            "ev-query", "task-1", "query", "query-call", {}, {"data": []}
+        )
+    )
+
+    with pytest.raises(CalculationError):
+        calculate_evidence(
+            "ev-calc",
+            "task-1",
+            operation,
+            [CalculationOperand("ev-query", ("data",))],
+            store,
+        )
+
+
+def test_calculate_evidence_counts_empty_selected_query_values() -> None:
+    store = EvidenceStore()
+    store.add(
+        EvidenceRecord.create(
+            "ev-query", "task-1", "query", "query-call", {}, {"data": []}
+        )
+    )
+
+    result = calculate_evidence(
+        "ev-calc",
+        "task-1",
+        "count",
+        [CalculationOperand("ev-query", ("data",))],
+        store,
+    )
+
+    assert result.payload()["value"] == 0
 
 
 @pytest.mark.parametrize(
@@ -150,3 +201,8 @@ def test_calculate_evidence_rejects_non_query_and_nonnumeric_sources() -> None:
             [CalculationOperand("ev-query", ("value",))],
             store,
         )
+
+
+def test_calculation_operand_rejects_negative_indices() -> None:
+    with pytest.raises(CalculationError):
+        CalculationOperand("ev-query", ("data", -1))

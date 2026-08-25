@@ -41,6 +41,8 @@ class CalculationOperand:
             for part in self.path
         ):
             _calculation_error("operand path parts must be strings or integers.")
+        if any(isinstance(part, int) and part < 0 for part in self.path):
+            _calculation_error("operand path indices must be non-negative.")
 
 
 _SUPPORTED_OPERATIONS = frozenset(
@@ -79,6 +81,10 @@ def calculate(operation: str, operands: Sequence[object]) -> Decimal | int:
         _calculation_error(f"{operation} requires at least one operand.")
 
     values = _expand_numeric_values(values)
+    if not values and operation in ("sum", "average", "minimum", "maximum"):
+        _calculation_error(
+            f"{operation} requires at least one value after sequence expansion."
+        )
     numbers = [_decimal(value) for value in values]
     if operation == "sum":
         return sum(numbers, Decimal(0))
