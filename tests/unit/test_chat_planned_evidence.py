@@ -139,7 +139,7 @@ def test_store_rejects_incompatible_requirement_links() -> None:
         store.add(evidence, requirement=requirement)
     store.add(evidence)
     with pytest.raises(IncompatibleEvidenceError):
-        store.link(requirement, evidence.evidence_id)
+        store.link("task-1", requirement, evidence.evidence_id)
 
 
 def test_store_link_accepts_matching_requirement() -> None:
@@ -153,8 +153,24 @@ def test_store_link_accepts_matching_requirement() -> None:
         operation=None,
     )
 
-    assert store.link(requirement, evidence.evidence_id) == evidence
-    assert store.for_requirement(requirement) == (evidence,)
+    assert store.link("task-1", requirement, evidence.evidence_id) == evidence
+    assert store.for_requirement("task-1", requirement) == (evidence,)
+
+
+def test_requirement_links_are_scoped_to_the_owning_task() -> None:
+    """Same requirement IDs in separate roots cannot share or suppress evidence."""
+    store = EvidenceStore()
+    requirement = EvidenceRequirement("shared", "query", "records", None)
+    first = record("root-a:query:1", "root-a")
+    second = record("root-b:query:1", "root-b")
+
+    store.add(first, requirement=requirement)
+    store.add(second, requirement=requirement)
+
+    assert store.for_requirement("root-a", requirement) == (first,)
+    assert store.for_requirement("root-b", requirement) == (second,)
+    with pytest.raises(IncompatibleEvidenceError):
+        store.link("root-b", requirement, first.evidence_id)
 
 
 def test_record_payload_json_must_be_valid_json() -> None:

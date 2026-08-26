@@ -219,7 +219,7 @@ class EvidenceStore:
 
     def __init__(self) -> None:
         self._records: dict[str, EvidenceRecord] = {}
-        self._links: dict[str, list[str]] = {}
+        self._links: dict[tuple[str, str], list[str]] = {}
 
     def add(
         self,
@@ -238,9 +238,9 @@ class EvidenceStore:
             )
         self._records[record.evidence_id] = record
         if requirement is not None:
-            self._links.setdefault(requirement.requirement_id, []).append(
-                record.evidence_id
-            )
+            self._links.setdefault(
+                (record.task_id, requirement.requirement_id), []
+            ).append(record.evidence_id)
         return record
 
     def get(self, evidence_id: str) -> EvidenceRecord | None:
@@ -252,31 +252,40 @@ class EvidenceStore:
         )
 
     def link(
-        self, requirement: EvidenceRequirement, evidence_id: str
+        self, task_id: str, requirement: EvidenceRequirement, evidence_id: str
     ) -> EvidenceRecord:
+        _validate_text(task_id, "task_id")
         if not isinstance(requirement, EvidenceRequirement):
             _type_error("requirement must be an EvidenceRequirement.")
         record = self._records.get(evidence_id)
         if record is None:
             _not_found(f"evidence ID {evidence_id!r} does not exist.")
+        if record.task_id != task_id:
+            _incompatible(
+                f"evidence {evidence_id!r} belongs to task {record.task_id!r}, "
+                f"not {task_id!r}."
+            )
         if not _compatible(requirement, record):
             _incompatible(
                 f"evidence {evidence_id!r} cannot satisfy requirement "
                 f"{requirement.requirement_id!r}."
             )
-        linked = self._links.setdefault(requirement.requirement_id, [])
+        linked = self._links.setdefault((task_id, requirement.requirement_id), [])
         if evidence_id not in linked:
             linked.append(evidence_id)
         return record
 
     def for_requirement(
-        self, requirement: EvidenceRequirement
+        self, task_id: str, requirement: EvidenceRequirement
     ) -> tuple[EvidenceRecord, ...]:
+        _validate_text(task_id, "task_id")
         if not isinstance(requirement, EvidenceRequirement):
             _type_error("requirement must be an EvidenceRequirement.")
         return tuple(
             self._records[evidence_id]
-            for evidence_id in self._links.get(requirement.requirement_id, ())
+            for evidence_id in self._links.get(
+                (task_id, requirement.requirement_id), ()
+            )
         )
 
     @property

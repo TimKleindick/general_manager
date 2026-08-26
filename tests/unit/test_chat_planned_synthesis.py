@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import asyncio
+from dataclasses import replace
+import time
 from types import MappingProxyType
 from typing import ClassVar
 
@@ -17,7 +19,10 @@ from general_manager.chat.planned.synthesis import (
     SynthesisFailedError,
     synthesize_answer,
 )
-from general_manager.chat.planned.provider_calls import InvalidProviderRoundError
+from general_manager.chat.planned.provider_calls import (
+    InvalidProviderRoundError,
+    ProviderRoundResult,
+)
 from general_manager.chat.providers.base import DoneEvent, TextChunkEvent, TokenUsage
 
 
@@ -158,6 +163,49 @@ def test_synthesis_propagates_cancellation_without_fallback() -> None:
                     "show parts", _store(), {}, _settings(), RoundBudget(())
                 )
             )
+
+
+def test_synthesis_attempts_share_one_absolute_stage_deadline() -> None:
+    """Giving the fallback a fresh timeout would overrun the synthesis stage."""
+    timeouts: list[float] = []
+
+    async def staged_round(*_args: object, **kwargs: object) -> ProviderRoundResult:
+        assert not kwargs
+        timeout = _args[-1]
+        assert isinstance(timeout, float)
+        timeouts.append(timeout)
+        if len(timeouts) == 1:
+            await asyncio.sleep(0.065)
+            return ProviderRoundResult(
+                '{"answer":"","evidence_ids":[]}', None, TokenUsage(1, 2)
+            )
+        await asyncio.sleep(timeout * 0.5)
+        return ProviderRoundResult(
+            '{"answer":"No parts found.","evidence_ids":["ev-query-1"]}',
+            None,
+            TokenUsage(1, 2),
+        )
+
+    started = time.monotonic()
+    with patch(
+        "general_manager.chat.planned.synthesis.complete_provider_round",
+        side_effect=staged_round,
+    ):
+        result = asyncio.run(
+            synthesize_answer(
+                "show parts",
+                _store(),
+                {},
+                replace(_settings(), synthesis_timeout_seconds=0.1),
+                RoundBudget(()),
+            )
+        )
+    elapsed = time.monotonic() - started
+
+    assert 0 < timeouts[1] < 0.07
+    assert elapsed < 0.105
+    assert result.attempt_usages == (TokenUsage(1, 2), TokenUsage(1, 2))
+    assert result.usage == TokenUsage(2, 4)
 
 
 def test_synthesis_falls_back_and_sanitizes_unresolved_diagnostics() -> None:

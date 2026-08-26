@@ -455,6 +455,7 @@ class _TaskRuntime:
     reason: StableReason | None = None
     role: str | None = None
     fallback_used: bool = False
+    prior_failure: bool = False
     no_progress: int = 0
     phase_failure_reason: StableReason | None = None
     local_passes: int = 0
@@ -680,7 +681,8 @@ class _Runner:
             (
                 item
                 for item in runtime.task.requirements
-                if item.kind == kind and not self.evidence.for_requirement(item)
+                if item.kind == kind
+                and not self.evidence.for_requirement(runtime.task.task_id, item)
             ),
             None,
         )
@@ -744,7 +746,8 @@ class _Runner:
 
     def requirements_satisfied(self, runtime: _TaskRuntime) -> bool:
         return all(
-            self.evidence.for_requirement(req) for req in runtime.task.requirements
+            self.evidence.for_requirement(runtime.task.task_id, req)
+            for req in runtime.task.requirements
         )
 
     def resolve_candidates(
@@ -789,6 +792,8 @@ class _Runner:
     ) -> None:
         if runtime.status != "running":
             return
+        if failure_reason in ("provider_failed", "manager_unresolved"):
+            runtime.prior_failure = True
         if made_progress:
             runtime.no_progress = 0
             runtime.phase_failure_reason = None
@@ -886,7 +891,8 @@ class _Runner:
                 and (record := self.evidence.get(item)) is not None
                 and record.task_id == runtime.task.task_id
                 and any(
-                    record in self.evidence.for_requirement(requirement)
+                    record
+                    in self.evidence.for_requirement(runtime.task.task_id, requirement)
                     for requirement in runtime.task.requirements
                 )
                 for item in ids
@@ -1017,7 +1023,9 @@ class _Runner:
                                 == item.operation
                             )
                         )
-                        and not self.evidence.for_requirement(item)
+                        and not self.evidence.for_requirement(
+                            runtime.task.task_id, item
+                        )
                     ),
                     None,
                 )
@@ -1084,7 +1092,7 @@ class _Runner:
                     runtime.task,
                     unique_manager=unique_manager,
                     path_depth=runtime.path_depth,
-                    prior_failure=False,
+                    prior_failure=runtime.prior_failure,
                 )
             await self.audit(
                 "route",
