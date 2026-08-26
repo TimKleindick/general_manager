@@ -380,6 +380,50 @@ class DatasetLoadingTests(SimpleTestCase):
         ]
         assert filter_cases(cases, tier=0, tags=["demo"]) == []
 
+    def test_legacy_suite_excludes_planned_orchestration_dataset(self) -> None:
+        datasets = {
+            "basic_queries": [
+                EvalCase(
+                    name="legacy_case",
+                    description="",
+                    conversation=[],
+                    expectations={},
+                )
+            ],
+            "planned_orchestration": [
+                EvalCase(
+                    name="planned_case",
+                    description="",
+                    conversation=[],
+                    expectations={},
+                )
+            ],
+        }
+        executed: list[str] = []
+
+        async def record_run_case(
+            _provider: object,
+            case: EvalCase,
+            _tool_defs: list[dict[str, Any]],
+            **_kwargs: Any,
+        ) -> EvalResult:
+            executed.append(case.name)
+            return EvalResult(case=case)
+
+        with (
+            patch.object(eval_runner, "list_datasets", return_value=list(datasets)),
+            patch.object(eval_runner, "load_dataset", side_effect=datasets.__getitem__),
+            patch.object(eval_runner, "get_tool_definitions", return_value=[]),
+            patch.object(eval_runner, "run_case", side_effect=record_run_case),
+        ):
+            results = asyncio.run(eval_runner.run_eval_suite(object()))
+
+        assert [result.case.name for result in results] == ["legacy_case"]
+        assert executed == ["legacy_case"]
+
+        with pytest.raises(ValueError, match="not supported by the legacy"):
+            asyncio.run(eval_runner.run_eval_suite(object(), ["planned_orchestration"]))
+
     def test_result_values_are_required_in_answers(self) -> None:
         failures: list[str] = []
         for dataset_name in list_datasets():

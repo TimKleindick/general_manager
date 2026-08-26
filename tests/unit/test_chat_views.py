@@ -11,6 +11,7 @@ from asgiref.sync import async_to_sync
 from django.http import HttpRequest, JsonResponse
 from django.test import RequestFactory, SimpleTestCase
 
+from general_manager.chat.errors import public_chat_error
 from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
@@ -25,6 +26,7 @@ from general_manager.chat.views import (
     _ensure_session_key,
     _execute_confirmation_request,
     _execute_message_request,
+    _iter_prepared_message_events,
     _parse_json_body,
     _prepare_message_request,
     _render_summary_source,
@@ -154,6 +156,18 @@ class _NoEventProvider:
 
 
 class ChatViewHelperTests(SimpleTestCase):
+    def test_public_timeout_mapping_preserves_an_explicit_public_reason(self) -> None:
+        """Timeout fallback must not override a stable error reason supplied upstream."""
+
+        class _PlannedTimeout(TimeoutError):
+            public_reason = "provider_failed"
+
+        assert public_chat_error(_PlannedTimeout()).as_event() == {
+            "type": "error",
+            "message": "The provider could not complete the request.",
+            "code": "provider_failed",
+        }
+
     def setUp(self) -> None:
         self.factory = RequestFactory()
 
@@ -627,6 +641,58 @@ class ChatViewHelperTests(SimpleTestCase):
             )
             == "planned synthesis"
         )
+
+    def test_planned_http_transport_shares_its_limiter_callback_with_scheduler(
+        self,
+    ) -> None:
+        """Planner usage must reach the HTTP limiter through the scheduler seam."""
+        prepared = _PreparedMessageRequest(
+            conversation=object(),
+            scope={"transport": "http"},
+            provider=object(),
+            messages=[Message(role="user", content="show parts")],
+            early_events=None,
+            user_text="show parts",
+            planned_settings=SimpleNamespace(enabled=True),
+        )
+        limiter_calls: list[dict[str, object]] = []
+        callback_ids: list[int] = []
+
+        def limiter(_scope: object, **kwargs: object) -> None:
+            limiter_calls.append(dict(kwargs))
+
+        async def prepare(*_args: object, **kwargs: object) -> object:
+            callbacks = kwargs["callbacks"]
+            callback_ids.append(id(callbacks))
+            callbacks.enforce_rate_limit(
+                prepared.scope,
+                input_tokens=3,
+                output_tokens=5,
+                count_request=False,
+            )
+            return SimpleNamespace(mutation_plan=None)
+
+        async def planned_events(*_args: object, **kwargs: object):
+            callback_ids.append(id(kwargs["callbacks"]))
+            yield {"type": "done"}
+
+        with (
+            patch("general_manager.chat.views.enforce_chat_rate_limit", new=limiter),
+            patch("general_manager.chat.views.prepare_planned_turn", new=prepare),
+            patch(
+                "general_manager.chat.views.iter_planned_read_events",
+                new=planned_events,
+            ),
+        ):
+            events = async_to_sync(_collect_events)(
+                _iter_prepared_message_events(prepared, transport="http")
+            )
+
+        assert events == [{"type": "done"}]
+        assert limiter_calls == [
+            {"input_tokens": 3, "output_tokens": 5, "count_request": False}
+        ]
+        assert callback_ids[0] == callback_ids[1]
 
     def test_execute_message_request_uses_legacy_events_for_planned_mutation(
         self,

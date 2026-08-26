@@ -17,6 +17,7 @@ from general_manager.chat.schema_index import (
 )
 from general_manager.chat.system_prompt import build_system_prompt
 from general_manager.chat.tools import (
+    ScopeChatContext,
     execute_chat_tool,
     find_path,
     get_manager_schema,
@@ -126,6 +127,13 @@ class ChatSchemaIndexTests(SimpleTestCase):
         if hasattr(PathMap, "instance"):
             delattr(PathMap, "instance")
         super().tearDown()
+
+    def test_scope_context_rejects_boolean_planned_query_timeout(self) -> None:
+        context = ScopeChatContext.from_scope(
+            {"user": None, "planned_query_timeout_ms": True}
+        )
+
+        assert context.planned_query_timeout_ms is None
 
     def test_build_schema_index_excludes_hidden_managers(self) -> None:
         index = build_schema_index()

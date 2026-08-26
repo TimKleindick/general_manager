@@ -692,7 +692,7 @@ class ChatQueryToolTests(SimpleTestCase):
             }
         }
     )
-    def test_query_sets_statement_timeout_for_postgresql(self) -> None:
+    def test_query_ignores_boolean_planned_statement_timeout(self) -> None:
         events: list[str] = []
 
         schema = _RecordingSchema(
@@ -747,7 +747,12 @@ class ChatQueryToolTests(SimpleTestCase):
             ),
             patch("django.db.transaction.atomic", return_value=_Atomic()),
         ):
-            result = query(manager="PartManager", filters={}, fields=["name"])
+            result = query(
+                manager="PartManager",
+                filters={},
+                fields=["name"],
+                context=SimpleNamespace(planned_query_timeout_ms=True),
+            )
 
         assert result["data"] == [{"name": "Bolt"}]
         assert events == ["atomic_enter", "set_timeout", "execute", "atomic_exit"]

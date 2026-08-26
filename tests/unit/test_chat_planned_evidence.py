@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import MappingProxyType
 
 import pytest
 
@@ -46,8 +47,15 @@ def test_evidence_payload_is_immutable_snapshot() -> None:
 
 def test_evidence_record_is_frozen_and_provenance_is_snapshot() -> None:
     provenance = {"tool": "query"}
-    evidence = record()
-    provenance["task"] = "changed"
+    evidence = EvidenceRecord.create(
+        "ev-1",
+        "task-1",
+        "query",
+        "call",
+        provenance,
+        {"data": []},
+    )
+    provenance["tool"] = "changed"
 
     assert evidence.provenance == {"tool": "query"}
     with pytest.raises(TypeError):
@@ -58,7 +66,7 @@ def test_evidence_record_is_frozen_and_provenance_is_snapshot() -> None:
     "key",
     ["cookie", "set-cookie", "session", "session_id", "private_key", "unknown_secret"],
 )
-def test_provenance_redacts_unallowlisted_or_secret_like_values(key: str) -> None:
+def test_provenance_omits_unallowlisted_or_secret_like_values(key: str) -> None:
     evidence = EvidenceRecord.create(
         "ev-1",
         "task-1",
@@ -68,7 +76,36 @@ def test_provenance_redacts_unallowlisted_or_secret_like_values(key: str) -> Non
         {"data": []},
     )
 
-    assert evidence.provenance[key] == "[redacted]"
+    assert key not in evidence.provenance
+
+
+def test_provenance_normalizes_safe_keys_and_preserves_sorted_mapping_snapshot() -> (
+    None
+):
+    evidence = EvidenceRecord.create(
+        "ev-1",
+        "task-1",
+        "query",
+        "call",
+        {"TOOL": "query", "Field": "quantity", "Cookie": "sensitive"},
+        {"data": []},
+    )
+
+    assert isinstance(evidence.provenance, MappingProxyType)
+    assert list(evidence.provenance) == ["field", "tool"]
+    assert dict(evidence.provenance) == {"field": "quantity", "tool": "query"}
+
+
+def test_provenance_validates_values_before_omitting_unsafe_keys() -> None:
+    with pytest.raises(ValueError):
+        EvidenceRecord.create(
+            "ev-1",
+            "task-1",
+            "query",
+            "call",
+            {"Cookie": object()},  # type: ignore[dict-item]
+            {"data": []},
+        )
 
 
 def test_provenance_preserves_allowlisted_framework_values() -> None:

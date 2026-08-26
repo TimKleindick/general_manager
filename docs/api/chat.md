@@ -428,7 +428,7 @@ every evaluation run requires either `--settings MODULE` or a nonempty
 | `--settings` | Import path for the Django settings module. Overrides an existing `DJANGO_SETTINGS_MODULE` for this process. |
 | `--provider` | Provider class import path. When omitted, GeneralManager imports the provider configured in `GENERAL_MANAGER["CHAT"]`. |
 | `--model` | Model name merged into the selected provider configuration before provider construction. |
-| `--dataset` | One packaged dataset name. When omitted, the runner selects all datasets. |
+| `--dataset` | One legacy-compatible packaged dataset name. When omitted, the runner selects all legacy-compatible datasets; `planned_orchestration` is excluded because it requires deterministic role-pinned providers. |
 | `--fixture` | `toy` or `large`; registers the matching built-in eval schema before the run. |
 | `--tier` | Integer tier filter. |
 | `--tag` | Required tag filter; repeat the option to pass multiple tags. |
@@ -437,7 +437,11 @@ every evaluation run requires either `--settings MODULE` or a nonempty
 | `--trace-jsonl` | File path that receives per-case JSONL traces. |
 
 The packaged dataset names are `basic_queries`, `demo_readiness`, `edge_cases`,
-`follow_ups`, `large_schema`, and `multi_hop`.
+`follow_ups`, `large_schema`, `multi_hop`, and `planned_orchestration`. The
+installed CLI's legacy suite runs the first six; selecting
+`planned_orchestration` explicitly is rejected. That packaged dataset is
+instead exercised by the deterministic planned tests described in the task
+guide.
 
 ### Eval exit status
 

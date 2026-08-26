@@ -53,7 +53,7 @@ from general_manager.chat.planned.planner import (
     plan_request,
 )
 from general_manager.chat.planned.catalog import load_manager_catalog
-from general_manager.chat.planned.resolver import ManagerResolver
+from general_manager.chat.planned.resolver import AUDIT_MATCH_SOURCES, ManagerResolver
 from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
     complete_provider_round,
@@ -824,6 +824,10 @@ class _Runner:
     ) -> StableReason | None:
         if runtime.role is None:
             return "provider_failed"
+        remaining = _stage_remaining(self.deadline, self.clock)
+        if remaining <= 0:
+            await self.set_blocked(runtime, "deadline_exceeded")
+            return None
         try:
             # Resolution is free; charge only immediately before a real
             # provider request can start.
@@ -846,7 +850,7 @@ class _Runner:
                     candidates,
                 ),
                 _tool_definitions(),
-                _stage_remaining(self.deadline, self.clock),
+                remaining,
             )
             await self.account_usage(result.usage)
             await self.audit(
@@ -1055,25 +1059,14 @@ class _Runner:
             before = self._progress_signature(runtime)
             candidates, _candidates_changed = self.resolve_candidates(runtime)
             runtime.local_passes += 1
-            source_categories = {
-                "exact manager name": "exact_name",
-                "exact catalog alias": "exact_alias",
-                "catalog domain": "catalog_domain",
-                "catalog aliases": "catalog_alias",
-                "catalog use_when": "catalog_use_when",
-                "schema description": "schema_description",
-                "schema fields": "schema_field",
-                "schema filters": "schema_filter",
-                "schema relations": "schema_relation",
-            }
             sources: set[str] = set()
             for candidate in candidates:
                 matches = candidate["matches"]
                 if not isinstance(matches, list):
                     continue
                 for source in matches:
-                    if isinstance(source, str) and source in source_categories:
-                        sources.add(source_categories[source])
+                    if isinstance(source, str) and source in AUDIT_MATCH_SOURCES:
+                        sources.add(AUDIT_MATCH_SOURCES[source])
             await self.audit(
                 "candidate",
                 {

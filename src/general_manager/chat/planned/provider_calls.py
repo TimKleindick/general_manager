@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from math import isfinite
 
 from general_manager.chat.providers.base import (
     BaseLLMProvider,
@@ -45,6 +46,7 @@ def _validate_timeout(timeout_seconds: float) -> float:
     if (
         isinstance(timeout_seconds, bool)
         or not isinstance(timeout_seconds, (int, float))
+        or not isfinite(timeout_seconds)
         or timeout_seconds <= 0
     ):
         raise InvalidProviderRoundTimeoutError(  # noqa: TRY003

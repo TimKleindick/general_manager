@@ -26,6 +26,7 @@ from general_manager.chat.models import (
 from general_manager.chat.planned.catalog import load_manager_catalog
 from general_manager.chat.planned.config import get_planned_chat_settings
 from general_manager.chat.planned.scheduler import (
+    SchedulerCallbacks,
     iter_planned_read_events,
     prepare_planned_turn,
 )
@@ -593,6 +594,7 @@ async def _iter_prepared_message_events(
             yield event
         return
 
+    callbacks = SchedulerCallbacks(enforce_rate_limit=enforce_chat_rate_limit)
     planned_turn = await prepare_planned_turn(
         prepared.user_text
         or next(
@@ -606,6 +608,7 @@ async def _iter_prepared_message_events(
         prepared.messages,
         planned_settings,
         _planned_catalog_summary(planned_settings),
+        callbacks=callbacks,
         scope=prepared.scope,
     )
     if planned_turn.mutation_plan is not None:
@@ -623,6 +626,7 @@ async def _iter_prepared_message_events(
         scope=prepared.scope,
         conversation=prepared.conversation,
         messages=prepared.messages,
+        callbacks=callbacks,
     ):
         yield event
 

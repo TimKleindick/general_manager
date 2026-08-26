@@ -178,6 +178,8 @@ module = [
     "graphql",
     "graphql.*",
     "numpy",
+    "openai",
+    "openai.*",
     "pint",
     "pint.*",
     "prometheus_client",

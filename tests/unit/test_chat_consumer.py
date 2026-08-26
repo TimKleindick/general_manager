@@ -672,6 +672,110 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_disconnect_cancels_planning_before_a_scheduler_task_exists(self) -> None:
+        """A disconnect must cancel an in-progress planner, not only its iterator."""
+        consumer = ChatConsumer()
+        consumer.scope = {"user": AnonymousUser(), "session": _Session("key")}
+        consumer.session_key = "key"
+        consumer.provider = _Provider()
+        consumer.channel_name = "chat.planner-cancel"
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def prepare(*_args: object, **_kwargs: object) -> object:
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return SimpleNamespace(mutation_plan=None)
+
+        async def run() -> None:
+            receive_task: asyncio.Task[None] | None = None
+            try:
+                with (
+                    patch.object(consumer, "send_json", new_callable=AsyncMock),
+                    patch.object(
+                        consumer,
+                        "_get_persistent_conversation",
+                        new_callable=AsyncMock,
+                        return_value=None,
+                    ),
+                    patch(
+                        "general_manager.chat.consumer.get_planned_chat_settings",
+                        return_value=SimpleNamespace(enabled=True),
+                    ),
+                    patch(
+                        "general_manager.chat.consumer.prepare_planned_turn",
+                        new=prepare,
+                    ),
+                    patch(
+                        "general_manager.chat.consumer.build_system_prompt",
+                        return_value="system prompt text",
+                    ),
+                    patch(
+                        "general_manager.chat.consumer.AsyncJsonWebsocketConsumer.disconnect",
+                        new_callable=AsyncMock,
+                    ),
+                ):
+                    receive_task = asyncio.create_task(
+                        consumer.receive_json({"type": "message", "text": "show parts"})
+                    )
+                    await asyncio.wait_for(entered.wait(), timeout=1)
+                    await consumer.disconnect(1000)
+                    await asyncio.wait_for(cancelled.wait(), timeout=1)
+                    await asyncio.wait_for(receive_task, timeout=1)
+
+                assert consumer._provider_task is None
+                assert consumer._active_turn is not None
+                assert consumer._active_turn.done()
+            finally:
+                if receive_task is not None and not receive_task.done():
+                    receive_task.cancel()
+                    await asyncio.gather(receive_task, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_disconnect_cleans_up_a_planned_task_cancelled_before_its_first_step(
+        self,
+    ) -> None:
+        """Task-finally cleanup cannot run when disconnect cancels before scheduling."""
+        consumer = ChatConsumer()
+        consumer.scope = {"user": AnonymousUser(), "session": _Session("key")}
+        consumer.session_key = "key"
+        consumer.provider = _Provider()
+        consumer.channel_name = "chat.prestart-cancel"
+
+        async def run() -> None:
+            with (
+                patch(
+                    "general_manager.chat.consumer.get_planned_chat_settings",
+                    return_value=SimpleNamespace(enabled=True),
+                ),
+                patch(
+                    "general_manager.chat.consumer.AsyncJsonWebsocketConsumer.disconnect",
+                    new_callable=AsyncMock,
+                ),
+            ):
+                consumer._active_turn = asyncio.get_running_loop().create_future()
+                started = await consumer._stream_message_turn(
+                    "show parts", [Message(role="user", content="show parts")], []
+                )
+                provider_task = consumer._provider_task
+                assert started is True
+                assert provider_task is not None
+                assert provider_task.done() is False
+
+                await consumer.disconnect(1000)
+
+            assert provider_task.cancelled()
+            assert consumer._provider_task is None
+            assert consumer._active_turn is not None
+            assert consumer._active_turn.done()
+
+        asyncio.run(run())
+
     def test_receive_json_rejects_non_object_payload(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
@@ -805,7 +909,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_timeout_errors_use_generic_public_message(self) -> None:
+    def test_receive_json_timeout_errors_report_the_deadline_public_reason(
+        self,
+    ) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
             "user": AnonymousUser(),
@@ -829,8 +935,8 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
             assert mock_send_json.await_args_list[-1].args[0] == {
                 "type": "error",
-                "message": "Chat request failed.",
-                "code": "chat_error",
+                "message": "The request reached its time limit.",
+                "code": "deadline_exceeded",
             }
 
         asyncio.run(run())

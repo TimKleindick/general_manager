@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from inspect import signature
+from math import isfinite
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -25,6 +26,7 @@ REQUIRED_ROLES = (
 
 _POSITIVE_INTEGER = "{key} must be a positive integer."
 _POSITIVE_NUMBER = "{key} must be a positive number."
+_ENABLED_BOOLEAN = "enabled must be a boolean."
 _PROFILES_MAPPING = "provider_profiles must be a mapping."
 _PROFILE_NAME = "provider profile names must be non-empty strings."
 _PROFILE_MAPPING = "provider profile {name!r} must be a mapping."
@@ -86,7 +88,12 @@ def _positive_int(value: object, key: str) -> int:
 
 
 def _positive_float(value: object, key: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not isfinite(value)
+        or value <= 0
+    ):
         raise _error(_detail(_POSITIVE_NUMBER, key=key))
     return float(value)
 
@@ -149,11 +156,11 @@ def get_planned_chat_settings() -> PlannedChatSettings:
     """Return immutable planned-chat settings normalized from chat settings."""
     settings = get_chat_settings()
     raw_planned = settings.get("planned", {})
-    if raw_planned is None:
-        raw_planned = {}
     if not isinstance(raw_planned, Mapping):
         raise _error(_PLANNED_MAPPING)
-    enabled = bool(raw_planned.get("enabled", False))
+    enabled = raw_planned.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise _error(_ENABLED_BOOLEAN)
 
     if not enabled:
         implicit_profile = _implicit_profile(settings)

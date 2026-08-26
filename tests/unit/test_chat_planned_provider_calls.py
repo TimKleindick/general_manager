@@ -8,6 +8,7 @@ import pytest
 
 from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
+    InvalidProviderRoundTimeoutError,
     complete_provider_round,
 )
 from general_manager.chat.providers.base import (
@@ -98,6 +99,19 @@ def test_provider_round_rejects_empty_text_chunk_before_a_tool_call() -> None:
 def test_provider_round_caps_timeout_to_stage_remaining() -> None:
     with pytest.raises(TimeoutError):
         asyncio.run(complete_provider_round(_StallingProvider(), [], [], 0.01))
+
+
+@pytest.mark.parametrize("timeout_seconds", [float("nan"), float("inf"), float("-inf")])
+def test_provider_round_rejects_non_finite_timeout(timeout_seconds: float) -> None:
+    with pytest.raises(InvalidProviderRoundTimeoutError):
+        asyncio.run(
+            complete_provider_round(
+                _Provider([TextChunkEvent("answer"), DoneEvent(TokenUsage())]),
+                [],
+                [],
+                timeout_seconds,
+            )
+        )
 
 
 def test_provider_round_rejects_no_usable_output_and_duplicate_done() -> None:

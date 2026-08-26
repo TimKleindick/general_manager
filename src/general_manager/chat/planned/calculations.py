@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import NoReturn
 
-from general_manager.chat.planned.evidence import EvidenceRecord, EvidenceStore
+from general_manager.chat.planned.evidence import (
+    EvidenceRecord,
+    EvidenceStore,
+    canonical_call_identity,
+)
+from general_manager.chat.planned.models import CALCULATION_OPERATIONS
 
 
 class CalculationError(ValueError):
@@ -45,23 +50,9 @@ class CalculationOperand:
             _calculation_error("operand path indices must be non-negative.")
 
 
-_SUPPORTED_OPERATIONS = frozenset(
-    (
-        "count",
-        "sum",
-        "average",
-        "minimum",
-        "maximum",
-        "difference",
-        "ratio",
-        "percentage",
-    )
-)
-
-
 def calculate(operation: str, operands: Sequence[object]) -> Decimal | int:
     """Evaluate one of the eight named operations using Decimal arithmetic."""
-    if operation not in _SUPPORTED_OPERATIONS:
+    if operation not in CALCULATION_OPERATIONS:
         _calculation_error(f"unsupported calculation operation {operation!r}.")
     if not isinstance(operands, Sequence) or isinstance(
         operands, (str, bytes, bytearray)
@@ -223,10 +214,6 @@ def _decimal(value: object) -> Decimal:
 def _calculation_call_identity(
     operation: str, operands: Sequence[CalculationOperand]
 ) -> str:
-    # Importing the identity helper here avoids making the evidence module
-    # depend on calculation types while retaining one canonical serializer.
-    from general_manager.chat.planned.evidence import canonical_call_identity
-
     return canonical_call_identity(
         "calculate",
         {

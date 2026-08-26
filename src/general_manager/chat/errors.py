@@ -34,6 +34,8 @@ def public_chat_error(_exc: Exception) -> PublicChatError:
     planned_reason = getattr(_exc, "public_reason", None)
     if isinstance(planned_reason, str):
         return planned_public_error(planned_reason)
+    if isinstance(_exc, TimeoutError):
+        return planned_public_error("deadline_exceeded")
     return PublicChatError("chat_error", "Chat request failed.")
 
 

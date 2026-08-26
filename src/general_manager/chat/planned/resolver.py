@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+from types import MappingProxyType
 from typing import Any
 
 from general_manager.chat.audit import emit_planned_audit_event
@@ -20,17 +21,19 @@ from general_manager.chat.schema_index import find_exposed_path
 _NO_PATH_DISTANCE = 1_000_000
 _MAX_CANDIDATES = 5
 _MAX_EXPLANATIONS = 3
-_AUDIT_MATCH_SOURCES = {
-    "exact manager name": "exact_name",
-    "exact catalog alias": "exact_alias",
-    "catalog domain": "catalog_domain",
-    "catalog aliases": "catalog_alias",
-    "catalog use_when": "catalog_use_when",
-    "schema description": "schema_description",
-    "schema fields": "schema_field",
-    "schema filters": "schema_filter",
-    "schema relations": "schema_relation",
-}
+AUDIT_MATCH_SOURCES = MappingProxyType(
+    {
+        "exact manager name": "exact_name",
+        "exact catalog alias": "exact_alias",
+        "catalog domain": "catalog_domain",
+        "catalog aliases": "catalog_alias",
+        "catalog use_when": "catalog_use_when",
+        "schema description": "schema_description",
+        "schema fields": "schema_field",
+        "schema filters": "schema_filter",
+        "schema relations": "schema_relation",
+    }
+)
 PathFinder = Callable[[str, str], list[str] | None]
 
 
@@ -175,7 +178,7 @@ class ManagerResolver:
                 category
                 for candidate in candidates
                 for explanation in candidate.explanations
-                if (category := _AUDIT_MATCH_SOURCES.get(explanation)) is not None
+                if (category := AUDIT_MATCH_SOURCES.get(explanation)) is not None
             }
         )
         emit_planned_audit_event(
