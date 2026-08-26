@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import json
@@ -232,12 +233,11 @@ async def _attempt(
     messages: list[Message],
     settings: PlannedChatSettings,
     budget: RoundBudget,
+    timeout_seconds: float,
 ) -> ProviderRoundResult:
     provider = build_profile_provider(profile_for_role(settings, role))
     budget.consume_global()
-    return await complete_provider_round(
-        provider, messages, [], settings.synthesis_timeout_seconds
-    )
+    return await complete_provider_round(provider, messages, [], timeout_seconds)
 
 
 async def synthesize_answer(
@@ -258,9 +258,16 @@ async def synthesize_answer(
         raise SynthesisFailedError(total_usage, tuple(attempt_usages))
     eligible_ids = frozenset(record.evidence_id for record in records)
     messages = _messages(user_text, records, coverage)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.synthesis_timeout_seconds
     for role in ("synthesizer", "fallback_executor"):
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
         try:
-            result = await _attempt(role, messages, settings, budget)
+            result = await asyncio.wait_for(
+                _attempt(role, messages, settings, budget, remaining), remaining
+            )
             total_usage = _add_usage(total_usage, result.usage)
             attempt_usages.append(result.usage)
             if result.tool_call is not None:
@@ -277,6 +284,8 @@ async def synthesize_answer(
             # accounting even though the next attempt could not be admitted.
             exc.attempt_usages = tuple(attempt_usages)
             exc.usage = total_usage
+            raise
+        except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001, S110
             # Provider and parse diagnostics are never exposed as grounding input.

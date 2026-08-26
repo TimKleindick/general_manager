@@ -253,8 +253,8 @@
         simple_executor:
           - {task_id: task_1, tool: query, args: {manager: PartManager, fields: [name]}}
           - {task_id: task_1, tool: query, args: {fields: [name], manager: PartManager}}
+        complex_executor:
           - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1"]}}
-        complex_executor: []
         synthesizer:
           - text: {answer: cached, evidence_ids: ["task_1:query:1"]}
         fallback_executor: []

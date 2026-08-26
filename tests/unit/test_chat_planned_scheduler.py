@@ -525,6 +525,76 @@ def test_dynamic_children_handoff_parent_owned_snapshots_only_to_synthesis() -> 
     }
 
 
+def test_dynamic_handoff_does_not_satisfy_a_same_named_root_requirement() -> None:
+    """Parent handoff remains private when an independent root shares its ID."""
+    requirement = EvidenceRequirement("shared", "query", "records", None)
+    parent = PlannedTask(
+        "parent", "find dependent records", (), (requirement,), ("shared",), ()
+    )
+    child = _dynamic_child("parent_child", depends_on=["parent"])
+    independent = PlannedTask(
+        "independent", "find records", (), (requirement,), ("shared",), ()
+    )
+    _Executor.responses = []
+    _Executor.responses_by_task = {
+        "parent": [
+            {"action": "spawn_children", "children": [child]},
+            {
+                "action": "complete",
+                "evidence_ids": ["parent:child:parent_child:query:1"],
+            },
+        ],
+        "parent_child": [
+            ToolCallEvent(
+                "child-query", "query", {"manager": "PartManager", "fields": []}
+            ),
+            {"action": "complete", "evidence_ids": ["parent_child:query:1"]},
+        ],
+        "independent": [
+            ToolCallEvent(
+                "root-query", "query", {"manager": "PartManager", "fields": []}
+            ),
+            {"action": "complete", "evidence_ids": ["independent:query:1"]},
+        ],
+    }
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (parent, independent)),
+        _settings(),
+        user_text="show records",
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        None,
+        [],
+        SchedulerCallbacks(
+            execute_tool=lambda *_args: {"status": "success", "data": []}
+        ),
+        100.0,
+        lambda: 0.0,
+    )
+
+    async def run() -> None:
+        await runner.run_task(runner.runtimes["parent"])
+        await runner.run_task(runner.runtimes["independent"])
+
+    asyncio.run(run())
+
+    assert runner.result().statuses == {
+        "parent": "resolved",
+        "independent": "resolved",
+        "parent_child": "resolved",
+    }
+    assert [
+        record.evidence_id
+        for record in runner.evidence.for_requirement("parent", requirement)
+    ] == ["parent:child:parent_child:query:1"]
+    assert [
+        record.evidence_id
+        for record in runner.evidence.for_requirement("independent", requirement)
+    ] == ["independent:query:1"]
+
+
 def test_child_failure_blocks_parent_but_not_an_independent_root() -> None:
     """A failed child must not turn a sibling root's grounded answer into an error."""
 
@@ -1336,7 +1406,7 @@ def test_two_normal_failures_then_two_fallback_failures_block(
 
     assert roles == [
         "simple_executor",
-        "simple_executor",
+        "complex_executor",
         "fallback_executor",
         "fallback_executor",
     ]
@@ -1360,7 +1430,7 @@ def test_fallback_terminal_reason_requires_two_provider_failures(
 
     assert roles == [
         "simple_executor",
-        "simple_executor",
+        "complex_executor",
         "fallback_executor",
         "fallback_executor",
     ]
@@ -1401,7 +1471,13 @@ def test_real_progress_resets_consecutive_failure_count() -> None:
     runtime.candidates = ("PartManager",)
     asyncio.run(runner.run_task(runtime))
 
-    assert _Executor.roles[:4] == ["simple_executor"] * 4
+    assert _Executor.roles[:5] == [
+        "simple_executor",
+        "complex_executor",
+        "complex_executor",
+        "complex_executor",
+        "fallback_executor",
+    ]
     assert runner.result().statuses["task_1"] == "resolved"
 
 
