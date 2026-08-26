@@ -37,7 +37,10 @@ against a development-only configuration.
 
 The wheel includes `basic_queries`, `demo_readiness`, `edge_cases`,
 `follow_ups`, `large_schema`, `multi_hop`, and `planned_orchestration`. The
-`basic_queries` dataset can use the built-in toy schema and data:
+The legacy CLI runs the six provider-backed datasets by default. The
+`planned_orchestration` dataset is packaged separately for deterministic,
+role-pinned tests and is not part of the legacy CLI suite. The `basic_queries`
+dataset can use the built-in toy schema and data:
 
 ```bash
 python -m general_manager.chat.evals \
@@ -50,9 +53,11 @@ python -m general_manager.chat.evals \
 ```
 
 Omit `--provider` to use the provider configured in
-`GENERAL_MANAGER["CHAT"]`. Omit `--dataset` to run every shipped dataset whose
-managers and expectations fit the configured project. Use `--fixture large`
-with `large_schema`; omit fixtures when the selected dataset is intended to run
+`GENERAL_MANAGER["CHAT"]`. Omit `--dataset` to run every legacy-compatible
+shipped dataset whose managers and expectations fit the configured project.
+Selecting `--dataset planned_orchestration` in this CLI is rejected; use the
+deterministic test command in section 6 instead. Use `--fixture large` with
+`large_schema`; omit fixtures when the selected dataset is intended to run
 against your project's own managers and data.
 
 ## 3. Narrow or compare a run
@@ -125,12 +130,13 @@ allow-listing, confirmation, persistence, and transport behavior.
 
 ## 6. Run deterministic planned orchestration evaluations
 
-The shipped `planned_orchestration` dataset is exercised by deterministic
-role-pinned fake providers in the test suite, not by a network provider. It
-covers alias resolution, a one-edge dependency, dynamic children, calculation,
-partial answers, budget and deadline exhaustion, duplicate calls, no-progress
-termination, and mutation fallback. Run it with the legacy eval regressions and
-sanitized-diagnostic checks:
+The shipped `planned_orchestration` dataset is intentionally unavailable to the
+legacy provider CLI. It is exercised by deterministic role-pinned fake providers
+in the test suite, not by a network provider. It covers alias resolution, a
+one-edge dependency, dynamic children, calculation, partial answers, budget and
+deadline exhaustion, duplicate calls, no-progress termination, and mutation
+fallback. Run it with the legacy eval regressions and sanitized-diagnostic
+checks:
 
 ```bash
 python -m pytest \

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, get_args
 
 
 TaskStatus: TypeAlias = Literal[
@@ -30,6 +30,10 @@ RoutingFeature: TypeAlias = Literal[
     "requires_calculation",
     "multiple_queries",
 ]
+
+REQUIREMENT_KINDS: frozenset[RequirementKind] = frozenset(get_args(RequirementKind))
+ROUTING_FEATURE_VALUES: tuple[RoutingFeature, ...] = get_args(RoutingFeature)
+
 PlanIntent: TypeAlias = Literal["read", "mutation"]
 
 CALCULATION_OPERATIONS: tuple[str, ...] = (

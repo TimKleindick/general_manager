@@ -8,12 +8,10 @@ import json
 from types import MappingProxyType
 from typing import Any, Literal, NoReturn, TypeAlias
 
-from general_manager.chat.planned.models import EvidenceRequirement
+from general_manager.chat.planned.models import EvidenceRequirement, REQUIREMENT_KINDS
 
 
 EvidenceKind: TypeAlias = Literal["schema", "path", "query", "calculation"]
-_EVIDENCE_KINDS = frozenset(("schema", "path", "query", "calculation"))
-_REDACTED = "[redacted]"
 _SAFE_PROVENANCE_KEYS = frozenset(
     {
         "tool",
@@ -117,7 +115,8 @@ def _provenance(value: Mapping[str, str] | None) -> Mapping[str, str]:
         if not isinstance(key, str) or not isinstance(item, str):
             _invalid("provenance keys and values must be strings.")
         normalized_key = key.casefold()
-        sanitized[key] = item if normalized_key in _SAFE_PROVENANCE_KEYS else _REDACTED
+        if normalized_key in _SAFE_PROVENANCE_KEYS:
+            sanitized[normalized_key] = item
     return MappingProxyType(dict(sorted(sanitized.items())))
 
 
@@ -182,7 +181,7 @@ class EvidenceRecord:
     def __post_init__(self) -> None:
         _validate_text(self.evidence_id, "evidence_id")
         _validate_text(self.task_id, "task_id")
-        if self.kind not in _EVIDENCE_KINDS:
+        if self.kind not in REQUIREMENT_KINDS:
             _invalid(f"unsupported evidence kind {self.kind!r}.")
         _validate_text(self.call_identity, "call_identity")
         parsed = _decode_json(self.payload_json)

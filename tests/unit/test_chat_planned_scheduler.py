@@ -1224,6 +1224,87 @@ def test_malformed_executor_attempt_usage_is_recorded_before_private_limiter_fai
     ]
 
 
+def test_expired_executor_admission_does_not_consume_budget_or_call_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Charging before deadline admission leaks a round when no provider can start."""
+    provider_calls: list[object] = []
+
+    async def complete(*_args: object, **_kwargs: object) -> ProviderRoundResult:
+        provider_calls.append(object())
+        raise AssertionError
+
+    monkeypatch.setattr(
+        "general_manager.chat.planned.scheduler.complete_provider_round", complete
+    )
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (_task("task_1"),)), _settings(), user_text="show parts"
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        None,
+        [],
+        SchedulerCallbacks(execute_tool=lambda *_args: {}),
+        10.0,
+        lambda: 10.0,
+    )
+    runtime = runner.runtimes["task_1"]
+    runtime.status = "running"
+    runtime.role = "complex_executor"
+
+    failure_reason = asyncio.run(runner._execute_one_pass(runtime, ()))
+
+    assert failure_reason is None
+    assert provider_calls == []
+    assert prepared.budget.subtree_count("task_1") == 0
+    assert (runtime.status, runtime.reason) == ("blocked", "deadline_exceeded")
+
+
+def test_executor_passes_its_admission_timeout_without_recomputing_the_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later clock read must not shorten the timeout admitted before charging."""
+    received_timeouts: list[float] = []
+    clock_readings = iter((9.5, 9.6, 9.9))
+
+    async def complete(
+        _provider: object,
+        _messages: list[object],
+        _tools: list[object],
+        timeout_seconds: float,
+    ) -> ProviderRoundResult:
+        received_timeouts.append(timeout_seconds)
+        return ProviderRoundResult(
+            text=json.dumps({"action": "block", "reason": "manager_unresolved"}),
+            tool_call=None,
+            usage=TokenUsage(),
+        )
+
+    monkeypatch.setattr(
+        "general_manager.chat.planned.scheduler.complete_provider_round", complete
+    )
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (_task("task_1"),)), _settings(), user_text="show parts"
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        None,
+        [],
+        SchedulerCallbacks(execute_tool=lambda *_args: {}),
+        10.0,
+        lambda: next(clock_readings),
+    )
+    runtime = runner.runtimes["task_1"]
+    runtime.status = "running"
+    runtime.role = "complex_executor"
+
+    asyncio.run(runner._execute_one_pass(runtime, ()))
+
+    assert received_timeouts == [pytest.approx(0.5)]
+
+
 def test_synthesis_usage_is_accounted_from_its_immutable_attempt_snapshots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -68,6 +68,7 @@ from general_manager.chat.tools import execute_chat_tool, get_tool_definitions
 from general_manager.chat.evals.traces import EvalTraceWriter
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
+LEGACY_EXCLUDED_DATASETS = frozenset({"planned_orchestration"})
 
 MAX_TOOL_ITERATIONS = 10
 
@@ -341,6 +342,21 @@ def filter_cases(
             continue
         output.append(case)
     return output
+
+
+def _legacy_dataset_names(dataset_names: list[str] | None) -> list[str]:
+    """Return datasets supported by the legacy evaluation suite."""
+    if dataset_names is None:
+        return [
+            name for name in list_datasets() if name not in LEGACY_EXCLUDED_DATASETS
+        ]
+
+    unsupported = sorted(set(dataset_names) & LEGACY_EXCLUDED_DATASETS)
+    if unsupported:
+        names = ", ".join(unsupported)
+        msg = f"Dataset(s) not supported by the legacy eval suite: {names}."
+        raise ValueError(msg)
+    return dataset_names
 
 
 # ---------------------------------------------------------------------------
@@ -3230,8 +3246,7 @@ async def run_eval_suite(
     recover_missing_tools: bool = False,
 ) -> list[EvalResult]:
     """Run all (or selected) eval datasets and return results."""
-    if dataset_names is None:
-        dataset_names = list_datasets()
+    dataset_names = _legacy_dataset_names(dataset_names)
 
     tool_defs = get_tool_definitions()
     results: list[EvalResult] = []

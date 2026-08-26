@@ -447,7 +447,7 @@ class ChatHttpTransportTests(TestCase):
             }
         ]
 
-    def test_http_timeout_errors_use_generic_public_message(self) -> None:
+    def test_http_timeout_errors_report_the_deadline_public_reason(self) -> None:
         with patch(
             "general_manager.chat.views.import_provider",
             return_value=TimeoutHttpProvider,
@@ -462,8 +462,8 @@ class ChatHttpTransportTests(TestCase):
         assert payload["events"] == [
             {
                 "type": "error",
-                "message": "Chat request failed.",
-                "code": "chat_error",
+                "message": "The request reached its time limit.",
+                "code": "deadline_exceeded",
             }
         ]
 

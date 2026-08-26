@@ -23,6 +23,7 @@ from general_manager.chat.grounding import (
 from general_manager.chat.planned.catalog import load_manager_catalog
 from general_manager.chat.planned.config import get_planned_chat_settings
 from general_manager.chat.planned.scheduler import (
+    SchedulerCallbacks,
     iter_planned_read_events,
     prepare_planned_turn,
 )
@@ -269,6 +270,11 @@ class ChatConsumer(_ChatConsumerBase):
                 await provider_task
             except asyncio.CancelledError:
                 pass
+        if self._provider_task is provider_task:
+            self._provider_task = None
+        active_turn = getattr(self, "_active_turn", None)
+        if active_turn is not None and not active_turn.done():
+            active_turn.set_result(None)
         await self._cancel_confirmation_timeout()
         await super().disconnect(code)
 
@@ -571,42 +577,52 @@ class ChatConsumer(_ChatConsumerBase):
         if not planned_settings.enabled:
             await self._stream_provider_turn(messages, history, tool_retries=0)
             return False
-        planned_messages = messages
-        if self.conversation is not None:
-            from general_manager.chat.models import build_conversation_context
-
-            context = await sync_to_async(build_conversation_context)(self.conversation)
-            planned_messages = [
-                Message(role="system", content=build_system_prompt()),
-                *(Message(role=item.role, content=item.content) for item in context),
-            ]
-        planned_turn = await prepare_planned_turn(
-            text,
-            planned_messages,
-            planned_settings,
-            self._planned_catalog_summary(planned_settings),
-            scope=self.scope,
-        )
-        if planned_turn.mutation_plan is not None:
-            await self._stream_provider_turn(messages, history, tool_retries=0)
-            return False
         self._provider_task = asyncio.create_task(
-            self._stream_planned_read_turn(planned_turn, planned_messages)
+            self._stream_planned_turn(text, messages, history, planned_settings)
         )
         return True
 
-    async def _stream_planned_read_turn(
+    async def _stream_planned_turn(
         self,
-        planned_turn: Any,
+        text: str,
         messages: list[Message],
+        history: list[dict[str, str]],
+        planned_settings: Any,
     ) -> None:
-        """Own planned streaming separately so Channels can dispatch disconnect."""
+        """Own planning and execution in one cancellable websocket task."""
+        planned_messages = messages
+        callbacks = SchedulerCallbacks(enforce_rate_limit=enforce_chat_rate_limit)
         try:
+            if self.conversation is not None:
+                from general_manager.chat.models import build_conversation_context
+
+                context = await sync_to_async(build_conversation_context)(
+                    self.conversation
+                )
+                planned_messages = [
+                    Message(role="system", content=build_system_prompt()),
+                    *(
+                        Message(role=item.role, content=item.content)
+                        for item in context
+                    ),
+                ]
+            planned_turn = await prepare_planned_turn(
+                text,
+                planned_messages,
+                planned_settings,
+                self._planned_catalog_summary(planned_settings),
+                callbacks=callbacks,
+                scope=self.scope,
+            )
+            if planned_turn.mutation_plan is not None:
+                await self._stream_provider_turn(messages, history, tool_retries=0)
+                return
             async for event in iter_planned_read_events(
                 planned_turn,
                 scope=self.scope,
                 conversation=self.conversation,
-                messages=messages,
+                messages=planned_messages,
+                callbacks=callbacks,
             ):
                 await self.send_json(event)
         except asyncio.CancelledError:
@@ -619,7 +635,8 @@ class ChatConsumer(_ChatConsumerBase):
             )
             await self.send_json(public_chat_error(exc).as_event())
         finally:
-            self._provider_task = None
+            if self._provider_task is asyncio.current_task():
+                self._provider_task = None
             if self._active_turn is not None and not self._active_turn.done():
                 self._active_turn.set_result(None)
 

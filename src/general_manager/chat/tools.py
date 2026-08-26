@@ -45,7 +45,11 @@ class ScopeChatContext:
         timeout = scope.get("planned_query_timeout_ms")
         return cls(
             user=scope.get("user"),
-            planned_query_timeout_ms=timeout if isinstance(timeout, int) else None,
+            planned_query_timeout_ms=(
+                timeout
+                if isinstance(timeout, int) and not isinstance(timeout, bool)
+                else None
+            ),
         )
 
 
@@ -609,7 +613,11 @@ def query(
 
     timeout_ms = get_query_timeout_ms()
     planned_timeout_ms = getattr(context, "planned_query_timeout_ms", None)
-    if isinstance(planned_timeout_ms, int) and planned_timeout_ms > 0:
+    if (
+        isinstance(planned_timeout_ms, int)
+        and not isinstance(planned_timeout_ms, bool)
+        and planned_timeout_ms > 0
+    ):
         timeout_ms = (
             planned_timeout_ms
             if timeout_ms is None

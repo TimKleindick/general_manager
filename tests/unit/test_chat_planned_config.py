@@ -82,6 +82,20 @@ class PlannedChatSettingsTests(SimpleTestCase):
     def test_disabled_planned_mode_does_not_validate_planned_settings(self) -> None:
         assert get_planned_chat_settings().enabled is False
 
+    @override_settings(GENERAL_MANAGER={"CHAT": {"planned": None}})
+    def test_planned_settings_reject_explicit_none(self) -> None:
+        with pytest.raises(ChatConfigurationError, match="planned must be a mapping"):
+            get_planned_chat_settings()
+
+    def test_planned_enabled_requires_a_boolean(self) -> None:
+        for value in ("false", 1):
+            with self.subTest(value=value):
+                with override_settings(
+                    GENERAL_MANAGER={"CHAT": {"planned": {"enabled": value}}}
+                ):
+                    with pytest.raises(ChatConfigurationError, match="enabled"):
+                        get_planned_chat_settings()
+
     @override_settings(
         GENERAL_MANAGER={
             "CHAT": {
@@ -210,6 +224,18 @@ class PlannedChatSettingsTests(SimpleTestCase):
                 ):
                     with pytest.raises(ChatConfigurationError, match=key):
                         get_planned_chat_settings()
+
+    def test_enabled_planned_settings_require_finite_numeric_bounds(self) -> None:
+        for key in ("evidence_timeout_seconds", "synthesis_timeout_seconds"):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(key=key, value=value):
+                    with override_settings(
+                        GENERAL_MANAGER={
+                            "CHAT": {"planned": {"enabled": True, key: value}}
+                        }
+                    ):
+                        with pytest.raises(ChatConfigurationError, match=key):
+                            get_planned_chat_settings()
 
     @override_settings(
         GENERAL_MANAGER={

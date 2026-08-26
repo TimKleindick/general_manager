@@ -11,7 +11,8 @@ from general_manager.chat.planned.models import (
     EvidenceRequirement,
     PlanIntent,
     PlannedTask,
-    RequirementKind,
+    REQUIREMENT_KINDS,
+    ROUTING_FEATURE_VALUES,
     RoutingFeature,
     ValidatedPlan,
 )
@@ -35,12 +36,6 @@ _TASK_KEYS = frozenset(
 _REQUIREMENT_KEYS = frozenset(("requirement_id", "kind", "description", "operation"))
 _CHILDREN_KEYS = frozenset(("children",))
 _INTENTS = frozenset(("read", "mutation"))
-_REQUIREMENT_KINDS = frozenset(("schema", "path", "query", "calculation"))
-_ROUTING_FEATURES: tuple[RoutingFeature, ...] = (
-    "has_dependency",
-    "requires_calculation",
-    "multiple_queries",
-)
 
 
 class PlanValidationError(ValueError):
@@ -154,7 +149,7 @@ def _validate_requirement_record(
     if requirement_id in seen_requirement_ids:
         _invalid(f"duplicate requirement_id {requirement_id!r}.")
     seen_requirement_ids.add(requirement_id)
-    if not isinstance(value.kind, str) or value.kind not in _REQUIREMENT_KINDS:
+    if not isinstance(value.kind, str) or value.kind not in REQUIREMENT_KINDS:
         _invalid("requirement kind is not supported.")
     _required_text(value.description, "description")
     operation = value.operation
@@ -208,9 +203,11 @@ def _validate_task_record(value: object) -> PlannedTask:
     ):
         _invalid("completion_criteria must list every requirement exactly once.")
     routing_features = _string_tuple(value.routing_features, "routing_features")
-    if any(feature not in _ROUTING_FEATURES for feature in routing_features):
+    if any(feature not in ROUTING_FEATURE_VALUES for feature in routing_features):
         _invalid("routing_features contains an unsupported feature.")
-    if tuple(routing_features) != _expected_routing_features(depends_on, requirements):
+    if set(routing_features) != set(
+        _expected_routing_features(depends_on, requirements)
+    ):
         _invalid("routing_features must match task structure.")
     if value.parent_id is not None:
         _required_text(value.parent_id, "parent_id")
@@ -227,7 +224,7 @@ def _parse_requirement(
     _exact_keys(mapping, _REQUIREMENT_KEYS, "requirement")
     requirement_id = _required_text(mapping["requirement_id"], "requirement_id")
     kind = mapping["kind"]
-    if not isinstance(kind, str) or kind not in _REQUIREMENT_KINDS:
+    if not isinstance(kind, str) or kind not in REQUIREMENT_KINDS:
         _invalid("requirement kind is not supported.")
     description = _required_text(mapping["description"], "description")
     operation = mapping["operation"]
@@ -235,7 +232,7 @@ def _parse_requirement(
         _invalid("requirement operation must be a string or null.")
     parsed = EvidenceRequirement(
         requirement_id=requirement_id,
-        kind=cast(RequirementKind, kind),
+        kind=kind,
         description=description,
         operation=operation,
     )
@@ -346,11 +343,10 @@ def validate_plan(payload: object) -> ValidatedPlan:
 def _validate_child_graph(
     children: tuple[PlannedTask, ...],
     parent_id: str,
-    existing_sibling_ids: Collection[str] = (),
 ) -> None:
     child_ids = {child.task_id for child in children}
-    existing_ids = set(existing_sibling_ids)
-    allowed_dependencies = child_ids | existing_ids | {parent_id}
+    children_by_id = {child.task_id: child for child in children}
+    allowed_dependencies = child_ids | {parent_id}
     for child in children:
         if child.task_id in child.depends_on:
             _invalid(f"child {child.task_id!r} cannot depend on itself.")
@@ -363,14 +359,14 @@ def _validate_child_graph(
     visiting: set[str] = set()
 
     def depth(task_id: str) -> int:
-        if task_id == parent_id or task_id in existing_ids:
+        if task_id == parent_id:
             return 0
         if task_id in visiting:
             _invalid("dynamic child dependencies must be acyclic.")
         if task_id in depths:
             return depths[task_id]
         visiting.add(task_id)
-        child = next(child for child in children if child.task_id == task_id)
+        child = children_by_id[task_id]
         child_depth = 0
         if child.depends_on:
             child_depth = 1 + max(depth(dependency) for dependency in child.depends_on)
@@ -378,6 +374,7 @@ def _validate_child_graph(
         depths[task_id] = child_depth
         return child_depth
 
+    # Evaluating every child lets the visiting guard detect all dependency cycles.
     for child in children:
         depth(child.task_id)
 

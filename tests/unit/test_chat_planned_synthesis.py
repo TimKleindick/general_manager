@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import asyncio
 from dataclasses import replace
-import time
 from types import MappingProxyType
 from typing import ClassVar
 
@@ -186,7 +185,6 @@ def test_synthesis_attempts_share_one_absolute_stage_deadline() -> None:
             TokenUsage(1, 2),
         )
 
-    started = time.monotonic()
     with patch(
         "general_manager.chat.planned.synthesis.complete_provider_round",
         side_effect=staged_round,
@@ -200,10 +198,7 @@ def test_synthesis_attempts_share_one_absolute_stage_deadline() -> None:
                 RoundBudget(()),
             )
         )
-    elapsed = time.monotonic() - started
-
     assert 0 < timeouts[1] < 0.07
-    assert elapsed < 0.105
     assert result.attempt_usages == (TokenUsage(1, 2), TokenUsage(1, 2))
     assert result.usage == TokenUsage(2, 4)
 

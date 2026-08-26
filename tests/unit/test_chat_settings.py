@@ -129,3 +129,24 @@ class ChatSettingsTests(SimpleTestCase):
             match="confirm_mutations must also be in allowed_mutations: createPart",
         ):
             validate_chat_settings()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider": "tests.unit.test_chat_settings.ConfiguredProvider",
+                "planned": None,
+            }
+        }
+    )
+    def test_validate_chat_settings_rejects_explicit_none_planned_settings(
+        self,
+    ) -> None:
+        import graphene
+
+        class Query(graphene.ObjectType):
+            ping = graphene.String()
+
+        GraphQL._schema = graphene.Schema(query=Query)
+
+        with pytest.raises(ChatConfigurationError, match="planned must be a mapping"):
+            validate_chat_settings()

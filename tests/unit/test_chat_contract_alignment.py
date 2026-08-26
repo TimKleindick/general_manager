@@ -180,7 +180,7 @@ class ChatSignalEmissionTests(unittest.TestCase):
         assert mutations
         assert mutations[0]["mutation"] == "createPart"
 
-    def test_receive_json_emits_error_signal_on_provider_failure(self) -> None:
+    def test_receive_json_emits_error_signal_on_provider_timeout(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
             "user": AnonymousUser(),
@@ -215,8 +215,8 @@ class ChatSignalEmissionTests(unittest.TestCase):
                 await consumer.receive_json({"type": "message", "text": "hello"})
                 assert mock_send_json.await_args_list[-1].args[0] == {
                     "type": "error",
-                    "message": "Chat request failed.",
-                    "code": "chat_error",
+                    "message": "The request reached its time limit.",
+                    "code": "deadline_exceeded",
                 }
 
         try:
@@ -233,9 +233,11 @@ class ChatConsumerDisconnectTests(unittest.TestCase):
         consumer = ChatConsumer()
 
         async def run() -> None:
-            consumer._provider_task = asyncio.create_task(asyncio.sleep(10))
+            provider_task = asyncio.create_task(asyncio.sleep(10))
+            consumer._provider_task = provider_task
             await consumer.disconnect(1000)
             await asyncio.sleep(0)
-            assert consumer._provider_task.cancelled() is True
+            assert provider_task.cancelled() is True
+            assert consumer._provider_task is None
 
         asyncio.run(run())

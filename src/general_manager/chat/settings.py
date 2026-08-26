@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from difflib import get_close_matches
 from importlib import import_module
-from collections.abc import Mapping
 from typing import Any, cast
 
 from django.utils.module_loading import import_string
@@ -239,13 +238,13 @@ def validate_chat_settings() -> dict[str, Any]:
     if unknown_confirmations:
         joined = ", ".join(unknown_confirmations)
         raise ChatConfigurationError.invalid_confirm_mutations(joined)
-    planned = settings.get("planned", {})
-    if isinstance(planned, Mapping) and bool(planned.get("enabled", False)):
+    from general_manager.chat.planned.config import get_planned_chat_settings
+
+    planned_settings = get_planned_chat_settings()
+    if planned_settings.enabled:
         from general_manager.chat.planned.catalog import load_manager_catalog
-        from general_manager.chat.planned.config import get_planned_chat_settings
         from general_manager.chat.schema_index import build_schema_index
 
-        planned_settings = get_planned_chat_settings()
         from general_manager.chat.planned.config import validate_profile_provider
 
         for profile in planned_settings.profiles.values():

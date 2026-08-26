@@ -290,6 +290,16 @@ def test_routing_features_are_exact_deterministic_structural_facts() -> None:
         "requires_calculation",
         "multiple_queries",
     )
+    payload["routing_features"] = [
+        "multiple_queries",
+        "has_dependency",
+        "requires_calculation",
+    ]
+    assert validate_plan(plan([task("task_1"), payload])).tasks[1].routing_features == (
+        "multiple_queries",
+        "has_dependency",
+        "requires_calculation",
+    )
     for features in (
         [],
         ["has_dependency"],
