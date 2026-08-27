@@ -3006,24 +3006,22 @@ async def _run_planned_case(
                     {"case": case.name, "strategy": "legacy", "answer": result.answer}
                 )
                 return result
-            turn_events = [
-                event
-                async for event in iter_planned_read_events(
-                    prepared,
-                    scope={},
-                    conversation=None,
-                    messages=history,
-                    callbacks=SchedulerCallbacks(
-                        execute_tool=_planned_tool_callback(case, tool_executions),
-                        enforce_rate_limit=None,
-                    ),
-                )
-            ]
-            events.extend(turn_events)
-            if prepared.result is not None:
-                execution_results.append(prepared.result)
             record = TurnRecord()
-            for event in turn_events:
+            record_appended = False
+            async for event in iter_planned_read_events(
+                prepared,
+                scope={},
+                conversation=None,
+                messages=history,
+                callbacks=SchedulerCallbacks(
+                    execute_tool=_planned_tool_callback(case, tool_executions),
+                    enforce_rate_limit=None,
+                ),
+            ):
+                if not record_appended:
+                    records.append(record)
+                    record_appended = True
+                events.append(event)
                 if event["type"] == "tool_call":
                     record.tool_calls.append(
                         {"name": event["name"], "args": dict(event["args"])}
@@ -3032,7 +3030,10 @@ async def _run_planned_case(
                     record.tool_results.append(event["result"])
                 elif event["type"] == "text_chunk":
                     record.answer_chunks.append(str(event["content"]))
-            records.append(record)
+            if not record_appended:
+                records.append(record)
+            if prepared.result is not None:
+                execution_results.append(prepared.result)
             if record.answer:
                 history.append(Message(role="assistant", content=record.answer))
     except (

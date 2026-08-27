@@ -185,6 +185,32 @@ def test_planned_eval_writes_partial_trace_when_a_later_turn_fails(
     assert trace["answer"] == "Partial answer"
 
 
+def test_planned_eval_retains_event_yielded_before_same_turn_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case("multi_manager_alias_discovery")
+
+    async def iter_events(*_args: Any, **_kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        yield {"type": "tool_call", "name": "query", "args": {"limit": 1}}
+        raise ValueError("planned stream failed")  # noqa: TRY003
+
+    monkeypatch.setattr(eval_runner, "iter_planned_read_events", iter_events)
+
+    result = asyncio.run(
+        run_case(
+            None,
+            case,
+            [],
+            strategy="planned",
+            role_overrides=planned_role_overrides(case),
+        )
+    )
+
+    assert result.error == "planned stream failed"
+    assert result.tool_calls == [{"args": {"limit": 1}, "name": "query"}]
+    assert result.trace == {"events": [{"type": "tool_call", "name": "query"}]}
+
+
 def test_planned_mutation_case_falls_back_to_unchanged_legacy_turn() -> None:
     case = _case("mutation_fallback")
     provider = _LegacyProvider()
