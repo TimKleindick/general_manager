@@ -3044,6 +3044,10 @@ async def _run_planned_case(
         OSError,
     ) as exc:
         result = EvalResult(case=case, error=str(exc))
+        result.tool_calls, result.tool_results, result.answer = _aggregate_records(
+            records
+        )
+        result.trace = sanitize_planned_trace(events)
         _write_trace(
             trace_writer,
             case=case,
