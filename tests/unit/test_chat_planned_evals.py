@@ -144,7 +144,11 @@ def test_planned_eval_writes_partial_trace_when_a_later_turn_fails(
         if calls == 2:
             raise ValueError("planned turn failed")  # noqa: TRY003
         yield {"type": "tool_call", "name": "query", "args": {"limit": 1}}
-        yield {"type": "tool_result", "result": {"status": "success"}}
+        yield {
+            "type": "tool_result",
+            "name": "query",
+            "result": {"status": "success"},
+        }
         yield {"type": "text_chunk", "content": "Partial answer"}
 
     monkeypatch.setattr(eval_runner, "prepare_planned_turn", prepare)
@@ -164,6 +168,16 @@ def test_planned_eval_writes_partial_trace_when_a_later_turn_fails(
 
     trace = json.loads(trace_path.read_text())
     assert result.error == "planned turn failed"
+    assert result.tool_calls == [{"args": {"limit": 1}, "name": "query"}]
+    assert result.tool_results == [{"status": "success"}]
+    assert result.answer == "Partial answer"
+    assert result.trace == {
+        "events": [
+            {"type": "tool_call", "name": "query"},
+            {"type": "tool_result", "name": "query"},
+            {"type": "text_chunk", "content": "Partial answer"},
+        ]
+    }
     assert trace["case"] == case.name
     assert trace["error"] == "planned turn failed"
     assert trace["tool_calls"] == [{"args": {"limit": 1}, "name": "query"}]
