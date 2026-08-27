@@ -1864,6 +1864,7 @@ class _RoundProbe:
         self.first_rounds_started = asyncio.Event()
         self.release_first_rounds = asyncio.Event()
         self.rounds_by_task: dict[str, int] = {}
+        self.started_tasks: list[str] = []
         self.cancelled = False
         self._lock = asyncio.Lock()
 
@@ -1873,6 +1874,8 @@ class _RoundProbe:
             self.maximum_in_flight = max(self.maximum_in_flight, self.in_flight)
             round_number = self.rounds_by_task.get(task_id, 0) + 1
             self.rounds_by_task[task_id] = round_number
+            if round_number == 1:
+                self.started_tasks.append(task_id)
             if (
                 self.gate_first_rounds
                 and round_number == 1
@@ -2002,6 +2005,91 @@ def test_scheduler_caps_provider_concurrency_at_three() -> None:
 
     assert probe.maximum_in_flight == 3
     assert set(runner.result().statuses.values()) == {"resolved"}
+
+
+def test_scheduler_admits_ready_roots_in_plan_order() -> None:
+    set_order = tuple(set(f"root_{number}" for number in range(6)))
+    plan_order = tuple(reversed(set_order))
+    assert tuple(set(plan_order)) != plan_order
+    tasks = tuple(_task(task_id) for task_id in plan_order)
+    probe = _RoundProbe(gate_first_rounds=2)
+    _RoundProbeProvider.probe = probe
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", tasks),
+        _probe_settings(max_concurrent_tasks=2),
+        user_text="show parts",
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        None,
+        [],
+        SchedulerCallbacks(
+            execute_tool=lambda *_args: {"status": "success", "data": []}
+        ),
+        100.0,
+        lambda: 0.0,
+    )
+
+    async def run() -> None:
+        execution = asyncio.create_task(runner.run())
+        await asyncio.wait_for(probe.first_rounds_started.wait(), timeout=0.2)
+        assert probe.started_tasks == list(plan_order[:2])
+        probe.release_first_rounds.set()
+        await execution
+
+    asyncio.run(run())
+
+
+def test_scheduler_runs_ready_children_in_creation_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_order = tuple(set(f"child_{number}" for number in range(4)))
+    child_order = tuple(reversed(set_order))
+    assert tuple(set(child_order)) != child_order
+    children = tuple(_task(task_id) for task_id in child_order)
+    parent = _task("parent")
+    prepared = PreparedPlannedTurn.for_plan(
+        ValidatedPlan("read", (parent,)), _settings(), user_text="show parts"
+    )
+    runner = _Runner(
+        prepared,
+        {},
+        None,
+        [],
+        SchedulerCallbacks(execute_tool=lambda *_args: {}),
+        100.0,
+        lambda: 0.0,
+    )
+    runtime = runner.runtimes[parent.task_id]
+    runtime.status = "running"
+    runtime.role = "simple_executor"
+    started: list[str] = []
+
+    async def complete(*_args: object, **_kwargs: object) -> ProviderRoundResult:
+        return ProviderRoundResult(
+            text=json.dumps({"action": "spawn_children", "children": []}),
+            tool_call=None,
+            usage=TokenUsage(),
+        )
+
+    async def run_child(child_runtime: Any) -> None:
+        started.append(child_runtime.task.task_id)
+        child_runtime.status = "resolved"
+
+    monkeypatch.setattr(
+        "general_manager.chat.planned.scheduler.complete_provider_round", complete
+    )
+    monkeypatch.setattr(
+        "general_manager.chat.planned.scheduler.validate_dynamic_children",
+        lambda *_args: children,
+    )
+    monkeypatch.setattr(runner, "run_task", run_child)
+
+    failure_reason = asyncio.run(runner._execute_one_pass(runtime, ()))
+
+    assert failure_reason is None
+    assert started == list(child_order)
 
 
 class _ToolConcurrencyProbe:

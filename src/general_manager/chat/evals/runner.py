@@ -3043,7 +3043,15 @@ async def _run_planned_case(
         KeyError,
         OSError,
     ) as exc:
-        return EvalResult(case=case, error=str(exc))
+        result = EvalResult(case=case, error=str(exc))
+        _write_trace(
+            trace_writer,
+            case=case,
+            records=records,
+            result=result,
+            run_metadata=run_metadata,
+        )
+        return result
 
     result = _score_case(case, records)
     result.tool_calls, result.tool_results, result.answer = _aggregate_records(records)

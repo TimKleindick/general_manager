@@ -980,13 +980,15 @@ class _Runner:
         for child in children:
             self.runtimes[child.task_id] = _TaskRuntime(child, runtime.root_id)
         runtime.child_count += len(children)
-        pending_children = {child.task_id for child in children}
+        child_ids = tuple(child.task_id for child in children)
+        pending_children = set(child_ids)
         while pending_children:
             child_id = next(
                 (
                     candidate
-                    for candidate in pending_children
-                    if all(
+                    for candidate in child_ids
+                    if candidate in pending_children
+                    and all(
                         dependency == runtime.task.task_id
                         or self.runtimes[dependency].status == "resolved"
                         for dependency in self.runtimes[candidate].task.depends_on
@@ -1117,7 +1119,8 @@ class _Runner:
                 except Exception:  # noqa: BLE001
                     await self.set_blocked(runtime, "provider_failed")
 
-        pending = set(self.runtimes)
+        root_ids = tuple(self.runtimes)
+        pending = set(root_ids)
         active: dict[asyncio.Task[None], str] = {}
         try:
             while pending or active:
@@ -1132,16 +1135,18 @@ class _Runner:
                     return
                 ready = [
                     task_id
-                    for task_id in pending
-                    if all(
+                    for task_id in root_ids
+                    if task_id in pending
+                    and all(
                         self.runtimes[dependency].status == "resolved"
                         for dependency in self.runtimes[task_id].task.depends_on
                     )
                 ]
                 blocked = [
                     task_id
-                    for task_id in pending
-                    if any(
+                    for task_id in root_ids
+                    if task_id in pending
+                    and any(
                         self.runtimes[dependency].status
                         in ("blocked", "budget_exhausted")
                         for dependency in self.runtimes[task_id].task.depends_on
@@ -1156,7 +1161,9 @@ class _Runner:
                     active[task] = task_id
                 if not active:
                     if pending:
-                        for task_id in tuple(pending):
+                        for task_id in root_ids:
+                            if task_id not in pending:
+                                continue
                             pending.remove(task_id)
                             await self.set_blocked(
                                 self.runtimes[task_id], "dependency_blocked"
