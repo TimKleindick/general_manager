@@ -482,7 +482,7 @@ def test_publish_artifact_job_builds_once_at_the_exact_commit() -> None:
     commands = run_commands(job)
     assert "python -m pip install --upgrade pip" in commands
     assert (
-        "python -m pip install python-semantic-release==10.6.1 build twine==6.0.1"
+        "python -m pip install python-semantic-release==10.6.2 build twine==6.0.1"
     ) in commands
     prepare = step_by_id(job, "prepare")
     assert steps.index(checkout) < steps.index(attach_branch) < steps.index(prepare)
@@ -606,7 +606,7 @@ def test_publish_release_job_mutates_only_after_downloading_validated_files() ->
         "python-version": "3.12"
     }
     assert (
-        "python -m pip install python-semantic-release==10.6.1 twine==6.0.1" in commands
+        "python -m pip install python-semantic-release==10.6.2 twine==6.0.1" in commands
     )
     assert "python -m build" not in commands
 
