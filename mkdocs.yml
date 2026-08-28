@@ -168,6 +168,7 @@ nav:
       - examples/graphql_file_upload.md
       - examples/rule_validation.md
       - examples/chat_eval_cli.md
+      - examples/planned_chat_orchestration.md
       - examples/dev_search_lifecycle.md
       - examples/permission_patterns.md
       - examples/permission_cookbook.md

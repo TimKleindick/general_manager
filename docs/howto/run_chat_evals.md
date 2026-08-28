@@ -37,7 +37,7 @@ against a development-only configuration.
 
 The wheel includes `basic_queries`, `demo_readiness`, `edge_cases`,
 `follow_ups`, `large_schema`, `multi_hop`, and `planned_orchestration`. The
-The legacy CLI runs the six provider-backed datasets by default. The
+legacy CLI runs the six provider-backed datasets by default. The
 `planned_orchestration` dataset is packaged separately for deterministic,
 role-pinned tests and is not part of the legacy CLI suite. The `basic_queries`
 dataset can use the built-in toy schema and data:
@@ -104,12 +104,79 @@ See the [chat prompt and eval model](../concepts/chat_prompting.md), the
 ## 5. Roll out planned chat safely
 
 Keep planned chat disabled by default while you validate the application's
-catalog, profile construction, role mappings, and single trust group. Start
-with the implicit `default` profile (the existing legacy provider and
-configuration) or configure explicit `planner`, `simple_executor`,
-`complex_executor`, `synthesizer`, and `fallback_executor` roles. Use one
-non-production environment first; public requests must never select profiles or
-trust groups.
+catalog, profile construction, role mappings, and single trust group. The
+smallest rollout uses the legacy provider as the implicit `default` profile:
+
+```python
+GENERAL_MANAGER = {
+    "CHAT": {
+        "enabled": True,
+        "provider": "general_manager.chat.providers.OllamaProvider",
+        "provider_config": {"model": "gemma4:e4b"},
+        "planned": {
+            "enabled": True,
+            "catalog": "myproject.chat.catalog.catalog",
+        },
+    }
+}
+```
+
+For role-specific models, configure explicit profiles. Every role must be
+mapped, every profile must provide a `trust_group`, and all mapped profiles
+must use the same trust group:
+
+```python
+GENERAL_MANAGER["CHAT"].update(
+    {
+        "provider_profiles": {
+            "fast_local": {
+                "provider": "general_manager.chat.providers.OllamaProvider",
+                "provider_config": {"model": "gemma4:e4b"},
+                "trust_group": "local",
+            },
+            "strong_local": {
+                "provider": "general_manager.chat.providers.OllamaProvider",
+                "provider_config": {"model": "qwen3.5:9b"},
+                "trust_group": "local",
+            },
+        },
+        "planned": {
+            "enabled": True,
+            "catalog": "myproject.chat.catalog.catalog",
+            "roles": {
+                "planner": "strong_local",
+                "simple_executor": "fast_local",
+                "complex_executor": "strong_local",
+                "synthesizer": "strong_local",
+                "fallback_executor": "strong_local",
+            },
+            "max_concurrent_tasks": 3,
+            "evidence_timeout_seconds": 90,
+            "synthesis_timeout_seconds": 30,
+        },
+    }
+)
+```
+
+The catalog callable must return metadata for already chat-exposed managers.
+Each entry requires `domain`, `aliases`, `use_when`, and `distinguish_from`.
+Catalog metadata improves local ranking only; it does not expose managers or
+change permissions:
+
+```python
+def catalog():
+    return {
+        "PartManager": {
+            "domain": "manufacturing",
+            "aliases": ["part", "component"],
+            "use_when": "The question concerns designed components.",
+            "distinguish_from": ["MaterialManager"],
+        },
+    }
+```
+
+Run `python manage.py check` before enabling traffic. Use one non-production
+environment first; public requests must never select profiles or trust groups.
 
 Add deterministic fake-provider cases for graph validation, manager resolution,
 round exhaustion, 90-second evidence and 30-second synthesis deadlines,
@@ -126,7 +193,10 @@ Production rollout is an application-owned settings change and requires no
 migration. If an evaluation or operational check regresses, disable planned
 mode; the next request uses the compatible legacy strategy. Mutation requests
 already use that legacy safety path, including its authentication, mutation
-allow-listing, confirmation, persistence, and transport behavior.
+allow-listing, confirmation, persistence, and transport behavior. See the
+[planned-chat cookbook](../examples/planned_chat_orchestration.md) for a
+client-visible event sequence and the [Chat API reference](../api/chat.md#planned-read-orchestration)
+for exact payload and error contracts.
 
 ## 6. Run deterministic planned orchestration evaluations
 

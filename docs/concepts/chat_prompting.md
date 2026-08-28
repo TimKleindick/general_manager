@@ -183,13 +183,29 @@ A gate may pass with generic prompt/tool retries, but it must not pass with forb
 
 ## Planned orchestration bounds and grounding
 
-The optional planned strategy converts a complex read into a validated graph of
-one to six root tasks. Roots can depend only on earlier roots, the longest root
-dependency chain has one edge, and a root can create at most two non-recursive
-children. The task runtime states are `pending`, `running`, `resolved`,
-`blocked`, and `budget_exhausted`; only committed compatible evidence resolves a
-task. Failed calls, candidate lists, provider prose, and raw plans are
-diagnostics rather than facts.
+The optional planned strategy is a read-only orchestration layer behind the
+normal chat transports. It converts a complex read into a validated graph of
+one to six root tasks, resolves each task against the live chat-exposed schema,
+collects immutable evidence, and synthesizes an answer only from evidence that
+belongs to resolved roots. Mutations stay on the legacy confirmation path. The
+[planned-chat rollout guide](../howto/run_chat_evals.md#5-roll-out-planned-chat-safely)
+shows how to enable the strategy; the [planned-chat cookbook](../examples/planned_chat_orchestration.md)
+contains a copy-ready settings and transport example.
+
+The five configured roles separate responsibilities: `planner` returns a
+strict JSON task graph, `simple_executor` and `complex_executor` gather
+evidence, `synthesizer` produces the grounded answer, and
+`fallback_executor` handles bounded escalation. A provider profile is selected
+by the server-side role mapping; clients cannot select a profile or trust
+group. All profiles used by one turn must share a trust group so escalation
+cannot silently cross a provider boundary.
+
+Roots can depend only on earlier roots, the longest root dependency chain has
+one edge, and a root can create at most two non-recursive children. The task
+runtime states are `pending`, `running`, `resolved`, `blocked`, and
+`budget_exhausted`; only committed compatible evidence resolves a task. Failed
+calls, candidate lists, provider prose, and raw plans are diagnostics rather
+than facts.
 
 Every provider request consumes a round, including failed, duplicate, cached,
 planner, and synthesis requests. A root and its children share 15 rounds. The
@@ -217,4 +233,5 @@ Plans, routes, budgets, candidates, and evidence lineage stay in memory for the
 request. A disconnect or process restart ends the turn; planned execution is
 not resumable and introduces no persistence table or migration. This is
 compatible with legacy chat: disabling `planned.enabled` immediately restores
-the legacy strategy and its event behavior.
+the legacy strategy and its event behavior. The [chat API reference](../api/chat.md#planned-read-orchestration)
+lists the stable event, error, settings, and Python helper contracts.
