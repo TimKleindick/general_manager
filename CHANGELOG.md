@@ -2,6 +2,161 @@
 
 <!-- version list -->
 
+## v0.77.0 (2026-08-28)
+
+### Bug Fixes
+
+- Accept planned chat intent prefixes
+  ([`3800a41`](https://github.com/TimKleindick/general_manager/commit/3800a41a71bacee75a868d91fb2031c0b5e375d7))
+
+- Account planned synthesis failures
+  ([`4380c1d`](https://github.com/TimKleindick/general_manager/commit/4380c1da1fcd46bf86ed8784be0637a488d313c2))
+
+- Address planned chat review findings
+  ([`19294ec`](https://github.com/TimKleindick/general_manager/commit/19294ec1187615b99ddbc2bb2c93c160b6fd35ad))
+
+- Bound planned resolver passes
+  ([`4d32176`](https://github.com/TimKleindick/general_manager/commit/4d32176a54e0337de6c62cb3503207c70c4e2b76))
+
+- Cancel planned websocket turns on disconnect
+  ([`64e1382`](https://github.com/TimKleindick/general_manager/commit/64e138239721164a013f903845521fda4942ac26))
+
+- Harden planned chat audit diagnostics
+  ([`61fb1a9`](https://github.com/TimKleindick/general_manager/commit/61fb1a99c65ce04a5f3216bf8c0fa04053aff44a))
+
+- Harden planned chat evidence and routing
+  ([`7824999`](https://github.com/TimKleindick/general_manager/commit/78249994872623c18cb0fce3c68601fa0b2b2f4a))
+
+- Harden planned chat orchestration
+  ([`ea072c8`](https://github.com/TimKleindick/general_manager/commit/ea072c8d8b2d665201c16bd40a615363f70313b3))
+
+- Harden planned chat provider roles
+  ([`1c14c4d`](https://github.com/TimKleindick/general_manager/commit/1c14c4d8050aa0760859e56a003f9a34dc12cb26))
+
+- Harden planned chat scheduler boundaries
+  ([`3267e38`](https://github.com/TimKleindick/general_manager/commit/3267e381e7db46b449521f9490af9e6c91b07534))
+
+- Harden planned scheduler recovery
+  ([`03af4e8`](https://github.com/TimKleindick/general_manager/commit/03af4e8802b0f462b89aafc56d4e3c36b76e3fd9))
+
+- Isolate planned child evidence handoff
+  ([`2e9f997`](https://github.com/TimKleindick/general_manager/commit/2e9f9970b76bddb6258cc05962f1810850a007bc))
+
+- Isolate planned task evidence
+  ([`61515c9`](https://github.com/TimKleindick/general_manager/commit/61515c97014c179812b65f3ad96d61de5c58691c))
+
+- Narrow planned chat mutation guard
+  ([`5564cb3`](https://github.com/TimKleindick/general_manager/commit/5564cb351418292aeed9e7a805caeae42c1bfc27))
+
+- Preserve planned budget exhaustion
+  ([`09eafa1`](https://github.com/TimKleindick/general_manager/commit/09eafa171df1ed16d616147086aecba9cb238bba))
+
+- Preserve planned orchestration determinism
+  ([`61ca65c`](https://github.com/TimKleindick/general_manager/commit/61ca65c344d45afb695266d246dfa202693dfc6d))
+
+- Require callable dotted catalog sources
+  ([`4091e39`](https://github.com/TimKleindick/general_manager/commit/4091e3918556c2abb98b4224a3b567638e671c0d))
+
+- Retain incremental planned eval events
+  ([`7673a18`](https://github.com/TimKleindick/general_manager/commit/7673a1870f50935e2b189daa6d2041b3b6901d12))
+
+- Retain partial planned eval results
+  ([`53fed00`](https://github.com/TimKleindick/general_manager/commit/53fed004b66e65397d11c07a4af2dc1f419a2451))
+
+- Retain planned pass failure class
+  ([`e7d15b9`](https://github.com/TimKleindick/general_manager/commit/e7d15b9c5c595dc2c4dcf2704255915a7f58b38e))
+
+- Tighten planned chat task graph validation
+  ([`1385a93`](https://github.com/TimKleindick/general_manager/commit/1385a939b3d69c5292079e0b502bebc755452cbb))
+
+- Unify planned scheduler pass progress
+  ([`ecf617b`](https://github.com/TimKleindick/general_manager/commit/ecf617be86163cdab93865385d10714e9805025e))
+
+- Validate complete planned task graph
+  ([`95b105f`](https://github.com/TimKleindick/general_manager/commit/95b105f46f4d499a9ca6aec4aa887d466c4984fe))
+
+- Validate planned provider profiles
+  ([`5868b89`](https://github.com/TimKleindick/general_manager/commit/5868b89e3f49500fc7b8d43a630dfe04edeb0ad5))
+
+- Validate planned task record invariants
+  ([`dc10079`](https://github.com/TimKleindick/general_manager/commit/dc10079061e4ea4b2eba06d0d78c2ffc3847a9e7))
+
+### Documentation
+
+- Add LLM chat setup guide
+  ([`f14b27d`](https://github.com/TimKleindick/general_manager/commit/f14b27d00a1cc061a3c701fb368d555ad88c301c))
+
+- Add SSE mutation confirmation example
+  ([`308de6c`](https://github.com/TimKleindick/general_manager/commit/308de6cb46380676cc8f3f5f15206c7e81e84a40))
+
+- Correct SSE confirmation example
+  ([`cee3c0a`](https://github.com/TimKleindick/general_manager/commit/cee3c0a94d52d7150f9585f0505761bcfca12780))
+
+- Document dev search lifecycle
+  ([`e7f59e9`](https://github.com/TimKleindick/general_manager/commit/e7f59e923d0a22ce6680e31a794aefcc95dd25c6))
+
+- Document planned chat orchestration
+  ([`375d34d`](https://github.com/TimKleindick/general_manager/commit/375d34d018dc5416a03da4bb65e5dcf9536fbb16))
+
+- Fix chat confirmation example
+  ([`1141040`](https://github.com/TimKleindick/general_manager/commit/1141040c767713e562539369d122ec89ce48b1d5))
+
+- Fix search API heading hierarchy
+  ([`2ddf7d4`](https://github.com/TimKleindick/general_manager/commit/2ddf7d4b065a683ee3e8fc3310f42fb4ffb0e02a))
+
+### Features
+
+- Add bounded planned chat scheduler
+  ([`6c08b57`](https://github.com/TimKleindick/general_manager/commit/6c08b5702489f84012678416344033220cee66e5))
+
+- Add catalog-aware manager resolution
+  ([`f64c40e`](https://github.com/TimKleindick/general_manager/commit/f64c40ef61e7b207bcd0c439c86ba64a3fefb6e4))
+
+- Add planned chat evidence and budgets
+  ([`2a5efea`](https://github.com/TimKleindick/general_manager/commit/2a5efea78cc4f0c17fda2c1604ab383cb9b7f379))
+
+- Add planned chat provider profiles
+  ([`195d778`](https://github.com/TimKleindick/general_manager/commit/195d778fd9d67ce1286dd10b2601f34fde469798))
+
+- Add planned chat provider roles
+  ([`1755ef4`](https://github.com/TimKleindick/general_manager/commit/1755ef43eeb81c8e4eba6f7fb5e7cb47129025d4))
+
+- Integrate planned chat transports
+  ([`579835b`](https://github.com/TimKleindick/general_manager/commit/579835b5018cc152d0c0a0c737613313c3687893))
+
+- Validate planned chat task graphs
+  ([`6f47e32`](https://github.com/TimKleindick/general_manager/commit/6f47e321c00f1f7da06e66b8886e9bb740c490a3))
+
+### Testing
+
+- Add planned chat orchestration evaluations
+  ([`b659ae7`](https://github.com/TimKleindick/general_manager/commit/b659ae76c917ebbe392f877d1cc01c6ef6722381))
+
+- Assert planned child public coverage
+  ([`91d32db`](https://github.com/TimKleindick/general_manager/commit/91d32db94ba368cd7d203915c602cec16f91e57a))
+
+- Bind planned coverage to done event
+  ([`45c29ce`](https://github.com/TimKleindick/general_manager/commit/45c29ce574ab9d74b420664e8597edfc3f721eea))
+
+- Bound planned deadline probe
+  ([`f89afaf`](https://github.com/TimKleindick/general_manager/commit/f89afaf6873cae573f3d45982ebb2d4efa9a3a3a))
+
+- Complete planned scheduler acceptance matrix
+  ([`5f5de08`](https://github.com/TimKleindick/general_manager/commit/5f5de081956943b09c686841bfe3aa42c97988dd))
+
+- Execute planned eval dataset cases
+  ([`7c77ebf`](https://github.com/TimKleindick/general_manager/commit/7c77ebf8139913912aad9907b5b338d7751582fe))
+
+- Harden planned scheduler acceptance matrix
+  ([`8e2fdb3`](https://github.com/TimKleindick/general_manager/commit/8e2fdb3249b0c56565fc38077ed9d5dcf8fb68bf))
+
+- Prove planned scheduler resource bounds
+  ([`d8f1f4d`](https://github.com/TimKleindick/general_manager/commit/d8f1f4d6a0307f08f65f3a684d03d15912482c1f))
+
+- Verify mutation planned eval contract
+  ([`540a640`](https://github.com/TimKleindick/general_manager/commit/540a640f9119de088111ab404cd0fb920dd845fb))
+
+
 ## v0.76.0 (2026-08-23)
 
 ### Bug Fixes
