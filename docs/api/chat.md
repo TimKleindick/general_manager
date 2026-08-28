@@ -31,6 +31,8 @@ GENERAL_MANAGER = {
 | `url` | `"/chat/"` | Base path used for every chat transport. Leading and trailing slashes are normalized for Django routing. |
 | `provider` | `"general_manager.chat.providers.OllamaProvider"` | Dotted provider class path. The class is constructed without arguments for each HTTP/SSE request or WebSocket connection. |
 | `provider_config` | `{}` | Mapping read by the selected provider. Supported keys depend on the adapter. |
+| `provider_profiles` | `{}` | Optional named provider-profile mappings used by planned roles. Each profile supplies `provider`, `provider_config`, and `trust_group`. |
+| `planned` | `{}` | Optional planned read-orchestration settings. `enabled` defaults to `False`; see [Planned read orchestration](#planned-read-orchestration). |
 | `permission` | `None` | Callable or dotted path receiving `(user, scope)`. Returning `False` denies the request or socket. |
 | `allowed_origins` | `None` | Explicit WebSocket origin list. When empty, Channels' allowed-host origin validator is used. |
 | `allowed_mutations` | `[]` | Exact generated GraphQL mutation names the `mutate` tool may execute. |
@@ -90,7 +92,10 @@ for chat activity and errors.
 
 Provider credentials can be passed in `provider_config`. When an SDK supports
 its own environment variables, omitting `api_key` delegates credential lookup
-to that SDK.
+to that SDK. Built-in providers retain zero-argument construction for legacy
+chat. They also accept an explicit mapping through `from_config(config)` and
+expose the copied, read-only mapping through `provider_config`; planned profile
+construction uses these two hooks without changing legacy settings.
 
 Two timeout keys apply to every adapter at the GeneralManager provider loop:
 
@@ -399,6 +404,66 @@ startup validation and `required_extra` for an installation hint.
 
 ::: general_manager.chat.providers.base.DoneEvent
 
+::: general_manager.chat.providers.openai.OpenAIProvider
+
+::: general_manager.chat.providers.anthropic.AnthropicProvider
+
+::: general_manager.chat.providers.google.GeminiProvider
+
+::: general_manager.chat.providers.google.GoogleProvider
+
+::: general_manager.chat.providers.ollama.OllamaProvider
+
+::: general_manager.chat.providers.openai.OpenAIDependencyImportError
+
+::: general_manager.chat.providers.anthropic.AnthropicDependencyImportError
+
+::: general_manager.chat.providers.google.GoogleDependencyImportError
+
+::: general_manager.chat.providers.ollama.OllamaDependencyImportError
+
+::: general_manager.chat.providers.ollama.OllamaBaseUrlError
+
+## Settings, errors, and audit helpers
+
+::: general_manager.chat.settings.ChatConfigurationError
+
+::: general_manager.chat.settings.get_chat_settings
+
+::: general_manager.chat.settings.validate_chat_settings
+
+::: general_manager.chat.errors.PublicChatError
+
+::: general_manager.chat.errors.public_chat_error
+
+::: general_manager.chat.errors.planned_public_error
+
+`planned_public_error(reason)` accepts only the stable planned reasons listed
+below. It returns a `PublicChatError`; invalid or unknown reasons use the
+generic `chat_error` code and message. `public_chat_error(exc)` preserves an
+exception's valid `public_reason`, maps a plain `TimeoutError` to
+`deadline_exceeded`, and maps other unexpected exceptions to `chat_error`.
+
+| Code | Public message |
+| --- | --- |
+| `invalid_plan` | `I could not prepare a safe plan for that request.` |
+| `manager_unresolved` | `I could not resolve the required application data.` |
+| `dependency_blocked` | `A required part of the request could not be completed.` |
+| `budget_exhausted` | `The request reached its execution limit.` |
+| `deadline_exceeded` | `The request reached its time limit.` |
+| `provider_failed` | `The provider could not complete the request.` |
+| `synthesis_failed` | `I could not produce a grounded answer from the available data.` |
+
+::: general_manager.chat.audit.planned_audit_lineage_id
+
+::: general_manager.chat.audit.emit_planned_audit_event
+
+`emit_planned_audit_event(event_type, payload, *, sink=None)` accepts only the
+allowlisted planned event categories. It hashes planner-controlled identifiers
+and canonical call identities, validates category-specific fields, and drops
+raw plans, manager names, profiles, trust groups, credentials, results, and
+exceptions before forwarding to the generic audit sink.
+
 ## Django system checks
 
 When chat is enabled, `python manage.py check` can report:
@@ -544,3 +609,189 @@ budgets, latency, reported token usage/cost, evidence-kind counts, coverage,
 and terminal reason. Raw tool results, manager names, plans, credentials, and
 exceptions are excluded; the existing configured field redaction and result-size
 limits still apply to the generic audit layer.
+
+### Planned settings and catalog
+
+The settings helpers normalize the nested `planned` mapping into immutable
+profile and role data. `get_planned_chat_settings()` returns disabled settings
+with the legacy provider as an implicit `default` profile when planned mode is
+off. When enabled, all five required roles must resolve to configured profiles,
+all mapped profiles must share one `trust_group`, and each configured provider
+must support the explicit configuration construction used by
+`build_profile_provider()`.
+
+::: general_manager.chat.planned.config.REQUIRED_ROLES
+
+::: general_manager.chat.planned.config.ProviderProfile
+
+::: general_manager.chat.planned.config.PlannedChatSettings
+
+::: general_manager.chat.planned.config.get_planned_chat_settings
+
+::: general_manager.chat.planned.config.profile_for_role
+
+::: general_manager.chat.planned.config.build_profile_provider
+
+::: general_manager.chat.planned.config.validate_profile_provider
+
+`load_manager_catalog(source, schema_index)` accepts `None`, a mapping, a
+callable, or a dotted callable path. It returns an immutable catalog whose
+entries contain `domain`, normalized `aliases`, `use_when`, and
+`distinguish_from`; a catalog entry for a manager absent from `schema_index`
+raises `ChatConfigurationError`. Catalog metadata ranks candidates but does not
+change schema exposure or authorization.
+
+::: general_manager.chat.planned.catalog.ManagerCatalogEntry
+
+::: general_manager.chat.planned.catalog.ManagerCatalog
+
+::: general_manager.chat.planned.catalog.normalize_match_text
+
+::: general_manager.chat.planned.catalog.load_manager_catalog
+
+### Planned task and validation types
+
+Plans are JSON-compatible mappings. `validate_plan(payload)` returns a frozen
+`ValidatedPlan` for one to six read roots, or a mutation plan with no tasks;
+invalid shapes raise `PlanValidationError` before application data access.
+`validate_dynamic_children(parent, payload, existing_tasks)` validates at most
+two non-recursive children and enforces globally unique task IDs and compatible
+dependencies.
+
+::: general_manager.chat.planned.models.TaskStatus
+
+::: general_manager.chat.planned.models.TerminalReason
+
+::: general_manager.chat.planned.models.RequirementKind
+
+::: general_manager.chat.planned.models.RoutingFeature
+
+::: general_manager.chat.planned.models.PlanIntent
+
+::: general_manager.chat.planned.models.CALCULATION_OPERATIONS
+
+::: general_manager.chat.planned.models.EvidenceRequirement
+
+::: general_manager.chat.planned.models.PlannedTask
+
+::: general_manager.chat.planned.models.ValidatedPlan
+
+::: general_manager.chat.planned.validation.MAX_ROOT_TASKS
+
+::: general_manager.chat.planned.validation.MAX_CHILDREN_PER_ROOT
+
+::: general_manager.chat.planned.validation.MAX_ROOT_DEPENDENCY_DEPTH
+
+::: general_manager.chat.planned.validation.PlanValidationError
+
+::: general_manager.chat.planned.validation.validate_plan
+
+::: general_manager.chat.planned.validation.validate_dynamic_children
+
+### Planned resolution, evidence, and calculations
+
+`ManagerResolver` ranks up to five managers that are already present in the
+schema index. `resolve(query, anchors=())` returns deterministic
+`ManagerCandidate` records and may use anchors to prefer managers connected by
+an exposed relation path.
+
+::: general_manager.chat.planned.resolver.AUDIT_MATCH_SOURCES
+
+::: general_manager.chat.planned.resolver.ManagerCandidate
+
+::: general_manager.chat.planned.resolver.ManagerResolver
+
+`EvidenceRecord` snapshots JSON payloads and read-only provenance. An
+`EvidenceStore` owns turn-local records and links them to compatible
+`EvidenceRequirement` objects. `canonical_call_identity()` produces stable
+canonical JSON for a tool name and its arguments. `calculate_evidence()` allows
+only the operations in `CALCULATION_OPERATIONS` and stores the derived value as
+another immutable evidence record.
+
+::: general_manager.chat.planned.evidence.EvidenceError
+
+::: general_manager.chat.planned.evidence.InvalidEvidenceError
+
+::: general_manager.chat.planned.evidence.DuplicateEvidenceError
+
+::: general_manager.chat.planned.evidence.EvidenceNotFoundError
+
+::: general_manager.chat.planned.evidence.IncompatibleEvidenceError
+
+::: general_manager.chat.planned.evidence.EvidenceLinkError
+
+::: general_manager.chat.planned.evidence.EvidenceKind
+
+::: general_manager.chat.planned.evidence.EvidenceRecord
+
+::: general_manager.chat.planned.evidence.EvidenceStore
+
+::: general_manager.chat.planned.evidence.canonical_call_identity
+
+::: general_manager.chat.planned.calculations.CalculationError
+
+::: general_manager.chat.planned.calculations.CalculationOperand
+
+::: general_manager.chat.planned.calculations.calculate
+
+::: general_manager.chat.planned.calculations.calculate_evidence
+
+### Planned orchestration helpers
+
+The lower-level planned modules are transport-neutral and are useful when an
+application owns a custom chat transport or deterministic test harness. Normal
+applications should configure `CHAT["planned"]` and use the existing transport
+routes. `plan_request()` performs at most one correction and one fallback
+attempt; `complete_provider_round()` accepts exactly one terminal `DoneEvent`
+and either text or one tool call; `synthesize_answer()` references only eligible
+resolved evidence.
+
+::: general_manager.chat.planned.budget.RoundBudget
+
+::: general_manager.chat.planned.budget.RoundBudgetExhausted
+
+::: general_manager.chat.planned.budget.BudgetExhaustedError
+
+::: general_manager.chat.planned.planner.InvalidPlanError
+
+::: general_manager.chat.planned.planner.PlanningResult
+
+::: general_manager.chat.planned.planner.plan_request
+
+::: general_manager.chat.planned.provider_calls.InvalidProviderRoundError
+
+::: general_manager.chat.planned.provider_calls.ProviderRoundResult
+
+::: general_manager.chat.planned.provider_calls.complete_provider_round
+
+::: general_manager.chat.planned.routing.ExecutorRole
+
+::: general_manager.chat.planned.routing.select_executor_role
+
+::: general_manager.chat.planned.synthesis.SynthesisFailedError
+
+::: general_manager.chat.planned.synthesis.SynthesisResult
+
+::: general_manager.chat.planned.synthesis.synthesize_answer
+
+::: general_manager.chat.planned.events.PLANNED_PUBLIC_MESSAGES
+
+::: general_manager.chat.planned.events.planned_done_event
+
+::: general_manager.chat.planned.events.planned_error_event
+
+::: general_manager.chat.planned.events.planned_tool_call_event
+
+::: general_manager.chat.planned.events.planned_tool_result_event
+
+::: general_manager.chat.planned.scheduler.SchedulerCallbacks
+
+::: general_manager.chat.planned.scheduler.PlannedCoverage
+
+::: general_manager.chat.planned.scheduler.PlannedExecutionResult
+
+::: general_manager.chat.planned.scheduler.PreparedPlannedTurn
+
+::: general_manager.chat.planned.scheduler.prepare_planned_turn
+
+::: general_manager.chat.planned.scheduler.iter_planned_read_events
