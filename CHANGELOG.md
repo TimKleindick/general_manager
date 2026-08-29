@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.77.1 (2026-08-29)
+
+### Bug Fixes
+
+- Update semantic release compatibility
+  ([`05129dd`](https://github.com/TimKleindick/general_manager/commit/05129dd76cc6634363bde9106ef9a1e9cd3c2b4a))
+
+
 ## v0.77.0 (2026-08-28)
 
 ### Bug Fixes
