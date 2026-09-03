@@ -6,6 +6,11 @@ __all__ = [
     "AdditiveManagerPermission",
     "CalculationInterface",
     "DatabaseInterface",
+    "ExcelCharField",
+    "ExcelDecimalField",
+    "ExcelField",
+    "ExcelIntegerField",
+    "ExcelInterface",
     "ExistingModelInterface",
     "FieldConfig",
     "GeneralManager",
@@ -42,6 +47,11 @@ from general_manager.permission.manager_based_permission import (
 )
 from general_manager.interface.interfaces.calculation import CalculationInterface
 from general_manager.interface.interfaces.database import DatabaseInterface
+from general_manager.interface.excel import ExcelCharField
+from general_manager.interface.excel import ExcelDecimalField
+from general_manager.interface.excel import ExcelField
+from general_manager.interface.excel import ExcelIntegerField
+from general_manager.interface.interfaces.excel import ExcelInterface
 from general_manager.interface.interfaces.existing_model import ExistingModelInterface
 from general_manager.search.config import FieldConfig
 from general_manager.manager.general_manager import GeneralManager

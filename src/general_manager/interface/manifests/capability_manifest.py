@@ -16,6 +16,9 @@ from general_manager.interface.orm_interface import (
 from general_manager.interface.interfaces.database import (
     DatabaseInterface,
 )
+from general_manager.interface.interfaces.excel import (
+    ExcelInterface,
+)
 from general_manager.interface.interfaces.existing_model import (
     ExistingModelInterface,
 )
@@ -210,6 +213,11 @@ CAPABILITY_MANIFEST = CapabilityManifest(
                 "scheduling": "scheduling",
                 "access_control": "access_control",
             },
+        ),
+        ExcelInterface: _plan(
+            required=names("excel_lifecycle"),
+            optional=names("notification", "access_control", "observability"),
+            flags={"notifications": "notification", "access_control": "access_control"},
         ),
     }
 )

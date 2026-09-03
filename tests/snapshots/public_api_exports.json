@@ -12,6 +12,26 @@
       "general_manager.interface.interfaces.database",
       "DatabaseInterface"
     ],
+    "ExcelCharField": [
+      "general_manager.interface.excel",
+      "ExcelCharField"
+    ],
+    "ExcelDecimalField": [
+      "general_manager.interface.excel",
+      "ExcelDecimalField"
+    ],
+    "ExcelField": [
+      "general_manager.interface.excel",
+      "ExcelField"
+    ],
+    "ExcelIntegerField": [
+      "general_manager.interface.excel",
+      "ExcelIntegerField"
+    ],
+    "ExcelInterface": [
+      "general_manager.interface.interfaces.excel",
+      "ExcelInterface"
+    ],
     "ExistingModelInterface": [
       "general_manager.interface.interfaces.existing_model",
       "ExistingModelInterface"
@@ -619,6 +639,26 @@
     "DatabaseInterface": [
       "general_manager.interface.interfaces.database",
       "DatabaseInterface"
+    ],
+    "ExcelCharField": [
+      "general_manager.interface.excel",
+      "ExcelCharField"
+    ],
+    "ExcelDecimalField": [
+      "general_manager.interface.excel",
+      "ExcelDecimalField"
+    ],
+    "ExcelField": [
+      "general_manager.interface.excel",
+      "ExcelField"
+    ],
+    "ExcelIntegerField": [
+      "general_manager.interface.excel",
+      "ExcelIntegerField"
+    ],
+    "ExcelInterface": [
+      "general_manager.interface.interfaces.excel",
+      "ExcelInterface"
     ],
     "ExistingModelInterface": [
       "general_manager.interface.interfaces.existing_model",

@@ -6,10 +6,11 @@ import json
 import random
 import time
 import uuid
+from collections.abc import Mapping
 from contextvars import ContextVar
 from datetime import date, datetime
 from time import perf_counter
-from typing import TYPE_CHECKING, Callable, Iterable, Literal, Tuple, Type, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Tuple, Type, cast
 
 from django.core.cache import cache
 from django.db import DEFAULT_DB_ALIAS
@@ -85,6 +86,25 @@ class DependencyLockTimeoutError(TimeoutError):
         super().__init__(
             f"Timed out acquiring dependency index lock during {operation}."
         )
+
+
+class _DependencyValueSnapshot:
+    """Attribute view over row values for dependency invalidation."""
+
+    def __init__(
+        self,
+        values: Mapping[str, Any],
+        *,
+        identification: Mapping[str, Any] | None = None,
+    ) -> None:
+        self._values = dict(values)
+        self.identification = dict(identification or {})
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self._values[name]
+        except KeyError as error:
+            raise AttributeError(name) from error
 
 
 # -----------------------------------------------------------------------------
@@ -788,7 +808,7 @@ def capture_old_values(
 def _generic_cache_invalidation_locked(
     idx: dependency_index,
     manager_name: str,
-    instance: GeneralManager,
+    instance: GeneralManager | _DependencyValueSnapshot,
     old_relevant_values: dict[str, object],
 ) -> set[str]:
     """
@@ -1231,7 +1251,7 @@ def _generic_cache_invalidation_locked(
 
 def _generic_cache_invalidation_from_shards(
     manager_name: str,
-    instance: GeneralManager,
+    instance: GeneralManager | _DependencyValueSnapshot,
     old_relevant_values: dict[str, object],
 ) -> set[str]:
     def value_for_lookup(lookup: str, *, use_old_values: bool) -> object | None:
@@ -1382,10 +1402,94 @@ def _generic_cache_invalidation_from_shards(
     return invalidated_cache_keys
 
 
+def invalidate_manager_cache(manager_name: str) -> set[str]:
+    """Conservatively invalidate a manager when an external mirror baseline is lost."""
+    lock_token = acquire_lock_with_retry("invalidate_manager_cache")
+    try:
+        keys: set[str] = set()
+        if legacy_dependency_index_exists():
+            idx = get_full_index()
+
+            def collect(value: object) -> None:
+                if isinstance(value, set):
+                    keys.update(item for item in value if isinstance(item, str))
+                elif isinstance(value, dict):
+                    for child in value.values():
+                        collect(child)
+
+            for section in idx.values():
+                collect(section.get(manager_name, {}))
+            for key in keys:
+                cache.delete(key)
+            _remove_cache_keys_from_index_locked(idx, tuple(keys))
+            set_full_index(idx)
+        else:
+            keys.update(all_records_cache_keys(manager_name))
+            keys.update(request_query_cache_keys(manager_name))
+            for lookup in tracked_lookup_names(manager_name):
+                for action in ACTIONS:
+                    keys.update(
+                        candidate_cache_keys_for_lookup(manager_name, action, lookup)
+                    )
+            for key in keys:
+                cache.delete(key)
+                remove_cache_key_from_shards(key)
+        return keys
+    finally:
+        release_lock(lock_token)
+
+
+def invalidate_manager_cache_for_value_change(
+    manager_cls_or_name: type[GeneralManager] | str,
+    old_values: Mapping[str, Any] | None,
+    new_values: Mapping[str, Any] | None,
+    *,
+    identification: Mapping[str, Any] | None = None,
+) -> set[str]:
+    """Invalidate dependencies from external row snapshots without loading managers."""
+    manager_name = (
+        manager_cls_or_name
+        if isinstance(manager_cls_or_name, str)
+        else manager_cls_or_name.__name__
+    )
+    instance = _DependencyValueSnapshot(new_values or {}, identification=identification)
+    return _invalidate_manager_cache_for_instance_change(
+        manager_name, instance, dict(old_values or {})
+    )
+
+
+def _invalidate_manager_cache_for_instance_change(
+    manager_name: str,
+    instance: GeneralManager | _DependencyValueSnapshot,
+    old_relevant_values: dict[str, object],
+) -> set[str]:
+    invalidated_cache_keys: set[str] = set()
+    lock_token = acquire_lock_with_retry("generic_cache_invalidation")
+    try:
+        if legacy_dependency_index_exists():
+            idx = get_full_index()
+            invalidated_cache_keys = _generic_cache_invalidation_locked(
+                idx,
+                manager_name,
+                instance,
+                old_relevant_values,
+            )
+            set_full_index(idx)
+        else:
+            invalidated_cache_keys = _generic_cache_invalidation_from_shards(
+                manager_name,
+                instance,
+                old_relevant_values,
+            )
+    finally:
+        release_lock(lock_token)
+    return invalidated_cache_keys
+
+
 @receiver(post_data_change)
 def generic_cache_invalidation(
     sender: type[GeneralManager],
-    instance: GeneralManager,
+    instance: GeneralManager | _DependencyValueSnapshot,
     old_relevant_values: dict[str, object],
     database_alias: str = DEFAULT_DB_ALIAS,
     **kwargs: object,
@@ -1403,27 +1507,9 @@ def generic_cache_invalidation(
     """
     started = perf_counter()
     try:
-        manager_name = sender.__name__
-        invalidated_cache_keys: set[str] = set()
-        lock_token = acquire_lock_with_retry("generic_cache_invalidation")
-        try:
-            if legacy_dependency_index_exists():
-                idx = get_full_index()
-                invalidated_cache_keys = _generic_cache_invalidation_locked(
-                    idx,
-                    manager_name,
-                    instance,
-                    old_relevant_values,
-                )
-                set_full_index(idx)
-            else:
-                invalidated_cache_keys = _generic_cache_invalidation_from_shards(
-                    manager_name,
-                    instance,
-                    old_relevant_values,
-                )
-        finally:
-            release_lock(lock_token)
+        invalidated_cache_keys = _invalidate_manager_cache_for_instance_change(
+            sender.__name__, instance, old_relevant_values
+        )
         if invalidated_cache_keys:
             record_invalidated_cache_keys_for_graphql_rewarm(invalidated_cache_keys)
     finally:

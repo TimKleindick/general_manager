@@ -268,11 +268,11 @@ class AppsUtilitiesTests(SimpleTestCase):
 
         assert call_order == [
             "install_runner",
-            "register_checks",
             "register_upload_checks",
             "register_search_checks",
             "autoload",
             "initialize",
+            "register_checks",
             "configure_audit",
             "configure_search",
             "configure_search_invalidation",
@@ -423,11 +423,11 @@ class AppsUtilitiesTests(SimpleTestCase):
 
         assert call_order == [
             "install_runner",
-            "register_checks",
             "register_upload_checks",
             "register_search_checks",
             "autoload",
             "initialize",
+            "register_checks",
             "remote_api",
             "configure_audit",
             "configure_search",

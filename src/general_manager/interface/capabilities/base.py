@@ -16,6 +16,8 @@ CapabilityName = Literal[
     "orm_mutation",
     "orm_lifecycle",
     "calculation_lifecycle",
+    "excel_lifecycle",
+    "excel_sync",
     "notification",
     "scheduling",
     "access_control",

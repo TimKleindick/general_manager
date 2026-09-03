@@ -26,4 +26,6 @@ These tutorials walk you through common development tasks when working with Gene
 22. [Keep ORM writes and history on one database](orm_atomic_writes.md)
 23. [Write validation rules with reliable fallback errors](write_validation_rules.md)
 
+24. [Read and write Excel workbooks](excel_interface.md)
+
 Follow them in order when you start a new project, or jump to the topic relevant to your current task.

@@ -781,6 +781,11 @@ class GeneralManagerMeta(type):
                 ) -> None:
                     self._attr_name = descriptor_attr_name
                     self._class = descriptor_class
+                    # Excel values can change outside this manager instance.
+                    self._cache_values = (
+                        getattr(descriptor_class.Interface, "_interface_type", None)
+                        != "excel"
+                    )
                     self._dependency_tracking_value_class: type | object = (
                         _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN
                     )
@@ -847,7 +852,11 @@ class GeneralManagerMeta(type):
                             self._attr_name,
                         )
                     try:
-                        cache = instance._attribute_value_cache
+                        cache = (
+                            instance._attribute_value_cache
+                            if self._cache_values
+                            else None
+                        )
                     except AttributeError:
                         cache = None
                     if cache is not None:
@@ -901,6 +910,12 @@ class GeneralManagerMeta(type):
                         try:
                             attribute = attribute(instance._interface)
                         except Exception as e:
+                            if getattr(
+                                e,
+                                "preserve_attribute_evaluation_error",
+                                False,
+                            ):
+                                raise
                             logger.exception(
                                 "attribute evaluation failed",
                                 context={
