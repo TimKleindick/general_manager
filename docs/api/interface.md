@@ -1388,3 +1388,27 @@ normalizer implementations.
 ::: general_manager.interface.infrastructure.system_checks.registered_system_checks
 
 ::: general_manager.interface.infrastructure.system_checks.clear_system_checks
+
+
+## Excel interface
+
+::: general_manager.interface.interfaces.excel.ExcelInterface
+
+`ExcelInterface` maps typed fields to an `.xlsx` worksheet table or header row.
+Declare `ExcelCharField`, `ExcelIntegerField`, `ExcelDecimalField`, or a custom
+`ExcelField` on the nested interface. `Meta` requires `workbook`, `sheet`, `key`,
+and exactly one of `table` or `header_row`.
+
+`Meta.cache_alias` defaults to `"default"`; `cache_version` defaults to `"1"`.
+Complete parsed snapshots use Django's cache API, while workbook access is
+serialized with a filesystem sidecar lock. A shared cache and shared workbook
+filesystem support multiple workers. Other cache backends remain usable.
+
+`Manager.sync_excel()` forces synchronization and returns an `ExcelSyncDelta`
+containing created snapshots, `(old, new)` updated pairs, and deleted snapshots.
+`Manager.Interface.sync_from_excel(force=False)` checks the fingerprint and skips
+parsing when unchanged. `create`, `update`, and `delete` write through to Excel;
+keys cannot be updated. Existing manager instances refresh their field reads.
+
+See [Use an Excel interface](../howto/excel_interface.md) for cache configuration,
+conflict behavior, file-lock requirements and external-editor limitations.

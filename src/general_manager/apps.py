@@ -166,7 +166,6 @@ class GeneralmanagerConfig(AppConfig):
                 wiring, or GraphQL bootstrap propagate unchanged.
         """
         self.install_startup_hook_runner()
-        self.register_system_checks()
         from general_manager.uploads.checks import register_upload_checks
         from general_manager.search.checks import register_search_checks
 
@@ -177,6 +176,7 @@ class GeneralmanagerConfig(AppConfig):
             GeneralManagerMeta.pending_attribute_initialization,
             GeneralManagerMeta.all_classes,
         )
+        self.register_system_checks()
         handle_remote_api(GeneralManagerMeta.all_classes)
         configure_audit_logger_from_settings(settings)
         configure_search_backend_from_settings(settings)
