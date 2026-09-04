@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, Inexact, localcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from django.core.checks import run_checks
 from django.core.checks.registry import registry as django_checks_registry
@@ -162,13 +162,13 @@ class ExcelLifecycleTests(SimpleTestCase):
         sync.sync_from_excel.return_value = "synced"
 
         def capability(name):
-            return sync if name == "excel_sync" else query
+            return {"excel_sync": sync, "query": query}[name]
 
         with patch.object(
             ExcelProduct.Interface,
             "require_capability",
             side_effect=capability,
-        ):
+        ) as require_capability:
             self.assertEqual(
                 ExcelProduct.Interface.sync_from_excel(force=True), "synced"
             )
@@ -176,6 +176,10 @@ class ExcelLifecycleTests(SimpleTestCase):
             self.assertEqual(ExcelProduct.Interface.exclude(name="Beta"), "excluded")
             self.assertEqual(ExcelProduct.Interface.all(), "all")
 
+        self.assertEqual(
+            require_capability.call_args_list,
+            [call("excel_sync"), call("query"), call("query"), call("query")],
+        )
         sync.sync_from_excel.assert_called_once_with(ExcelProduct.Interface, force=True)
         query.filter.assert_called_once_with(ExcelProduct.Interface, name="Alpha")
         query.exclude.assert_called_once_with(ExcelProduct.Interface, name="Beta")
