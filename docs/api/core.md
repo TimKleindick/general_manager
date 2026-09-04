@@ -230,7 +230,9 @@ class. When read on an instance, they first call
 callables must be wrapped in a non-callable container or exposed by a custom
 descriptor path. Callable failures are wrapped in `AttributeEvaluationError`
 whose message starts with `Error calling attribute {name}:`, with the original
-exception chained as `__cause__`. Missing stored keys raise
+exception chained as `__cause__`. Exceptions with a truthy
+`preserve_attribute_evaluation_error` attribute, including
+`ExcelValidationError`, are re-raised unchanged. Missing stored keys raise
 `MissingAttributeError`, but missing `instance._attributes` or
 `instance._interface` raises normal `AttributeError`. Invalidated managers raise
 `InvalidManagerStateError`, and class-level field type lookup errors propagate
@@ -255,8 +257,9 @@ resolved values. Duplicate names are processed in order, so later duplicates
 overwrite earlier descriptors. Non-string names or attribute iterables that fail
 partway through propagate their original exception and may leave descriptors for
 earlier names installed. A present but malformed `_interface` is passed to
-callable attribute values unchanged; errors raised by that callable are wrapped
-as `AttributeEvaluationError`. Normal `GeneralManager` construction creates
+callable attribute values unchanged; errors raised by that callable follow the
+same preservation rule before otherwise being wrapped as
+`AttributeEvaluationError`. Normal `GeneralManager` construction creates
 `instance._interface` from `self.Interface(*args, **kwargs)`, and trusted ORM
 hydration creates it through the interface's trusted hydration hook. The
 descriptor does not check that the current `instance._interface` is an instance

@@ -206,6 +206,46 @@ class ExcelWorkbookAdapterTests(TempPathMixin, SimpleTestCase):
 
         self.assertEqual(table_refs(path), ("A1:D2", "A1:D2"))
 
+    def test_delete_translates_relative_formulas_when_rows_move(self) -> None:
+        path = self.temp_path("formulas.xlsx")
+        save_plain_workbook(
+            path,
+            [
+                ["sku", "price", "total"],
+                ["SKU-1", 10, "=B2*2"],
+                ["SKU-2", 20, "=B3*2"],
+            ],
+        )
+        meta = ExcelMeta(workbook=str(path), sheet="Products", header_row=1, key="sku")
+
+        ExcelWorkbookAdapter(meta).delete_row("SKU-1")
+
+        workbook = load_workbook(path, data_only=False)
+        try:
+            self.assertEqual(workbook["Products"]["C2"].value, "=B2*2")
+        finally:
+            workbook.close()
+
+    def test_delete_translates_out_of_bounds_reference_to_ref_error(self) -> None:
+        path = self.temp_path("boundary-formula.xlsx")
+        save_plain_workbook(
+            path,
+            [
+                ["sku", "price", "total"],
+                ["SKU-1", 10, "=B2*2"],
+                ["SKU-2", 20, "=A1+B3"],
+            ],
+        )
+        meta = ExcelMeta(workbook=str(path), sheet="Products", header_row=1, key="sku")
+
+        ExcelWorkbookAdapter(meta).delete_row("SKU-1")
+
+        workbook = load_workbook(path, data_only=False)
+        try:
+            self.assertEqual(workbook["Products"]["C2"].value, "=#REF!+B2")
+        finally:
+            workbook.close()
+
     def test_append_after_delete_uses_next_table_row_without_gap(self) -> None:
         path = self.temp_path("products.xlsx")
         save_table_workbook(path)

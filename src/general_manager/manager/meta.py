@@ -741,7 +741,7 @@ class GeneralManagerMeta(type):
         """
         Attach descriptor properties to new_class for each name in attributes.
 
-        Each generated descriptor returns the interface field type when accessed on the class and resolves the corresponding value from instance._attributes when accessed on an instance. Existing attributes with the same names are overwritten unconditionally, matching bootstrap descriptor installation. Generated descriptors implement only ``__get__``; assignment to the same name on the class replaces the descriptor, and instance assignment follows normal non-data-descriptor shadowing rules. Descriptor reads cache resolved values on the manager instance and replay dependency tracking when returning a cached manager value. Duplicate names are processed in order, so later duplicates overwrite earlier descriptors. Non-string names or iterables that raise during iteration propagate their original exception and may leave descriptors from earlier names installed. If called through ``ensure_attributes_initialized()``, those failures can occur after ``manager_class._attributes`` is cached and before pending-initialization removal. If the stored value is callable it is always treated as a deferred evaluator and invoked with instance._interface; expose literal callables by wrapping them in a non-callable container or by using a custom descriptor path. A missing stored key raises MissingAttributeError, but a missing ``instance._attributes`` mapping or missing ``instance._interface`` attribute raises the normal ``AttributeError``. A present but malformed ``_interface`` is passed to the callable unchanged; callable failures are wrapped in ``AttributeEvaluationError``.
+        Each generated descriptor returns the interface field type when accessed on the class and resolves the corresponding value from instance._attributes when accessed on an instance. Existing attributes with the same names are overwritten unconditionally, matching bootstrap descriptor installation. Generated descriptors implement only ``__get__``; assignment to the same name on the class replaces the descriptor, and instance assignment follows normal non-data-descriptor shadowing rules. Descriptor reads cache resolved values on the manager instance and replay dependency tracking when returning a cached manager value. Duplicate names are processed in order, so later duplicates overwrite earlier descriptors. Non-string names or iterables that raise during iteration propagate their original exception and may leave descriptors from earlier names installed. If called through ``ensure_attributes_initialized()``, those failures can occur after ``manager_class._attributes`` is cached and before pending-initialization removal. If the stored value is callable it is always treated as a deferred evaluator and invoked with instance._interface; expose literal callables by wrapping them in a non-callable container or by using a custom descriptor path. A missing stored key raises MissingAttributeError, but a missing ``instance._attributes`` mapping or missing ``instance._interface`` attribute raises the normal ``AttributeError``. A present but malformed ``_interface`` is passed to the callable unchanged. Callable failures are wrapped in ``AttributeEvaluationError`` unless the exception has a truthy ``preserve_attribute_evaluation_error`` attribute, in which case the original exception is re-raised unchanged.
 
         Parameters:
             attributes (Iterable[str]): Names of attributes for which descriptors will be created.
@@ -763,7 +763,7 @@ class GeneralManagerMeta(type):
             """
             Create a descriptor that provides attribute access backed by an instance's interface attributes.
 
-            When accessed on the class, the descriptor returns the field type by delegating to the class's `Interface.get_field_type` for the configured attribute name. When accessed on an instance, it returns the value stored in `instance._attributes[attr_name]`. If the stored value is callable, it is invoked with `instance._interface` and the resulting value is returned. If the attribute is not present on the instance, a `MissingAttributeError` is raised. If invoking a callable attribute raises an exception, that error is wrapped in `AttributeEvaluationError`.
+            When accessed on the class, the descriptor returns the field type by delegating to the class's `Interface.get_field_type` for the configured attribute name. When accessed on an instance, it returns the value stored in `instance._attributes[attr_name]`. If the stored value is callable, it is invoked with `instance._interface` and the resulting value is returned. If the attribute is not present on the instance, a `MissingAttributeError` is raised. Callable exceptions with a truthy `preserve_attribute_evaluation_error` attribute are re-raised unchanged; other callable exceptions are wrapped in `AttributeEvaluationError`.
 
             Parameters:
                 attr_name (str): The name of the attribute the descriptor resolves.
@@ -818,10 +818,11 @@ class GeneralManagerMeta(type):
                             invalidated before access.
                         MissingAttributeError: If the attribute is not present in instance._attributes.
                         AttributeEvaluationError: If calling a callable
-                            attribute raises an exception; the original
-                            exception is chained as ``__cause__`` and the
-                            message starts with
-                            ``"Error calling attribute {name}:"``.
+                            attribute raises an exception without a truthy
+                            ``preserve_attribute_evaluation_error`` attribute;
+                            the original exception is chained as ``__cause__``.
+                            Preserved exceptions, including
+                            ``ExcelValidationError``, are re-raised unchanged.
                     """
                     if instance is None:
                         return self._class.Interface.get_field_type(self._attr_name)

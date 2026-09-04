@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException
 from typing import Any, Callable, ClassVar, Generic, TypeVar, cast
 
 T = TypeVar("T")
@@ -287,11 +287,16 @@ class ExcelDecimalField(ExcelField[Decimal]):
             return super().parse(value)
         try:
             parsed = Decimal(str(value))
-        except (InvalidOperation, ValueError) as error:
+        except (DecimalException, ValueError) as error:
             raise ExcelValidationError.cannot_parse_decimal(value) from error
+        if not parsed.is_finite():
+            raise ExcelValidationError.cannot_parse_decimal(value)
         if self.decimal_places is not None:
-            quantizer = Decimal("1").scaleb(-self.decimal_places)
-            parsed = parsed.quantize(quantizer)
+            try:
+                quantizer = Decimal("1").scaleb(-self.decimal_places)
+                parsed = parsed.quantize(quantizer)
+            except DecimalException as error:
+                raise ExcelValidationError.cannot_parse_decimal(value) from error
         if (
             self.max_digits is not None
             and _decimal_digit_count(parsed) > self.max_digits

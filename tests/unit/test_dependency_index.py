@@ -19,6 +19,8 @@ from general_manager.cache.dependency_index import (
     invalidate_cache_key,
     invalidate_and_remove_cache_keys,
     invalidate_request_query_dependencies,
+    invalidate_manager_cache,
+    invalidate_manager_cache_for_value_changes,
     capture_old_values,
     generic_cache_invalidation,
     parse_dependency_identifier,
@@ -1210,6 +1212,93 @@ class GenericCacheInvalidationTests(TestCase):
                     self.assertNotIn(nested, remaining_keys)
 
         assert_absent(idx)
+
+    def test_manager_invalidation_collects_reverse_mapping_cache_keys(self) -> None:
+        identifier = "serialized-dependency-identifier"
+        cache.set("actual-cache-key", "cached", None)
+        cache.set(identifier, "unrelated", None)
+        cache.set("malformed-reserved-value", "unrelated", None)
+        index = {
+            "filter": {
+                "DummyManager2": {
+                    "__cache_dependencies__": {
+                        "actual-cache-key": {identifier},
+                        123: {"ignored-non-string-key"},
+                    }
+                }
+            },
+            "exclude": {
+                "DummyManager2": {
+                    "__cache_dependencies__": {"malformed-reserved-value"}
+                }
+            },
+            "request_query": {},
+            "all": {},
+        }
+
+        with (
+            patch(
+                "general_manager.cache.dependency_index.acquire_lock_with_retry",
+                return_value="owner-token",
+            ),
+            patch("general_manager.cache.dependency_index.release_lock"),
+            patch(
+                "general_manager.cache.dependency_index.legacy_dependency_index_exists",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index.get_full_index",
+                return_value=index,
+            ),
+            patch("general_manager.cache.dependency_index.set_full_index"),
+        ):
+            invalidated = invalidate_manager_cache("DummyManager2")
+
+        self.assertEqual(invalidated, {"actual-cache-key"})
+        self.assertIsNone(cache.get("actual-cache-key"))
+        self.assertEqual(cache.get(identifier), "unrelated")
+        self.assertEqual(cache.get("malformed-reserved-value"), "unrelated")
+
+    def test_external_value_change_batch_reuses_one_legacy_index_lock(self) -> None:
+        with (
+            patch(
+                "general_manager.cache.dependency_index.acquire_lock_with_retry",
+                return_value="owner-token",
+            ) as acquire,
+            patch("general_manager.cache.dependency_index.release_lock") as release,
+            patch(
+                "general_manager.cache.dependency_index.legacy_dependency_index_exists",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index.get_full_index",
+                return_value={
+                    "filter": {},
+                    "exclude": {},
+                    "request_query": {},
+                    "all": {},
+                },
+            ) as get_index,
+            patch("general_manager.cache.dependency_index.set_full_index") as set_index,
+            patch(
+                "general_manager.cache.dependency_index._generic_cache_invalidation_locked",
+                side_effect=({"first"}, {"second"}),
+            ) as invalidate,
+        ):
+            result = invalidate_manager_cache_for_value_changes(
+                "DummyManager2",
+                (
+                    ({"status": "old"}, {"status": "new"}, {"id": 1}),
+                    ({}, {"status": "created"}, {"id": 2}),
+                ),
+            )
+
+        self.assertEqual(result, {"first", "second"})
+        acquire.assert_called_once_with("generic_cache_invalidation")
+        release.assert_called_once_with("owner-token")
+        get_index.assert_called_once_with()
+        set_index.assert_called_once()
+        self.assertEqual(invalidate.call_count, 2)
 
     def test_generic_invalidation_records_bounded_receiver_latency(self) -> None:
         inst = DummyManager2(status="active", count=1)

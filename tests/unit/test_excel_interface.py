@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, Inexact, localcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -83,6 +83,29 @@ class ExcelFieldTests(SimpleTestCase):
 
         with self.assertRaises(ExcelValidationError):
             field.parse("99.995")
+
+    def test_decimal_field_rejects_non_finite_values(self) -> None:
+        field = ExcelDecimalField(decimal_places=2)
+
+        for value in ("NaN", "Infinity", "+Infinity", "-Infinity"):
+            with self.subTest(value=value), self.assertRaises(ExcelValidationError):
+                field.parse(value)
+
+    def test_decimal_field_converts_quantization_failure_to_validation_error(
+        self,
+    ) -> None:
+        field = ExcelDecimalField(decimal_places=2)
+
+        with self.assertRaises(ExcelValidationError):
+            field.parse("1e999999999999999999")
+
+    def test_decimal_field_converts_trapped_quantization_signal(self) -> None:
+        field = ExcelDecimalField(decimal_places=2)
+
+        with localcontext() as context:
+            context.traps[Inexact] = True
+            with self.assertRaises(ExcelValidationError):
+                field.parse("1.234")
 
     def test_fields_compare_by_identity(self) -> None:
         char_field = ExcelCharField(max_length=4)
@@ -729,6 +752,28 @@ class ExcelDependencyCacheInvalidationTests(TempPathMixin, SimpleTestCase):
         self.assertEqual(alpha_count(), 0)
         self.assertEqual(calls["count"], 2)
 
+    def test_sync_update_invalidates_repeated_exclude_dependencies(self) -> None:
+        path = self.temp_path("products.xlsx")
+        write_product_workbook(path, [["SKU-1", "Alpha"], ["SKU-2", "Beta"]])
+        Product = build_product_manager(path)
+        Product.sync_excel()
+        calls = {"count": 0}
+
+        @cached(cache="dependency")
+        def remaining_count() -> int:
+            calls["count"] += 1
+            return Product.exclude(name="Alpha").exclude(name="Beta").count()
+
+        self.assertEqual(remaining_count(), 0)
+        self.assertEqual(remaining_count(), 0)
+        self.assertEqual(calls["count"], 1)
+
+        set_product_workbook_value(path, "SKU-1", "Gamma")
+        Product.sync_excel()
+
+        self.assertEqual(remaining_count(), 1)
+        self.assertEqual(calls["count"], 2)
+
     def test_sync_update_enqueues_invalidated_cache_key_for_rewarm(self) -> None:
         path = self.temp_path("products.xlsx")
         write_product_workbook(path, [["SKU-1", "Alpha"], ["SKU-2", "Gamma"]])
@@ -991,6 +1036,39 @@ class ExcelMutationTests(TempPathMixin, SimpleTestCase):
         self.assertEqual(product_workbook_value(path, "SKU-1"), "Alpha Prime")
         self.assertEqual(product.name, "Alpha Prime")
 
+    def test_update_detects_edit_between_refresh_and_adapter_mutation(self) -> None:
+        path = self.temp_path("products.xlsx")
+        write_product_workbook(path, [["SKU-1", "Alpha"]])
+        Product = build_product_manager(path)
+        Product.sync_excel()
+        product = Product(sku="SKU-1")
+        self.assertEqual(product.name, "Alpha")
+
+        from general_manager.interface.capabilities import excel as excel_capabilities
+
+        adapter = excel_capabilities._write_adapter(Product.Interface)
+
+        class RacingAdapter:
+            def update_row(self, key, values, *, expected_fingerprint=None):
+                set_product_workbook_value(path, "SKU-1", "Excel Edit")
+                adapter.update_row(
+                    key,
+                    values,
+                    expected_fingerprint=expected_fingerprint,
+                )
+
+        with (
+            patch.object(
+                excel_capabilities,
+                "_write_adapter",
+                return_value=RacingAdapter(),
+            ),
+            self.assertRaises(ExcelWriteConflictError),
+        ):
+            product.update(name="GM Edit", ignore_permission=True)
+
+        self.assertEqual(product_workbook_value(path, "SKU-1"), "Excel Edit")
+
     def test_update_conflict_excel_wins_and_refreshes_mirror(self) -> None:
         path = self.temp_path("products.xlsx")
         write_product_workbook(path, [["SKU-1", "Alpha"]])
@@ -1090,6 +1168,37 @@ class ExcelMutationTests(TempPathMixin, SimpleTestCase):
 
         self.assertEqual(product_workbook_key_count(path, "SKU-1"), 0)
         self.assertEqual(product_workbook_key_count(path, "SKU-2"), 1)
+
+    def test_delete_detects_edit_between_refresh_and_adapter_mutation(self) -> None:
+        path = self.temp_path("products.xlsx")
+        write_product_workbook(path, [["SKU-1", "Alpha"]])
+        Product = build_product_manager(path)
+        Product.sync_excel()
+        product = Product(sku="SKU-1")
+
+        from general_manager.interface.capabilities import excel as excel_capabilities
+
+        adapter = excel_capabilities._write_adapter(Product.Interface)
+
+        class RacingAdapter:
+            def delete_row(self, key, *, expected_fingerprint=None):
+                set_product_workbook_value(path, "SKU-1", "Excel Edit")
+                adapter.delete_row(
+                    key,
+                    expected_fingerprint=expected_fingerprint,
+                )
+
+        with (
+            patch.object(
+                excel_capabilities,
+                "_write_adapter",
+                return_value=RacingAdapter(),
+            ),
+            self.assertRaises(ExcelWriteConflictError),
+        ):
+            product.delete(ignore_permission=True)
+
+        self.assertEqual(product_workbook_value(path, "SKU-1"), "Excel Edit")
 
     def test_delete_conflict_excel_wins(self) -> None:
         path = self.temp_path("products.xlsx")

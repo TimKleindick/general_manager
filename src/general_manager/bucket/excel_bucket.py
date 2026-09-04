@@ -8,6 +8,7 @@ from typing import Any, Protocol, cast
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
+from general_manager.cache.dependency_matching import lookup_spec_from_key
 from general_manager.interface.excel import ExcelMeta
 from general_manager.interface.excel_store import DEFAULT_EXCEL_STORE
 from general_manager.utils.filter_parser import create_filter_function
@@ -115,16 +116,15 @@ class ExcelBucket(Bucket[GeneralManagerType]):
         constraints: tuple[tuple[str, Any], ...],
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {}
-        repeated: dict[str, list[Any]] = {}
         for lookup, expected in constraints:
-            if lookup in payload:
-                repeated.setdefault(lookup, [payload[lookup]]).append(expected)
-            elif lookup in repeated:
-                repeated[lookup].append(expected)
-            else:
-                payload[lookup] = expected
-        for lookup, values in repeated.items():
-            payload[lookup] = tuple(values)
+            dependency_lookup = (
+                lookup.removesuffix("__exact") if lookup.endswith("__exact") else lookup
+            )
+            spec = lookup_spec_from_key(dependency_lookup)
+            normalized_lookup = "__".join(spec.attr_path)
+            if spec.operator != "eq":
+                normalized_lookup = f"{normalized_lookup}__{spec.operator}"
+            payload[normalized_lookup] = expected
         return payload
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
@@ -309,16 +309,22 @@ class ExcelBucket(Bucket[GeneralManagerType]):
     def _track_dependencies(self) -> None:
         manager_name = self._manager_class.__name__
         if self._filters:
-            DependencyTracker.track(
-                manager_name,
-                "filter",
-                serialize_dependency_identifier(self.filters),
-            )
+            for constraint in self._filters:
+                DependencyTracker.track(
+                    manager_name,
+                    "filter",
+                    serialize_dependency_identifier(
+                        self._dependency_payload((constraint,))
+                    ),
+                )
         else:
             DependencyTracker.track(manager_name, "all", "")
         if self._excludes:
-            DependencyTracker.track(
-                manager_name,
-                "exclude",
-                serialize_dependency_identifier(self.excludes),
-            )
+            for constraint in self._excludes:
+                DependencyTracker.track(
+                    manager_name,
+                    "exclude",
+                    serialize_dependency_identifier(
+                        self._dependency_payload((constraint,))
+                    ),
+                )

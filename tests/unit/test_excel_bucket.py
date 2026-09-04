@@ -64,6 +64,28 @@ class ExcelBucketTests(TempPathMixin, SimpleTestCase):
             dependencies,
         )
 
+    def test_exact_lookup_tracks_same_dependency_as_bare_field(self) -> None:
+        path = self.temp_path("products.xlsx")
+        save_workbook(path)
+
+        class Product(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                name = ExcelCharField()
+
+                class Meta:
+                    workbook = str(path)
+                    sheet = "Products"
+                    header_row = 1
+                    key = "sku"
+
+        with DependencyTracker() as bare_dependencies:
+            self.assertEqual(Product.filter(name="Alpha").count(), 1)
+        with DependencyTracker() as exact_dependencies:
+            self.assertEqual(Product.filter(name__exact="Alpha").count(), 1)
+
+        self.assertEqual(exact_dependencies, bare_dependencies)
+
     def test_all_tracks_all_dependency(self) -> None:
         path = self.temp_path("products.xlsx")
         save_workbook(path)
@@ -268,6 +290,34 @@ class ExcelBucketTests(TempPathMixin, SimpleTestCase):
         bucket = Product.exclude(name="Alpha").exclude(name="Beta")
 
         self.assertEqual(bucket.count(), 0)
+
+    def test_repeated_constraints_track_individual_scalar_dependencies(self) -> None:
+        path = self.temp_path("products.xlsx")
+        save_workbook(path)
+
+        class Product(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                name = ExcelCharField()
+
+                class Meta:
+                    workbook = str(path)
+                    sheet = "Products"
+                    header_row = 1
+                    key = "sku"
+
+        with DependencyTracker() as dependencies:
+            Product.exclude(name="Alpha").exclude(name="Beta").count()
+
+        for value in ("Alpha", "Beta"):
+            self.assertIn(
+                (
+                    "Product",
+                    "exclude",
+                    serialize_dependency_identifier({"name": value}),
+                ),
+                dependencies,
+            )
 
     def test_exclude_translates_reserved_id_in_to_excel_key(self) -> None:
         path = self.temp_path("products.xlsx")

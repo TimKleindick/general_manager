@@ -13,7 +13,7 @@ from general_manager.cache.dependency_index import (
     drain_invalidated_cache_keys_for_graphql_rewarm,
     end_dependency_data_change,
     is_dependency_data_change_active,
-    invalidate_manager_cache_for_value_change,
+    invalidate_manager_cache_for_value_changes,
     invalidate_manager_cache,
     record_invalidated_cache_keys_for_graphql_rewarm,
 )
@@ -38,6 +38,7 @@ from general_manager.interface.excel_store import (
 from general_manager.interface.excel_workbook import (
     ExcelWorkbookAdapter,
     ExcelWorkbookRecord,
+    WorkbookFingerprint,
     workbook_fingerprint,
 )
 from general_manager.logging import get_logger
@@ -346,10 +347,14 @@ class ExcelUpdateCapability(BaseCapability):
         values = _parse_update_values(interface_cls, kwargs)
         lock = DEFAULT_EXCEL_STORE.lock_for(interface_cls.excel_meta.workbook)
         with lock:
-            _refresh_for_write(interface_instance)
+            expected_fingerprint = _refresh_for_write(interface_instance)
             _validate_declared_write_headers(interface_cls)
             if values:
-                _write_adapter(interface_cls).update_row(workbook_key, values)
+                _write_adapter(interface_cls).update_row(
+                    workbook_key,
+                    values,
+                    expected_fingerprint=expected_fingerprint,
+                )
             _set_observed_snapshot(
                 interface_instance,
                 _synced_snapshot(interface_cls, key),
@@ -373,9 +378,12 @@ class ExcelDeleteCapability(BaseCapability):
         workbook_key = _dump_key_value(interface_cls, key)
         lock = DEFAULT_EXCEL_STORE.lock_for(interface_cls.excel_meta.workbook)
         with lock:
-            _refresh_for_write(interface_instance)
+            expected_fingerprint = _refresh_for_write(interface_instance)
             _validate_declared_write_headers(interface_cls)
-            _write_adapter(interface_cls).delete_row(workbook_key)
+            _write_adapter(interface_cls).delete_row(
+                workbook_key,
+                expected_fingerprint=expected_fingerprint,
+            )
             interface_cls.sync_from_excel(force=True)
             _set_observed_snapshot(interface_instance, None)
         return {interface_cls.excel_meta.key: key}
@@ -442,35 +450,20 @@ def _invalidate_dependency_cache_from_delta(
     if manager_cls is None:
         return set()
     key = interface_cls.excel_meta.key
-    invalidated_cache_keys: set[str] = set()
+    changes: list[
+        tuple[
+            Mapping[str, Any],
+            Mapping[str, Any],
+            Mapping[str, Any],
+        ]
+    ] = []
     for row in delta.created:
-        invalidated_cache_keys.update(
-            invalidate_manager_cache_for_value_change(
-                manager_cls,
-                {},
-                row.values,
-                identification={key: row.key},
-            )
-        )
+        changes.append(({}, row.values, {key: row.key}))
     for old, new in delta.updated:
-        invalidated_cache_keys.update(
-            invalidate_manager_cache_for_value_change(
-                manager_cls,
-                old.values,
-                new.values,
-                identification={key: new.key},
-            )
-        )
+        changes.append((old.values, new.values, {key: new.key}))
     for row in delta.deleted:
-        invalidated_cache_keys.update(
-            invalidate_manager_cache_for_value_change(
-                manager_cls,
-                row.values,
-                {},
-                identification={key: row.key},
-            )
-        )
-    return invalidated_cache_keys
+        changes.append((row.values, {}, {key: row.key}))
+    return invalidate_manager_cache_for_value_changes(manager_cls, changes)
 
 
 def _enqueue_graphql_rewarm_for_invalidated_keys(cache_keys: Iterable[str]) -> None:
@@ -644,7 +637,7 @@ def _synced_snapshot(
     return mirror.rows[key]
 
 
-def _refresh_for_write(interface_instance: "ExcelInterface") -> ExcelRowSnapshot:
+def _refresh_for_write(interface_instance: "ExcelInterface") -> WorkbookFingerprint:
     interface_cls = type(interface_instance)
     key = interface_instance.identification[interface_cls.excel_meta.key]
     mirror = DEFAULT_EXCEL_STORE.mirror_for(interface_cls)
@@ -655,11 +648,12 @@ def _refresh_for_write(interface_instance: "ExcelInterface") -> ExcelRowSnapshot
         _set_observed_snapshot(interface_instance, None)
         raise ExcelWriteConflictError.missing_row(key)
     _set_observed_snapshot(interface_instance, current_snapshot)
-    if expected_snapshot is None:
-        return current_snapshot
-    if expected_snapshot.fingerprint != current_snapshot.fingerprint:
+    if (
+        expected_snapshot is not None
+        and expected_snapshot.fingerprint != current_snapshot.fingerprint
+    ):
         raise ExcelWriteConflictError.changed_row(key)
-    return current_snapshot
+    return cast(WorkbookFingerprint, mirror.fingerprint)
 
 
 def _set_observed_snapshot(
