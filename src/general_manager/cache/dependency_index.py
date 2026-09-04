@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+from threading import Event, Thread
 import time
 import uuid
 from collections.abc import Mapping
@@ -12,7 +13,7 @@ from datetime import date, datetime
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Tuple, Type, cast
 
-from django.core.cache import cache
+from django.core.cache import cache, caches
 from django.db import DEFAULT_DB_ALIAS
 from django.dispatch import receiver
 
@@ -147,6 +148,74 @@ def release_lock(token: DependencyLockToken) -> None:
     """
     if cache.get(LOCK_KEY) == token:
         cache.delete(LOCK_KEY)
+
+
+def renew_lock(
+    token: DependencyLockToken,
+    timeout: int = LOCK_TIMEOUT,
+) -> bool | None:
+    """Renew the dependency lock while preserving token ownership.
+
+    Returns ``True`` when the lease was renewed, ``False`` when ownership was
+    lost, and ``None`` when the backend does not support renewal but the caller
+    still owns the current lease.
+    """
+    if cache.get(LOCK_KEY) != token:
+        return False
+    try:
+        renewed = cache.touch(LOCK_KEY, timeout)
+    except (AttributeError, NotImplementedError):
+        return None if cache.get(LOCK_KEY) == token else False
+    if renewed:
+        return bool(cache.get(LOCK_KEY) == token)
+    return None if cache.get(LOCK_KEY) == token else False
+
+
+def _lock_token_is_stored(token: DependencyLockToken) -> bool:
+    """Return whether this backend retained the newly acquired lock token."""
+    return bool(cache.get(LOCK_KEY) == token)
+
+
+def _atomic_set_full_index_if_lock_owner(
+    idx: dependency_index,
+    token: DependencyLockToken,
+) -> bool | None:
+    """Atomically persist a legacy index on supported Redis cache backends.
+
+    None means the backend has no supported atomic compare-and-set primitive.
+    Callers can still invalidate cache values conservatively while leaving
+    legacy index compaction for a later safe operation.
+    """
+    backend = cast(Any, caches["default"])
+    backend_module = type(backend).__module__
+    script = """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            redis.call('SET', KEYS[2], ARGV[2])
+            return 1
+        end
+        return 0
+    """
+    if backend_module == "django.core.cache.backends.redis":
+        client_wrapper = backend._cache
+        raw_client = client_wrapper.get_client(None, write=True)
+        make_key = backend.make_key
+        encode = client_wrapper._serializer.dumps
+    elif backend_module == "django_redis.cache":
+        client_wrapper = backend.client
+        raw_client = client_wrapper.get_client(write=True)
+        make_key = client_wrapper.make_key
+        encode = client_wrapper.encode
+    else:
+        return None
+    result = raw_client.eval(
+        script,
+        2,
+        make_key(LOCK_KEY),
+        make_key(INDEX_KEY),
+        encode(token),
+        encode(idx),
+    )
+    return bool(result)
 
 
 def get_dependency_generation() -> int:
@@ -1494,7 +1563,50 @@ def invalidate_manager_cache_for_value_changes(
 
     invalidated_cache_keys: set[str] = set()
     lock_token = acquire_lock_with_retry("generic_cache_invalidation")
+    lease_started = time.monotonic()
+    ownership_tracked = _lock_token_is_stored(lock_token)
+    stop_renewal = Event()
+    lease_lost = Event()
+
+    def renew_while_processing() -> None:
+        nonlocal lease_started
+        interval = max(LOCK_TIMEOUT / 3, 0.01)
+        while not stop_renewal.wait(interval):
+            renewal = renew_lock(lock_token, LOCK_TIMEOUT)
+            if renewal is True:
+                lease_started = time.monotonic()
+            elif renewal is False:
+                lease_lost.set()
+                return
+            else:
+                return
+
+    def maintain_lock_lease() -> None:
+        nonlocal lease_started
+        if not ownership_tracked:
+            if time.monotonic() - lease_started >= LOCK_TIMEOUT:
+                raise DependencyLockTimeoutError("generic_cache_invalidation")
+            return
+        if lease_lost.is_set():
+            raise DependencyLockTimeoutError("generic_cache_invalidation")
+        renewal = renew_lock(lock_token, LOCK_TIMEOUT)
+        if renewal is True:
+            lease_started = time.monotonic()
+            return
+        if renewal is False or time.monotonic() - lease_started >= LOCK_TIMEOUT:
+            raise DependencyLockTimeoutError("generic_cache_invalidation")
+
+    renewal_thread: Thread | None = None
+    renewal_started = False
     try:
+        if ownership_tracked:
+            renewal_thread = Thread(
+                target=renew_while_processing,
+                name="general-manager-dependency-lock-renewal",
+                daemon=True,
+            )
+            renewal_thread.start()
+            renewal_started = True
         if legacy_dependency_index_exists():
             idx = get_full_index()
             for instance, old_relevant_values in snapshots:
@@ -1506,7 +1618,12 @@ def invalidate_manager_cache_for_value_changes(
                         old_relevant_values,
                     )
                 )
-            set_full_index(idx)
+                maintain_lock_lease()
+            maintain_lock_lease()
+            if ownership_tracked:
+                persisted = _atomic_set_full_index_if_lock_owner(idx, lock_token)
+                if persisted is False:
+                    raise DependencyLockTimeoutError("generic_cache_invalidation")
         else:
             for instance, old_relevant_values in snapshots:
                 invalidated_cache_keys.update(
@@ -1516,7 +1633,11 @@ def invalidate_manager_cache_for_value_changes(
                         old_relevant_values,
                     )
                 )
+                maintain_lock_lease()
     finally:
+        stop_renewal.set()
+        if renewal_thread is not None and renewal_started:
+            renewal_thread.join()
         release_lock(lock_token)
     return invalidated_cache_keys
 
