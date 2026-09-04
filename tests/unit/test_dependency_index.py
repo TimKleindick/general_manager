@@ -3,7 +3,9 @@ from general_manager.cache.dependency_index import (
     DATA_CHANGE_COUNT_KEY,
     DATA_CHANGE_LOCK_KEY,
     DEPENDENCY_GENERATION_KEY,
+    DependencyLockTimeoutError,
     LOCK_KEY,
+    LOCK_TIMEOUT,
     acquire_lock,
     acquire_lock_with_retry,
     begin_dependency_data_change,
@@ -12,6 +14,7 @@ from general_manager.cache.dependency_index import (
     get_dependency_generation,
     is_dependency_data_change_active,
     release_lock,
+    renew_lock,
     set_full_index,
     record_dependencies,
     record_many_dependencies,
@@ -27,6 +30,7 @@ from general_manager.cache.dependency_index import (
     serialize_dependency_identifier,
     cache,
     dependency_index,
+    _atomic_set_full_index_if_lock_owner,
 )
 import time
 import json
@@ -86,6 +90,23 @@ class TestAcquireReleaseLock(TestCase):
         release_lock("not-the-owner")
 
         assert cache.get(LOCK_KEY) is None
+
+    def test_renew_lock_extends_current_owner_lease(self) -> None:
+        token = acquire_lock(0.1)
+        assert token is not None
+
+        self.assertIs(renew_lock(token, 1), True)
+        time.sleep(0.2)
+
+        self.assertEqual(cache.get(LOCK_KEY), token)
+
+    def test_renew_lock_rejects_stale_owner(self) -> None:
+        token = acquire_lock()
+        assert token is not None
+        cache.set(LOCK_KEY, "successor", LOCK_TIMEOUT)
+
+        self.assertIs(renew_lock(token), False)
+        self.assertEqual(cache.get(LOCK_KEY), "successor")
 
 
 @override_settings(CACHES=TEST_CACHES)
@@ -1279,7 +1300,18 @@ class GenericCacheInvalidationTests(TestCase):
                     "all": {},
                 },
             ) as get_index,
-            patch("general_manager.cache.dependency_index.set_full_index") as set_index,
+            patch(
+                "general_manager.cache.dependency_index._lock_token_is_stored",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index._atomic_set_full_index_if_lock_owner",
+                return_value=True,
+            ) as persist_index,
+            patch(
+                "general_manager.cache.dependency_index.renew_lock",
+                return_value=True,
+            ) as renew,
             patch(
                 "general_manager.cache.dependency_index._generic_cache_invalidation_locked",
                 side_effect=({"first"}, {"second"}),
@@ -1297,8 +1329,329 @@ class GenericCacheInvalidationTests(TestCase):
         acquire.assert_called_once_with("generic_cache_invalidation")
         release.assert_called_once_with("owner-token")
         get_index.assert_called_once_with()
-        set_index.assert_called_once()
+        persist_index.assert_called_once()
         self.assertEqual(invalidate.call_count, 2)
+        self.assertEqual(renew.call_count, 3)
+
+    def test_external_value_change_batch_does_not_persist_after_lock_loss(
+        self,
+    ) -> None:
+        with (
+            patch(
+                "general_manager.cache.dependency_index.acquire_lock_with_retry",
+                return_value="owner-token",
+            ),
+            patch("general_manager.cache.dependency_index.release_lock"),
+            patch(
+                "general_manager.cache.dependency_index.legacy_dependency_index_exists",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index.get_full_index",
+                return_value={
+                    "filter": {},
+                    "exclude": {},
+                    "request_query": {},
+                    "all": {},
+                },
+            ),
+            patch(
+                "general_manager.cache.dependency_index._lock_token_is_stored",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index._atomic_set_full_index_if_lock_owner",
+                return_value=False,
+            ) as persist_index,
+            patch(
+                "general_manager.cache.dependency_index._generic_cache_invalidation_locked",
+                return_value=set(),
+            ),
+            patch(
+                "general_manager.cache.dependency_index.renew_lock",
+                return_value=True,
+            ),
+        ):
+            with self.assertRaises(DependencyLockTimeoutError):
+                invalidate_manager_cache_for_value_changes(
+                    "DummyManager2",
+                    (({"status": "old"}, {"status": "new"}, {"id": 1}),),
+                )
+
+        persist_index.assert_called_once()
+
+    def test_external_value_change_batch_renews_during_slow_processing(
+        self,
+    ) -> None:
+        def slow_invalidation(*args, **kwargs):
+            del args, kwargs
+            time.sleep(0.1)
+            return set()
+
+        with (
+            patch("general_manager.cache.dependency_index.LOCK_TIMEOUT", 0.06),
+            patch(
+                "general_manager.cache.dependency_index.acquire_lock_with_retry",
+                return_value="owner-token",
+            ),
+            patch("general_manager.cache.dependency_index.release_lock"),
+            patch(
+                "general_manager.cache.dependency_index.legacy_dependency_index_exists",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index.get_full_index",
+                return_value={
+                    "filter": {},
+                    "exclude": {},
+                    "request_query": {},
+                    "all": {},
+                },
+            ),
+            patch(
+                "general_manager.cache.dependency_index._lock_token_is_stored",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index._atomic_set_full_index_if_lock_owner",
+                return_value=True,
+            ) as persist_index,
+            patch(
+                "general_manager.cache.dependency_index._generic_cache_invalidation_locked",
+                side_effect=slow_invalidation,
+            ),
+            patch(
+                "general_manager.cache.dependency_index.renew_lock",
+                return_value=True,
+            ) as renew,
+        ):
+            invalidate_manager_cache_for_value_changes(
+                "DummyManager2",
+                (({"status": "old"}, {"status": "new"}, {"id": 1}),),
+            )
+
+        persist_index.assert_called_once()
+        self.assertGreaterEqual(renew.call_count, 3)
+
+    def test_external_value_change_batch_bounds_unrenewable_lease(self) -> None:
+        with (
+            patch(
+                "general_manager.cache.dependency_index.acquire_lock_with_retry",
+                return_value="owner-token",
+            ),
+            patch("general_manager.cache.dependency_index.release_lock"),
+            patch(
+                "general_manager.cache.dependency_index.legacy_dependency_index_exists",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index.get_full_index",
+                return_value={
+                    "filter": {},
+                    "exclude": {},
+                    "request_query": {},
+                    "all": {},
+                },
+            ),
+            patch(
+                "general_manager.cache.dependency_index._lock_token_is_stored",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index._atomic_set_full_index_if_lock_owner",
+            ) as persist_index,
+            patch(
+                "general_manager.cache.dependency_index._generic_cache_invalidation_locked",
+                return_value=set(),
+            ),
+            patch(
+                "general_manager.cache.dependency_index.renew_lock",
+                return_value=None,
+            ),
+            patch(
+                "general_manager.cache.dependency_index.time.monotonic",
+                side_effect=(10.0, 10.0 + LOCK_TIMEOUT),
+            ),
+        ):
+            with self.assertRaises(DependencyLockTimeoutError):
+                invalidate_manager_cache_for_value_changes(
+                    "DummyManager2",
+                    (({"status": "old"}, {"status": "new"}, {"id": 1}),),
+                )
+
+        persist_index.assert_not_called()
+
+    def test_external_value_change_batch_skips_unfenced_legacy_persistence(
+        self,
+    ) -> None:
+        with (
+            patch(
+                "general_manager.cache.dependency_index.acquire_lock_with_retry",
+                return_value="owner-token",
+            ),
+            patch("general_manager.cache.dependency_index.release_lock"),
+            patch(
+                "general_manager.cache.dependency_index._lock_token_is_stored",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index.legacy_dependency_index_exists",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index.get_full_index",
+                return_value={
+                    "filter": {},
+                    "exclude": {},
+                    "request_query": {},
+                    "all": {},
+                },
+            ),
+            patch(
+                "general_manager.cache.dependency_index._generic_cache_invalidation_locked",
+                return_value={"invalidated"},
+            ),
+            patch(
+                "general_manager.cache.dependency_index.renew_lock",
+                return_value=True,
+            ),
+            patch(
+                "general_manager.cache.dependency_index._atomic_set_full_index_if_lock_owner",
+                return_value=None,
+            ) as persist_index,
+            patch(
+                "general_manager.cache.dependency_index.set_full_index"
+            ) as unsafe_set,
+        ):
+            result = invalidate_manager_cache_for_value_changes(
+                "DummyManager2",
+                (({"status": "old"}, {"status": "new"}, {"id": 1}),),
+            )
+
+        self.assertEqual(result, {"invalidated"})
+        persist_index.assert_called_once()
+        unsafe_set.assert_not_called()
+
+    def test_external_value_change_batch_releases_lock_if_renewal_thread_fails(
+        self,
+    ) -> None:
+        with (
+            patch(
+                "general_manager.cache.dependency_index.acquire_lock_with_retry",
+                return_value="owner-token",
+            ),
+            patch(
+                "general_manager.cache.dependency_index._lock_token_is_stored",
+                return_value=True,
+            ),
+            patch("general_manager.cache.dependency_index.Thread") as thread,
+            patch("general_manager.cache.dependency_index.release_lock") as release,
+        ):
+            thread.return_value.start.side_effect = RuntimeError("cannot start")
+            with self.assertRaisesRegex(RuntimeError, "cannot start"):
+                invalidate_manager_cache_for_value_changes(
+                    "DummyManager2",
+                    (({"status": "old"}, {"status": "new"}, {"id": 1}),),
+                )
+
+        release.assert_called_once_with("owner-token")
+        thread.return_value.join.assert_not_called()
+
+    def test_redis_legacy_persistence_compares_owner_and_sets_atomically(self) -> None:
+        calls: list[tuple[object, ...]] = []
+
+        class RawClient:
+            def eval(self, *args):
+                calls.append(args)
+                return 1
+
+        class Serializer:
+            @staticmethod
+            def dumps(value):
+                return f"encoded:{value}".encode()
+
+        class ClientWrapper:
+            _serializer = Serializer()
+
+            @staticmethod
+            def get_client(key, *, write):
+                del key
+                self.assertTrue(write)
+                return RawClient()
+
+        RedisBackend = type(
+            "RedisCache",
+            (),
+            {
+                "__module__": "django.core.cache.backends.redis",
+                "_cache": ClientWrapper(),
+                "make_key": staticmethod(lambda key: f"prefix:{key}"),
+            },
+        )
+        index = {
+            "filter": {},
+            "exclude": {},
+            "request_query": {},
+            "all": {},
+        }
+
+        with patch(
+            "general_manager.cache.dependency_index.caches",
+            {"default": RedisBackend()},
+        ):
+            persisted = _atomic_set_full_index_if_lock_owner(index, "owner-token")
+
+        self.assertIs(persisted, True)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            calls[0][1:4],
+            (2, "prefix:dependency_index_lock", "prefix:dependency_index"),
+        )
+        self.assertEqual(calls[0][4], b"encoded:owner-token")
+
+    def test_redis_legacy_persistence_rejects_replaced_owner(self) -> None:
+        class RawClient:
+            @staticmethod
+            def eval(*args):
+                del args
+                return 0
+
+        class ClientWrapper:
+            class _serializer:
+                @staticmethod
+                def dumps(value):
+                    return value
+
+            @staticmethod
+            def get_client(key, *, write):
+                del key, write
+                return RawClient()
+
+        RedisBackend = type(
+            "RedisCache",
+            (),
+            {
+                "__module__": "django.core.cache.backends.redis",
+                "_cache": ClientWrapper(),
+                "make_key": staticmethod(lambda key: key),
+            },
+        )
+
+        with patch(
+            "general_manager.cache.dependency_index.caches",
+            {"default": RedisBackend()},
+        ):
+            persisted = _atomic_set_full_index_if_lock_owner(
+                {
+                    "filter": {},
+                    "exclude": {},
+                    "request_query": {},
+                    "all": {},
+                },
+                "stale-owner",
+            )
+
+        self.assertIs(persisted, False)
 
     def test_generic_invalidation_records_bounded_receiver_latency(self) -> None:
         inst = DummyManager2(status="active", count=1)
