@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
+from itertools import permutations
 import json
 import threading
 import time
@@ -49,6 +50,12 @@ PLANNED_AUDIT_EVENTS: list[dict[str, object]] = []
 
 def _capture_planned_audit_event(event: dict[str, object]) -> None:
     PLANNED_AUDIT_EVENTS.append(event)
+
+
+def _order_distinct_from_set_iteration(prefix: str, count: int) -> tuple[str, ...]:
+    """Return an input order that differs from set iteration on this runtime."""
+    items = tuple(f"{prefix}_{number}" for number in range(count))
+    return next(order for order in permutations(items) if tuple(set(order)) != order)
 
 
 class _Executor:
@@ -2008,9 +2015,7 @@ def test_scheduler_caps_provider_concurrency_at_three() -> None:
 
 
 def test_scheduler_admits_ready_roots_in_plan_order() -> None:
-    set_order = tuple(set(f"root_{number}" for number in range(6)))
-    plan_order = tuple(reversed(set_order))
-    assert tuple(set(plan_order)) != plan_order
+    plan_order = _order_distinct_from_set_iteration("root", 6)
     tasks = tuple(_task(task_id) for task_id in plan_order)
     probe = _RoundProbe(gate_first_rounds=2)
     _RoundProbeProvider.probe = probe
@@ -2044,9 +2049,7 @@ def test_scheduler_admits_ready_roots_in_plan_order() -> None:
 def test_scheduler_runs_ready_children_in_creation_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    set_order = tuple(set(f"child_{number}" for number in range(4)))
-    child_order = tuple(reversed(set_order))
-    assert tuple(set(child_order)) != child_order
+    child_order = _order_distinct_from_set_iteration("child", 4)
     children = tuple(_task(task_id) for task_id in child_order)
     parent = _task("parent")
     prepared = PreparedPlannedTurn.for_plan(
