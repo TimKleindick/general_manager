@@ -18,14 +18,17 @@ class ExcelStructureError(ExcelError):
 
     @classmethod
     def duplicate_key(cls, key: Any) -> "ExcelStructureError":
+        """Build an error for a duplicate workbook key."""
         return cls(f"Duplicate Excel key {key!r}.")
 
     @classmethod
     def missing_column(cls, field_name: str) -> "ExcelStructureError":
+        """Build an error for a missing declared column."""
         return cls(f"Missing Excel column for field {field_name!r}.")
 
     @classmethod
     def blank_key(cls) -> "ExcelStructureError":
+        """Build an error for a blank workbook key."""
         return cls("Excel key value is blank.")
 
 
@@ -34,12 +37,14 @@ class ExcelWriteConflictError(ExcelError):
 
     @classmethod
     def workbook_changed(cls, operation: str) -> ExcelWriteConflictError:
+        """Build an error for an intervening workbook change."""
         return cls(
             f"Workbook changed during {operation}; retry after refreshing Excel."
         )
 
     @classmethod
     def existing_key(cls, key: Any) -> "ExcelWriteConflictError":
+        """Build an error for a key that already exists."""
         return cls(
             "GeneralManager create for Excel key "
             f"{key!r} could not be saved because the key already exists in Excel. "
@@ -48,6 +53,7 @@ class ExcelWriteConflictError(ExcelError):
 
     @classmethod
     def missing_row(cls, key: Any) -> "ExcelWriteConflictError":
+        """Build an error for a row that no longer exists."""
         return cls(
             "GeneralManager write for Excel key "
             f"{key!r} could not be saved because the row is missing in Excel. "
@@ -56,6 +62,7 @@ class ExcelWriteConflictError(ExcelError):
 
     @classmethod
     def changed_row(cls, key: Any) -> "ExcelWriteConflictError":
+        """Build an error for a row changed since it was observed."""
         return cls(
             "GeneralManager write for Excel key "
             f"{key!r} could not be saved because the row changed in Excel. "
@@ -68,10 +75,12 @@ class ExcelMutationPayloadError(ExcelError):
 
     @classmethod
     def unknown_field(cls, field_name: str) -> "ExcelMutationPayloadError":
+        """Build an error for a field absent from the Excel schema."""
         return cls(f"Unknown Excel field {field_name!r}.")
 
     @classmethod
     def cannot_update_key(cls, field_name: str) -> "ExcelMutationPayloadError":
+        """Build an error for an attempted key-field update."""
         return cls(f"Excel key field {field_name!r} cannot be updated.")
 
 
@@ -82,24 +91,29 @@ class ExcelValidationError(ExcelError):
 
     @classmethod
     def required_blank(cls) -> "ExcelValidationError":
+        """Build an error for a blank required field."""
         return cls("Required Excel value is blank.")
 
     @classmethod
     def cannot_parse(cls, value: Any, python_type_name: str) -> "ExcelValidationError":
+        """Build an error for a value that cannot be parsed."""
         return cls(f"Cannot parse {value!r} as {python_type_name}.")
 
     @classmethod
     def exceeds_max_length(cls, value: str, max_length: int) -> "ExcelValidationError":
+        """Build an error for text exceeding its maximum length."""
         return cls(f"Excel value {value!r} exceeds max_length={max_length}.")
 
     @classmethod
     def cannot_parse_decimal(cls, value: Any) -> "ExcelValidationError":
+        """Build an error for an invalid decimal value."""
         return cls(f"Cannot parse {value!r} as Decimal.")
 
     @classmethod
     def exceeds_max_digits(
         cls, value: Decimal, max_digits: int
     ) -> "ExcelValidationError":
+        """Build an error for a decimal exceeding its digit limit."""
         return cls(f"Excel value {value!r} exceeds max_digits={max_digits}.")
 
 
@@ -112,30 +126,37 @@ class ExcelConfigurationError(ValueError):
 
     @classmethod
     def missing_meta(cls) -> "ExcelConfigurationError":
+        """Build an error for a missing nested Excel ``Meta`` class."""
         return cls("ExcelInterface requires a nested Meta class.")
 
     @classmethod
     def missing_workbook(cls) -> "ExcelConfigurationError":
+        """Build an error for a missing workbook setting."""
         return cls("ExcelInterface.Meta.workbook is required.")
 
     @classmethod
     def missing_sheet(cls) -> "ExcelConfigurationError":
+        """Build an error for a missing worksheet setting."""
         return cls("ExcelInterface.Meta.sheet is required.")
 
     @classmethod
     def missing_key(cls) -> "ExcelConfigurationError":
+        """Build an error for a missing key-field setting."""
         return cls("ExcelInterface.Meta.key is required.")
 
     @classmethod
     def ambiguous_location(cls) -> "ExcelConfigurationError":
+        """Build an error for conflicting table and header-row settings."""
         return cls("Configure exactly one of Meta.table or Meta.header_row.")
 
     @classmethod
     def invalid_header_row(cls) -> "ExcelConfigurationError":
+        """Build an error for a non-positive header-row setting."""
         return cls("ExcelInterface.Meta.header_row must be >= 1.")
 
     @classmethod
     def key_not_excel_field(cls) -> "ExcelConfigurationError":
+        """Build an error when the key is not a declared Excel field."""
         return cls("ExcelInterface.Meta.key must name an ExcelField.")
 
 
@@ -177,6 +198,7 @@ class ExcelSyncDelta:
 
 
 def build_excel_meta(meta: type | None) -> ExcelMeta:
+    """Validate and normalize an Excel interface's ``Meta`` configuration."""
     if meta is None:
         raise ExcelConfigurationError.missing_meta()
     return ExcelMeta(
@@ -203,6 +225,7 @@ class ExcelField(Generic[T]):
     dumper: Callable[[T | None], Any] | None = None
 
     def parse(self, value: Any) -> T | None:
+        """Convert a workbook value to the field's declared Python type."""
         if value is None or value == "":
             if self.required and self.default is None:
                 raise ExcelValidationError.required_blank()
@@ -218,11 +241,13 @@ class ExcelField(Generic[T]):
             ) from error
 
     def dump(self, value: T | None) -> Any:
+        """Convert a Python value to its workbook representation."""
         if self.dumper is not None:
             return self.dumper(value)
         return value
 
     def header_candidates(self, name: str) -> tuple[str, ...]:
+        """Return accepted workbook headers for this field."""
         return (self.header or name, *self.aliases)
 
 
@@ -252,6 +277,7 @@ class ExcelCharField(ExcelField[str]):
         )
 
     def parse(self, value: Any) -> str | None:
+        """Parse and validate a workbook value as text."""
         parsed = super().parse(value)
         if (
             parsed is not None
@@ -283,6 +309,7 @@ class ExcelDecimalField(ExcelField[Decimal]):
         super().__init__(Decimal, **kwargs)
 
     def parse(self, value: Any) -> Decimal | None:
+        """Parse and validate a finite decimal workbook value."""
         if value is None or value == "":
             return super().parse(value)
         try:

@@ -73,12 +73,14 @@ class ExcelWorkbookStore:
         self._mirrors: WeakKeyDictionary[type, ExcelMirror] = WeakKeyDictionary()
 
     def lock_for(self, workbook: str) -> FileLock:
+        """Return the filesystem lock coordinating access to a workbook path."""
         # A persistent sidecar survives atomic replacement of the xlsx inode.
         path = str(Path(workbook).resolve()) + ".gm.lock"
         with _locks_guard:
             return _locks.setdefault(path, FileLock(path, timeout=30))
 
     def mirror_for(self, interface_cls: Any) -> ExcelMirror:
+        """Return the local mirror, refreshing it from shared cache when available."""
         mirror = self._mirrors.setdefault(interface_cls, ExcelMirror())
         try:
             cached = caches[interface_cls.excel_meta.cache_alias].get(
@@ -105,6 +107,7 @@ class ExcelWorkbookStore:
         fingerprint: WorkbookFingerprint,
         publish: bool = True,
     ) -> ExcelSyncDelta:
+        """Replace an interface mirror and optionally publish it to the cache."""
         mirror = self._mirrors.setdefault(interface_cls, ExcelMirror())
         old_rows = mirror.rows
         created = tuple(row for key, row in rows.items() if key not in old_rows)
@@ -122,6 +125,7 @@ class ExcelWorkbookStore:
         return ExcelSyncDelta(created=created, updated=updated, deleted=deleted)
 
     def publish(self, interface_cls: Any) -> None:
+        """Publish the current interface mirror to the configured cache."""
         mirror = self._mirrors[interface_cls]
         try:
             caches[interface_cls.excel_meta.cache_alias].set(
@@ -131,6 +135,7 @@ class ExcelWorkbookStore:
             logger.exception("Excel mirror cache write failed; using local snapshot.")
 
     def set_error(self, interface_cls: type, error: Exception) -> None:
+        """Record a workbook structure error on the local mirror."""
         self._mirrors.setdefault(interface_cls, ExcelMirror()).structure_error = error
 
 
@@ -138,5 +143,6 @@ DEFAULT_EXCEL_STORE = ExcelWorkbookStore()
 
 
 def row_fingerprint(values: dict[str, Any]) -> str:
+    """Return a stable fingerprint for a parsed Excel row."""
     payload = repr(sorted(values.items())).encode("utf-8")
     return sha256(payload).hexdigest()

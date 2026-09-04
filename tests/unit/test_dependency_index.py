@@ -108,6 +108,33 @@ class TestAcquireReleaseLock(TestCase):
         self.assertIs(renew_lock(token), False)
         self.assertEqual(cache.get(LOCK_KEY), "successor")
 
+    def test_renew_lock_reports_unsupported_touch_for_current_owner(self) -> None:
+        token = acquire_lock()
+        assert token is not None
+
+        with patch.object(cache, "touch", side_effect=NotImplementedError):
+            self.assertIs(renew_lock(token), None)
+
+    def test_renew_lock_reports_unrenewed_lease_for_current_owner(self) -> None:
+        token = acquire_lock()
+        assert token is not None
+
+        with patch.object(cache, "touch", return_value=False):
+            self.assertIs(renew_lock(token), None)
+
+    def test_renew_lock_detects_owner_replacement_during_touch(self) -> None:
+        token = acquire_lock()
+        assert token is not None
+
+        def replace_owner(*_args, **_kwargs):
+            cache.set(LOCK_KEY, "successor", LOCK_TIMEOUT)
+            return False
+
+        with patch.object(cache, "touch", side_effect=replace_owner):
+            self.assertIs(renew_lock(token), False)
+
+        self.assertEqual(cache.get(LOCK_KEY), "successor")
+
 
 @override_settings(CACHES=TEST_CACHES)
 class TestFullIndex(TestCase):
@@ -1652,6 +1679,60 @@ class GenericCacheInvalidationTests(TestCase):
             )
 
         self.assertIs(persisted, False)
+
+    def test_django_redis_legacy_persistence_uses_client_codec(self) -> None:
+        calls: list[tuple[object, ...]] = []
+
+        class RawClient:
+            def eval(self, *args):
+                calls.append(args)
+                return 1
+
+        class ClientWrapper:
+            @staticmethod
+            def get_client(*, write):
+                self.assertTrue(write)
+                return RawClient()
+
+            @staticmethod
+            def make_key(key):
+                return f"django-redis:{key}"
+
+            @staticmethod
+            def encode(value):
+                return f"encoded:{value}".encode()
+
+        DjangoRedisBackend = type(
+            "RedisCache",
+            (),
+            {
+                "__module__": "django_redis.cache",
+                "client": ClientWrapper(),
+            },
+        )
+        index = {
+            "filter": {},
+            "exclude": {},
+            "request_query": {},
+            "all": {},
+        }
+
+        with patch(
+            "general_manager.cache.dependency_index.caches",
+            {"default": DjangoRedisBackend()},
+        ):
+            persisted = _atomic_set_full_index_if_lock_owner(index, "owner-token")
+
+        self.assertIs(persisted, True)
+        self.assertEqual(
+            calls[0][1:4],
+            (
+                2,
+                "django-redis:dependency_index_lock",
+                "django-redis:dependency_index",
+            ),
+        )
+        self.assertEqual(calls[0][4], b"encoded:owner-token")
 
     def test_generic_invalidation_records_bounded_receiver_latency(self) -> None:
         inst = DummyManager2(status="active", count=1)

@@ -30,6 +30,33 @@ def test_new_store_reuses_published_rows(product):
     assert fresh.rows["SKU-1"].values["name"] == "Alpha"
 
 
+def test_replace_publishes_snapshot_by_default(product):
+    manager, _ = product
+    manager.sync_excel()
+    source = ExcelWorkbookStore().mirror_for(manager.Interface)
+    cache.clear()
+
+    store = ExcelWorkbookStore()
+    store.replace(
+        manager.Interface,
+        rows=source.rows,
+        fingerprint=source.fingerprint,
+    )
+
+    fresh = ExcelWorkbookStore().mirror_for(manager.Interface)
+    assert fresh.rows["SKU-1"].values["name"] == "Alpha"
+
+
+def test_set_error_records_structure_error_locally(product):
+    manager, _ = product
+    store = ExcelWorkbookStore()
+    error = ValueError("invalid workbook")
+
+    store.set_error(manager.Interface, error)
+
+    assert store.mirror_for(manager.Interface).structure_error is error
+
+
 def test_shared_snapshot_is_not_mutated_by_reader(product):
     manager, _ = product
     manager.sync_excel()

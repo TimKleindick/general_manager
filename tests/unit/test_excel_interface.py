@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, Inexact, localcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.core.checks import run_checks
 from django.core.checks.registry import registry as django_checks_registry
@@ -153,6 +153,34 @@ class ExcelProduct(GeneralManager):
 
 
 class ExcelLifecycleTests(SimpleTestCase):
+    def test_interface_classmethods_delegate_to_excel_capabilities(self) -> None:
+        query = Mock()
+        sync = Mock()
+        query.filter.return_value = "filtered"
+        query.exclude.return_value = "excluded"
+        query.all.return_value = "all"
+        sync.sync_from_excel.return_value = "synced"
+
+        def capability(name):
+            return sync if name == "excel_sync" else query
+
+        with patch.object(
+            ExcelProduct.Interface,
+            "require_capability",
+            side_effect=capability,
+        ):
+            self.assertEqual(
+                ExcelProduct.Interface.sync_from_excel(force=True), "synced"
+            )
+            self.assertEqual(ExcelProduct.Interface.filter(name="Alpha"), "filtered")
+            self.assertEqual(ExcelProduct.Interface.exclude(name="Beta"), "excluded")
+            self.assertEqual(ExcelProduct.Interface.all(), "all")
+
+        sync.sync_from_excel.assert_called_once_with(ExcelProduct.Interface, force=True)
+        query.filter.assert_called_once_with(ExcelProduct.Interface, name="Alpha")
+        query.exclude.assert_called_once_with(ExcelProduct.Interface, name="Beta")
+        query.all.assert_called_once_with(ExcelProduct.Interface)
+
     def test_meta_and_fields_are_normalized(self) -> None:
         self.assertEqual(ExcelProduct.Interface._interface_type, "excel")
         self.assertEqual(ExcelProduct.Interface.excel_meta.workbook, "products.xlsx")

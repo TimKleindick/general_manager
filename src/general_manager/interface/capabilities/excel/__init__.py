@@ -56,6 +56,7 @@ class ExcelReadCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "read"
 
     def get_data(self, interface_instance: "ExcelInterface") -> dict[str, Any]:
+        """Return the mirrored Excel row for an interface instance."""
         interface_cls = type(interface_instance)
         key = interface_instance.identification[interface_cls.excel_meta.key]
         mirror = DEFAULT_EXCEL_STORE.mirror_for(interface_cls)
@@ -72,6 +73,7 @@ class ExcelReadCapability(BaseCapability):
         self,
         interface_cls: type["ExcelInterface"],
     ) -> dict[str, dict[str, Any]]:
+        """Describe the declared Excel fields for manager metadata."""
         return {
             name: {
                 "type": field.python_type,
@@ -84,6 +86,7 @@ class ExcelReadCapability(BaseCapability):
         }
 
     def get_attributes(self, interface_cls: type["ExcelInterface"]) -> dict[str, Any]:
+        """Build lazy attribute readers for the declared Excel fields."""
         return {
             name: lambda interface_instance, name=name: interface_instance.get_data()[
                 name
@@ -96,6 +99,7 @@ class ExcelReadCapability(BaseCapability):
         interface_cls: type["ExcelInterface"],
         field_name: str,
     ) -> type:
+        """Return the Python type declared for an Excel field."""
         return interface_cls.excel_fields[field_name].python_type
 
 
@@ -107,6 +111,7 @@ class ExcelQueryCapability(BaseCapability):
         interface_cls: type["ExcelInterface"],
         **kwargs: Any,
     ) -> ExcelBucket[Any]:
+        """Return an Excel bucket filtered by the supplied lookups."""
         return ExcelBucket(interface_cls._parent_class, interface_cls).filter(**kwargs)
 
     def exclude(
@@ -114,9 +119,11 @@ class ExcelQueryCapability(BaseCapability):
         interface_cls: type["ExcelInterface"],
         **kwargs: Any,
     ) -> ExcelBucket[Any]:
+        """Return an Excel bucket excluding the supplied lookups."""
         return ExcelBucket(interface_cls._parent_class, interface_cls).exclude(**kwargs)
 
     def all(self, interface_cls: type["ExcelInterface"]) -> ExcelBucket[Any]:
+        """Return a bucket containing all rows for the interface."""
         return ExcelBucket(interface_cls._parent_class, interface_cls)
 
 
@@ -127,6 +134,7 @@ class ExcelSyncCapability(BaseCapability):
         self,
         interface_cls: type["ExcelInterface"],
     ) -> tuple[Callable[[], None], ...]:
+        """Return startup hooks that warm normalized Excel interfaces."""
         if not _is_normalized_excel_interface(interface_cls):
             return tuple()
 
@@ -150,6 +158,7 @@ class ExcelSyncCapability(BaseCapability):
         self,
         interface_cls: type["ExcelInterface"],
     ) -> tuple[Callable[[], list[Warning]], ...]:
+        """Return Django checks for normalized Excel interfaces."""
         if not _is_normalized_excel_interface(interface_cls):
             return tuple()
 
@@ -169,6 +178,7 @@ class ExcelSyncCapability(BaseCapability):
         *,
         force: bool = False,
     ) -> ExcelSyncDelta:
+        """Refresh the shared mirror and invalidate dependencies for changes."""
         lock = DEFAULT_EXCEL_STORE.lock_for(interface_cls.excel_meta.workbook)
         with lock:
             adapter = ExcelWorkbookAdapter(interface_cls.excel_meta)
@@ -244,6 +254,7 @@ class ExcelSyncCapability(BaseCapability):
         self,
         interface_cls: type["ExcelInterface"],
     ) -> None:
+        """Validate workbook headers and row structure without publishing data."""
         rows = ExcelWorkbookAdapter(interface_cls.excel_meta).read_rows()
         _validate_declared_read_headers(interface_cls, rows.headers)
         parsed_rows: set[Any] = set()
@@ -309,6 +320,7 @@ class ExcelCreateCapability(BaseCapability):
         history_comment: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        """Validate and append a new row to the Excel workbook."""
         del creator_id, history_comment
         _validate_payload_fields(interface_cls, kwargs)
         key, values = _parse_create_values(interface_cls, kwargs)
@@ -335,6 +347,7 @@ class ExcelUpdateCapability(BaseCapability):
         history_comment: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        """Validate and write changes to an existing Excel row."""
         del creator_id, history_comment
         interface_cls = type(interface_instance)
         key = interface_instance.identification[interface_cls.excel_meta.key]
@@ -372,6 +385,7 @@ class ExcelDeleteCapability(BaseCapability):
         creator_id: int | None = None,
         history_comment: str | None = None,
     ) -> dict[str, Any]:
+        """Delete an existing Excel row after conflict checks."""
         del creator_id, history_comment
         interface_cls = type(interface_instance)
         key = interface_instance.identification[interface_cls.excel_meta.key]
@@ -401,6 +415,7 @@ class ExcelLifecycleCapability(BaseCapability):
         attrs: dict[str, Any],
         interface: type["ExcelInterface"],
     ) -> tuple[dict[str, Any], type["ExcelInterface"], None]:
+        """Prepare and validate a pending Excel-backed manager creation."""
         excel_fields: dict[str, ExcelField[Any]] = {}
         for base in reversed(interface.__mro__):
             for key, value in vars(base).items():
@@ -431,6 +446,7 @@ class ExcelLifecycleCapability(BaseCapability):
         interface_class: type["ExcelInterface"],
         model: None = None,
     ) -> None:
+        """Attach the parent manager and its Excel synchronization helper."""
         interface_class._parent_class = new_class
 
         def sync_excel(manager_cls: type) -> ExcelSyncDelta:

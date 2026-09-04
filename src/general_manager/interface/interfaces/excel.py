@@ -75,20 +75,24 @@ class ExcelInterface(InterfaceBase):
 
     @classmethod
     def sync_from_excel(cls, *, force: bool = False) -> ExcelSyncDelta:
+        """Refresh this interface's shared Excel mirror."""
         handler = cast(_ExcelSyncHandler, cls.require_capability("excel_sync"))
         return handler.sync_from_excel(cls, force=force)
 
     @classmethod
     def filter(cls, **kwargs: Any) -> Bucket[Any]:
+        """Return a bucket filtered by Excel field lookups."""
         handler = cast(_ExcelQueryHandler, cls.require_capability("query"))
         return handler.filter(cls, **kwargs)
 
     @classmethod
     def exclude(cls, **kwargs: Any) -> Bucket[Any]:
+        """Return a bucket excluding Excel field lookups."""
         handler = cast(_ExcelQueryHandler, cls.require_capability("query"))
         return handler.exclude(cls, **kwargs)
 
     @classmethod
     def all(cls) -> Bucket[Any]:
+        """Return a bucket containing all Excel rows."""
         handler = cast(_ExcelQueryHandler, cls.require_capability("query"))
         return handler.all(cls)
