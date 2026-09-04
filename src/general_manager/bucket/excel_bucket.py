@@ -132,6 +132,7 @@ class ExcelBucket(Bucket[GeneralManagerType]):
             yield self._manager_class(**{self._interface_cls.excel_meta.key: key})
 
     def filter(self, **kwargs: Any) -> ExcelBucket[GeneralManagerType]:
+        """Return a bucket narrowed to rows matching every lookup."""
         constraints = self._normalize_reserved_constraints(kwargs)
         self._validate_lookups(lookup for lookup, _expected in constraints)
         return ExcelBucket(
@@ -143,6 +144,7 @@ class ExcelBucket(Bucket[GeneralManagerType]):
         )
 
     def exclude(self, **kwargs: Any) -> ExcelBucket[GeneralManagerType]:
+        """Return a bucket without rows matching any supplied lookup."""
         constraints = self._normalize_reserved_constraints(kwargs)
         self._validate_lookups(lookup for lookup, _expected in constraints)
         return ExcelBucket(
@@ -154,6 +156,7 @@ class ExcelBucket(Bucket[GeneralManagerType]):
         )
 
     def all(self) -> ExcelBucket[GeneralManagerType]:
+        """Return an independent bucket preserving the current query."""
         return ExcelBucket(
             self._manager_class,
             self._interface_cls,
@@ -163,17 +166,21 @@ class ExcelBucket(Bucket[GeneralManagerType]):
         )
 
     def count(self) -> int:
+        """Return the number of rows in the current query."""
         return len(self._matching_keys())
 
     def first(self) -> GeneralManagerType | None:
+        """Return the first matching manager, or ``None`` when empty."""
         items = tuple(self)
         return items[0] if items else None
 
     def last(self) -> GeneralManagerType | None:
+        """Return the last matching manager, or ``None`` when empty."""
         items = tuple(self)
         return items[-1] if items else None
 
     def get(self, **kwargs: Any) -> GeneralManagerType:
+        """Return the single matching manager or raise when the count differs."""
         bucket = self.filter(**kwargs) if kwargs else self
         items = tuple(bucket)
         if len(items) != 1:
@@ -231,6 +238,7 @@ class ExcelBucket(Bucket[GeneralManagerType]):
         key: tuple[str, ...] | str,
         reverse: bool = False,
     ) -> ExcelBucket[GeneralManagerType]:
+        """Return a bucket ordered by one or more Excel field names."""
         key_names = (key,) if isinstance(key, str) else key
         self._validate_field_names(key_names)
         rows = self._matching_rows()
@@ -245,6 +253,7 @@ class ExcelBucket(Bucket[GeneralManagerType]):
         )
 
     def none(self) -> ExcelBucket[GeneralManagerType]:
+        """Return an empty bucket for this manager and interface."""
         return ExcelBucket(self._manager_class, self._interface_cls, keys=tuple())
 
     def _matching_rows(self) -> list[Any]:

@@ -6,7 +6,11 @@ from tempfile import TemporaryDirectory
 from django.test import SimpleTestCase
 from openpyxl import Workbook
 
-from general_manager.bucket.excel_bucket import ExcelBucket, ExcelBucketLookupError
+from general_manager.bucket.excel_bucket import (
+    ExcelBucket,
+    ExcelBucketLookupError,
+    ExcelSingleItemRequiredError,
+)
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.interface import ExcelInterface
@@ -35,6 +39,39 @@ class TempPathMixin:
 
 
 class ExcelBucketTests(TempPathMixin, SimpleTestCase):
+    def test_collection_helpers_preserve_row_order_and_identity(self) -> None:
+        path = self.temp_path("products.xlsx")
+        save_workbook(path)
+
+        class Product(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                name = ExcelCharField()
+
+                class Meta:
+                    workbook = str(path)
+                    sheet = "Products"
+                    header_row = 1
+                    key = "sku"
+
+        bucket = Product.all()
+
+        self.assertEqual(bucket.first().sku, "SKU-1")
+        self.assertEqual(bucket.last().sku, "SKU-2")
+        self.assertEqual(bucket.get(sku="SKU-2").name, "Beta")
+        self.assertEqual(bucket[1].sku, "SKU-2")
+        self.assertEqual(len(bucket), 2)
+        self.assertIn(Product(sku="SKU-1"), bucket)
+        self.assertEqual(
+            [item.sku for item in bucket.sort(("name", "sku"), reverse=True)],
+            ["SKU-2", "SKU-1"],
+        )
+        self.assertIsNone(bucket.none().first())
+        self.assertIsNone(bucket.none().last())
+
+        with self.assertRaises(ExcelSingleItemRequiredError):
+            bucket.get()
+
     def test_filter_returns_matching_managers_and_tracks_dependency(self) -> None:
         path = self.temp_path("products.xlsx")
         save_workbook(path)

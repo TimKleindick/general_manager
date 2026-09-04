@@ -78,6 +78,7 @@ class ExcelWorkbookRows:
 
 
 def workbook_fingerprint(path: str) -> WorkbookFingerprint:
+    """Return a fingerprint from workbook metadata and a content digest."""
     file_path = Path(path)
     stat = file_path.stat()
     digest = sha256(file_path.read_bytes()).hexdigest()
@@ -132,6 +133,7 @@ class ExcelWorkbookAdapter:
 
     @_workbook_locked
     def read_rows(self) -> ExcelWorkbookRows:
+        """Read workbook headers and row records without mutating the file."""
         fingerprint = workbook_fingerprint(self.meta.workbook)
         workbook = load_workbook(self.meta.workbook, data_only=True)
         try:
@@ -167,6 +169,7 @@ class ExcelWorkbookAdapter:
         *,
         expected_fingerprint: WorkbookFingerprint | None = None,
     ) -> None:
+        """Update a row when its observed fingerprint still matches."""
         expected = workbook_fingerprint(self.meta.workbook)
         if expected_fingerprint is not None and expected != expected_fingerprint:
             raise ExcelWriteConflictError.workbook_changed("update")
@@ -186,6 +189,7 @@ class ExcelWorkbookAdapter:
 
     @_workbook_locked
     def append_row(self, values: dict[str, Any]) -> None:
+        """Append the supplied values as a new workbook row."""
         expected = workbook_fingerprint(self.meta.workbook)
         workbook = load_workbook(self.meta.workbook)
         try:
@@ -212,6 +216,7 @@ class ExcelWorkbookAdapter:
         *,
         expected_fingerprint: WorkbookFingerprint | None = None,
     ) -> None:
+        """Delete a row when its observed fingerprint still matches."""
         expected = workbook_fingerprint(self.meta.workbook)
         if expected_fingerprint is not None and expected != expected_fingerprint:
             raise ExcelWriteConflictError.workbook_changed("delete")
