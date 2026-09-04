@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
 
 from openpyxl import load_workbook  # type: ignore[import-untyped]
+from openpyxl.formula.tokenizer import Token  # type: ignore[import-untyped]
+from openpyxl.formula.translate import (  # type: ignore[import-untyped]
+    Translator,
+    TranslatorError,
+)
 from openpyxl.utils.cell import (  # type: ignore[import-untyped]
+    coordinate_to_tuple,
     get_column_letter,
     range_boundaries,
 )
@@ -78,6 +84,34 @@ def workbook_fingerprint(path: str) -> WorkbookFingerprint:
     return WorkbookFingerprint(stat.st_mtime_ns, stat.st_size, digest)
 
 
+def _translate_formula(formula: str, *, origin: str, target: str) -> str:
+    """Translate a formula, replacing references moved out of bounds with #REF!."""
+    translator = Translator(formula, origin=origin)
+    try:
+        return cast(str, translator.translate_formula(target))
+    except TranslatorError:
+        origin_row, origin_column = coordinate_to_tuple(origin)
+        target_row, target_column = coordinate_to_tuple(target)
+        row_delta = target_row - origin_row
+        column_delta = target_column - origin_column
+        translated = ["="]
+        for token in translator.get_tokens():
+            if token.type == Token.OPERAND and token.subtype == Token.RANGE:
+                try:
+                    translated.append(
+                        Translator.translate_range(
+                            token.value,
+                            row_delta,
+                            column_delta,
+                        )
+                    )
+                except TranslatorError:
+                    translated.append("#REF!")
+            else:
+                translated.append(token.value)
+        return "".join(translated)
+
+
 _F = TypeVar("_F", bound=Callable[..., Any])
 
 
@@ -126,8 +160,16 @@ class ExcelWorkbookAdapter:
             workbook.close()
 
     @_workbook_locked
-    def update_row(self, key: object, values: dict[str, Any]) -> None:
+    def update_row(
+        self,
+        key: object,
+        values: dict[str, Any],
+        *,
+        expected_fingerprint: WorkbookFingerprint | None = None,
+    ) -> None:
         expected = workbook_fingerprint(self.meta.workbook)
+        if expected_fingerprint is not None and expected != expected_fingerprint:
+            raise ExcelWriteConflictError.workbook_changed("update")
         workbook = load_workbook(self.meta.workbook)
         try:
             sheet = self._sheet(workbook)
@@ -164,8 +206,15 @@ class ExcelWorkbookAdapter:
             workbook.close()
 
     @_workbook_locked
-    def delete_row(self, key: object) -> None:
+    def delete_row(
+        self,
+        key: object,
+        *,
+        expected_fingerprint: WorkbookFingerprint | None = None,
+    ) -> None:
         expected = workbook_fingerprint(self.meta.workbook)
+        if expected_fingerprint is not None and expected != expected_fingerprint:
+            raise ExcelWriteConflictError.workbook_changed("delete")
         workbook = load_workbook(self.meta.workbook)
         try:
             sheet = self._sheet(workbook)
@@ -177,7 +226,14 @@ class ExcelWorkbookAdapter:
                 for column in range(min_col, max_col + 1):
                     source = sheet.cell(row=row + 1, column=column)
                     target = sheet.cell(row=row, column=column)
-                    target.value = source.value
+                    value = source.value
+                    if isinstance(value, str) and value.startswith("="):
+                        value = _translate_formula(
+                            value,
+                            origin=source.coordinate,
+                            target=target.coordinate,
+                        )
+                    target.value = value
                     target._style = copy(source._style)
                     target.comment = copy(source.comment)
                     target.hyperlink = copy(source.hyperlink)

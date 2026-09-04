@@ -650,7 +650,12 @@ def _remove_cache_keys_from_index_locked(
             idx[action],
         )
         for mname, model_section in list(action_section.items()):
-            cache_dependencies = model_section.get("__cache_dependencies__", {})
+            raw_cache_dependencies = model_section.get("__cache_dependencies__", {})
+            cache_dependencies = (
+                raw_cache_dependencies
+                if isinstance(raw_cache_dependencies, dict)
+                else {}
+            )
             for lookup, lookup_map in list(model_section.items()):
                 if lookup == "__cache_dependencies__":
                     continue
@@ -1414,8 +1419,16 @@ def invalidate_manager_cache(manager_name: str) -> set[str]:
                 if isinstance(value, set):
                     keys.update(item for item in value if isinstance(item, str))
                 elif isinstance(value, dict):
-                    for child in value.values():
-                        collect(child)
+                    for name, child in value.items():
+                        if name == "__cache_dependencies__":
+                            if isinstance(child, dict):
+                                keys.update(
+                                    cache_key
+                                    for cache_key in child
+                                    if isinstance(cache_key, str)
+                                )
+                        else:
+                            collect(child)
 
             for section in idx.values():
                 collect(section.get(manager_name, {}))
@@ -1447,15 +1460,65 @@ def invalidate_manager_cache_for_value_change(
     identification: Mapping[str, Any] | None = None,
 ) -> set[str]:
     """Invalidate dependencies from external row snapshots without loading managers."""
+    return invalidate_manager_cache_for_value_changes(
+        manager_cls_or_name,
+        ((old_values, new_values, identification),),
+    )
+
+
+def invalidate_manager_cache_for_value_changes(
+    manager_cls_or_name: type[GeneralManager] | str,
+    changes: Iterable[
+        tuple[
+            Mapping[str, Any] | None,
+            Mapping[str, Any] | None,
+            Mapping[str, Any] | None,
+        ]
+    ],
+) -> set[str]:
+    """Invalidate a batch of external row changes under one dependency lock."""
     manager_name = (
         manager_cls_or_name
         if isinstance(manager_cls_or_name, str)
         else manager_cls_or_name.__name__
     )
-    instance = _DependencyValueSnapshot(new_values or {}, identification=identification)
-    return _invalidate_manager_cache_for_instance_change(
-        manager_name, instance, dict(old_values or {})
+    snapshots = tuple(
+        (
+            _DependencyValueSnapshot(new_values or {}, identification=identification),
+            dict(old_values or {}),
+        )
+        for old_values, new_values, identification in changes
     )
+    if not snapshots:
+        return set()
+
+    invalidated_cache_keys: set[str] = set()
+    lock_token = acquire_lock_with_retry("generic_cache_invalidation")
+    try:
+        if legacy_dependency_index_exists():
+            idx = get_full_index()
+            for instance, old_relevant_values in snapshots:
+                invalidated_cache_keys.update(
+                    _generic_cache_invalidation_locked(
+                        idx,
+                        manager_name,
+                        instance,
+                        old_relevant_values,
+                    )
+                )
+            set_full_index(idx)
+        else:
+            for instance, old_relevant_values in snapshots:
+                invalidated_cache_keys.update(
+                    _generic_cache_invalidation_from_shards(
+                        manager_name,
+                        instance,
+                        old_relevant_values,
+                    )
+                )
+    finally:
+        release_lock(lock_token)
+    return invalidated_cache_keys
 
 
 def _invalidate_manager_cache_for_instance_change(
