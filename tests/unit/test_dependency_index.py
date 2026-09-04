@@ -1733,6 +1733,7 @@ class GenericCacheInvalidationTests(TestCase):
             ),
         )
         self.assertEqual(calls[0][4], b"encoded:owner-token")
+        self.assertEqual(calls[0][5], ClientWrapper.encode(index))
 
     def test_generic_invalidation_records_bounded_receiver_latency(self) -> None:
         inst = DummyManager2(status="active", count=1)
