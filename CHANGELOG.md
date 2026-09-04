@@ -2,6 +2,35 @@
 
 <!-- version list -->
 
+## v0.78.0 (2026-09-04)
+
+### Bug Fixes
+
+- Fence batched cache invalidation
+  ([`8a8675d`](https://github.com/TimKleindick/general_manager/commit/8a8675db52aae57ad59636126293bf7d6dc60dd8))
+
+- Harden Excel cache synchronization
+  ([`0cdb3aa`](https://github.com/TimKleindick/general_manager/commit/0cdb3aa27f532f3d63ef8f5309f1b2b05eb09994))
+
+### Documentation
+
+- Document planned chat public API
+  ([`0c4e73b`](https://github.com/TimKleindick/general_manager/commit/0c4e73bcbef035803f859e19ef9b882e104108cc))
+
+### Features
+
+- Add Excel interface with shared cache mirrors
+  ([`f7aa340`](https://github.com/TimKleindick/general_manager/commit/f7aa34090470b5593631006f6abde2ff3130ccda))
+
+### Testing
+
+- Expand Excel interface coverage
+  ([`7b5329a`](https://github.com/TimKleindick/general_manager/commit/7b5329af4b8f744c402e1606076ea9a9e02b906c))
+
+- Tighten Excel cache assertions
+  ([`5879591`](https://github.com/TimKleindick/general_manager/commit/587959110f537780a47bb027ee7a03fd54d1971c))
+
+
 ## v0.77.1 (2026-08-29)
 
 ### Bug Fixes
