@@ -101,7 +101,6 @@ async def _iter_provider_events(
     stream_timeout = float(provider_config.get("stream_timeout_seconds", 30))
     stream = provider.complete(messages, tools).__aiter__()
     first_chunk = True
-    stream_closed = False
     try:
         while True:
             timeout = request_timeout if first_chunk else stream_timeout
@@ -110,23 +109,15 @@ async def _iter_provider_events(
             except StopAsyncIteration:
                 return
             first_chunk = False
-            if isinstance(event, DoneEvent):
-                close = getattr(stream, "aclose", None)
-                if callable(close):
-                    result = close()
-                    if inspect.isawaitable(result):
-                        await result
-                stream_closed = True
             yield event
             if isinstance(event, DoneEvent):
                 return
     finally:
-        if not stream_closed:
-            close = getattr(stream, "aclose", None)
-            if callable(close):
-                result = close()
-                if inspect.isawaitable(result):
-                    await result
+        close = getattr(stream, "aclose", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
 
 
 def _last_user_text(messages: list[Message]) -> str:
@@ -496,6 +487,8 @@ class ChatConsumer(_ChatConsumerBase):
                         output_tokens=event.usage.output_tokens,
                         count_request=False,
                     )
+                    # Account completion before cleanup, but do not continue or finish first.
+                    await provider_events.aclose()
                     if isinstance(rate_limited, dict):
                         await self.send_json(
                             {

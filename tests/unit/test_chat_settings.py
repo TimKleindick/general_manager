@@ -101,7 +101,18 @@ class ChatSettingsTests(SimpleTestCase):
     @override_settings(GENERAL_MANAGER={"CHAT": {"max_total_rounds_per_message": 0}})
     def test_validate_chat_settings_rejects_a_zero_total_round_cap(self) -> None:
         GraphQL.reset_registry()
-        with pytest.raises(ChatConfigurationError, match="max_total_rounds"):
+        with pytest.raises(
+            ChatConfigurationError,
+            match="max_total_rounds_per_message must be a positive integer or null",
+        ):
+            validate_chat_settings()
+
+    @override_settings(GENERAL_MANAGER={"CHAT": {"max_mutations_per_message": None}})
+    def test_validate_chat_settings_rejects_null_mutation_cap(self) -> None:
+        with pytest.raises(
+            ChatConfigurationError,
+            match="max_mutations_per_message must be a non-negative integer",
+        ):
             validate_chat_settings()
 
     @override_settings(GENERAL_MANAGER={"CHAT": {"permission": 123}})

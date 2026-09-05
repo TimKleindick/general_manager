@@ -4,7 +4,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 from typing import ClassVar
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -94,6 +94,71 @@ class _DisabledToolsProvider:
             yield DoneEvent(usage=TokenUsage(input_tokens=4, output_tokens=5))
         finally:
             self.closed = True
+
+
+class _CleanupFailure(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("provider cleanup failed")
+
+
+class _CleanupFailingDoneProvider:
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        try:
+            yield DoneEvent(usage=TokenUsage(input_tokens=4, output_tokens=5))
+        finally:
+            raise _CleanupFailure
+
+
+class _CleanupFailingToolDoneProvider:
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        try:
+            yield ToolCallEvent(
+                id="cleanup-tool",
+                name="query",
+                args={"manager": "Part", "fields": ["name"]},
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=4, output_tokens=5))
+        finally:
+            raise _CleanupFailure
+
+
+class _SummaryEventsWithoutAclose:
+    def __init__(self) -> None:
+        self._events = iter(
+            [
+                TextChunkEvent(content="compressed history"),
+                DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=3)),
+            ]
+        )
+
+    def __aiter__(self) -> _SummaryEventsWithoutAclose:
+        return self
+
+    async def __anext__(self):  # type: ignore[no-untyped-def]
+        try:
+            return next(self._events)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+class _ClosableSummaryEvents(_SummaryEventsWithoutAclose):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _SummaryIteratorProvider:
+    def __init__(self, events: object) -> None:
+        self.events = events
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        return self.events
 
 
 class _ConfirmationProvider:
@@ -408,6 +473,86 @@ class ChatTurnBudgetConsumerTests(TransactionTestCase):
 
         asyncio.run(run())
 
+    def test_websocket_accounts_done_usage_when_provider_cleanup_fails(self) -> None:
+        provider = _CleanupFailingDoneProvider()
+        consumer = self._consumer(provider, "websocket-cleanup-failure")
+        state = TurnState(max_rounds=1, max_mutations=1)
+
+        async def run() -> None:
+            with (
+                patch.object(consumer, "send_json", new_callable=AsyncMock) as send,
+                patch.object(ChatConsumer, "_build_tool_definitions", return_value=[]),
+                patch(
+                    "general_manager.chat.consumer.enforce_chat_rate_limit",
+                    return_value=None,
+                ) as enforce_limit,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "provider cleanup failed"):
+                    await consumer._stream_provider_turn(
+                        [Message(role="user", content="hello")],
+                        [],
+                        tool_retries=0,
+                        turn_state=state,
+                    )
+
+            assert state.usage == TokenUsage(input_tokens=4, output_tokens=5)
+            assert send.await_args_list == []
+            assert enforce_limit.call_args_list == [
+                call(consumer.scope, count_request=False),
+                call(
+                    consumer.scope,
+                    input_tokens=4,
+                    output_tokens=5,
+                    count_request=False,
+                ),
+            ]
+
+        asyncio.run(run())
+
+    def test_websocket_cleanup_failure_sends_only_outer_error_event(self) -> None:
+        provider = _CleanupFailingDoneProvider()
+        consumer = self._consumer(provider, "websocket-cleanup-outer-error")
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer,
+                    "_get_persistent_conversation",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(consumer, "send_json", new_callable=AsyncMock) as send,
+                patch.object(ChatConsumer, "_build_tool_definitions", return_value=[]),
+                patch(
+                    "general_manager.chat.consumer.get_planned_chat_settings",
+                    return_value=SimpleNamespace(enabled=False),
+                ),
+                patch(
+                    "general_manager.chat.consumer.enforce_chat_rate_limit",
+                    side_effect=[None, None, None],
+                ) as enforce_limit,
+            ):
+                await consumer.receive_json({"type": "message", "text": "hello"})
+
+            send.assert_awaited_once_with(
+                {
+                    "type": "error",
+                    "message": "Chat request failed.",
+                    "code": "chat_error",
+                }
+            )
+            assert enforce_limit.call_args_list == [
+                call(consumer.scope),
+                call(consumer.scope, count_request=False),
+                call(
+                    consumer.scope,
+                    input_tokens=4,
+                    output_tokens=5,
+                    count_request=False,
+                ),
+            ]
+
+        asyncio.run(run())
+
     def test_http_disabled_tools_accounts_terminal_usage_before_rejection(self) -> None:
         provider = _DisabledToolsProvider()
         state = TurnState(max_rounds=1, max_mutations=1)
@@ -433,6 +578,95 @@ class ChatTurnBudgetConsumerTests(TransactionTestCase):
             assert provider.closed
             assert state.usage == TokenUsage(4, 5)
             assert events[-1]["code"] == "tool_retry_limit"
+
+        asyncio.run(run())
+
+    def test_http_accounts_done_usage_when_provider_cleanup_fails(self) -> None:
+        provider = _CleanupFailingDoneProvider()
+        state = TurnState(max_rounds=1, max_mutations=1)
+
+        async def run() -> None:
+            with patch(
+                "general_manager.chat.views.enforce_chat_rate_limit",
+                return_value=None,
+            ) as enforce_limit:
+                with self.assertRaisesRegex(RuntimeError, "provider cleanup failed"):
+                    await _run_provider_turn(
+                        scope={},
+                        conversation=None,
+                        provider=provider,
+                        messages=[Message(role="user", content="hello")],
+                        transport="http",
+                        turn_state=state,
+                    )
+
+            assert state.usage == TokenUsage(input_tokens=4, output_tokens=5)
+            assert enforce_limit.call_args_list == [
+                call({}, count_request=False),
+                call({}, input_tokens=4, output_tokens=5, count_request=False),
+            ]
+
+        asyncio.run(run())
+
+    def test_http_cleanup_failure_stops_tool_continuation(self) -> None:
+        provider = _CleanupFailingToolDoneProvider()
+        state = TurnState(max_rounds=1, max_mutations=1)
+
+        async def run() -> None:
+            with (
+                patch("general_manager.chat.views.execute_chat_tool") as execute_tool,
+                patch(
+                    "general_manager.chat.views.enforce_chat_rate_limit",
+                    return_value=None,
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "provider cleanup failed"):
+                    await _run_provider_turn(
+                        scope={},
+                        conversation=None,
+                        provider=provider,
+                        messages=[Message(role="user", content="find parts")],
+                        transport="http",
+                        turn_state=state,
+                    )
+
+            execute_tool.assert_not_called()
+            assert state.usage == TokenUsage(input_tokens=4, output_tokens=5)
+
+        asyncio.run(run())
+
+    def test_summary_accepts_non_closable_async_iterator(self) -> None:
+        events = _SummaryEventsWithoutAclose()
+        provider = _SummaryIteratorProvider(events)
+        state = TurnState(max_rounds=1, max_mutations=1)
+
+        async def run() -> None:
+            with patch(
+                "general_manager.chat.context.enforce_chat_rate_limit",
+                return_value=None,
+            ):
+                summary = await summarize_messages_with_provider(
+                    provider, [], scope={}, turn_state=state
+                )
+
+            assert summary == "compressed history"
+            assert state.usage == TokenUsage(input_tokens=2, output_tokens=3)
+
+        asyncio.run(run())
+
+    def test_summary_closes_compatible_async_iterator(self) -> None:
+        events = _ClosableSummaryEvents()
+        provider = _SummaryIteratorProvider(events)
+
+        async def run() -> None:
+            with patch(
+                "general_manager.chat.context.enforce_chat_rate_limit",
+                return_value=None,
+            ):
+                summary = await summarize_messages_with_provider(provider, [], scope={})
+
+            assert summary == "compressed history"
+            assert events.closed is True
 
         asyncio.run(run())
 
@@ -550,6 +784,51 @@ class ChatTurnBudgetHttpTests(TransactionTestCase):
     def tearDown(self) -> None:
         test_urls.urlpatterns[:] = []
         cache.clear()
+
+    def test_sse_cleanup_failure_emits_only_outer_error_event(self) -> None:
+        provider = _CleanupFailingDoneProvider()
+        with (
+            patch(
+                "general_manager.chat.views.import_provider",
+                return_value=lambda: provider,
+            ),
+            patch("general_manager.chat.views.get_tool_definitions", return_value=[]),
+            patch(
+                "general_manager.chat.views.get_planned_chat_settings",
+                return_value=SimpleNamespace(enabled=False),
+            ),
+            patch(
+                "general_manager.chat.views.enforce_chat_rate_limit",
+                side_effect=[None, None, None],
+            ) as enforce_limit,
+        ):
+            response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "hello"}),
+                content_type="application/json",
+            )
+
+            async def collect_stream() -> bytes:
+                stream = response.streaming_content
+                if hasattr(stream, "__aiter__"):
+                    return b"".join([chunk async for chunk in stream])
+                return b"".join(stream)
+
+            body = asyncio.run(collect_stream()).decode()
+
+        assert body.count('"type": "error"') == 1
+        assert '"type": "done"' not in body
+        usage_calls = [
+            event
+            for event in enforce_limit.call_args_list
+            if "input_tokens" in event.kwargs
+        ]
+        assert len(usage_calls) == 1
+        assert usage_calls[0].kwargs == {
+            "input_tokens": 4,
+            "output_tokens": 5,
+            "count_request": False,
+        }
 
     def test_sse_pending_state_and_http_denial_leave_row_retriable(self) -> None:
         _ConfirmationProvider.instances = []

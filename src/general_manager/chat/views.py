@@ -465,6 +465,8 @@ async def _iter_provider_turn_events(
                     output_tokens=event.usage.output_tokens,
                     count_request=False,
                 )
+                # Account completion before cleanup, but do not continue or finish first.
+                await provider_events.aclose()
                 if isinstance(rate_limited, dict):
                     yield {
                         "type": "error",
