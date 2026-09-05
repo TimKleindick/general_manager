@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Generator, TypeGuard, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, FieldDoesNotExist, FieldError
 from django.db import models
+from django.db.models.expressions import Col
 from django.db.models.sql.query import Query
 from simple_history.models import HistoricalChanges
 
@@ -2061,9 +2062,41 @@ def _database_materialized_lookup_data(
         query.clear_ordering(True)
         query.distinct = False
         query.distinct_fields = ()
-        query.promote_joins(set(query.alias_map))
+        required_aliases = {query.get_initial_alias()}
+        for expression in (*query.annotations.values(), query.where):
+            required_aliases.update(_expression_column_aliases(expression))
+        for alias in tuple(required_aliases):
+            parent = getattr(query.alias_map.get(alias), "parent_alias", None)
+            while parent is not None:
+                required_aliases.add(parent)
+                parent = getattr(query.alias_map.get(parent), "parent_alias", None)
+        # Joins used only by the removed filter would multiply aggregate rows.
+        query.alias_refcount = {
+            alias: max(count, 1) if alias in required_aliases else 0
+            for alias, count in query.alias_refcount.items()
+        }
+        query.promote_joins(required_aliases)
         data.query = query
     return data
+
+
+def _expression_column_aliases(expression: object) -> set[str]:
+    """Find outer-query columns required by an annotation or predicate."""
+    if isinstance(expression, Col):
+        alias = getattr(expression, "alias", None)
+        return {alias} if isinstance(alias, str) else set()
+    method = (
+        "get_external_cols"
+        if isinstance(expression, Query)
+        else "get_source_expressions"
+    )
+    get_children = getattr(expression, method, None)
+    if not callable(get_children):
+        return set()
+    aliases: set[str] = set()
+    for child in get_children():
+        aliases.update(_expression_column_aliases(child))
+    return aliases
 
 
 def _restore_database_materialized_bucket(
