@@ -1296,6 +1296,16 @@ cloning emits `request.pre_create` and `_parent_class` assignment emits
 `request.post_create`. Create/update/delete accept
 `creator_id` and `history_comment` for manager API compatibility but do not send
 those values to the remote service.
+
+A compiler fragment may contribute both outbound request values and local
+predicates. A single mixed exclusion preserves both contributions; a conflict or
+additional lookup in that exclusion is rejected when the flat request plan cannot
+represent its full negated expression. Local predicates are grouped by their
+originating manager call, even when a compiler emits a different predicate
+action. Sorting a request bucket keeps response provenance, and subsequent
+no-op `all()`, `filter()`, and `exclude()` calls keep that provenance too, so a
+partial response or one without a total cannot establish global uniqueness.
+
 `RequestInterface.execute_request_plan()` treats only `create`, `update`, and
 `delete` as mutation actions; every other action string resolves a query
 operation using `plan.operation_name`. Missing mutation operations raise

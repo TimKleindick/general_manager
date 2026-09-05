@@ -1691,6 +1691,33 @@ class DatabaseBucketTestCase(TestCase):
             [self.u1.id],
         )
 
+    def test_materialized_exclude_matches_native_multivalued_relation_semantics(self):
+        first = Group.objects.create(name="First")
+        second = Group.objects.create(name="Second")
+        self.u1.groups.add(first, second)
+        self.u2.groups.add(first)
+        source = DatabaseBucket(User.objects.order_by("username"), NativeUserManager)
+        conditions = {"groups__name": "First", "groups__id": second.pk}
+        native_ids = [
+            item.identification["id"] for item in source.exclude(**conditions)
+        ]
+        self.assertEqual(native_ids, [self.u2.pk, self.u3.pk])
+        alice, bob, carol = list(source)
+        variants = {
+            "slice": source[:2],
+            "union": source | source,
+            "instances": source.with_instances([carol, alice, bob, carol]),
+        }
+        for kind, derived in variants.items():
+            with self.subTest(kind=kind):
+                expected = [
+                    item for item in derived if item.identification["id"] in native_ids
+                ]
+                actual = list(derived.exclude(**conditions))
+                self.assertEqual(actual, expected)
+                for result, original in zip(actual, expected, strict=True):
+                    self.assertIs(result, original)
+
     def test_materialized_database_subset_preserves_query_annotations(self):
         source = self.bucket.filter(username_length__gte=5)
         derived = source.with_instances([UserManager(self.u2.id)])

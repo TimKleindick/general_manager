@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -34,6 +35,15 @@ if TYPE_CHECKING:
 modelsModel = TypeVar("modelsModel", bound=models.Model)
 type FactoryParams = dict[str, object]
 type AdjustmentRecords = FactoryParams | list[FactoryParams]
+
+
+_ADJUSTED_M2M_VALUES_KEY = object()
+_preparing_factory_options: ContextVar[tuple[object, dict[str, object]] | None] = (
+    ContextVar(
+        "preparing_factory_options",
+        default=None,
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -123,6 +133,19 @@ class MissingIdentificationFieldError(AttributeError):
 class _AutoFactoryOptions(DjangoOptions):
     """Apply evaluated many-to-many values within their own factory build step."""
 
+    def prepare_arguments(
+        self,
+        attributes: dict[str, object],
+    ) -> tuple[tuple[object, ...], dict[str, object]]:
+        """Expose the current build-step attributes to ``_adjust_kwargs()``."""
+        token = _preparing_factory_options.set((self, attributes))
+        try:
+            return super().prepare_arguments(  # type: ignore[no-any-return, no-untyped-call]
+                attributes
+            )
+        finally:
+            _preparing_factory_options.reset(token)
+
     def use_postgeneration_results(
         self,
         step: object,
@@ -139,10 +162,15 @@ class _AutoFactoryOptions(DjangoOptions):
             return
         factory = cast(Any, self.factory)
         model = cast(type[models.Model], factory._meta.model)
-        many_to_many_values = {
-            field.name: build_step.attributes[field.name]
+        many_to_many_values = cast(
+            FactoryParams,
+            build_step.attributes.get(_ADJUSTED_M2M_VALUES_KEY, {}),
+        )
+        post_generation_results = cast(Mapping[str, object], results)
+        post_generation_owned_fields = {
+            field.name
             for field in model._meta.many_to_many
-            if field.name in build_step.attributes
+            if field.name in post_generation_results
         }
         objects = instance if isinstance(instance, list) else (instance,)
         for item in objects:
@@ -150,6 +178,7 @@ class _AutoFactoryOptions(DjangoOptions):
                 factory._handle_many_to_many_fields_after_creation(
                     item,
                     many_to_many_values,
+                    skip_fields=post_generation_owned_fields,
                 )
 
 
@@ -337,6 +366,8 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         cls,
         obj: models.Model,
         attrs: FactoryParams,
+        *,
+        skip_fields: frozenset[str] | set[str] = frozenset(),
     ) -> None:
         """
         Assign related objects to many-to-many fields after saved creation.
@@ -348,8 +379,12 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         Parameters:
             obj (models.Model): Instance whose many-to-many relations should be populated.
             attrs: Evaluated declared or caller-supplied many-to-many attributes.
+            skip_fields: Relations assigned by post-generation declarations and
+                excluded from automatic assignment.
         """
         for field in obj._meta.many_to_many:
+            if field.name in skip_fields:
+                continue
             relation_generation = cls._get_related_factory_mode(field.name)
             if field.name in attrs:
                 m2m_values = attrs[field.name]
@@ -375,6 +410,17 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         """
         model: type[models.Model] = cls._meta.model
         m2m_fields = {field.name for field in model._meta.many_to_many}
+        preparation_context = _preparing_factory_options.get()
+        if preparation_context is not None and preparation_context[0] is cls._meta:
+            adjusted_many_to_many_values = {
+                field_name: kwargs[field_name]
+                for field_name in m2m_fields
+                if field_name in kwargs
+            }
+            # Store values on the individual build step rather than factory metadata.
+            # The build step later applies them after post-generation hooks.
+            attributes = cast(dict[object, object], preparation_context[1])
+            attributes[_ADJUSTED_M2M_VALUES_KEY] = adjusted_many_to_many_values
         for field_name in list(kwargs.keys()):
             raw_relation_override = kwargs.get(field_name)
             if isinstance(raw_relation_override, _RawRelationAttnameOverride):
