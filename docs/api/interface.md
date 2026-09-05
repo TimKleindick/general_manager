@@ -1395,6 +1395,11 @@ normalizer implementations.
 ::: general_manager.interface.interfaces.excel.ExcelInterface
 
 `ExcelInterface` maps typed fields to an `.xlsx` worksheet table or header row.
+Its public class methods are `sync_from_excel(*, force=False)`,
+`filter(**kwargs)`, `exclude(**kwargs)`, and `all()`. The query methods return an
+Excel-backed bucket; supported lookup suffixes are `exact`, `lt`, `lte`, `gt`,
+`gte`, `contains`, `startswith`, `endswith`, and `in`.
+
 Declare `ExcelCharField`, `ExcelIntegerField`, `ExcelDecimalField`, or a custom
 `ExcelField` on the nested interface. `Meta` requires `workbook`, `sheet`, `key`,
 and exactly one of `table` or `header_row`.
@@ -1404,11 +1409,73 @@ Complete parsed snapshots use Django's cache API, while workbook access is
 serialized with a filesystem sidecar lock. A shared cache and shared workbook
 filesystem support multiple workers. Other cache backends remain usable.
 
-`Manager.sync_excel()` forces synchronization and returns an `ExcelSyncDelta`
-containing created snapshots, `(old, new)` updated pairs, and deleted snapshots.
-`Manager.Interface.sync_from_excel(force=False)` checks the fingerprint and skips
-parsing when unchanged. `create`, `update`, and `delete` write through to Excel;
-keys cannot be updated. Existing manager instances refresh their field reads.
+`Manager.sync_excel() -> ExcelSyncDelta` forces synchronization. Its `created`
+and `deleted` members contain `ExcelRowSnapshot` values, while `updated`
+contains `(old, new)` snapshot pairs. `Manager.Interface.sync_from_excel(
+force=False) -> ExcelSyncDelta` checks the fingerprint and skips parsing when
+unchanged. `create`, `update`, and `delete` write through to Excel; keys cannot
+be updated. Existing manager instances refresh their field reads.
+
+::: general_manager.interface.excel.ExcelMeta
+
+::: general_manager.interface.excel.ExcelSyncDelta
+
+::: general_manager.interface.excel.ExcelRowSnapshot
+
+## Excel fields
+
+::: general_manager.interface.excel.ExcelField
+
+::: general_manager.interface.excel.ExcelCharField
+
+::: general_manager.interface.excel.ExcelIntegerField
+
+::: general_manager.interface.excel.ExcelDecimalField
+
+`ExcelField` accepts `python_type`, `required=True`, `default=None`,
+`header=None`, `aliases=()`, `unique=False`, `editable=True`, optional `parser`,
+and optional `dumper`. `parse(value)` returns a typed value or default and
+raises `ExcelValidationError` for required blanks or conversion failures;
+`dump(value)` returns the workbook representation. `ExcelCharField` adds
+`max_length`; `ExcelDecimalField` adds `max_digits` and `decimal_places`.
+
+## Excel buckets
+
+::: general_manager.bucket.excel_bucket.ExcelBucket
+
+`ExcelBucket` is the in-memory query result returned by the Excel interface.
+`filter()` and `exclude()` return new buckets; `all()` returns a new unfiltered
+bucket. `count()`, `first()`, `last()`, `get()`, indexing, slicing, membership,
+and iteration materialize current workbook rows. `get()` requires exactly one
+row and raises `ExcelSingleItemRequiredError`; unknown fields or lookup suffixes
+raise `ExcelBucketLookupError`; incompatible unions raise
+`ExcelBucketUnionError`. `sort(key, reverse=False)` accepts one field name or a
+tuple of field names and sorts parsed values in memory.
+
+## Excel errors and compatibility
+
+::: general_manager.interface.excel.ExcelError
+
+::: general_manager.interface.excel.ExcelStructureError
+
+::: general_manager.interface.excel.ExcelWriteConflictError
+
+::: general_manager.interface.excel.ExcelMutationPayloadError
+
+::: general_manager.interface.excel.ExcelValidationError
+
+::: general_manager.interface.excel.ExcelLockError
+
+::: general_manager.interface.excel.ExcelConfigurationError
+
+Workbook layout failures raise `ExcelStructureError`; cell conversion and
+validation failures raise `ExcelValidationError`; unsupported mutation payloads
+raise `ExcelMutationPayloadError`; and stale or overlapping writes raise
+`ExcelWriteConflictError`. The errors are defined in
+`general_manager.interface.excel` and are stable exception types for handling
+Excel-backed operations. `ExcelLockError` is reserved for lock-acquisition
+failures; current file-lock timeouts are surfaced by the underlying
+`filelock.Timeout` exception.
 
 See [Use an Excel interface](../howto/excel_interface.md) for cache configuration,
 conflict behavior, file-lock requirements and external-editor limitations.
