@@ -633,6 +633,7 @@ class ChatViewHelperTests(SimpleTestCase):
         }
 
     def test_token_limit_after_a_provider_round_blocks_tool_execution(self) -> None:
+        provider = _ToolThenSynthesisProvider()
         with (
             patch(
                 "general_manager.chat.views.get_chat_settings",
@@ -645,17 +646,22 @@ class ChatViewHelperTests(SimpleTestCase):
             patch("general_manager.chat.views.execute_chat_tool") as execute_tool,
             patch(
                 "general_manager.chat.views.enforce_chat_rate_limit",
-                return_value={"retry_after_seconds": 60},
-            ),
+                side_effect=[None, {"retry_after_seconds": 60}],
+            ) as enforce_limit,
         ):
             events = async_to_sync(_run_provider_turn)(
                 scope={},
                 conversation=object(),
-                provider=_QueryLoopProvider(),
+                provider=provider,
                 messages=[Message(role="user", content="Find parts")],
                 transport="sse",
             )
 
+        assert len(provider.tools) == 1
+        assert enforce_limit.call_args_list == [
+            call({}, count_request=False),
+            call({}, input_tokens=1, output_tokens=1, count_request=False),
+        ]
         execute_tool.assert_not_called()
         assert events == [
             {

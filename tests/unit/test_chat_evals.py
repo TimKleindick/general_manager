@@ -943,7 +943,18 @@ class RunnerHelperTests(SimpleTestCase):
             {"name": "query", "args": {"manager": "PartManager"}}
         ]
         assert record.tool_results == [{"error": "bad query args"}]
+        assert messages[-2].role == "assistant"
+        assert messages[-2].tool_calls == (
+            ToolCallEvent(
+                id="eval-recovery-1",
+                name="query",
+                args={"manager": "PartManager"},
+            ),
+        )
         assert messages[-1].role == "tool"
+        assert messages[-1].tool_call_id == "eval-recovery-1"
+        assert messages[-1].tool_name == "query"
+        assert messages[-1].tool_result == {"error": "bad query args"}
         assert "bad query args" in messages[-1].content
         assert 'tool_call query: {"manager": "PartManager"}' in stream.getvalue()
 

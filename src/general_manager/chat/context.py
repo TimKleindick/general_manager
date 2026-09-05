@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import aclosing
+import inspect
 from typing import Any
 
 from asgiref.sync import sync_to_async
@@ -66,7 +66,8 @@ async def summarize_messages_with_provider(
             )
             if isinstance(rate_limited, dict):
                 raise ChatSummaryRateLimitExceeded(rate_limited["retry_after_seconds"])
-        async with aclosing(provider.complete(prompt_messages, [])) as events:
+        events = provider.complete(prompt_messages, [])
+        try:
             async for event in events:
                 if isinstance(event, TextChunkEvent):
                     chunks.append(event.content)
@@ -85,6 +86,12 @@ async def summarize_messages_with_provider(
                                 rate_limited["retry_after_seconds"]
                             )
                     return
+        finally:
+            close = getattr(events, "aclose", None)
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
 
     await asyncio.wait_for(consume(), timeout=timeout_seconds)
     return "".join(chunks).strip()
