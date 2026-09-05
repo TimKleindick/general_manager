@@ -1435,8 +1435,10 @@ be updated. Existing manager instances refresh their field reads.
 `ExcelField` accepts `python_type`, `required=True`, `default=None`,
 `header=None`, `aliases=()`, `unique=False`, `editable=True`, optional `parser`,
 and optional `dumper`. `parse(value)` returns a typed value or default and
-raises `ExcelValidationError` for required blanks or conversion failures;
-`dump(value)` returns the workbook representation. `ExcelCharField` adds
+raises `ExcelValidationError` for required blanks and built-in `python_type`
+conversion failures. Exceptions raised by a custom `parser` propagate
+unchanged; a custom parser may raise `ExcelValidationError` itself when that is
+desired. `dump(value)` returns the workbook representation. `ExcelCharField` adds
 `max_length`; `ExcelDecimalField` adds `max_digits` and `decimal_places`.
 
 ## Excel buckets
