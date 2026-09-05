@@ -801,9 +801,10 @@ class ChatHttpTransportTests(TestCase):
             )
 
         assert response.status_code == 200
-        assert limit.call_count == 2
+        assert limit.call_count == 3
         assert limit.call_args_list[0].kwargs == {}
-        assert limit.call_args_list[1].kwargs == {
+        assert limit.call_args_list[1].kwargs == {"count_request": False}
+        assert limit.call_args_list[2].kwargs == {
             "input_tokens": 1,
             "output_tokens": 1,
             "count_request": False,

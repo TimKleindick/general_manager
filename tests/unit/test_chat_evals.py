@@ -1348,14 +1348,62 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert second_call_messages[-1].role == "tool"
         assert "PartManager" in second_call_messages[-1].content
         assert second_call_messages[-2].role == "assistant"
-        assert (
-            second_call_messages[-2].content
-            == "Called tool search_managers. The next message is the tool result; answer from it exactly."
+        assert second_call_messages[-2].content == ""
+        assert second_call_messages[-2].tool_calls == (
+            ToolCallEvent(id="1", name="search_managers", args={"query": "parts"}),
         )
+        assert second_call_messages[-1].tool_call_id == "1"
+        assert second_call_messages[-1].tool_name == "search_managers"
         assert all(
             message.content != "[tool:search_managers]"
             for message in second_call_messages
         )
+
+    def test_run_case_keeps_a_provider_tool_batch_in_one_assistant_message(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1", name="search_managers", args={"query": "parts"}
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="get_manager_schema",
+                        args={"manager": "PartManager"},
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [TextChunkEvent(content="done"), DoneEvent(usage=TokenUsage())],
+            ]
+        )
+        case = EvalCase(
+            name="tool_batch_history_case",
+            description="Tool history batch shape test",
+            conversation=[{"user": "Find parts"}],
+            expectations={},
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value={"ok": True},
+        ):
+            asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "search_managers", "description": "Search"},
+                        {"name": "get_manager_schema", "description": "Schema"},
+                    ],
+                )
+            )
+
+        resumed = provider.calls[1]["messages"]
+        assert resumed[-3].role == "assistant"
+        assert [call.id for call in resumed[-3].tool_calls] == ["1", "2"]
+        assert [message.tool_call_id for message in resumed[-2:]] == ["1", "2"]
 
     def test_run_case_catches_provider_exception(self) -> None:
         class _FailProvider:

@@ -31,7 +31,7 @@ from general_manager.chat.models import (
     update_conversation_summary,
 )
 from general_manager.chat.context import prepare_conversation_messages
-from general_manager.chat.providers.base import DoneEvent, TextChunkEvent, TokenUsage
+from general_manager.chat.providers.base import TextChunkEvent
 from general_manager.chat.views import _build_messages
 
 
@@ -980,7 +980,6 @@ class ChatPersistenceTests(TestCase):
 
             async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
                 del messages, tools
-                yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=3))
                 while True:
                     await asyncio.sleep(0.001)
                     yield TextChunkEvent(content="late")
@@ -1001,9 +1000,7 @@ class ChatPersistenceTests(TestCase):
         conversation.refresh_from_db()
         assert conversation.summary_text == ""
         assert conversation.summarized_through_id is None
-        limit.assert_called_once_with(
-            {"user": None}, input_tokens=2, output_tokens=3, count_request=False
-        )
+        limit.assert_called_once_with({"user": None}, count_request=False)
 
     @override_settings(
         GENERAL_MANAGER={

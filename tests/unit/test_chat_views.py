@@ -5,7 +5,7 @@ import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, ClassVar
-from unittest.mock import ANY, AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, call, patch
 
 from asgiref.sync import async_to_sync
 from django.http import HttpRequest, JsonResponse
@@ -124,6 +124,18 @@ class _UsageSummaryProvider:
         yield DoneEvent(usage=TokenUsage(input_tokens=3, output_tokens=5))
 
 
+class _DoneThenWaitSummaryProvider:
+    closed = False
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        try:
+            yield DoneEvent(usage=TokenUsage())
+            await asyncio.sleep(10)
+        finally:
+            self.closed = True
+
+
 class _MutateSuccessProvider:
     def __init__(self) -> None:
         self.calls = 0
@@ -142,6 +154,21 @@ class _MutateSuccessProvider:
         yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=3))
 
 
+class _RepeatedMutationProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        self.calls += 1
+        yield ToolCallEvent(
+            id=f"mutate-{self.calls}",
+            name="mutate",
+            args={"mutation": "updatePart", "input": {"id": str(self.calls)}},
+        )
+        yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+
+
 class _QueryLoopProvider:
     async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         del messages, tools
@@ -150,6 +177,25 @@ class _QueryLoopProvider:
             name="query",
             args={"manager": "Part", "fields": ["name"]},
         )
+
+
+class _ToolThenSynthesisProvider:
+    def __init__(self) -> None:
+        self.tools: list[list[Any]] = []
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages
+        self.tools.append(list(tools))
+        if len(self.tools) == 1:
+            yield ToolCallEvent(
+                id="query-1",
+                name="query",
+                args={"manager": "Part", "fields": ["name"]},
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+            return
+        yield TextChunkEvent(content="The part is Bolt.")
+        yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=3))
 
 
 class _TwoQueryRoundProvider:
@@ -289,9 +335,29 @@ class ChatViewHelperTests(SimpleTestCase):
             )
 
         assert summary == "summary"
-        limit.assert_called_once_with(
-            {"user": None}, input_tokens=3, output_tokens=5, count_request=False
+        limit.assert_has_calls(
+            [
+                call({"user": None}, count_request=False),
+                call(
+                    {"user": None},
+                    input_tokens=3,
+                    output_tokens=5,
+                    count_request=False,
+                ),
+            ]
         )
+
+    def test_summary_stops_and_closes_stream_after_done(self) -> None:
+        provider = _DoneThenWaitSummaryProvider()
+
+        assert (
+            async_to_sync(_summarize_messages_with_provider)(
+                provider,
+                [SimpleNamespace(role="user", tool_name="", content="hello")],
+            )
+            == ""
+        )
+        assert provider.closed is True
 
     def test_build_messages_updates_empty_summary_when_history_is_long(self) -> None:
         conversation = SimpleNamespace(summary_text="")
@@ -481,6 +547,124 @@ class ChatViewHelperTests(SimpleTestCase):
             "result": {"status": "ok"},
         }
         assert events[-1]["type"] == "done"
+
+    def test_run_provider_turn_stops_repeated_mutations_before_the_second_write(
+        self,
+    ) -> None:
+        provider = _RepeatedMutationProvider()
+
+        with (
+            patch(
+                "general_manager.chat.views.get_chat_settings",
+                return_value={
+                    "max_retries_per_message": 8,
+                    "max_total_rounds_per_message": 4,
+                    "max_mutations_per_message": 1,
+                    "recover_missing_tool_calls": False,
+                },
+            ),
+            patch("general_manager.chat.views.get_tool_definitions", return_value=[]),
+            patch(
+                "general_manager.chat.views.execute_chat_tool",
+                return_value={"status": "ok"},
+            ) as execute_tool,
+            patch("general_manager.chat.views.append_chat_message"),
+            patch("general_manager.chat.views.enforce_chat_rate_limit"),
+            patch("general_manager.chat.views.emit_chat_tool_called"),
+            patch("general_manager.chat.views.emit_chat_mutation_executed"),
+        ):
+            events = async_to_sync(_run_provider_turn)(
+                scope={},
+                conversation=object(),
+                provider=provider,
+                messages=[Message(role="user", content="Update parts")],
+                transport="sse",
+            )
+
+        assert execute_tool.call_count == 1
+        assert provider.calls == 2
+        assert events[-1] == {
+            "type": "error",
+            "message": "Chat mutation limit exceeded.",
+            "code": "mutation_limit",
+        }
+
+    def test_read_cap_reserves_one_tools_disabled_final_synthesis_round(self) -> None:
+        provider = _ToolThenSynthesisProvider()
+
+        with (
+            patch(
+                "general_manager.chat.views.get_chat_settings",
+                return_value={
+                    "max_retries_per_message": 1,
+                    "recover_missing_tool_calls": False,
+                },
+            ),
+            patch(
+                "general_manager.chat.views.get_tool_definitions",
+                return_value=[
+                    {
+                        "name": "query",
+                        "description": "Query",
+                        "input_schema": {"type": "object"},
+                    }
+                ],
+            ),
+            patch(
+                "general_manager.chat.views.execute_chat_tool",
+                return_value={"rows": [{"name": "Bolt"}]},
+            ),
+            patch("general_manager.chat.views.append_chat_message"),
+            patch("general_manager.chat.views.enforce_chat_rate_limit"),
+            patch("general_manager.chat.views.emit_chat_tool_called"),
+        ):
+            events = async_to_sync(_run_provider_turn)(
+                scope={},
+                conversation=object(),
+                provider=provider,
+                messages=[Message(role="user", content="Find parts")],
+                transport="sse",
+            )
+
+        assert provider.tools[1] == []
+        assert events[-1] == {
+            "type": "done",
+            "usage": {"input_tokens": 3, "output_tokens": 4},
+        }
+
+    def test_token_limit_after_a_provider_round_blocks_tool_execution(self) -> None:
+        with (
+            patch(
+                "general_manager.chat.views.get_chat_settings",
+                return_value={
+                    "max_retries_per_message": 1,
+                    "recover_missing_tool_calls": False,
+                },
+            ),
+            patch("general_manager.chat.views.get_tool_definitions", return_value=[]),
+            patch("general_manager.chat.views.execute_chat_tool") as execute_tool,
+            patch(
+                "general_manager.chat.views.enforce_chat_rate_limit",
+                return_value={"retry_after_seconds": 60},
+            ),
+        ):
+            events = async_to_sync(_run_provider_turn)(
+                scope={},
+                conversation=object(),
+                provider=_QueryLoopProvider(),
+                messages=[Message(role="user", content="Find parts")],
+                transport="sse",
+            )
+
+        execute_tool.assert_not_called()
+        assert events == [
+            {
+                "type": "error",
+                "message": "Chat rate limit exceeded. Try again later.",
+                "code": "rate_limited",
+                "retry_after_seconds": 60,
+            }
+        ]
 
     def test_run_provider_turn_executes_tool_off_event_loop(self) -> None:
         provider = _MutateSuccessProvider()
@@ -782,8 +966,11 @@ class ChatViewHelperTests(SimpleTestCase):
             }
         ]
         execute_tool.assert_not_called()
-        rate_limit.assert_called_once_with(
-            {}, input_tokens=1, output_tokens=1, count_request=False
+        rate_limit.assert_has_calls(
+            [
+                call({}, count_request=False),
+                call({}, input_tokens=1, output_tokens=1, count_request=False),
+            ]
         )
 
     def test_run_provider_turn_recovers_empty_response_after_tool_result(self) -> None:

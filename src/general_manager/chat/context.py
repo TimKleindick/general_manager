@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import aclosing
 from typing import Any
 
 from asgiref.sync import sync_to_async
@@ -19,6 +20,17 @@ from general_manager.chat.providers.base import DoneEvent, Message, TextChunkEve
 from general_manager.chat.rate_limits import enforce_chat_rate_limit
 from general_manager.chat.settings import get_chat_settings
 from general_manager.chat.system_prompt import build_system_prompt
+from general_manager.chat.turns import TurnState
+
+
+class ChatSummaryRateLimitExceeded(RuntimeError):
+    """Stop a request when history compression consumes its token allowance."""
+
+    public_reason = "rate_limited"
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__("Chat summary token budget exhausted.")
+        self.retry_after_seconds = retry_after_seconds
 
 
 async def summarize_messages_with_provider(
@@ -26,6 +38,7 @@ async def summarize_messages_with_provider(
     messages: list[Any],
     *,
     scope: dict[str, Any] | None = None,
+    turn_state: TurnState | None = None,
 ) -> str:
     """Summarize one history prefix within a whole-request provider deadline."""
     prompt_messages = [
@@ -45,16 +58,33 @@ async def summarize_messages_with_provider(
     chunks: list[str] = []
 
     async def consume() -> None:
-        async for event in provider.complete(prompt_messages, []):
-            if isinstance(event, TextChunkEvent):
-                chunks.append(event.content)
-            elif isinstance(event, DoneEvent) and scope is not None:
-                await sync_to_async(enforce_chat_rate_limit)(
-                    scope,
-                    input_tokens=event.usage.input_tokens,
-                    output_tokens=event.usage.output_tokens,
-                    count_request=False,
-                )
+        if turn_state is not None and not turn_state.reserve_round():
+            return
+        if scope is not None:
+            rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+                scope, count_request=False
+            )
+            if isinstance(rate_limited, dict):
+                raise ChatSummaryRateLimitExceeded(rate_limited["retry_after_seconds"])
+        async with aclosing(provider.complete(prompt_messages, [])) as events:
+            async for event in events:
+                if isinstance(event, TextChunkEvent):
+                    chunks.append(event.content)
+                elif isinstance(event, DoneEvent):
+                    if turn_state is not None:
+                        turn_state.record_usage(event.usage)
+                    if scope is not None:
+                        rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+                            scope,
+                            input_tokens=event.usage.input_tokens,
+                            output_tokens=event.usage.output_tokens,
+                            count_request=False,
+                        )
+                        if isinstance(rate_limited, dict):
+                            raise ChatSummaryRateLimitExceeded(
+                                rate_limited["retry_after_seconds"]
+                            )
+                    return
 
     await asyncio.wait_for(consume(), timeout=timeout_seconds)
     return "".join(chunks).strip()
@@ -67,6 +97,7 @@ async def prepare_conversation_messages(
     allow_summarization: bool = True,
     scope: dict[str, Any] | None = None,
     summarize: Callable[[Any, list[Any]], Awaitable[str]] | None = None,
+    turn_state: TurnState | None = None,
 ) -> list[Message]:
     """Return system plus bounded durable history for a legacy provider turn."""
     settings = get_chat_settings()
@@ -86,7 +117,7 @@ async def prepare_conversation_messages(
                     await summarize(provider, older_messages)
                     if summarize is not None
                     else await summarize_messages_with_provider(
-                        provider, older_messages, scope=scope
+                        provider, older_messages, scope=scope, turn_state=turn_state
                     )
                 )
                 if summary_text:

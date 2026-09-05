@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Callable
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,6 +70,7 @@ from general_manager.chat.tools import (
     execute_chat_tool,
     get_tool_definitions,
 )
+from general_manager.chat.turns import TurnState
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,7 @@ class _PreparedMessageRequest:
     early_events: list[dict[str, Any]] | None
     user_text: str | None = None
     planned_settings: Any | None = None
+    turn_state: TurnState | None = None
 
 
 def _ensure_session_key(request: HttpRequest) -> str | None:
@@ -144,8 +147,11 @@ async def _summarize_messages_with_provider(
     messages: list[Any],
     *,
     scope: dict[str, Any] | None = None,
+    turn_state: TurnState | None = None,
 ) -> str:
-    return await summarize_messages_with_provider(provider, messages, scope=scope)
+    return await summarize_messages_with_provider(
+        provider, messages, scope=scope, turn_state=turn_state
+    )
 
 
 async def _build_messages(
@@ -154,10 +160,11 @@ async def _build_messages(
     *,
     allow_summarization: bool = True,
     scope: dict[str, Any] | None = None,
+    turn_state: TurnState | None = None,
 ) -> list[Message]:
     async def summarize(provider_instance: Any, history: list[Any]) -> str:
         return await _summarize_messages_with_provider(
-            provider_instance, history, scope=scope
+            provider_instance, history, scope=scope, turn_state=turn_state
         )
 
     return await prepare_conversation_messages(
@@ -166,6 +173,7 @@ async def _build_messages(
         allow_summarization=allow_summarization,
         scope=scope,
         summarize=summarize,
+        turn_state=turn_state,
     )
 
 
@@ -223,16 +231,45 @@ async def _iter_provider_turn_events(
     tool_retries: int = 0,
     tool_calls: list[dict[str, Any]] | None = None,
     recovered_missing_tools: bool = False,
+    turn_state: TurnState | None = None,
+    allow_tools: bool = True,
 ) -> AsyncIterator[dict[str, Any]]:
     tool_calls = list(tool_calls or [])
     assistant_chunks: list[str] = []
     settings = get_chat_settings()
     max_retries = int(settings.get("max_retries_per_message", 8))
     recover_missing_tools = bool(settings.get("recover_missing_tool_calls", False))
+    turn_state = turn_state or TurnState.from_settings(settings)
+    turn_state.tool_retries = tool_retries
+    if not turn_state.reserve_round():
+        yield {
+            "type": "error",
+            "message": "Chat turn limit exceeded.",
+            "code": "turn_limit",
+        }
+        return
+    rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+        scope, count_request=False
+    )
+    if isinstance(rate_limited, dict):
+        yield {
+            "type": "error",
+            "message": "Chat rate limit exceeded. Try again later.",
+            "code": "rate_limited",
+            "retry_after_seconds": rate_limited["retry_after_seconds"],
+        }
+        return
     provider_tool_events: list[ToolCallEvent] = []
 
     async def continue_after_tool_events() -> AsyncIterator[dict[str, Any]]:
         """Execute one completed provider tool batch before the next round."""
+        if not allow_tools:
+            yield {
+                "type": "error",
+                "message": "Chat tool retry limit exceeded.",
+                "code": "tool_retry_limit",
+            }
+            return
         if len(provider_tool_events) > 1 and any(
             event.name == "mutate" for event in provider_tool_events
         ):
@@ -256,6 +293,24 @@ async def _iter_provider_turn_events(
 
         results: list[tuple[ToolCallEvent, Any]] = []
         for tool_event in provider_tool_events:
+            rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+                scope, count_request=False
+            )
+            if isinstance(rate_limited, dict):
+                yield {
+                    "type": "error",
+                    "message": "Chat rate limit exceeded. Try again later.",
+                    "code": "rate_limited",
+                    "retry_after_seconds": rate_limited["retry_after_seconds"],
+                }
+                return
+            if tool_event.name == "mutate" and not turn_state.reserve_mutation():
+                yield {
+                    "type": "error",
+                    "message": "Chat mutation limit exceeded.",
+                    "code": "mutation_limit",
+                }
+                return
             yield {
                 "type": "tool_call",
                 "id": tool_event.id,
@@ -307,7 +362,10 @@ async def _iter_provider_turn_events(
                     conversation,
                     confirmation_id=tool_event.id,
                     mutation_name=str(result["mutation"]),
-                    payload={"input": result["input"]},
+                    payload={
+                        "input": result["input"],
+                        "_gm_turn_state": turn_state.as_payload(),
+                    },
                     timeout_seconds=int(
                         get_chat_settings().get("confirm_timeout_seconds", 30)
                     ),
@@ -371,13 +429,6 @@ async def _iter_provider_turn_events(
             )
 
         next_retries = tool_retries + non_mutation_count
-        if results and next_retries >= max_retries:
-            yield {
-                "type": "error",
-                "message": "Chat tool retry limit exceeded.",
-                "code": "tool_retry_limit",
-            }
-            return
         async for next_event in _iter_provider_turn_events(
             scope=scope,
             conversation=conversation,
@@ -387,47 +438,125 @@ async def _iter_provider_turn_events(
             tool_retries=next_retries,
             tool_calls=tool_calls,
             recovered_missing_tools=recovered_missing_tools,
+            turn_state=turn_state,
+            allow_tools=next_retries < max_retries,
         ):
             yield next_event
 
-    async for event in _iter_provider_events(
-        provider, messages, _build_tool_definitions()
-    ):
-        if isinstance(event, TextChunkEvent):
-            assistant_chunks.append(event.content)
-            if not recover_missing_tools:
-                yield {"type": "text_chunk", "content": event.content}
-            continue
-        if isinstance(event, ToolCallEvent):
-            provider_tool_events.append(event)
-            continue
-        if isinstance(event, DoneEvent):
-            if provider_tool_events:
-                await sync_to_async(enforce_chat_rate_limit)(
+    async with aclosing(
+        _iter_provider_events(
+            provider, messages, _build_tool_definitions() if allow_tools else []
+        )
+    ) as provider_events:
+        async for event in provider_events:
+            if isinstance(event, TextChunkEvent):
+                assistant_chunks.append(event.content)
+                if not recover_missing_tools:
+                    yield {"type": "text_chunk", "content": event.content}
+                continue
+            if isinstance(event, ToolCallEvent):
+                provider_tool_events.append(event)
+                continue
+            if isinstance(event, DoneEvent):
+                turn_state.record_usage(event.usage)
+                rate_limited = await sync_to_async(enforce_chat_rate_limit)(
                     scope,
                     input_tokens=event.usage.input_tokens,
                     output_tokens=event.usage.output_tokens,
                     count_request=False,
                 )
-                async for next_event in continue_after_tool_events():
-                    yield next_event
-                return
-            if assistant_chunks:
-                assistant_message = "".join(assistant_chunks)
-                if (
+                if isinstance(rate_limited, dict):
+                    yield {
+                        "type": "error",
+                        "message": "Chat rate limit exceeded. Try again later.",
+                        "code": "rate_limited",
+                        "retry_after_seconds": rate_limited["retry_after_seconds"],
+                    }
+                    return
+                if provider_tool_events:
+                    async for next_event in continue_after_tool_events():
+                        yield next_event
+                    return
+                if assistant_chunks:
+                    assistant_message = "".join(assistant_chunks)
+                    if (
+                        recover_missing_tools
+                        and not recovered_missing_tools
+                        and not _has_tool_after_last_user(messages)
+                        and should_recover_missing_tool_call(
+                            user_text=_last_user_text(messages),
+                            assistant_text=assistant_message,
+                            tool_calls=[],
+                        )
+                    ):
+                        messages.append(
+                            Message(
+                                role="system",
+                                content=build_missing_tool_recovery_message(
+                                    _last_user_text(messages)
+                                ),
+                            )
+                        )
+                        async for recovery_event in _iter_provider_turn_events(
+                            scope=scope,
+                            conversation=conversation,
+                            provider=provider,
+                            messages=messages,
+                            transport=transport,
+                            tool_retries=tool_retries,
+                            tool_calls=tool_calls,
+                            recovered_missing_tools=True,
+                            turn_state=turn_state,
+                        ):
+                            yield recovery_event
+                        return
+                    if (
+                        recover_missing_tools
+                        and not recovered_missing_tools
+                        and should_recover_answer_without_query(
+                            user_text=_last_user_text(messages),
+                            assistant_text=assistant_message,
+                            tool_calls=tool_calls,
+                        )
+                    ):
+                        messages.append(
+                            Message(
+                                role="system",
+                                content=build_query_required_recovery_message(
+                                    _last_user_text(messages)
+                                ),
+                            )
+                        )
+                        async for recovery_event in _iter_provider_turn_events(
+                            scope=scope,
+                            conversation=conversation,
+                            provider=provider,
+                            messages=messages,
+                            transport=transport,
+                            tool_retries=tool_retries,
+                            tool_calls=tool_calls,
+                            recovered_missing_tools=True,
+                            turn_state=turn_state,
+                        ):
+                            yield recovery_event
+                        return
+                    if recover_missing_tools:
+                        for chunk in assistant_chunks:
+                            yield {"type": "text_chunk", "content": chunk}
+                    await sync_to_async(append_chat_message)(
+                        conversation,
+                        role="assistant",
+                        content=assistant_message,
+                    )
+                elif (
                     recover_missing_tools
                     and not recovered_missing_tools
-                    and not _has_tool_after_last_user(messages)
-                    and should_recover_missing_tool_call(
-                        user_text=_last_user_text(messages),
-                        assistant_text=assistant_message,
-                        tool_calls=[],
-                    )
+                    and _has_tool_after_last_user(messages)
                 ):
                     messages.append(
                         Message(
                             role="system",
-                            content=build_missing_tool_recovery_message(
+                            content=build_empty_response_recovery_message(
                                 _last_user_text(messages)
                             ),
                         )
@@ -441,85 +570,18 @@ async def _iter_provider_turn_events(
                         tool_retries=tool_retries,
                         tool_calls=tool_calls,
                         recovered_missing_tools=True,
+                        turn_state=turn_state,
                     ):
                         yield recovery_event
                     return
-                if (
-                    recover_missing_tools
-                    and not recovered_missing_tools
-                    and should_recover_answer_without_query(
-                        user_text=_last_user_text(messages),
-                        assistant_text=assistant_message,
-                        tool_calls=tool_calls,
-                    )
-                ):
-                    messages.append(
-                        Message(
-                            role="system",
-                            content=build_query_required_recovery_message(
-                                _last_user_text(messages)
-                            ),
-                        )
-                    )
-                    async for recovery_event in _iter_provider_turn_events(
-                        scope=scope,
-                        conversation=conversation,
-                        provider=provider,
-                        messages=messages,
-                        transport=transport,
-                        tool_retries=tool_retries,
-                        tool_calls=tool_calls,
-                        recovered_missing_tools=True,
-                    ):
-                        yield recovery_event
-                    return
-                if recover_missing_tools:
-                    for chunk in assistant_chunks:
-                        yield {"type": "text_chunk", "content": chunk}
-                await sync_to_async(append_chat_message)(
-                    conversation,
-                    role="assistant",
-                    content=assistant_message,
-                )
-            elif (
-                recover_missing_tools
-                and not recovered_missing_tools
-                and _has_tool_after_last_user(messages)
-            ):
-                messages.append(
-                    Message(
-                        role="system",
-                        content=build_empty_response_recovery_message(
-                            _last_user_text(messages)
-                        ),
-                    )
-                )
-                async for recovery_event in _iter_provider_turn_events(
-                    scope=scope,
-                    conversation=conversation,
-                    provider=provider,
-                    messages=messages,
-                    transport=transport,
-                    tool_retries=tool_retries,
-                    tool_calls=tool_calls,
-                    recovered_missing_tools=True,
-                ):
-                    yield recovery_event
+                yield {
+                    "type": "done",
+                    "usage": {
+                        "input_tokens": turn_state.usage.input_tokens,
+                        "output_tokens": turn_state.usage.output_tokens,
+                    },
+                }
                 return
-            await sync_to_async(enforce_chat_rate_limit)(
-                scope,
-                input_tokens=event.usage.input_tokens,
-                output_tokens=event.usage.output_tokens,
-                count_request=False,
-            )
-            yield {
-                "type": "done",
-                "usage": {
-                    "input_tokens": event.usage.input_tokens,
-                    "output_tokens": event.usage.output_tokens,
-                },
-            }
-            return
 
     if provider_tool_events:
         async for next_event in continue_after_tool_events():
@@ -536,6 +598,8 @@ async def _run_provider_turn(
     tool_retries: int = 0,
     tool_calls: list[dict[str, Any]] | None = None,
     recovered_missing_tools: bool = False,
+    turn_state: TurnState | None = None,
+    allow_tools: bool = True,
 ) -> list[dict[str, Any]]:
     return [
         event
@@ -548,6 +612,8 @@ async def _run_provider_turn(
             tool_retries=tool_retries,
             tool_calls=tool_calls,
             recovered_missing_tools=recovered_missing_tools,
+            turn_state=turn_state,
+            allow_tools=allow_tools,
         )
     ]
 
@@ -640,11 +706,13 @@ async def _prepare_message_request(
     )
     provider = provider_cls()
     planned_settings = get_planned_chat_settings()
+    turn_state = TurnState.from_settings(get_chat_settings())
     messages = await _build_messages(
         conversation,
         provider,
         allow_summarization=not planned_settings.enabled,
         scope=scope,
+        turn_state=turn_state,
     )
     emit_chat_message_received(
         user=getattr(request, "user", None),
@@ -659,6 +727,7 @@ async def _prepare_message_request(
         early_events=None,
         user_text=text,
         planned_settings=planned_settings,
+        turn_state=turn_state,
     )
 
 
@@ -682,6 +751,7 @@ async def _iter_prepared_message_events(
             provider=prepared.provider,
             messages=prepared.messages,
             transport=transport,
+            turn_state=prepared.turn_state,
         ):
             yield event
         return
@@ -710,6 +780,7 @@ async def _iter_prepared_message_events(
             provider=prepared.provider,
             messages=prepared.messages,
             transport=transport,
+            turn_state=prepared.turn_state,
         ):
             yield event
         return
@@ -799,6 +870,20 @@ async def _execute_confirmation_request(
                 {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
             ]
         confirmation_id = requested_confirmation_id
+        scope = _request_scope(request)
+        if confirmed:
+            rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+                scope, count_request=False
+            )
+            if isinstance(rate_limited, dict):
+                return conversation, [
+                    {
+                        "type": "error",
+                        "message": "Chat rate limit exceeded. Try again later.",
+                        "code": "rate_limited",
+                        "retry_after_seconds": rate_limited["retry_after_seconds"],
+                    }
+                ]
         pending = await sync_to_async(ChatPendingConfirmation.claim_for_conversation)(
             conversation=conversation,
             confirmation_id=confirmation_id,
@@ -809,7 +894,6 @@ async def _execute_confirmation_request(
                 {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
             ]
 
-        scope = _request_scope(request)
         if confirmed:
             result = await sync_to_async(execute_confirmed_chat_mutation)(
                 mutation=pending.mutation_name,
@@ -847,7 +931,10 @@ async def _execute_confirmation_request(
             tool_call_id=pending.confirmation_id,
         )
         provider = import_provider()()
-        messages = await _build_messages(conversation, provider, scope=scope)
+        turn_state = TurnState.from_payload(get_chat_settings(), pending.payload)
+        messages = await _build_messages(
+            conversation, provider, scope=scope, turn_state=turn_state
+        )
         events = [
             {
                 "type": "tool_result",
@@ -863,6 +950,8 @@ async def _execute_confirmation_request(
                 provider=provider,
                 messages=messages,
                 transport="sse",
+                tool_retries=turn_state.tool_retries,
+                turn_state=turn_state,
             )
         )
     except Exception as exc:  # noqa: BLE001
