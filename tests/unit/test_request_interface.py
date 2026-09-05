@@ -21,6 +21,7 @@ from general_manager.interface.requests import (
     RequestExcludeNotSupportedError,
     RequestField,
     RequestFilter,
+    RequestFilterBinding,
     RequestIncompleteResultError,
     RequestLocalPaginationUnsupportedError,
     RequestPlanConflictError,
@@ -598,6 +599,22 @@ class TestRequestInterface(SimpleTestCase):
             (RequestLocalPredicate("status", "active", "filter", 0),),
         )
 
+    def test_filter_compiler_can_emit_a_negated_local_predicate(self) -> None:
+        def compile_not_status(binding: RequestFilterBinding) -> RequestPlanFragment:
+            return RequestPlanFragment(
+                local_predicates=(
+                    RequestLocalPredicate("status", binding.value, "exclude"),
+                ),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "not_status": RequestFilter(value_type=str, compiler=compile_not_status),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            items = list(RemoteProject.filter(not_status="active"))
+        self.assertEqual([item.status for item in items], ["inactive"])
+
     def test_compiler_filter_conflict_does_not_discard_remote_contribution(
         self,
     ) -> None:
@@ -658,11 +675,10 @@ class TestRequestInterface(SimpleTestCase):
     def test_compiler_exclude_keeps_transformed_alias_predicate(self) -> None:
         """Compiler predicates retain their alias and transformed value for excludes."""
 
-        def compile_status_code(binding: object) -> RequestPlanFragment:
-            del binding
+        def compile_status_code(binding: RequestFilterBinding) -> RequestPlanFragment:
             return RequestPlanFragment(
                 local_predicates=(
-                    RequestLocalPredicate("status", "inactive", "filter"),
+                    RequestLocalPredicate("status", "inactive", binding.action),
                 )
             )
 
