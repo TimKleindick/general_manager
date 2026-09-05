@@ -646,6 +646,95 @@ class TestRequestInterface(SimpleTestCase):
             ),
         )
 
+    def test_combined_filter_compiler_negations_remain_independent(self) -> None:
+        """Negations emitted by separate filter bindings are ANDed together."""
+
+        def compile_not_status(binding: RequestFilterBinding) -> RequestPlanFragment:
+            return RequestPlanFragment(
+                local_predicates=(
+                    RequestLocalPredicate("status", binding.value, "exclude"),
+                ),
+            )
+
+        def compile_not_name(binding: RequestFilterBinding) -> RequestPlanFragment:
+            return RequestPlanFragment(
+                local_predicates=(
+                    RequestLocalPredicate(
+                        "local_name__exact", binding.value, "exclude"
+                    ),
+                ),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "not_status": RequestFilter(value_type=str, compiler=compile_not_status),
+            "not_name": RequestFilter(value_type=str, compiler=compile_not_name),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            combined = list(
+                RemoteProject.filter(not_status="active", not_name="Beta Local")
+            )
+            chained = list(
+                RemoteProject.filter(not_status="active").filter(not_name="Beta Local")
+            )
+
+        self.assertEqual(combined, [])
+        self.assertEqual(chained, [])
+        combined_plan = RemoteProject.Interface.calls[0]["plan"]
+        self.assertEqual(
+            combined_plan.local_predicates,
+            (
+                RequestLocalPredicate("status", "active", "exclude", 0),
+                RequestLocalPredicate("local_name__exact", "Beta Local", "exclude", 1),
+            ),
+        )
+
+    def test_filter_compiler_fragment_keeps_multiple_negations_grouped(self) -> None:
+        """One compiler fragment retains its NOT(AND) alongside another binding."""
+
+        def compile_not_status_and_name(
+            binding: RequestFilterBinding,
+        ) -> RequestPlanFragment:
+            del binding
+            return RequestPlanFragment(
+                local_predicates=(
+                    RequestLocalPredicate("status", "active", "exclude"),
+                    RequestLocalPredicate("local_name__exact", "Beta Local", "exclude"),
+                ),
+            )
+
+        def compile_not_alpha(binding: RequestFilterBinding) -> RequestPlanFragment:
+            del binding
+            return RequestPlanFragment(
+                local_predicates=(
+                    RequestLocalPredicate(
+                        "local_name__exact", "Alpha Local", "exclude"
+                    ),
+                ),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "not_status_and_name": RequestFilter(
+                value_type=bool,
+                compiler=compile_not_status_and_name,
+            ),
+            "not_alpha": RequestFilter(value_type=bool, compiler=compile_not_alpha),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            items = list(RemoteProject.filter(not_status_and_name=True, not_alpha=True))
+
+        self.assertEqual([item.identification["id"] for item in items], [2])
+        plan = RemoteProject.Interface.calls[-1]["plan"]
+        self.assertEqual(
+            plan.local_predicates,
+            (
+                RequestLocalPredicate("status", "active", "exclude", 0),
+                RequestLocalPredicate("local_name__exact", "Beta Local", "exclude", 0),
+                RequestLocalPredicate("local_name__exact", "Alpha Local", "exclude", 1),
+            ),
+        )
+
     def test_compiler_filter_conflict_does_not_discard_remote_contribution(
         self,
     ) -> None:

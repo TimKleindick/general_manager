@@ -508,12 +508,16 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         Returns:
             models.Model | list[models.Model]: Saved instance(s).
         """
-        kwargs = cls._adjust_kwargs(**kwargs)
-        if cls._adjustmentMethod is not None:
-            return cls.__create_with_generate_func(
-                use_creation_method=True, params=kwargs
-            )
-        return cls._model_creation(model_class, **kwargs)
+        token = _preparing_factory_options.set(None)
+        try:
+            kwargs = cls._adjust_kwargs(**kwargs)
+            if cls._adjustmentMethod is not None:
+                return cls.__create_with_generate_func(
+                    use_creation_method=True, params=kwargs
+                )
+            return cls._model_creation(model_class, **kwargs)
+        finally:
+            _preparing_factory_options.reset(token)
 
     @classmethod
     def _build(
@@ -530,12 +534,16 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         Returns:
             models.Model | list[models.Model]: Unsaved instance(s).
         """
-        kwargs = cls._adjust_kwargs(**kwargs)
-        if cls._adjustmentMethod is not None:
-            return cls.__create_with_generate_func(
-                use_creation_method=False, params=kwargs
-            )
-        return cls._model_building(model_class, **kwargs)
+        token = _preparing_factory_options.set(None)
+        try:
+            kwargs = cls._adjust_kwargs(**kwargs)
+            if cls._adjustmentMethod is not None:
+                return cls.__create_with_generate_func(
+                    use_creation_method=False, params=kwargs
+                )
+            return cls._model_building(model_class, **kwargs)
+        finally:
+            _preparing_factory_options.reset(token)
 
     @classmethod
     def _model_creation(

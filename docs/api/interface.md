@@ -1300,11 +1300,13 @@ those values to the remote service.
 A compiler fragment may contribute both outbound request values and local
 predicates. A single mixed exclusion preserves both contributions; a conflict or
 additional lookup in that exclusion is rejected when the flat request plan cannot
-represent its full negated expression. Local predicates are grouped by their
-originating manager call, even when a compiler emits a different predicate
-action. Sorting a request bucket keeps response provenance, and subsequent
-no-op `all()`, `filter()`, and `exclude()` calls keep that provenance too, so a
-partial response or one without a total cannot establish global uniqueness.
+represent its full negated expression. Predicates emitted by one filter compiler
+fragment remain one group; independently compiled filter lookups that emit
+negations are separate groups and therefore all apply. Ordinary `exclude()`
+lookups from one call remain one negated group. Sorting a request bucket keeps
+response provenance, and subsequent no-op `all()`, `filter()`, and `exclude()`
+calls keep that provenance too, so a partial response or one without a total
+cannot establish global uniqueness.
 
 `RequestInterface.execute_request_plan()` treats only `create`, `update`, and
 `delete` as mutation actions; every other action string resolves a query
