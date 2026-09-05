@@ -9,6 +9,7 @@ GeneralManager ships with these interface flavours:
 - [Read-only interfaces](db_based_interface.md#read-only-data) synchronise static datasets from JSON.
 - [Calculation interfaces](computed_data_interfaces.md) compute values on the fly from inputs and related managers.
 - [Request interfaces](request_interface.md) connect managers to remote HTTP-style services through declarative request operations and filter mappings.
+- [Excel-backed interfaces](excel_interface.md) expose typed worksheet rows through a shared cache mirror while keeping Excel authoritative.
 - [RemoteAPI websocket invalidation](remote_api.md) keeps remote clients aligned with committed server-side changes.
 
 All interfaces inherit from `general_manager.interface.base_interface.InterfaceBase`, which provides shared behaviour such as identification, validation, and integration with the dependency tracker.

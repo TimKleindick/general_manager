@@ -105,6 +105,7 @@ nav:
           - concepts/interfaces/computed_data_interfaces.md
           - concepts/interfaces/dependency_graph.md
           - concepts/interfaces/request_interface.md
+          - concepts/interfaces/excel_interface.md
           - concepts/interfaces/remote_api.md
       - Observability:
           - concepts/observability/index.md
@@ -140,6 +141,7 @@ nav:
       - howto/run_chat_evals.md
       - howto/orm_atomic_writes.md
       - howto/write_validation_rules.md
+      - howto/excel_interface.md
       - howto/graphql_file_uploads.md
       - howto/graphql_file_uploads_s3.md
       - howto/search.md
@@ -175,6 +177,7 @@ nav:
       - examples/audit_logger_custom.md
       - examples/existing_model_interface.md
       - examples/custom_capability_examples.md
+      - examples/excel_interface_end_to_end.md
       - examples/startup_hooks.md
       - examples/remote_manager_interface_end_to_end.md
       - examples/request_interface_end_to_end.md

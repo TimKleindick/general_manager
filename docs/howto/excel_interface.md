@@ -43,11 +43,28 @@ class Meta:
 
 Configure exactly one of `table` or `header_row`. Table mode reads and resizes the named Excel table during creates and deletes. Header-row mode reads headers from the configured row and writes below the last non-empty row.
 
+Use the normal manager query methods against the mirrored rows:
+
+```python
+active = Product.filter(name__startswith="Active")
+not_expensive = Product.exclude(price__gte=Decimal("100.00"))
+ordered = Product.all().sort(("price", "sku"), reverse=True)
+```
+
+Supported lookup suffixes are `exact`, `lt`, `lte`, `gt`, `gte`, `contains`,
+`startswith`, `endswith`, and `in`. `Product.all()` and filtered buckets expose
+`count()`, `first()`, `last()`, `get()`, slicing, and `sort()`; results are
+manager instances identified by `Meta.key`.
+
 ## Headers and keys
 
 `Meta.key` names the Excel field that identifies each row. Keys must be present, non-blank, and unique after parsing.
 
 By default, a field reads and writes the column with the same name as the field. Set `header="Product Name"` when the workbook header differs from the field name. Set `aliases=("Name",)` to allow older read headers during sync; writes still use the declared field header.
+
+Use `ExcelIntegerField` for integer columns and `ExcelField` when a custom
+Python type, parser, or dumper is needed. All field types support the shared
+`required`, `default`, `header`, `aliases`, `unique`, and `editable` options.
 
 ## Startup sync and checks
 
@@ -57,7 +74,7 @@ Excel interfaces also register a Django system check. The check reads workbook s
 
 ## Writes and conflicts
 
-`create`, `update`, and `delete` write through to the workbook, then sync the mirror back from Excel. Unknown workbook columns are preserved.
+`create`, `update`, and `delete` write through to the workbook, then sync the mirror back from Excel. Unknown workbook columns are preserved. `sync_from_excel(force=True)` returns an `ExcelSyncDelta` with typed snapshots for rows created, updated, or deleted since the previous mirror.
 
 Excel remains authoritative. Before a write, GeneralManager refreshes the row from the workbook. If Excel changed, removed the row, or already contains a created key, the write raises an Excel conflict error and the refreshed Excel state wins.
 
