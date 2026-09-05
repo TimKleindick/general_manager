@@ -460,6 +460,22 @@ class DatabaseBucketTestCase(TestCase):
         self.assertTrue(expected)
         self.assertEqual(actual, expected)
 
+    def test_materialized_annotations_drop_unrelated_source_filter_joins(self):
+        first = Group.objects.create(name="First")
+        second = Group.objects.create(name="Second")
+        self.u1.groups.add(first, second)
+        source = DatabaseBucket(
+            User.objects.annotate(group_count=models.Count("groups")).filter(
+                groups__name="First"
+            ),
+            UserManager,
+        )
+        derived = source.with_instances([UserManager(self.u1.pk)])
+        self.assertEqual(
+            [item.identification["id"] for item in derived.filter(group_count=2)],
+            [self.u1.pk],
+        )
+
     def test_materialized_filters_preserve_related_annotations(self):
         group = Group.objects.create(name="Selected")
         self.u1.groups.add(group)
