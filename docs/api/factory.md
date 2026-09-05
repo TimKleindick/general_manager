@@ -20,17 +20,19 @@ The generation order is:
    keyword arguments already present in the payload win over generated defaults.
    Missing foreign-key and one-to-one values use the configured related-factory
    mode.
-2. factory_boy dispatches to `_build()` or `_create()`.
+2. factory_boy evaluates declarations and prepares constructor arguments.
 3. `_adjust_kwargs()` removes many-to-many values from constructor kwargs and
    coerces foreign-key/one-to-one values. Its adjusted many-to-many values are
-   retained for that individual factory build and assigned after creation.
-4. If `_adjustmentMethod` is configured, it receives those generated/default
-   filled, many-to-many-stripped, relation-coerced kwargs and returns one or
-   more record payloads. Otherwise the normalized kwargs are assigned directly.
+   retained during that individual factory's argument preparation and assigned
+   after creation.
+4. factory_boy dispatches to `_build()` or `_create()`, which normalizes the
+   arguments without capturing another build step’s many-to-many values. If
+   `_adjustmentMethod` is configured, it receives these normalized kwargs and
+   returns one or more record payloads. Otherwise they are assigned directly.
 5. Create strategy calls `full_clean()` and `save()` for each record; build
    strategy only constructs unsaved model instances.
-6. `_generate()` applies many-to-many assignments to saved create-strategy
-   model instances, then wraps those model instances into manager instances.
+6. Each build step applies many-to-many assignments after post-generation
+   hooks. `_generate()` then wraps saved model instances into manager instances.
    A post-generation declaration named for a many-to-many field owns that
    field's assignment and prevents automatic regeneration.
 

@@ -768,7 +768,9 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertEqual(list(declared.dummy_m2m.all()), [adjusted_tag])
         self.assertEqual(list(caller_supplied.dummy_m2m.all()), [adjusted_tag])
 
-    def test_nested_creation_inside_adjust_kwargs_restores_outer_m2m_context(self):
+    def test_nested_different_factory_before_adjust_kwargs_restores_outer_m2m_context(
+        self,
+    ):
         related = self.factory_class.create(name="FK", value=1)
         inner_declared_tag = self.factory_class.create(name="Inner declared", value=2)
         inner_adjusted_tag = self.factory_class.create(name="Inner adjusted", value=3)
@@ -819,6 +821,125 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertTrue(
             all(values == [inner_adjusted_tag] for values in inner_m2m_values)
         )
+
+    def test_recursive_same_factory_after_adjust_kwargs_keeps_outer_m2m_values(
+        self,
+    ):
+        related = self.factory_class.create(name="FK", value=1)
+        outer_tag = self.factory_class.create(name="Outer", value=2)
+        inner_tag = self.factory_class.create(name="Inner", value=3)
+
+        class RecursiveFactory(AutoFactory):
+            interface = DummyInterface
+            _creating_inner = False
+
+            class Meta:
+                model = DummyModel2
+
+            @classmethod
+            def _adjust_kwargs(cls, **kwargs: object) -> dict[str, object]:
+                adjusted = super()._adjust_kwargs(**kwargs)
+                if "dummy_m2m" in kwargs and not cls._creating_inner:
+                    cls._creating_inner = True
+                    try:
+                        cls.create(
+                            description="Inner",
+                            dummy_model=related,
+                            dummy_m2m=[inner_tag],
+                        )
+                    finally:
+                        cls._creating_inner = False
+                return adjusted
+
+        outer = RecursiveFactory.create(
+            description="Outer",
+            dummy_model=related,
+            dummy_m2m=[outer_tag],
+        )
+
+        self.assertEqual(list(outer.dummy_m2m.all()), [outer_tag])
+        inner = DummyModel2.objects.get(description="Inner")
+        self.assertEqual(list(inner.dummy_m2m.all()), [inner_tag])
+
+    def test_recursive_same_factory_build_after_adjust_kwargs_keeps_outer_m2m_values(
+        self,
+    ):
+        related = self.factory_class.create(name="FK", value=1)
+        outer_tag = self.factory_class.create(name="Outer", value=2)
+        inner_tag = self.factory_class.create(name="Inner", value=3)
+        built_inner: DummyModel2 | None = None
+
+        class RecursiveFactory(AutoFactory):
+            interface = DummyInterface
+            _creating_inner = False
+
+            class Meta:
+                model = DummyModel2
+
+            @classmethod
+            def _adjust_kwargs(cls, **kwargs: object) -> dict[str, object]:
+                nonlocal built_inner
+                adjusted = super()._adjust_kwargs(**kwargs)
+                if "dummy_m2m" in kwargs and not cls._creating_inner:
+                    cls._creating_inner = True
+                    try:
+                        built_inner = cls.build(
+                            description="Inner",
+                            dummy_model=related,
+                            dummy_m2m=[inner_tag],
+                        )
+                    finally:
+                        cls._creating_inner = False
+                return adjusted
+
+        outer = RecursiveFactory.create(
+            description="Outer",
+            dummy_model=related,
+            dummy_m2m=[outer_tag],
+        )
+
+        self.assertEqual(list(outer.dummy_m2m.all()), [outer_tag])
+        self.assertIsInstance(built_inner, DummyModel2)
+        self.assertIsNone(built_inner.pk)
+        self.assertEqual(built_inner.description, "Inner")
+
+    def test_recursive_same_factory_before_adjust_kwargs_keeps_outer_m2m_values(
+        self,
+    ):
+        related = self.factory_class.create(name="FK", value=1)
+        outer_tag = self.factory_class.create(name="Outer", value=2)
+        inner_tag = self.factory_class.create(name="Inner", value=3)
+
+        class RecursiveFactory(AutoFactory):
+            interface = DummyInterface
+            _creating_inner = False
+
+            class Meta:
+                model = DummyModel2
+
+            @classmethod
+            def _adjust_kwargs(cls, **kwargs: object) -> dict[str, object]:
+                if "dummy_m2m" in kwargs and not cls._creating_inner:
+                    cls._creating_inner = True
+                    try:
+                        cls.create(
+                            description="Inner",
+                            dummy_model=related,
+                            dummy_m2m=[inner_tag],
+                        )
+                    finally:
+                        cls._creating_inner = False
+                return super()._adjust_kwargs(**kwargs)
+
+        outer = RecursiveFactory.create(
+            description="Outer",
+            dummy_model=related,
+            dummy_m2m=[outer_tag],
+        )
+
+        self.assertEqual(list(outer.dummy_m2m.all()), [outer_tag])
+        inner = DummyModel2.objects.get(description="Inner")
+        self.assertEqual(list(inner.dummy_m2m.all()), [inner_tag])
 
     def test_nested_post_generation_owns_required_many_to_many_field(self):
         chosen_tag = self.factory_class.create(name="Chosen", value=1)

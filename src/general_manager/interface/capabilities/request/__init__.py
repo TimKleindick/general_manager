@@ -760,7 +760,7 @@ class RequestQueryCapability(BaseCapability):
             operation=operation,
             action="exclude",
             groups=exclude_groups,
-            call_group_offset=len(filter_groups),
+            call_group_offset=self._lookup_binding_count(filter_groups),
             query_params=query_params,
             headers=headers,
             path_params=path_params,
@@ -800,7 +800,8 @@ class RequestQueryCapability(BaseCapability):
         local_predicates: list[RequestLocalPredicate],
     ) -> None:
         """Compile every representable group without weakening its semantics."""
-        for group_index, group in enumerate(groups, start=call_group_offset):
+        next_call_group = call_group_offset
+        for group in groups:
             bindings = [
                 (
                     lookup_key,
@@ -810,6 +811,15 @@ class RequestQueryCapability(BaseCapability):
                 for lookup_key, values in group.items()
                 for value in values
             ]
+            if action == "exclude":
+                group_index = next_call_group
+                predicate_groups = (group_index,) * len(bindings)
+                next_call_group += 1
+            else:
+                predicate_groups = tuple(
+                    range(next_call_group, next_call_group + len(bindings))
+                )
+                next_call_group += len(bindings)
             fragments = [
                 self._compile_fragment(
                     spec=spec,
@@ -817,9 +827,11 @@ class RequestQueryCapability(BaseCapability):
                     value=value,
                     action=action,
                     operation_name=operation.name,
-                    call_group=group_index,
+                    call_group=predicate_group,
                 )
-                for lookup_key, value, spec in bindings
+                for (lookup_key, value, spec), predicate_group in zip(
+                    bindings, predicate_groups, strict=True
+                )
             ]
             if action == "exclude":
                 self._compile_exclude_group(
@@ -834,8 +846,8 @@ class RequestQueryCapability(BaseCapability):
                     local_predicates=local_predicates,
                 )
                 continue
-            for (lookup_key, value, spec), fragment in zip(
-                bindings, fragments, strict=True
+            for (lookup_key, value, spec), fragment, predicate_group in zip(
+                bindings, fragments, predicate_groups, strict=True
             ):
                 conflict = self._fragment_conflict(
                     query_params, headers, path_params, body, fragment
@@ -852,16 +864,21 @@ class RequestQueryCapability(BaseCapability):
                             lookup_key,
                             value,
                             action,
-                            group_index,
+                            predicate_group,
                             conflict,
                         ).local_predicates
                     )
                 local_predicates.extend(
                     self._with_predicate_group(
                         fragment.local_predicates,
-                        call_group=group_index,
+                        call_group=predicate_group,
                     )
                 )
+
+    @staticmethod
+    def _lookup_binding_count(groups: RequestLookupGroups) -> int:
+        """Return the number of independently compiled request lookups."""
+        return sum(len(values) for group in groups for values in group.values())
 
     def _compile_exclude_group(
         self,
