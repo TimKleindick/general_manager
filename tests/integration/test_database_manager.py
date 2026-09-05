@@ -1191,6 +1191,41 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 7,
             )
 
+    def test_materialized_historical_subset_uses_latest_snapshot_version(self):
+        base_time = timezone.now() - timedelta(days=10)
+        with patch("django.utils.timezone.now", return_value=base_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="Old member",
+                ignore_permission=True,
+            )
+        snapshot = base_time + timedelta(minutes=30)
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            human.update(name="New member", ignore_permission=True)
+
+        source = self.TestHuman.filter(name="Old member", search_date=snapshot)
+        selected = self.TestHuman(human.identification["id"], search_date=snapshot)
+        from django.db.models.functions import Length
+        from general_manager.bucket.database_bucket import DatabaseBucket
+
+        annotated = DatabaseBucket(
+            source._data.annotate(name_length=Length("name")),
+            self.TestHuman,
+            search_date=snapshot,
+        )
+        for bucket in (source, annotated):
+            derived = bucket.with_instances([selected])
+            self.assertEqual(
+                [
+                    item.identification["id"]
+                    for item in derived.filter(name="Old member")
+                ],
+                [human.identification["id"]],
+            )
+            self.assertEqual(list(derived.filter(name="New member")), [])
+
     def test_ambient_as_of_propagates_through_many_to_many_relations(self):
         base_time = timezone.now() - timedelta(days=10)
         with patch("django.utils.timezone.now", return_value=base_time):

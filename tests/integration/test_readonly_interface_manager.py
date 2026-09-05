@@ -1,6 +1,7 @@
 from contextlib import suppress
 
 from django.db import connections, models, transaction as django_transaction
+from django.test import override_settings
 from django.db.models import CharField, IntegerField, SmallIntegerField, TextField
 from decimal import Decimal
 from typing import ClassVar, Any
@@ -931,6 +932,14 @@ class ReadOnlySchemaConcreteFieldsIntegrationTests(GeneralManagerTransactionTest
         self.assertEqual(warnings, [])
 
 
+class _SecondaryDatabaseRouter:
+    def db_for_read(self, model, **hints):
+        return "secondary"
+
+    def db_for_write(self, model, **hints):
+        return "secondary"
+
+
 class ReadOnlySecondaryDatabaseRoutingTests(GeneralManagerTransactionTestCase):
     """Exercise synchronization against separate default and secondary tables."""
 
@@ -1044,6 +1053,16 @@ class ReadOnlySecondaryDatabaseRoutingTests(GeneralManagerTransactionTestCase):
         self.SecondaryCategory._data = []
         self.SecondaryProduct._data = []
 
+    @override_settings(DATABASE_ROUTERS=[_SecondaryDatabaseRouter()])
+    def test_sync_uses_router_when_interface_alias_is_unspecified(self) -> None:
+        with patch.object(self.SecondaryStatus.Interface, "database", None):
+            self.test_sync_reads_updates_and_reconciles_on_secondary_only()
+
+    @override_settings(DATABASE_ROUTERS=[_SecondaryDatabaseRouter()])
+    def test_router_selected_sync_transaction_rolls_back(self) -> None:
+        with patch.object(self.SecondaryStatus.Interface, "database", None):
+            self.test_injected_transaction_rolls_back_secondary_after_later_write_fails()
+
     def test_sync_reads_updates_and_reconciles_on_secondary_only(self) -> None:
         """Secondary payload reconciliation leaves the default alias untouched."""
         model = self.SecondaryStatus.Interface._model
@@ -1084,6 +1103,8 @@ class ReadOnlySecondaryDatabaseRoutingTests(GeneralManagerTransactionTestCase):
         original_save = model.save
 
         def fail_second_save(instance: models.Model, *args: object, **kwargs: object):
+            assert kwargs["using"] == "secondary"
+            assert connections["secondary"].in_atomic_block
             if instance.code == "FAIL":
                 raise RuntimeError
             return original_save(instance, *args, **kwargs)

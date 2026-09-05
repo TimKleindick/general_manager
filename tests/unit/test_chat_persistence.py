@@ -30,6 +30,7 @@ from general_manager.chat.models import (
     provider_messages_from_context,
     update_conversation_summary,
 )
+from general_manager.chat.context import prepare_conversation_messages
 from general_manager.chat.providers.base import DoneEvent, TextChunkEvent, TokenUsage
 from general_manager.chat.views import _build_messages
 
@@ -68,6 +69,10 @@ class ChatPersistenceTests(TestCase):
         assert len(first.session_key) == 64
         assert first.session_key != raw_session_key
 
+    @skipIf(
+        connection.vendor != "sqlite",
+        "Only SQLite retains legacy values beyond the declared varchar length.",
+    )
     def test_for_actor_reuses_legacy_overlength_session_history(self) -> None:
         raw_session_key = "legacy-cookie-" + ("x" * 80)
         legacy = ChatConversation.objects.create(session_key=raw_session_key)
@@ -915,12 +920,56 @@ class ChatPersistenceTests(TestCase):
                 conversation, summary_text="summary", summarized_through=watermark
             )
 
+        quoted_table = connection.ops.quote_name(ChatConversation._meta.db_table)
         locked_select = next(
             query["sql"]
             for query in queries.captured_queries
-            if 'FROM "general_manager_chatconversation"' in query["sql"]
+            if f"FROM {quoted_table}" in query["sql"]
         )
         assert "JOIN" not in locked_select.upper()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "max_recent_messages": 20,
+                "summarize_after": 10,
+            }
+        }
+    )
+    def test_prepare_messages_skips_empty_older_prefix_at_default_window(self) -> None:
+        """Histories within the recent window must not attempt an empty summary."""
+        summarize_calls: list[list[ChatMessage]] = []
+
+        async def summarize(_provider, messages):  # type: ignore[no-untyped-def]
+            summarize_calls.append(messages)
+            return "unexpected summary"
+
+        for summary_text in ("", "existing summary"):
+            with self.subTest(summary_text=summary_text):
+                conversation = ChatConversation.for_actor(
+                    user=None,
+                    session_key=f"empty-summary-prefix-{summary_text or 'none'}",
+                )
+                for index in range(11):
+                    append_chat_message(
+                        conversation,
+                        role="user" if index % 2 == 0 else "assistant",
+                        content=f"message-{index}",
+                    )
+                if summary_text:
+                    conversation.summary_text = summary_text
+                    conversation.save(update_fields=["summary_text"])
+
+                messages = async_to_sync(prepare_conversation_messages)(
+                    conversation,
+                    object(),
+                    summarize=summarize,
+                )
+
+                assert [message.role for message in messages[1:]] == [
+                    "user" if index % 2 == 0 else "assistant" for index in range(11)
+                ]
+        assert summarize_calls == []
 
     @override_settings(
         GENERAL_MANAGER={"CHAT": {"max_recent_messages": 1, "summarize_after": 1}}

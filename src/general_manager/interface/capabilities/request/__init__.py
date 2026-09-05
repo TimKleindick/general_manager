@@ -838,9 +838,11 @@ class RequestQueryCapability(BaseCapability):
                 conflict = self._fragment_conflict(
                     query_params, headers, path_params, body, fragment
                 )
-                if fragment.local_predicates:
-                    local_predicates.extend(fragment.local_predicates)
-                elif conflict is not None:
+                if conflict is None:
+                    self._merge_compiled_fragment(
+                        query_params, headers, path_params, body, fragment
+                    )
+                else:
                     local_predicates.extend(
                         self._deferred_local_predicate(
                             interface_cls,
@@ -852,10 +854,13 @@ class RequestQueryCapability(BaseCapability):
                             conflict,
                         ).local_predicates
                     )
-                else:
-                    self._merge_compiled_fragment(
-                        query_params, headers, path_params, body, fragment
+                local_predicates.extend(
+                    self._with_predicate_context(
+                        fragment.local_predicates,
+                        action=action,
+                        call_group=group_index,
                     )
+                )
 
     def _compile_exclude_group(
         self,
@@ -893,7 +898,18 @@ class RequestQueryCapability(BaseCapability):
             path_params.update(pending_path)
             body.update(pending_body)
             return
-        for lookup_key, value, spec in bindings:
+        for (lookup_key, value, spec), fragment in zip(
+            bindings, fragments, strict=True
+        ):
+            if fragment.local_predicates:
+                local_predicates.extend(
+                    self._with_predicate_context(
+                        fragment.local_predicates,
+                        action="exclude",
+                        call_group=call_group,
+                    )
+                )
+                continue
             local_predicates.extend(
                 self._deferred_local_predicate(
                     interface_cls,
@@ -905,6 +921,24 @@ class RequestQueryCapability(BaseCapability):
                     conflict or ("query", lookup_key),
                 ).local_predicates
             )
+
+    @staticmethod
+    def _with_predicate_context(
+        predicates: tuple[RequestLocalPredicate, ...],
+        *,
+        action: RequestAction,
+        call_group: int,
+    ) -> tuple[RequestLocalPredicate, ...]:
+        """Assign the calling lookup's action and grouping to compiler predicates."""
+        return tuple(
+            RequestLocalPredicate(
+                lookup_key=predicate.lookup_key,
+                value=predicate.value,
+                action=action,
+                call_group=call_group,
+            )
+            for predicate in predicates
+        )
 
     @staticmethod
     def _fragment_conflict(

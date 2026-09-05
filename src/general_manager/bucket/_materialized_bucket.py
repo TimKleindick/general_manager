@@ -80,6 +80,8 @@ class MaterializedBucket(Bucket[GeneralManagerType]):
         return MaterializedBucket(self._manager_class, items, snapshot=self._snapshot)
 
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        if self._snapshot is _SNAPSHOT_UNSPECIFIED:
+            return (self.__class__, (self._manager_class, self._items))
         return (self.__class__, (self._manager_class, self._items, self._snapshot))
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
@@ -100,6 +102,8 @@ class MaterializedBucket(Bucket[GeneralManagerType]):
         elif isinstance(other, Bucket):
             if other._manager_class is not self._manager_class:
                 raise MaterializedBucketTypeMismatchError(self._manager_class, other)
+            if _bucket_snapshot(other) != self._snapshot:
+                raise MaterializedBucketSnapshotMismatchError
             candidates = (*self._items, *tuple(other))
         else:
             raise MaterializedBucketTypeMismatchError(self._manager_class, other)
@@ -196,3 +200,12 @@ def _manager_identity(item: "GeneralManager") -> object:
         freeze_bucket_index_value(item.identification),
         getattr(item, "_effective_search_date", None),
     )
+
+
+def _bucket_snapshot(bucket: Bucket[GeneralManagerType]) -> object:
+    """Return explicit snapshot provenance when a native bucket exposes it."""
+    if hasattr(bucket, "_search_date"):
+        return bucket._search_date
+    if hasattr(bucket, "_effective_search_date"):
+        return bucket._effective_search_date
+    return _SNAPSHOT_UNSPECIFIED

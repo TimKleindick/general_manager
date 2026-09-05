@@ -1203,6 +1203,8 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
         class RelatedModel:
             _general_manager_class = RelatedManager
 
+        RelatedInterface._model = RelatedModel
+
         class FakeForeignKey(models.ForeignKey):
             def __init__(self, name: str, remote_model: type) -> None:
                 """

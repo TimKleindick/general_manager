@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import pickle
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -215,6 +216,27 @@ class ExcelBucketTests(TempPathMixin, SimpleTestCase):
 
         self.assertEqual(list(subset), [outside, outside])
         self.assertIs(subset[0], outside)
+
+    def test_native_excel_union_accepts_materialized_results(self) -> None:
+        path = self.temp_path("products.xlsx")
+        save_workbook(path)
+
+        class Product(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                name = ExcelCharField()
+
+                class Meta:
+                    workbook = str(path)
+                    sheet = "Products"
+                    header_row = 1
+                    key = "sku"
+
+        source = Product.all()
+        self.assertEqual([item.sku for item in source | source[:1]], ["SKU-1", "SKU-2"])
+        self.assertEqual(
+            [item.sku for item in source | (source | source)], ["SKU-1", "SKU-2"]
+        )
 
     def test_native_exclude_preserves_each_call_group(self) -> None:
         """Excel exclusions negate a conjunction from each exclude call."""
@@ -663,3 +685,21 @@ class ExcelBucketPickleTests(TempPathMixin, SimpleTestCase):
         self.assertEqual(restored._exclude_groups, exclude_groups)
         self.assertEqual(restored._keys, ("SKU-2", "SKU-1"))
         self.assertEqual([item.sku for item in restored], ["SKU-2", "SKU-1"])
+
+    def test_materialized_excel_subsets_preserve_unspecified_snapshot_when_copied(self):
+        source = PickleProduct.all()
+        derived = (
+            source[:1],
+            source | source,
+            source.with_instances([source.first()]),
+        )
+
+        for bucket in derived:
+            restored = pickle.loads(pickle.dumps(bucket))  # noqa: S301 - local test data
+            copied = copy.deepcopy(bucket)
+            self.assertEqual(
+                [item.sku for item in restored], [item.sku for item in bucket]
+            )
+            self.assertEqual(
+                [item.sku for item in copied], [item.sku for item in bucket]
+            )

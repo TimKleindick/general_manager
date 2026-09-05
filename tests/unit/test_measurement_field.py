@@ -524,6 +524,67 @@ class MeasurementFieldTests(TestCase):
         self.assertIsNone(instance.length_unit)
 
     @isolate_apps("tests")
+    def test_concrete_subclasses_inherit_measurement_defaults(self):
+        calls = []
+
+        def default_length():
+            calls.append(None)
+            return Measurement(2, "meter")
+
+        class Parent(models.Model):
+            length = MeasurementField(base_unit="meter", default=default_length)
+
+            class Meta:
+                app_label = "tests"
+
+        class Proxy(Parent):
+            class Meta:
+                app_label = "tests"
+                proxy = True
+
+        class Child(Parent):
+            class Meta:
+                app_label = "tests"
+
+        for model in (Parent, Proxy, Child):
+            with self.subTest(model=model.__name__):
+                calls.clear()
+                instance = model()
+                self.assertEqual(instance.length, Measurement(2, "meter"))
+                self.assertEqual(instance.length_value, Decimal("2"))
+                self.assertEqual(calls, [None])
+                explicit = model(length=Measurement(7, "meter"))
+                self.assertEqual(explicit.length, Measurement(7, "meter"))
+                self.assertEqual(calls, [None])
+
+    @isolate_apps("tests")
+    def test_concrete_subclass_nullable_default_is_evaluated_once(self):
+        calls = []
+
+        def default_length():
+            calls.append(None)
+            return None
+
+        class Parent(models.Model):
+            length = MeasurementField(
+                base_unit="meter", default=default_length, null=True
+            )
+
+            class Meta:
+                app_label = "tests"
+
+        class Child(Parent):
+            width = MeasurementField(base_unit="meter", default=Measurement(3, "meter"))
+
+            class Meta:
+                app_label = "tests"
+
+        instance = Child()
+        self.assertIsNone(instance.length)
+        self.assertEqual(instance.width, Measurement(3, "meter"))
+        self.assertEqual(calls, [None])
+
+    @isolate_apps("tests")
     def test_custom_init_observes_default_after_super(self):
         class DefaultedModel(models.Model):
             length = MeasurementField(

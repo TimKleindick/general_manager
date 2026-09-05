@@ -24,9 +24,11 @@ from general_manager.interface.requests import (
     RequestIncompleteResultError,
     RequestLocalPaginationUnsupportedError,
     RequestPlanConflictError,
+    RequestPlanFragment,
     RequestQueryOperation,
     RequestQueryPlan,
     RequestQueryResult,
+    RequestLocalPredicate,
     RequestSingleItemRequiredError,
     RequestSingleResponseRequiredError,
     RequestTransportConfig,
@@ -568,6 +570,58 @@ class TestRequestInterface(SimpleTestCase):
         )
         self.assertEqual(plan.local_predicates, ())
 
+    def test_compiler_filter_preserves_remote_and_local_contributions(self) -> None:
+        """A compiler fragment can restrict both the request and returned rows."""
+
+        def compile_tenant_status(binding: object) -> RequestPlanFragment:
+            del binding
+            return RequestPlanFragment(
+                query_params={"tenant_id": 42},
+                local_predicates=(RequestLocalPredicate("status", "active", "filter"),),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "tenant_status": RequestFilter(
+                value_type=str,
+                compiler=compile_tenant_status,
+            ),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            items = list(RemoteProject.filter(tenant_status="active"))
+
+        self.assertEqual([item.identification["id"] for item in items], [1])
+        plan = RemoteProject.Interface.calls[-1]["plan"]
+        self.assertEqual(dict(plan.query_params), {"tenant_id": 42})
+        self.assertEqual(
+            plan.local_predicates,
+            (RequestLocalPredicate("status", "active", "filter", 0),),
+        )
+
+    def test_compiler_filter_conflict_does_not_discard_remote_contribution(
+        self,
+    ) -> None:
+        """A mixed compiler fragment still rejects an unrepresentable remote conflict."""
+
+        def compile_tenant_status(binding: object) -> RequestPlanFragment:
+            del binding
+            return RequestPlanFragment(
+                query_params={"tenant_id": 42},
+                local_predicates=(RequestLocalPredicate("status", "active", "filter"),),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "tenant": RequestFilter(remote_name="tenant_id", value_type=int),
+            "tenant_status": RequestFilter(
+                value_type=str,
+                compiler=compile_tenant_status,
+            ),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            with self.assertRaises(RequestPlanConflictError):
+                RemoteProject.filter(tenant=99).filter(tenant_status="active")
+
     def test_chained_conflicting_remote_filter_fails_before_request(self) -> None:
         with self.assertRaises(RequestPlanConflictError):
             RemoteProject.filter(status="active").filter(status="inactive")
@@ -600,6 +654,41 @@ class TestRequestInterface(SimpleTestCase):
 
         call = RemoteProject.Interface.calls[-1]
         self.assertEqual(dict(call["plan"].query_params), {"state_not": "inactive"})
+
+    def test_compiler_exclude_keeps_transformed_alias_predicate(self) -> None:
+        """Compiler predicates retain their alias and transformed value for excludes."""
+
+        def compile_status_code(binding: object) -> RequestPlanFragment:
+            del binding
+            return RequestPlanFragment(
+                local_predicates=(
+                    RequestLocalPredicate("status", "inactive", "filter"),
+                )
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "status_code": RequestFilter(
+                value_type=int,
+                compiler=compile_status_code,
+            ),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            items = list(
+                RemoteProject.exclude(local_name__exact="Alpha Local").exclude(
+                    status_code=2
+                )
+            )
+
+        self.assertEqual(items, [])
+        plan = RemoteProject.Interface.calls[-1]["plan"]
+        self.assertEqual(
+            plan.local_predicates,
+            (
+                RequestLocalPredicate("local_name__exact", "Alpha Local", "exclude", 0),
+                RequestLocalPredicate("status", "inactive", "exclude", 1),
+            ),
+        )
 
     def test_all_uses_unfiltered_collection_request(self) -> None:
         list(RemoteProject.all())
@@ -715,6 +804,38 @@ class TestRequestInterface(SimpleTestCase):
             "cannot establish global uniqueness",
         ):
             RemoteProject.get(page=1, page_size=1)
+
+    def test_sort_preserves_incomplete_response_metadata(self) -> None:
+        response = RequestQueryResult(
+            items=(
+                {
+                    "id": 1,
+                    "name": "Alpha",
+                    "status": "active",
+                    "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                    "local_name": "Alpha Local",
+                },
+            ),
+            total_count=100,
+            page=2,
+            page_size=1,
+        )
+
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=response,
+        ):
+            for fields in ((), ("name",)):
+                with self.subTest(fields=fields):
+                    bucket = RemoteProject.all().sort(*fields)
+
+                    self.assertEqual(bucket.total_count, 100)
+                    self.assertEqual(bucket.upstream_page, 2)
+                    self.assertEqual(bucket.upstream_page_size, 1)
+                    self.assertFalse(bucket.response_is_complete)
+                    with self.assertRaises(RequestIncompleteResultError):
+                        bucket.get()
 
     def test_missing_total_one_row_cannot_satisfy_manager_get(self) -> None:
         response = RequestQueryResult(

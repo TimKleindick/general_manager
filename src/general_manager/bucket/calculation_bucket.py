@@ -389,6 +389,19 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 )
                 | other
             )
+        if isinstance(other, MaterializedBucket):
+            if other._manager_class != self._manager_class:
+                raise IncompatibleBucketManagerError(
+                    self._manager_class, other._manager_class
+                )
+            return (
+                MaterializedBucket(
+                    self._manager_class,
+                    tuple(self),
+                    snapshot=self._effective_search_date,
+                )
+                | other
+            )
         if not isinstance(other, self.__class__):
             raise IncompatibleBucketTypeError(self.__class__, type(other))
         if self._manager_class != other._manager_class:

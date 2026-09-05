@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.db.models.expressions import Col
-from django.db.models.signals import post_init, pre_init
+from django.db.models.signals import class_prepared, post_init, pre_init
 from decimal import Decimal, InvalidOperation
 import pint
 from general_manager.measurement.measurement import (
@@ -819,3 +819,21 @@ class MeasurementField(MeasurementFieldBase):
             raise ValidationError(
                 {self.name: ["Value must be a Measurement instance or None."]}
             )
+
+
+def _install_inherited_measurement_defaults(
+    sender: type[models.Model], **_kwargs: object
+) -> None:
+    """Register initialization signals for inherited fields on concrete models."""
+    # Forward fields are available before the app registry has finished loading.
+    for field in sender._meta.fields:
+        if isinstance(field, MeasurementField):
+            field._install_default_initializer(sender)
+            break
+
+
+class_prepared.connect(
+    _install_inherited_measurement_defaults,
+    dispatch_uid="general_manager.measurement.inherited_defaults",
+    weak=False,
+)

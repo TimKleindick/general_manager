@@ -75,25 +75,26 @@ async def prepare_conversation_messages(
     conversation_messages = await sync_to_async(get_conversation_messages)(conversation)
     if allow_summarization and len(conversation_messages) > summarize_after:
         older_messages = conversation_messages[:-max_recent_messages]
-        summary_is_current = (
-            bool(conversation.summary_text.strip())
-            and getattr(conversation, "summarized_through_id", None)
-            == older_messages[-1].pk
-        )
-        if not summary_is_current:
-            summary_text = (
-                await summarize(provider, older_messages)
-                if summarize is not None
-                else await summarize_messages_with_provider(
-                    provider, older_messages, scope=scope
-                )
+        if older_messages:
+            summary_is_current = (
+                bool(conversation.summary_text.strip())
+                and getattr(conversation, "summarized_through_id", None)
+                == older_messages[-1].pk
             )
-            if summary_text:
-                await sync_to_async(update_conversation_summary)(
-                    conversation,
-                    summary_text=summary_text,
-                    summarized_through=older_messages[-1],
+            if not summary_is_current:
+                summary_text = (
+                    await summarize(provider, older_messages)
+                    if summarize is not None
+                    else await summarize_messages_with_provider(
+                        provider, older_messages, scope=scope
+                    )
                 )
+                if summary_text:
+                    await sync_to_async(update_conversation_summary)(
+                        conversation,
+                        summary_text=summary_text,
+                        summarized_through=older_messages[-1],
+                    )
     context = await sync_to_async(build_conversation_context)(conversation)
     return [
         Message(role="system", content=build_system_prompt()),

@@ -87,6 +87,20 @@ class ConfirmedMutationIntegrationProvider:
         return _stream()
 
 
+class ReconnectConfirmationIntegrationProvider:
+    requests: ClassVar[list[list[object]]] = []
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+        self.requests.append(list(messages))
+
+        async def _stream():
+            yield TextChunkEvent(content="reconnect follow-up")
+            yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+
+        return _stream()
+
+
 class SummaryContextIntegrationProvider:
     provider_config: ClassVar[dict[str, int]] = {"timeout_seconds": 1}
 
@@ -557,71 +571,113 @@ class ChatTransportIntegrationTests(TransactionTestCase):
         },
         ALLOWED_HOSTS=["testserver"],
     )
-    def test_websocket_reconnect_claims_persisted_confirmation_once(self) -> None:
-        session = SessionStore()
-        session["_gm_chat_session"] = True
-        session.save()
-        conversation = ChatConversation.for_actor(
-            user=None, session_key=session.session_key
-        )
-        append_chat_message(conversation, role="user", content="create a part")
-        append_chat_message(
-            conversation,
-            role="assistant",
-            tool_calls=[
-                {
-                    "id": "reconnect-confirm",
-                    "name": "mutate",
-                    "args": {"mutation": "createPart", "input": {"name": "Bolt"}},
-                }
-            ],
-        )
-        create_pending_confirmation(
-            conversation,
-            confirmation_id="reconnect-confirm",
-            mutation_name="createPart",
-            payload={"input": {"name": "Bolt"}},
-            timeout_seconds=30,
-        )
+    def test_websocket_reconnect_preserves_pending_tool_exchange(self) -> None:
+        for sequence, confirmed in enumerate((True, False)):
+            with self.subTest(confirmed=confirmed):
+                ReconnectConfirmationIntegrationProvider.requests.clear()
+                session = SessionStore()
+                session["_gm_chat_session"] = f"pending-{sequence}"
+                session.save()
+                conversation = ChatConversation.for_actor(
+                    user=None, session_key=session.session_key
+                )
+                append_chat_message(conversation, role="user", content="create a part")
+                append_chat_message(
+                    conversation,
+                    role="assistant",
+                    tool_calls=[
+                        {
+                            "id": "reconnect-confirm",
+                            "name": "mutate",
+                            "args": {
+                                "mutation": "createPart",
+                                "input": {"name": "Bolt"},
+                            },
+                        }
+                    ],
+                )
+                create_pending_confirmation(
+                    conversation,
+                    confirmation_id="reconnect-confirm",
+                    mutation_name="createPart",
+                    payload={"input": {"name": "Bolt"}},
+                    timeout_seconds=30,
+                )
 
-        async def run_test() -> None:
-            ensure_chat_route()
-            cookie = f"sessionid={session.session_key}".encode()
-            with patch(
-                "general_manager.chat.consumer.execute_confirmed_chat_mutation",
-                return_value={"status": "executed"},
-            ):
-                first = await self._connect(cookie=cookie)
-                await self._send_json(
-                    first,
-                    {
-                        "type": "confirm",
-                        "confirmation_id": "reconnect-confirm",
-                        "confirmed": True,
-                    },
-                )
-                assert (
-                    json.loads((await first.receive_output())["text"])["type"]
-                    == "tool_result"
-                )
-                await self._disconnect(first)
+                async def run_test(session_key: str, is_confirmed: bool) -> None:
+                    ensure_chat_route()
+                    cookie = f"sessionid={session_key}".encode()
+                    with (
+                        patch(
+                            "general_manager.chat.consumer.execute_confirmed_chat_mutation",
+                            return_value={"status": "executed"},
+                        ) as execute_mutation,
+                        patch(
+                            "general_manager.chat.consumer.import_provider",
+                            return_value=ReconnectConfirmationIntegrationProvider,
+                        ),
+                    ):
+                        first = await self._connect(cookie=cookie)
+                        await self._send_json(
+                            first,
+                            {
+                                "type": "confirm",
+                                "confirmation_id": "reconnect-confirm",
+                                "confirmed": is_confirmed,
+                            },
+                        )
+                        assert (
+                            json.loads((await first.receive_output())["text"])["type"]
+                            == "tool_result"
+                        )
+                        assert (
+                            json.loads((await first.receive_output())["text"])["type"]
+                            == "text_chunk"
+                        )
+                        assert (
+                            json.loads((await first.receive_output())["text"])["type"]
+                            == "done"
+                        )
+                        if is_confirmed:
+                            execute_mutation.assert_called_once()
+                        else:
+                            execute_mutation.assert_not_called()
+                        await self._disconnect(first)
 
-                replay = await self._connect(cookie=cookie)
-                await self._send_json(
-                    replay,
-                    {
-                        "type": "confirm",
-                        "confirmation_id": "reconnect-confirm",
-                        "confirmed": True,
-                    },
-                )
-                assert (
-                    json.loads((await replay.receive_output())["text"])["code"]
-                    == "bad_event"
-                )
-                await self._disconnect(replay)
+                        replay = await self._connect(cookie=cookie)
+                        await self._send_json(
+                            replay,
+                            {
+                                "type": "confirm",
+                                "confirmation_id": "reconnect-confirm",
+                                "confirmed": is_confirmed,
+                            },
+                        )
+                        assert (
+                            json.loads((await replay.receive_output())["text"])["code"]
+                            == "bad_event"
+                        )
+                        await self._disconnect(replay)
 
-        asyncio.run(run_test())
+                asyncio.run(run_test(session.session_key, confirmed))
+
+                messages = ReconnectConfirmationIntegrationProvider.requests[-1]
+                declarations = [
+                    message
+                    for message in messages
+                    if getattr(message, "tool_calls", ())
+                ]
+                results = [
+                    message
+                    for message in messages
+                    if getattr(message, "role", None) == "tool"
+                ]
+                assert len(declarations) == 1
+                assert len(results) == 1
+                declaration = declarations[0]
+                result = results[0]
+                assert declaration.tool_calls[0].id == "reconnect-confirm"
+                assert result.tool_call_id == declaration.tool_calls[0].id
 
     @override_settings(
         SESSION_ENGINE="django.contrib.sessions.backends.db",
