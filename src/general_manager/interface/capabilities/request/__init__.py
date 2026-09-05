@@ -855,9 +855,8 @@ class RequestQueryCapability(BaseCapability):
                         ).local_predicates
                     )
                 local_predicates.extend(
-                    self._with_predicate_context(
+                    self._with_predicate_group(
                         fragment.local_predicates,
-                        action=action,
                         call_group=group_index,
                     )
                 )
@@ -903,9 +902,8 @@ class RequestQueryCapability(BaseCapability):
         ):
             if fragment.local_predicates:
                 local_predicates.extend(
-                    self._with_predicate_context(
+                    self._with_predicate_group(
                         fragment.local_predicates,
-                        action="exclude",
                         call_group=call_group,
                     )
                 )
@@ -923,18 +921,17 @@ class RequestQueryCapability(BaseCapability):
             )
 
     @staticmethod
-    def _with_predicate_context(
+    def _with_predicate_group(
         predicates: tuple[RequestLocalPredicate, ...],
         *,
-        action: RequestAction,
         call_group: int,
     ) -> tuple[RequestLocalPredicate, ...]:
-        """Assign the calling lookup's action and grouping to compiler predicates."""
+        """Assign the call group without changing compiler predicate semantics."""
         return tuple(
             RequestLocalPredicate(
                 lookup_key=predicate.lookup_key,
                 value=predicate.value,
-                action=action,
+                action=predicate.action,
                 call_group=call_group,
             )
             for predicate in predicates
