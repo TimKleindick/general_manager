@@ -30,16 +30,27 @@ matching routes. Predicate exceptions and dead-letter handler exceptions are not
 wrapped by the in-memory registry; database outbox processing records them as
 outbox failures.
 
-Identical registrations are ignored rather than appended. Registration identity
-includes the event key, handler, validator, predicate, retry count, retry
-predicate, and dead-letter handler. Changing any of those routing options creates
-a separate registration and may invoke the same handler more than once. Matching
-handlers run in registration order within each route bucket, and type-route
-registrations run before name-route registrations when an event matches both.
-Registrations skipped by `when=False` are not considered applicable for
-`publish()` return values. Callable identity uses
-`__module__ + "." + __qualname__` when available and `repr(...)` otherwise. The
-retry count in the identity is the clamped retry count.
+Database registries use `registration_id` as the durable delivery identity.
+Importable module-level functions retain a deterministic default identity. Pass
+an explicit, deployment-stable ID for closures, bound methods, callable objects,
+or when any validator, predicate, retry predicate, or dead-letter callback is
+dynamic. Re-registering the same ID with the same callable objects and routing
+configuration is idempotent. Reusing it for a different event route, callback,
+or routing option raises `WorkflowHandlerRegistrationConflictError`.
+Explicit IDs are exact, non-blank strings up to 255 characters; accepted IDs
+are not normalized, so separators remain valid. Delivery lookup uses the
+durable `(event, registration_id)` pair. New delivery rows use a bounded,
+colon-free `v3_` digest key, while existing delivery keys remain unchanged.
+In-memory registries keep distinct runtime callbacks distinct, including
+callable objects whose equality methods say they are equal. Matching handlers run
+in registration order within each route bucket, and type-route registrations run
+before name-route registrations when an event matches both. Registrations skipped
+by `when=False` are not considered applicable for `publish()` return values.
+
+When introducing explicit durable IDs, drain the outbox or explicitly reconcile
+existing registrations and delivery attempts before deployment. Existing
+`WorkflowDeliveryAttempt` rows are not rewritten, and completed deliveries are
+never replayed automatically under a new registration ID.
 
 If `retry_on` raises while evaluating a handler failure, that exception
 propagates in the in-memory registry and is recorded as an outbox failure during

@@ -68,9 +68,11 @@ applies `filter(**filters)` only when `filters` is truthy, applies
 computes `total_count` before pagination, and returns a JSON envelope with
 `items`, `metadata`, and `total_count`. `ordering` may be one field name or a
 list of field names; a leading `-` sorts that field descending, and multi-field
-ordering is applied in reverse order through chained bucket sorts. Pagination is
-applied only when both `page` and `page_size` are positive integers; other
-values are left in response metadata but do not slice the bucket.
+ordering is passed once as one complete bucket sort call. A nonempty sort
+replaces prior ordering. Pagination is
+applied when either positive integer `page` or `page_size` is supplied; the
+omitted control defaults to page 1 or size 10. Zero, negative, and boolean
+controls are rejected.
 `GET /<id>` returns one item, `PATCH /<id>` requires an object body and returns
 the updated item, `DELETE /<id>` returns an empty `items` list, and
 `POST /<resource>` creates an item and returns HTTP `201`. URL identifiers are
@@ -79,6 +81,14 @@ coerced to `int` only when the manager interface `id` input type is exactly
 Disabled operations and unsupported item methods return HTTP `405` without
 constructing a manager for that request. Coercion failures are mapped to the
 standard remote error envelope.
+
+Mutation bodies contain only schema fields. The server rejects client-supplied
+`ignore_permission` and `creator_id`, and derives the mutation actor from the
+authenticated request user. An optional audit comment is carried separately as
+`{"__metadata__": {"history_comment": "..."}}`; this metadata object accepts
+only `history_comment`, which must be a string or `null`. `RemoteManagerInterface`
+uses this envelope automatically when its trusted Python `create`, `update`, or
+`delete` call receives a string `history_comment`.
 
 Success envelopes include `items`, `metadata.protocol_version`,
 `metadata.request_id`, response header `X-Request-ID`, optional metadata extras
@@ -149,6 +159,11 @@ become top-level query body controls instead of remote filter keys; only their
 first supplied value is used, and the capability does not add extra validation
 beyond the normal request lookup/input casting path. Reserved names are special
 only in `filters`; the same names in `exclude(...)` remain ordinary exclude keys.
+Independent later `filter(...)` calls are retained in the request body, including
+reserved controls. Repeating a remote key with a different normalized value fails
+during planning instead of silently overwriting it. A flat remote `excludes`
+payload represents one `NOT(AND(...))` call group, so multiple `exclude(...)`
+call groups also fail during planning rather than changing their meaning.
 Operation names are resolved through the interface's declared query operations.
 `operation_name=None` and `operation_name=""` are intentional default-operation
 forms and resolve through the interface default operation, normally `list`.

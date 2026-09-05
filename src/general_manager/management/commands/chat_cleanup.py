@@ -22,6 +22,8 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 "Deleted "
                 f"{deleted['conversations']} chat conversations and "
-                f"{deleted['pending_confirmations']} pending confirmations."
+                f"{deleted['messages']} messages and "
+                f"{deleted['pending_confirmations']} pending confirmations "
+                f"({deleted['total']} rows total)."
             )
         )

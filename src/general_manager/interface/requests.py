@@ -429,6 +429,23 @@ class RequestSingleItemRequiredError(ValueError):
         super().__init__("get() requires exactly one item.")
 
 
+class RequestIncompleteResultError(RequestSingleItemRequiredError):
+    """Raised when a request page cannot prove that its one row is unique."""
+
+    def __init__(self, operation_name: str, total_count: int | None) -> None:
+        if total_count is None:
+            detail = "the response did not provide total_count"
+        else:
+            detail = f"the response total_count is {total_count}"
+        ValueError.__init__(
+            self,
+            "get() cannot establish global uniqueness for request operation "
+            f"'{operation_name}': {detail}. Use a configured detail read, an "
+            "explicit materialized subset, or first() when global uniqueness is "
+            "not required.",
+        )
+
+
 class RequestSingleResponseRequiredError(ValueError):
     """Raised when a detail/create/update operation returns the wrong item count."""
 
@@ -1037,6 +1054,7 @@ class RequestLocalPredicate:
     lookup_key: str
     value: object
     action: RequestAction
+    call_group: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1146,7 +1164,7 @@ class RequestOperation:
     path: str
     method: str = "GET"
     collection: bool = False
-    filters: Mapping[str, "RequestFilter"] | None = field(default_factory=dict)
+    filters: Mapping[str, "RequestFilter"] | None = None
     metadata: RequestPayload = field(default_factory=dict)
     static_query_params: RequestPayload = field(default_factory=dict)
     static_headers: RequestHeaders = field(default_factory=dict)
@@ -1195,6 +1213,8 @@ class RequestPlanState(TypedDict):
     local_predicates: tuple[RequestLocalPredicate, ...]
     filters: dict[str, tuple[object, ...]]
     excludes: dict[str, tuple[object, ...]]
+    filter_call_groups: tuple[dict[str, tuple[object, ...]], ...]
+    exclude_call_groups: tuple[dict[str, tuple[object, ...]], ...]
     metadata: RequestMutablePayload
 
 
@@ -1219,6 +1239,12 @@ class RequestPlan:
     local_predicates: tuple[RequestLocalPredicate, ...] = field(default_factory=tuple)
     filters: Mapping[str, tuple[object, ...]] = field(default_factory=dict)
     excludes: Mapping[str, tuple[object, ...]] = field(default_factory=dict)
+    filter_call_groups: tuple[Mapping[str, tuple[object, ...]], ...] = field(
+        default_factory=tuple
+    )
+    exclude_call_groups: tuple[Mapping[str, tuple[object, ...]], ...] = field(
+        default_factory=tuple
+    )
     metadata: RequestPayload = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -1246,6 +1272,22 @@ class RequestPlan:
                 {key: tuple(values) for key, values in self.excludes.items()}
             ),
         )
+        object.__setattr__(
+            self,
+            "filter_call_groups",
+            tuple(
+                MappingProxyType({key: tuple(values) for key, values in group.items()})
+                for group in self.filter_call_groups
+            ),
+        )
+        object.__setattr__(
+            self,
+            "exclude_call_groups",
+            tuple(
+                MappingProxyType({key: tuple(values) for key, values in group.items()})
+                for group in self.exclude_call_groups
+            ),
+        )
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
     def __reduce__(
@@ -1271,6 +1313,14 @@ class RequestPlan:
                     "excludes": {
                         key: tuple(values) for key, values in self.excludes.items()
                     },
+                    "filter_call_groups": tuple(
+                        {key: tuple(values) for key, values in group.items()}
+                        for group in self.filter_call_groups
+                    ),
+                    "exclude_call_groups": tuple(
+                        {key: tuple(values) for key, values in group.items()}
+                        for group in self.exclude_call_groups
+                    ),
                     "metadata": dict(self.metadata),
                 },
             ),
@@ -1302,8 +1352,22 @@ def _restore_request_plan(state: RequestPlanState) -> RequestPlan:
         local_predicates=tuple(state["local_predicates"]),
         filters=state["filters"],
         excludes=state["excludes"],
+        filter_call_groups=state.get("filter_call_groups", ()),
+        exclude_call_groups=state.get("exclude_call_groups", ()),
         metadata=state["metadata"],
     )
+
+
+class InvalidRequestPageCoordinatesError(ValueError):
+    """Raised when a normalized request result has invalid page provenance."""
+
+    @classmethod
+    def incomplete(cls) -> "InvalidRequestPageCoordinatesError":
+        return cls("Request page coordinates must include page and page_size.")
+
+    @classmethod
+    def invalid(cls) -> "InvalidRequestPageCoordinatesError":
+        return cls("Request page coordinates must be positive non-boolean integers.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1311,14 +1375,27 @@ class RequestQueryResult:
     """Normalized output returned by request query execution hooks.
 
     `items` contains zero or more mapping payloads after response normalization.
-    Single-object responses are represented as a one-item tuple.
+    Single-object responses are represented as a one-item tuple. `total_count`
+    is optional upstream cardinality metadata and does not make a response
+    complete unless it equals the fetched item count. Custom adapters returning
+    a pre-paginated response must supply both positive non-boolean `page` and
+    `page_size` coordinates; adapters must omit both for an unpaginated result.
     """
 
     items: tuple[RequestPayload, ...]
     total_count: int | None = None
     metadata: RequestPayload = field(default_factory=dict)
+    page: int | None = None
+    page_size: int | None = None
 
     def __post_init__(self) -> None:
+        if (self.page is None) != (self.page_size is None):
+            raise InvalidRequestPageCoordinatesError.incomplete()
+        for value in (self.page, self.page_size):
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value <= 0
+            ):
+                raise InvalidRequestPageCoordinatesError.invalid()
         object.__setattr__(self, "items", tuple(self.items))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
@@ -1867,11 +1944,21 @@ class UrllibRequestTransport(SharedRequestTransport):
                 headers=dict(getattr(raw_response, "headers", {})),
             )
         except HTTPError as error:
+            error_payload: RequestResponse | None = None
+            try:
+                error_payload = self._decode_payload(error.read())
+            except RequestSchemaError:
+                # HTTP status and transport metadata remain authoritative when
+                # an upstream proxy returns HTML or another non-JSON body.
+                error_payload = None
+            error_headers = error.headers
             raise RequestTransportStatusError(
                 status_code=error.code,
                 request=request,
-                payload=self._decode_payload(error.read()),
-                headers=dict(error.headers.items()),
+                payload=error_payload,
+                headers=(
+                    dict(error_headers.items()) if error_headers is not None else {}
+                ),
             ) from error
         except URLError as error:
             raise OSError(str(error.reason)) from error

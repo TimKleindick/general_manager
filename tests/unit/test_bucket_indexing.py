@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -15,8 +16,11 @@ from general_manager.bucket.indexing import (
     resolve_bucket_index_key,
     validate_bucket_index_max_rows,
 )
+from general_manager.bucket._materialized_bucket import MaterializedBucket
+from general_manager.bucket._ordering import InvalidOrderingError
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.manager.general_manager import GeneralManager
+from tests.utils.simple_manager_interface import BaseTestInterface
 
 
 class RelatedManager(GeneralManager):
@@ -26,6 +30,37 @@ class RelatedManager(GeneralManager):
         self._GeneralManager__id = {"id": pk}
         self._manager_state_valid = True
         self._manager_state_reason = None
+
+
+class SubsetInterface(BaseTestInterface):
+    """Declare the fields used by the materialized ordering assertion."""
+
+    @classmethod
+    def get_attribute_types(cls) -> dict[str, dict[str, object]]:
+        return {"a": {"type": int}, "b": {"type": int}}
+
+    @classmethod
+    def get_graph_ql_properties(cls) -> dict[str, object]:
+        return {}
+
+
+class SubsetManager(GeneralManager):
+    """Minimal manager used to exercise private exact-subset identity rules."""
+
+    Interface = SubsetInterface
+
+    def __init__(self, identifier: int, a: int, b: int) -> None:
+        self._interface = cast(InterfaceBase, object())
+        self._GeneralManager__id = {"id": identifier}
+        self._effective_search_date = None
+        self._manager_state_valid = True
+        self._manager_state_reason = None
+        self.a = a
+        self.b = b
+
+
+class SubsetManagerChild(SubsetManager):
+    """Subclasses must not cross an exact materialized subset boundary."""
 
 
 class MixedIdentificationManager(GeneralManager):
@@ -176,6 +211,95 @@ def test_freeze_bucket_index_value_normalizes_manager_values() -> None:
         RelatedManager,
         (("id", 10),),
     )
+
+
+def test_materialized_bucket_preserves_query_groups_and_rejects_snapshots() -> None:
+    """Exact subset operations retain objects, duplicate input, and snapshot identity."""
+    first = SubsetManager(1, 1, 1)
+    second = SubsetManager(2, 1, 2)
+    third = SubsetManager(3, 2, 2)
+    outside = SubsetManager(4, 3, 3)
+    for item in (first, second, third, outside):
+        item._effective_search_date = "one"
+    bucket = MaterializedBucket(SubsetManager, (first, second, third), "one")
+
+    assert list(bucket.filter(a=1).filter(a=2)) == []
+    assert list(bucket.exclude(a=1, b=1)) == [second, third]
+    assert list(bucket.exclude(a=1).exclude(b=1)) == [third]
+    assert list(bucket[:0].all().filter(a=1).sort("a")) == []
+    assert list(bucket.with_instances((outside, outside))) == [outside, outside]
+    assert list(bucket | bucket) == [first, second, third]
+    equivalent_first = SubsetManager(1, 99, 99)
+    equivalent_first._effective_search_date = "one"
+    assert equivalent_first in bucket
+    assert SubsetManagerChild(1, 1, 1) not in bucket
+
+    outside._effective_search_date = "two"
+    with pytest.raises(ValueError, match="different snapshots"):
+        bucket.with_instances((outside,))
+
+    with pytest.raises(ValueError, match="different snapshots"):
+        _ = bucket | MaterializedBucket(SubsetManager, (outside,), "two")
+
+    with pytest.raises(TypeError):
+        MaterializedBucket(SubsetManager, (SubsetManagerChild(5, 3, 3),), "one")
+    outside._effective_search_date = None
+    with pytest.raises(ValueError, match="different snapshots"):
+        MaterializedBucket(SubsetManager, (outside,), "one")
+
+
+def test_materialized_bucket_sort_keeps_nullable_declared_relation_last() -> None:
+    class RelatedInterface:
+        @classmethod
+        def get_attribute_types(cls) -> dict[str, dict[str, object]]:
+            return {"name": {"type": str}}
+
+        @classmethod
+        def get_graph_ql_properties(cls) -> dict[str, object]:
+            return {}
+
+    class Related:
+        Interface = RelatedInterface
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    class ParentInterface:
+        @classmethod
+        def get_attribute_types(cls) -> dict[str, dict[str, object]]:
+            return {"related": {"type": Related}}
+
+        @classmethod
+        def get_graph_ql_properties(cls) -> dict[str, object]:
+            return {}
+
+    class Parent:
+        Interface = ParentInterface
+
+        def __init__(self, related: Related | None) -> None:
+            self.related = related
+
+    related = Related("alpha")
+    bucket = MaterializedBucket(Parent, (Parent(None), Parent(related)))
+
+    assert [item.related for item in bucket.sort("related__name")] == [related, None]
+
+
+def test_materialized_bucket_rejects_non_sortable_property_before_iteration() -> None:
+    class ManagerInterface:
+        @classmethod
+        def get_attribute_types(cls) -> dict[str, dict[str, object]]:
+            return {}
+
+        @classmethod
+        def get_graph_ql_properties(cls) -> dict[str, object]:
+            return {"rank": SimpleNamespace(sortable=False)}
+
+    class Manager:
+        Interface = ManagerInterface
+
+    with pytest.raises(InvalidOrderingError, match="not sortable"):
+        MaterializedBucket(Manager, ()).sort("rank")
 
 
 def test_freeze_bucket_index_value_normalizes_nested_containers() -> None:

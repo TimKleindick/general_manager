@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 from collections.abc import Iterator
-from typing import Generic, cast, get_args
+from decimal import Decimal
+from types import UnionType
+from typing import Generic, Union, cast, get_args, get_origin
 from datetime import datetime, date, time
 from general_manager.api.property import GraphQLProperty
 from general_manager.measurement import Measurement
@@ -60,6 +62,37 @@ class MissingGroupAttributeError(AttributeError):
         super().__init__(f"{manager_name} has no attribute {attribute}.")
 
 
+class NonNumericGroupSumError(TypeError):
+    """Raised when an explicit group sum names a nonnumeric field."""
+
+    def __init__(self, field: str) -> None:
+        super().__init__(f"{field} is not a numeric group sum field.")
+
+
+def group_sum_value_type(field_type: object) -> type[object] | None:
+    """Return the concrete numeric member of a supported optional annotation."""
+    if get_origin(field_type) in {Union, UnionType}:
+        members = [
+            member for member in get_args(field_type) if member is not type(None)
+        ]
+        if len(members) != 1:
+            return None
+        field_type = members[0]
+    return field_type if isinstance(field_type, type) else None
+
+
+class _GroupKeys(dict[str, object]):
+    """Expose explicit group keys without breaking ``dict(GroupManager)``."""
+
+    def __init__(self, group: "GroupManager[GeneralManagerType]") -> None:
+        super().__init__(group._group_by_value)
+        self._group = group
+
+    def __call__(self) -> list[str]:
+        """Provide mapping-protocol keys for legacy ``dict(group)`` callers."""
+        return [name for name, _value in self._group]
+
+
 class GroupManager(Generic[GeneralManagerType]):
     """Represent aggregated results for grouped GeneralManager records."""
 
@@ -84,6 +117,49 @@ class GroupManager(Generic[GeneralManagerType]):
         self._group_by_value = group_by_value
         self._data = data
         self._grouped_data: dict[str, object] = {}
+
+    @property
+    def keys(self) -> dict[str, object]:
+        """Return a detached mapping of the values that define this group."""
+        return _GroupKeys(self)
+
+    def __getitem__(self, item: str) -> object:
+        """Support the mapping protocol used by ``dict(group)`` callers."""
+        return getattr(self, item)
+
+    @property
+    def members(self) -> Bucket[GeneralManagerType]:
+        """Return the original, unaggregated managers that belong to this group."""
+        return self._data
+
+    @property
+    def count(self) -> int:
+        """Return the number of original managers in this group."""
+        return sum(1 for _ in self._data)
+
+    def sum(self, field: str) -> int | float | Decimal | Measurement | None:
+        """Sum one numeric group field while preserving its native numeric type.
+
+        ``bool`` deliberately is not numeric for the explicit grouped API.  It
+        remains supported by :meth:`combine_value` for compatibility with the
+        legacy aggregate attribute behaviour.
+        """
+        attribute_types = self._manager_class.Interface.get_attribute_types()
+        attr_info = attribute_types.get(field)
+        data_type = group_sum_value_type(attr_info["type"] if attr_info else None)
+        if data_type is None:
+            raise MissingGroupAttributeError(self.__class__.__name__, field)
+        if issubclass(data_type, bool) or not issubclass(
+            data_type,
+            (int, float, Decimal, Measurement),
+        ):
+            raise NonNumericGroupSumError(field)
+
+        values = [getattr(entry, field) for entry in self._data]
+        non_null_values = [value for value in values if value is not None]
+        if not non_null_values:
+            return None
+        return sum(cast(list[int | float | Decimal | Measurement], non_null_values))
 
     def __hash__(self) -> int:
         """

@@ -6,9 +6,10 @@ from collections.abc import Callable
 from functools import lru_cache
 from typing import TypeAlias, TypeGuard, cast
 import pint
-from decimal import Decimal, getcontext, InvalidOperation
-from operator import eq, ne, lt, le, gt, ge
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
+from operator import lt, le, gt, ge
 from pint.facets.plain import PlainQuantity
+from pint.util import UnitsContainer
 
 NumericMagnitude: TypeAlias = Decimal | float | int | str
 NumericScalar: TypeAlias = Decimal | float | int
@@ -16,8 +17,6 @@ QuantityMagnitude: TypeAlias = Decimal | float
 MeasurementQuantity: TypeAlias = PlainQuantity[QuantityMagnitude]
 ComparisonOperation: TypeAlias = Callable[[QuantityMagnitude, QuantityMagnitude], bool]
 
-# Set precision for Decimal
-getcontext().prec = 28
 _PERCENT_SCALE = Decimal("100")
 _COUNT_PUBLIC_UNIT = "count"
 _PIECE_COUNT_CANONICAL_UNIT = "piece"
@@ -31,6 +30,9 @@ ureg: pint.UnitRegistry[QuantityMagnitude] = pint.UnitRegistry(
 # counts as their own unit family so scalar arithmetic cannot silently erase it.
 ureg.define(f"{_PIECE_COUNT_CANONICAL_UNIT} = [piece_count] = {_COUNT_PUBLIC_UNIT}")
 _PIECE_COUNT_UNIT = ureg.parse_units(_COUNT_PUBLIC_UNIT)
+_CONVERSION_FACTOR_PRECISION = 80
+_CONVERSION_FACTOR_EMAX = 999999
+_CONVERSION_FACTOR_EMIN = -999999
 
 # Define currency units
 currency_units = ["EUR", "USD", "GBP", "JPY", "CHF", "AUD", "CAD"]
@@ -66,13 +68,38 @@ def _format_decimal(value: Decimal) -> Decimal:
     Returns:
         Decimal: Normalised decimal with insignificant trailing zeros removed.
     """
-    value = value.normalize()
-    if value == value.to_integral_value():
-        try:
-            return value.quantize(Decimal("1"))
-        except InvalidOperation:
-            return value
-    return value
+    with localcontext() as context:
+        context.prec = _decimal_precision(value)
+        normalized = value.normalize(context=context)
+        if normalized == normalized.to_integral_value(context=context):
+            try:
+                return normalized.quantize(Decimal("1"), context=context)
+            except InvalidOperation:
+                return normalized
+        return normalized
+
+
+def _decimal_precision(*values: Decimal, extra_digits: int = 0) -> int:
+    """Return enough local precision to retain all supplied Decimal coefficients."""
+
+    finite_values = [value for value in values if value.is_finite()]
+    coefficient_digits = sum(len(value.as_tuple().digits) for value in finite_values)
+    if not finite_values:
+        return max(28, extra_digits)
+    lowest_exponent = min(
+        cast(int, value.as_tuple().exponent) for value in finite_values
+    )
+    highest_adjusted_exponent = max(value.adjusted() for value in finite_values)
+    aligned_digits = highest_adjusted_exponent - lowest_exponent + 1
+    return max(28, coefficient_digits, aligned_digits) + extra_digits
+
+
+def _multiply_decimals(left: Decimal, right: Decimal) -> Decimal:
+    """Multiply Decimals without depending on the caller's ambient context."""
+
+    with localcontext() as context:
+        context.prec = _decimal_precision(left, right)
+        return _format_decimal(left * right)
 
 
 def _decimal_from_magnitude(value: NumericMagnitude) -> Decimal:
@@ -185,13 +212,10 @@ def _prepare_quantities_for_binary_operation(
 
 
 def _build_quantity(value: NumericMagnitude, unit: str) -> MeasurementQuantity:
-    """Build a Pint quantity while routing offset units through float magnitudes."""
+    """Build a Decimal-backed Pint quantity without losing input precision."""
 
     decimal_value = _decimal_from_magnitude(value)
-    quantity_value: QuantityMagnitude = decimal_value
-    if _unit_uses_offset(unit):
-        quantity_value = float(decimal_value)
-    return cast(MeasurementQuantity, ureg.Quantity(quantity_value, _parse_unit(unit)))
+    return cast(MeasurementQuantity, ureg.Quantity(decimal_value, _parse_unit(unit)))
 
 
 def _convert_quantity(
@@ -261,20 +285,28 @@ def _multiplicative_conversion_factor(
 ) -> Decimal | None:
     """Return a cached Decimal factor for safe multiplicative conversions."""
 
-    try:
-        if (
-            _unit_uses_offset_for_unit_string(source_unit)
-            or _unit_uses_offset_for_unit_string(target_unit)
-            or _is_implicit_cross_currency_conversion(source_unit, target_unit)
-        ):
+    with localcontext() as context:
+        context.prec = _CONVERSION_FACTOR_PRECISION
+        context.rounding = ROUND_HALF_EVEN
+        context.Emax = _CONVERSION_FACTOR_EMAX
+        context.Emin = _CONVERSION_FACTOR_EMIN
+        for signal in context.traps:
+            context.traps[signal] = False
+        context.clear_flags()
+        try:
+            if (
+                _unit_uses_offset_for_unit_string(source_unit)
+                or _unit_uses_offset_for_unit_string(target_unit)
+                or _is_implicit_cross_currency_conversion(source_unit, target_unit)
+            ):
+                return None
+            converted_quantity = ureg.Quantity(
+                Decimal("1"),
+                _parse_unit(source_unit),
+            ).to(_parse_unit(target_unit))
+        except pint.errors.PintError:
             return None
-        converted_quantity = ureg.Quantity(
-            Decimal("1"),
-            _parse_unit(source_unit),
-        ).to(_parse_unit(target_unit))
-    except pint.errors.PintError:
-        return None
-    return _decimal_from_magnitude(converted_quantity.magnitude)
+        return _decimal_from_magnitude(converted_quantity.magnitude)
 
 
 def _cached_multiplicative_conversion_factor(
@@ -294,55 +326,241 @@ def _cached_multiplicative_conversion_factor(
     )
 
 
+@lru_cache(maxsize=512)
+def _pure_temperature_unit_name(unit: str) -> str | None:
+    """Return the sole unit component for an absolute temperature unit."""
+
+    components = _pint_unit_components(unit)
+    if (
+        len(components) != 1
+        or components[0][1] != 1
+        or _unit_dimensionality(unit) != _unit_dimensionality("kelvin")
+    ):
+        return None
+    return components[0][0]
+
+
+def _temperature_to_kelvin(value: Decimal, unit: str) -> Decimal | None:
+    """Convert the supported absolute temperature units to Kelvin in Decimal."""
+
+    if _pure_temperature_unit_name(unit) is None:
+        return None
+    prefix_scale, base_unit_name = _temperature_prefix_and_base_unit(unit)
+    with localcontext() as context:
+        context.prec = _decimal_precision(
+            value,
+            prefix_scale,
+            Decimal("459.67"),
+            extra_digits=28,
+        )
+        base_value = _format_decimal(value * prefix_scale)
+        exact_conversion = _exact_temperature_to_kelvin(base_value, base_unit_name)
+        if exact_conversion is not None:
+            return exact_conversion
+        return _convert_temperature_with_pint(base_value, base_unit_name, "kelvin")
+
+
+def _kelvin_to_temperature(value: Decimal, unit: str) -> Decimal | None:
+    """Convert a Kelvin Decimal to a supported absolute temperature unit."""
+
+    if _pure_temperature_unit_name(unit) is None:
+        return None
+    prefix_scale, base_unit_name = _temperature_prefix_and_base_unit(unit)
+    with localcontext() as context:
+        context.prec = _decimal_precision(
+            value,
+            prefix_scale,
+            Decimal("459.67"),
+            extra_digits=28,
+        )
+        exact_conversion = _exact_kelvin_to_temperature(value, base_unit_name)
+        if exact_conversion is None:
+            exact_conversion = _convert_temperature_with_pint(
+                value,
+                "kelvin",
+                base_unit_name,
+            )
+        return _format_decimal(exact_conversion / prefix_scale)
+
+
+def _temperature_prefix_and_base_unit(unit: str) -> tuple[Decimal, str]:
+    """Split a Pint temperature name into its Decimal prefix and base unit."""
+
+    parsed_names = ureg.parse_unit_name(unit)
+    if len(parsed_names) != 1:
+        raise ValueError
+    prefix, unit_name, suffix = parsed_names[0]
+    if suffix:
+        raise ValueError
+    return Decimal(str(ureg._prefixes[prefix].value)), unit_name
+
+
+def _exact_temperature_to_kelvin(value: Decimal, unit_name: str) -> Decimal | None:
+    """Convert Pint's built-in rational temperature scales without floats."""
+
+    if unit_name == "kelvin":
+        return value
+    if unit_name == "degree_Celsius":
+        return _format_decimal(value + Decimal("273.15"))
+    if unit_name == "degree_Fahrenheit":
+        return _format_decimal((value + Decimal("459.67")) * Decimal(5) / Decimal(9))
+    if unit_name in {"degree_Rankine", "delta_degree_Fahrenheit"}:
+        return _format_decimal(value * Decimal(5) / Decimal(9))
+    if unit_name == "delta_degree_Celsius":
+        return value
+    return None
+
+
+def _exact_kelvin_to_temperature(value: Decimal, unit_name: str) -> Decimal | None:
+    """Convert Kelvin to Pint's built-in rational temperature scales."""
+
+    if unit_name == "kelvin":
+        return value
+    if unit_name == "degree_Celsius":
+        return _format_decimal(value - Decimal("273.15"))
+    if unit_name == "degree_Fahrenheit":
+        return _format_decimal(value * Decimal(9) / Decimal(5) - Decimal("459.67"))
+    if unit_name in {"degree_Rankine", "delta_degree_Fahrenheit"}:
+        return _format_decimal(value * Decimal(9) / Decimal(5))
+    if unit_name == "delta_degree_Celsius":
+        return value
+    return None
+
+
+def _convert_temperature_with_pint(
+    value: Decimal,
+    source_unit: str,
+    target_unit: str,
+) -> Decimal:
+    """Convert generic pure-temperature units without float-backed offsets."""
+
+    if target_unit == "kelvin":
+        scale, offset, reference = _temperature_converter_parts(source_unit)
+        with localcontext() as context:
+            context.prec = _decimal_precision(
+                value,
+                scale,
+                offset,
+                extra_digits=56,
+            )
+            reference_magnitude = _format_decimal(value * scale + offset)
+            converted = ureg.Quantity(reference_magnitude, reference).to("kelvin")
+        return _decimal_from_magnitude(converted.magnitude)
+
+    scale, offset, reference = _temperature_converter_parts(target_unit)
+    with localcontext() as context:
+        context.prec = _decimal_precision(
+            value,
+            scale,
+            offset,
+            extra_digits=56,
+        )
+        reference_magnitude = ureg.Quantity(value, "kelvin").to(reference).magnitude
+        result = _format_decimal(
+            (_decimal_from_magnitude(reference_magnitude) - offset) / scale
+        )
+    return result
+
+
+def _temperature_converter_parts(unit: str) -> tuple[Decimal, Decimal, UnitsContainer]:
+    """Return the Decimal converter scale, offset, and Pint reference for one unit."""
+
+    parsed_names = ureg.parse_unit_name(unit)
+    if len(parsed_names) != 1:
+        raise ValueError
+    prefix, unit_name, _suffix = parsed_names[0]
+    definition = ureg._units[unit_name]
+    prefix_scale = Decimal(str(ureg._prefixes[prefix].value))
+    converter = definition.converter
+    scale = prefix_scale * Decimal(str(getattr(converter, "scale", 1)))
+    offset = Decimal(str(getattr(converter, "offset", 0)))
+    if definition.reference is None:
+        raise ValueError
+    return scale, offset, definition.reference
+
+
+def _convert_pure_temperature_magnitude(
+    value: Decimal,
+    source_unit: str,
+    target_unit: str,
+) -> Decimal | None:
+    """Convert pure temperatures exactly when both units use supported scales."""
+
+    if (
+        _pure_temperature_unit_name(source_unit) is not None
+        and _pure_temperature_unit_name(target_unit) is not None
+    ):
+        source_prefix, source_base_unit = _temperature_prefix_and_base_unit(source_unit)
+        target_prefix, target_base_unit = _temperature_prefix_and_base_unit(target_unit)
+        if source_base_unit == target_base_unit:
+            with localcontext() as context:
+                context.prec = _decimal_precision(
+                    value,
+                    source_prefix,
+                    target_prefix,
+                    extra_digits=28,
+                )
+                return _format_decimal(value * source_prefix / target_prefix)
+
+    kelvin_value = _temperature_to_kelvin(value, source_unit)
+    if kelvin_value is None:
+        return None
+    return _kelvin_to_temperature(kelvin_value, target_unit)
+
+
 def convert_magnitude(value: Decimal, source_unit: str, target_unit: str) -> Decimal:
     """
-    Convert a magnitude between units while keeping offset-unit math away from Decimal.
+    Convert a magnitude between units without losing Decimal input precision.
 
-    Pint's non-multiplicative conversions use float offsets internally, so absolute
-    temperatures like ``degC`` and ``degF`` cannot be converted when the magnitude
-    stays as ``Decimal``. For those conversions, convert through ``float`` and then
-    round-trip back to ``Decimal`` via ``str``.
+    The built-in absolute temperature scales use Decimal conversion so their
+    offsets do not force input coefficients through float. Other Pint conversions
+    run inside a local Decimal context sized for the supplied coefficient.
     """
+
+    temperature_conversion = _convert_pure_temperature_magnitude(
+        value,
+        source_unit,
+        target_unit,
+    )
+    if temperature_conversion is not None:
+        return temperature_conversion
 
     conversion_factor = _cached_multiplicative_conversion_factor(
         source_unit,
         target_unit,
     )
     if conversion_factor is not None:
-        return _decimal_from_magnitude(value * conversion_factor)
+        return _multiply_decimals(value, conversion_factor)
 
-    converted_quantity = _convert_quantity(
-        _build_quantity(value, source_unit), target_unit
-    )
+    with localcontext() as context:
+        context.prec = _decimal_precision(value, extra_digits=28)
+        converted_quantity = _convert_quantity(
+            _build_quantity(value, source_unit), target_unit
+        )
     return _decimal_from_magnitude(converted_quantity.magnitude)
 
 
 HASH_DECIMAL_QUANTUM = Decimal("1e-9")
 
 
-def _compare_magnitudes(
-    left: Decimal,
-    right: Decimal,
-    operation: ComparisonOperation,
-    *,
-    tolerant: bool,
-) -> bool:
-    """Compare magnitudes, quantizing offset-unit paths to match hashing."""
-
-    if not tolerant:
-        return operation(left, right)
-
-    return operation(_hash_decimal(left), _hash_decimal(right))
-
-
 def _hash_decimal(value: NumericMagnitude) -> Decimal:
     """Return the Decimal representation used for equality-compatible hashing."""
 
     decimal_value = _decimal_from_magnitude(value)
-    try:
-        return decimal_value.quantize(HASH_DECIMAL_QUANTUM)
-    except InvalidOperation:
-        return decimal_value
+    with localcontext() as context:
+        context.prec = _decimal_precision(
+            decimal_value,
+            HASH_DECIMAL_QUANTUM,
+            extra_digits=9,
+        )
+        try:
+            return decimal_value.quantize(
+                HASH_DECIMAL_QUANTUM,
+                rounding=ROUND_HALF_EVEN,
+                context=context,
+            )
+        except InvalidOperation:
+            return decimal_value
 
 
 class InvalidMeasurementInitializationError(ValueError):
@@ -501,8 +719,8 @@ class Measurement:
     """
     Decimal-backed measurement value with Pint unit conversion and arithmetic.
 
-    A ``Measurement`` stores a magnitude and unit, exposes the underlying Pint
-    quantity for advanced integrations, and supports compatible arithmetic,
+    A ``Measurement`` stores a magnitude and unit, exposes a defensive Pint
+    quantity copy for advanced integrations, and supports compatible arithmetic,
     comparison, string parsing, pickling, and explicit currency conversion.
     Currency conversions never use implicit rates; callers must pass an
     ``exchange_rate`` when converting between different configured currencies.
@@ -599,10 +817,12 @@ class Measurement:
     ) -> None:
         """Store quantity and cached public scalar values for internal reads."""
 
-        self.__quantity = quantity
-        self.__magnitude = _decimal_from_magnitude(quantity.magnitude)
+        magnitude = _decimal_from_magnitude(quantity.magnitude)
+        quantity_unit = str(quantity.units)
+        self.__quantity = _build_quantity(magnitude, quantity_unit)
+        self.__magnitude = magnitude
         self.__unit = (
-            unit if unit is not None else _canonical_unit_string(str(quantity.units))
+            unit if unit is not None else _canonical_unit_string(quantity_unit)
         )
         self.__quantity_exposed = False
 
@@ -617,13 +837,9 @@ class Measurement:
         return quantity
 
     def __current_magnitude(self) -> Decimal:
-        if self.__quantity_exposed:
-            return _decimal_from_magnitude(self.__current_quantity().magnitude)
         return self.__magnitude
 
     def __current_unit(self) -> str:
-        if self.__quantity_exposed:
-            return _canonical_unit_string(str(self.__current_quantity().units))
         return self.__unit
 
     def __getstate__(self) -> dict[str, str]:
@@ -653,21 +869,36 @@ class Measurement:
         unit = state["unit"]
         self.__set_quantity(_build_quantity(value, unit), _canonical_unit_string(unit))
 
+    def deconstruct(self) -> tuple[str, list[object], dict[str, object]]:
+        """Describe this value for Django migration serialization.
+
+        Django serializes field defaults through this protocol.  Keeping the
+        Decimal magnitude and canonical public unit as constructor arguments
+        recreates the same immutable value without changing pickle or equality
+        behavior.
+        """
+        return (
+            "general_manager.measurement.Measurement",
+            [self.magnitude, self.unit],
+            {},
+        )
+
     @property
     def quantity(self) -> MeasurementQuantity:
         """
-        Access the underlying pint quantity for advanced operations.
+        Access a defensive Pint quantity copy for advanced operations.
 
-        Magnitudes are usually Decimal-backed. Offset units such as absolute
-        temperatures may be float-backed because Pint performs those conversions
-        with non-multiplicative offsets.
+        Mutating the returned Pint quantity does not change this value object.
 
         Returns:
-            PlainQuantity: Pint quantity representing the measurement value and unit.
+            PlainQuantity: Independent Pint quantity representing this measurement.
         """
         quantity = self.__current_quantity()
         self.__quantity_exposed = True
-        return quantity
+        return _build_quantity(
+            _decimal_from_magnitude(quantity.magnitude),
+            str(quantity.units),
+        )
 
     @property
     def magnitude(self) -> Decimal:
@@ -832,6 +1063,8 @@ class Measurement:
 
         source_currency = _currency_component(self.unit)
         target_currency = _currency_component(target_unit)
+        if self.is_currency() and target_currency is None and exchange_rate is None:
+            raise MissingExchangeRateError()
         if (
             source_currency is not None
             and target_currency is not None
@@ -841,29 +1074,32 @@ class Measurement:
                 raise MissingExchangeRateError()
             source_currency_name, source_currency_power = source_currency
             target_currency_name, target_currency_power = target_currency
-            if source_currency_power == target_currency_power:
-                value = convert_magnitude(
-                    self.magnitude,
-                    _unit_without_currency(
-                        self.unit, source_currency_name, source_currency_power
-                    ),
-                    _unit_without_currency(
-                        target_unit, target_currency_name, target_currency_power
-                    ),
+            if source_currency_power != target_currency_power:
+                return Measurement(
+                    convert_magnitude(self.magnitude, self.unit, target_unit),
+                    target_unit,
                 )
-                value *= Decimal(str(exchange_rate)) ** source_currency_power
-                return Measurement(value, target_unit)
-
-        if self.is_currency():
-            if exchange_rate is not None:
-                # Convert using the provided exchange rate
-                value = self.magnitude * Decimal(str(exchange_rate))
-                return Measurement(value, target_unit)
-            raise MissingExchangeRateError()
-        else:
-            # Standard conversion for physical units
-            value = convert_magnitude(self.magnitude, self.unit, target_unit)
+            value = convert_magnitude(
+                self.magnitude,
+                _unit_without_currency(
+                    self.unit, source_currency_name, source_currency_power
+                ),
+                _unit_without_currency(
+                    target_unit, target_currency_name, target_currency_power
+                ),
+            )
+            with localcontext() as context:
+                exchange_decimal = Decimal(str(exchange_rate))
+                context.prec = _decimal_precision(
+                    value,
+                    exchange_decimal,
+                    extra_digits=abs(source_currency_power),
+                )
+                value = _format_decimal(value * exchange_decimal**source_currency_power)
             return Measurement(value, target_unit)
+
+        value = convert_magnitude(self.magnitude, self.unit, target_unit)
+        return Measurement(value, target_unit)
 
     def is_currency(self) -> bool:
         """
@@ -1150,7 +1386,7 @@ class Measurement:
 
     def _compare(self, other: object, operation: ComparisonOperation) -> bool:
         """
-        Compare this measurement to another value by normalizing both to the same unit and applying a comparison operation.
+        Compare this measurement to another value through its canonical key.
 
         ``None`` and values equal to ``""``, ``[]``, ``()``, or ``{}`` return
         ``False`` for every comparison operation, including equality and
@@ -1162,11 +1398,9 @@ class Measurement:
         ``InvalidMeasurementStringError`` or ``InvalidDimensionlessValueError``.
         Other falsey values such as ``0`` and ``False`` are unsupported operands
         and raise ``UnsupportedComparisonError``.
-        Offset-unit comparisons quantize normalized magnitudes to ``1e-9`` so
-        equality matches hashing. Non-offset comparisons use exact Decimal
-        comparison after conversion. Which units Pint treats as offset units
-        and which operations require float-backed quantities are delegated to
-        Pint.
+        Pure temperature comparisons use the same 1e-9 Kelvin bins as equality
+        and hashing. Other compatible units compare their exact canonical Decimal
+        magnitudes.
 
         Parameters:
             other (object): A Measurement instance or a string parseable by Measurement.from_string; empty or null-like values return False.
@@ -1186,25 +1420,33 @@ class Measurement:
 
         if not isinstance(other, Measurement):
             raise UnsupportedComparisonError()
-        try:
-            self_quantity, other_quantity = _prepare_quantities_for_binary_operation(
-                self.__current_quantity(),
-                other.__current_quantity(),
-            )
-            other_converted = _convert_quantity(
-                other_quantity, str(self_quantity.units)
-            )
-            left = _decimal_from_magnitude(self_quantity.magnitude)
-            right = _decimal_from_magnitude(other_converted.magnitude)
-            return _compare_magnitudes(
-                left,
-                right,
-                operation,
-                tolerant=_unit_uses_offset(self_quantity)
-                or _unit_uses_offset(other_converted),
-            )
-        except pint.DimensionalityError as error:
-            raise IncomparableMeasurementError() from error
+        self_key = self._comparison_key()
+        other_key = other._comparison_key()
+        if self_key[1] != other_key[1]:
+            raise IncomparableMeasurementError()
+        return operation(self_key[0], other_key[0])
+
+    def _comparison_key(self) -> tuple[Decimal, str]:
+        """Return the shared canonical value used by equality and hashing."""
+
+        unit = self.__current_unit()
+        magnitude = self.__current_magnitude()
+        if _pure_temperature_unit_name(unit) is not None:
+            kelvin_magnitude = _temperature_to_kelvin(magnitude, unit)
+            if kelvin_magnitude is not None:
+                return _hash_decimal(kelvin_magnitude), "kelvin"
+
+        with localcontext() as context:
+            context.prec = _decimal_precision(magnitude, extra_digits=28)
+            quantity = self.__current_quantity().to_base_units()
+        canonical_magnitude = _decimal_from_magnitude(quantity.magnitude)
+        canonical_unit = _canonical_unit_string(str(quantity.units))
+        if _unit_dimensionality(unit) == _unit_dimensionality("kelvin"):
+            return _hash_decimal(canonical_magnitude), "kelvin"
+        return (
+            canonical_magnitude,
+            canonical_unit,
+        )
 
     def __radd__(self, other: object) -> Measurement:
         """
@@ -1313,7 +1555,9 @@ class Measurement:
             UnsupportedComparisonError: If ``other`` cannot be interpreted as a measurement.
             IncomparableMeasurementError: If units are incompatible.
         """
-        return self._compare(other, eq)
+        if not isinstance(other, Measurement):
+            return NotImplemented
+        return self._comparison_key() == other._comparison_key()
 
     def __ne__(self, other: object) -> bool:
         """
@@ -1336,7 +1580,9 @@ class Measurement:
             UnsupportedComparisonError: If ``other`` cannot be interpreted as a measurement.
             IncomparableMeasurementError: If units are incompatible.
         """
-        return self._compare(other, ne)
+        if not isinstance(other, Measurement):
+            return NotImplemented
+        return self._comparison_key() != other._comparison_key()
 
     def __lt__(self, other: object) -> bool:
         """
@@ -1422,8 +1668,4 @@ class Measurement:
             int: Stable hash suitable for use in dictionaries and sets. Measurements
             that compare equal after unit conversion produce the same hash.
         """
-        quantity = self.__current_quantity()
-        if _unit_uses_offset(quantity):
-            quantity = cast(MeasurementQuantity, _quantity_as_float(quantity))
-        base_quantity = quantity.to_base_units()
-        return hash((_hash_decimal(base_quantity.magnitude), str(base_quantity.units)))
+        return hash(self._comparison_key())

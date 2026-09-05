@@ -78,10 +78,11 @@ class GeneralManagerLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
     Attach structured metadata (component + context) to log records.
 
     The adapter supports standard ``LoggerAdapter`` logging calls and accepts a
-    top-level ``context={...}`` keyword. Context merging is shallow: existing
-    ``extra["context"]`` values are copied first, then per-call ``context``
-    wins on key conflicts. The caller-provided ``extra`` mapping is updated in
-    place so Python's logging machinery receives the merged metadata.
+    top-level ``context={...}`` keyword. Context merging is shallow: constructor
+    context is copied first, followed by ``extra["context"]`` and then per-call
+    ``context``; later values win on key conflicts. The caller-provided ``extra``
+    mapping is updated in place so Python's logging machinery receives the merged
+    metadata.
 
     Prefer constructing adapters through ``get_logger()``. Direct construction
     follows ``logging.LoggerAdapter(logger, extra)``; provide a mutable
@@ -158,16 +159,26 @@ class GeneralManagerLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
         if component is not None:
             extra.setdefault(COMPONENT_EXTRA_FIELD, component)
 
-        if context is not None:
-            current_context = context
-            existing_context = extra.get(CONTEXT_EXTRA_FIELD)
-            if existing_context is None:
-                merged_context: dict[str, object] = dict(current_context)
-            elif isinstance(existing_context, Mapping):
-                merged_context = {**dict(existing_context), **current_context}
-            else:
+        adapter_context = extra_metadata.get(CONTEXT_EXTRA_FIELD)
+        existing_context = extra.get(CONTEXT_EXTRA_FIELD)
+        for candidate_context in (adapter_context, existing_context):
+            if candidate_context is not None and not isinstance(
+                candidate_context, Mapping
+            ):
                 raise InvalidContextError()
 
+        if (
+            adapter_context is not None
+            or existing_context is not None
+            or context is not None
+        ):
+            merged_context: dict[str, object] = {}
+            if isinstance(adapter_context, Mapping):
+                merged_context.update(adapter_context)
+            if isinstance(existing_context, Mapping):
+                merged_context.update(existing_context)
+            if context is not None:
+                merged_context.update(context)
             extra[CONTEXT_EXTRA_FIELD] = merged_context
 
         return msg, kwargs

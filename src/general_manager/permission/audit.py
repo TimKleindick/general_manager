@@ -104,6 +104,27 @@ class InvalidAuditLoggerOptionsError(TypeError):
         super().__init__("AUDIT_LOGGER options must be a mapping.")
 
 
+class AuditLoggerClosedError(RuntimeError):
+    """Raised when an audit event is submitted after the logger has closed."""
+
+    def __init__(self) -> None:
+        super().__init__("audit logger is closed")
+
+
+class _AuditLoggerWorkerUnavailableError(RuntimeError):
+    """Raised when a worker-backed logger has lost its worker resources."""
+
+    def __init__(self) -> None:
+        super().__init__("audit logger worker resources are unavailable")
+
+
+class _AuditLoggerWorkerStoppedError(RuntimeError):
+    """Raised when a worker exits before completing a queued flush."""
+
+    def __init__(self) -> None:
+        super().__init__("audit logger worker stopped before flush completed")
+
+
 def configure_audit_logger(logger: AuditLogger | None) -> None:
     """
     Configure the audit logger used by permission checks.
@@ -316,6 +337,9 @@ class _BufferedAuditLogger:
         self._flush_interval = flush_interval
         self._use_worker = use_worker
         self._closed = Event()
+        self._worker_stopped = Event()
+        self._state_lock = Lock()
+        self._worker_failure: BaseException | None = None
         self._queue: SimpleQueue[PermissionAuditEvent | object] | None
         self._worker: Thread | None
         if self._use_worker:
@@ -326,62 +350,131 @@ class _BufferedAuditLogger:
         else:
             self._queue = None
             self._worker = None
+            self._worker_stopped.set()
 
     def record(self, event: PermissionAuditEvent) -> None:
-        """Queue or synchronously persist an audit event unless the logger is closed."""
-        if self._closed.is_set():
-            return
-        if not self._use_worker:
-            self._handle_batch((event,))
-            return
-        if self._queue is None:
-            return
-        self._queue.put(event)
+        """Queue or synchronously persist one event before the close boundary."""
+        with self._state_lock:
+            if self._closed.is_set():
+                raise AuditLoggerClosedError
+            self._raise_worker_failure()
+            if not self._use_worker:
+                self._handle_batch((event,))
+                return
+            if self._queue is None:
+                raise _AuditLoggerWorkerUnavailableError
+            self._queue.put(event)
 
     def close(self) -> None:
         """
         Stop the worker after processing queued events.
 
-        Calls after the first close are ignored. Synchronous loggers created with
-        `use_worker=False` have no worker to close.
+        New calls to :meth:`record` are rejected before the worker receives its
+        terminal marker, so accepted events remain FIFO ahead of that marker.
+        This method waits for the worker to drain them and re-raises a persistence
+        failure. Repeated calls return after a successful close and re-raise a
+        previously observed worker failure. A persistence operation that never
+        returns can therefore keep ``close()`` blocked; the logger does not claim
+        a successful close after a timeout.
         """
-        if self._closed.is_set():
-            return
-        self._closed.set()
-        if not self._use_worker:
-            return
-        if self._queue is None or self._worker is None:
-            return
-        self._queue.put(self._SENTINEL)
-        self._worker.join(timeout=2.0)
+        with self._state_lock:
+            if not self._closed.is_set():
+                self._closed.set()
+                if self._use_worker:
+                    if self._queue is None:
+                        raise _AuditLoggerWorkerUnavailableError
+                    self._queue.put(self._SENTINEL)
+
+        if self._use_worker:
+            if self._worker is None:
+                raise _AuditLoggerWorkerUnavailableError
+            self._worker.join()
+        self._raise_worker_failure()
 
     def flush(self) -> None:
         """
-        Block until queued events are processed.
+        Block until events accepted before this call have been persisted.
 
-        For worker-backed loggers this closes the worker, so later `record()`
-        calls are ignored. For synchronous loggers it is a no-op.
+        A successful flush keeps the logger open for later records. Worker-backed
+        loggers append a FIFO acknowledgement marker to the queue and wait for
+        it; worker failures are re-raised instead of leaving callers blocked.
+        Synchronous loggers have no queued work.
         """
-        self.close()
+        if not self._use_worker:
+            with self._state_lock:
+                self._raise_worker_failure()
+            return
+
+        acknowledgement: Event | None = Event()
+        with self._state_lock:
+            self._raise_worker_failure()
+            if self._closed.is_set():
+                acknowledgement = None
+            else:
+                if self._queue is None:
+                    raise _AuditLoggerWorkerUnavailableError
+                self._queue.put(acknowledgement)
+
+        if acknowledgement is None:
+            self.close()
+            return
+
+        while not acknowledgement.wait(timeout=0.05):
+            if self._worker_stopped.is_set():
+                self._raise_worker_failure()
+                raise _AuditLoggerWorkerStoppedError
+        self._raise_worker_failure()
 
     def _worker_loop(self) -> None:
         if self._queue is None:
             return
         pending: list[PermissionAuditEvent] = []
-        while True:
-            try:
-                item = self._queue.get(timeout=self._flush_interval)
-            except Empty:
-                item = None
-            if item is self._SENTINEL:
-                break
-            if isinstance(item, PermissionAuditEvent):
-                pending.append(item)
-            if len(pending) >= self._batch_size or (item is None and pending):
-                self._handle_batch(pending)
-                pending = []
-        if pending:
-            self._handle_batch(pending)
+        try:
+            while True:
+                try:
+                    item = self._queue.get(timeout=self._flush_interval)
+                except Empty:
+                    item = None
+
+                acknowledgement = item if isinstance(item, Event) else None
+                is_acknowledgement = acknowledgement is not None
+                closing = item is self._SENTINEL
+                if isinstance(item, PermissionAuditEvent):
+                    pending.append(item)
+
+                should_persist = (
+                    len(pending) >= self._batch_size
+                    or (item is None and pending)
+                    or is_acknowledgement
+                    or closing
+                )
+                if should_persist and pending:
+                    try:
+                        self._handle_batch(pending)
+                    except Exception as error:  # noqa: BLE001 - report sink failures.
+                        self._store_worker_failure(error)
+                        if acknowledgement is not None:
+                            acknowledgement.set()
+                        return
+                    pending = []
+
+                if acknowledgement is not None:
+                    acknowledgement.set()
+                if closing:
+                    return
+        finally:
+            self._worker_stopped.set()
+
+    def _store_worker_failure(self, error: BaseException) -> None:
+        """Save the first worker persistence failure for lifecycle callers."""
+        with self._state_lock:
+            if self._worker_failure is None:
+                self._worker_failure = error
+
+    def _raise_worker_failure(self) -> None:
+        """Raise the saved worker failure, if persistence has failed."""
+        if self._worker_failure is not None:
+            raise self._worker_failure
 
     def _handle_batch(self, events: Iterable[PermissionAuditEvent]) -> None:
         raise NotImplementedError
@@ -392,9 +485,10 @@ class FileAuditLogger(_BufferedAuditLogger):
     Persist audit events as newline-delimited JSON records in a file.
 
     The parent directory is created during initialization. Events are appended in
-    the built-in serialized shape. A background worker is used by default; call
-    `flush()` or `close()` during teardown to process queued events. After
-    closing, later `record()` calls are ignored.
+    the built-in serialized shape. A background worker is used by default;
+    `flush()` drains accepted events while keeping the logger open, and `close()`
+    terminates the logger after draining them. Later `record()` calls raise
+    :class:`AuditLoggerClosedError`.
     """
 
     def __init__(
@@ -423,8 +517,9 @@ class DatabaseAuditLogger(_BufferedAuditLogger):
 
     The table is created on demand if it is missing. Non-SQLite connections use
     the background worker; SQLite writes synchronously to support in-memory test
-    databases. Call `flush()` or `close()` during teardown when the worker is
-    active. After closing, later `record()` calls are ignored.
+    databases. `flush()` drains accepted events while keeping the logger open,
+    and `close()` terminates the logger after draining them. Later `record()`
+    calls raise :class:`AuditLoggerClosedError`.
     """
 
     def __init__(
@@ -481,6 +576,7 @@ class DatabaseAuditLogger(_BufferedAuditLogger):
 
 __all__ = [
     "AuditLogger",
+    "AuditLoggerClosedError",
     "DatabaseAuditLogger",
     "FileAuditLogger",
     "PermissionAuditEvent",

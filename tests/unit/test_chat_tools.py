@@ -346,4 +346,4 @@ class ChatSchemaIndexTests(SimpleTestCase):
         assert '"manager": "PartManager"' in prompt
         assert '"fields": ["name", {"material": ["name"]}]' in prompt
         assert "Example tool call for mutate:" in prompt
-        assert '"confirmed": true' in prompt
+        assert '"confirmed": true' not in prompt

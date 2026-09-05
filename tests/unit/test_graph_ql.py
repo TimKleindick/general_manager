@@ -25,9 +25,13 @@ from general_manager import bootstrap as gm_bootstrap
 from general_manager.api.graphql import (
     BigIntScalar,
     MeasurementType,
-    MeasurementScalar,
     GraphQL,
     get_read_permission_filter,
+)
+from general_manager.api.graphql_ordering import (
+    OrderingTypes,
+    clear_ordering_type_cache,
+    create_ordering_types,
 )
 from general_manager.api.registry import GraphQLRegistry
 from general_manager.api.graphql_type import (
@@ -99,6 +103,7 @@ def _restore_graphql_registry(snapshot: GraphQLRegistry) -> None:
     GraphQL._query_fields = snapshot.query_fields
     GraphQL._subscription_fields = snapshot.subscription_fields
     GraphQL._page_type_registry = snapshot.page_type_registry
+    GraphQL._group_page_type_registry = snapshot.group_page_type_registry
     GraphQL._subscription_payload_registry = snapshot.subscription_payload_registry
     GraphQL.graphql_type_registry = snapshot.graphql_type_registry
     GraphQL.graphql_output_type_registry = snapshot.graphql_output_type_registry
@@ -1539,6 +1544,27 @@ class MeasurementTypeTests(TestCase):
 
 
 class GraphQLTests(TestCase):
+    def test_registry_snapshot_restores_group_page_types(self) -> None:
+        """Snapshots include generated grouping page types as independent mappings."""
+        original = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_graphql_registry, original)
+        GraphQL.reset_registry()
+
+        group_page_type = type("GroupedProjectPage", (graphene.ObjectType,), {})
+        GraphQL._group_page_type_registry["Project"] = group_page_type
+        snapshot = GraphQL.get_registry_snapshot()
+        self.assertIsNot(
+            GraphQL._group_page_type_registry,
+            snapshot.group_page_type_registry,
+        )
+        GraphQL.reset_registry()
+        _restore_graphql_registry(snapshot)
+
+        self.assertEqual(
+            GraphQL._group_page_type_registry,
+            {"Project": group_page_type},
+        )
+
     def test_public_bulk_data_change_notifications_is_importable(self):
         """Bulk notification batching is exposed only through the API module."""
         import general_manager
@@ -1583,6 +1609,54 @@ class GraphQLTests(TestCase):
         self.general_manager_class.__name__ = "TestManager"
         self.info = MagicMock()
         self.info.context.user = AnonymousUser()
+
+    def test_ordering_type_cache_uses_qualified_identity_and_resets(self) -> None:
+        registry_snapshot = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_graphql_registry, registry_snapshot)
+        self.addCleanup(GraphQL.reset_registry)
+        clear_ordering_type_cache()
+        first_manager = type(
+            "SharedManager",
+            (),
+            {"__module__": "tests.ordering.first"},
+        )
+        second_manager = type(
+            "SharedManager",
+            (),
+            {"__module__": "tests.ordering.second"},
+        )
+
+        first = create_ordering_types(
+            first_manager,
+            scope="",
+            field_paths={"name": "name"},
+        )
+        reused_first = create_ordering_types(
+            first_manager,
+            scope="",
+            field_paths={"name": "name"},
+        )
+        second = create_ordering_types(
+            second_manager,
+            scope="",
+            field_paths={"name": "name"},
+        )
+
+        assert first is not None
+        assert second is not None
+        self.assertIs(reused_first, first)
+        self.assertIsNot(second, first)
+        self.assertNotEqual(second.field_enum.__name__, first.field_enum.__name__)
+
+        GraphQL.reset_registry()
+        rebuilt_first = create_ordering_types(
+            first_manager,
+            scope="",
+            field_paths={"name": "name"},
+        )
+
+        self.assertIsNot(rebuilt_first, first)
+        self.assertEqual(rebuilt_first.field_enum.__name__, "SharedManagerOrderField")
 
     def test_create_graphql_output_type_has_no_operations(self) -> None:
         declarations = get_registered_graphql_types()
@@ -2152,34 +2226,39 @@ class GraphQLTests(TestCase):
             return Employee if field_type in {Employee, object} else None
 
         with patch(
-            "general_manager.api.graphql.resolve_general_manager_type",
+            "general_manager.api.graphql_ordering.resolve_general_manager_type",
             side_effect=resolve,
         ):
-            options = GraphQL._sort_by_options(Project)
+            ordering_types = GraphQL._ordering_types(Project, scope="")
 
-        assert options is not None
-        members = options._meta.enum.__members__
+        assert ordering_types is not None
+        members = ordering_types.field_enum._meta.enum.__members__
         assert members["title"].value == "title"
         assert members["employee"].value == "employee__id"
         assert members["employee__name"].value == "employee__name"
-        assert members["contact_list"].value == "contact_list__id"
+        assert members["contactList"].value == "contact_list__id"
         assert members["score"].value == "score"
         assert "employee_list" not in members
         assert "employee__aliases" not in members
         assert "employee__supervisor" not in members
         assert "employee__computed_label" not in members
 
-    def test_relation_list_uses_list_valued_sort_argument(self) -> None:
+    def test_relation_list_uses_list_valued_order_argument(self) -> None:
         class RelatedManager(GeneralManager):
             pass
 
         class RelatedManagerType(graphene.ObjectType):
             name = graphene.String()
 
-        sort_enum = type(
-            "RelatedSortByOptions",
+        order_field = type(
+            "RelatedManagerRelationOrderField",
             (graphene.Enum,),
             {"name": "name"},
+        )
+        order_input = type(
+            "RelatedManagerRelationOrderBy",
+            (graphene.InputObjectType,),
+            {"field": graphene.InputField(order_field, required=True)},
         )
         with (
             patch.dict(
@@ -2187,7 +2266,11 @@ class GraphQLTests(TestCase):
                 {"RelatedManager": RelatedManagerType},
             ),
             patch.object(GraphQL, "_create_filter_options", return_value=None),
-            patch.object(GraphQL, "_sort_by_options", return_value=sort_enum),
+            patch.object(
+                GraphQL,
+                "_ordering_types",
+                return_value=OrderingTypes(order_field, order_input, {"name": "name"}),
+            ),
         ):
             field = GraphQL._map_field_to_graphene_read(
                 RelatedManager,
@@ -2195,11 +2278,11 @@ class GraphQLTests(TestCase):
                 {"relation_kind": "collection"},
             )
 
-        assert isinstance(field.args["sort_by"].type, graphene.List)
-        assert isinstance(field.args["sort_by"].type.of_type, graphene.NonNull)
-        assert field.args["sort_by"].type.of_type.of_type is sort_enum
+        assert isinstance(field.args["order_by"].type, graphene.List)
+        assert isinstance(field.args["order_by"].type.of_type, graphene.NonNull)
+        assert field.args["order_by"].type.of_type.of_type is order_input
 
-    def test_relation_list_executes_singleton_and_variable_sort_lists(self) -> None:
+    def test_relation_list_executes_typed_order_lists(self) -> None:
         class RelatedManager(GeneralManager):
             pass
 
@@ -2209,20 +2292,29 @@ class GraphQLTests(TestCase):
         class RelatedManagerPage(graphene.ObjectType):
             items = graphene.List(RelatedManagerType)
 
-        sort_enum = type(
-            "RelatedSortByOptions",
+        order_field = type(
+            "RelatedManagerRelationOrderField",
             (graphene.Enum,),
             {"name": "name"},
         )
-        received_sort_values: list[list[object]] = []
+        order_input = type(
+            "RelatedManagerRelationOrderBy",
+            (graphene.InputObjectType,),
+            {"field": graphene.InputField(order_field, required=True)},
+        )
+        received_order_values: list[list[object]] = []
 
         def resolve_related_list(_root, _info, **kwargs):
-            received_sort_values.append(kwargs["sort_by"])
+            received_order_values.append(kwargs["order_by"])
             return {"items": []}
 
         with (
             patch.object(GraphQL, "_create_filter_options", return_value=None),
-            patch.object(GraphQL, "_sort_by_options", return_value=sort_enum),
+            patch.object(
+                GraphQL,
+                "_ordering_types",
+                return_value=OrderingTypes(order_field, order_input, {"name": "name"}),
+            ),
             patch.object(
                 GraphQL,
                 "_get_or_create_page_type",
@@ -2256,39 +2348,48 @@ class GraphQLTests(TestCase):
             """
             query {
               parent {
-                relatedManagerList(sortBy: name) { items { name } }
+                relatedManagerList(orderBy: [{field: name}]) { items { name } }
               }
             }
             """
         )
         variable_result = schema.execute(
             """
-            query Sort($sortBy: [RelatedSortByOptions!]!) {
+            query Sort($orderBy: [RelatedManagerRelationOrderBy!]!) {
               parent {
-                relatedManagerList(sortBy: $sortBy) { items { name } }
+                relatedManagerList(orderBy: $orderBy) { items { name } }
               }
             }
             """,
-            variable_values={"sortBy": ["name"]},
+            variable_values={"orderBy": [{"field": "name"}]},
         )
 
         assert inline_result.errors is None
         assert variable_result.errors is None
         assert [
-            [enum_value.value for enum_value in sort_values]
-            for sort_values in received_sort_values
+            [order_value["field"].value for order_value in order_values]
+            for order_values in received_order_values
         ] == [["name"], ["name"]]
 
-    def test_top_level_list_uses_list_valued_sort_argument(self) -> None:
+    def test_top_level_list_uses_list_valued_order_argument(self) -> None:
         class ManagerType(graphene.ObjectType):
             name = graphene.String()
 
-        sort_enum = type(
-            "TestManagerSortByOptions",
+        order_field = type(
+            "TestManagerOrderField",
             (graphene.Enum,),
             {"name": "name"},
         )
-        self.general_manager_class.Interface = SimpleNamespace(input_fields={})
+        order_input = type(
+            "TestManagerOrderBy",
+            (graphene.InputObjectType,),
+            {"field": graphene.InputField(order_field, required=True)},
+        )
+        self.general_manager_class.Interface = SimpleNamespace(
+            input_fields={},
+            get_attribute_types=lambda: {"name": {"type": str}},
+            get_graph_ql_properties=lambda: {},
+        )
         previous_query_fields = GraphQL._query_fields
         GraphQL._query_fields = {}
         try:
@@ -2299,38 +2400,53 @@ class GraphQLTests(TestCase):
                     return_value=False,
                 ),
                 patch.object(GraphQL, "_create_filter_options", return_value=None),
-                patch.object(GraphQL, "_sort_by_options", return_value=sort_enum),
+                patch.object(
+                    GraphQL,
+                    "_ordering_types",
+                    return_value=OrderingTypes(
+                        order_field, order_input, {"name": "name"}
+                    ),
+                ),
             ):
                 GraphQL._add_queries_to_schema(ManagerType, self.general_manager_class)
 
             argument_type = (
-                GraphQL._query_fields["test_manager_list"].args["sort_by"].type
+                GraphQL._query_fields["test_manager_list"].args["order_by"].type
             )
             assert isinstance(argument_type, graphene.List)
             assert isinstance(argument_type.of_type, graphene.NonNull)
-            assert argument_type.of_type.of_type is sort_enum
+            assert argument_type.of_type.of_type is order_input
         finally:
             GraphQL._query_fields = previous_query_fields
 
-    def test_top_level_list_executes_singleton_and_variable_sort_lists(self) -> None:
+    def test_top_level_list_executes_typed_order_lists(self) -> None:
         class ManagerType(graphene.ObjectType):
             name = graphene.String()
 
         class ManagerPage(graphene.ObjectType):
             items = graphene.List(ManagerType)
 
-        sort_enum = type(
-            "TestManagerSortByOptions",
+        order_field = type(
+            "TestManagerOrderField",
             (graphene.Enum,),
             {"name": "name"},
         )
-        received_sort_values: list[list[object]] = []
+        order_input = type(
+            "TestManagerOrderBy",
+            (graphene.InputObjectType,),
+            {"field": graphene.InputField(order_field, required=True)},
+        )
+        received_order_values: list[list[object]] = []
 
         def resolve_list(_root, _info, **kwargs):
-            received_sort_values.append(kwargs["sort_by"])
+            received_order_values.append(kwargs["order_by"])
             return {"items": []}
 
-        self.general_manager_class.Interface = SimpleNamespace(input_fields={})
+        self.general_manager_class.Interface = SimpleNamespace(
+            input_fields={},
+            get_attribute_types=lambda: {"name": {"type": str}},
+            get_graph_ql_properties=lambda: {},
+        )
         previous_query_fields = GraphQL._query_fields
         GraphQL._query_fields = {}
         try:
@@ -2341,10 +2457,21 @@ class GraphQLTests(TestCase):
                     return_value=False,
                 ),
                 patch.object(GraphQL, "_create_filter_options", return_value=None),
-                patch.object(GraphQL, "_sort_by_options", return_value=sort_enum),
+                patch.object(
+                    GraphQL,
+                    "_ordering_types",
+                    return_value=OrderingTypes(
+                        order_field, order_input, {"name": "name"}
+                    ),
+                ),
                 patch.object(
                     GraphQL,
                     "_get_or_create_page_type",
+                    return_value=ManagerPage,
+                ),
+                patch.object(
+                    GraphQL,
+                    "_get_or_create_group_page_type",
                     return_value=ManagerPage,
                 ),
                 patch.object(
@@ -2364,24 +2491,24 @@ class GraphQLTests(TestCase):
             inline_result = schema.execute(
                 """
                 query {
-                  testManagerList(sortBy: name) { items { name } }
+                  testManagerList(orderBy: [{field: name}]) { items { name } }
                 }
                 """
             )
             variable_result = schema.execute(
                 """
-                query Sort($sortBy: [TestManagerSortByOptions!]!) {
-                  testManagerList(sortBy: $sortBy) { items { name } }
+                query Sort($orderBy: [TestManagerOrderBy!]!) {
+                  testManagerList(orderBy: $orderBy) { items { name } }
                 }
                 """,
-                variable_values={"sortBy": ["name"]},
+                variable_values={"orderBy": [{"field": "name"}]},
             )
 
             assert inline_result.errors is None
             assert variable_result.errors is None
             assert [
-                [enum_value.value for enum_value in sort_values]
-                for sort_values in received_sort_values
+                [order_value["field"].value for order_value in order_values]
+                for order_values in received_order_values
             ] == [["name"], ["name"]]
         finally:
             GraphQL._query_fields = previous_query_fields
@@ -2471,7 +2598,7 @@ class GraphQLTests(TestCase):
 
         with (
             patch.object(GraphQL, "_create_filter_options", return_value=None),
-            patch.object(GraphQL, "_sort_by_options", return_value=None),
+            patch.object(GraphQL, "_ordering_types", return_value=None),
         ):
             for declared_type in (
                 list[RelatedManager],
@@ -2732,7 +2859,8 @@ class GraphQLTests(TestCase):
         )
         self.assertIs(fields["measurement"].type, MeasurementType)
         self.assertIsInstance(fields["measurements"].type, graphene.List)
-        self.assertIs(fields["measurements"].type.of_type, MeasurementScalar)
+        self.assertIsInstance(fields["measurements"].type.of_type, graphene.NonNull)
+        self.assertIs(fields["measurements"].type.of_type.of_type, MeasurementType)
         self.assertIs(fields["related"].type, RelatedType)
         self.assertIsInstance(fields["related_list"].type, graphene.List)
         self.assertIs(fields["related_list"].type.of_type, RelatedType)

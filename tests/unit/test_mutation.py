@@ -15,6 +15,7 @@ from general_manager.api.graphql import GraphQL
 from general_manager.as_of import HistoricalMutationError, as_of
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
+from general_manager.measurement import Measurement
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.permission.base_permission import PermissionCheckError
 from general_manager.permission.mutation_permission import MutationPermission
@@ -434,6 +435,178 @@ class MutationDecoratorTests(TestCase):
         self.assertFalse(arg.kwargs.get("required"))
         self.assertIsNone(arg.kwargs.get("default_value"))
 
+    def test_nullable_arguments_preserve_omission_and_explicit_null(self):
+        @graph_ql_mutation()
+        def with_default(info, value: int | None = 7) -> int:
+            _ = info
+            return 0 if value is None else value
+
+        @graph_ql_mutation()
+        def without_default(info, value: int | None) -> int:
+            _ = info
+            return 0 if value is None else value
+
+        info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        self.assertEqual(GraphQL._mutations["withDefault"].mutate(None, info).int, 7)
+        self.assertEqual(
+            GraphQL._mutations["withDefault"].mutate(None, info, value=None).int,
+            0,
+        )
+        self.assertEqual(
+            GraphQL._mutations["withoutDefault"].mutate(None, info).int,
+            0,
+        )
+
+        class Query(graphene.ObjectType):
+            ok = graphene.Boolean()
+
+        class Mutation(graphene.ObjectType):
+            with_default = GraphQL._mutations["withDefault"].Field()
+            without_default = GraphQL._mutations["withoutDefault"].Field()
+
+        result = graphene.Schema(query=Query, mutation=Mutation).execute(
+            """
+            mutation {
+              default: withDefault { int }
+              explicitNull: withDefault(value: null) { int }
+              nullable: withoutDefault { int }
+            }
+            """,
+            context_value=type("Ctx", (), {"user": object()})(),
+        )
+
+        self.assertIsNone(result.errors)
+        self.assertEqual(
+            result.data,
+            {
+                "default": {"int": 7},
+                "explicitNull": {"int": 0},
+                "nullable": {"int": 0},
+            },
+        )
+
+    def test_non_nullable_default_rejects_explicit_null(self):
+        @graph_ql_mutation()
+        def with_default(info, value: int = 7) -> int:
+            _ = info
+            return 0 if value is None else value
+
+        class Query(graphene.ObjectType):
+            ok = graphene.Boolean()
+
+        class Mutation(graphene.ObjectType):
+            with_default = GraphQL._mutations["withDefault"].Field()
+
+        schema = graphene.Schema(query=Query, mutation=Mutation)
+        omitted = schema.execute(
+            "mutation { withDefault { int } }",
+            context_value=type("Ctx", (), {"user": object()})(),
+        )
+        explicit_null = schema.execute(
+            "mutation { withDefault(value: null) { int } }",
+            context_value=type("Ctx", (), {"user": object()})(),
+        )
+
+        self.assertIsNone(omitted.errors)
+        self.assertEqual(omitted.data, {"withDefault": {"int": 7}})
+        self.assertIsNotNone(explicit_null.errors)
+        self.assertIn("Expected value of type 'Int!'", str(explicit_null.errors[0]))
+
+    def test_nullable_list_items_use_nullable_graphql_integers(self):
+        @graph_ql_mutation()
+        def total(info, values: list[int | None]) -> int:
+            _ = info
+            return sum(value or 0 for value in values)
+
+        mutation = GraphQL._mutations["total"]
+        self.assertIsInstance(mutation._meta.arguments["values"], graphene.List)
+        self.assertEqual(mutation._meta.arguments["values"].of_type, graphene.Int)
+
+        class Query(graphene.ObjectType):
+            ok = graphene.Boolean()
+
+        class Mutation(graphene.ObjectType):
+            total = mutation.Field()
+
+        result = graphene.Schema(query=Query, mutation=Mutation).execute(
+            "mutation { total(values: [1, null]) { int } }",
+            context_value=type("Ctx", (), {"user": object()})(),
+        )
+
+        self.assertIsNone(result.errors)
+        self.assertEqual(result.data, {"total": {"int": 1}})
+
+    def test_info_is_bound_from_its_declared_signature_slot(self):
+        @graph_ql_mutation()
+        def positional_only(value: int, info, /) -> int:
+            return value if info.context.user else 0
+
+        @graph_ql_mutation()
+        def middle(value: int, info) -> int:
+            return value if info.context.user else 0
+
+        @graph_ql_mutation()
+        def keyword_only(value: int, *, info) -> int:
+            return value if info.context.user else 0
+
+        @graph_ql_mutation()
+        def without_info(value: int) -> int:
+            return value
+
+        info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        self.assertEqual(
+            GraphQL._mutations["positionalOnly"].mutate(None, info, value=2).int,
+            2,
+        )
+        self.assertEqual(
+            GraphQL._mutations["middle"].mutate(None, info, value=3).int, 3
+        )
+        self.assertEqual(
+            GraphQL._mutations["keywordOnly"].mutate(None, info, value=4).int,
+            4,
+        )
+        self.assertEqual(
+            GraphQL._mutations["withoutInfo"].mutate(None, info, value=5).int,
+            5,
+        )
+
+    def test_measurement_mutation_output_uses_target_unit_conversion(self):
+        @graph_ql_mutation()
+        def measurement_result(info) -> Measurement:
+            _ = info
+            return Measurement(1, "meter")
+
+        mutation = GraphQL._mutations["measurementResult"]
+
+        class Query(graphene.ObjectType):
+            ok = graphene.Boolean()
+
+        class Mutation(graphene.ObjectType):
+            measurement_result = mutation.Field()
+
+        result = graphene.Schema(query=Query, mutation=Mutation).execute(
+            """
+            mutation {
+              measurementResult {
+                measurement(targetUnit: \"centimeter\") { value unit }
+              }
+            }
+            """,
+            context_value=type("Ctx", (), {"user": object()})(),
+        )
+
+        self.assertIsNone(result.errors)
+        self.assertEqual(
+            result.data,
+            {
+                "measurementResult": {
+                    "measurement": {"value": 100.0, "unit": "centimeter"}
+                }
+            },
+        )
+
     def test_general_manager_argument_uses_id(self):
         @graph_ql_mutation()
         def gm(info, item: SingleInputGM) -> str:
@@ -726,7 +899,8 @@ class MutationDecoratorTests(TestCase):
         mutation = GraphQL._mutations["many"]
         arg = mutation._meta.arguments["items"]
         self.assertIsInstance(arg, graphene.List)
-        self.assertEqual(arg.of_type, graphene.Int)
+        self.assertIsInstance(arg.of_type, graphene.NonNull)
+        self.assertEqual(arg.of_type.of_type, graphene.Int)
 
     def test_mutation_with_multiple_return_types(self):
         """
@@ -856,7 +1030,8 @@ class MutationDecoratorTests(TestCase):
         mutation = GraphQL._mutations["total"]
         arg = mutation._meta.arguments["items"]
         self.assertIsInstance(arg, graphene.List)
-        self.assertEqual(arg.of_type, graphene.Int)
+        self.assertIsInstance(arg.of_type, graphene.NonNull)
+        self.assertEqual(arg.of_type.of_type, graphene.Int)
         self.assertFalse(arg.kwargs.get("required"))
         self.assertIsNone(arg.kwargs.get("default_value"))
 
@@ -869,7 +1044,8 @@ class MutationDecoratorTests(TestCase):
         mutation = GraphQL._mutations["bulk"]
         arg = mutation._meta.arguments["items"]
         self.assertIsInstance(arg, graphene.List)
-        self.assertEqual(arg.of_type, graphene.ID)
+        self.assertIsInstance(arg.of_type, graphene.NonNull)
+        self.assertEqual(arg.of_type.of_type, graphene.ID)
 
     def test_general_manager_list_argument_normalizes_manager_items(self):
         seen: dict[str, list] = {}
@@ -1423,17 +1599,24 @@ def test_mutation_permission_ignores_non_list_public_attributes() -> None:
     )
 
 
-def test_mutation_permission_inherits_mutate_but_not_field_permissions() -> None:
-    """Global __mutate__ is inherited, but field permissions are concrete only."""
+def test_mutation_permission_inherits_and_overrides_field_permissions() -> None:
+    """Field declarations merge through the MRO and child values replace them."""
 
     class ParentPermission(MutationPermission):
         __mutate__: ClassVar[List[str]] = []
-        field: ClassVar[List[str]] = ["public"]
+        field: ClassVar[List[str]] = ["isAuthenticated"]
 
     class ChildPermission(ParentPermission):
         pass
 
-    permission = ChildPermission({"field": "value"}, User())
+    class OverridePermission(ParentPermission):
+        field: ClassVar[List[str]] = ["public"]
 
-    assert permission.check_permission("field")
-    assert "field" not in permission._MutationPermission__attribute_permissions
+    child_permission = ChildPermission({"field": "value"}, AnonymousUser())
+    override_permission = OverridePermission({"field": "value"}, AnonymousUser())
+
+    assert not child_permission.check_permission("field")
+    assert override_permission.check_permission("field")
+    assert child_permission._MutationPermission__attribute_permissions["field"] == [
+        "isAuthenticated"
+    ]

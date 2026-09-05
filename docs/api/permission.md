@@ -19,13 +19,16 @@ and, when audit logging is enabled, emit bypass audit events. Denials are
 logged with manager/action/user context, collected, and raised as one
 `PermissionCheckError`. `check_delete_permission()` iterates the manager's
 permission attributes and follows the same superuser, audit, denial logging, and
-denial aggregation behavior.
+denial aggregation behavior. When no permission attributes are declared, it
+evaluates the class-level delete gate once; an anonymous user therefore remains
+denied by the default `isAuthenticated` rule.
 
 `can_read_instance()` returns `True` for superusers and for read plans that do
 not require a row-level check. Otherwise it infers candidate readable attributes
 from the manager `_attributes` mapping or dictionary permission payload keys and
-returns after the first allowed read attribute. If no candidate readable
-attribute can be inferred, it raises `NotImplementedError`.
+returns after the first allowed read attribute. When candidate attributes are
+available but all of them deny access, it returns `False`. If no candidate
+readable attribute can be inferred, it raises `NotImplementedError`.
 
 `PermissionCheckError(user, errors)` renders the user as `anonymous` when no
 `id` is available, otherwise as `id=<id>`, and includes the collected denial
@@ -58,7 +61,9 @@ field-specific `list[str]` class attributes whose names match payload keys; thos
 expressions add a second gate for that field. For matching fields, both the
 global gate and the field-specific gate must pass. Expressions within one list
 are alternatives. Payload fields with no field-specific list are governed by the
-global gate alone.
+global gate alone. Field-specific declarations are collected across the
+permission class MRO from base to derived classes; a child declaration for the
+same field replaces the inherited declaration.
 
 `MutationPermission.check(data, request_user)` receives the normalized mutation
 argument mapping. Manager-typed GraphQL arguments have already been converted to
@@ -75,11 +80,11 @@ inheritance, so a subclass may inherit a base class's global mutation gate.
 `__mutate__` must be a `list` containing only strings; tuples, mixed-type lists,
 non-list values, and other sequences deny the global gate.
 
-Empty field-specific lists allow that field gate. Only non-dunder attributes
-declared directly on the concrete permission class and whose value is a `list`
-containing only strings are collected as field-specific permission lists;
-inherited field lists, mixed-type lists, tuples, other sequences, constants, and
-non-list attributes are ignored. `describe_permissions(attribute)` returns
+Empty field-specific lists allow that field gate. Non-dunder attributes whose
+value is a `list` containing only strings are collected as field-specific
+permission lists while walking the permission class MRO; a child list replaces
+an inherited list for the same field. Mixed-type lists, tuples, other sequences,
+constants, and non-list attributes are ignored. `describe_permissions(attribute)` returns
 declared expressions for diagnostics in evaluation order, with global expressions
 first and matching field expressions second, without deduplication. Superusers
 bypass expression evaluation. When audit logging is enabled, `check()` emits one
@@ -219,6 +224,8 @@ Built-in registry names:
 ## Audit logging
 
 ::: general_manager.permission.audit.AuditLogger
+
+::: general_manager.permission.audit.AuditLoggerClosedError
 
 ::: general_manager.permission.audit.FileAuditLogger
 

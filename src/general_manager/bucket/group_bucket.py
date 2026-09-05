@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 from collections.abc import Generator, Hashable, Mapping
-from operator import attrgetter
 from typing import Generic, Literal, cast, overload
 from general_manager.manager.group_manager import GroupManager
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
+from general_manager.bucket._ordering import normalize_ordering, sort_items
 from general_manager.bucket.projection import (
     ProjectionRows,
     project_bucket_rows,
@@ -541,7 +541,6 @@ class GroupBucket(Generic[GeneralManagerType]):
             GroupManager[GeneralManagerType] if `item` is an int, otherwise a GroupBucket[GeneralManagerType] built from the selected groups.
 
         Raises:
-            EmptyGroupBucketSliceError: If the slice selects no groups.
             InvalidGroupBucketIndexError: If `item` is not an int or slice.
         """
         self._ensure_as_of_compatible()
@@ -556,7 +555,12 @@ class GroupBucket(Generic[GeneralManagerType]):
                 else:
                     new_base_data = new_base_data | manager._data
             if new_base_data is None:
-                raise EmptyGroupBucketSliceError()
+                empty = getattr(self._basis_data, "none", None)
+                new_base_data = cast(
+                    Bucket[GeneralManagerType],
+                    empty() if callable(empty) else self._basis_data[0:0],
+                )
+            assert new_base_data is not None
             new_bucket = GroupBucket(
                 self._manager_class, self._group_by_keys, new_base_data
             )
@@ -587,28 +591,22 @@ class GroupBucket(Generic[GeneralManagerType]):
 
     def sort(
         self,
-        key: tuple[str, ...] | str,
-        reverse: bool = False,
+        *fields: str,
     ) -> GroupBucket[GeneralManagerType]:
         """
         Return a new GroupBucket sorted by the specified attributes.
 
         Parameters:
-            key (str | tuple[str, ...]): Attribute name(s) used for sorting.
-            reverse (bool): Whether to apply descending order.
+            fields: Signed attribute names used for sorting.
 
         Returns:
             GroupBucket[GeneralManagerType]: Sorted grouping bucket.
         """
         self._ensure_as_of_compatible()
-        if isinstance(key, str):
-            key = (key,)
-        getters = [attrgetter(item.replace("__", ".")) for item in key]
-        sorted_data = sorted(
-            self._data,
-            key=lambda entry: tuple(getter(entry) for getter in getters),
-            reverse=reverse,
-        )
+        terms = normalize_ordering(fields)
+        if not terms:
+            return self
+        sorted_data = sort_items(self._data, terms)
 
         new_bucket = GroupBucket(
             self._manager_class, self._group_by_keys, self._basis_data
@@ -644,6 +642,3 @@ class GroupBucket(Generic[GeneralManagerType]):
         return GroupBucket(
             self._manager_class, self._group_by_keys, self._basis_data.none()
         )
-
-
-Bucket.register(GroupBucket)

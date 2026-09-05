@@ -1165,6 +1165,55 @@ class ManagerBasedPermissionTests(TestCase):
         self.assertTrue(permission.check_operation_permission("create"))
         self.assertFalse(permission.check_operation_permission("update"))
 
+    def test_empty_declared_attributes_still_enforce_delete_operation(self) -> None:
+        """An attribute-free manager must still apply its delete gate."""
+        from general_manager.permission.base_permission import PermissionCheckError
+
+        class AttributeFreePermission(ManagerBasedPermission):
+            __based_on__: ClassVar[Optional[str]] = None
+            __delete__: ClassVar[list[str]] = ["isAuthenticated"]
+
+        manager_instance = Mock()
+        manager_instance._attributes = {}
+
+        with patch(
+            "general_manager.permission.base_permission.PermissionDataManager"
+        ) as mock_permission_manager:
+            mock_permission_manager.return_value = Mock()
+            with self.assertRaises(PermissionCheckError):
+                AttributeFreePermission.check_delete_permission(
+                    manager_instance, self.anonymous_user
+                )
+
+    def test_inherited_field_permissions_are_retained_and_overridden(self) -> None:
+        """Field declarations merge through the MRO and child values replace them."""
+
+        class ParentPermission(ManagerBasedPermission):
+            __based_on__: ClassVar[Optional[str]] = None
+            __create__: ClassVar[list[str]] = ["public"]
+            secret: ClassVar[dict[str, list[str]]] = {
+                "create": ["isAdmin"],
+            }
+
+        class ChildPermission(ParentPermission):
+            pass
+
+        class OverridePermission(ParentPermission):
+            secret: ClassVar[dict[str, list[str]]] = {
+                "create": ["public"],
+            }
+
+        self.assertFalse(
+            ChildPermission(self.mock_instance, self.user).check_permission(
+                "create", "secret"
+            )
+        )
+        self.assertTrue(
+            OverridePermission(self.mock_instance, self.user).check_permission(
+                "create", "secret"
+            )
+        )
+
     def test_operation_permission_uses_cached_result_without_based_on(self) -> None:
         """Operation checks without delegation should cache per action."""
 
@@ -1189,6 +1238,17 @@ class ManagerBasedPermissionTests(TestCase):
         permission = CustomManagerBasedPermission(self.mock_instance, self.superuser)
 
         self.assertTrue(permission.check_operation_permission("update"))
+
+    def test_operation_permission_unknown_action_raises_validation_error(self) -> None:
+        """Operation checks reject actions outside the CRUD contract."""
+        from general_manager.permission.manager_based_permission import (
+            UnknownPermissionActionError,
+        )
+
+        permission = CustomManagerBasedPermission(self.mock_instance, self.user)
+
+        with self.assertRaises(UnknownPermissionActionError):
+            permission.check_operation_permission("unknown_action")  # type: ignore
 
     def test_operation_permission_with_based_on_denial(self) -> None:
         """Delegated operation denial should block local operation permission."""

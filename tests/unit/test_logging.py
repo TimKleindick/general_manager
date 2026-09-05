@@ -16,7 +16,12 @@ from general_manager.cache.dependency_index import (
     generic_cache_invalidation,
     set_full_index,
 )
-from general_manager.logging import BlankComponentError, build_logger_name, get_logger
+from general_manager.logging import (
+    BlankComponentError,
+    GeneralManagerLoggerAdapter,
+    build_logger_name,
+    get_logger,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.base_permission import (
@@ -147,6 +152,29 @@ def test_adapter_merges_existing_extra_context(
     assert extra["context"] == {"model": "Project", "count": 5}
 
 
+def test_adapter_merges_constructor_context_with_explicit_call_overrides(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    adapter = GeneralManagerLoggerAdapter(
+        logging.getLogger("general_manager.audit"),
+        {"context": {"tenant": "constructor", "region": "eu"}},
+    )
+
+    with caplog.at_level(logging.INFO, logger="general_manager.audit"):
+        adapter.info(
+            "persisted audit event",
+            extra={"context": {"request_id": "request", "tenant": "extra"}},
+            context={"tenant": "call", "event_id": "event"},
+        )
+
+    assert caplog.records[0].context == {
+        "tenant": "call",
+        "region": "eu",
+        "request_id": "request",
+        "event_id": "event",
+    }
+
+
 def test_general_manager_logging_for_create_and_queries() -> None:
     class AllowPermission(BasePermission):
         def check_permission(self, action: str, attribute: str) -> bool:  # type: ignore[override]
@@ -217,37 +245,27 @@ def test_general_manager_logging_for_create_and_queries() -> None:
 
 
 def test_cached_decorator_logs_cache_hit_and_miss() -> None:
-    class FakeCache:
-        def __init__(self) -> None:
-            self.storage: dict[str, object] = {}
+    cache.clear()
+    try:
+        with patch("general_manager.cache.cache_decorator.logger") as mock_logger:
 
-        def get(self, key: str, default: object | None = None) -> object | None:
-            return self.storage.get(key, default)
+            @cached(
+                cache="dependency",
+                timeout=None,
+                cache_backend=cache,
+                record_fn=lambda _k, _d: None,
+            )
+            def compute(x: int) -> int:
+                return x * 2
 
-        def set(
-            self, key: str, value: object, timeout: int | None = None
-        ) -> None:  # pragma: no cover - interface compatibility
-            self.storage[key] = value
+            assert compute(3) == 6  # miss
+            assert compute(3) == 6  # hit
 
-    fake_cache = FakeCache()
-
-    with patch("general_manager.cache.cache_decorator.logger") as mock_logger:
-
-        @cached(
-            cache="dependency",
-            timeout=None,
-            cache_backend=fake_cache,
-            record_fn=lambda _k, _d: None,
-        )
-        def compute(x: int) -> int:
-            return x * 2
-
-        assert compute(3) == 6  # miss
-        assert compute(3) == 6  # hit
-
-    debug_messages = [c.args[0] for c in mock_logger.debug.call_args_list]
-    assert "cache miss recorded" in debug_messages
-    assert "cache hit" in debug_messages
+        debug_messages = [c.args[0] for c in mock_logger.debug.call_args_list]
+        assert "cache miss recorded" in debug_messages
+        assert "cache hit" in debug_messages
+    finally:
+        cache.clear()
 
 
 def test_permission_check_logs_denial() -> None:

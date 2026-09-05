@@ -1254,8 +1254,19 @@ exception when the value is invalid. `RequestResponseNormalizer` receives a raw
 transport response plus interface, operation, and plan, and must return a
 `RequestQueryResult`.
 
+Custom query adapters should return `RequestQueryResult(items=..., total_count=...)`
+with `total_count` only when it describes the same remote query. A response that
+is already a remote page must additionally provide both positive, non-boolean
+`page` and `page_size` coordinates; omit both for an unpaginated response.
+Before this provenance contract, adapters could return a page as ordinary items
+and GraphQL might slice it again. Now GraphQL reuses matching coordinates and
+reports the upstream page honestly. A missing total never proves completeness:
+adapters without a complete result or declared upstream pagination controls must
+expect GraphQL to return null global totals after local authorization and to
+reject global ordering, grouping, or mismatched page requests rather than guess.
+
 `RequestOperation(name, path, ...)` requires `name` and `path`. Optional
-constructor fields are `method="GET"`, `collection=False`, `filters={}`,
+constructor fields are `method="GET"`, `collection=False`, `filters=None`,
 `metadata={}`, `static_query_params={}`, `static_headers={}`, `static_body=None`,
 and `timeout=None`. For request interfaces, pass `filters=None` when a declared
 operation should inherit the interface-level filter mapping; an explicit mapping,

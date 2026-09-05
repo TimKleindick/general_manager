@@ -4,21 +4,31 @@ import asyncio
 import json
 from contextlib import suppress
 from types import SimpleNamespace
+from typing import ClassVar
+from unittest.mock import patch
 
 import graphene
 from asgiref.testing import ApplicationCommunicator
-from django.test import TestCase
+from django.contrib.sessions.backends.signed_cookies import SessionStore
+from django.contrib.sessions.models import Session
+from django.test import TransactionTestCase
 from django.test.utils import override_settings
 
 from general_manager.api.graphql import GraphQL
 from general_manager.chat.bootstrap import ensure_chat_route
 from general_manager.chat.consumer import ChatConsumer
+from general_manager.chat.models import (
+    ChatConversation,
+    append_chat_message,
+    create_pending_confirmation,
+)
 from general_manager.chat.providers.base import (
     DoneEvent,
     TextChunkEvent,
     TokenUsage,
     ToolCallEvent,
 )
+from general_manager.chat.tools import ScopeChatContext
 from tests import testing_asgi
 
 
@@ -50,6 +60,56 @@ class IntegrationProvider:
         return _stream()
 
 
+class ConfirmedMutationIntegrationProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+        self.calls += 1
+
+        async def _stream():
+            if self.calls == 1:
+                yield ToolCallEvent(
+                    id="tool-provider-confirmed",
+                    name="mutate",
+                    args={
+                        "mutation": "createPart",
+                        "input": {"name": "Bolt"},
+                        "confirmed": True,
+                    },
+                )
+                yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+                return
+            yield TextChunkEvent(content=f"confirmed:{messages[-1].content}")
+            yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+
+        return _stream()
+
+
+class SummaryContextIntegrationProvider:
+    provider_config: ClassVar[dict[str, int]] = {"timeout_seconds": 1}
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+
+        async def _stream():
+            if messages[0].content.startswith("Summarize the prior conversation"):
+                yield TextChunkEvent(content="summary")
+                yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+                return
+            has_summary = any(
+                message.role == "system" and message.content == "summary"
+                for message in messages
+            )
+            yield TextChunkEvent(
+                content="answer with summary" if has_summary else "answer"
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+
+        return _stream()
+
+
 class _Result:
     def __init__(self, data=None, errors=None) -> None:
         self.data = data
@@ -62,7 +122,7 @@ class _Schema:
         return _Result(data={"createPart": {"success": True}})
 
 
-class ChatTransportIntegrationTests(TestCase):
+class ChatTransportIntegrationTests(TransactionTestCase):
     def setUp(self) -> None:
         self._original_patterns = list(testing_asgi.websocket_urlpatterns)
         self._original_application = testing_asgi.application
@@ -344,20 +404,18 @@ class ChatTransportIntegrationTests(TestCase):
                 ensure_chat_route()
                 communicator = await self._connect()
 
-                with patch(
-                    "general_manager.chat.consumer.execute_chat_tool",
-                    side_effect=lambda name, args, _context: (
-                        {
+                with (
+                    patch(
+                        "general_manager.chat.consumer.execute_chat_tool",
+                        return_value={
                             "status": "confirmation_required",
                             "mutation": "createPart",
                             "input": {"name": "Bolt"},
-                        }
-                        if (
-                            name == "mutate"
-                            and args.get("mutation") == "createPart"
-                            and not args.get("confirmed", False)
-                        )
-                        else {"status": "executed", "data": {"success": True}}
+                        },
+                    ),
+                    patch(
+                        "general_manager.chat.consumer.execute_confirmed_chat_mutation",
+                        return_value={"status": "executed", "data": {"success": True}},
                     ),
                 ):
                     await self._send_json(
@@ -413,20 +471,241 @@ class ChatTransportIntegrationTests(TestCase):
                         "usage": {"input_tokens": 2, "output_tokens": 2},
                     }
 
+                    await self._send_json(
+                        communicator,
+                        {
+                            "type": "confirm",
+                            "confirmation_id": "tool-create",
+                            "confirmed": True,
+                        },
+                    )
+                    assert json.loads(
+                        (await communicator.receive_output())["text"]
+                    ) == {
+                        "type": "error",
+                        "message": "Unknown chat event.",
+                        "code": "bad_event",
+                    }
+
                 await self._disconnect(communicator)
 
         asyncio.run(run_test())
 
-    async def _connect(self) -> ApplicationCommunicator:
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": (
+                    "tests.integration.test_chat_transport."
+                    "ConfirmedMutationIntegrationProvider"
+                ),
+                "url": "/chat/",
+                "allowed_mutations": ["createPart"],
+                "confirm_mutations": ["createPart"],
+            }
+        },
+        ALLOWED_HOSTS=["testserver"],
+    )
+    def test_websocket_provider_confirmation_argument_stays_pending(self) -> None:
+        async def run_test() -> None:
+            from unittest.mock import AsyncMock, patch
+
+            with (
+                patch.object(
+                    ChatConsumer,
+                    "_get_persistent_conversation",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(
+                    ScopeChatContext,
+                    "from_scope",
+                    return_value=SimpleNamespace(
+                        user=SimpleNamespace(is_authenticated=True)
+                    ),
+                ),
+            ):
+                ensure_chat_route()
+                communicator = await self._connect()
+                await self._send_json(
+                    communicator, {"type": "message", "text": "create a part"}
+                )
+
+                tool_call = json.loads((await communicator.receive_output())["text"])
+                confirmation = json.loads((await communicator.receive_output())["text"])
+
+                assert tool_call["type"] == "tool_call"
+                assert tool_call["args"]["confirmed"] is True
+                assert confirmation == {
+                    "type": "confirm_mutation",
+                    "id": "tool-provider-confirmed",
+                    "mutation": "createPart",
+                    "input": {"name": "Bolt"},
+                }
+                await self._disconnect(communicator)
+
+        asyncio.run(run_test())
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.integration.test_chat_transport.IntegrationProvider",
+                "url": "/chat/",
+                "allowed_mutations": ["createPart"],
+                "confirm_mutations": ["createPart"],
+            }
+        },
+        ALLOWED_HOSTS=["testserver"],
+    )
+    def test_websocket_reconnect_claims_persisted_confirmation_once(self) -> None:
+        session = SessionStore()
+        session["_gm_chat_session"] = True
+        session.save()
+        conversation = ChatConversation.for_actor(
+            user=None, session_key=session.session_key
+        )
+        append_chat_message(conversation, role="user", content="create a part")
+        append_chat_message(
+            conversation,
+            role="assistant",
+            tool_calls=[
+                {
+                    "id": "reconnect-confirm",
+                    "name": "mutate",
+                    "args": {"mutation": "createPart", "input": {"name": "Bolt"}},
+                }
+            ],
+        )
+        create_pending_confirmation(
+            conversation,
+            confirmation_id="reconnect-confirm",
+            mutation_name="createPart",
+            payload={"input": {"name": "Bolt"}},
+            timeout_seconds=30,
+        )
+
+        async def run_test() -> None:
+            ensure_chat_route()
+            cookie = f"sessionid={session.session_key}".encode()
+            with patch(
+                "general_manager.chat.consumer.execute_confirmed_chat_mutation",
+                return_value={"status": "executed"},
+            ):
+                first = await self._connect(cookie=cookie)
+                await self._send_json(
+                    first,
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "reconnect-confirm",
+                        "confirmed": True,
+                    },
+                )
+                assert (
+                    json.loads((await first.receive_output())["text"])["type"]
+                    == "tool_result"
+                )
+                await self._disconnect(first)
+
+                replay = await self._connect(cookie=cookie)
+                await self._send_json(
+                    replay,
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "reconnect-confirm",
+                        "confirmed": True,
+                    },
+                )
+                assert (
+                    json.loads((await replay.receive_output())["text"])["code"]
+                    == "bad_event"
+                )
+                await self._disconnect(replay)
+
+        asyncio.run(run_test())
+
+    @override_settings(
+        SESSION_ENGINE="django.contrib.sessions.backends.db",
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.integration.test_chat_transport.IntegrationProvider",
+                "url": "/chat/",
+            }
+        },
+        ALLOWED_HOSTS=["testserver"],
+    )
+    def test_websocket_connect_persists_database_session_and_conversation(self) -> None:
+        async def run_test() -> None:
+            ensure_chat_route()
+            communicator = await self._connect()
+            await self._disconnect(communicator)
+
+        asyncio.run(run_test())
+
+        assert Session.objects.count() == 1
+        conversation = ChatConversation.objects.get()
+        assert conversation.session_key == Session.objects.get().session_key
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": (
+                    "tests.integration.test_chat_transport."
+                    "SummaryContextIntegrationProvider"
+                ),
+                "url": "/chat/",
+                "max_recent_messages": 2,
+                "summarize_after": 2,
+            }
+        },
+        ALLOWED_HOSTS=["testserver"],
+    )
+    def test_websocket_uses_shared_summary_preparation_for_long_history(self) -> None:
+        session = SessionStore()
+        session["_gm_chat_session"] = True
+        session.save()
+        conversation = ChatConversation.for_actor(
+            user=None, session_key=session.session_key
+        )
+        append_chat_message(conversation, role="user", content="old question")
+        append_chat_message(conversation, role="assistant", content="old answer")
+        append_chat_message(conversation, role="user", content="newer question")
+
+        async def run_test() -> None:
+            ensure_chat_route()
+            communicator = await self._connect(
+                cookie=f"sessionid={session.session_key}".encode()
+            )
+            await self._send_json(communicator, {"type": "message", "text": "latest"})
+            assert json.loads((await communicator.receive_output())["text"]) == {
+                "type": "text_chunk",
+                "content": "answer with summary",
+            }
+            assert (
+                json.loads((await communicator.receive_output())["text"])["type"]
+                == "done"
+            )
+            await self._disconnect(communicator)
+
+        asyncio.run(run_test())
+        conversation.refresh_from_db()
+        assert conversation.summarized_through_id is not None
+        assert conversation.summary_text == "summary"
+
+    async def _connect(self, *, cookie: bytes | None = None) -> ApplicationCommunicator:
+        headers = [
+            (b"host", b"testserver"),
+            (b"origin", b"http://testserver"),
+        ]
+        if cookie is not None:
+            headers.append((b"cookie", cookie))
         communicator = ApplicationCommunicator(
             testing_asgi.application,
             {
                 "type": "websocket",
                 "path": "/chat/",
-                "headers": [
-                    (b"host", b"testserver"),
-                    (b"origin", b"http://testserver"),
-                ],
+                "headers": headers,
                 "query_string": b"",
                 "client": ("testserver", 80),
                 "server": ("testserver", 80),
@@ -435,7 +714,7 @@ class ChatTransportIntegrationTests(TestCase):
         )
         await communicator.send_input({"type": "websocket.connect"})
         accept = await communicator.receive_output()
-        assert accept["type"] == "websocket.accept"
+        assert accept["type"] == "websocket.accept", accept
         return communicator
 
     async def _send_json(

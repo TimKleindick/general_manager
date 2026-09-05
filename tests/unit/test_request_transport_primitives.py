@@ -16,9 +16,11 @@ from general_manager.interface.requests import (
     RequestPayload,
     RequestQueryOperation,
     RequestQueryPlan,
+    RequestRateLimitedError,
     RequestRetryPolicy,
     RequestSchemaError,
     RequestServerError,
+    RequestTransportError,
     RequestTransportConfig,
     RequestTransportRequest,
     RequestTransportResponse,
@@ -430,6 +432,112 @@ def test_urllib_request_transport_maps_http_status_errors() -> None:
 
     assert error_info.value.status_code == 503
     assert error_info.value.headers["x-request-id"] == "failed-1"
+
+
+def test_urllib_request_transport_preserves_html_http_error_context() -> None:
+    request = RequestTransportRequest(
+        method="GET",
+        url="https://service.example.test/projects",
+        path="/projects",
+    )
+    headers = {"x-request-id": "html-1", "retry-after": "1"}
+
+    def failing_urlopen(
+        raw_request: Any, timeout: float | int | None = None
+    ) -> FakeUrlopenResponse:
+        del timeout
+        raise HTTPError(
+            url=raw_request.full_url,
+            code=503,
+            msg="Service Unavailable",
+            hdrs=headers,
+            fp=BytesIO(b"<html><body>temporarily unavailable</body></html>"),
+        )
+
+    with pytest.raises(RequestTransportStatusError) as error_info:
+        UrllibRequestTransport(urlopen=failing_urlopen).send(
+            request,
+            interface_cls=DummyInterface,
+            operation=RequestQueryOperation(
+                name="list", method="GET", path="/projects"
+            ),
+            plan=RequestQueryPlan(
+                operation_name="list",
+                action="filter",
+                method="GET",
+                path="/projects",
+            ),
+            identification=None,
+        )
+
+    error = error_info.value
+    assert error.status_code == 503
+    assert error.request is request
+    assert dict(error.headers) == headers
+    assert error.payload is None
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_error", "expected_attempts", "expected_retries"),
+    [
+        (429, RequestRateLimitedError, 2, 1),
+        (503, RequestServerError, 2, 1),
+        (400, RequestTransportError, 1, 0),
+    ],
+)
+def test_urllib_request_transport_retries_html_statuses_before_mapping(
+    status_code: int,
+    expected_error: type[RequestTransportError],
+    expected_attempts: int,
+    expected_retries: int,
+) -> None:
+    attempts = 0
+
+    def failing_urlopen(
+        request: Any, timeout: float | int | None = None
+    ) -> FakeUrlopenResponse:
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        raise HTTPError(
+            url=request.full_url,
+            code=status_code,
+            msg="HTTP failure",
+            hdrs={"x-request-id": "html-status"},
+            fp=BytesIO(b"<html><body>failure</body></html>"),
+        )
+
+    interface_cls = type(
+        "HtmlErrorInterface",
+        (),
+        {
+            "transport_config": RequestTransportConfig(
+                base_url="https://service.example.test",
+                retry_policy=RequestRetryPolicy(max_attempts=2),
+            ),
+            "auth_provider": None,
+            "__name__": "HtmlErrorInterface",
+        },
+    )
+
+    with pytest.raises(expected_error) as error_info:
+        UrllibRequestTransport(urlopen=failing_urlopen).execute(
+            interface_cls=interface_cls,
+            operation=RequestQueryOperation(
+                name="list", method="GET", path="/projects"
+            ),
+            plan=RequestQueryPlan(
+                operation_name="list",
+                action="filter",
+                method="GET",
+                path="/projects",
+            ),
+        )
+
+    assert attempts == expected_attempts
+    assert error_info.value.status_code == status_code
+    assert error_info.value.retry_count == expected_retries
+    assert error_info.value.headers["x-request-id"] == "html-status"
 
 
 def test_urllib_request_transport_uses_operation_timeout_override() -> None:

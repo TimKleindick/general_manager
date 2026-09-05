@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     ClassVar,
@@ -32,6 +34,18 @@ if TYPE_CHECKING:
 modelsModel = TypeVar("modelsModel", bound=models.Model)
 type FactoryParams = dict[str, object]
 type AdjustmentRecords = FactoryParams | list[FactoryParams]
+_evaluated_many_to_many_values: ContextVar[FactoryParams | None] = ContextVar(
+    "evaluated_many_to_many_values",
+    default=None,
+)
+
+
+@dataclass(frozen=True)
+class _RawRelationAttnameOverride:
+    """Temporarily mask a relation declaration while preserving a raw-ID value."""
+
+    attname: str
+    value: object
 
 
 class AdjustmentMethod(Protocol):
@@ -73,6 +87,15 @@ class UndefinedAdjustmentMethodError(ValueError):
         Initialize the UndefinedAdjustmentMethodError with the default message indicating that a generate/adjustment function is not configured.
         """
         super().__init__("_adjustmentMethod is not defined.")
+
+
+class ConflictingRelationOverrideError(ValueError):
+    """Raised when a relation name and raw-ID attname disagree."""
+
+    def __init__(self, field_name: str, attname: str) -> None:
+        super().__init__(
+            f"Conflicting relation overrides for {field_name} and {attname}."
+        )
 
 
 class MissingManagerClassError(ValueError):
@@ -183,7 +206,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
         Parameters:
             strategy (Literal["build", "create"]): "build" returns unsaved model instance(s); "create" saves model instance(s) and returns GeneralManager wrapper(s).
-            params: Field values supplied by the caller; missing non-auto fields will be populated from declared defaults or generated values.
+            params: Field values supplied by the caller; missing non-auto fields will be populated from declared defaults or generated values. A foreign key may use either its relation name or raw-ID attname (for example, ``parent`` or ``parent_id``); simultaneous values must agree.
 
         Returns:
             A Django model instance or a list of Django model instances. If `strategy` is "create", returns a `GeneralManager` instance or a list of `GeneralManager` instances wrapping the created model(s).
@@ -227,57 +250,92 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             *special_fields,
         ]
 
-        for field in field_list:
-            if field.name in [*params, *declared_fields]:
-                continue  # Skip fields that are already set
-            if isinstance(field, models.AutoField) or field.auto_created:
-                continue  # Skip auto fields
-            declared_default = cls._get_declared_default(field.name)
-            if declared_default is not None:
-                params[field.name] = declared_default
-                continue
-            if getattr(field, "is_relation", False) and (
-                getattr(field, "many_to_one", False)
-                or getattr(field, "one_to_one", False)
-            ):
-                params[field.name] = get_field_value(
-                    field,
-                    relation_generation=cls._get_related_factory_mode(field.name),
-                    database_alias=database_alias,
-                )
-                continue
-            params[field.name] = get_field_value(field)
-
-        generate = cast(
-            Callable[[Literal["build", "create"], FactoryParams], object],
-            super()._generate,
-        )
-        obj = generate(strategy, params)
-        if not isinstance(obj, (models.Model, list)):
-            raise InvalidGeneratedObjectError()
-        if isinstance(obj, list):
-            for item in obj:
-                if not isinstance(item, models.Model):
-                    raise InvalidGeneratedObjectError()
-            if strategy == "create":
-                for item in obj:
-                    cls._handle_many_to_many_fields_after_creation(
-                        item, params, supplied_field_names
+        m2m_values: FactoryParams = {}
+        token = _evaluated_many_to_many_values.set(m2m_values)
+        try:
+            for field in field_list:
+                if cls._has_relation_override_conflict(field, params):
+                    raise ConflictingRelationOverrideError(
+                        field.name,
+                        cls._field_attname(field),
                     )
-        elif strategy == "create":
-            cls._handle_many_to_many_fields_after_creation(
-                obj, params, supplied_field_names
+                if cls._has_raw_relation_attname_override(field, params):
+                    attname = cls._field_attname(field)
+                    params[field.name] = _RawRelationAttnameOverride(
+                        attname,
+                        params[attname],
+                    )
+                if (
+                    field.name in params
+                    or cls._field_attname(field) in params
+                    or field.name in declared_fields
+                    or cls._field_attname(field) in declared_fields
+                ):
+                    continue  # Skip fields that are already set.
+                if isinstance(field, models.AutoField) or field.auto_created:
+                    continue  # Skip auto fields.
+                declared_default = cls._get_declared_default(field.name)
+                if declared_default is not None:
+                    params[field.name] = declared_default
+                    continue
+                if getattr(field, "is_relation", False) and (
+                    getattr(field, "many_to_one", False)
+                    or getattr(field, "one_to_one", False)
+                ):
+                    params[field.name] = get_field_value(
+                        field,
+                        relation_generation=cls._get_related_factory_mode(field.name),
+                        database_alias=database_alias,
+                    )
+                    continue
+                params[field.name] = get_field_value(field)
+
+            generate = cast(
+                Callable[[Literal["build", "create"], FactoryParams], object],
+                super()._generate,
             )
-        if strategy == "create":
-            return cls._wrap_generated_objects(obj)
-        return obj
+            obj = generate(strategy, params)
+            post_save_m2m_values = {
+                field.name: params[field.name]
+                for field in model._meta.many_to_many
+                if field.name in supplied_field_names
+            }
+            post_save_m2m_values.update(
+                {
+                    field_name: value
+                    for field_name, value in m2m_values.items()
+                    if field_name in supplied_field_names
+                    or field_name in declared_fields
+                }
+            )
+            if not isinstance(obj, (models.Model, list)):
+                raise InvalidGeneratedObjectError()
+            if isinstance(obj, list):
+                for item in obj:
+                    if not isinstance(item, models.Model):
+                        raise InvalidGeneratedObjectError()
+                if strategy == "create":
+                    for item in obj:
+                        cls._handle_many_to_many_fields_after_creation(
+                            item,
+                            post_save_m2m_values,
+                        )
+            elif strategy == "create":
+                cls._handle_many_to_many_fields_after_creation(
+                    obj,
+                    post_save_m2m_values,
+                )
+            if strategy == "create":
+                return cls._wrap_generated_objects(obj)
+            return obj
+        finally:
+            _evaluated_many_to_many_values.reset(token)
 
     @classmethod
     def _handle_many_to_many_fields_after_creation(
         cls,
         obj: models.Model,
         attrs: FactoryParams,
-        supplied_field_names: set[str] | None = None,
     ) -> None:
         """
         Assign related objects to many-to-many fields after saved creation.
@@ -288,13 +346,11 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
         Parameters:
             obj (models.Model): Instance whose many-to-many relations should be populated.
-            attrs: Original attributes passed to the factory.
+            attrs: Evaluated declared or caller-supplied many-to-many attributes.
         """
-        if supplied_field_names is None:
-            supplied_field_names = set(attrs)
         for field in obj._meta.many_to_many:
             relation_generation = cls._get_related_factory_mode(field.name)
-            if field.name in attrs and field.name in supplied_field_names:
+            if field.name in attrs:
                 m2m_values = attrs[field.name]
             elif relation_generation == "reuse_existing" and field.blank:
                 continue
@@ -304,7 +360,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                     relation_generation=relation_generation,
                     database_alias=cls._get_database_alias(),
                 )
-            if m2m_values:
+            if m2m_values is not None:
                 normalized_values = cls._coerce_many_to_many_values(m2m_values)
                 getattr(obj, field.name).set(normalized_values)
 
@@ -319,7 +375,15 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         model: type[models.Model] = cls._meta.model
         m2m_fields = {field.name for field in model._meta.many_to_many}
         for field_name in list(kwargs.keys()):
+            raw_relation_override = kwargs.get(field_name)
+            if isinstance(raw_relation_override, _RawRelationAttnameOverride):
+                kwargs.pop(field_name)
+                kwargs[raw_relation_override.attname] = raw_relation_override.value
+                continue
             if field_name in m2m_fields:
+                m2m_values = _evaluated_many_to_many_values.get()
+                if m2m_values is not None:
+                    m2m_values[field_name] = kwargs[field_name]
                 kwargs.pop(field_name, None)
                 continue
             try:
@@ -331,6 +395,53 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                     kwargs[field_name]
                 )
         return kwargs
+
+    @classmethod
+    def _has_relation_override_conflict(
+        cls,
+        field: models.Field[object, object] | models.ForeignObjectRel,
+        params: FactoryParams,
+    ) -> bool:
+        """Return whether simultaneous relation-name and attname values differ."""
+        if not getattr(field, "is_relation", False) or not (
+            getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False)
+        ):
+            return False
+        attname = cls._field_attname(field)
+        if field.name not in params or attname not in params:
+            return False
+        return cls._relation_override_value(
+            params[field.name]
+        ) != cls._relation_override_value(params[attname])
+
+    @classmethod
+    def _has_raw_relation_attname_override(
+        cls,
+        field: models.Field[object, object] | models.ForeignObjectRel,
+        params: FactoryParams,
+    ) -> bool:
+        """Return whether only a FK/O2O raw-ID attname was supplied."""
+        if not getattr(field, "is_relation", False) or not (
+            getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False)
+        ):
+            return False
+        attname = cls._field_attname(field)
+        return attname != field.name and attname in params and field.name not in params
+
+    @staticmethod
+    def _field_attname(
+        field: models.Field[object, object] | models.ForeignObjectRel,
+    ) -> str:
+        """Return a model field's storage name, or its name for reverse relations."""
+        return cast(str, getattr(field, "attname", field.name))
+
+    @classmethod
+    def _relation_override_value(cls, value: object) -> object:
+        """Normalize a relation override to its raw primary key when possible."""
+        resolved = cls._coerce_single_related_value(value)
+        if isinstance(resolved, models.Model):
+            return resolved.pk
+        return resolved
 
     @classmethod
     def _create(
@@ -424,9 +535,10 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         The adjustment method receives generated/default-filled kwargs after
         `_adjust_kwargs()` has stripped many-to-many entries and coerced
         foreign-key/one-to-one values. A returned list is processed in order and
-        an empty list returns an empty list. Create-mode list processing is
+        an empty list returns an empty list. Create-mode list record saves are
         atomic, so later failures roll back earlier saves from the same
-        adjustment-method result.
+        adjustment-method result; post-save many-to-many assignment happens
+        after that record-list transaction.
 
         Parameters:
             use_creation_method (bool): If True, created records are validated and saved; if False, unsaved instances are returned.

@@ -11,6 +11,7 @@ from django.test import override_settings
 from general_manager.api import as_of
 from general_manager.as_of import as_of_cache_fingerprint
 from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.cache_decorator import cached
 from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.dependency_index import Dependency
 from general_manager.cache.dependency_publish import (
@@ -321,7 +322,7 @@ def test_run_context_batches_capped_value_touches() -> None:
         assert context.get("key") == "value"
         touch_many.assert_called_once_with(
             context,
-            (("values", "key"),),
+            (("values", run_context._RunCacheKey(None, "key")),),
             mode_generation=context._run_cache_mode_generation,
         )
 
@@ -339,7 +340,7 @@ def test_run_context_batches_capped_get_or_set_touches() -> None:
 
         touch_many.assert_called_once_with(
             context,
-            (("values", "key"),),
+            (("values", run_context._RunCacheKey(None, "key")),),
             mode_generation=context._run_cache_mode_generation,
         )
 
@@ -357,7 +358,7 @@ def test_run_context_batches_capped_has_touches() -> None:
 
         touch_many.assert_called_once_with(
             context,
-            (("values", "key"),),
+            (("values", run_context._RunCacheKey(None, "key")),),
             mode_generation=context._run_cache_mode_generation,
         )
 
@@ -538,8 +539,8 @@ def test_extracted_owner_touch_batch_rejects_delayed_aba_generation() -> None:
         if worker_errors:
             raise worker_errors[0]
         assert tuple(entry[2] for entry in run_context_cache_budget._entries) == (
-            "first",
-            "second",
+            run_context._RunCacheKey(None, "first"),
+            run_context._RunCacheKey(None, "second"),
         )
 
 
@@ -578,7 +579,9 @@ def test_foreign_immediate_touch_rejects_delayed_aba_generation() -> None:
 
         def touch_from_foreign_thread() -> None:
             try:
-                context._touch_run_cache_entry("values", "first")
+                context._touch_run_cache_entry(
+                    "values", run_context._RunCacheKey(None, "first")
+                )
             except BaseException as error:  # noqa: BLE001
                 worker_errors.append(error)
 
@@ -598,8 +601,8 @@ def test_foreign_immediate_touch_rejects_delayed_aba_generation() -> None:
         if worker_errors:
             raise worker_errors[0]
         assert tuple(entry[2] for entry in run_context_cache_budget._entries) == (
-            "first",
-            "second",
+            run_context._RunCacheKey(None, "first"),
+            run_context._RunCacheKey(None, "second"),
         )
 
 
@@ -722,7 +725,7 @@ def test_run_context_repeated_touch_fast_path_avoids_pending_key_rehashes() -> N
 
         touch_many.assert_called_once_with(
             context,
-            (("values", key),),
+            (("values", run_context._RunCacheKey(None, key)),),
             mode_generation=context._run_cache_mode_generation,
         )
         assert key.hash_calls <= RUN_CONTEXT_TOUCH_BATCH_SIZE + 2
@@ -747,7 +750,7 @@ def test_run_context_hot_reads_use_cached_budget_enabled_state() -> None:
 
         touch_many.assert_called_once_with(
             context,
-            (("values", "key"),),
+            (("values", run_context._RunCacheKey(None, "key")),),
             mode_generation=context._run_cache_mode_generation,
         )
 
@@ -769,7 +772,10 @@ def test_run_context_batches_capped_touches_in_latest_access_order() -> None:
 
         touch_many.assert_called_once_with(
             context,
-            (("values", "second"), ("values", "first")),
+            (
+                ("values", run_context._RunCacheKey(None, "second")),
+                ("values", run_context._RunCacheKey(None, "first")),
+            ),
             mode_generation=context._run_cache_mode_generation,
         )
 
@@ -792,7 +798,7 @@ def test_run_context_does_not_publish_a_removed_pending_touch() -> None:
 
         touch_many.assert_called_once_with(
             context,
-            (("values", "kept"),),
+            (("values", run_context._RunCacheKey(None, "kept")),),
             mode_generation=context._run_cache_mode_generation,
         )
 
@@ -810,7 +816,7 @@ def test_run_context_flushes_earlier_touches_before_refresh() -> None:
         activate_run_cache_recency(context)
         assert context.get("b") == "B"
 
-        context._refresh_run_value("a")
+        context._refresh_run_value(run_context._RunCacheKey(None, "a"))
         context.set("c", "C")
 
         assert context.get("a") == "A"
@@ -857,7 +863,7 @@ def test_run_context_touch_batch_does_not_leak_across_reuse() -> None:
 
         touch_many.assert_called_once_with(
             context,
-            (("values", "new"),),
+            (("values", run_context._RunCacheKey(None, "new")),),
             mode_generation=context._run_cache_mode_generation,
         )
 
@@ -894,7 +900,7 @@ def test_reused_run_context_refreshes_cached_budget_enabled_state() -> None:
 
     touch_many.assert_called_once_with(
         context,
-        (("values", "key"),),
+        (("values", run_context._RunCacheKey(None, "key")),),
         mode_generation=context._run_cache_mode_generation,
     )
 
@@ -1186,10 +1192,10 @@ def test_run_context_budget_keeps_historical_namespaces_independent() -> None:
     assert first_fingerprint is not None
     assert second_fingerprint is not None
     first_size = estimate_cache_entry_size(
-        ("as_of", first_fingerprint, "key"), "A", stop_after=None
+        run_context._RunCacheKey(first_fingerprint, "key"), "A", stop_after=None
     )
     second_size = estimate_cache_entry_size(
-        ("as_of", second_fingerprint, "key"), "B", stop_after=None
+        run_context._RunCacheKey(second_fingerprint, "key"), "B", stop_after=None
     )
 
     with (
@@ -1321,6 +1327,37 @@ def test_run_values_and_dependency_hits_share_global_lru_across_contexts() -> No
         assert first_context.get("ordinary") is None
         assert second_context.get_dependency_cache_hit("cache-a") == first_hit
         assert second_context.get_dependency_cache_hit("cache-b") == second_hit
+
+
+def test_run_cache_eviction_recomputes_without_replaying_evicted_dependencies() -> None:
+    """Evicting a cached result also evicts its captured dependency snapshot."""
+    state = {"dependency": "OldManager", "value": "old"}
+    calls = 0
+
+    @cached
+    def cached_value() -> str:
+        nonlocal calls
+        calls += 1
+        DependencyTracker.track(state["dependency"], "all", "{}")
+        return state["value"]
+
+    @cached
+    def pressure() -> str:
+        return "pressure"
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 1_200}),
+        CalculationRunContext(),
+    ):
+        assert cached_value() == "old"
+        assert pressure() == "pressure"
+
+        state.update(dependency="NewManager", value="new")
+        with DependencyTracker() as dependencies:
+            assert cached_value() == "new"
+
+    assert calls == 2
+    assert dependencies == {("NewManager", "all", "{}")}
 
 
 def test_pending_dependency_publication_hit_is_pinned_until_flush() -> None:
@@ -1864,7 +1901,7 @@ def test_historical_storage_applies_one_run_namespace_transform() -> None:
         assert fingerprint is not None
 
         assert ctx._values == {
-            ("as_of", fingerprint, ("cache", "key")): "value",
+            run_context._RunCacheKey(fingerprint, ("cache", "key")): "value",
         }
 
 
@@ -1886,7 +1923,7 @@ def test_equivalent_offset_instants_share_run_cache_namespace() -> None:
     assert calls == 1
 
 
-def test_prefix_deletion_only_discards_active_as_of_namespace() -> None:
+def test_prefix_deletion_discards_every_as_of_namespace() -> None:
     prefix = ("orm_instance", "Human")
 
     with CalculationRunContext() as ctx:
@@ -1898,7 +1935,38 @@ def test_prefix_deletion_only_discards_active_as_of_namespace() -> None:
             ctx.discard_prefix(prefix)
             assert ctx.get((*prefix, 1)) is None
         with as_of("2022-01-02"):
-            assert ctx.get((*prefix, 1)) == "date-b"
+            assert ctx.get((*prefix, 1)) is None
+
+
+def test_discard_prefix_matches_historical_entries_across_snapshots() -> None:
+    """Prefix invalidation removes stored historical entries without re-entering them."""
+    prefix = ("orm_instance", "Human")
+
+    with CalculationRunContext() as ctx:
+        with as_of("2022-01-01"):
+            ctx.set((*prefix, 1), "date-a")
+        with as_of("2022-01-02"):
+            ctx.set((*prefix, 2), "date-b")
+
+        ctx.discard_prefix(prefix)
+
+        with as_of("2022-01-01"):
+            assert ctx.get((*prefix, 1)) is None
+        with as_of("2022-01-02"):
+            assert ctx.get((*prefix, 2)) is None
+
+
+def test_historical_run_keys_do_not_collide_with_caller_owned_tuples() -> None:
+    """A tuple resembling an old historical wrapper remains a caller key."""
+    caller_key = ("as_of", "2022-01-01T00:00:00+00:00", ("cache", "key"))
+
+    with CalculationRunContext() as ctx:
+        ctx.set(caller_key, "caller")
+        with as_of("2022-01-01"):
+            ctx.set(("cache", "key"), "historical")
+            assert ctx.get(("cache", "key")) == "historical"
+
+        assert ctx.get(caller_key) == "caller"
 
 
 def test_index_and_group_helpers_isolate_sequential_as_of_namespaces() -> None:

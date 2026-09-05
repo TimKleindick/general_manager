@@ -48,7 +48,7 @@ from general_manager.interface.interfaces import (
     ExcelIntegerField as InterfacesExcelIntegerField,
 )
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.utils.make_cache_key import make_cache_key
+from general_manager.utils._make_cache_key import make_cache_key
 
 
 class ExcelFieldTests(SimpleTestCase):

@@ -1,12 +1,14 @@
 # type: ignore
 import pickle
+from inspect import signature
 
 from django.test import TestCase, override_settings
 from datetime import date, datetime, UTC
 from types import SimpleNamespace
 from unittest.mock import patch
-from general_manager.api.property import GraphQLProperty
+from general_manager.api.property import GraphQLProperty, graph_ql_property
 from general_manager.bucket.calculation_bucket import CalculationBucket
+from general_manager.bucket._ordering import InvalidOrderingError
 from general_manager.as_of import (
     HistoricalContextConflictError,
     as_of,
@@ -258,7 +260,7 @@ class TestCalculationBucket(TestCase):
                 self.number = kwargs["number"]
 
         SortedInterface._parent_class = SortedManager
-        bucket = CalculationBucket(SortedManager, sort_key="number", reverse=True)
+        bucket = CalculationBucket(SortedManager).sort("-number")
 
         self.assertEqual(bucket.values_list("number", flat=True), (3, 2, 1))
 
@@ -374,12 +376,12 @@ class TestCalculationBucket(TestCase):
                 self.identification = dict(kwargs)
                 self.number = kwargs["number"] * 10
 
-            @GraphQLProperty
+            @graph_ql_property(sortable=True, cache="none")
             def descending(self) -> int:
                 return -self.number
 
         PropertySortInterface._parent_class = PropertySortManager
-        bucket = CalculationBucket(PropertySortManager, sort_key="descending")
+        bucket = CalculationBucket(PropertySortManager).sort("descending")
 
         projected = bucket.values_list("number", flat=True)
         projection_constructions = len(manager_constructions)
@@ -514,7 +516,7 @@ class TestCalculationBucket(TestCase):
 
         with as_of(datetime.fromisoformat("2022-01-01T01:00:00+01:00")):
             bucket = CalculationBucket(DummyGeneralManager)
-            derived = bucket.filter(dummy=1).exclude(dummy=2).sort("dummy").all()
+            derived = bucket.filter(dummy=1).exclude(dummy=2).sort().all()
 
         self.assertEqual(bucket._effective_search_date, snapshot)
         self.assertEqual(derived._effective_search_date, snapshot)
@@ -652,39 +654,63 @@ class TestCalculationBucket(TestCase):
         """
         Tests that CalculationBucket initializes with default values when only the manager class is provided.
 
-        Verifies that filters, excludes, sort key, and reverse flag are set to their defaults, and that input fields are sourced from the associated interface.
+        Verifies that filters and excludes are initialized and ordering is empty.
         """
         bucket = CalculationBucket(manager_class=DummyGeneralManager)
         self.assertIsInstance(bucket, CalculationBucket)
         self.assertEqual(bucket._manager_class, DummyGeneralManager)
         self.assertEqual(bucket.filters, {})
         self.assertEqual(bucket.excludes, {})
-        self.assertIsNone(bucket.sort_key)
-        self.assertFalse(bucket.reverse)
+        self.assertEqual(bucket._sort_fields, ())
         # input_fields should come from the interface
         self.assertEqual(bucket.input_fields, DummyCalculationInterface.input_fields)
 
     def test_initialization_with_filters_and_excludes(self, _mock_parse):
-        # Filters and excludes passed directly to constructor
-
-        """
-        Tests that CalculationBucket initializes with provided filter and exclude definitions, sort key, and reverse flag.
-
-        Verifies that the constructor correctly assigns the given filters, excludes, sort key, and reverse attributes.
-        """
+        """The constructor retains only filter and exclude state."""
         fdefs = {"f": {"filter_kwargs": {"f": 1}}}
         edefs = {"e": {"filter_kwargs": {"e": 2}}}
-        bucket = CalculationBucket(
-            manager_class=DummyGeneralManager,
-            filter_definitions=fdefs,
-            exclude_definitions=edefs,
-            sort_key="key",
-            reverse=True,
-        )
+        bucket = CalculationBucket(DummyGeneralManager, fdefs, edefs)
         self.assertEqual(bucket.filter_definitions, fdefs)
         self.assertEqual(bucket.exclude_definitions, edefs)
-        self.assertEqual(bucket.sort_key, "key")
-        self.assertTrue(bucket.reverse)
+        self.assertEqual(bucket._sort_fields, ())
+
+    def test_constructor_rejects_legacy_ordering_keywords(self, _mock_parse):
+        """Public ordering is available only through signed ``sort`` fields."""
+        parameters = signature(CalculationBucket).parameters
+
+        self.assertNotIn("sort_key", parameters)
+        self.assertNotIn("reverse", parameters)
+        with self.assertRaises(TypeError):
+            CalculationBucket(DummyGeneralManager, sort_key="key")
+        with self.assertRaises(TypeError):
+            CalculationBucket(DummyGeneralManager, reverse=True)
+
+    def test_signed_ordering_survives_filter_exclude_clone_and_pickle(
+        self, _mock_parse
+    ):
+        """Derived calculation buckets retain private signed ordering state."""
+        _mock_parse.side_effect = parse_filters
+        source = (
+            CalculationBucket(InputIdentificationManager)
+            .sort("-field2", "field1")
+            .filter(field1__in=["first", "second"])
+            .exclude(field2=1)
+        )
+
+        clone = source.all()
+        restored = pickle.loads(pickle.dumps(source))  # noqa: S301
+
+        expected = [{"field1": "first", "field2": 2}, {"field1": "second", "field2": 2}]
+        self.assertEqual(source.generate_combinations(), expected)
+        self.assertEqual(clone.generate_combinations(), expected)
+        self.assertEqual(restored.generate_combinations(), expected)
+        self.assertEqual(source._sort_fields, ("-field2", "field1"))
+        self.assertEqual(restored._sort_fields, source._sort_fields)
+        self.assertEqual(
+            repr(source),
+            "CalculationBucket(InputIdentificationManager, {'field1__in': "
+            "['first', 'second']}, {'field2': 1}).sort('-field2', 'field1')",
+        )
 
     def test_reduce_and_setstate(self, _mock_parse):
         # Test pickling support
@@ -695,13 +721,16 @@ class TestCalculationBucket(TestCase):
         Verifies that the reduced state includes current combinations and that state restoration
         correctly sets the internal combinations on a new instance.
         """
-        bucket = CalculationBucket(DummyGeneralManager, {"a": 1}, {"b": 2}, "k", True)
+        bucket = CalculationBucket(DummyGeneralManager, {"a": 1}, {"b": 2})
         # Prepopulate state
         bucket._data = [{"x": 10}]
         cls, args, state = bucket.__reduce__()
         # Check reduce data
         self.assertEqual(cls, CalculationBucket)
-        self.assertEqual(args, (DummyGeneralManager, {"a": 1}, {"b": 2}, "k", True))
+        self.assertEqual(
+            args,
+            (DummyGeneralManager, {"a": 1}, {"b": 2}, ({"a": 1},), ({"b": 2},)),
+        )
         self.assertIn("data", state)
         # Restore state on new instance
         new_bucket = CalculationBucket(*args)
@@ -719,13 +748,10 @@ class TestCalculationBucket(TestCase):
             DummyGeneralManager, {"f1": 1, "f2": 3}, {"e1": 2, "e2": 4}
         )
         combined = b1 | b2
-        self.assertIsInstance(combined, CalculationBucket)
-        # Only common identical definitions should remain
-        self.assertEqual(combined.filter_definitions, {"f1": 1})
-        self.assertEqual(combined.exclude_definitions, {"e1": 2})
+        self.assertEqual([manager.identification for manager in combined], [{}])
 
     def test_or_intersects_distinct_allowed_instance_subsets(self, _mock_parse):
-        """Combining exact subsets must not widen either authorization boundary."""
+        """Combining exact subsets returns a left-first deduplicated union."""
 
         class DynInterface(CalculationInterface):
             input_fields: ClassVar[dict] = {
@@ -747,7 +773,7 @@ class TestCalculationBucket(TestCase):
 
         self.assertEqual(
             [manager.identification for manager in combined],
-            [{"num": 2}],
+            [{"num": 1}, {"num": 2}, {"num": 3}],
         )
 
     def test_or_with_invalid(self, _mock_parse):
@@ -789,7 +815,7 @@ class TestCalculationBucket(TestCase):
         s3 = repr(bucket)
         self.assertEqual(
             s3,
-            f"CalculationBucket({DummyGeneralManager.__name__}, {{}}, {{}}, None, False)",
+            f"CalculationBucket({DummyGeneralManager.__name__}, {{}}, {{}})",
         )
 
     def test_all_iter_len_count(self, _mock_parse):
@@ -840,9 +866,9 @@ class TestCalculationBucket(TestCase):
         self.assertIsInstance(mgr, DummyGeneralManager)
         # Slice __getitem__
         sliced = bucket[0:2]
-        self.assertIsInstance(sliced, CalculationBucket)
-        # Sliced bucket should have its own combinations
-        self.assertEqual(sliced._data, [{"i": 1}, {"i": 2}])
+        self.assertEqual(
+            [manager.identification for manager in sliced], [{"i": 1}, {"i": 2}]
+        )
 
     def test_with_instances_materializes_non_id_identifications_in_order(
         self, _mock_parse
@@ -855,9 +881,7 @@ class TestCalculationBucket(TestCase):
                 InputIdentificationManager,
                 {"field1__in": ["first", "second"]},
                 {"field2": 0},
-                ("field1", "field2"),
-                True,
-            )
+            ).sort("field1", "-field2")
             source._data = [{"field1": "cached", "field2": 99}]
             selected = [
                 InputIdentificationManager(field1="second", field2=2),
@@ -867,8 +891,6 @@ class TestCalculationBucket(TestCase):
             subset = source.with_instances(selected)
             empty = source.with_instances(())
             restored = pickle.loads(pickle.dumps(subset))  # noqa: S301
-            filtered = restored.filter(field1="first")
-            sorted_subset = restored.sort("field2")
 
             expected_identifications = [
                 {"field1": "second", "field2": 2},
@@ -880,46 +902,125 @@ class TestCalculationBucket(TestCase):
                 expected_identifications,
             )
             self.assertEqual(
-                restored._allowed_identifications, expected_identifications
-            )
-            self.assertIsNone(filtered._data)
-            self.assertEqual(
-                filtered._allowed_identifications, expected_identifications
-            )
-            self.assertEqual(
-                [manager.identification for manager in filtered],
-                [{"field1": "first", "field2": 1}],
-            )
-            self.assertIsNone(sorted_subset._data)
-            self.assertEqual(
-                sorted_subset._allowed_identifications,
+                [manager.identification for manager in restored],
                 expected_identifications,
             )
             self.assertIsNot(subset, source)
-            self.assertIsInstance(empty, CalculationBucket)
             self.assertEqual(list(empty), [])
             self.assertEqual(
                 source.filter_definitions,
                 {"field1__in": ["first", "second"]},
             )
             self.assertEqual(source.exclude_definitions, {"field2": 0})
-            self.assertEqual(source.sort_key, ("field1", "field2"))
-            self.assertTrue(source.reverse)
+            self.assertEqual(source._sort_fields, ("field1", "-field2"))
             self.assertEqual(source._data, [{"field1": "cached", "field2": 99}])
             self.assertEqual(source._effective_search_date, snapshot)
+
+    def test_exact_subset_keeps_supplied_instances_and_empty_slice_membership(
+        self, _mock_parse
+    ) -> None:
+        """Exact subset operations cannot reconstruct rows outside the subset."""
+        source = CalculationBucket(InputCalculationManager)
+        first, second = tuple(source)
+
+        subset = source.with_instances([second, second, first])
+
+        self.assertEqual(list(subset), [second, second, first])
+        self.assertIs(subset[0], second)
+        self.assertEqual(list(source[:0].sort("year")), [])
+
+    def test_native_filter_and_exclude_preserve_call_groups(self, _mock_parse) -> None:
+        """Calculation query calls use Django-style AND and NOT(AND) groups."""
+        _mock_parse.side_effect = parse_filters
+
+        class RowInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "row": Input(int, possible_values=[1, 2, 3]),
+            }
+
+        class RowManager:
+            Interface = RowInterface
+
+            def __init__(self, **kwargs: int) -> None:
+                self.identification = dict(kwargs)
+                self.row = kwargs["row"]
+                self._a, self._b = ((1, 1), (1, 2), (2, 2))[self.row - 1]
+
+            @GraphQLProperty
+            def a(self) -> int:
+                return self._a
+
+            @GraphQLProperty
+            def b(self) -> int:
+                return self._b
+
+        RowInterface._parent_class = RowManager
+        bucket = CalculationBucket(RowManager)
+
+        self.assertEqual(list(bucket.filter(a=1).filter(a=2)), [])
+        self.assertEqual([manager.row for manager in bucket.exclude(a=1, b=1)], [2, 3])
+        self.assertEqual(
+            [manager.row for manager in bucket.exclude(a=1).exclude(b=1)], [3]
+        )
+        self.assertEqual(
+            [manager.row for manager in bucket.filter(a=1).filter()], [1, 2]
+        )
+        self.assertEqual([manager.row for manager in bucket.exclude()], [1, 2, 3])
+        self.assertEqual(
+            [manager.row for manager in bucket.exclude(a=1, b=1).exclude()],
+            [2, 3],
+        )
+
+    def test_native_groups_preserve_manager_id_aliases_and_nested_lookups(
+        self, _mock_parse
+    ) -> None:
+        """Grouped fallback evaluates normalized manager-input lookup paths."""
+        _mock_parse.side_effect = parse_filters
+
+        with override_settings(AUTOCREATE_GRAPHQL=False):
+
+            class RelatedInterface:
+                def __init__(self, *, id: int) -> None:
+                    self.identification = {"id": id}
+
+            class RelatedManager(GeneralManager):
+                pass
+
+        RelatedManager.Interface = RelatedInterface  # type: ignore[assignment]
+        RelatedManager.Permission = ManagerBasedPermission  # type: ignore[assignment]
+        RelatedManager._attributes = {}
+        related = [RelatedManager(id=1), RelatedManager(id=2)]
+
+        class ParentInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "related": Input(RelatedManager, possible_values=related),
+            }
+
+        class ParentManager:
+            Interface = ParentInterface
+
+            def __init__(self, **kwargs: object) -> None:
+                self.related = kwargs["related"]
+                self.identification = dict(kwargs)
+
+        ParentInterface._parent_class = ParentManager
+        bucket = CalculationBucket(ParentManager)
+
+        self.assertEqual(list(bucket.filter(related_id=1).filter(related__id=2)), [])
 
     def test_sort_returns_new_bucket(self, _mock_parse):
         """
         Tests that the sort() method returns a new CalculationBucket with updated sort key and reverse flag, leaving the original bucket unchanged.
         """
-        bucket = CalculationBucket(DummyGeneralManager, {"a": 1}, {"b": 2}, None, False)
-        sorted_bucket = bucket.sort(key="a", reverse=True)
-        self.assertIsInstance(sorted_bucket, CalculationBucket)
-        # Original bucket unchanged
-        self.assertIsNone(bucket.sort_key)
-        # New bucket has updated sort settings
-        self.assertEqual(sorted_bucket.sort_key, "a")
-        self.assertTrue(sorted_bucket.reverse)
+        bucket = CalculationBucket(DummyGeneralManager, {"a": 1}, {"b": 2})
+        with self.assertRaises(InvalidOrderingError):
+            bucket.sort("-a")
+
+    def test_sort_rejects_non_sortable_property_before_evaluation(self, _mock_parse):
+        bucket = CalculationBucket(InputCalculationManager).none()
+
+        with self.assertRaises(InvalidOrderingError):
+            bucket.sort("computed_total")
 
 
 @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
@@ -949,6 +1050,15 @@ class TestGenerateCombinations(TestCase):
 
         DynInterface._parent_class = DynManager
         return CalculationBucket(DynManager)
+
+    def test_sort_orders_heterogeneous_declared_values_by_category(self, _mock_parse):
+        bucket = self._make_bucket_with_fields(
+            {"value": Input(type=object, possible_values=["later", 2, False])}
+        )
+
+        managers = list(bucket.sort("value"))
+
+        self.assertEqual([manager.value for manager in managers], [False, 2, "later"])
 
     def test_basic_cartesian_product(self, _mock_parse):
         # Two independent fields produce a Cartesian product
@@ -1162,7 +1272,7 @@ class TestGenerateCombinations(TestCase):
 
         DynInterface._parent_class = DynManager
 
-        bucket = CalculationBucket(DynManager, sort_key="num")
+        bucket = CalculationBucket(DynManager).sort("num")
 
         combos = bucket.generate_combinations()
 
@@ -1181,11 +1291,8 @@ class TestGenerateCombinations(TestCase):
         }
         bucket = self._make_bucket_with_fields(fields)
         sorted_bucket = CalculationBucket(
-            bucket._manager_class,
-            bucket.filters,
-            bucket.excludes,
-            sort_key=("b", "a"),
-        )
+            bucket._manager_class, bucket.filters, bucket.excludes
+        ).sort("b", "a")
 
         combos = sorted_bucket.generate_combinations()
 
@@ -1209,13 +1316,13 @@ class TestGenerateCombinations(TestCase):
                 self.identification = dict(kwargs)
                 self.num = kwargs["num"]
 
-            @property
-            def descending_value(self):
+            @graph_ql_property(sortable=True, cache="none")
+            def descending_value(self) -> int:
                 return -self.num
 
         DynInterface._parent_class = DynManager
 
-        bucket = CalculationBucket(DynManager, sort_key="descending_value")
+        bucket = CalculationBucket(DynManager).sort("descending_value")
 
         combos = bucket.generate_combinations()
 
@@ -1245,13 +1352,13 @@ class TestGenerateCombinations(TestCase):
             def doubled(self):
                 return self.num * 2
 
-            @property
-            def descending_value(self):
+            @graph_ql_property(sortable=True, cache="none")
+            def descending_value(self) -> int:
                 return -self.num
 
         DynInterface._parent_class = DynManager
 
-        bucket = CalculationBucket(DynManager, sort_key="descending_value")
+        bucket = CalculationBucket(DynManager).sort("descending_value")
         bucket._filters = {"doubled": {"filter_funcs": [lambda value: value >= 4]}}
 
         combos = bucket.generate_combinations()
@@ -1270,28 +1377,28 @@ class TestGenerateCombinations(TestCase):
                 "num": Input(type=int, possible_values=[1, 2, 3]),
             }
 
-        class DynManager:
+        class DynManager(GeneralManager):
             Interface = DynInterface
 
             def __init__(self, **kwargs):
                 calls.append(dict(kwargs))
-                self.identification = dict(kwargs)
-                self.num = kwargs["num"]
+                super().__init__(**kwargs)
 
-            @property
-            def doubled(self):
-                return self.num * 2
+            @graph_ql_property(sortable=True)
+            def doubled(self) -> int:
+                return int(self.identification["num"]) * 2
 
         DynInterface._parent_class = DynManager
+        DynManager.Interface.input_fields = DynInterface.input_fields
         source = CalculationBucket(DynManager)
         subset = source.with_instances([DynManager(num=2), DynManager(num=3)])
         subset = subset.sort("doubled")
         calls.clear()
 
-        combinations = subset.generate_combinations()
-
-        self.assertEqual(combinations, [{"num": 2}, {"num": 3}])
-        self.assertEqual(calls, [{"num": 1}, {"num": 2}, {"num": 3}])
+        self.assertEqual(
+            [manager.identification for manager in subset], [{"num": 2}, {"num": 3}]
+        )
+        self.assertEqual(calls, [])
 
     def test_mixed_input_and_property_sort_key_uses_manager_sorting(self, _mock_parse):
         calls = []
@@ -1311,13 +1418,13 @@ class TestGenerateCombinations(TestCase):
                 self.group = kwargs["group"]
                 self.num = kwargs["num"]
 
-            @property
-            def descending_value(self):
+            @graph_ql_property(sortable=True, cache="none")
+            def descending_value(self) -> int:
                 return -self.num
 
         DynInterface._parent_class = DynManager
 
-        bucket = CalculationBucket(DynManager, sort_key=("group", "descending_value"))
+        bucket = CalculationBucket(DynManager).sort("group", "descending_value")
 
         combos = bucket.generate_combinations()
 
@@ -1345,9 +1452,8 @@ class TestGenerateCombinations(TestCase):
         }
         bucket = self._make_bucket_with_fields(fields)
 
-        managers = list(bucket.sort(("rank", "employee__name", "employee__id")))
-
-        assert [manager.employee.id for manager in managers] == [1, 2, 3]
+        with self.assertRaises(InvalidOrderingError):
+            bucket.sort("rank", "employee__name", "employee__id")
 
     def test_empty_possible_values(self, _mock_parse):
         # A field with no possible_values yields no combinations
@@ -1535,14 +1641,7 @@ class TestGenerateCombinations(TestCase):
         }
         # Create unsorted bucket
         bucket = self._make_bucket_with_fields(fields)
-        # New bucket with sort_key
-        sorted_bucket = CalculationBucket(
-            bucket._manager_class,
-            bucket.filters,
-            bucket.excludes,
-            sort_key="v",
-            reverse=True,
-        )
+        sorted_bucket = bucket.sort("-v")
         combos = sorted_bucket.generate_combinations()
         # Should be [3,2,1]
         self.assertEqual([d["v"] for d in combos], [3, 2, 1])
@@ -1608,8 +1707,9 @@ class TestCalculationBucketAdditional(TestCase):
         self.assertEqual(last_mgr.kwargs, {"i": 4})
         # Extended slice
         sliced = bucket[::2]
-        self.assertIsInstance(sliced, CalculationBucket)
-        self.assertEqual(sliced._data, [{"i": 1}, {"i": 3}])
+        self.assertEqual(
+            [manager.identification for manager in sliced], [{"i": 1}, {"i": 3}]
+        )
 
     @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
     def test_len_and_count_on_empty(self, _mock_parse):
@@ -1723,13 +1823,9 @@ class TestCalculationBucketAdditional(TestCase):
         restricted = source.with_instances([DynManager(n=7), DynManager(n=9)])
         uncached = restricted.filter()
 
-        preview = str(uncached)
-
-        self.assertTrue(preview.startswith("CalculationBucket (2)["))
-        self.assertIn("DynManager(**{'n': 7})", preview)
-        self.assertIn("DynManager(**{'n': 9})", preview)
-        self.assertNotIn("DynManager(**{'n': 0})", preview)
-        self.assertIsNone(uncached._data)
+        self.assertEqual(
+            [manager.identification for manager in uncached], [{"n": 7}, {"n": 9}]
+        )
 
     @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
     def test_str_preserves_static_iterator_possible_values(self, _mock_parse):
@@ -1855,7 +1951,7 @@ class TestCalculationBucketAdditional(TestCase):
                 self.identification = dict(kwargs)
 
         DynInterface._parent_class = DynManager
-        bucket = CalculationBucket(DynManager, sort_key="n")
+        bucket = CalculationBucket(DynManager).sort("n")
 
         s = str(bucket)
 
@@ -1999,19 +2095,13 @@ class TestCalculationBucketAdditional(TestCase):
         """
         bucket = CalculationBucket(DummyGeneralManager)
         bucket._data = [{"a": 1}, {"b": 2}]
-        sorted_bucket = bucket.sort(key="a", reverse=False)
-        with self.assertRaises((KeyError, TypeError, AttributeError)):
-            _ = (
-                sorted_bucket.generate_combinations()
-                if hasattr(sorted_bucket, "generate_combinations")
-                and sorted_bucket._data is None
-                else sorted_bucket._data.sort(key=lambda d: d["a"])
-            )  # Fallback if implementation sorts on generation
+        with self.assertRaises(InvalidOrderingError):
+            bucket.sort("a")
 
     @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
     def test_or_operator_preserves_common_nested_structures(self, _mock_parse):
         """
-        __or__ should preserve only filters/excludes with identical nested structures.
+        __or__ should materialize the represented collection union.
         """
         f1 = {
             "field": {"gte": 1, "lte": 5},
@@ -2028,8 +2118,7 @@ class TestCalculationBucketAdditional(TestCase):
             DummyGeneralManager, filter_definitions=f2, exclude_definitions=e2
         )
         combined = b1 | b2
-        self.assertEqual(combined.filter_definitions, f1)  # identical preserved
-        self.assertEqual(combined.exclude_definitions, {})  # non-identical removed
+        self.assertEqual([manager.identification for manager in combined], [{}])
 
 
 class TestCalculationBucketExceptions(TestCase):
@@ -2094,7 +2183,7 @@ class TestCalculationBucketExceptions(TestCase):
             def all(self):
                 return self
 
-            def sort(self, key, reverse=False):
+            def sort(self, *fields):
                 return self
 
             def get(self, **kwargs):
@@ -2280,9 +2369,10 @@ class TestCalculationBucketExceptions(TestCase):
         bucket = CalculationBucket(InlineManager)
         manager_instance = InlineManager(id=123)
 
-        with patch.object(bucket, "filter", return_value=bucket):
-            combined = bucket | manager_instance
-        self.assertIsInstance(combined, CalculationBucket)
+        combined = bucket | manager_instance
+        self.assertEqual(
+            [manager.identification for manager in combined], [{"id": 123}]
+        )
 
 
 class TestCalculationBucketCoverageEdges(TestCase):
@@ -2322,19 +2412,13 @@ class TestCalculationBucketCoverageEdges(TestCase):
             Interface = SignatureInterface
 
         SignatureInterface._parent_class = SignatureManager
-        bucket = CalculationBucket(
-            SignatureManager,
-            {"x": 1},
-            {"y": 2},
-            sort_key=("x",),
-            reverse=True,
-        )
+        bucket = CalculationBucket(SignatureManager, {"x": 1}, {"y": 2}).sort("-x")
 
         signature = bucket._bucket_index_source_signature()
 
         self.assertEqual(signature[0], "calculation")
         self.assertIs(signature[1], SignatureManager)
-        self.assertEqual(signature[-2:], (("x",), True))
+        self.assertEqual(signature[-1], ("-x",))
 
     def test_topological_sort_skips_already_visited_dependencies(self):
         """Shared dependency paths should not duplicate already visited inputs."""

@@ -570,9 +570,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(tax_calculation_bucket_sorted[1].employee.name, "Alice")
         self.assertEqual(tax_calculation_bucket_sorted[2].employee.name, "Bob")
 
-        tax_calculation_bucket_sorted = tax_calculation_bucket.sort(
-            "calculated_tax", reverse=True
-        )
+        tax_calculation_bucket_sorted = tax_calculation_bucket.sort("-calculated_tax")
         self.assertEqual(tax_calculation_bucket_sorted[2].employee.name, "Tim")
         self.assertEqual(tax_calculation_bucket_sorted[1].employee.name, "Alice")
         self.assertEqual(tax_calculation_bucket_sorted[0].employee.name, "Bob")
@@ -597,7 +595,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         )
 
         tax_calculation_bucket_sorted = self.TaxCalculation.all().sort(
-            ("calculated_tax", "employee.name"), reverse=False
+            "calculated_tax", "employee__name"
         )
         self.assertEqual(tax_calculation_bucket_sorted[0].employee.name, "Tim")
         self.assertEqual(tax_calculation_bucket_sorted[1].employee.name, "Alice")
@@ -621,7 +619,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         )
         query = """
         query {
-          taxCalculationList(sortBy: [calculated_tax, employee__name]) {
+          taxCalculationList(orderBy: [{field: calculatedTax}, {field: employee__name}]) {
             items {
               calculatedTax { value }
               employee { name }
@@ -660,8 +658,10 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         query = """
         query {
           taxCalculationList(
-            sortBy: [calculated_tax, employee__name]
-            reverse: true
+            orderBy: [
+              {field: calculatedTax, direction: DESC}
+              {field: employee__name, direction: DESC}
+            ]
           ) {
             items {
               calculatedTax { value }

@@ -29,7 +29,7 @@ from general_manager.as_of import (
     ensure_as_of_read_supported,
     reject_historical_mutation,
 )
-from general_manager.utils.args_to_kwargs import args_to_kwargs
+from general_manager.utils._args_to_kwargs import args_to_kwargs
 from general_manager.api.property import GraphQLProperty
 from general_manager.interface.capabilities.base import Capability, CapabilityName
 from general_manager.interface.capabilities.configuration import (

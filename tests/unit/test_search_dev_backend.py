@@ -4,6 +4,8 @@ from django.test import SimpleTestCase
 
 from general_manager.search.backend import SearchDocument
 from general_manager.search.backends.dev import DevSearchBackend
+from general_manager.bucket._ordering import InvalidOrderingError
+from general_manager.measurement import Measurement
 
 
 class DevSearchBackendTests(SimpleTestCase):
@@ -62,12 +64,226 @@ class DevSearchBackendTests(SimpleTestCase):
 
         assert result.total == 0
 
+    def test_type_restriction_conjoins_every_filter_group(self) -> None:
+        self.backend.upsert(
+            "global",
+            [
+                SearchDocument(
+                    id="OtherProject:3",
+                    type="OtherProject",
+                    identification={"id": 3},
+                    index="global",
+                    data={"name": "Gamma Project", "status": "private"},
+                    field_boosts={"name": 1.0},
+                )
+            ],
+        )
+        result = self.backend.search(
+            "global",
+            "",
+            filters=[{"status": "public"}, {"status": "private"}],
+            types=["Project"],
+        )
+
+        assert [hit.id for hit in result.hits] == ["Project:1", "Project:2"]
+
     def test_search_sorting(self) -> None:
         """Sort search results by a stored document field."""
-        result = self.backend.search("global", "", sort_by="name", sort_desc=True)
+        result = self.backend.search("global", "", sort=("-name",))
         data = result.hits[0].data
         assert data is not None
         assert data["name"] == "Beta Project"
+
+    def test_search_rejects_scalar_sort_string(self) -> None:
+        with self.assertRaises(InvalidOrderingError):
+            self.backend.search("global", "", sort="name")
+        with self.assertRaises(InvalidOrderingError):
+            self.backend.search("global", "", sort="")
+
+    def test_search_rejects_plus_prefixed_sort_field(self) -> None:
+        with self.assertRaises(InvalidOrderingError):
+            self.backend.search("global", "", sort=("+name",))
+
+    def test_search_mixed_direction_keeps_nulls_last(self) -> None:
+        """Mixed signed sort terms preserve their directions and null placement."""
+        self.backend.ensure_index("ordering", {})
+        self.backend.upsert(
+            "ordering",
+            [
+                SearchDocument(
+                    "Project:1",
+                    "Project",
+                    {"id": 1},
+                    "ordering",
+                    {"name": "a", "date": 1},
+                    {},
+                ),
+                SearchDocument(
+                    "Project:2",
+                    "Project",
+                    {"id": 2},
+                    "ordering",
+                    {"name": "a", "date": 2},
+                    {},
+                ),
+                SearchDocument(
+                    "Project:3",
+                    "Project",
+                    {"id": 3},
+                    "ordering",
+                    {"name": "b", "date": None},
+                    {},
+                ),
+            ],
+        )
+
+        result = self.backend.search("ordering", "", sort=("name", "-date"))
+
+        assert [hit.identification["id"] for hit in result.hits] == [2, 1, 3]
+
+    def test_explicit_sort_ties_use_typed_logical_identity_before_document_id(
+        self,
+    ) -> None:
+        self.backend.ensure_index("logical-identity", {})
+        self.backend.upsert(
+            "logical-identity",
+            [
+                SearchDocument(
+                    str(row_id),
+                    "Project",
+                    {"id": row_id},
+                    "logical-identity",
+                    {"name": "same"},
+                    {},
+                )
+                for row_id in (10, 2, 1)
+            ],
+        )
+
+        full_result = self.backend.search(
+            "logical-identity", "", sort=("name",), limit=10
+        )
+        limited_result = self.backend.search(
+            "logical-identity", "", sort=("name",), limit=2
+        )
+
+        assert [hit.identification["id"] for hit in full_result.hits] == [1, 2, 10]
+        assert [hit.identification["id"] for hit in limited_result.hits] == [1, 2]
+
+    def test_search_preserves_date_looking_strings_as_strings(self) -> None:
+        self.backend.ensure_index("dates", {})
+        self.backend.upsert(
+            "dates",
+            [
+                SearchDocument(
+                    "Project:1",
+                    "Project",
+                    {"id": 1},
+                    "dates",
+                    {"date": "2024-2-01"},
+                    {},
+                ),
+                SearchDocument(
+                    "Project:2",
+                    "Project",
+                    {"id": 2},
+                    "dates",
+                    {"date": "2024-10-01"},
+                    {},
+                ),
+            ],
+        )
+
+        result = self.backend.search("dates", "", sort=("date",))
+
+        assert [hit.identification["id"] for hit in result.hits] == [2, 1]
+
+    def test_search_orders_heterogeneous_values_by_category(self) -> None:
+        self.backend.ensure_index("mixed-values", {})
+        self.backend.upsert(
+            "mixed-values",
+            [
+                SearchDocument(
+                    "Project:1",
+                    "Project",
+                    {"id": 1},
+                    "mixed-values",
+                    {"value": "later"},
+                    {},
+                ),
+                SearchDocument(
+                    "Project:2", "Project", {"id": 2}, "mixed-values", {"value": 2}, {}
+                ),
+                SearchDocument(
+                    "Project:3",
+                    "Project",
+                    {"id": 3},
+                    "mixed-values",
+                    {"value": False},
+                    {},
+                ),
+            ],
+        )
+
+        result = self.backend.search("mixed-values", "", sort=("value",))
+
+        assert [hit.identification["id"] for hit in result.hits] == [3, 2, 1]
+
+    def test_search_preserves_large_integer_precision_when_sorting(self) -> None:
+        self.backend.ensure_index("large-integers", {})
+        self.backend.upsert(
+            "large-integers",
+            [
+                SearchDocument(
+                    "Project:1",
+                    "Project",
+                    {"id": 1},
+                    "large-integers",
+                    {"value": 2**53 + 1},
+                    {},
+                ),
+                SearchDocument(
+                    "Project:2",
+                    "Project",
+                    {"id": 2},
+                    "large-integers",
+                    {"value": 2**53},
+                    {},
+                ),
+            ],
+        )
+
+        result = self.backend.search("large-integers", "", sort=("value",))
+
+        assert [hit.identification["id"] for hit in result.hits] == [2, 1]
+
+    def test_search_keeps_homogeneous_measurements_comparable(self) -> None:
+        self.backend.ensure_index("measurements", {})
+        self.backend.upsert(
+            "measurements",
+            [
+                SearchDocument(
+                    "Project:1",
+                    "Project",
+                    {"id": 1},
+                    "measurements",
+                    {"value": Measurement(2, "kg")},
+                    {},
+                ),
+                SearchDocument(
+                    "Project:2",
+                    "Project",
+                    {"id": 2},
+                    "measurements",
+                    {"value": Measurement(1, "kg")},
+                    {},
+                ),
+            ],
+        )
+
+        result = self.backend.search("measurements", "", sort=("value",))
+
+        assert [hit.identification["id"] for hit in result.hits] == [2, 1]
 
     def test_search_requires_every_distinct_query_term(self) -> None:
         result = self.backend.search("global", "Alpha missing")

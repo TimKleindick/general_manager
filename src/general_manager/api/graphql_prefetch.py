@@ -24,7 +24,7 @@ from general_manager.cache.dependency_cache import (
 )
 from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.utils.make_cache_key import make_cache_key
+from general_manager.utils._make_cache_key import make_cache_key
 
 
 class _GraphQLPropertyInterface(Protocol):

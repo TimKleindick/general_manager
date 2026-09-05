@@ -214,30 +214,29 @@ or `Annotated[int, ...]` fall back to `String`.
 ## Query generated lists
 
 Generated list fields accept the arguments that the manager metadata supports,
-including `filter`, `exclude`, `sortBy`, `reverse`, `groupBy`, `page`, and
+including `filter`, `exclude`, `orderBy`, `page`, and
 `pageSize`. Filters use the same lookup names as buckets. `filter` and
 `exclude` may be GraphQL input objects or JSON object strings; malformed JSON
 and decoded JSON values that are not objects are treated as empty filters.
 Relation `none` filters are supported under `filter`, but not under `exclude`.
 Top-level list queries and generated relation-list fields always include
-nullable `reverse`, `page`, `pageSize`, and `groupBy`. They include nullable
+nullable `page` and `pageSize`. They include nullable
 `filter` and `exclude` only when a filter input type can be generated for the
-manager, and nullable `sortBy` only when sortable fields exist. If omitted,
-`reverse` defaults to `false`; `reverse: true` has no effect when `sortBy` is
-omitted or `null`. Soft-delete managers also expose nullable `includeInactive`
+manager, and nullable typed `orderBy` only when sortable fields exist.
+Soft-delete managers also expose nullable `includeInactive`
 on top-level list queries, which defaults to `false` and switches fallback list
 loading from `Manager.all()` to `Manager.filter(include_inactive=True)` when
 true. That fallback applies only when the resolver returns `None`; other falsey
 bucket-like values are used as returned.
 
-`sortBy` accepts an ordered list of keys. GraphQL's list coercion also keeps an
-inline singleton such as `sortBy: name` valid. An empty list, `sortBy: []`, is a
-no-op equivalent to omitting `sortBy` or passing `sortBy: null`. The first key is
-primary, later keys break ties, and `reverse: true` reverses every key in the
-list. Generated sort enums expose a direct manager field as a sort by that
-manager's identifier; for example, `sortBy: commercials` orders projects by the
-related commercial ID. A directly related scalar is available through a one-hop
-key such as `commercials__name`. Collection relations and multi-hop paths such
+`orderBy` accepts an ordered list of typed objects such as
+`[{field: name}, {field: date, direction: DESC}]`. The field is required and
+the direction defaults to `ASC`; an empty list or `null` leaves existing order
+unchanged. The first key is primary and later keys break ties. Generated order
+enums expose a direct manager field as an order by that manager's identifier;
+for example, `[{field: commercials}]` orders projects by the related commercial
+ID. A directly related scalar is available through a one-hop key such as
+`commercials__name`. Collection relations and multi-hop paths such
 as `commercials__owner__name` are not exposed as sort options. Computed
 `@graph_ql_property` values on the related manager are also excluded; only
 sortable properties on the root manager are eligible. Top-level and generated
@@ -284,7 +283,7 @@ See the [bucket concept](../concepts/models_entities.md#buckets) and the
 
 ```graphql
 query ActiveProjects($filters: ProjectFilterInput) {
-  projectList(filter: $filters, sortBy: name, page: 1, pageSize: 20) {
+  projectList(filter: $filters, orderBy: [{field: name}], page: 1, pageSize: 20) {
     items {
       id
       name
@@ -299,14 +298,12 @@ query ActiveProjects($filters: ProjectFilterInput) {
 }
 ```
 
-For typed variables, migrate a previous singleton enum declaration such as
-`$sort: ProjectSortByOptions` to the list form
-`$sort: [ProjectSortByOptions!]`. Add an outer `!` only when the client requires
-the variable itself to be non-null. For example:
+For typed variables, use the generated input list form and add an outer `!`
+only when the client requires the variable itself to be non-null. For example:
 
 ```graphql
-query SortedProjects($sort: [ProjectSortByOptions!]) {
-  projectList(sortBy: $sort) {
+query SortedProjects($order: [ProjectOrderBy!]) {
+  projectList(orderBy: $order) {
     items {
       id
       name
@@ -317,39 +314,39 @@ query SortedProjects($sort: [ProjectSortByOptions!]) {
 
 ```json
 {
-  "sort": ["commercials__name", "name"]
+  "order": [{"field": "commercials__name"}, {"field": "name"}]
 }
 ```
 
-Use `groupBy: [""]` to call the bucket's default grouping behavior, or pass
-explicit field names such as `groupBy: ["status"]`. Filtering and exclusion run
-before grouping; `sortBy` runs after grouping and before pagination. Without
-`groupBy`, `sortBy` orders records as usual. With `groupBy`, it orders the
-returned grouped manager objects, so sorting by a grouping key honors `reverse`,
-while sorting by another exposed field uses that field's aggregated group value.
-`totalCount` is computed after permission filtering, user filters, excludes,
-grouping, and sorting, but before page slicing.
+Every manager also receives a sibling `<manager>Groups` field, and every
+generated relation list receives a matching `…Groups` sibling. A group page has
+`groups` and `pageInfo`; each group exposes typed `keys`, ordinary paginated
+`members`, and `count`. Managers with eligible numeric sum fields also expose
+typed `sums`; groups for managers without those fields omit `sums` entirely.
+Supply at least one `groupBy` field name. Filtering and row authorization run
+before grouping. A grouping key that is unreadable for any authorized member
+fails the query, while an unreadable sum produces a normal GraphQL field error
+without materializing that sum.
 
-Grouping by a scalar foreign-key identifier also normalizes the aggregated
-manager value. Rows that point to the same related manager collapse to one
-object; a group containing distinct related managers returns their union bucket.
 For example, this groups projects by the related commercial identity while
-returning the generated relation field:
+keeping each original project and its singular relation inside `members`:
 
 ```graphql
 query ProjectsByCommercial {
-  projectList(groupBy: ["commercials_id"]) {
-    items { commercials { id name } }
+  projectGroups(groupBy: ["commercials_id"]) {
+    groups {
+      keys { commercialsId }
+      members { items { commercials { id name } } }
+      count
+    }
   }
 }
 ```
 
 ```graphql
 query ProjectsByDescendingStatus {
-  projectList(groupBy: ["status"], sortBy: status, reverse: true) {
-    items {
-      status
-    }
+  projectGroups(groupBy: ["status"], orderBy: [{field: status, direction: DESC}]) {
+    groups { keys { status } count }
     pageInfo {
       totalCount
     }
@@ -357,13 +354,12 @@ query ProjectsByDescendingStatus {
 }
 ```
 
-Invalid `sortBy` enum values are rejected by Graphene; invalid filter, grouping,
-or slicing values propagate the corresponding bucket or resolver error. When
-grouping is active, pagination slices grouped manager objects rather than the
-original ungrouped rows, and the GraphQL `items` field still uses the manager's
-generated item type. If no rows match, a paginated grouped query returns an
-empty `items` list with `totalCount: 0`; negative `page` or `pageSize` values
-still raise the normal input error.
+Invalid `orderBy` enum values are rejected by Graphene. Group ordering may use
+only fields selected in `groupBy`; aggregate ordering is unavailable. Group-page
+pagination slices groups, while member pagination slices the original members.
+If no rows match, a paginated grouped query returns an empty `groups` list with
+`totalCount: 0`; negative `page` or `pageSize` values still raise the normal
+input error.
 
 ## Class-wide subscription permission checks
 

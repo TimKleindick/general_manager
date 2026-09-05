@@ -45,7 +45,7 @@ field:
 
 ```graphql
 query {
-  projectList(sortBy: name) {
+  projectList(orderBy: [{field: name}]) {
     items {
       name
       capabilities {

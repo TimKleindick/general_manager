@@ -284,11 +284,12 @@ semantics. Materialized `exclude()` removes an item when any supplied lookup
 matches, so a missing attribute leaves the item in the result. Bare or unknown
 lookup suffixes are exact matches; supported suffixes include comparisons,
 `contains`, `icontains`, `in`, and `isnull`; incompatible comparisons return
-`False`. `sort(key, reverse=False)` always materializes the bucket, accepts one
-attribute name or a tuple of attribute names, and raises
+`False`. `sort(*fields)` always materializes the bucket and accepts signed
+attribute paths such as `sort("name", "-updated_at")`. It raises
 `RequestBucketSortAttributeError` if an item lacks any requested sort attribute.
-Tuple keys sort lexicographically by resolved values, nested attribute paths are
-not parsed, and Python `TypeError` propagates for incomparable values.
+Null values remain last in either direction. Mixed scalar values order as
+booleans, numbers, temporal values, strings, then bytes without parsing
+date-looking strings; unsupported runtime domains raise `TypeError`.
 Lazy `filter()`, `exclude()`, and `all()` compile a new request plan and can
 raise the query capability's validation and planning errors, including unknown
 or unsupported filters, unsupported exclude lookups, required local fallbacks,

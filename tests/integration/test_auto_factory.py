@@ -165,6 +165,24 @@ class AutoFactoryIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(stored.manufacturer_id, manufacturer.identification["id"])
         self.assertEqual(stored.name, "Integration Car")
 
+    def test_factory_create_accepts_raw_foreign_key_attname(self) -> None:
+        manufacturer = self.Manufacturer.create(
+            creator_id=None,
+            name="Raw id manufacturer",
+            country="DE",
+            ignore_permission=True,
+        )
+
+        car = self.Car.Factory.create(
+            name="Raw id car",
+            manufacturer_id=manufacturer.identification["id"],
+            changed_by=self.user,
+        )
+
+        self.assertEqual(
+            car.manufacturer.identification["id"], manufacturer.identification["id"]
+        )
+
     def test_factory_populates_many_to_many_relations(self) -> None:
         """
         AutoFactory must handle many-to-many assignments provided during creation and expose them via buckets.

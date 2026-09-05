@@ -2,12 +2,13 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.db import models, connection, connections
 from django.core.exceptions import ValidationError
 from factory.django import DjangoModelFactory
-from factory.declarations import LazyAttributeSequence
+from factory.declarations import LazyAttributeSequence, LazyFunction
 from general_manager.factory.auto_factory import (
     AutoFactory,
     InvalidGeneratedObjectError,
     UndefinedAdjustmentMethodError,
 )
+from general_manager.factory.factories import get_field_value
 from types import SimpleNamespace
 from typing import Any, ClassVar, Iterable
 from unittest.mock import MagicMock, Mock, patch
@@ -284,6 +285,90 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertEqual(instance.description, "Test Description")  # type: ignore
         self.assertEqual(instance.dummy_model, dummy_model_instance)  # type: ignore
 
+    def test_foreign_key_attname_overrides_generated_relation_for_build_and_create(
+        self,
+    ):
+        related = self.factory_class.create(name="Related", value=1)
+
+        built = self.factory_class2.build(
+            description="Raw id build",
+            dummy_model_id=related.pk,
+        )
+        created = self.factory_class2.create(
+            description="Raw id create",
+            dummy_model_id=related.pk,
+        )
+
+        self.assertEqual(built.dummy_model_id, related.pk)
+        self.assertEqual(created.dummy_model_id, related.pk)
+
+    def test_foreign_key_attname_override_skips_declared_relation_factory(self):
+        related = self.factory_class.create(name="Related", value=1)
+        declared_factory_calls = 0
+
+        def declared_relation() -> DummyModel:
+            nonlocal declared_factory_calls
+            declared_factory_calls += 1
+            return self.factory_class.create(name="Declared", value=2)
+
+        class DeclaredRelationFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_model = LazyFunction(declared_relation)
+
+            class Meta:
+                model = DummyModel2
+
+        instance = DeclaredRelationFactory.create(
+            description="Raw ID takes precedence",
+            dummy_model_id=related.pk,
+        )
+
+        self.assertEqual(instance.dummy_model_id, related.pk)
+        self.assertEqual(declared_factory_calls, 0)
+
+    def test_declared_foreign_key_attname_skips_automatic_relation_generation(self):
+        related = self.factory_class.create(name="Related", value=1)
+
+        class DeclaredRawIdFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_model_id = LazyFunction(lambda: related.pk)
+
+            class Meta:
+                model = DummyModel2
+
+        with patch(
+            "general_manager.factory.auto_factory.get_field_value",
+            wraps=get_field_value,
+        ) as get_value:
+            instance = DeclaredRawIdFactory.create(
+                description="Declared raw ID",
+            )
+
+        self.assertEqual(instance.dummy_model_id, related.pk)
+        self.assertNotIn(
+            "dummy_model",
+            [call.args[0].name for call in get_value.call_args_list],
+        )
+
+    def test_conflicting_foreign_key_name_and_attname_overrides_are_rejected(self):
+        first = self.factory_class.create(name="First", value=1)
+        second = self.factory_class.create(name="Second", value=2)
+
+        matching = self.factory_class2.create(
+            description="Matching relation",
+            dummy_model=first,
+            dummy_model_id=first.pk,
+        )
+
+        with self.assertRaisesRegex(ValueError, "dummy_model and dummy_model_id"):
+            self.factory_class2.create(
+                description="Conflicting relation",
+                dummy_model=first,
+                dummy_model_id=second.pk,
+            )
+
+        self.assertEqual(matching.dummy_model_id, first.pk)
+
     def test_generate_instance_reuses_existing_foreign_key_by_default(self):
         existing = self.factory_class.create(name="Existing", value=1)
         factory_calls = 0
@@ -507,6 +592,30 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertEqual(instance.dummy_model, dummy_model_instance)
         self.assertIn(dummy_model_instance, instance.dummy_m2m.all())
         self.assertIn(dummy_model_instance2, instance.dummy_m2m.all())
+
+    def test_declared_many_to_many_values_persist_and_empty_override_clears(self):
+        related = self.factory_class.create(name="FK", value=1)
+        declared_option = self.factory_class.create(name="Declared M2M", value=2)
+
+        class DeclaredManyToManyFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_m2m = LazyFunction(lambda: [declared_option])
+
+            class Meta:
+                model = DummyModel2
+
+        declared = DeclaredManyToManyFactory.create(
+            description="Uses declared M2M",
+            dummy_model=related,
+        )
+        cleared = DeclaredManyToManyFactory.create(
+            description="Clears declared M2M",
+            dummy_model=related,
+            dummy_m2m=[],
+        )
+
+        self.assertEqual(list(declared.dummy_m2m.all()), [declared_option])
+        self.assertEqual(list(cleared.dummy_m2m.all()), [])
 
     def test_generate_instance_without_many_to_many_value_leaves_blank_m2m_empty(
         self,

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from importlib import import_module
+import subprocess
+import sys
+import textwrap
 
 import pytest
 
@@ -135,3 +139,87 @@ def test_graphql_type_is_a_package_root_export() -> None:
 
     assert "GraphQLType" in public_module.__all__
     assert public_module.GraphQLType is implementation_module.GraphQLType
+
+
+@pytest.mark.parametrize("implementations_first", [False, True])
+def test_utility_function_exports_survive_import_order(
+    implementations_first: bool,
+) -> None:
+    """Utility facade functions stay callable after implementation imports."""
+    code = textwrap.dedent(
+        f"""
+        from importlib import import_module
+
+        from general_manager.public_api_registry import UTILS_EXPORTS
+
+        package = import_module("general_manager.utils")
+        names = ("none_to_zero", "args_to_kwargs", "make_cache_key")
+        for name in names:
+            legacy_path = "general_manager.utils." + name
+            try:
+                import_module(legacy_path)
+            except ModuleNotFoundError as error:
+                assert error.name == legacy_path, (legacy_path, error.name)
+            else:
+                raise AssertionError("Legacy utility module exists: " + legacy_path)
+        implementation_modules = tuple(
+            UTILS_EXPORTS[name][0] for name in names
+        )
+
+        def load_implementations():
+            return tuple(import_module(path) for path in implementation_modules)
+
+        if {implementations_first!r}:
+            loaded_modules = load_implementations()
+        from general_manager.utils import (
+            args_to_kwargs as before_args_to_kwargs,
+            make_cache_key as before_make_cache_key,
+            none_to_zero as before_none_to_zero,
+        )
+        before = {{
+            "none_to_zero": before_none_to_zero,
+            "args_to_kwargs": before_args_to_kwargs,
+            "make_cache_key": before_make_cache_key,
+        }}
+        if not {implementations_first!r}:
+            loaded_modules = load_implementations()
+        from general_manager.utils import (
+            args_to_kwargs as after_args_to_kwargs,
+            make_cache_key as after_make_cache_key,
+            none_to_zero as after_none_to_zero,
+        )
+        after = {{
+            "none_to_zero": after_none_to_zero,
+            "args_to_kwargs": after_args_to_kwargs,
+            "make_cache_key": after_make_cache_key,
+        }}
+
+        for name, implementation in zip(names, loaded_modules, strict=True):
+            expected = getattr(implementation, name)
+            assert callable(before[name]), (name, before[name])
+            assert callable(after[name]), (name, after[name])
+            assert before[name] is expected, (name, before[name], expected)
+            assert after[name] is expected, (name, after[name], expected)
+        """
+    )
+    project_root = Path(__file__).resolve().parents[2]
+    environment = os.environ.copy()
+    existing_pythonpath = environment.get("PYTHONPATH")
+    pythonpath = [str(project_root / "src"), str(project_root)]
+    if existing_pythonpath:
+        pythonpath.append(existing_pythonpath)
+    environment["PYTHONPATH"] = os.pathsep.join(pythonpath)
+    environment["DJANGO_SETTINGS_MODULE"] = "tests.test_settings"
+    result = subprocess.run(  # noqa: S603 - executable and code are test constants
+        [sys.executable, "-c", code],
+        cwd=project_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"subprocess failed with exit code {result.returncode}\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )

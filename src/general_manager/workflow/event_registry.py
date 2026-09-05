@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from hashlib import sha1
+from hashlib import sha1, sha256
 from time import perf_counter
 from collections import deque
 from collections.abc import Callable, Mapping
 from threading import Lock
 from traceback import format_exc
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
+from types import FunctionType, MethodType
 from uuid import uuid4
 
 from django.db import IntegrityError, models, transaction
@@ -105,6 +106,35 @@ class InvalidWorkflowEventRegistryError(TypeError):
         )
 
 
+class DurableHandlerRegistrationIdRequiredError(ValueError):
+    """Raised when a dynamic callable lacks a durable registration identity."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Database event registry registrations with closures, bound methods, "
+            "or callable objects require an explicit registration_id."
+        )
+
+
+class InvalidDurableHandlerRegistrationIdError(ValueError):
+    """Raised when an explicit durable registration ID is not persistence-safe."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "registration_id must be a non-blank string no longer than 255 characters."
+        )
+
+
+class WorkflowHandlerRegistrationConflictError(ValueError):
+    """Raised when a registration ID is reused for different routing behavior."""
+
+    def __init__(self, registration_id: str) -> None:
+        super().__init__(
+            "Workflow handler registration ID "
+            f"{registration_id!r} is already registered with different configuration."
+        )
+
+
 class _DeliveryInProgressError(RuntimeError):
     """Raised when another worker owns an in-flight delivery attempt."""
 
@@ -132,10 +162,6 @@ class _EventHandlerRegistration:
 
 
 def _callable_path(value: object) -> str:
-    bound_self = getattr(value, "__self__", None)
-    bound_func = getattr(value, "__func__", None)
-    if bound_self is not None and bound_func is not None:
-        return f"{_callable_path(bound_func)}@{id(bound_self)}"
     module = getattr(value, "__module__", "")
     if not isinstance(module, str):
         module = ""
@@ -165,6 +191,101 @@ def _registration_id(
     return sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
+def _runtime_callable_identity(value: object | None) -> str:
+    if value is None:
+        return "none"
+    if isinstance(value, MethodType):
+        return f"bound:{id(value.__func__)}:{id(value.__self__)}"
+    return f"callable:{id(value)}"
+
+
+def _runtime_registration_id(
+    event: str,
+    handler: WorkflowEventHandler,
+    *,
+    validator: EventValidator | None = None,
+    when: EventPredicate | None = None,
+    retries: int = 0,
+    retry_on: RetryPredicate | None = None,
+    dead_letter_handler: DeadLetterHandler | None = None,
+) -> str:
+    raw = (
+        f"{event}:{_runtime_callable_identity(handler)}:"
+        f"{_runtime_callable_identity(validator)}:{_runtime_callable_identity(when)}:"
+        f"{retries}:{_runtime_callable_identity(retry_on)}:"
+        f"{_runtime_callable_identity(dead_letter_handler)}"
+    )
+    return sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
+def _is_module_level_function(value: object) -> bool:
+    if (
+        not isinstance(value, FunctionType)
+        or not value.__module__
+        or value.__qualname__ != value.__name__
+    ):
+        return False
+    try:
+        return import_string(f"{value.__module__}.{value.__name__}") is value
+    except ImportError:
+        return False
+
+
+def _has_dynamic_registration_callable(
+    *,
+    handler: WorkflowEventHandler,
+    validator: EventValidator | None,
+    when: EventPredicate | None,
+    retry_on: RetryPredicate | None,
+    dead_letter_handler: DeadLetterHandler | None,
+) -> bool:
+    return any(
+        value is not None and not _is_module_level_function(value)
+        for value in (handler, validator, when, retry_on, dead_letter_handler)
+    )
+
+
+def _same_callable(left: object | None, right: object | None) -> bool:
+    if isinstance(left, MethodType) and isinstance(right, MethodType):
+        return left.__func__ is right.__func__ and left.__self__ is right.__self__
+    return left is right
+
+
+def _validate_registration_id(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or value.isspace() or len(value) > 255:
+        raise InvalidDurableHandlerRegistrationIdError
+    return value
+
+
+def _delivery_idempotency_key(event_id: str, registration_id: str) -> str:
+    event_bytes = event_id.encode("utf-8")
+    registration_bytes = registration_id.encode("utf-8")
+    encoded_pair = (
+        len(event_bytes).to_bytes(8, "big")
+        + event_bytes
+        + len(registration_bytes).to_bytes(8, "big")
+        + registration_bytes
+    )
+    return f"v3_{sha256(encoded_pair, usedforsecurity=False).hexdigest()}"
+
+
+def _same_registration(
+    left: _EventHandlerRegistration,
+    right: _EventHandlerRegistration,
+) -> bool:
+    return (
+        left.event_key == right.event_key
+        and left.retries == right.retries
+        and _same_callable(left.handler, right.handler)
+        and _same_callable(left.validator, right.validator)
+        and _same_callable(left.when, right.when)
+        and _same_callable(left.retry_on, right.retry_on)
+        and _same_callable(left.dead_letter_handler, right.dead_letter_handler)
+    )
+
+
 @runtime_checkable
 class EventRegistry(Protocol):
     """Registry that validates, deduplicates, and routes workflow events."""
@@ -179,6 +300,7 @@ class EventRegistry(Protocol):
         retries: int = 0,
         retry_on: RetryPredicate | None = None,
         dead_letter_handler: DeadLetterHandler | None = None,
+        registration_id: str | None = None,
     ) -> None:
         """
         Register a handler for an event type or event name.
@@ -202,13 +324,15 @@ class EventRegistry(Protocol):
         `event_name` containing a dot is treated as a type route key, so prefer
         dot-free event names.
 
-        Identical registrations are ignored rather than appended. Registration
-        identity is derived from the event key, handler, validator, predicate,
-        retry count, retry predicate, and dead-letter handler. Different routing
-        options produce separate registrations and may invoke the same handler
-        more than once. Callable identity uses each callable's
-        `__module__ + "." + __qualname__` when available and `repr(...)`
-        otherwise; retry count identity uses the clamped retry count.
+        `registration_id` is a stable delivery identity for database-backed
+        registries. Importable module-level functions receive a deterministic
+        default, but closures, bound methods, callable objects, and dynamic
+        ancillary callbacks require an explicit ID. Explicit IDs must be
+        non-blank strings up to 255 characters. Reusing an ID for the exact
+        same callable objects and configuration is idempotent; reusing it for a
+        different callable, route key, or material configuration raises
+        `WorkflowHandlerRegistrationConflictError`. In-memory registries retain
+        separate runtime registrations for distinct callbacks.
 
         Matching handlers run in registration order within each route bucket.
         Type-route registrations run before name-route registrations when an
@@ -240,7 +364,10 @@ class _RoutingMixin:
     def __init__(self) -> None:
         self._handlers_by_type: dict[str, list[_EventHandlerRegistration]] = {}
         self._handlers_by_name: dict[str, list[_EventHandlerRegistration]] = {}
+        self._registrations_by_id: dict[str, _EventHandlerRegistration] = {}
         self._lock = Lock()
+
+    _requires_durable_registration_id = False
 
     def register(
         self,
@@ -252,11 +379,30 @@ class _RoutingMixin:
         retries: int = 0,
         retry_on: RetryPredicate | None = None,
         dead_letter_handler: DeadLetterHandler | None = None,
+        registration_id: str | None = None,
     ) -> None:
         retry_count = max(0, retries)
-        registration = _EventHandlerRegistration(
-            event_key=event,
-            registration_id=_registration_id(
+        registration_id = _validate_registration_id(registration_id)
+        if (
+            self._requires_durable_registration_id
+            and registration_id is None
+            and _has_dynamic_registration_callable(
+                handler=handler,
+                validator=validator,
+                when=when,
+                retry_on=retry_on,
+                dead_letter_handler=dead_letter_handler,
+            )
+        ):
+            raise DurableHandlerRegistrationIdRequiredError
+        resolved_registration_id = registration_id
+        if resolved_registration_id is None:
+            registration_id_factory = (
+                _registration_id
+                if self._requires_durable_registration_id
+                else _runtime_registration_id
+            )
+            resolved_registration_id = registration_id_factory(
                 event,
                 handler,
                 validator=validator,
@@ -264,7 +410,10 @@ class _RoutingMixin:
                 retries=retry_count,
                 retry_on=retry_on,
                 dead_letter_handler=dead_letter_handler,
-            ),
+            )
+        registration = _EventHandlerRegistration(
+            event_key=event,
+            registration_id=resolved_registration_id,
             handler=handler,
             validator=validator,
             when=when,
@@ -273,16 +422,19 @@ class _RoutingMixin:
             dead_letter_handler=dead_letter_handler,
         )
         with self._lock:
+            existing = self._registrations_by_id.get(registration.registration_id)
+            if existing is not None:
+                if _same_registration(existing, registration):
+                    return
+                raise WorkflowHandlerRegistrationConflictError(
+                    registration.registration_id
+                )
             if "." in event:
                 bucket = self._handlers_by_type.setdefault(event, [])
             else:
                 bucket = self._handlers_by_name.setdefault(event, [])
-            if any(
-                existing.registration_id == registration.registration_id
-                for existing in bucket
-            ):
-                return
             bucket.append(registration)
+            self._registrations_by_id[registration.registration_id] = registration
 
     def _get_entries(
         self, event: WorkflowEvent
@@ -468,6 +620,8 @@ class DatabaseEventRegistry(_RoutingMixin):
     timezone behavior follows the project's Django settings and database backend.
     """
 
+    _requires_durable_registration_id = True
+
     def publish_sync(self, event: WorkflowEvent) -> bool:
         """
         Persist `event` if possible and route matching handlers inline.
@@ -509,11 +663,13 @@ class DatabaseEventRegistry(_RoutingMixin):
         """
         Route one outbox row and finalize its delivery state.
 
-        Returns `False` for missing or already processed rows, stale or missing
-        ownership claims, duplicate in-progress delivery attempts, handler
-        failures, and finalize failures. Rows with only filtered-out handlers are
-        marked processed and return `False`. Successful handler completion marks
-        the row processed and returns `True`.
+        Returns `False` for missing, processed, or dead-letter rows, stale or
+        missing ownership claims, duplicate in-progress delivery attempts,
+        handler failures, and finalize failures. Dead-letter rows must be reset
+        to pending by an explicit redrive before they can execute handlers.
+        Rows with only filtered-out handlers are marked processed and return
+        `False`. Successful handler completion marks the row processed and
+        returns `True`.
 
         Handler failure increments the outbox attempt count. While attempts are
         below `WORKFLOW_MAX_RETRIES`, the row remains failed and becomes due
@@ -548,7 +704,10 @@ class DatabaseEventRegistry(_RoutingMixin):
             )
             if outbox is None:
                 return False
-            if outbox.status == WorkflowOutbox.STATUS_PROCESSED:
+            if outbox.status in {
+                WorkflowOutbox.STATUS_PROCESSED,
+                WorkflowOutbox.STATUS_DEAD_LETTER,
+            }:
                 return False
             if claim_token is not None:
                 if (
@@ -746,13 +905,15 @@ class DatabaseEventRegistry(_RoutingMixin):
         ).first()
         if event_record is None:
             return False
-        idempotency_key = f"{event.event_id}:{entry.registration_id}"
+        idempotency_key = _delivery_idempotency_key(
+            event.event_id, entry.registration_id
+        )
         with transaction.atomic():
             attempt_record, _created = WorkflowDeliveryAttempt.objects.get_or_create(
-                idempotency_key=idempotency_key,
+                event=event_record,
+                handler_registration_id=entry.registration_id,
                 defaults={
-                    "event": event_record,
-                    "handler_registration_id": entry.registration_id,
+                    "idempotency_key": idempotency_key,
                     "status": WorkflowDeliveryAttempt.STATUS_PENDING,
                 },
             )

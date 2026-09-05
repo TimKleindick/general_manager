@@ -13,6 +13,7 @@ from general_manager.api.graphql_warmup import (
     GraphQLWarmUpManagerClass,
     warm_up_graphql_properties,
 )
+from general_manager.manager.general_manager import GeneralManager
 
 
 class UnknownGraphQLWarmUpManagerError(CommandError):
@@ -29,6 +30,16 @@ class InvalidGraphQLWarmUpManagerPathError(CommandError):
     def __init__(self, manager_path: str) -> None:
         """Build an error for an invalid dotted manager import path."""
         super().__init__(f"Invalid GraphQL manager path: {manager_path}")
+
+
+class NonManagerGraphQLWarmUpManagerPathError(CommandError):
+    """Raised when a dotted path resolves to something other than a manager."""
+
+    def __init__(self, manager_path: str) -> None:
+        """Build an error for an importable path outside the manager contract."""
+        super().__init__(
+            f"GraphQL manager path must be a manager class: {manager_path}"
+        )
 
 
 class Command(BaseCommand):
@@ -75,11 +86,14 @@ class Command(BaseCommand):
         for manager_name in manager_names:
             if "." in manager_name:
                 try:
-                    manager_classes.append(
-                        cast(GraphQLWarmUpManagerClass, import_string(manager_name))
-                    )
+                    manager_class = import_string(manager_name)
                 except (AttributeError, ImportError, ModuleNotFoundError) as error:
                     raise InvalidGraphQLWarmUpManagerPathError(manager_name) from error
+                if not isinstance(manager_class, type) or not issubclass(
+                    manager_class, GeneralManager
+                ):
+                    raise NonManagerGraphQLWarmUpManagerPathError(manager_name)
+                manager_classes.append(cast(GraphQLWarmUpManagerClass, manager_class))
                 continue
             manager_class = GraphQL.manager_registry.get(manager_name)
             if manager_class is None:

@@ -207,7 +207,11 @@ through the dependency index.
 Custom cache backends passed to `cached` only need the two methods used by the
 selected persistent scopes: `get(key, default)` returns a cached object or the
 exact default sentinel when absent, and `set(key, value, timeout=None)` stores a
-backend-serializable object. Run and none scopes do not call the backend.
+backend-serializable object. Timeout caching can use such a backend. Dependency
+caching is restricted to Django's configured default cache identity so its
+invalidation index can be resolved consistently. Run and none scopes do not
+call the backend. `cached` accepts synchronous callables only; async functions,
+async callable objects, and runtime awaitable results are rejected.
 
 ## Run context storage
 

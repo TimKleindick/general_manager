@@ -100,3 +100,97 @@ class ChatPendingConfirmationMigrationTests(TransactionTestCase):
             self.assertIsNotNone(additional_resolved.pk)
         finally:
             MigrationExecutor(connection).migrate(latest_targets)
+
+
+class ChatSummaryWatermarkMigrationTests(TransactionTestCase):
+    """Verify the summary-watermark migration preserves existing chat history."""
+
+    migrate_from: ClassVar[tuple[str, str]] = (
+        "general_manager",
+        "0011_search_index_state_dirty_generation",
+    )
+    migrate_to: ClassVar[tuple[str, str]] = (
+        "general_manager",
+        "0012_chat_context_watermarks",
+    )
+
+    def test_upgrade_keeps_legacy_rows_unsummarized_and_round_trips_new_fields(
+        self,
+    ) -> None:
+        """Existing conversations get a null watermark; new rows persist linkage."""
+        executor = MigrationExecutor(connection)
+        latest_targets = executor.loader.graph.leaf_nodes()
+        try:
+            executor.migrate([self.migrate_from])
+            old_apps = executor.loader.project_state(self.migrate_from).apps
+            old_conversation_model = old_apps.get_model(
+                "general_manager", "ChatConversation"
+            )
+            old_message_model = old_apps.get_model("general_manager", "ChatMessage")
+            conversation = old_conversation_model.objects.create(
+                session_key="watermark-upgrade",
+                summary_text="legacy cached summary",
+            )
+            message = old_message_model.objects.create(
+                conversation_id=conversation.pk,
+                role="user",
+                content="legacy context",
+            )
+
+            executor = MigrationExecutor(connection)
+            executor.migrate([self.migrate_to])
+            new_apps = executor.loader.project_state(self.migrate_to).apps
+            conversation_model = new_apps.get_model(
+                "general_manager", "ChatConversation"
+            )
+            message_model = new_apps.get_model("general_manager", "ChatMessage")
+            migrated = conversation_model.objects.get(pk=conversation.pk)
+
+            self.assertIsNone(migrated.summarized_through_id)
+            self.assertEqual(migrated.summary_text, "legacy cached summary")
+            self.assertEqual(
+                message_model.objects.get(pk=message.pk).tool_call_id, None
+            )
+
+            fresh = conversation_model.objects.create(session_key="watermark-new")
+            fresh_message = message_model.objects.create(
+                conversation_id=fresh.pk,
+                role="assistant",
+                content="new context",
+                tool_name="lookup_part",
+                tool_args={"part_id": 7},
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "name": "lookup_part",
+                        "arguments": {"part_id": 7},
+                    }
+                ],
+            )
+            tool_result = message_model.objects.create(
+                conversation_id=fresh.pk,
+                role="tool",
+                content="part found",
+                tool_name="lookup_part",
+                tool_call_id="call-1",
+                tool_result={"part_id": 7, "name": "Bolt"},
+            )
+            fresh.summarized_through_id = fresh_message.pk
+            fresh.summary_text = "summary"
+            fresh.save(update_fields=["summarized_through", "summary_text"])
+
+            restored = conversation_model.objects.get(pk=fresh.pk)
+            self.assertEqual(restored.summarized_through_id, fresh_message.pk)
+            self.assertEqual(restored.summary_text, "summary")
+            restored_declaration = message_model.objects.get(pk=fresh_message.pk)
+            self.assertEqual(restored_declaration.tool_calls[0]["name"], "lookup_part")
+            self.assertEqual(
+                restored_declaration.tool_calls[0]["arguments"], {"part_id": 7}
+            )
+            restored_result = message_model.objects.get(pk=tool_result.pk)
+            self.assertEqual(restored_result.tool_call_id, "call-1")
+            self.assertEqual(
+                restored_result.tool_result, {"part_id": 7, "name": "Bolt"}
+            )
+        finally:
+            MigrationExecutor(connection).migrate(latest_targets)

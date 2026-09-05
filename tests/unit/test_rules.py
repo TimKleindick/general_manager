@@ -1,6 +1,7 @@
 from django.core.exceptions import NON_FIELD_ERRORS
 from django.test import TestCase, override_settings
 from datetime import datetime
+from types import FunctionType
 import ast
 from typing import ClassVar, cast
 
@@ -11,7 +12,9 @@ from general_manager.rule.rule import (
     InvalidErrorTemplateError,
     InvalidRuleHandlerConfigurationError,
     MissingErrorTemplateVariableError,
+    NonexistentAttributeError,
     Rule,
+    RuleSourceAmbiguityError,
 )
 from general_manager.rule.handler import BaseRuleHandler
 
@@ -1172,6 +1175,107 @@ class RuleTests(TestCase):
         rule = Rule(func)
         with self.assertRaises(AttributeError):
             rule.evaluate(x)
+
+    def test_rule_selects_only_the_lambda_used_from_a_shared_source_line(self):
+        """A same-line sibling lambda must not contribute rule variables."""
+
+        first, _second = (lambda item: item.first > 0), (lambda item: item.second > 0)
+
+        rule = Rule(first)
+
+        self.assertEqual(rule.variables, ["first"])
+        self.assertFalse(rule.evaluate(DummyObject(first=-1)))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"first": "[first] (-1) must be > 0!"},
+        )
+
+    def test_rule_selects_inner_lambda_from_nested_lambda_result(self):
+        """A returned inner lambda must retain its own source body."""
+
+        inner = (lambda: (lambda item: item.first > 0))()
+        rule = Rule(inner)
+
+        self.assertEqual(rule.variables, ["first"])
+
+    def test_rule_selects_same_parameter_inner_lambda_from_nested_result(self):
+        """Nested lambdas with matching parameters still use the inner body."""
+
+        inner = (lambda _item: (lambda _item: _item.first > 0))(None)
+        rule = Rule(inner)
+
+        self.assertEqual(rule.variables, ["first"])
+
+    def test_rule_ignores_decorator_expression_variables(self):
+        """Decorator expressions do not contribute predicate variables."""
+
+        def identity(_marker: object):
+            def decorate(predicate):
+                return predicate
+
+            return decorate
+
+        @identity(lambda item: item.decorator_only > 0)
+        def func(item: DummyObject) -> bool:
+            return item.actual > 0
+
+        rule = Rule(func)
+
+        self.assertEqual(rule.variables, ["actual"])
+
+    def test_rule_ignores_default_expression_variables(self):
+        """Default expressions do not contribute predicate variables."""
+
+        def func(
+            item: DummyObject = lambda item: item.default_only > 0,
+        ) -> bool:
+            return item.actual > 0
+
+        rule = Rule(func)
+
+        self.assertEqual(rule.variables, ["actual"])
+
+    def test_rule_clears_last_result_when_variable_extraction_raises(self):
+        """An extraction failure cannot expose a previous failed result."""
+
+        def func(item: DummyObject) -> bool:
+            return item.amount > 0
+
+        rule = Rule(func, ignore_if_none=False)
+
+        self.assertFalse(rule.evaluate(DummyObject(amount=-1)))
+        with self.assertRaises(NonexistentAttributeError):
+            rule.evaluate(DummyObject())
+
+        self.assertIsNone(rule.last_evaluation_result)
+        self.assertIsNone(rule.get_error_message())
+
+    def test_rule_rejects_tied_source_without_code_positions(self):
+        """Unresolved same-line callables raise a focused source error."""
+
+        first, _second = (lambda item: item.first > 0), (lambda item: item.second > 0)
+        unavailable_positions = first.__code__.replace(co_linetable=b"")
+        ambiguous = FunctionType(unavailable_positions, first.__globals__)
+
+        with self.assertRaises(RuleSourceAmbiguityError) as context:
+            Rule(ambiguous)
+
+        self.assertIn("source positions", str(context.exception))
+
+    def test_rule_clears_last_result_when_predicate_raises(self):
+        """A failed subsequent evaluation cannot publish a stale result."""
+
+        def func(item: DummyObject) -> bool:
+            return item.amount > 0
+
+        rule = Rule(func, ignore_if_none=False)
+
+        self.assertFalse(rule.evaluate(DummyObject(amount=-1)))
+        with self.assertRaises(TypeError):
+            rule.evaluate(DummyObject(amount="bad"))
+
+        self.assertIsNone(rule.last_evaluation_result)
+        self.assertIsNone(rule.get_error_message())
 
     def test_rule_property_access(self):
         """Ensure Rule exposes the expected property accessors."""

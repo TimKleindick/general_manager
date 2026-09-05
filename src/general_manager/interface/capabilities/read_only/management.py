@@ -6,12 +6,14 @@ import json
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from hashlib import sha256
-from typing import TYPE_CHECKING, ClassVar, Protocol, cast
+from typing import TYPE_CHECKING, ClassVar, Protocol, TypeVar, cast
 
 from django.core.checks import Warning
 from django.db import (
+    DEFAULT_DB_ALIAS,
     IntegrityError,
     connection as django_connection,
+    connections,
     models,
     transaction as django_transaction,
 )
@@ -73,7 +75,11 @@ class _SchemaConnection(Protocol):
 class _TransactionModule(Protocol):
     """Subset of Django transaction management used by read-only sync."""
 
-    def atomic(self) -> AbstractContextManager[object]:
+    def atomic(
+        self,
+        *,
+        using: str | None = None,
+    ) -> AbstractContextManager[object]:
         """Return a transaction context manager."""
 
 
@@ -109,12 +115,27 @@ if TYPE_CHECKING:  # pragma: no cover
 type _ReadOnlyInterface = type["OrmInterfaceBase[models.Model]"]
 type _RowData = dict[str, object]
 type _RowSnapshot = dict[str, object]
+ManagerT = TypeVar("ManagerT")
 
 
 class ReadOnlyManagementCapability(BaseCapability):
     """Provide schema verification and data-sync behavior for read-only interfaces."""
 
     name: ClassVar[CapabilityName] = "read_only_management"
+
+    @staticmethod
+    def _database_alias(interface_cls: _ReadOnlyInterface) -> str:
+        """Return the ORM alias configured for a read-only interface."""
+        return cast(str, getattr(interface_cls, "database", None) or DEFAULT_DB_ALIAS)
+
+    @staticmethod
+    def _using_database(
+        manager: ManagerT,
+        database_alias: str,
+    ) -> ManagerT:
+        """Bind an ORM manager to an alias while retaining lightweight test doubles."""
+        using = getattr(manager, "using", None)
+        return cast(ManagerT, using(database_alias) if callable(using) else manager)
 
     @staticmethod
     def _related_readonly_interfaces(
@@ -434,7 +455,9 @@ class ReadOnlyManagementCapability(BaseCapability):
         `None` clears the relation and a present list replaces it. Related
         read-only interfaces sync before the local transaction, each through
         its own `sync_data()` call, and recursive cycles are skipped by the
-        in-progress guard.
+        in-progress guard. A related interface on another database resolves
+        its own connection and transaction; cross-database relation writes are
+        outside this synchronization's atomicity guarantee.
 
         Parameters:
             interface_cls: Read-only interface class whose parent class must expose `_data` and model binding.
@@ -487,7 +510,10 @@ class ReadOnlyManagementCapability(BaseCapability):
                 MissingUniqueFieldError: if no unique fields can be determined for the model.
                 IntegrityError: if a create operation violates database constraints and reconciliation fails.
             """
-            db_connection = connection or cast(_SchemaConnection, django_connection)
+            database_alias = self._database_alias(interface_cls)
+            db_connection = connection or cast(
+                _SchemaConnection, connections[database_alias]
+            )
             db_transaction = transaction or django_transaction
             integrity_error_cls = integrity_error or IntegrityError
             json_lib = (
@@ -558,8 +584,9 @@ class ReadOnlyManagementCapability(BaseCapability):
             }
             editable_fields.discard("is_active")
 
-            manager = (
-                model.all_objects if hasattr(model, "all_objects") else model.objects
+            manager = self._using_database(
+                model.all_objects if hasattr(model, "all_objects") else model.objects,
+                database_alias,
             )
             active_logger = logger_instance or _resolve_logger()
 
@@ -602,16 +629,56 @@ class ReadOnlyManagementCapability(BaseCapability):
                         expected_type=ReadOnlyManagementCapability,
                     ),
                 )
-                related_capability.sync_data(
-                    related_interface,
-                    connection=db_connection,
-                    transaction=db_transaction,
-                    integrity_error=integrity_error_cls,
-                    json_module=json_lib,
-                    logger_instance=active_logger,
-                    unique_fields=None,
-                    schema_validated=schema_validated,
-                )
+                if (
+                    self._database_alias(related_interface) == database_alias
+                    and connection is not None
+                    and transaction is not None
+                ):
+                    related_capability.sync_data(
+                        related_interface,
+                        connection=connection,
+                        transaction=transaction,
+                        integrity_error=integrity_error_cls,
+                        json_module=json_lib,
+                        logger_instance=active_logger,
+                        unique_fields=None,
+                        schema_validated=schema_validated,
+                    )
+                elif (
+                    self._database_alias(related_interface) == database_alias
+                    and connection is not None
+                ):
+                    related_capability.sync_data(
+                        related_interface,
+                        connection=connection,
+                        integrity_error=integrity_error_cls,
+                        json_module=json_lib,
+                        logger_instance=active_logger,
+                        unique_fields=None,
+                        schema_validated=schema_validated,
+                    )
+                elif (
+                    self._database_alias(related_interface) == database_alias
+                    and transaction is not None
+                ):
+                    related_capability.sync_data(
+                        related_interface,
+                        transaction=transaction,
+                        integrity_error=integrity_error_cls,
+                        json_module=json_lib,
+                        logger_instance=active_logger,
+                        unique_fields=None,
+                        schema_validated=schema_validated,
+                    )
+                else:
+                    related_capability.sync_data(
+                        related_interface,
+                        integrity_error=integrity_error_cls,
+                        json_module=json_lib,
+                        logger_instance=active_logger,
+                        unique_fields=None,
+                        schema_validated=schema_validated,
+                    )
 
             def _fingerprint(rows: list[_RowSnapshot]) -> str | None:
                 """
@@ -712,7 +779,11 @@ class ReadOnlyManagementCapability(BaseCapability):
                     )
 
                 try:
-                    active_instances = list(model.objects.filter(is_active=True))
+                    active_manager = self._using_database(
+                        model.objects,
+                        database_alias,
+                    )
+                    active_instances = list(active_manager.filter(is_active=True))
                 except (AttributeError, TypeError, ValueError):
                     return False
 
@@ -819,7 +890,11 @@ class ReadOnlyManagementCapability(BaseCapability):
                     return flattened
 
                 lookup = _flatten_lookup(lookup)
-                qs = remote_model.objects.filter(**lookup)
+                remote_manager = self._using_database(
+                    remote_model.objects,
+                    database_alias,
+                )
+                qs = remote_manager.filter(**lookup)
                 matches = list(qs[:2])
                 match_count = len(matches)
                 if match_count != 1:
@@ -911,7 +986,8 @@ class ReadOnlyManagementCapability(BaseCapability):
                         )
                 return resolved, m2m_assignments
 
-            with db_transaction.atomic():
+            atomic = db_transaction.atomic(using=database_alias)
+            with atomic:
                 json_unique_values: set[tuple[object, ...]] = set()
                 processed_pks: list[object] = []
 
@@ -977,7 +1053,7 @@ class ReadOnlyManagementCapability(BaseCapability):
                         setattr(instance, field_name, value)
                     if updated and hasattr(instance, "save"):
                         try:
-                            instance.save()
+                            instance.save(using=database_alias)
                         except Exception as exc:
                             active_logger.warning(
                                 "readonly instance save failed",
@@ -1002,7 +1078,10 @@ class ReadOnlyManagementCapability(BaseCapability):
                             updated = True
                     needs_activation = not getattr(instance, "is_active", True)
                     if updated or needs_activation or is_created:
-                        activation_manager = getattr(model, "all_objects", None)
+                        activation_manager = self._using_database(
+                            getattr(model, "all_objects", None),
+                            database_alias,
+                        )
                         if activation_manager is not None and hasattr(
                             activation_manager, "filter"
                         ):
@@ -1010,17 +1089,18 @@ class ReadOnlyManagementCapability(BaseCapability):
                                 pk=getattr(instance, "pk", None)
                             ).update(is_active=True)
                             if hasattr(instance, "refresh_from_db"):
-                                instance.refresh_from_db()
+                                instance.refresh_from_db(using=database_alias)
                             elif hasattr(instance, "save"):
-                                instance.save()
+                                instance.save(using=database_alias)
                         else:
                             cast(SoftDeleteMixin, instance).is_active = True
                             if hasattr(instance, "save"):
-                                instance.save()
+                                instance.save(using=database_alias)
                         changes["created" if is_created else "updated"].append(instance)
                     processed_pks.append(getattr(instance, "pk", None))
 
-                existing_instances = model.objects.filter(is_active=True)
+                existing_manager = self._using_database(model.objects, database_alias)
+                existing_instances = existing_manager.filter(is_active=True)
                 for existing_instance in existing_instances:
                     lookup = {
                         field: getattr(existing_instance, field)
@@ -1031,13 +1111,14 @@ class ReadOnlyManagementCapability(BaseCapability):
                     )
                     if unique_identifier not in json_unique_values:
                         existing_instance.is_active = False
-                        existing_instance.save()
+                        existing_instance.save(using=database_alias)
                         changes["deactivated"].append(existing_instance)
 
                 if processed_pks and hasattr(model, "all_objects"):
-                    model.all_objects.filter(pk__in=processed_pks).update(
-                        is_active=True
-                    )
+                    self._using_database(
+                        model.all_objects,
+                        database_alias,
+                    ).filter(pk__in=processed_pks).update(is_active=True)
 
             if any(changes.values()):
                 active_logger.info(

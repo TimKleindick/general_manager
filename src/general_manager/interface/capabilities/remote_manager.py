@@ -12,11 +12,21 @@ from general_manager.bucket.base_bucket import GeneralManagerType
 from general_manager.as_of import ensure_as_of_read_supported
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
-from general_manager.interface.capabilities.request import RequestQueryCapability
+from general_manager.interface.capabilities.request import (
+    RequestCreateCapability,
+    RequestDeleteCapability,
+    RequestLookupGroups,
+    RequestQueryCapability,
+    RequestUpdateCapability,
+    _apply_request_rules,
+)
 from general_manager.interface.requests import (
     RequestConfigurationError,
     RequestPlan,
+    RequestPlanConflictError,
+    RequestPayload,
     RequestQueryPlan,
+    RequestSingleResponseRequiredError,
 )
 
 from .base import CapabilityName
@@ -31,6 +41,16 @@ _REMOTE_MANAGER_TOKEN_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 type RemoteManagerOperationName = str | None
 type RemoteManagerLookupValues = tuple[object, ...]
 type RemoteManagerLookupMap = Mapping[str, RemoteManagerLookupValues]
+
+
+def _remote_mutation_body(
+    values: Mapping[str, object], history_comment: str | None
+) -> dict[str, object]:
+    """Encode an optional audit comment outside schema mutation fields."""
+    body = dict(values)
+    if history_comment is not None:
+        body["__metadata__"] = {"history_comment": history_comment}
+    return body
 
 
 class RemoteManagerQueryControls(TypedDict, total=False):
@@ -51,6 +71,123 @@ class RemoteManagerQueryPayload(TypedDict):
     page: NotRequired[object]
     page_size: NotRequired[object]
     operation: NotRequired[str]
+
+
+class RemoteManagerCreateCapability(RequestCreateCapability):
+    """Create remote managers with audit metadata kept out of schema fields."""
+
+    def create(
+        self,
+        interface_cls: type["RequestInterface"],
+        *,
+        creator_id: int | None = None,
+        history_comment: str | None = None,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del creator_id
+        operation = interface_cls.get_mutation_operation("create")
+        serializer = getattr(interface_cls, "create_serializer", None)
+        _apply_request_rules(interface_cls, kwargs)
+        serialized = serializer(kwargs) if callable(serializer) else kwargs
+        body = _remote_mutation_body(
+            cast(Mapping[str, object], serialized), history_comment
+        )
+        result = interface_cls.execute_request_plan(
+            RequestQueryPlan(
+                operation_name=operation.name,
+                action="create",
+                method=operation.method,
+                path=operation.path,
+                body=body,
+                metadata=operation.metadata,
+            )
+        )
+        if len(result.items) != 1:
+            raise RequestSingleResponseRequiredError(
+                interface_cls.__name__, len(result.items)
+            )
+        return interface_cls.extract_identification(result.items[0])
+
+
+class RemoteManagerUpdateCapability(RequestUpdateCapability):
+    """Update remote managers with audit metadata kept out of schema fields."""
+
+    def update(
+        self,
+        interface_instance: "RequestInterface",
+        *,
+        creator_id: int | None = None,
+        history_comment: str | None = None,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del creator_id
+        interface_cls = type(interface_instance)
+        operation = interface_cls.get_mutation_operation("update")
+        serializer = getattr(interface_cls, "update_serializer", None)
+        cached_payload = getattr(interface_instance, "_request_payload_cache", None)
+        existing_values = dict(
+            cast(
+                RequestPayload,
+                cached_payload
+                if cached_payload is not None
+                else interface_instance.get_data(),
+            )
+        )
+        existing_values.update(dict(interface_instance.identification))
+        candidate_values = {**existing_values, **kwargs}
+        _apply_request_rules(interface_cls, candidate_values)
+        serialized = serializer(kwargs) if callable(serializer) else kwargs
+        body = _remote_mutation_body(
+            cast(Mapping[str, object], serialized), history_comment
+        )
+        result = interface_cls.execute_request_plan(
+            RequestQueryPlan(
+                operation_name=operation.name,
+                action="update",
+                method=operation.method,
+                path=operation.path,
+                path_params=dict(interface_instance.identification),
+                body=body,
+                metadata=operation.metadata,
+            )
+        )
+        if len(result.items) != 1:
+            raise RequestSingleResponseRequiredError(
+                interface_cls.__name__, len(result.items)
+            )
+        merged = {
+            **existing_values,
+            **dict(interface_instance.identification),
+            **result.items[0],
+        }
+        interface_instance._request_payload_cache = merged
+        return interface_cls.extract_identification(merged)
+
+
+class RemoteManagerDeleteCapability(RequestDeleteCapability):
+    """Delete remote managers while preserving an optional audit comment."""
+
+    def delete(
+        self,
+        interface_instance: "RequestInterface",
+        *,
+        creator_id: int | None = None,
+        history_comment: str | None = None,
+    ) -> None:
+        del creator_id
+        interface_cls = type(interface_instance)
+        operation = interface_cls.get_mutation_operation("delete")
+        interface_cls.execute_request_plan(
+            RequestQueryPlan(
+                operation_name=operation.name,
+                action="delete",
+                method=operation.method,
+                path=operation.path,
+                path_params=dict(interface_instance.identification),
+                body=_remote_mutation_body({}, history_comment),
+                metadata=operation.metadata,
+            )
+        )
 
 
 __all__ = [
@@ -79,6 +216,8 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
         operation_name: RemoteManagerOperationName = None,
         filters: RemoteManagerLookupMap | None = None,
         excludes: RemoteManagerLookupMap | None = None,
+        filter_call_groups: RequestLookupGroups | None = None,
+        exclude_call_groups: RequestLookupGroups | None = None,
     ) -> None:
         """
         Validate remote-manager filter and exclude lookup maps.
@@ -119,6 +258,8 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
         operation_name: RemoteManagerOperationName = None,
         filters: RemoteManagerLookupMap | None = None,
         excludes: RemoteManagerLookupMap | None = None,
+        filter_call_groups: RequestLookupGroups | None = None,
+        exclude_call_groups: RequestLookupGroups | None = None,
     ) -> RequestBucket[GeneralManagerType]:
         """
         Compile remote-manager lookups into a lazy request bucket.
@@ -155,13 +296,21 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
                 before a request plan can be built.
         """
         ensure_as_of_read_supported(interface_cls)
-        filter_map = self._copy_lookup_map(filters)
-        exclude_map = self._copy_lookup_map(excludes)
+        filter_groups = self._copy_lookup_groups(filter_call_groups)
+        exclude_groups = self._copy_lookup_groups(exclude_call_groups)
+        if not filter_groups and filters:
+            filter_groups = (self._copy_lookup_map(filters),)
+        if not exclude_groups and excludes:
+            exclude_groups = (self._copy_lookup_map(excludes),)
+        filter_map = self._combine_lookup_groups(filter_groups)
+        exclude_map = self._combine_lookup_groups(exclude_groups)
         request_plan = self._build_request_plan(
             interface_cls,
             operation_name=operation_name,
             filters=filter_map,
             excludes=exclude_map,
+            filter_call_groups=filter_groups,
+            exclude_call_groups=exclude_groups,
         )
         DependencyTracker.track(
             interface_cls._parent_class.__name__,
@@ -182,6 +331,8 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
             request_plan=request_plan,
             filters=filter_map,
             excludes=exclude_map,
+            filter_call_groups=filter_groups,
+            exclude_call_groups=exclude_groups,
         )
 
     def _build_request_plan(
@@ -191,6 +342,8 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
         operation_name: RemoteManagerOperationName,
         filters: RemoteManagerLookupMap,
         excludes: RemoteManagerLookupMap,
+        filter_call_groups: RequestLookupGroups | None = None,
+        exclude_call_groups: RequestLookupGroups | None = None,
     ) -> RequestPlan:
         """
         Build the remote query request plan used by validation and bucket creation.
@@ -209,8 +362,16 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
                 before a request plan can be built.
         """
         operation = interface_cls.get_query_operation(operation_name)
+        filter_groups = filter_call_groups or (
+            (self._copy_lookup_map(filters),) if filters else ()
+        )
+        exclude_groups = exclude_call_groups or (
+            (self._copy_lookup_map(excludes),) if excludes else ()
+        )
+        remote_filters = self._merge_remote_lookup_groups(filter_groups)
+        remote_excludes = self._merge_remote_exclude_groups(exclude_groups)
         query_controls: RemoteManagerQueryControls = {}
-        for key, values in filters.items():
+        for key, values in remote_filters.items():
             if key == "ordering" and values:
                 query_controls["ordering"] = values[0]
             elif key == "page" and values:
@@ -219,7 +380,7 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
                 query_controls["page_size"] = values[0]
         normalized_filters = {
             key: values
-            for key, values in filters.items()
+            for key, values in remote_filters.items()
             if key not in self._reserved_query_keys
         }
         body: RemoteManagerQueryPayload = {
@@ -229,7 +390,7 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
             },
             "excludes": {
                 key: values[0] if len(values) == 1 else list(values)
-                for key, values in excludes.items()
+                for key, values in remote_excludes.items()
             },
         }
         if "ordering" in query_controls:
@@ -242,15 +403,41 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
             body["operation"] = operation.name
         return RequestQueryPlan(
             operation_name=operation.name,
-            action="all" if not normalized_filters and not excludes else "filter",
+            action="all" if not filters and not excludes else "filter",
             method=operation.method,
             path=operation.path,
             headers=dict(operation.static_headers),
             body=body,
-            filters=normalized_filters,
+            filters=filters,
             excludes=excludes,
+            filter_call_groups=filter_groups,
+            exclude_call_groups=exclude_groups,
             metadata=operation.metadata,
         )
+
+    @staticmethod
+    def _merge_remote_lookup_groups(
+        groups: RequestLookupGroups,
+    ) -> RemoteManagerLookupMap:
+        merged: dict[str, RemoteManagerLookupValues] = {}
+        for group in groups:
+            for key, values in group.items():
+                if key in merged and merged[key] != values:
+                    raise RequestPlanConflictError(location="body", key=key)
+                merged[key] = values
+        return merged
+
+    @classmethod
+    def _merge_remote_exclude_groups(
+        cls,
+        groups: RequestLookupGroups,
+    ) -> RemoteManagerLookupMap:
+        """Return one lossless ``NOT(AND(...))`` exclusion group for the API."""
+        nonempty_groups = [group for group in groups if group]
+        if len(nonempty_groups) > 1:
+            first_later_key = next(iter(nonempty_groups[1]))
+            raise RequestPlanConflictError(location="body", key=first_later_key)
+        return cls._merge_remote_lookup_groups(tuple(nonempty_groups))
 
 
 def validate_remote_manager_meta(interface_cls: type["RemoteManagerInterface"]) -> None:

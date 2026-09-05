@@ -165,13 +165,15 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
         query = """
         query {
           ascending: changeRequestList(
-            sortBy: [title_length, change_request_approval__approved_by]
+            orderBy: [{field: titleLength}, {field: changeRequestApproval__approvedBy}]
           ) {
             items { title }
           }
           descending: changeRequestList(
-            sortBy: [title_length, change_request_approval__approved_by]
-            reverse: true
+            orderBy: [
+              {field: titleLength, direction: DESC}
+              {field: changeRequestApproval__approvedBy, direction: DESC}
+            ]
           ) {
             items { title }
           }
@@ -196,7 +198,7 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
 
         with self.assertNumQueries(2):
             sorted_bucket = self.ChangeRequest.all().sort(
-                ("title_length", "change_request_approval__approved_by")
+                "title_length", "change_request_approval__approved_by"
             )
             titles = [change_request.title for change_request in sorted_bucket]
 
@@ -207,7 +209,7 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
         query = """
         query {
           changeRequestList(
-            sortBy: [change_request_approval__approved_by, title]
+            orderBy: [{field: changeRequestApproval__approvedBy}, {field: title}]
           ) {
             items { title }
           }

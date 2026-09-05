@@ -155,6 +155,7 @@ nav:
       - howto/testing_guides.md
       - howto/audit_logger_analysis.md
       - howto/migrations_gotchas.md
+      - howto/migrate-to-stable-api.md
       - howto/workflow_events.md
       - howto/workflow_ops.md
   - Examples (Cookbook):

@@ -5,11 +5,12 @@ from typing import Any, ClassVar
 
 from django.test import SimpleTestCase
 
+from general_manager.api.property import GraphQLProperty
 from general_manager.bucket.request_bucket import (
     RequestBucketManagerMismatchError,
-    RequestBucketSortAttributeError,
     RequestBucketTypeMismatchError,
 )
+from general_manager.bucket._ordering import InvalidOrderingError
 from general_manager.interface.capabilities.request import RequestLifecycleCapability
 from general_manager.interface import RequestInterface
 from general_manager.interface.requests import (
@@ -20,6 +21,7 @@ from general_manager.interface.requests import (
     RequestFilter,
     RequestLocalPaginationUnsupportedError,
     RequestMutationOperation,
+    RequestPlanConflictError,
     RequestQueryOperation,
     RequestQueryPlan,
     RequestQueryResult,
@@ -41,6 +43,7 @@ class EqualityProject(GeneralManager):
 
         name = RequestField(str)
         status = RequestField(str)
+        value = RequestField(object)
 
         class Meta:
             filters: ClassVar[dict[str, RequestFilter]] = {
@@ -87,6 +90,10 @@ class EqualityProject(GeneralManager):
                 if status == "empty"
                 else None,
             )
+
+    @GraphQLProperty
+    def rank(self) -> int:
+        return 0
 
 
 class OtherEqualityProject(GeneralManager):
@@ -490,15 +497,19 @@ class RequestBucketHardeningTests(SimpleTestCase):
         self.assertEqual(cloned, bucket)
         self.assertEqual(next(iter(cloned)).status, "active")
 
-    def test_request_bucket_count_uses_total_count_when_available(self) -> None:
+    def test_request_bucket_count_uses_represented_rows_when_total_is_available(
+        self,
+    ) -> None:
         bucket = EqualityProject.filter(status="active")
 
-        self.assertEqual(bucket.count(), 3)
+        self.assertEqual(bucket.count(), 1)
+        self.assertEqual(bucket.total_count, 3)
 
-    def test_request_bucket_count_uses_zero_total_count_when_available(self) -> None:
+    def test_request_bucket_preserves_zero_total_metadata(self) -> None:
         bucket = EqualityProject.filter(status="empty")
 
-        self.assertEqual(bucket.count(), 0)
+        self.assertEqual(bucket.count(), 1)
+        self.assertEqual(bucket.total_count, 0)
 
     def test_request_bucket_count_falls_back_to_item_count(self) -> None:
         bucket = EqualityProject.filter(status="inactive")
@@ -517,15 +528,14 @@ class RequestBucketHardeningTests(SimpleTestCase):
         self.assertEqual(list(missing), [])
         self.assertEqual(bucket.operation_name, "list")
 
-    def test_request_bucket_pickle_follow_up_filter_compiles_request_plan(
+    def test_request_bucket_pickle_follow_up_conflicting_remote_filter_fails_early(
         self,
     ) -> None:
         bucket = EqualityProject.filter(status="active")
         round_tripped = _trusted_pickle_loads(pickle.dumps(bucket))
 
-        filtered = round_tripped.filter(status="inactive")
-
-        self.assertEqual(next(iter(filtered)).status, "inactive")
+        with self.assertRaises(RequestPlanConflictError):
+            round_tripped.filter(status="inactive")
 
     def test_request_bucket_local_fallback_rejects_partial_remote_page(self) -> None:
         bucket = LocalFallbackProject.filter(name__icontains="a")
@@ -549,11 +559,30 @@ class RequestBucketHardeningTests(SimpleTestCase):
     def test_request_bucket_sort_reports_missing_attribute(self) -> None:
         bucket = EqualityProject.filter(status="active")
 
-        with self.assertRaises(RequestBucketSortAttributeError) as context:
+        with self.assertRaises(InvalidOrderingError) as context:
             bucket.sort("missing")
 
         self.assertIn("missing", str(context.exception))
         self.assertIn("EqualityProject", str(context.exception))
+
+    def test_request_bucket_rejects_non_sortable_property_before_fetch(self) -> None:
+        with self.assertRaises(InvalidOrderingError):
+            EqualityProject.filter(status="active").none().sort("rank")
+
+    def test_request_bucket_sort_orders_heterogeneous_declared_values(self) -> None:
+        first = next(iter(EqualityProject.filter(status="active")))
+        second = next(iter(EqualityProject.filter(status="inactive")))
+        third = next(iter(EqualityProject.filter(status="active")))
+        first.value = "later"
+        second.value = 2
+        third.value = False
+        bucket = EqualityProject.filter(status="active")._from_items(
+            (first, second, third)
+        )
+
+        self.assertEqual(
+            [item.value for item in bucket.sort("value")], [False, 2, "later"]
+        )
 
     def test_request_bucket_accepts_compound_relation_sort(self) -> None:
         project_one = next(iter(EqualityProject.filter(status="active")))
@@ -566,16 +595,15 @@ class RequestBucketHardeningTests(SimpleTestCase):
             (item_for_project_two, item_for_project_one)
         )
 
-        sorted_bucket = bucket.sort(("project__name", "project__id"))
-
-        assert [item.project.id for item in sorted_bucket] == [1, 2]
+        with self.assertRaises(InvalidOrderingError):
+            bucket.sort("project__name", "project__id")
 
     def test_request_bucket_nested_sort_reports_original_key(self) -> None:
         item = next(iter(EqualityProject.filter(status="active")))
         item.project = object()
         bucket = EqualityProject.filter(status="active")._from_items((item,))
 
-        with self.assertRaises(RequestBucketSortAttributeError) as context:
+        with self.assertRaises(InvalidOrderingError) as context:
             bucket.sort("project__missing")
 
         self.assertIn("project__missing", str(context.exception))

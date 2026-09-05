@@ -22,9 +22,11 @@ submodules shown below, but they are not re-exported from `general_manager.searc
 
 ::: general_manager.search.config.iter_index_names
 
-`FieldConfig` and `IndexConfig` validate only numeric boost/min-score bounds at
-construction time. `FieldConfig.boost` and `IndexConfig.boost` must be positive
-when provided; `IndexConfig.min_score` must be non-negative when provided.
+`FieldConfig` and `IndexConfig` validate numeric boost/min-score bounds and
+reject the reserved document-envelope names `id`, `gm_document_id`, `type`,
+`identification`, and `data` at construction time. `FieldConfig.boost` and
+`IndexConfig.boost` must be positive when provided; `IndexConfig.min_score` must
+be non-negative when provided.
 `IndexConfig.iter_fields()` converts plain string field entries to
 `FieldConfig(name=...)` while preserving field order, and `field_boosts()` keeps
 only explicit field boosts.

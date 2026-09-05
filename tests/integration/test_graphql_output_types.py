@@ -164,6 +164,10 @@ class ProjectSummary(GeneralManager):
         return [None, self.hours[0]]
 
     @graph_ql_property(cache="none")
+    def measurements(self) -> "list[Measurement]":
+        return [Measurement(1, "hour"), Measurement(2, "hour")]
+
+    @graph_ql_property(cache="none")
     def details(self) -> "IntegrationProjectDetails":
         details_type = cast(
             type[IntegrationProjectDetails],
@@ -211,6 +215,7 @@ def _restore_graphql_registry(snapshot: GraphQLRegistry) -> None:
     GraphQL._query_fields = snapshot.query_fields
     GraphQL._subscription_fields = snapshot.subscription_fields
     GraphQL._page_type_registry = snapshot.page_type_registry
+    GraphQL._group_page_type_registry = snapshot.group_page_type_registry
     GraphQL._subscription_payload_registry = snapshot.subscription_payload_registry
     GraphQL.graphql_type_registry = snapshot.graphql_type_registry
     GraphQL.graphql_output_type_registry = snapshot.graphql_output_type_registry
@@ -388,6 +393,31 @@ class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
         self.assertNotIn("integrationProjectDetailsList", query_fields)
         self.assertIsNotNone(
             self.schema.graphql_schema.get_type("IntegrationProjectHourType")
+        )
+
+    def test_legacy_measurement_collections_convert_every_value(self) -> None:
+        response = self.schema.execute(
+            """
+            query {
+                projectSummary(projectId: 3) {
+                    measurements(targetUnit: \"minute\") { value unit }
+                }
+            }
+            """,
+            context_value=SimpleNamespace(user=AnonymousUser()),
+        )
+
+        self.assertIsNone(response.errors)
+        self.assertEqual(
+            response.data,
+            {
+                "projectSummary": {
+                    "measurements": [
+                        {"value": 60.0, "unit": "minute"},
+                        {"value": 120.0, "unit": "minute"},
+                    ]
+                }
+            },
         )
 
     def test_late_declaration_survives_setup_and_cleanup(self) -> None:

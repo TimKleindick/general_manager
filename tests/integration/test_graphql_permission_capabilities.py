@@ -137,7 +137,7 @@ class TestGraphQLPermissionCapabilities(GeneralManagerTransactionTestCase):
     ) -> None:
         query = """
         query {
-            projectList(sortBy: name) {
+            projectList(orderBy: [{field: name}]) {
                 items {
                     name
                     capabilities {
@@ -165,7 +165,7 @@ class TestGraphQLPermissionCapabilities(GeneralManagerTransactionTestCase):
     def test_permission_and_mutation_capability_helpers_are_exposed(self) -> None:
         query = """
         query {
-            projectList(sortBy: name) {
+            projectList(orderBy: [{field: name}]) {
                 items {
                     name
                     capabilities {
@@ -223,7 +223,7 @@ class TestGraphQLPermissionCapabilities(GeneralManagerTransactionTestCase):
     def test_list_query_does_not_warm_capabilities_when_unselected(self) -> None:
         query = """
         query {
-            projectList(sortBy: name) {
+            projectList(orderBy: [{field: name}]) {
                 items {
                     name
                 }
@@ -258,7 +258,7 @@ class TestGraphQLPermissionCapabilities(GeneralManagerTransactionTestCase):
         try:
             query = """
             query {
-                projectList(sortBy: name) {
+                projectList(orderBy: [{field: name}]) {
                     items {
                         name
                         capabilities {

@@ -41,6 +41,7 @@ from graphql import (
     GraphQLSchema,
     parse,
     subscribe,
+    validate,
 )
 
 from general_manager.api.graphql import GraphQL
@@ -354,6 +355,18 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
                     "type": "error",
                     "id": operation_id,
                     "payload": [error.formatted],
+                }
+            )
+            await self._send_protocol_message({"type": "complete", "id": operation_id})
+            return
+
+        validation_errors = validate(schema.graphql_schema, document)
+        if validation_errors:
+            await self._send_protocol_message(
+                {
+                    "type": "error",
+                    "id": operation_id,
+                    "payload": [error.formatted for error in validation_errors],
                 }
             )
             await self._send_protocol_message({"type": "complete", "id": operation_id})

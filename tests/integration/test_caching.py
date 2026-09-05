@@ -9,7 +9,7 @@ from general_manager.cache.cache_decorator import (
 from general_manager.cache.dependency_index import get_full_index
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
-from general_manager.utils.make_cache_key import make_cache_key
+from general_manager.utils._make_cache_key import make_cache_key
 from general_manager.manager import GeneralManager, Input
 from general_manager.api import as_of, bulk_data_change_notifications
 from general_manager.as_of import HistoricalContextConflictError
@@ -100,7 +100,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 return (self.project.actual_costs / self.project.budget).to("percent")
 
-            @graph_ql_property(cache="dependency")
+            @graph_ql_property(cache="dependency", sortable=True)
             def project_name(self) -> str:
                 """
                 Return the associated project name for deterministic calculation sorting.

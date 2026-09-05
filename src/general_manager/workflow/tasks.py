@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from secrets import randbelow
-from typing import ParamSpec, Protocol, TypeVar, cast, overload
+from typing import NoReturn, ParamSpec, Protocol, TypeVar, cast, overload
 
 from django.conf import settings
 from django.db import transaction
@@ -39,6 +39,16 @@ _F = TypeVar("_F", bound=Callable[..., object])
 
 type WorkflowTaskPayload = Mapping[str, object]
 type WorkflowTaskHandler = Callable[[dict[str, object]], WorkflowTaskPayload | None]
+
+
+class _WorkflowHandlerNotCallableError(TypeError):
+    """Raised when a resolved workflow handler is not callable."""
+
+    def __init__(self, handler_path: str, handler_candidate: object) -> None:
+        super().__init__(
+            f"Workflow handler path '{handler_path}' resolved to an object that is "
+            f"not callable: {type(handler_candidate).__name__}."
+        )
 
 
 class _TaskCallable(Protocol[_P, _R_co]):
@@ -262,6 +272,19 @@ def _resolve_handler(handler_path: str) -> object:
     return import_string(handler_path)
 
 
+def _raise_non_callable_handler(
+    handler_path: str, handler_candidate: object
+) -> NoReturn:
+    raise _WorkflowHandlerNotCallableError(handler_path, handler_candidate)
+
+
+def _resolve_workflow_task_handler(handler_path: str) -> WorkflowTaskHandler:
+    handler_candidate = _resolve_handler(handler_path)
+    if not callable(handler_candidate):
+        _raise_non_callable_handler(handler_path, handler_candidate)
+    return cast(WorkflowTaskHandler, handler_candidate)
+
+
 @shared_task(queue="workflow.executions")
 def execute_workflow_handler(
     execution_id: str,
@@ -289,8 +312,9 @@ def execute_workflow_handler(
     The handler is a synchronous callable accepting one `dict[str, object]`
     payload and returning a mapping, `None`, or another falsey value. `None`
     input becomes `{}`. Successful output is stored with `dict(result or {})`,
-    so non-mapping truthy outputs fail the execution. Missing execution ids
-    raise `WorkflowExecutionNotFoundError`. The task returns `None` for skipped,
+    so non-mapping truthy outputs fail the execution. A resolved object that is
+    not callable also fails the execution. Missing execution ids raise
+    `WorkflowExecutionNotFoundError`. The task returns `None` for skipped,
     completed, and failed execution paths; callers inspect the execution record
     to distinguish those outcomes.
 
@@ -315,12 +339,8 @@ def execute_workflow_handler(
         execution.save(update_fields=["state", "updated_at"])
         increment_execution_state("running")
     try:
-        handler_candidate = _resolve_handler(handler_path)
-        if callable(handler_candidate):
-            handler = cast(WorkflowTaskHandler, handler_candidate)
-            result = handler(dict(input_data or {}))
-        else:
-            result = {}
+        handler = _resolve_workflow_task_handler(handler_path)
+        result = handler(dict(input_data or {}))
         end_time = datetime.now(UTC)
         updated = WorkflowExecutionRecord.objects.filter(
             execution_id=execution_id, state="running"
