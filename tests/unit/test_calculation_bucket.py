@@ -775,6 +775,14 @@ class TestCalculationBucket(TestCase):
             [manager.identification for manager in combined],
             [{"num": 1}, {"num": 2}, {"num": 3}],
         )
+        self.assertEqual(
+            [manager.identification for manager in source | left],
+            [{"num": 1}, {"num": 2}, {"num": 3}],
+        )
+        self.assertEqual(
+            [manager.identification for manager in source | (source | source)],
+            [{"num": 1}, {"num": 2}, {"num": 3}],
+        )
 
     def test_or_with_invalid(self, _mock_parse):
         """

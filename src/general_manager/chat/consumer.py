@@ -1123,6 +1123,7 @@ class ChatConsumer(_ChatConsumerBase):
                 }
             )
             messages = list(pending["messages"])
+            history = list(pending["history"])
             messages.append(
                 Message(
                     role="tool",
@@ -1140,9 +1141,18 @@ class ChatConsumer(_ChatConsumerBase):
                 tool_result=result,
                 tool_call_id=confirmation_id,
             )
-            await self._stream_provider_turn(
-                messages, list(pending["history"]), tool_retries=0
-            )
+            if bool(pending.get("rebuild_context_after_tool_result")):
+                from general_manager.chat.context import prepare_conversation_messages
+                from general_manager.chat.models import ChatConversation
+
+                if isinstance(self.conversation, ChatConversation):
+                    messages = await prepare_conversation_messages(
+                        self.conversation,
+                        self.provider,
+                        scope=self.scope,
+                    )
+                    history = await self._load_history()
+            await self._stream_provider_turn(messages, history, tool_retries=0)
         finally:
             if not followup_turn.done():
                 followup_turn.set_result(None)
@@ -1171,24 +1181,10 @@ class ChatConsumer(_ChatConsumerBase):
             )
             if db_pending is not None:
                 history = await self._load_history()
-                from general_manager.chat.models import ChatConversation
-
                 restored_messages = [
                     Message(role=item["role"], content=item["content"])
                     for item in history
                 ]
-                if isinstance(self.conversation, ChatConversation):
-                    from general_manager.chat.context import (
-                        prepare_conversation_messages,
-                    )
-
-                    restored_messages = (
-                        await prepare_conversation_messages(
-                            self.conversation,
-                            self.provider,
-                            scope=self.scope,
-                        )
-                    )[1:]
                 pending = {
                     "id": db_pending.confirmation_id,
                     "mutation": db_pending.mutation_name,
@@ -1200,6 +1196,7 @@ class ChatConsumer(_ChatConsumerBase):
                     "history": history,
                     "expires_at": db_pending.expires_at,
                     "durable": False,
+                    "rebuild_context_after_tool_result": True,
                 }
         if pending is None or confirmation_id != pending.get("id"):
             await self.send_json(

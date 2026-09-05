@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING, ClassVar, Protocol, TypeVar, cast
 
 from django.core.checks import Warning
 from django.db import (
-    DEFAULT_DB_ALIAS,
     IntegrityError,
     connection as django_connection,
     connections,
     models,
+    router,
     transaction as django_transaction,
 )
 
@@ -125,8 +125,9 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     @staticmethod
     def _database_alias(interface_cls: _ReadOnlyInterface) -> str:
-        """Return the ORM alias configured for a read-only interface."""
-        return cast(str, getattr(interface_cls, "database", None) or DEFAULT_DB_ALIAS)
+        """Resolve one write alias for synchronization, honoring database routers."""
+        configured = getattr(interface_cls, "database", None)
+        return cast(str, configured or router.db_for_write(interface_cls._model))
 
     @staticmethod
     def _using_database(

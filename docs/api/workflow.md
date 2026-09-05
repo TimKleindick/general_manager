@@ -256,6 +256,11 @@ state is in memory only and is not shared across processes.
 
 ::: general_manager.workflow.backends.celery.CeleryWorkflowEngine
 
+Correlation reuse checks for an existing active or completed execution before
+inserting. Protection against concurrent inserts also requires database support
+for the conditional unique constraint. MariaDB does not enforce that constraint,
+so concurrent starts can create duplicate executions for the same correlation id.
+
 ::: general_manager.workflow.backends.n8n.N8nWorkflowEngine
 
 `N8nWorkflowEngine` is a placeholder adapter for future remote orchestration.

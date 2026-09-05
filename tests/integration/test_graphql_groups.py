@@ -125,6 +125,48 @@ class TestGraphQLGroups(GeneralManagerTransactionTestCase):
             [{"sums": {"distance": {"value": 100.0, "unit": "centimeter"}}}],
         )
 
+    def test_measurement_group_keys_serialize_values_and_target_units(self) -> None:
+        commercial = self.group_commercial.Factory.create(name="Commercial")
+        self.group_project.Factory.create(
+            name="Measured",
+            amount=2,
+            distance=Measurement(1, "meter"),
+            commercial=commercial,
+        )
+        self.group_project.Factory.create(
+            name="Missing",
+            amount=3,
+            distance=None,
+            commercial=commercial,
+        )
+        response = self.query(
+            """
+            query {
+              groupProjectGroups(groupBy: ["distance"]) {
+                groups { keys {
+                  distance { value unit }
+                  converted: distance(targetUnit: "centimeter") { value unit }
+                } }
+              }
+            }
+            """
+        )
+        self.assertResponseNoErrors(response)
+        keys = [
+            group["keys"]
+            for group in response.json()["data"]["groupProjectGroups"]["groups"]
+        ]
+        self.assertCountEqual(
+            keys,
+            [
+                {
+                    "distance": {"value": 1.0, "unit": "meter"},
+                    "converted": {"value": 100.0, "unit": "centimeter"},
+                },
+                {"distance": None, "converted": None},
+            ],
+        )
+
     def test_group_by_accepts_camel_case_scalar_key(self) -> None:
         """GraphQL key spelling resolves to the interface's snake-case field."""
         commercial = self.group_commercial.Factory.create(name="Commercial")

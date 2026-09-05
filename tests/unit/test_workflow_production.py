@@ -620,7 +620,15 @@ class WorkflowProductionEngineTests(TestCase):
                 return None
             return original_lookup(workflow_id, correlation_id)
 
-        with patch.object(engine, "_get_existing_correlation_execution", miss_once):
+        # Force a database insert conflict on every supported backend. MariaDB
+        # does not enforce the conditional correlation uniqueness constraint.
+        with (
+            patch.object(engine, "_get_existing_correlation_execution", miss_once),
+            patch(
+                "general_manager.workflow.backends.celery.uuid4",
+                return_value="exec-correlation-winner",
+            ),
+        ):
             execution = engine.start(
                 WorkflowDefinition(workflow_id="wf-correlation-race"),
                 correlation_id="corr-race",

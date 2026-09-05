@@ -596,10 +596,15 @@ class RequestBucket(Bucket[GeneralManagerType]):
         """
         terms = normalize_ordering(fields)
         if not terms:
-            return self._from_items(self._ensure_items())
+            return self._from_items(
+                self._ensure_items(), preserve_response_provenance=True
+            )
         validate_ordering_fields(self._manager_class, terms)
         try:
-            return self._from_items(tuple(sort_items(self._ensure_items(), terms)))
+            return self._from_items(
+                tuple(sort_items(self._ensure_items(), terms)),
+                preserve_response_provenance=True,
+            )
         except AttributeError as error:
             raise RequestBucketSortAttributeError(
                 next(iter(self._ensure_items()), None), error.name or "unknown"
@@ -704,14 +709,27 @@ class RequestBucket(Bucket[GeneralManagerType]):
     def _from_items(
         self,
         items: tuple[GeneralManagerType, ...],
+        *,
+        preserve_response_provenance: bool = False,
     ) -> "RequestBucket[GeneralManagerType]":
+        if preserve_response_provenance:
+            self._ensure_raw_items()
         return RequestBucket(
             self._manager_class,
             self._interface_cls,
             operation_name=self._operation_name,
             items=items,
             count_override=len(items),
-            response_is_complete=True,
+            total_count=self._total_count if preserve_response_provenance else None,
+            response_is_complete=(
+                self._response_is_complete if preserve_response_provenance else True
+            ),
+            upstream_page=(
+                self._upstream_page if preserve_response_provenance else None
+            ),
+            upstream_page_size=(
+                self._upstream_page_size if preserve_response_provenance else None
+            ),
         )
 
     def _validate_materialized_filters(self, kwargs: Mapping[str, object]) -> None:

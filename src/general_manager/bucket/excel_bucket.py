@@ -283,6 +283,14 @@ class ExcelBucket(Bucket[GeneralManagerType]):
         from general_manager.bucket._materialized_bucket import MaterializedBucket
 
         items = tuple(self)
+        if isinstance(other, MaterializedBucket):
+            if other._manager_class is not self._manager_class:
+                raise ExcelBucketUnionError(
+                    self._manager_class,
+                    other,
+                    other_manager_class=other._manager_class,
+                )
+            return MaterializedBucket(self._manager_class, items) | other
         if isinstance(other, ExcelBucket):
             if (
                 other._manager_class is not self._manager_class

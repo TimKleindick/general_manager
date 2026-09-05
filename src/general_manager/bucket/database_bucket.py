@@ -12,6 +12,7 @@ from django.db.models.sql.query import Query
 from simple_history.models import HistoricalChanges
 
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket._materialized_bucket import MaterializedBucket
 from general_manager.bucket._ordering import (
     SortTerm,
     normalize_ordering,
@@ -1075,12 +1076,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
             other._ensure_as_of_compatible()
-            return (
-                MaterializedBucket(
-                    self._manager_class, tuple(self), snapshot=self._search_date
+            return self._materialize(tuple(self)) | other
+        if isinstance(other, MaterializedBucket):
+            if other._manager_class is not self._manager_class:
+                raise DatabaseBucketManagerMismatchError(
+                    self._manager_class, other._manager_class
                 )
-                | other
-            )
+            if other._snapshot != self._search_date:
+                raise DatabaseBucketSearchDateMismatchError(
+                    self._search_date, cast(datetime | date | None, other._snapshot)
+                )
+            return self._materialize(tuple(self)) | other
         if not isinstance(other, self.__class__):
             raise DatabaseBucketTypeMismatchError(self.__class__, type(other))
         other._ensure_as_of_compatible()
@@ -1092,9 +1098,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             raise DatabaseBucketSearchDateMismatchError(
                 self._search_date, other._search_date
             )
-        return MaterializedBucket(
-            self._manager_class, tuple(self), snapshot=self._search_date
-        ) | MaterializedBucket(
+        return self._materialize(tuple(self)) | MaterializedBucket(
             self._manager_class, tuple(other), snapshot=self._search_date
         )
 
@@ -1524,15 +1528,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         self._ensure_as_of_compatible()
         if isinstance(item, slice):
-            from general_manager.bucket._materialized_bucket import MaterializedBucket
-
             self._track_effective_dependencies()
-            return MaterializedBucket(
-                self._manager_class,
+            return self._materialize(
                 tuple(
                     self._build_manager_from_instance(row) for row in self._data[item]
-                ),
-                snapshot=self._search_date,
+                )
             )
         self._track_effective_dependencies()
         rows = self._peek_run_scoped_rows()
@@ -1894,8 +1894,6 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     ) -> Bucket[GeneralManagerType]:
         """Return the exact supplied manager objects in their supplied order."""
         self._ensure_as_of_compatible()
-        from general_manager.bucket._materialized_bucket import MaterializedBucket
-
         selected = tuple(instances)
         for instance in selected:
             if not isinstance(instance, GeneralManager) or (
@@ -1903,6 +1901,184 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             ):
                 raise DatabaseBucketTypeMismatchError(self.__class__, type(instance))
             instance._ensure_as_of_compatible()
-        return MaterializedBucket(
-            self._manager_class, selected, snapshot=self._search_date
+        return self._materialize(selected)
+
+    def _materialize(
+        self,
+        items: Iterable[GeneralManagerType],
+    ) -> "_DatabaseMaterializedBucket[GeneralManagerType]":
+        """Create an exact subset that retains this bucket's ORM lookup semantics."""
+        interface_model = getattr(self._manager_class.Interface, "_model", None)
+        source_model = (
+            interface_model
+            if isinstance(interface_model, type)
+            and issubclass(interface_model, models.Model)
+            else self._data.model
         )
+        return _DatabaseMaterializedBucket(
+            self._manager_class,
+            items,
+            source_model,
+            self._data.db,
+            self._data.query if self._data.query.annotations else None,
+            snapshot=self._search_date,
+        )
+
+
+class _DatabaseMaterializedBucket(MaterializedBucket[GeneralManagerType]):
+    """Exact database subset that reuses ORM lookups without source membership."""
+
+    def __init__(
+        self,
+        manager_class: type[GeneralManagerType],
+        items: Iterable[GeneralManagerType],
+        source_model: type[models.Model],
+        database_alias: str | None,
+        annotation_query: Query | None,
+        *,
+        snapshot: object,
+    ) -> None:
+        super().__init__(manager_class, items, snapshot=snapshot)
+        self._source_model = source_model
+        self._database_alias = database_alias
+        self._annotation_query = annotation_query.clone() if annotation_query else None
+
+    def _new(
+        self, items: Iterable[GeneralManagerType]
+    ) -> "_DatabaseMaterializedBucket[GeneralManagerType]":
+        return self.__class__(
+            self._manager_class,
+            items,
+            self._source_model,
+            self._database_alias,
+            self._annotation_query,
+            snapshot=self._snapshot,
+        )
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return (
+            _restore_database_materialized_bucket,
+            (
+                self._manager_class,
+                self._items,
+                self._source_model,
+                self._database_alias,
+                self._annotation_query,
+                self._snapshot,
+            ),
+        )
+
+    def _lookup_bucket(self) -> DatabaseBucket[GeneralManagerType]:
+        """Build an ORM lookup source while discarding prior membership filters."""
+        data = _database_materialized_lookup_data(
+            self._source_model,
+            self._database_alias,
+            cast(datetime | date | None, self._snapshot),
+            self._annotation_query,
+        )
+        return DatabaseBucket(
+            data,
+            self._manager_class,
+            search_date=cast(datetime | date | None, self._snapshot),
+        )
+
+    def _primary_key_lookup(self) -> str:
+        model = getattr(self._manager_class.Interface, "_model", None)
+        if isinstance(model, type) and issubclass(model, models.Model):
+            primary_key = model._meta.pk
+        else:
+            primary_key = self._source_model._meta.pk
+        return primary_key.name if primary_key is not None else "pk"
+
+    def _primary_key_for(self, item: GeneralManagerType) -> object:
+        lookup = self._primary_key_lookup()
+        identification = item.identification
+        if lookup in identification:
+            return identification[lookup]
+        return identification["id"]
+
+    def _matching_primary_keys(self, kwargs: dict[str, object]) -> set[object]:
+        primary_keys = {self._primary_key_for(item) for item in self._items}
+        lookup = self._primary_key_lookup()
+        filtered = self._lookup_bucket().filter(**{f"{lookup}__in": primary_keys})
+        filtered = filtered.filter(**kwargs)
+        filtered._track_effective_dependencies()
+        return set(filtered._data.values_list(lookup, flat=True))
+
+    def filter(
+        self, **kwargs: object
+    ) -> "_DatabaseMaterializedBucket[GeneralManagerType]":
+        if not kwargs:
+            return cast(_DatabaseMaterializedBucket[GeneralManagerType], self.all())
+        matching = self._matching_primary_keys(kwargs)
+        return self._new(
+            item for item in self._items if self._primary_key_for(item) in matching
+        )
+
+    def exclude(
+        self, **kwargs: object
+    ) -> "_DatabaseMaterializedBucket[GeneralManagerType]":
+        if not kwargs:
+            return cast(_DatabaseMaterializedBucket[GeneralManagerType], self.all())
+        matching = self._matching_primary_keys(kwargs)
+        return self._new(
+            item for item in self._items if self._primary_key_for(item) not in matching
+        )
+
+
+def _database_materialized_lookup_data(
+    model: type[models.Model],
+    database_alias: str | None,
+    snapshot: datetime | date | None,
+    annotation_query: Query | None,
+) -> models.QuerySet[models.Model]:
+    """Rebuild an unrestricted live or historical lookup source for an exact subset."""
+    if snapshot is not None and hasattr(model, "history"):
+        from general_manager.interface.capabilities.orm.history import (
+            latest_historical_instances,
+        )
+
+        history_manager = model.history
+        if database_alias is not None:
+            history_manager = history_manager.using(database_alias)
+        data = latest_historical_instances(
+            model,
+            history_manager,
+            cast(datetime, snapshot),
+        )
+    else:
+        manager = model._meta.base_manager
+        if database_alias is not None:
+            manager = manager.db_manager(database_alias)
+        data = manager.all()
+    if annotation_query is not None:
+        # Resolved annotations contain SQL column aliases. Retain their joins,
+        # but replace membership with the fresh live/historical view and allow
+        # represented rows with no related records through those joins.
+        query = annotation_query.clone()
+        query.where = data.query.where.clone()
+        query.clear_limits()
+        query.clear_ordering(True)
+        query.distinct = False
+        query.distinct_fields = ()
+        query.promote_joins(set(query.alias_map))
+        data.query = query
+    return data
+
+
+def _restore_database_materialized_bucket(
+    manager_class: type[GeneralManagerType],
+    items: tuple[GeneralManagerType, ...],
+    source_model: type[models.Model],
+    database_alias: str | None,
+    annotation_query: Query | None,
+    snapshot: object,
+) -> _DatabaseMaterializedBucket[GeneralManagerType]:
+    return _DatabaseMaterializedBucket(
+        manager_class,
+        items,
+        source_model,
+        database_alias,
+        annotation_query,
+        snapshot=snapshot,
+    )

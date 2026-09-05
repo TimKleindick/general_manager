@@ -84,6 +84,8 @@ def create_group_types(
         field_type = field_info["type"]
         key_fields[field_name] = map_field(field_type, field_name, field_info)
         sum_type = group_sum_value_type(field_type)
+        if sum_type is not None and issubclass(sum_type, Measurement):
+            key_fields[f"resolve_{field_name}"] = _measurement_key_resolver(field_name)
         if _is_sum_type(field_type):
             if sum_type is not None and issubclass(sum_type, Measurement):
                 sum_fields[field_name] = graphene.Field(
@@ -270,6 +272,20 @@ def group_sortable_field_paths(
         ):
             result[graphql_name] = python_path
     return result
+
+
+def _measurement_key_resolver(field_name: str) -> Callable[..., object]:
+    def resolver(
+        keys: Mapping[str, object],
+        _info: GraphQLResolveInfo,
+        target_unit: str | None = None,
+    ) -> object:
+        value = keys.get(field_name)
+        if isinstance(value, Measurement):
+            return measurement_to_graphql_payload(value, target_unit)
+        return value
+
+    return resolver
 
 
 def _sum_resolver(field_name: str) -> Callable[..., object]:
