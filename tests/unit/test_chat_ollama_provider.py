@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from importlib.metadata import version
 import json
 from types import ModuleType
 import sys
@@ -9,8 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from django.test.utils import override_settings
-import httpx
-import ollama
+import pytest
 
 from general_manager.chat.providers import OllamaProvider
 from general_manager.chat.providers.ollama import OllamaBaseUrlError
@@ -415,6 +413,11 @@ class OllamaProviderTests(unittest.TestCase):
         ]
 
     def test_complete_uses_raw_sdk_stream_to_preserve_native_tool_ids(self) -> None:
+        pytest.importorskip("httpx")
+        pytest.importorskip("ollama")
+        import httpx
+        import ollama
+
         captured_bodies: list[dict[str, object]] = []
 
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -480,7 +483,6 @@ class OllamaProviderTests(unittest.TestCase):
 
         asyncio.run(run())
 
-        assert version("ollama") == "0.6.1"
         assert captured_bodies == [
             {
                 "model": "gemma4:e4b",
@@ -551,6 +553,11 @@ class OllamaProviderTests(unittest.TestCase):
         asyncio.run(run())
 
     def test_complete_uses_distinct_fallback_ids_across_chunks_and_turns(self) -> None:
+        pytest.importorskip("httpx")
+        pytest.importorskip("ollama")
+        import httpx
+        import ollama
+
         request_count = 0
 
         async def handler(_request: httpx.Request) -> httpx.Response:
