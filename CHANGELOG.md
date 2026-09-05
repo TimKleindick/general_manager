@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v0.79.0 (2026-09-05)
+
+### Bug Fixes
+
+- Address public API review regressions
+  ([`dad0b45`](https://github.com/TimKleindick/general_manager/commit/dad0b45535080c593e88922f15b39b983cc1a5ed))
+
+- Drop stale joins from materialized annotations
+  ([`6ad316f`](https://github.com/TimKleindick/general_manager/commit/6ad316f7584f57a9e935d8a1ea2199bae617a2bb))
+
+- Isolate compiler negations and recursive factory capture
+  ([`566e690`](https://github.com/TimKleindick/general_manager/commit/566e6906a7e92478e996bb6218d74a27dec6f2f1))
+
+- Preserve constraints across derived API operations
+  ([`e59ca0b`](https://github.com/TimKleindick/general_manager/commit/e59ca0b500b1b49f0a151a06b6652750eeeb03a2))
+
+- Preserve custom request predicate actions
+  ([`fb63870`](https://github.com/TimKleindick/general_manager/commit/fb638700b5b939268fd534334143721350704f3f))
+
+- Stabilize public API contracts
+  ([`0e7e3c0`](https://github.com/TimKleindick/general_manager/commit/0e7e3c08f9fd269a460d7a842c722e3d63876813))
+
+### Documentation
+
+- Clarify Excel parser errors
+  ([`663e6c3`](https://github.com/TimKleindick/general_manager/commit/663e6c3c804e6d289f3340f442987980e86b1ab9))
+
+- Document Excel interface APIs
+  ([`ec65077`](https://github.com/TimKleindick/general_manager/commit/ec650775d21ed8c46981b721965d52cc9da9110f))
+
+### Testing
+
+- Keep optional Ollama SDK checks out of core collection
+  ([`14cbfc1`](https://github.com/TimKleindick/general_manager/commit/14cbfc10dbef74f02acbca1dab6d5d19ebd250a5))
+
+- Stabilize scheduler ordering assertions
+  ([`b6d7811`](https://github.com/TimKleindick/general_manager/commit/b6d78110c833dfddfa783a0b60f11df6a5a3ec41))
+
+
 ## v0.78.0 (2026-09-04)
 
 ### Bug Fixes
