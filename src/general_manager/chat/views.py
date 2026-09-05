@@ -8,20 +8,22 @@ from dataclasses import dataclass
 from typing import Any
 
 from asgiref.sync import async_to_sync, sync_to_async
+from django.conf import settings as django_settings
 from django.http import HttpRequest, JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_POST
 from django.utils import timezone
 
 from general_manager.chat.errors import public_chat_error
+from general_manager.chat.context import (
+    prepare_conversation_messages,
+    summarize_messages_with_provider,
+)
 from general_manager.chat.models import (
     ChatConversation,
     ChatPendingConfirmation,
     append_chat_message,
-    build_conversation_context,
     create_pending_confirmation,
-    get_conversation_messages,
-    update_conversation_summary,
 )
 from general_manager.chat.planned.catalog import load_manager_catalog
 from general_manager.chat.planned.config import get_planned_chat_settings
@@ -61,9 +63,9 @@ from general_manager.chat.settings import (
     get_chat_settings,
     import_provider,
 )
-from general_manager.chat.system_prompt import build_system_prompt
 from general_manager.chat.tools import (
     ScopeChatContext,
+    execute_confirmed_chat_mutation,
     execute_chat_tool,
     get_tool_definitions,
 )
@@ -84,7 +86,15 @@ def _ensure_session_key(request: HttpRequest) -> str | None:
     session = getattr(request, "session", None)
     session_key = getattr(session, "session_key", None)
     if session is not None and not session_key:
+        # Signed-cookie sessions need a value to survive response processing.
+        # This inert marker also lets SessionMiddleware emit the cookie before an
+        # SSE generator gets its first opportunity to run.
+        try:
+            session["_gm_chat_session"] = True
+        except TypeError:
+            pass
         session.save()
+        session.modified = True
         session_key = getattr(session, "session_key", None)
     return session_key
 
@@ -93,6 +103,29 @@ def _conversation_for_request(request: HttpRequest) -> ChatConversation:
     return ChatConversation.for_actor(
         user=getattr(request, "user", None),
         session_key=_ensure_session_key(request),
+    )
+
+
+def _attach_session_cookie(
+    response: StreamingHttpResponse, request: HttpRequest
+) -> None:
+    """Attach the already-created session before streaming commits headers."""
+    session = getattr(request, "session", None)
+    if session is None:
+        return
+    if not session.session_key:
+        return
+    response.set_cookie(
+        django_settings.SESSION_COOKIE_NAME,
+        session.session_key,
+        max_age=None
+        if session.get_expire_at_browser_close()
+        else session.get_expiry_age(),
+        domain=django_settings.SESSION_COOKIE_DOMAIN,
+        path=django_settings.SESSION_COOKIE_PATH,
+        secure=django_settings.SESSION_COOKIE_SECURE,
+        httponly=django_settings.SESSION_COOKIE_HTTPONLY,
+        samesite=django_settings.SESSION_COOKIE_SAMESITE,
     )
 
 
@@ -109,22 +142,10 @@ def _render_summary_source(messages: list[Any]) -> str:
 async def _summarize_messages_with_provider(
     provider: Any,
     messages: list[Any],
+    *,
+    scope: dict[str, Any] | None = None,
 ) -> str:
-    prompt_messages = [
-        Message(
-            role="system",
-            content=(
-                "Summarize the prior conversation briefly for future context. "
-                "Keep facts, user intent, tool outcomes, and unresolved tasks."
-            ),
-        ),
-        Message(role="user", content=_render_summary_source(messages)),
-    ]
-    chunks: list[str] = []
-    async for event in provider.complete(prompt_messages, []):
-        if isinstance(event, TextChunkEvent):
-            chunks.append(event.content)
-    return "".join(chunks).strip()
+    return await summarize_messages_with_provider(provider, messages, scope=scope)
 
 
 async def _build_messages(
@@ -132,28 +153,20 @@ async def _build_messages(
     provider: Any,
     *,
     allow_summarization: bool = True,
+    scope: dict[str, Any] | None = None,
 ) -> list[Message]:
-    settings = get_chat_settings()
-    summarize_after = int(settings.get("summarize_after", 20))
-    max_recent_messages = int(settings.get("max_recent_messages", 12))
-    conversation_messages = await sync_to_async(get_conversation_messages)(conversation)
-    if (
-        allow_summarization
-        and len(conversation_messages) > summarize_after
-        and not conversation.summary_text.strip()
-    ):
-        older_messages = conversation_messages[:-max_recent_messages]
-        summary_text = await _summarize_messages_with_provider(provider, older_messages)
-        if summary_text:
-            await sync_to_async(update_conversation_summary)(
-                conversation,
-                summary_text=summary_text,
-            )
+    async def summarize(provider_instance: Any, history: list[Any]) -> str:
+        return await _summarize_messages_with_provider(
+            provider_instance, history, scope=scope
+        )
 
-    messages = [Message(role="system", content=build_system_prompt())]
-    for item in await sync_to_async(build_conversation_context)(conversation):
-        messages.append(Message(role=item.role, content=item.content))
-    return messages
+    return await prepare_conversation_messages(
+        conversation,
+        provider,
+        allow_summarization=allow_summarization,
+        scope=scope,
+        summarize=summarize,
+    )
 
 
 def _planned_catalog_summary(settings: Any) -> dict[str, Any]:
@@ -216,6 +229,166 @@ async def _iter_provider_turn_events(
     settings = get_chat_settings()
     max_retries = int(settings.get("max_retries_per_message", 8))
     recover_missing_tools = bool(settings.get("recover_missing_tool_calls", False))
+    provider_tool_events: list[ToolCallEvent] = []
+
+    async def continue_after_tool_events() -> AsyncIterator[dict[str, Any]]:
+        """Execute one completed provider tool batch before the next round."""
+        if len(provider_tool_events) > 1 and any(
+            event.name == "mutate" for event in provider_tool_events
+        ):
+            yield {
+                "type": "error",
+                "message": "Request mutations one at a time.",
+                "code": "mutation_batch_unsupported",
+            }
+            return
+
+        non_mutation_count = sum(
+            event.name != "mutate" for event in provider_tool_events
+        )
+        if tool_retries + non_mutation_count > max_retries:
+            yield {
+                "type": "error",
+                "message": "Chat tool retry limit exceeded.",
+                "code": "tool_retry_limit",
+            }
+            return
+
+        results: list[tuple[ToolCallEvent, Any]] = []
+        for tool_event in provider_tool_events:
+            yield {
+                "type": "tool_call",
+                "id": tool_event.id,
+                "name": tool_event.name,
+                "args": tool_event.args,
+            }
+            result = await sync_to_async(execute_chat_tool)(
+                tool_event.name,
+                tool_event.args,
+                ScopeChatContext.from_scope(scope),
+            )
+            tool_calls.append(
+                {
+                    "name": tool_event.name,
+                    "args": dict(tool_event.args),
+                    "result": result,
+                }
+            )
+            emit_chat_tool_called(
+                user=scope.get("user"),
+                tool_name=tool_event.name,
+                args=tool_event.args,
+                result=result,
+            )
+            if (
+                isinstance(result, dict)
+                and result.get("status") == "confirmation_required"
+                and tool_event.name == "mutate"
+            ):
+                if transport == "http":
+                    yield {
+                        "type": "error",
+                        "message": "Confirmed mutations require WebSocket or SSE transport.",
+                        "code": "confirmation_required_transport",
+                    }
+                    return
+                await sync_to_async(append_chat_message)(
+                    conversation,
+                    role="assistant",
+                    tool_calls=[
+                        {
+                            "id": tool_event.id,
+                            "name": tool_event.name,
+                            "args": tool_event.args,
+                        }
+                    ],
+                )
+                await sync_to_async(create_pending_confirmation)(
+                    conversation,
+                    confirmation_id=tool_event.id,
+                    mutation_name=str(result["mutation"]),
+                    payload={"input": result["input"]},
+                    timeout_seconds=int(
+                        get_chat_settings().get("confirm_timeout_seconds", 30)
+                    ),
+                )
+                yield {
+                    "type": "confirm_mutation",
+                    "id": tool_event.id,
+                    "mutation": result["mutation"],
+                    "input": result["input"],
+                }
+                return
+            results.append((tool_event, result))
+
+        messages.append(
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=tuple(event for event, _ in results),
+            )
+        )
+        await sync_to_async(append_chat_message)(
+            conversation,
+            role="assistant",
+            tool_calls=[
+                {"id": event.id, "name": event.name, "args": event.args}
+                for event, _ in results
+            ],
+        )
+        for tool_event, result in results:
+            yield {
+                "type": "tool_result",
+                "id": tool_event.id,
+                "name": tool_event.name,
+                "result": result,
+            }
+            if tool_event.name == "mutate":
+                emit_chat_mutation_executed(
+                    user=scope.get("user"),
+                    mutation=tool_event.args.get("mutation"),
+                    input=tool_event.args.get("input"),
+                    result=result,
+                )
+            tool_content = json.dumps(result, sort_keys=True)
+            await sync_to_async(append_chat_message)(
+                conversation,
+                role="tool",
+                content=tool_content,
+                tool_name=tool_event.name,
+                tool_args=dict(tool_event.args),
+                tool_result=result,
+                tool_call_id=tool_event.id,
+            )
+            messages.append(
+                Message(
+                    role="tool",
+                    content=tool_content,
+                    tool_call_id=tool_event.id,
+                    tool_name=tool_event.name,
+                    tool_result=result,
+                )
+            )
+
+        next_retries = tool_retries + non_mutation_count
+        if results and next_retries >= max_retries:
+            yield {
+                "type": "error",
+                "message": "Chat tool retry limit exceeded.",
+                "code": "tool_retry_limit",
+            }
+            return
+        async for next_event in _iter_provider_turn_events(
+            scope=scope,
+            conversation=conversation,
+            provider=provider,
+            messages=messages,
+            transport=transport,
+            tool_retries=next_retries,
+            tool_calls=tool_calls,
+            recovered_missing_tools=recovered_missing_tools,
+        ):
+            yield next_event
 
     async for event in _iter_provider_events(
         provider, messages, _build_tool_definitions()
@@ -226,105 +399,19 @@ async def _iter_provider_turn_events(
                 yield {"type": "text_chunk", "content": event.content}
             continue
         if isinstance(event, ToolCallEvent):
-            yield {
-                "type": "tool_call",
-                "id": event.id,
-                "name": event.name,
-                "args": event.args,
-            }
-            result = await sync_to_async(execute_chat_tool)(
-                event.name, event.args, ScopeChatContext.from_scope(scope)
-            )
-            tool_calls.append(
-                {"name": event.name, "args": dict(event.args), "result": result}
-            )
-            emit_chat_tool_called(
-                user=scope.get("user"),
-                tool_name=event.name,
-                args=event.args,
-                result=result,
-            )
-            if (
-                isinstance(result, dict)
-                and result.get("status") == "confirmation_required"
-                and event.name == "mutate"
-            ):
-                if transport == "http":
-                    yield {
-                        "type": "error",
-                        "message": "Confirmed mutations require WebSocket or SSE transport.",
-                        "code": "confirmation_required_transport",
-                    }
-                    return
-                await sync_to_async(create_pending_confirmation)(
-                    conversation,
-                    confirmation_id=event.id,
-                    mutation_name=str(result["mutation"]),
-                    payload={"input": result["input"]},
-                    timeout_seconds=int(
-                        get_chat_settings().get("confirm_timeout_seconds", 30)
-                    ),
-                )
-                yield {
-                    "type": "confirm_mutation",
-                    "id": event.id,
-                    "mutation": result["mutation"],
-                    "input": result["input"],
-                }
-                return
-            yield {
-                "type": "tool_result",
-                "id": event.id,
-                "name": event.name,
-                "result": result,
-            }
-            if event.name == "mutate":
-                emit_chat_mutation_executed(
-                    user=scope.get("user"),
-                    mutation=event.args.get("mutation"),
-                    input=event.args.get("input"),
-                    result=result,
-                )
-            tool_content = json.dumps(result, sort_keys=True)
-            await sync_to_async(append_chat_message)(
-                conversation,
-                role="tool",
-                content=tool_content,
-                tool_name=event.name,
-                tool_args=dict(event.args),
-                tool_result=result,
-            )
-            messages.append(
-                Message(
-                    role="assistant",
-                    content=(
-                        f"Called tool {event.name}. The next message is the tool "
-                        "result; answer from it exactly."
-                    ),
-                )
-            )
-            messages.append(Message(role="tool", content=tool_content))
-            next_retries = tool_retries + (0 if event.name == "mutate" else 1)
-            if event.name != "mutate" and next_retries >= max_retries:
-                yield {
-                    "type": "error",
-                    "message": "Chat tool retry limit exceeded.",
-                    "code": "tool_retry_limit",
-                }
-                return
-            async for next_event in _iter_provider_turn_events(
-                scope=scope,
-                conversation=conversation,
-                provider=provider,
-                messages=messages,
-                transport=transport,
-                tool_retries=next_retries,
-                tool_calls=tool_calls,
-                recovered_missing_tools=recovered_missing_tools,
-            ):
-                yield next_event
-            return
+            provider_tool_events.append(event)
+            continue
         if isinstance(event, DoneEvent):
+            if provider_tool_events:
+                await sync_to_async(enforce_chat_rate_limit)(
+                    scope,
+                    input_tokens=event.usage.input_tokens,
+                    output_tokens=event.usage.output_tokens,
+                    count_request=False,
+                )
+                async for next_event in continue_after_tool_events():
+                    yield next_event
+                return
             if assistant_chunks:
                 assistant_message = "".join(assistant_chunks)
                 if (
@@ -433,6 +520,10 @@ async def _iter_provider_turn_events(
                 },
             }
             return
+
+    if provider_tool_events:
+        async for next_event in continue_after_tool_events():
+            yield next_event
 
 
 async def _run_provider_turn(
@@ -553,6 +644,7 @@ async def _prepare_message_request(
         conversation,
         provider,
         allow_summarization=not planned_settings.enabled,
+        scope=scope,
     )
     emit_chat_message_received(
         user=getattr(request, "user", None),
@@ -719,14 +811,10 @@ async def _execute_confirmation_request(
 
         scope = _request_scope(request)
         if confirmed:
-            result = await sync_to_async(execute_chat_tool)(
-                "mutate",
-                {
-                    "mutation": pending.mutation_name,
-                    "input": pending.payload.get("input", {}),
-                    "confirmed": True,
-                },
-                ScopeChatContext.from_scope(scope),
+            result = await sync_to_async(execute_confirmed_chat_mutation)(
+                mutation=pending.mutation_name,
+                input=pending.payload.get("input", {}),
+                context=ScopeChatContext.from_scope(scope),
             )
         else:
             result = {"status": "cancelled", "reason": "user_rejected"}
@@ -756,9 +844,10 @@ async def _execute_confirmation_request(
                 "input": pending.payload.get("input", {}),
             },
             tool_result=result,
+            tool_call_id=pending.confirmation_id,
         )
         provider = import_provider()()
-        messages = await _build_messages(conversation, provider)
+        messages = await _build_messages(conversation, provider, scope=scope)
         events = [
             {
                 "type": "tool_result",
@@ -818,6 +907,9 @@ def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
                 content_type="text/event-stream",
             )
         provider_importer = import_provider
+        # Streaming headers are committed before the generator runs. Establish the
+        # anonymous session here so SessionMiddleware can attach its cookie.
+        _ensure_session_key(request)
     except Exception as exc:  # noqa: BLE001
         events = _chat_error_events(exc, request, transport="sse")
         return StreamingHttpResponse(
@@ -825,10 +917,12 @@ def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
             content_type="text/event-stream",
         )
 
-    return StreamingHttpResponse(
+    response = StreamingHttpResponse(
         _async_sse_stream(request, provider_importer=provider_importer),
         content_type="text/event-stream",
     )
+    _attach_session_cookie(response, request)
+    return response
 
 
 @csrf_protect

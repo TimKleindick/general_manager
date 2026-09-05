@@ -49,7 +49,7 @@ class FakeInstance:
         self.is_active = True
         self.saved = False
 
-    def save(self):
+    def save(self, *_: object, **__: object):
         """
         Mark the instance as saved by setting the `saved` attribute to True.
         """
@@ -120,6 +120,10 @@ class FakeManager:
         inst.save()
         self._instances.append(inst)
         return inst
+
+    def using(self, _: str):
+        """Mirror Django manager alias binding for sync-routing tests."""
+        return self
 
     def filter(self, **kwargs):
         # Return queryset-like wrapper for matching instances
@@ -739,6 +743,29 @@ class SyncDataTests(SimpleTestCase):
         self.assertEqual(msg["updated"], 1)
         self.assertEqual(msg["deactivated"], 0)
 
+    def test_sync_uses_interface_database_alias_for_atomic_block(self):
+        """A secondary read-only interface opens its write transaction there."""
+        DummyManager._data = [{"name": "secondary", "other": 1}]
+
+        with mock.patch.object(DummyInterface, "database", "secondary", create=True):
+            self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once_with(using="secondary")
+
+    def test_sync_passes_database_alias_to_injected_transaction(self):
+        """An injected transaction receives the configured secondary alias."""
+        DummyManager._data = [{"name": "secondary", "other": 1}]
+        injected_transaction = mock.Mock()
+        injected_transaction.atomic.return_value = mock.MagicMock()
+
+        with mock.patch.object(DummyInterface, "database", "secondary", create=True):
+            self.capability.sync_data(
+                DummyInterface,
+                transaction=injected_transaction,
+            )
+
+        injected_transaction.atomic.assert_called_once_with(using="secondary")
+
     def test_sync_skips_full_reconcile_when_database_matches_payload(self):
         """
         Ensure an already-synchronized read-only payload avoids the expensive write path.
@@ -1175,6 +1202,8 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
 
         class RelatedModel:
             _general_manager_class = RelatedManager
+
+        RelatedInterface._model = RelatedModel
 
         class FakeForeignKey(models.ForeignKey):
             def __init__(self, name: str, remote_model: type) -> None:

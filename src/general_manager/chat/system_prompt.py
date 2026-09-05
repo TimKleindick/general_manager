@@ -209,9 +209,10 @@ def _mutation_safety_section() -> list[str]:
             "an action."
         ),
         (
-            "3. If a mutation is needed and confirmed is not already true, ask "
-            "for confirmation before calling mutate."
+            "3. If a mutation is needed, call mutate with the mutation and input. "
+            "The server requests client confirmation before it executes the write."
         ),
+        "4. Request mutate by itself; do not combine it with any other tool call.",
     ]
 
 

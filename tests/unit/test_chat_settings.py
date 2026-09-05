@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, ClassVar
+
 import pytest
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
@@ -28,9 +30,27 @@ class ConfiguredProvider:
         return None
 
 
+class ProfileConstructionProvider:
+    """Test double that distinguishes profile and legacy construction."""
+
+    constructed_configs: ClassVar[list[dict[str, Any]]] = []
+
+    def __init__(self) -> None:
+        self.config = dict(get_chat_settings()["provider_config"])
+        type(self).constructed_configs.append(self.config)
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> ProfileConstructionProvider:
+        provider = cls.__new__(cls)
+        provider.config = dict(config)
+        cls.constructed_configs.append(provider.config)
+        return provider
+
+
 class ChatSettingsTests(SimpleTestCase):
     def tearDown(self) -> None:
         GraphQL.reset_registry()
+        ProfileConstructionProvider.constructed_configs.clear()
         super().tearDown()
 
     @override_settings(GENERAL_MANAGER={"CHAT": "enabled"})
@@ -150,3 +170,82 @@ class ChatSettingsTests(SimpleTestCase):
 
         with pytest.raises(ChatConfigurationError, match="planned must be a mapping"):
             validate_chat_settings()
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider": (
+                    "tests.unit.test_chat_settings.ProfileConstructionProvider"
+                ),
+                "provider_config": {
+                    "model": "legacy-model",
+                    "api_key": "legacy-key",
+                    "base_url": "https://legacy.example.test",
+                },
+                "provider_profiles": {
+                    "isolated": {
+                        "provider": (
+                            "tests.unit.test_chat_settings.ProfileConstructionProvider"
+                        ),
+                        "provider_config": {},
+                        "trust_group": "default",
+                    }
+                },
+                "planned": {
+                    "enabled": True,
+                    "roles": {
+                        "planner": "isolated",
+                        "simple_executor": "isolated",
+                        "complex_executor": "isolated",
+                        "synthesizer": "isolated",
+                        "fallback_executor": "isolated",
+                    },
+                },
+            }
+        }
+    )
+    def test_empty_explicit_profile_does_not_inherit_legacy_provider_config(
+        self,
+    ) -> None:
+        from general_manager.chat.planned.config import (
+            build_profile_provider,
+            get_planned_chat_settings,
+        )
+
+        provider = build_profile_provider(
+            get_planned_chat_settings().profiles["isolated"]
+        )
+
+        assert provider.config == {}
+        assert ProfileConstructionProvider.constructed_configs == [{}]
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "provider": (
+                    "tests.unit.test_chat_settings.ProfileConstructionProvider"
+                ),
+                "provider_config": {
+                    "model": "legacy-model",
+                    "api_key": "legacy-key",
+                    "base_url": "https://legacy.example.test",
+                },
+                "planned": {"enabled": True},
+            }
+        }
+    )
+    def test_omitted_profiles_keep_legacy_provider_configuration(self) -> None:
+        from general_manager.chat.planned.config import (
+            build_profile_provider,
+            get_planned_chat_settings,
+        )
+
+        provider = build_profile_provider(
+            get_planned_chat_settings().profiles["default"]
+        )
+
+        assert provider.config == {
+            "model": "legacy-model",
+            "api_key": "legacy-key",
+            "base_url": "https://legacy.example.test",
+        }

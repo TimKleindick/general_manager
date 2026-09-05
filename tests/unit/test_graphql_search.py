@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from datetime import date, datetime
-from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 from unittest.mock import MagicMock, patch
 
+import graphene
+import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.test import SimpleTestCase, override_settings
 from graphql import GraphQLError
 
 from general_manager.api import graphql_search as graphql_search_module
 from general_manager.api.graphql import GraphQL
+from general_manager.bucket._ordering import SortTerm
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
@@ -139,7 +140,12 @@ class Project(GeneralManager):
 
     class SearchConfig:
         indexes: ClassVar[list[IndexConfig]] = [
-            IndexConfig(name="global", fields=["name"], filters=["status"])
+            IndexConfig(
+                name="global",
+                fields=["name"],
+                filters=["status"],
+                sorts=["name"],
+            )
         ]
 
 
@@ -155,7 +161,12 @@ class AlternateProject(GeneralManager):
 
     class SearchConfig:
         indexes: ClassVar[list[IndexConfig]] = [
-            IndexConfig(name="global", fields=["name"], filters=["status"])
+            IndexConfig(
+                name="global",
+                fields=["name"],
+                filters=["status"],
+                sorts=["name"],
+            )
         ]
 
 
@@ -276,6 +287,115 @@ class GraphQLSearchTests(SimpleTestCase):
         assert len(response["results"]) == 1
         assert response["results"][0].identification == {"id": 1}
 
+    def test_graphql_search_keeps_iso_like_strings_lexical(self) -> None:
+        ProjectInterface.data_store[3] = {"name": "2026-01-01", "status": "public"}
+        ProjectInterface.data_store[4] = {"name": "2026", "status": "public"}
+        self.addCleanup(ProjectInterface.data_store.pop, 3, None)
+        self.addCleanup(ProjectInterface.data_store.pop, 4, None)
+        indexer = SearchIndexer(backend_registry.get_search_backend())
+        indexer.index_instance(Project(id=3))
+        indexer.index_instance(Project(id=4))
+
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            order_by=[{"field": "name"}],
+            page=1,
+            page_size=10,
+        )
+
+        assert [item.name for item in response["results"]] == [
+            "2026",
+            "2026-01-01",
+            "Alpha",
+        ]
+
+    def test_graphql_search_keeps_iso_like_strings_lexical_when_window_trims(
+        self,
+    ) -> None:
+        ProjectInterface.data_store[3] = {"name": "2026-01-01", "status": "public"}
+        ProjectInterface.data_store[4] = {"name": "2026", "status": "public"}
+        self.addCleanup(ProjectInterface.data_store.pop, 3, None)
+        self.addCleanup(ProjectInterface.data_store.pop, 4, None)
+        indexer = SearchIndexer(backend_registry.get_search_backend())
+        indexer.index_instance(Project(id=3))
+        indexer.index_instance(Project(id=4))
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+        observed_entry_counts: list[int] = []
+        real_trim = graphql_search_module.trim_search_hit_entries_to_window
+
+        def tracking_trim(*args: Any, **kwargs: Any) -> None:
+            observed_entry_counts.append(len(args[0]))
+            real_trim(*args, **kwargs)
+
+        with patch.object(
+            graphql_search_module,
+            "trim_search_hit_entries_to_window",
+            side_effect=tracking_trim,
+        ):
+            response = field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                order_by=[{"field": "name"}],
+                page=1,
+                page_size=2,
+            )
+
+        assert max(observed_entry_counts) > 2
+        assert [item.name for item in response["results"]] == ["2026", "2026-01-01"]
+
+    def test_graphql_search_rejects_duplicate_order_fields_before_fetch(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(2)
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with pytest.raises(GraphQLError, match="occurs more than once"):
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                order_by=[{"field": "name"}, {"field": "name"}],
+            )
+
+        assert backend.search_calls == []
+
+    def test_graphql_search_rejects_unavailable_order_field_before_fetch(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(2)
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with pytest.raises(GraphQLError, match="not available"):
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                order_by=[{"field": "status"}],
+            )
+
+        assert backend.search_calls == []
+
+    def test_search_ordering_validates_every_selected_manager_index(self) -> None:
+        with pytest.raises(GraphQLError, match="not sortable for Project"):
+            graphql_search_module._validate_search_ordering(
+                [Project],
+                index_name="global",
+                terms=(SortTerm("status"),),
+            )
+
     def test_graphql_search_filters_list(self) -> None:
         """
         Verifies GraphQL search respects an explicit filter list and returns only matching items.
@@ -359,6 +479,50 @@ class GraphQLSearchTests(SimpleTestCase):
 
         assert response["total"] == 12
         assert len(response["results"]) == 10
+        assert response["page_info"] == {
+            "total_count": 12,
+            "page_size": 10,
+            "current_page": 1,
+            "total_pages": 2,
+        }
+
+        second_page = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=None,
+            page=2,
+            page_size=None,
+        )
+
+        assert len(second_page["results"]) == 2
+        assert second_page["page_info"] == {
+            "total_count": 12,
+            "page_size": 10,
+            "current_page": 2,
+            "total_pages": 2,
+        }
+
+        out_of_range = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=None,
+            page=3,
+            page_size=None,
+        )
+
+        assert out_of_range["results"] == []
+        assert out_of_range["page_info"] == {
+            "total_count": 12,
+            "page_size": 10,
+            "current_page": 3,
+            "total_pages": 2,
+        }
 
     def test_graphql_search_positive_pagination_returns_requested_page(self) -> None:
         added_rows = {
@@ -383,13 +547,19 @@ class GraphQLSearchTests(SimpleTestCase):
             index="global",
             types=None,
             filters=None,
-            sort_by="name",
+            order_by=[{"field": "name"}],
             page=2,
             page_size=2,
         )
 
         assert response["total"] == 3
         assert [item.identification for item in response["results"]] == [{"id": 3}]
+        assert response["page_info"] == {
+            "total_count": 3,
+            "page_size": 2,
+            "current_page": 2,
+            "total_pages": 2,
+        }
 
     def test_graphql_search_exact_total_scans_all_matches_by_default(self) -> None:
         backend = self._configure_counting_backend_with_public_rows(public_count=5)
@@ -440,6 +610,12 @@ class GraphQLSearchTests(SimpleTestCase):
         assert response["total_is_exact"] is False
         assert len(response["results"]) == 1
         assert len(backend.search_calls) == 1
+        assert response["page_info"] == {
+            "total_count": None,
+            "page_size": 1,
+            "current_page": 1,
+            "total_pages": None,
+        }
 
     def test_graphql_search_exact_total_ignores_best_effort_backend_total(self) -> None:
         backend = self._configure_counting_backend_with_public_rows(
@@ -520,13 +696,55 @@ class GraphQLSearchTests(SimpleTestCase):
         graphql_search_module.trim_search_hit_entries_to_window(
             entries,
             requested_count=2,
-            sort_by="name",
-            sort_desc=False,
+            terms=(SortTerm("name"),),
         )
 
         assert [entry[1].data["name"] for entry in entries] == [
             "Alpha Project",
             "Beta Project",
+        ]
+
+    def test_search_hit_window_uses_complete_hit_identity_for_equal_sort_values(
+        self,
+    ) -> None:
+        def make_entries():
+            return [
+                (
+                    None,
+                    SearchHit(
+                        id=str(row_id),
+                        type="Project",
+                        identification={"id": row_id},
+                        data={"name": "same"},
+                    ),
+                    Project(id=row_id),
+                )
+                for row_id in (10, 2, 1)
+            ]
+
+        entries = make_entries()
+        graphql_search_module.sort_search_hit_entries(
+            entries,
+            terms=(SortTerm("name"),),
+        )
+
+        assert [entry[1].identification for entry in entries] == [
+            {"id": 1},
+            {"id": 2},
+            {"id": 10},
+        ]
+
+        entries = make_entries()
+
+        graphql_search_module.trim_search_hit_entries_to_window(
+            entries,
+            requested_count=2,
+            terms=(SortTerm("name"),),
+        )
+
+        assert [entry[1].identification for entry in entries] == [
+            {"id": 1},
+            {"id": 2},
         ]
 
     def test_search_hit_window_keeps_null_sort_values_last_when_descending(
@@ -553,8 +771,7 @@ class GraphQLSearchTests(SimpleTestCase):
         graphql_search_module.trim_search_hit_entries_to_window(
             entries,
             requested_count=2,
-            sort_by="rank",
-            sort_desc=True,
+            terms=(SortTerm("rank", descending=True),),
         )
 
         assert [entry[2].identification for entry in entries] == [
@@ -787,7 +1004,9 @@ class GraphQLSearchTests(SimpleTestCase):
             )
         assert ctx.exception.extensions["code"] == "BAD_USER_INPUT"
 
-    def test_graphql_search_permission_filters_override_user_filters(self) -> None:
+    def test_graphql_search_conjoins_conflicting_user_and_permission_filters(
+        self,
+    ) -> None:
         field = GraphQL._query_fields["search"]
         info = MagicMock()
         info.context.user = AnonymousUser()
@@ -803,8 +1022,184 @@ class GraphQLSearchTests(SimpleTestCase):
             page_size=10,
         )
 
+        assert response["total"] == 0
+        assert response["results"] == []
+
+    def test_graphql_search_applies_user_filters_to_indexed_document_values(
+        self,
+    ) -> None:
+        ProjectInterface.data_store[1] = {"name": "Alpha", "status": "private"}
+        Project.SearchConfig.to_document = lambda _instance: {"status": "public"}
+        self.addCleanup(delattr, Project.SearchConfig, "to_document")
+        backend = CountingDevSearchBackend()
+        configure_search_backend(backend)
+        SearchIndexer(backend).index_instance(Project(id=1))
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+        allowed_plan = ReadPermissionPlan(
+            filters=[],
+            requires_instance_check=False,
+            decision="allow_all",
+        )
+
+        with patch.object(
+            graphql_search_module,
+            "get_read_permission_filter",
+            return_value=allowed_plan,
+        ):
+            response = field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=["Project"],
+                filters={"status": "public"},
+                page=1,
+                page_size=10,
+            )
+
+        assert [item.identification for item in response["results"]] == [{"id": 1}]
+
+    def test_graphql_search_collision_keeps_user_filters_and_checks_permission(
+        self,
+    ) -> None:
+        Project.SearchConfig.to_document = lambda _instance: {
+            "status": "public",
+        }
+        self.addCleanup(delattr, Project.SearchConfig, "to_document")
+        backend = CountingDevSearchBackend()
+        configure_search_backend(backend)
+        SearchIndexer(backend).index_instance(Project(id=2))
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+        permission_plan = ReadPermissionPlan(
+            filters=[{"filter": {"status": "private"}, "exclude": {}}],
+            requires_instance_check=False,
+        )
+
+        with patch.object(
+            graphql_search_module,
+            "get_read_permission_filter",
+            return_value=permission_plan,
+        ):
+            response = field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=["Project"],
+                filters={"status": "public", "status__in": ["public"]},
+                page=1,
+                page_size=10,
+            )
+
+        assert [item.identification for item in response["results"]] == [{"id": 2}]
+        assert backend.search_calls[0]["kwargs"]["filters"] == [
+            {"status": "public", "status__in": ["public"]}
+        ]
+
+    def test_graphql_search_schema_rejects_raw_selection(self) -> None:
+        query_type = type(
+            "SearchDisclosureQuery",
+            (graphene.ObjectType,),
+            dict(GraphQL._query_fields),
+        )
+        response = graphene.Schema(query=query_type).execute(
+            '{ search(query: "") { raw } }',
+            context_value=SimpleNamespace(user=AnonymousUser()),
+        )
+
+        assert response.errors is not None
+        assert "Cannot query field 'raw'" in response.errors[0].message
+
+    def test_graphql_search_uses_configured_type_label_and_rejects_other_hits(
+        self,
+    ) -> None:
+        backend = CountingDevSearchBackend()
+        configure_search_backend(backend)
+        Project.SearchConfig.type_label = "project-document"
+        self.addCleanup(delattr, Project.SearchConfig, "type_label")
+        SearchIndexer(backend).index_instance(Project(id=1))
+
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=["Project"],
+            filters=None,
+            page=1,
+            page_size=10,
+        )
+
         assert response["total"] == 1
-        assert response["results"][0].identification == {"id": 1}
+        assert [item.identification for item in response["results"]] == [{"id": 1}]
+        assert backend.search_calls[0]["kwargs"]["types"] == ["project-document"]
+
+    def test_graphql_search_deduplicates_type_selectors_in_first_seen_order(
+        self,
+    ) -> None:
+        """Repeated public selectors must not repeat hits or totals."""
+        backend = self._configure_counting_backend_with_public_rows(public_count=1)
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            types=["Project", "Project"],
+            page=1,
+            page_size=10,
+        )
+
+        assert response["total"] == 1
+        assert [item.identification for item in response["results"]] == [{"id": 1}]
+        assert len(backend.search_calls) == 1
+
+    def test_graphql_search_rejects_wrong_type_hit_before_hydration(self) -> None:
+        query_fields = {}
+        graphql_search_module.register_search_query(
+            query_fields,
+            {"Project": Project},
+            {"Project": MagicMock()},
+            None,
+            None,
+        )
+        backend = MagicMock()
+        backend.search.side_effect = [
+            SearchResult(
+                hits=[
+                    SearchHit(
+                        id="other:1",
+                        type="OtherProject",
+                        identification={"id": 1},
+                        score=1.0,
+                        data={"name": "Alpha"},
+                    )
+                ],
+                total=1,
+                took_ms=1,
+            ),
+            SearchResult(hits=[], total=0, took_ms=1),
+        ]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with patch.object(
+            graphql_search_module, "get_search_backend", return_value=backend
+        ):
+            response = query_fields["search"].resolver(None, info, query="")
+
+        assert response["total"] == 0
+        assert response["results"] == []
 
     def test_graphql_search_static_deny_skips_backend_and_response_data(self) -> None:
         backend = self._configure_counting_backend_with_public_rows(public_count=1)
@@ -836,9 +1231,14 @@ class GraphQLSearchTests(SimpleTestCase):
         assert response["results"] == []
         assert response["total"] == 0
         assert response["total_is_exact"] is True
-        assert response["raw"] == []
         assert response["took_ms"] is None
         assert backend.search_calls == []
+        assert response["page_info"] == {
+            "total_count": 0,
+            "page_size": 10,
+            "current_page": 1,
+            "total_pages": 0,
+        }
 
     def test_graphql_search_static_allow_keeps_user_filters_without_row_gate(
         self,
@@ -1086,7 +1486,11 @@ class GraphQLSearchTests(SimpleTestCase):
 
             class SearchConfig:
                 indexes: ClassVar[list[IndexConfig]] = [
-                    IndexConfig(name="global", fields=["name", "rank", "start_date"])
+                    IndexConfig(
+                        name="global",
+                        fields=["name", "rank", "start_date"],
+                        sorts=["rank", "start_date"],
+                    )
                 ]
 
         GeneralManagerMeta.all_classes = [RankedProject]
@@ -1117,8 +1521,7 @@ class GraphQLSearchTests(SimpleTestCase):
             info,
             query="",
             index="global",
-            sort_by="rank",
-            sort_desc=False,
+            order_by=[{"field": "rank"}],
             page=1,
             page_size=10,
         )
@@ -1130,8 +1533,7 @@ class GraphQLSearchTests(SimpleTestCase):
             info,
             query="",
             index="global",
-            sort_by="start_date",
-            sort_desc=False,
+            order_by=[{"field": "start_date"}],
             page=1,
             page_size=10,
         )
@@ -1238,25 +1640,40 @@ class GraphQLSearchHelperCoverageTests(SimpleTestCase):
                 permission_plan=plan,
             )
 
-    def test_total_mode_and_sort_value_edge_cases(self) -> None:
+    def test_total_mode_and_search_sorting_preserves_lexical_timestamps(self) -> None:
         bad_mode: Any = object()
         with self.assertRaises(GraphQLError):
             graphql_search_module.normalize_search_total_mode(bad_mode)
 
-        assert graphql_search_module.normalize_search_sort_value(None) is None
-        assert graphql_search_module.normalize_search_sort_value(Decimal("1.5")) == 1.5
+        entries = [
+            (
+                None,
+                SearchHit(
+                    id="first",
+                    type="Project",
+                    identification={"id": 1},
+                    data={"name": "2024-01-01T00:00:00+00:00"},
+                ),
+                Project(id=1),
+            ),
+            (
+                None,
+                SearchHit(
+                    id="second",
+                    type="Project",
+                    identification={"id": 2},
+                    data={"name": "2023-12-31T23:30:00-01:00"},
+                ),
+                Project(id=2),
+            ),
+        ]
 
-        naive = datetime(2024, 1, 2, 3, 4, 5)
-        aware = graphql_search_module.normalize_search_sort_value(naive)
-        assert isinstance(aware, datetime)
-        assert aware.tzinfo is not None
-
-        date_value = graphql_search_module.normalize_search_sort_value(date(2024, 1, 2))
-        assert isinstance(date_value, datetime)
-        assert date_value.tzinfo is not None
-        assert graphql_search_module.normalize_search_sort_value(object()).startswith(
-            "<object object at"
+        graphql_search_module.sort_search_hit_entries(
+            entries,
+            terms=(SortTerm("name"),),
         )
+
+        assert [entry[1].id for entry in entries] == ["second", "first"]
 
     def test_parse_filters_accepts_json_and_skips_malformed_items(self) -> None:
         parsed = graphql_search_module.parse_search_filters(

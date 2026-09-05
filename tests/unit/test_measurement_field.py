@@ -5,6 +5,7 @@ from django.test import TransactionTestCase
 from django.test.utils import isolate_apps
 from decimal import Decimal
 from django.core.exceptions import ValidationError
+from django.db.migrations.writer import MigrationWriter
 from general_manager.measurement.measurement import (
     Measurement,
     ureg,
@@ -12,8 +13,10 @@ from general_manager.measurement.measurement import (
 from general_manager.measurement.measurement_field import (
     InvalidMeasurementFieldBaseUnitError,
     MeasurementField,
+    MeasurementFieldNotEditableError,
 )
 from django.db import connection, models
+from unittest.mock import patch
 
 
 class MeasurementFieldTests(TestCase):
@@ -357,6 +360,330 @@ class MeasurementFieldTests(TestCase):
         self.assertTrue(rebuilt.null)
         self.assertTrue(rebuilt.blank)
         self.assertFalse(rebuilt.editable)
+
+    def test_migration_writer_serializes_scalar_measurement_default(self):
+        """Scalar defaults round-trip through Django's migration serializer."""
+        default = Measurement(
+            Decimal("1.123456789012345678901234567890123"),
+            "meter",
+        )
+        field = MeasurementField(
+            base_unit="meter",
+            default=default,
+            blank=True,
+        )
+
+        serialized, imports = MigrationWriter.serialize(field)
+        namespace: dict[str, object] = {}
+        exec(  # noqa: S102 - execute Django's generated migration expression.
+            "\n".join(imports) + f"\nrebuilt = {serialized}", namespace
+        )
+        rebuilt = namespace["rebuilt"]
+
+        self.assertIsInstance(rebuilt, MeasurementField)
+        assert isinstance(rebuilt, MeasurementField)
+        self.assertEqual(rebuilt.base_unit, "meter")
+        self.assertTrue(rebuilt.blank)
+        self.assertEqual(rebuilt.default, default)
+        self.assertIsInstance(rebuilt.default, Measurement)
+        assert isinstance(rebuilt.default, Measurement)
+        self.assertEqual(rebuilt.default.magnitude, default.magnitude)
+        self.assertEqual(rebuilt.default.unit, default.unit)
+
+    @isolate_apps("tests")
+    def test_scalar_measurement_default_populates_paired_fields_once(self):
+        class DefaultedModel(models.Model):
+            length = MeasurementField(
+                base_unit="meter",
+                default=Measurement(Decimal("2"), "meter"),
+            )
+
+            class Meta:
+                app_label = "tests"
+
+        instance = DefaultedModel()
+
+        self.assertEqual(instance.length, Measurement(Decimal("2"), "meter"))
+        self.assertEqual(instance.length_value, Decimal("2"))
+        self.assertEqual(instance.length_unit, "meter")
+
+    @isolate_apps("tests")
+    def test_callable_measurement_default_runs_once_per_instance(self):
+        calls: list[Measurement] = []
+
+        def default_length() -> Measurement:
+            measurement = Measurement(Decimal("3"), "meter")
+            calls.append(measurement)
+            return measurement
+
+        class DefaultedModel(models.Model):
+            length = MeasurementField(base_unit="meter", default=default_length)
+
+            class Meta:
+                app_label = "tests"
+
+        first = DefaultedModel()
+        second = DefaultedModel()
+
+        self.assertEqual(calls, [Measurement(Decimal("3"), "meter")] * 2)
+        self.assertEqual(first.length_value, Decimal("3"))
+        self.assertEqual(second.length_value, Decimal("3"))
+
+    @isolate_apps("tests")
+    def test_explicit_measurement_suppresses_callable_default(self):
+        calls: list[Measurement] = []
+
+        def default_length() -> Measurement:
+            measurement = Measurement(Decimal("3"), "meter")
+            calls.append(measurement)
+            return measurement
+
+        class DefaultedModel(models.Model):
+            length = MeasurementField(base_unit="meter", default=default_length)
+
+            class Meta:
+                app_label = "tests"
+
+        instance = DefaultedModel(length=Measurement(Decimal("7"), "meter"))
+
+        self.assertEqual(calls, [])
+        self.assertEqual(instance.length_value, Decimal("7"))
+        self.assertEqual(instance.length_unit, "meter")
+
+    @isolate_apps("tests")
+    def test_from_db_deferred_measurement_does_not_materialize_default(self):
+        class DefaultedModel(models.Model):
+            length = MeasurementField(
+                base_unit="meter",
+                default=Measurement(Decimal("2"), "meter"),
+                null=True,
+            )
+
+            class Meta:
+                app_label = "tests"
+
+        with patch.object(
+            DefaultedModel,
+            "refresh_from_db",
+            side_effect=AssertionError("unexpected deferred fetch"),
+        ):
+            instance = DefaultedModel.from_db("default", ["id"], [1])
+
+        self.assertNotIn("length_value", instance.__dict__)
+        self.assertNotIn("length_unit", instance.__dict__)
+
+    @isolate_apps("tests")
+    def test_from_db_loaded_null_measurement_does_not_use_default(self):
+        class DefaultedModel(models.Model):
+            length = MeasurementField(
+                base_unit="meter",
+                default=Measurement(Decimal("2"), "meter"),
+                null=True,
+            )
+
+            class Meta:
+                app_label = "tests"
+
+        instance = DefaultedModel.from_db(
+            "default",
+            ["id", "length_value", "length_unit"],
+            [1, None, None],
+        )
+
+        self.assertIsNone(instance.length_value)
+        self.assertIsNone(instance.length_unit)
+        self.assertIsNone(instance.length)
+
+    @isolate_apps("tests")
+    def test_inherited_callable_default_runs_once_when_it_returns_none(self):
+        calls: list[None] = []
+
+        def default_length() -> None:
+            calls.append(None)
+            return None
+
+        class Base(models.Model):
+            length = MeasurementField(
+                base_unit="meter",
+                default=default_length,
+                null=True,
+            )
+
+            class Meta:
+                abstract = True
+                app_label = "tests"
+
+        class DefaultedModel(Base):
+            class Meta:
+                app_label = "tests"
+
+        instance = DefaultedModel()
+
+        self.assertEqual(calls, [None])
+        self.assertIsNone(instance.length_value)
+        self.assertIsNone(instance.length_unit)
+
+    @isolate_apps("tests")
+    def test_concrete_subclasses_inherit_measurement_defaults(self):
+        calls = []
+
+        def default_length():
+            calls.append(None)
+            return Measurement(2, "meter")
+
+        class Parent(models.Model):
+            length = MeasurementField(base_unit="meter", default=default_length)
+
+            class Meta:
+                app_label = "tests"
+
+        class Proxy(Parent):
+            class Meta:
+                app_label = "tests"
+                proxy = True
+
+        class Child(Parent):
+            class Meta:
+                app_label = "tests"
+
+        for model in (Parent, Proxy, Child):
+            with self.subTest(model=model.__name__):
+                calls.clear()
+                instance = model()
+                self.assertEqual(instance.length, Measurement(2, "meter"))
+                self.assertEqual(instance.length_value, Decimal("2"))
+                self.assertEqual(calls, [None])
+                explicit = model(length=Measurement(7, "meter"))
+                self.assertEqual(explicit.length, Measurement(7, "meter"))
+                self.assertEqual(calls, [None])
+
+    @isolate_apps("tests")
+    def test_concrete_subclass_nullable_default_is_evaluated_once(self):
+        calls = []
+
+        def default_length():
+            calls.append(None)
+            return None
+
+        class Parent(models.Model):
+            length = MeasurementField(
+                base_unit="meter", default=default_length, null=True
+            )
+
+            class Meta:
+                app_label = "tests"
+
+        class Child(Parent):
+            width = MeasurementField(base_unit="meter", default=Measurement(3, "meter"))
+
+            class Meta:
+                app_label = "tests"
+
+        instance = Child()
+        self.assertIsNone(instance.length)
+        self.assertEqual(instance.width, Measurement(3, "meter"))
+        self.assertEqual(calls, [None])
+
+    @isolate_apps("tests")
+    def test_custom_init_observes_default_after_super(self):
+        class DefaultedModel(models.Model):
+            length = MeasurementField(
+                base_unit="meter",
+                default=Measurement(Decimal("2"), "meter"),
+                null=True,
+            )
+
+            class Meta:
+                app_label = "tests"
+
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                super().__init__(*args, **kwargs)
+                self.observed_length = self.length
+
+        instance = DefaultedModel()
+
+        self.assertEqual(instance.observed_length, Measurement(Decimal("2"), "meter"))
+
+    @isolate_apps("tests")
+    def test_non_editable_measurement_defaults_bypass_only_internal_assignment(self):
+        calls: list[Measurement] = []
+
+        def default_length() -> Measurement:
+            measurement = Measurement(Decimal("3"), "meter")
+            calls.append(measurement)
+            return measurement
+
+        class DefaultedModel(models.Model):
+            scalar = MeasurementField(
+                base_unit="meter",
+                default=Measurement(Decimal("2"), "meter"),
+                editable=False,
+            )
+            callable = MeasurementField(
+                base_unit="meter",
+                default=default_length,
+                editable=False,
+            )
+
+            class Meta:
+                app_label = "tests"
+
+        instance = DefaultedModel()
+
+        self.assertEqual(instance.scalar_value, Decimal("2"))
+        self.assertEqual(instance.callable_value, Decimal("3"))
+        self.assertEqual(calls, [Measurement(Decimal("3"), "meter")])
+        with self.assertRaises(ValidationError):
+            instance.scalar = Measurement(Decimal("4"), "meter")
+
+    @isolate_apps("tests")
+    def test_failed_default_initialization_does_not_leak_into_following_instance(self):
+        calls: list[Measurement] = []
+
+        def default_length() -> Measurement:
+            measurement = Measurement(Decimal("2"), "meter")
+            calls.append(measurement)
+            return measurement
+
+        class DefaultedModel(models.Model):
+            length = MeasurementField(base_unit="meter", default=default_length)
+
+            class Meta:
+                app_label = "tests"
+
+        for _ in range(3):
+            with self.assertRaises(TypeError):
+                DefaultedModel(unexpected=True)
+
+        instance = DefaultedModel()
+
+        self.assertEqual(calls, [Measurement(Decimal("2"), "meter")])
+        self.assertEqual(instance.length_value, Decimal("2"))
+
+    @isolate_apps("tests")
+    def test_default_storage_does_not_unlock_reentrant_read_only_assignment(self):
+        class DefaultedModel(models.Model):
+            primary = MeasurementField(
+                base_unit="meter",
+                default=Measurement(Decimal("2"), "meter"),
+            )
+            locked = MeasurementField(base_unit="meter", null=True, editable=False)
+
+            class Meta:
+                app_label = "tests"
+
+            def __setattr__(self, name: str, value: object) -> None:
+                if name == "primary_value":
+                    try:
+                        self.locked = Measurement(Decimal("4"), "meter")
+                    except MeasurementFieldNotEditableError:
+                        super().__setattr__("reentrant_assignment_blocked", True)
+                super().__setattr__(name, value)
+
+        instance = DefaultedModel()
+
+        self.assertTrue(instance.reentrant_assignment_blocked)
+        self.assertIsNone(instance.locked_value)
 
 
 class MeasurementFieldConstraintTests(TransactionTestCase):

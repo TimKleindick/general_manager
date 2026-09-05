@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from importlib import import_module
 from importlib.util import find_spec
+from inspect import isawaitable
 from types import MappingProxyType
 from typing import Any, Self
 from urllib.parse import urlparse
@@ -48,6 +49,7 @@ class OllamaProvider(BaseLLMProvider):
         self._instance_provider_config = MappingProxyType(
             deepcopy(self._provider_config(config))
         )
+        self._fallback_tool_call_sequence = 0
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> Self:
@@ -105,10 +107,7 @@ class OllamaProvider(BaseLLMProvider):
         return {
             "model": config["model"],
             "stream": True,
-            "messages": [
-                {"role": message.role, "content": message.content}
-                for message in messages
-            ],
+            "messages": [cls._build_message(message) for message in messages],
             "tools": [
                 {
                     "type": "function",
@@ -121,6 +120,29 @@ class OllamaProvider(BaseLLMProvider):
                 for tool in tools
             ],
         }
+
+    @staticmethod
+    def _build_message(message: Message) -> dict[str, Any]:
+        """Encode neutral tool history for the Ollama chat endpoint."""
+        provider_message: dict[str, Any] = {
+            "role": message.role,
+            "content": message.content,
+        }
+        if message.tool_calls:
+            provider_message["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.name, "arguments": call.args},
+                }
+                for call in message.tool_calls
+            ]
+        if message.role == "tool":
+            if message.tool_call_id is not None:
+                provider_message["tool_call_id"] = message.tool_call_id
+            if message.tool_name is not None:
+                provider_message["tool_name"] = message.tool_name
+        return provider_message
 
     @classmethod
     def _build_async_client(cls, config: Mapping[str, Any] | None = None) -> Any:
@@ -140,32 +162,58 @@ class OllamaProvider(BaseLLMProvider):
         """Stream Ollama text, tool calls, and usage events for one chat turn."""
         config = self.provider_config
         client = self._build_async_client(config)
-        stream = await client.chat(**self._build_request_body(messages, tools, config))
-        async for chunk in stream:
-            message = chunk.get("message", {})
-            content = message.get("content")
-            if isinstance(content, str) and content:
-                yield TextChunkEvent(content=content)
-            tool_calls = message.get("tool_calls", [])
-            if isinstance(tool_calls, list):
-                for index, tool_call in enumerate(tool_calls):
-                    function = tool_call.get("function", {})
-                    name = function.get("name")
-                    arguments = function.get("arguments", {})
-                    if isinstance(name, str) and isinstance(arguments, dict):
-                        yield ToolCallEvent(
-                            id=f"ollama-tool-{index}",
-                            name=name,
-                            args=arguments,
+        stream: Any | None = None
+        try:
+            stream = await client._request(
+                dict,
+                "POST",
+                "/api/chat",
+                json=self._build_request_body(messages, tools, config),
+                stream=True,
+            )
+            async for chunk in stream:
+                message = chunk.get("message", {})
+                content = message.get("content")
+                if isinstance(content, str) and content:
+                    yield TextChunkEvent(content=content)
+                tool_calls = message.get("tool_calls", [])
+                if isinstance(tool_calls, list):
+                    for tool_call in tool_calls:
+                        function = tool_call.get("function", {})
+                        name = function.get("name")
+                        arguments = function.get("arguments", {})
+                        if isinstance(name, str) and isinstance(arguments, dict):
+                            call_id = tool_call.get("id")
+                            if not isinstance(call_id, str) or not call_id:
+                                call_id = (
+                                    f"ollama-tool-{self._fallback_tool_call_sequence}"
+                                )
+                                self._fallback_tool_call_sequence += 1
+                            yield ToolCallEvent(
+                                id=call_id,
+                                name=name,
+                                args=arguments,
+                            )
+                if chunk.get("done") is True:
+                    yield DoneEvent(
+                        usage=TokenUsage(
+                            input_tokens=int(chunk.get("prompt_eval_count", 0)),
+                            output_tokens=int(chunk.get("eval_count", 0)),
                         )
-            if chunk.get("done") is True:
-                yield DoneEvent(
-                    usage=TokenUsage(
-                        input_tokens=int(chunk.get("prompt_eval_count", 0)),
-                        output_tokens=int(chunk.get("eval_count", 0)),
                     )
-                )
-                return
+                    return
+        finally:
+            await self._close_async_resource(stream)
+            await self._close_async_resource(getattr(client, "_client", None))
+
+    @staticmethod
+    async def _close_async_resource(resource: Any) -> None:
+        """Close a raw SDK stream or owned client when it exposes a closer."""
+        close = getattr(resource, "aclose", None)
+        if callable(close):
+            result = close()
+            if isawaitable(result):
+                await result
 
 
 __all__ = ["OllamaBaseUrlError", "OllamaDependencyImportError", "OllamaProvider"]

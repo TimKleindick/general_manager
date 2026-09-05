@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import ModuleType
 import sys
 import unittest
 from unittest.mock import patch
 
 from django.test.utils import override_settings
+import pytest
 
 from general_manager.chat.providers import OllamaProvider
 from general_manager.chat.providers.ollama import OllamaBaseUrlError
@@ -14,6 +16,7 @@ from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
     TextChunkEvent,
+    TokenUsage,
     ToolCallEvent,
     ToolDefinition,
 )
@@ -41,8 +44,8 @@ class _FakeAsyncClient:
         self.timeout = timeout
         self.calls: list[dict[str, object]] = []
 
-    async def chat(self, **kwargs):  # type: ignore[no-untyped-def]
-        self.calls.append(kwargs)
+    async def _request(self, _cls, *_args, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls.append(kwargs["json"])
         return _FakeAsyncStream(
             [
                 {"message": {"content": "Hello"}},
@@ -53,8 +56,8 @@ class _FakeAsyncClient:
 
 
 class _FakeToolClient(_FakeAsyncClient):
-    async def chat(self, **kwargs):  # type: ignore[no-untyped-def]
-        self.calls.append(kwargs)
+    async def _request(self, _cls, *_args, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls.append(kwargs["json"])
         return _FakeAsyncStream(
             [
                 {
@@ -73,6 +76,60 @@ class _FakeToolClient(_FakeAsyncClient):
                 {"done": True, "prompt_eval_count": 1, "eval_count": 1},
             ]
         )
+
+
+class _CloseTracker:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _BlockingAsyncStream:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self._continue = asyncio.Event()
+        self.closed = False
+
+    def __aiter__(self) -> _BlockingAsyncStream:
+        return self
+
+    async def __anext__(self) -> dict[str, object]:
+        self.started.set()
+        await self._continue.wait()
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        self.closed = True
+        self._continue.set()
+
+
+class _PartialAsyncStream:
+    def __init__(self) -> None:
+        self.closed = False
+        self._yielded = False
+
+    def __aiter__(self) -> _PartialAsyncStream:
+        return self
+
+    async def __anext__(self) -> dict[str, object]:
+        if self._yielded:
+            raise StopAsyncIteration
+        self._yielded = True
+        return {"message": {"content": "partial"}}
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _TrackingAsyncClient:
+    def __init__(self, stream: object) -> None:
+        self.stream = stream
+        self._client = _CloseTracker()
+
+    async def _request(self, _cls, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return self.stream
 
 
 class OllamaProviderTests(unittest.TestCase):
@@ -280,3 +337,290 @@ class OllamaProviderTests(unittest.TestCase):
                 },
             }
         ]
+
+    def test_request_body_preserves_multiple_tool_call_ids_and_results(self) -> None:
+        body = OllamaProvider._build_request_body(
+            [
+                Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=(
+                        ToolCallEvent(
+                            id="call-query",
+                            name="query",
+                            args={"manager": "PartManager"},
+                        ),
+                        ToolCallEvent(
+                            id="call-search",
+                            name="search_managers",
+                            args={"query": "parts"},
+                        ),
+                    ),
+                ),
+                Message(
+                    role="tool",
+                    content='{"status":"success","rows":[]}',
+                    tool_call_id="call-query",
+                    tool_name="query",
+                    tool_result={"status": "success", "rows": []},
+                ),
+                Message(
+                    role="tool",
+                    content='{"status":"success","matches":["PartManager"]}',
+                    tool_call_id="call-search",
+                    tool_name="search_managers",
+                    tool_result={"status": "success", "matches": ["PartManager"]},
+                ),
+            ],
+            [],
+        )
+
+        assert body["messages"] == [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-query",
+                        "type": "function",
+                        "function": {
+                            "name": "query",
+                            "arguments": {"manager": "PartManager"},
+                        },
+                    },
+                    {
+                        "id": "call-search",
+                        "type": "function",
+                        "function": {
+                            "name": "search_managers",
+                            "arguments": {"query": "parts"},
+                        },
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-query",
+                "tool_name": "query",
+                "content": '{"status":"success","rows":[]}',
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-search",
+                "tool_name": "search_managers",
+                "content": '{"status":"success","matches":["PartManager"]}',
+            },
+        ]
+
+    def test_complete_uses_raw_sdk_stream_to_preserve_native_tool_ids(self) -> None:
+        pytest.importorskip("httpx")
+        pytest.importorskip("ollama")
+        import httpx
+        import ollama
+
+        captured_bodies: list[dict[str, object]] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            captured_bodies.append(json.loads((await request.aread()).decode()))
+            return httpx.Response(
+                200,
+                content=(
+                    b'{"message":{"tool_calls":[{"id":"server-call-1",'
+                    b'"function":{"name":"query","arguments":'
+                    b'{"manager":"PartManager"}}}]},"done":true,'
+                    b'"prompt_eval_count":3,"eval_count":5}\n'
+                ),
+            )
+
+        client = ollama.AsyncClient(
+            host="http://ollama.test",
+            transport=httpx.MockTransport(handler),
+        )
+
+        async def run() -> None:
+            try:
+                with patch.object(
+                    OllamaProvider, "_build_async_client", return_value=client
+                ):
+                    events = [
+                        event
+                        async for event in OllamaProvider().complete(
+                            [
+                                Message(
+                                    role="assistant",
+                                    content="",
+                                    tool_calls=(
+                                        ToolCallEvent(
+                                            id="call-query",
+                                            name="query",
+                                            args={"manager": "PartManager"},
+                                        ),
+                                    ),
+                                ),
+                                Message(
+                                    role="tool",
+                                    content='{"status":"success"}',
+                                    tool_call_id="call-query",
+                                    tool_name="query",
+                                    tool_result={"status": "success"},
+                                ),
+                            ],
+                            [],
+                        )
+                    ]
+                    assert client._client.is_closed
+            finally:
+                await client._client.aclose()
+
+            assert events[0] == ToolCallEvent(
+                id="server-call-1",
+                name="query",
+                args={"manager": "PartManager"},
+            )
+            assert events[1] == DoneEvent(
+                usage=TokenUsage(input_tokens=3, output_tokens=5)
+            )
+
+        asyncio.run(run())
+
+        assert captured_bodies == [
+            {
+                "model": "gemma4:e4b",
+                "stream": True,
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-query",
+                                "type": "function",
+                                "function": {
+                                    "name": "query",
+                                    "arguments": {"manager": "PartManager"},
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "content": '{"status":"success"}',
+                        "tool_call_id": "call-query",
+                        "tool_name": "query",
+                    },
+                ],
+                "tools": [],
+            }
+        ]
+
+    def test_complete_closes_raw_stream_and_client_when_cancelled(self) -> None:
+        stream = _BlockingAsyncStream()
+        client = _TrackingAsyncClient(stream)
+
+        async def run() -> None:
+            with patch.object(
+                OllamaProvider, "_build_async_client", return_value=client
+            ):
+                events = OllamaProvider().complete(
+                    [Message(role="user", content="hello")], []
+                )
+                next_event = asyncio.create_task(anext(events))
+                await stream.started.wait()
+                next_event.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await next_event
+                assert stream.closed
+                assert client._client.closed
+
+        asyncio.run(run())
+
+    def test_complete_closes_raw_stream_and_client_on_early_stop(self) -> None:
+        stream = _PartialAsyncStream()
+        client = _TrackingAsyncClient(stream)
+
+        async def run() -> None:
+            with patch.object(
+                OllamaProvider, "_build_async_client", return_value=client
+            ):
+                events = OllamaProvider().complete(
+                    [Message(role="user", content="hello")], []
+                )
+                assert await anext(events) == TextChunkEvent(content="partial")
+                await events.aclose()
+                assert stream.closed
+                assert client._client.closed
+
+        asyncio.run(run())
+
+    def test_complete_uses_distinct_fallback_ids_across_chunks_and_turns(self) -> None:
+        pytest.importorskip("httpx")
+        pytest.importorskip("ollama")
+        import httpx
+        import ollama
+
+        request_count = 0
+
+        async def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal request_count
+            request_count += 1
+            if request_count == 1:
+                content = (
+                    b'{"message":{"tool_calls":[{"function":{"name":"query",'
+                    b'"arguments":{"number":1}}}]}}\n'
+                    b'{"message":{"tool_calls":[{"function":{"name":"query",'
+                    b'"arguments":{"number":2}}}]}}\n'
+                    b'{"done":true}\n'
+                )
+            else:
+                content = (
+                    b'{"message":{"tool_calls":[{"function":{"name":"query",'
+                    b'"arguments":{"number":3}}}]},"done":true}\n'
+                )
+            return httpx.Response(200, content=content)
+
+        client = ollama.AsyncClient(
+            host="http://ollama.test",
+            transport=httpx.MockTransport(handler),
+        )
+
+        async def run() -> None:
+            with patch.object(
+                OllamaProvider, "_build_async_client", return_value=client
+            ):
+                provider = OllamaProvider()
+                first_events = [
+                    event
+                    async for event in provider.complete(
+                        [Message(role="user", content="first")], []
+                    )
+                ]
+                assert client._client.is_closed
+
+                # Each turn owns a fresh raw SDK client. Recreate one with the same
+                # mocked transport while retaining the provider's fallback sequence.
+                second_client = ollama.AsyncClient(
+                    host="http://ollama.test",
+                    transport=httpx.MockTransport(handler),
+                )
+                with patch.object(
+                    OllamaProvider, "_build_async_client", return_value=second_client
+                ):
+                    second_events = [
+                        event
+                        async for event in provider.complete(
+                            [Message(role="user", content="second")], []
+                        )
+                    ]
+                assert second_client._client.is_closed
+
+            assert [
+                event.id for event in first_events if isinstance(event, ToolCallEvent)
+            ] == [
+                "ollama-tool-0",
+                "ollama-tool-1",
+            ]
+            assert [
+                event.id for event in second_events if isinstance(event, ToolCallEvent)
+            ] == ["ollama-tool-2"]
+
+        asyncio.run(run())

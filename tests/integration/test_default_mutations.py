@@ -5,6 +5,7 @@ from django.utils.crypto import get_random_string
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface
 from general_manager.measurement.measurement_field import MeasurementField
+from general_manager.measurement.measurement import Measurement
 from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
 )
@@ -97,7 +98,7 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         project = self.TestProject.all().first()
         self.assertEqual(project.name, "Test Project")
         self.assertEqual(project.number, 42)
-        self.assertEqual(project.budget, "2000 EUR")
+        self.assertEqual(project.budget, Measurement(2000, "EUR"))
         self.assertEqual(self._latest_history_user(project), self.user)
 
     def test_create_project_without_budget(self):
@@ -291,7 +292,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         project = self.TestProject2.all().first()
         self.assertEqual(project.name, "Test Project")
         self.assertEqual(project.number, 42)
-        self.assertEqual(project.budget, "2000 EUR")
+        self.assertEqual(project.budget, Measurement(2000, "EUR"))
         self.assertIsNone(self._latest_history_user(project))
 
 
@@ -425,7 +426,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         updated_project = self.TestProject(self.project.id)
         self.assertEqual(updated_project.name, "Updated Project")
         self.assertEqual(updated_project.number, 1)
-        self.assertEqual(updated_project.budget, "2000 EUR")
+        self.assertEqual(updated_project.budget, Measurement(2000, "EUR"))
         self.assertEqual(self._latest_history_user(updated_project), self.user)
 
     def test_entry_based_graphql_property_refreshes_after_update(self):
@@ -471,7 +472,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         updated_project = self.TestProject(self.project.id)
         self.assertEqual(updated_project.name, "Updated Project Without Budget")
         self.assertEqual(updated_project.number, 1)
-        self.assertEqual(updated_project.budget, "1000 EUR")
+        self.assertEqual(updated_project.budget, Measurement(1000, "EUR"))
         self.assertEqual(self._latest_history_user(updated_project), self.user)
 
     def test_update_project_without_name(self):
@@ -499,7 +500,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         updated_project = self.TestProject(self.project.id)
         self.assertEqual(updated_project.name, "Initial Project")
         self.assertEqual(updated_project.number, 1)
-        self.assertEqual(updated_project.budget, "2000 EUR")
+        self.assertEqual(updated_project.budget, Measurement(2000, "EUR"))
         self.assertEqual(self._latest_history_user(updated_project), self.user)
 
 

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
+    Any,
     ClassVar,
     Protocol,
     TypeVar,
@@ -13,7 +16,7 @@ from typing import (
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db import transaction
-from factory.django import DjangoModelFactory
+from factory.django import DjangoModelFactory, DjangoOptions
 from general_manager.factory.factories import (
     RelationGenerationMode,
     UnableToResolveManagerInstanceError,
@@ -32,6 +35,23 @@ if TYPE_CHECKING:
 modelsModel = TypeVar("modelsModel", bound=models.Model)
 type FactoryParams = dict[str, object]
 type AdjustmentRecords = FactoryParams | list[FactoryParams]
+
+
+_ADJUSTED_M2M_VALUES_KEY = object()
+_preparing_factory_options: ContextVar[tuple[object, dict[str, object]] | None] = (
+    ContextVar(
+        "preparing_factory_options",
+        default=None,
+    )
+)
+
+
+@dataclass(frozen=True)
+class _RawRelationAttnameOverride:
+    """Temporarily mask a relation declaration while preserving a raw-ID value."""
+
+    attname: str
+    value: object
 
 
 class AdjustmentMethod(Protocol):
@@ -75,6 +95,15 @@ class UndefinedAdjustmentMethodError(ValueError):
         super().__init__("_adjustmentMethod is not defined.")
 
 
+class ConflictingRelationOverrideError(ValueError):
+    """Raised when a relation name and raw-ID attname disagree."""
+
+    def __init__(self, field_name: str, attname: str) -> None:
+        super().__init__(
+            f"Conflicting relation overrides for {field_name} and {attname}."
+        )
+
+
 class MissingManagerClassError(ValueError):
     """Raised when attempting to wrap generated objects without a manager class."""
 
@@ -99,6 +128,58 @@ class MissingIdentificationFieldError(AttributeError):
         super().__init__(
             f"Unable to resolve identification field '{field_name}' from instance {instance!r}"
         )
+
+
+class _AutoFactoryOptions(DjangoOptions):
+    """Apply evaluated many-to-many values within their own factory build step."""
+
+    def prepare_arguments(
+        self,
+        attributes: dict[str, object],
+    ) -> tuple[tuple[object, ...], dict[str, object]]:
+        """Expose the current build-step attributes to ``_adjust_kwargs()``."""
+        token = _preparing_factory_options.set((self, attributes))
+        try:
+            return super().prepare_arguments(  # type: ignore[no-any-return, no-untyped-call]
+                attributes
+            )
+        finally:
+            _preparing_factory_options.reset(token)
+
+    def use_postgeneration_results(
+        self,
+        step: object,
+        instance: object,
+        results: object,
+    ) -> None:
+        super().use_postgeneration_results(  # type: ignore[no-untyped-call]
+            step, instance, results
+        )
+        if not isinstance(instance, (models.Model, list)):
+            return
+        build_step = cast(Any, step)
+        if getattr(build_step.builder, "strategy", None) != "create":
+            return
+        factory = cast(Any, self.factory)
+        model = cast(type[models.Model], factory._meta.model)
+        many_to_many_values = cast(
+            FactoryParams,
+            build_step.attributes.get(_ADJUSTED_M2M_VALUES_KEY, {}),
+        )
+        post_generation_results = cast(Mapping[str, object], results)
+        post_generation_owned_fields = {
+            field.name
+            for field in model._meta.many_to_many
+            if field.name in post_generation_results
+        }
+        objects = instance if isinstance(instance, list) else (instance,)
+        for item in objects:
+            if isinstance(item, models.Model):
+                factory._handle_many_to_many_fields_after_creation(
+                    item,
+                    many_to_many_values,
+                    skip_fields=post_generation_owned_fields,
+                )
 
 
 class AutoFactory(DjangoModelFactory[modelsModel]):
@@ -183,7 +264,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
         Parameters:
             strategy (Literal["build", "create"]): "build" returns unsaved model instance(s); "create" saves model instance(s) and returns GeneralManager wrapper(s).
-            params: Field values supplied by the caller; missing non-auto fields will be populated from declared defaults or generated values.
+            params: Field values supplied by the caller; missing non-auto fields will be populated from declared defaults or generated values. A foreign key may use either its relation name or raw-ID attname (for example, ``parent`` or ``parent_id``); simultaneous values must agree.
 
         Returns:
             A Django model instance or a list of Django model instances. If `strategy` is "create", returns a `GeneralManager` instance or a list of `GeneralManager` instances wrapping the created model(s).
@@ -206,7 +287,6 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         if not is_model:
             raise InvalidAutoFactoryModelError
         field_name_list, to_ignore_list = cls.interface.handle_custom_fields(model)
-        supplied_field_names = set(params)
         database_alias = cls._get_database_alias()
 
         fields = [
@@ -228,10 +308,28 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         ]
 
         for field in field_list:
-            if field.name in [*params, *declared_fields]:
-                continue  # Skip fields that are already set
+            if cls._has_relation_override_conflict(field, params):
+                raise ConflictingRelationOverrideError(
+                    field.name,
+                    cls._field_attname(field),
+                )
+            if cls._has_raw_relation_attname_override(field, params):
+                attname = cls._field_attname(field)
+                params[field.name] = _RawRelationAttnameOverride(
+                    attname,
+                    params[attname],
+                )
+            if (
+                field.name in params
+                or cls._field_attname(field) in params
+                or field.name in declared_fields
+                or cls._field_attname(field) in declared_fields
+            ):
+                continue  # Skip fields that are already set.
             if isinstance(field, models.AutoField) or field.auto_created:
-                continue  # Skip auto fields
+                continue  # Skip auto fields.
+            if getattr(field, "many_to_many", False):
+                continue
             declared_default = cls._get_declared_default(field.name)
             if declared_default is not None:
                 params[field.name] = declared_default
@@ -259,15 +357,6 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             for item in obj:
                 if not isinstance(item, models.Model):
                     raise InvalidGeneratedObjectError()
-            if strategy == "create":
-                for item in obj:
-                    cls._handle_many_to_many_fields_after_creation(
-                        item, params, supplied_field_names
-                    )
-        elif strategy == "create":
-            cls._handle_many_to_many_fields_after_creation(
-                obj, params, supplied_field_names
-            )
         if strategy == "create":
             return cls._wrap_generated_objects(obj)
         return obj
@@ -277,7 +366,8 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         cls,
         obj: models.Model,
         attrs: FactoryParams,
-        supplied_field_names: set[str] | None = None,
+        *,
+        skip_fields: frozenset[str] | set[str] = frozenset(),
     ) -> None:
         """
         Assign related objects to many-to-many fields after saved creation.
@@ -288,13 +378,15 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
         Parameters:
             obj (models.Model): Instance whose many-to-many relations should be populated.
-            attrs: Original attributes passed to the factory.
+            attrs: Evaluated declared or caller-supplied many-to-many attributes.
+            skip_fields: Relations assigned by post-generation declarations and
+                excluded from automatic assignment.
         """
-        if supplied_field_names is None:
-            supplied_field_names = set(attrs)
         for field in obj._meta.many_to_many:
+            if field.name in skip_fields:
+                continue
             relation_generation = cls._get_related_factory_mode(field.name)
-            if field.name in attrs and field.name in supplied_field_names:
+            if field.name in attrs:
                 m2m_values = attrs[field.name]
             elif relation_generation == "reuse_existing" and field.blank:
                 continue
@@ -304,7 +396,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                     relation_generation=relation_generation,
                     database_alias=cls._get_database_alias(),
                 )
-            if m2m_values:
+            if m2m_values is not None:
                 normalized_values = cls._coerce_many_to_many_values(m2m_values)
                 getattr(obj, field.name).set(normalized_values)
 
@@ -318,7 +410,23 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         """
         model: type[models.Model] = cls._meta.model
         m2m_fields = {field.name for field in model._meta.many_to_many}
+        preparation_context = _preparing_factory_options.get()
+        if preparation_context is not None and preparation_context[0] is cls._meta:
+            adjusted_many_to_many_values = {
+                field_name: kwargs[field_name]
+                for field_name in m2m_fields
+                if field_name in kwargs
+            }
+            # Store values on the individual build step rather than factory metadata.
+            # The build step later applies them after post-generation hooks.
+            attributes = cast(dict[object, object], preparation_context[1])
+            attributes[_ADJUSTED_M2M_VALUES_KEY] = adjusted_many_to_many_values
         for field_name in list(kwargs.keys()):
+            raw_relation_override = kwargs.get(field_name)
+            if isinstance(raw_relation_override, _RawRelationAttnameOverride):
+                kwargs.pop(field_name)
+                kwargs[raw_relation_override.attname] = raw_relation_override.value
+                continue
             if field_name in m2m_fields:
                 kwargs.pop(field_name, None)
                 continue
@@ -331,6 +439,59 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                     kwargs[field_name]
                 )
         return kwargs
+
+    @classmethod
+    def _has_relation_override_conflict(
+        cls,
+        field: models.Field[object, object] | models.ForeignObjectRel,
+        params: FactoryParams,
+    ) -> bool:
+        """Return whether simultaneous relation-name and attname values differ."""
+        if not getattr(field, "is_relation", False) or not (
+            getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False)
+        ):
+            return False
+        attname = cls._field_attname(field)
+        if field.name not in params or attname not in params:
+            return False
+        return cls._relation_override_value(
+            params[field.name], field
+        ) != cls._relation_override_value(params[attname], field)
+
+    @classmethod
+    def _has_raw_relation_attname_override(
+        cls,
+        field: models.Field[object, object] | models.ForeignObjectRel,
+        params: FactoryParams,
+    ) -> bool:
+        """Return whether only a FK/O2O raw-ID attname was supplied."""
+        if not getattr(field, "is_relation", False) or not (
+            getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False)
+        ):
+            return False
+        attname = cls._field_attname(field)
+        return attname != field.name and attname in params and field.name not in params
+
+    @staticmethod
+    def _field_attname(
+        field: models.Field[object, object] | models.ForeignObjectRel,
+    ) -> str:
+        """Return a model field's storage name, or its name for reverse relations."""
+        return cast(str, getattr(field, "attname", field.name))
+
+    @classmethod
+    def _relation_override_value(
+        cls,
+        value: object,
+        field: models.Field[object, object] | models.ForeignObjectRel,
+    ) -> object:
+        """Normalize a related object to the value stored by this relation."""
+        resolved = cls._coerce_single_related_value(value)
+        if isinstance(resolved, models.Model):
+            if isinstance(field, models.ForeignKey):
+                return field.target_field.value_from_object(resolved)
+            return resolved.pk
+        return resolved
 
     @classmethod
     def _create(
@@ -424,9 +585,10 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         The adjustment method receives generated/default-filled kwargs after
         `_adjust_kwargs()` has stripped many-to-many entries and coerced
         foreign-key/one-to-one values. A returned list is processed in order and
-        an empty list returns an empty list. Create-mode list processing is
+        an empty list returns an empty list. Create-mode list record saves are
         atomic, so later failures roll back earlier saves from the same
-        adjustment-method result.
+        adjustment-method result; post-save many-to-many assignment happens
+        after that record-list transaction.
 
         Parameters:
             use_creation_method (bool): If True, created records are validated and saved; if False, unsaved instances are returned.
@@ -613,3 +775,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         else:
             iterable = [values]
         return [cls._coerce_single_related_value(item) for item in iterable]
+
+
+# FactoryBoy chooses a subclass's options class from its already-built base.
+AutoFactory._options_class = _AutoFactoryOptions

@@ -23,7 +23,11 @@ freight_eur = Measurement(100, "USD/t").to("EUR/t", exchange_rate=0.92)
 
 - Addition and subtraction require compatible units or the same currency.
 - Multiplication and division combine units as expected (e.g., metres × metres → square metres).
-- Comparisons compare magnitudes after converting to a common unit.
+- Equality accepts another `Measurement` only. Parse convenience text explicitly
+  with `Measurement.from_string("50 cm")`. Compatible Measurement equality,
+  hashing, and relational ordering use the same canonical converted magnitude;
+  temperature values use the documented comparison bin so equal values never
+  sort differently.
 
 ```python
 width = Measurement.from_string("50 cm")

@@ -17,7 +17,6 @@ from typing import (
     get_args,
     cast,
 )
-from operator import attrgetter
 from copy import deepcopy
 from general_manager.as_of import (
     HistoricalContextConflictError,
@@ -30,11 +29,18 @@ from general_manager.interface.base_interface import (
 )
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.indexing import freeze_bucket_index_value
+from general_manager.bucket._ordering import (
+    SortTerm,
+    normalize_ordering,
+    sort_items,
+    validate_ordering_fields,
+)
 from general_manager.bucket.projection import ProjectionRows
 from general_manager.manager.input import Input, InputDomain
 from general_manager.utils.filter_parser import (
     FilterFunction,
     ParsedFilters,
+    create_filter_function,
     parse_filters,
 )
 
@@ -47,6 +53,7 @@ if TYPE_CHECKING:
 
 type Combination = dict[str, object]
 type RawFilterDefinitions = dict[str, object]
+type FilterCallGroups = tuple[RawFilterDefinitions, ...]
 
 
 class SortedFilters(TypedDict):
@@ -179,8 +186,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         manager_class: Type[GeneralManagerType],
         filter_definitions: Optional[RawFilterDefinitions] = None,
         exclude_definitions: Optional[RawFilterDefinitions] = None,
-        sort_key: Optional[Union[str, tuple[str, ...]]] = None,
-        reverse: bool = False,
+        filter_call_groups: FilterCallGroups | None = None,
+        exclude_call_groups: FilterCallGroups | None = None,
     ) -> None:
         """
         Initialize a CalculationBucket configured to enumerate all valid input combinations for a manager.
@@ -189,9 +196,6 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             manager_class (type[GeneralManagerType]): Manager subclass whose Interface must inherit from CalculationInterface.
             filter_definitions (dict[str, dict] | None): Mapping of input/property filter constraints to apply to generated combinations.
             exclude_definitions (dict[str, dict] | None): Mapping of input/property exclude constraints to remove generated combinations.
-            sort_key (str | tuple[str, ...] | None): Key name or tuple of key names used to order generated manager combinations.
-            reverse (bool): If True, reverse the ordering defined by `sort_key`.
-
         Raises:
             InvalidCalculationInterfaceError: If the manager_class.Interface does not inherit from CalculationInterface.
         """
@@ -211,6 +215,16 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self.exclude_definitions = (
             {} if exclude_definitions is None else exclude_definitions
         )
+        self._filter_call_groups = (
+            filter_call_groups
+            if filter_call_groups is not None
+            else ((self.filter_definitions,) if self.filter_definitions else ())
+        )
+        self._exclude_call_groups = (
+            exclude_call_groups
+            if exclude_call_groups is not None
+            else ((self.exclude_definitions,) if self.exclude_definitions else ())
+        )
 
         properties = self._manager_class.Interface.get_graph_ql_properties()
         possible_values = self.transform_properties_to_input_fields(
@@ -219,11 +233,16 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         self._filters = parse_filters(self.filter_definitions, possible_values)
         self._excludes = parse_filters(self.exclude_definitions, possible_values)
+        self._parsed_filter_call_groups = tuple(
+            parse_filters(group, possible_values) for group in self._filter_call_groups
+        )
+        self._parsed_exclude_call_groups = tuple(
+            parse_filters(group, possible_values) for group in self._exclude_call_groups
+        )
 
         self._data: list[Combination] | None = None
         self._allowed_identifications: list[Combination] | None = None
-        self.sort_key = sort_key
-        self.reverse = reverse
+        self._sort_fields: tuple[str, ...] = ()
         self._effective_search_date = current_as_of_date()
 
     def _ensure_as_of_compatible(self) -> None:
@@ -242,17 +261,19 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         *,
         filter_definitions: RawFilterDefinitions,
         exclude_definitions: RawFilterDefinitions,
-        sort_key: str | tuple[str, ...] | None,
-        reverse: bool,
+        sort_fields: tuple[str, ...],
+        filter_call_groups: FilterCallGroups | None = None,
+        exclude_call_groups: FilterCallGroups | None = None,
     ) -> CalculationBucket[GeneralManagerType]:
         """Build a derived bucket while preserving this bucket's snapshot."""
         bucket = self.__class__(
             self._manager_class,
             filter_definitions,
             exclude_definitions,
-            sort_key,
-            reverse,
+            filter_call_groups,
+            exclude_call_groups,
         )
+        bucket._sort_fields = sort_fields
         bucket._effective_search_date = self._effective_search_date
         if self._allowed_identifications is not None:
             bucket._allowed_identifications = [
@@ -277,6 +298,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         return (
             self.filter_definitions == other.filter_definitions
             and self.exclude_definitions == other.exclude_definitions
+            and self._filter_call_groups == other._filter_call_groups
+            and self._exclude_call_groups == other._exclude_call_groups
             and self._manager_class == other._manager_class
         )
 
@@ -294,13 +317,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 self._manager_class,
                 self.filter_definitions,
                 self.exclude_definitions,
-                self.sort_key,
-                self.reverse,
+                self._filter_call_groups,
+                self._exclude_call_groups,
             ),
             {
                 "data": self._data,
                 "allowed_identifications": self._allowed_identifications,
                 "effective_search_date": self._effective_search_date,
+                "sort_fields": self._sort_fields,
             },
         )
 
@@ -322,13 +346,23 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self._effective_search_date = cast(
             "datetime | None", state.get("effective_search_date")
         )
+        self._sort_fields = cast(tuple[str, ...], state.get("sort_fields", ()))
+        possible_values = self.transform_properties_to_input_fields(
+            self._manager_class.Interface.get_graph_ql_properties(), self.input_fields
+        )
+        self._parsed_filter_call_groups = tuple(
+            parse_filters(group, possible_values) for group in self._filter_call_groups
+        )
+        self._parsed_exclude_call_groups = tuple(
+            parse_filters(group, possible_values) for group in self._exclude_call_groups
+        )
 
     def __or__(
         self,
         other: Bucket[GeneralManagerType] | GeneralManagerType,
-    ) -> CalculationBucket[GeneralManagerType]:
+    ) -> Bucket[GeneralManagerType]:
         """
-        Build a bucket from constraints common to this bucket and another operand.
+        Materialize a left-first deduplicated union of represented combinations.
 
         Parameters:
             other: A CalculationBucket or a GeneralManager instance to combine.
@@ -336,20 +370,38 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 into an ``id__in=[identification]`` filter bucket.
 
         Returns:
-            A new CalculationBucket containing only filter and exclude
-            definitions that are present with equal values on both bucket
-            operands. This is a compatibility-preserving common-constraint
-            merge, not a set union of materialized calculation results.
+            A private exact-subset bucket containing each represented manager
+            once, in left-first order.
 
         Raises:
             IncompatibleBucketTypeError: If `other` is neither a CalculationBucket nor a compatible manager instance.
             IncompatibleBucketManagerError: If `other` is a CalculationBucket for a different manager class.
         """
-        from general_manager.manager.general_manager import GeneralManager
-
         self._ensure_as_of_compatible()
-        if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
-            return self.__or__(self.filter(id__in=[other.identification]))
+        from general_manager.bucket._materialized_bucket import MaterializedBucket
+
+        if isinstance(other, self._manager_class):
+            return (
+                MaterializedBucket(
+                    self._manager_class,
+                    tuple(self),
+                    snapshot=self._effective_search_date,
+                )
+                | other
+            )
+        if isinstance(other, MaterializedBucket):
+            if other._manager_class != self._manager_class:
+                raise IncompatibleBucketManagerError(
+                    self._manager_class, other._manager_class
+                )
+            return (
+                MaterializedBucket(
+                    self._manager_class,
+                    tuple(self),
+                    snapshot=self._effective_search_date,
+                )
+                | other
+            )
         if not isinstance(other, self.__class__):
             raise IncompatibleBucketTypeError(self.__class__, type(other))
         if self._manager_class != other._manager_class:
@@ -357,44 +409,16 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 self._manager_class, other._manager_class
             )
 
-        combined_filters = {
-            key: value
-            for key, value in self.filter_definitions.items()
-            if key in other.filter_definitions
-            and value == other.filter_definitions[key]
-        }
-
-        combined_excludes = {
-            key: value
-            for key, value in self.exclude_definitions.items()
-            if key in other.exclude_definitions
-            and value == other.exclude_definitions[key]
-        }
-
         other._ensure_as_of_compatible()
-        combined = self._derive(
-            filter_definitions=combined_filters,
-            exclude_definitions=combined_excludes,
-            sort_key=None,
-            reverse=False,
+        return MaterializedBucket(
+            self._manager_class,
+            tuple(self),
+            snapshot=self._effective_search_date,
+        ) | MaterializedBucket(
+            self._manager_class,
+            tuple(other),
+            snapshot=other._effective_search_date,
         )
-        if self._allowed_identifications is None:
-            if other._allowed_identifications is not None:
-                combined._allowed_identifications = [
-                    dict(identification)
-                    for identification in other._allowed_identifications
-                ]
-        elif other._allowed_identifications is not None:
-            other_allowed_keys = {
-                freeze_bucket_index_value(identification)
-                for identification in other._allowed_identifications
-            }
-            combined._allowed_identifications = [
-                dict(identification)
-                for identification in self._allowed_identifications
-                if freeze_bucket_index_value(identification) in other_allowed_keys
-            ]
-        return combined
 
     def __str__(self) -> str:
         """
@@ -426,14 +450,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         Return combinations, count label, and overflow flag for ``__str__``.
 
-        Sorted or reversed buckets use normal materialization so the preview
+        Sorted buckets use normal materialization so the preview
         reflects the final global ordering. Unsorted uncached buckets read at
         most ``limit + 1`` matching combinations and leave ``_data`` untouched.
         """
         if self._data is not None:
             return self._data[:limit], str(len(self._data)), len(self._data) > limit
 
-        if self._normalized_sort_key() is not None or self.reverse:
+        if self._normalized_sort_key() is not None:
             combinations = self.generate_combinations()
             return (
                 combinations[:limit],
@@ -467,7 +491,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                     for identification in self._allowed_identifications
                 }
             if (
-                sorted_filters["prop_filters"]
+                self._requires_grouped_call_evaluation()
+                or sorted_filters["prop_filters"]
                 or sorted_filters["prop_excludes"]
                 or allowed_identification_keys is not None
             ):
@@ -505,10 +530,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Return a detailed representation of the bucket configuration.
 
         Returns:
-            str: Debug string listing filters, excludes, sort key, and ordering.
+            str: Debug string listing filters, excludes, and signed ordering.
         """
         self._ensure_as_of_compatible()
-        return f"{self.__class__.__name__}({self._manager_class.__name__}, {self.filter_definitions}, {self.exclude_definitions}, {self.sort_key}, {self.reverse})"
+        rendered = (
+            f"{self.__class__.__name__}({self._manager_class.__name__}, "
+            f"{self.filter_definitions}, {self.exclude_definitions})"
+        )
+        if not self._sort_fields:
+            return rendered
+        fields = ", ".join(repr(field) for field in self._sort_fields)
+        return f"{rendered}.sort({fields})"
 
     @staticmethod
     def transform_properties_to_input_fields(
@@ -569,6 +601,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         ``field_id`` is an id alias, and suffixes such as
         ``field__name__startswith`` are forwarded to the nested manager bucket.
         Unknown fields raise ``UnknownInputFieldError`` from the filter parser.
+        Calling without keyword arguments returns an independent equivalent
+        bucket without altering the query groups.
 
         Parameters:
             **kwargs: Filter expressions applied to generated combinations.
@@ -584,14 +618,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             ValueError: Propagated from input parsing or normalization.
         """
         self._ensure_as_of_compatible()
+        if not kwargs:
+            return self.all()
         return self._derive(
             filter_definitions={
                 **self.filter_definitions.copy(),
                 **kwargs,
             },
             exclude_definitions=self.exclude_definitions.copy(),
-            sort_key=None,
-            reverse=False,
+            sort_fields=self._sort_fields,
+            filter_call_groups=(*self._filter_call_groups, dict(kwargs)),
+            exclude_call_groups=self._exclude_call_groups,
         )
 
     def exclude(self, **kwargs: object) -> CalculationBucket[GeneralManagerType]:
@@ -600,6 +637,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         Exclusion keys use the same lookup grammar and error behavior as
         :meth:`filter`; matching combinations are removed rather than kept.
+        Calling without keyword arguments returns an independent equivalent
+        bucket without altering the query groups.
 
         Parameters:
             **kwargs: Exclusion expressions removing combinations from the result.
@@ -615,14 +654,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             ValueError: Propagated from input parsing or normalization.
         """
         self._ensure_as_of_compatible()
+        if not kwargs:
+            return self.all()
         return self._derive(
             filter_definitions=self.filter_definitions.copy(),
             exclude_definitions={
                 **self.exclude_definitions.copy(),
                 **kwargs,
             },
-            sort_key=None,
-            reverse=False,
+            sort_fields=self._sort_fields,
+            filter_call_groups=self._filter_call_groups,
+            exclude_call_groups=(*self._exclude_call_groups, dict(kwargs)),
         )
 
     def all(self) -> CalculationBucket[GeneralManagerType]:
@@ -692,7 +734,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         sorted_filters: SortedFilters,
     ) -> bool:
         """Return whether property filters or sorting need manager values."""
-        if sorted_filters["prop_filters"] or sorted_filters["prop_excludes"]:
+        if (
+            self._requires_grouped_call_evaluation()
+            or sorted_filters["prop_filters"]
+            or sorted_filters["prop_excludes"]
+        ):
             return True
         return not self._sort_uses_only_inputs(self._normalized_sort_key())
 
@@ -722,6 +768,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             else:
                 prop_excludes[exclude_name] = exclude_def
 
+        if self._requires_grouped_call_evaluation():
+            # Flattened excludes implement NOT(a) AND NOT(b), which is not the
+            # public NOT(a AND b) contract. The grouped pass below evaluates
+            # them after manager construction instead.
+            input_excludes = {}
+            prop_excludes = {}
+
         return {
             "prop_filters": prop_filters,
             "input_filters": input_filters,
@@ -729,13 +782,85 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             "input_excludes": input_excludes,
         }
 
+    def _requires_grouped_call_evaluation(self) -> bool:
+        """Return whether flattened definitions lose a public call boundary."""
+        filter_keys = [key for group in self._filter_call_groups for key in group]
+        exclude_keys = [key for group in self._exclude_call_groups for key in group]
+        manager_lookup_keys = [
+            (field_name, lookup)
+            for groups in (
+                self._parsed_filter_call_groups,
+                self._parsed_exclude_call_groups,
+            )
+            for group in groups
+            for field_name, definitions in group.items()
+            for lookup in definitions.get("filter_kwargs", {})
+        ]
+        return (
+            len(filter_keys) != len(set(filter_keys))
+            or len(exclude_keys) != len(set(exclude_keys))
+            or len(manager_lookup_keys) != len(set(manager_lookup_keys))
+            or any(len(group) > 1 for group in self._exclude_call_groups)
+        )
+
+    @staticmethod
+    def _matches_call_group(
+        manager: GeneralManagerType,
+        group: ParsedFilters,
+    ) -> bool:
+        """Apply one parsed Django-style call group to a generated manager."""
+        for field_name, definitions in group.items():
+            try:
+                value = getattr(manager, field_name)
+            except AttributeError:
+                return False
+            for filter_func in definitions.get("filter_funcs", []):
+                if not filter_func(value):
+                    return False
+            for lookup, expected in definitions.get("filter_kwargs", {}).items():
+                identification = getattr(value, "identification", None)
+                lookup_parts = lookup.split("__") if lookup else []
+                if (
+                    isinstance(identification, dict)
+                    and lookup_parts
+                    and lookup_parts[0] in identification
+                ):
+                    candidate = identification[lookup_parts[0]]
+                    matcher = create_filter_function(
+                        "__".join(lookup_parts[1:]), expected
+                    )
+                else:
+                    candidate = value
+                    matcher = create_filter_function(lookup, expected)
+                if not matcher(candidate):
+                    return False
+        return True
+
+    def _apply_call_groups(
+        self,
+        managers: list[GeneralManagerType],
+    ) -> list[GeneralManagerType]:
+        """Preserve AND call groups and NOT(AND) exclude groups exactly."""
+        if not self._requires_grouped_call_evaluation():
+            return managers
+        return [
+            manager
+            for manager in managers
+            if all(
+                self._matches_call_group(manager, group)
+                for group in self._parsed_filter_call_groups
+            )
+            and not any(
+                self._matches_call_group(manager, group)
+                for group in self._parsed_exclude_call_groups
+            )
+        ]
+
     def _normalized_sort_key(self) -> tuple[str, ...] | None:
         """Return the configured sort key as a tuple, or None when unsorted."""
-        if self.sort_key is None:
+        if not self._sort_fields:
             return None
-        if isinstance(self.sort_key, str):
-            return (self.sort_key,)
-        return self.sort_key
+        return self._sort_fields
 
     def _bucket_index_source_signature(self) -> Hashable:
         """Return a stable signature for equivalent calculation bucket plans."""
@@ -745,21 +870,25 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             self._manager_class,
             freeze_bucket_index_value(self.filter_definitions),
             freeze_bucket_index_value(self.exclude_definitions),
+            freeze_bucket_index_value(self._filter_call_groups),
+            freeze_bucket_index_value(self._exclude_call_groups),
             freeze_bucket_index_value(self._allowed_identifications),
             self._normalized_sort_key(),
-            self.reverse,
         )
 
     def _sort_uses_only_inputs(self, sort_key: tuple[str, ...] | None) -> bool:
         """Return whether a sort can be applied to raw input dictionaries."""
         if sort_key is None:
             return True
-        return all(key in self.input_fields for key in sort_key)
+        return all(
+            key.removeprefix("-").removeprefix("+") in self.input_fields
+            for key in sort_key
+        )
 
     def _sort_dict_combinations(
         self,
         combinations: list[Combination],
-        sort_key: tuple[str, ...],
+        terms: tuple[SortTerm, ...],
     ) -> list[Combination]:
         """
         Sort input dictionaries while tolerating missing optional inputs.
@@ -768,11 +897,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         keys use None as the explicit placeholder, guarded by a presence flag so
         they are not compared directly with concrete input values.
         """
-        return sorted(
+        return sort_items(
             combinations,
-            key=lambda combo: tuple(
-                (key not in combo, combo.get(key, None)) for key in sort_key
-            ),
+            terms,
+            value_for=lambda combo, field: combo.get(field),
+            identity_for=lambda combo: combo,
         )
 
     def _manager_combinations(
@@ -844,6 +973,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                         manager_combinations
                     )
                 sort_key = self._normalized_sort_key()
+                sort_terms = (
+                    normalize_ordering(sort_key) if sort_key is not None else ()
+                )
                 needs_manager_access = self._filters_or_sort_require_manager_access(
                     sorted_filters
                 )
@@ -858,29 +990,22 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                         sorted_filters["prop_filters"],
                         sorted_filters["prop_excludes"],
                     )
-                    if sort_key is not None:
-                        getters = [
-                            attrgetter(key.replace("__", ".")) for key in sort_key
-                        ]
-                        manager_combinations = sorted(
-                            manager_combinations,
-                            key=lambda manager_obj: tuple(
-                                getter(manager_obj) for getter in getters
-                            ),
+                    manager_combinations = self._apply_call_groups(manager_combinations)
+                    if sort_terms:
+                        manager_combinations = sort_items(
+                            manager_combinations, sort_terms
                         )
                     identifications = self._manager_identifications(
                         manager_combinations
                     )
                 else:
                     identifications = current_combinations
-                    if sort_key is not None:
+                    if sort_terms:
                         identifications = self._sort_dict_combinations(
                             identifications,
-                            sort_key,
+                            sort_terms,
                         )
 
-                if self.reverse:
-                    identifications.reverse()
                 self._data = identifications
 
         return self._data
@@ -1129,7 +1254,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 not in allowed_identification_keys
             ):
                 continue
-            if self._filter_prop_combinations([manager], prop_filters, prop_excludes):
+            if self._apply_call_groups(
+                self._filter_prop_combinations([manager], prop_filters, prop_excludes)
+            ):
                 yield manager.identification
 
     def _filter_prop_combinations(
@@ -1225,7 +1352,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __getitem__(
         self, item: int | slice
-    ) -> GeneralManagerType | CalculationBucket[GeneralManagerType]:
+    ) -> GeneralManagerType | Bucket[GeneralManagerType]:
         """
         Retrieve a manager instance or subset of combinations.
 
@@ -1240,14 +1367,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         items = self.generate_combinations()
         result = items[item]
         if isinstance(result, list):
-            new_bucket = self._derive(
-                filter_definitions=self.filter_definitions.copy(),
-                exclude_definitions=self.exclude_definitions.copy(),
-                sort_key=self.sort_key,
-                reverse=self.reverse,
+            from general_manager.bucket._materialized_bucket import MaterializedBucket
+
+            return MaterializedBucket(
+                self._manager_class,
+                tuple(self._manager_class(**combination) for combination in result),
+                snapshot=self._effective_search_date,
             )
-            new_bucket._data = result
-            return new_bucket
         return self._manager_class(**result)
 
     def __contains__(self, item: GeneralManagerType) -> bool:
@@ -1285,31 +1411,34 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         else:
             raise MultipleCalculationMatchError()
 
-    def sort(
-        self, key: str | tuple[str, ...], reverse: bool = False
-    ) -> CalculationBucket[GeneralManagerType]:
+    def sort(self, *fields: str) -> CalculationBucket[GeneralManagerType]:
         """
-        Create a new CalculationBucket configured to order generated combinations by the given attribute key.
+        Create a new CalculationBucket configured to order generated combinations.
 
         Sorting by raw input keys happens before managers are built. Sorting by
         computed properties builds manager instances and reads the named
-        attributes. Missing attributes raise ``AttributeError`` when the bucket
-        materializes; incomparable values raise ``TypeError`` from Python's
-        sort. Exceptions raised by computed properties propagate unchanged.
+        attributes. Each signed field controls its own direction, and null
+        values remain last in either direction. Declared paths are validated
+        before materialization.
 
         Parameters:
-            key: Attribute name or tuple of attribute names to use for ordering generated manager combinations.
-            reverse: If True, sort in descending order.
+            fields: Signed attribute names; prefix a field with ``-`` for
+                descending order.
 
         Returns:
-            A new CalculationBucket configured to sort combinations by the provided key and direction.
+            A new CalculationBucket configured with the supplied ordering.
         """
         self._ensure_as_of_compatible()
+        terms = normalize_ordering(fields)
+        if not terms:
+            return self.all()
+        validate_ordering_fields(self._manager_class, terms)
         return self._derive(
             filter_definitions=self.filter_definitions,
             exclude_definitions=self.exclude_definitions,
-            sort_key=key,
-            reverse=reverse,
+            sort_fields=tuple(term.signed_field for term in terms),
+            filter_call_groups=self._filter_call_groups,
+            exclude_call_groups=self._exclude_call_groups,
         )
 
     def group_by(self, *group_by_keys: str) -> GroupBucket[GeneralManagerType]:
@@ -1323,7 +1452,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         The returned bucket starts from an ``all()`` copy, then clears cached
         data and raw/parsed filter and exclude definitions. It preserves the
-        manager class, sort key, and reverse flag.
+        manager class and private signed ordering state.
 
         Returns:
             CalculationBucket[GeneralManagerType]: Bucket with no combinations
@@ -1335,32 +1464,25 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         own.exclude_definitions = {}
         own._filters = {}
         own._excludes = {}
+        own._filter_call_groups = ()
+        own._exclude_call_groups = ()
+        own._parsed_filter_call_groups = ()
+        own._parsed_exclude_call_groups = ()
         own._allowed_identifications = []
         return own
 
     def with_instances(
         self,
         instances: Iterable[GeneralManagerType],
-    ) -> CalculationBucket[GeneralManagerType]:
-        """Return a materialized subset using declared input identifications."""
+    ) -> Bucket[GeneralManagerType]:
+        """Return the exact supplied instances without reconstruction."""
         self._ensure_as_of_compatible()
-        from general_manager.manager.general_manager import GeneralManager
+        from general_manager.bucket._materialized_bucket import MaterializedBucket
 
-        identifications: list[Combination] = []
-        for instance in instances:
+        selected = tuple(instances)
+        for instance in selected:
             if instance.__class__ != self._manager_class:
                 raise IncompatibleBucketTypeError(self.__class__, type(instance))
-            if isinstance(instance, GeneralManager):
-                instance._ensure_as_of_compatible()
-            identifications.append(dict(instance.identification))
-        subset = self._derive(
-            filter_definitions=self.filter_definitions.copy(),
-            exclude_definitions=self.exclude_definitions.copy(),
-            sort_key=self.sort_key,
-            reverse=self.reverse,
+        return MaterializedBucket(
+            self._manager_class, selected, snapshot=self._effective_search_date
         )
-        subset._allowed_identifications = [
-            dict(identification) for identification in identifications
-        ]
-        subset._data = identifications
-        return subset

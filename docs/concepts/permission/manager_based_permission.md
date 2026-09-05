@@ -109,6 +109,11 @@ class Permission(OverrideManagerPermission):
 
 For `total_capex`, only `isFinanceTeam` is evaluated locally; the class-level `__update__` rule still applies to other attributes.
 
+Field-specific dictionaries are collected across the permission class MRO from
+base classes to derived classes. A child declaration for the same field replaces
+the inherited declaration, so a subclass with no declaration retains its
+parent's field rules while an explicit declaration can change them.
+
 When `__based_on__` is set, delegated permissions always remain an outer gate
 in both classes. In read planning this is an AND with the local alternatives:
 the delegated plan must allow access as well as one local alternative. A

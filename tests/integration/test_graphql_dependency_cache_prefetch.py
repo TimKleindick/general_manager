@@ -13,7 +13,7 @@ from general_manager.measurement import Measurement, MeasurementField
 from general_manager.permission.base_permission import ReadPermissionPlan
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.permission.permission_checks import register_permission
-from general_manager.utils.make_cache_key import make_cache_key
+from general_manager.utils._make_cache_key import make_cache_key
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
 

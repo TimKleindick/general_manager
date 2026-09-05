@@ -21,10 +21,16 @@ from general_manager.interface.requests import (
     RequestExcludeNotSupportedError,
     RequestField,
     RequestFilter,
+    RequestFilterBinding,
+    RequestIncompleteResultError,
     RequestLocalPaginationUnsupportedError,
+    RequestPlanConflictError,
+    RequestPlanFragment,
     RequestQueryOperation,
     RequestQueryPlan,
     RequestQueryResult,
+    RequestLocalPredicate,
+    RequestSingleItemRequiredError,
     RequestSingleResponseRequiredError,
     RequestTransportConfig,
     RequestTransportResponse,
@@ -45,6 +51,7 @@ class RemoteProject(GeneralManager):
         status = RequestField(str)
         updated_at = RequestField(datetime)
         local_name = RequestField(str)
+        local_status = RequestField(str, source="status")
 
         class Meta:
             filters: ClassVar[dict[str, RequestFilter]] = {
@@ -70,6 +77,18 @@ class RemoteProject(GeneralManager):
                 "local_name__icontains": RequestFilter(
                     allow_local_fallback=True,
                     value_type=str,
+                ),
+                "local_name__exact": RequestFilter(
+                    allow_local_fallback=True,
+                    value_type=str,
+                ),
+                "local_status__exact": RequestFilter(
+                    allow_local_fallback=True,
+                    value_type=str,
+                ),
+                "status__in": RequestFilter(
+                    allow_local_fallback=True,
+                    value_type=tuple,
                 ),
             }
             query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
@@ -141,6 +160,8 @@ class RemoteProject(GeneralManager):
                     )
                 )
             if plan.operation_name == "search":
+                if plan.body.get("q") == "missing":
+                    return RequestQueryResult(items=(), total_count=0)
                 return RequestQueryResult(
                     items=(
                         {
@@ -215,6 +236,20 @@ class PayloadProject(GeneralManager):
         )
 
         class Meta:
+            filters: ClassVar[dict[str, RequestFilter]] = {
+                "display_name": RequestFilter(
+                    allow_local_fallback=True,
+                    value_type=str,
+                ),
+                "optional_label": RequestFilter(
+                    allow_local_fallback=True,
+                    value_type=str,
+                ),
+                "required_label": RequestFilter(
+                    allow_local_fallback=True,
+                    value_type=str,
+                ),
+            }
             query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
                 "detail": RequestQueryOperation(
                     name="detail",
@@ -328,6 +363,118 @@ class TestRequestInterface(SimpleTestCase):
             len(RemoteProject.Interface.calls), calls_after_materialization
         )
 
+    def test_materialized_request_union_deduplicates_left_first(self) -> None:
+        """Request composition uses represented rows and retains the left instance."""
+        first = RemoteProject(1)
+        duplicate = RemoteProject(1)
+        second = RemoteProject(2)
+
+        union = RemoteProject.all().with_instances(
+            [first, second]
+        ) | RemoteProject.all().with_instances([duplicate])
+
+        self.assertEqual(list(union), [first, second])
+        self.assertIs(union[0], first)
+
+    def test_with_instances_keeps_request_lookup_validation(self) -> None:
+        """Exact request subsets retain the request capability validation seam."""
+        materialized = RemoteProject.all().with_instances([RemoteProject(1)])
+
+        with self.assertRaises(UnknownRequestFilterError):
+            materialized.filter(foo="bar")
+        with self.assertRaises(RequestExcludeNotSupportedError):
+            materialized.exclude(name__icontains="beta")
+
+    def test_with_instances_rejects_request_manager_subclasses(self) -> None:
+        """Exact request subsets cannot contain a subtype of the source manager."""
+
+        class RemoteProjectChild(RemoteProject):
+            pass
+
+        with self.assertRaises(TypeError):
+            RemoteProject.all().with_instances([RemoteProjectChild(1)])
+
+    def test_materialized_membership_uses_complete_request_identity(self) -> None:
+        """Request subsets compare concrete class, identification, and snapshot."""
+
+        class RemoteProjectChild(RemoteProject):
+            pass
+
+        first = RemoteProject(1)
+        first._effective_search_date = "one"
+        materialized = RemoteProject.all().with_instances([first])
+        equivalent = RemoteProject(1)
+        equivalent._effective_search_date = "one"
+        snapshot_mismatch = RemoteProject(1)
+        snapshot_mismatch._effective_search_date = "two"
+        subclass = RemoteProjectChild(1)
+        subclass._effective_search_date = "one"
+        unrelated = PayloadProject(1)
+        unrelated._effective_search_date = "one"
+
+        self.assertIn(equivalent, materialized)
+        self.assertNotIn(snapshot_mismatch, materialized)
+        self.assertNotIn(subclass, materialized)
+        self.assertNotIn(unrelated, materialized)
+
+    def test_materialized_exclude_preserves_each_call_group(self) -> None:
+        """Concrete request rows use NOT(AND) exclusions without empty matches."""
+        response = RequestQueryResult(
+            items=(
+                {
+                    "id": 1,
+                    "name": "Alpha",
+                    "status": "active",
+                    "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                    "local_name": "Alpha Local",
+                },
+                {
+                    "id": 2,
+                    "name": "Beta",
+                    "status": "active",
+                    "updated_at": datetime(2026, 3, 10, 9, 0, 0),
+                    "local_name": "Beta Local",
+                },
+                {
+                    "id": 3,
+                    "name": "Gamma",
+                    "status": "inactive",
+                    "updated_at": datetime(2026, 3, 9, 9, 0, 0),
+                    "local_name": "Gamma Local",
+                },
+            )
+        )
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=response,
+        ):
+            source = RemoteProject.all()
+            materialized = source.with_instances(tuple(source))
+
+        self.assertEqual(
+            [
+                item.identification["id"]
+                for item in materialized.exclude(
+                    status="active", local_name__icontains="alpha"
+                )
+            ],
+            [2, 3],
+        )
+        self.assertEqual(
+            [
+                item.identification["id"]
+                for item in materialized.exclude(status="active").exclude(
+                    local_name__icontains="alpha"
+                )
+            ],
+            [3],
+        )
+        self.assertEqual(
+            [item.identification["id"] for item in materialized.exclude()],
+            [1, 2, 3],
+        )
+
     def test_request_capabilities_alias_is_reexported_from_bundles_package(
         self,
     ) -> None:
@@ -338,7 +485,7 @@ class TestRequestInterface(SimpleTestCase):
     def test_meta_configuration_is_normalized_onto_interface(self) -> None:
         self.assertEqual(
             set(RemoteProject.Interface.fields),
-            {"name", "status", "updated_at", "local_name"},
+            {"name", "status", "updated_at", "local_name", "local_status"},
         )
         self.assertIn("status", RemoteProject.Interface.filters)
         self.assertIn("detail", RemoteProject.Interface.query_operations)
@@ -403,6 +550,132 @@ class TestRequestInterface(SimpleTestCase):
             {"state": "active", "search": "alp"},
         )
 
+    def test_chained_independent_remote_filters_remain_on_request(self) -> None:
+        bucket = (
+            RemoteProject.filter(status="active")
+            .filter(page=1, ordering="-updated_at")
+            .filter(list_only="recent")
+        )
+
+        list(bucket)
+
+        plan = RemoteProject.Interface.calls[-1]["plan"]
+        self.assertEqual(
+            dict(plan.query_params),
+            {
+                "state": "active",
+                "page": 1,
+                "sort": "-updated_at",
+                "listOnly": "recent",
+            },
+        )
+        self.assertEqual(plan.local_predicates, ())
+
+    def test_compiler_filter_preserves_remote_and_local_contributions(self) -> None:
+        """A compiler fragment can restrict both the request and returned rows."""
+
+        def compile_tenant_status(binding: object) -> RequestPlanFragment:
+            del binding
+            return RequestPlanFragment(
+                query_params={"tenant_id": 42},
+                local_predicates=(RequestLocalPredicate("status", "active", "filter"),),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "tenant_status": RequestFilter(
+                value_type=str,
+                compiler=compile_tenant_status,
+            ),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            items = list(RemoteProject.filter(tenant_status="active"))
+
+        self.assertEqual([item.identification["id"] for item in items], [1])
+        plan = RemoteProject.Interface.calls[-1]["plan"]
+        self.assertEqual(dict(plan.query_params), {"tenant_id": 42})
+        self.assertEqual(
+            plan.local_predicates,
+            (RequestLocalPredicate("status", "active", "filter", 0),),
+        )
+
+    def test_filter_compiler_can_emit_a_negated_local_predicate(self) -> None:
+        def compile_not_status(binding: RequestFilterBinding) -> RequestPlanFragment:
+            return RequestPlanFragment(
+                local_predicates=(
+                    RequestLocalPredicate("status", binding.value, "exclude"),
+                ),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "not_status": RequestFilter(value_type=str, compiler=compile_not_status),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            items = list(RemoteProject.filter(not_status="active"))
+        self.assertEqual([item.status for item in items], ["inactive"])
+
+    def test_compiler_negation_uses_its_originating_call_group(self) -> None:
+        """A compiler negation cannot merge with a later ordinary exclude call."""
+
+        def compile_not_status(binding: RequestFilterBinding) -> RequestPlanFragment:
+            return RequestPlanFragment(
+                local_predicates=(
+                    RequestLocalPredicate("status", binding.value, "exclude"),
+                ),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "not_status": RequestFilter(value_type=str, compiler=compile_not_status),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            items = list(
+                RemoteProject.filter(not_status="active").exclude(
+                    local_name__exact="Beta Local"
+                )
+            )
+
+        self.assertEqual(items, [])
+        plan = RemoteProject.Interface.calls[-1]["plan"]
+        self.assertEqual(
+            plan.local_predicates,
+            (
+                RequestLocalPredicate("status", "active", "exclude", 0),
+                RequestLocalPredicate("local_name__exact", "Beta Local", "exclude", 1),
+            ),
+        )
+
+    def test_compiler_filter_conflict_does_not_discard_remote_contribution(
+        self,
+    ) -> None:
+        """A mixed compiler fragment still rejects an unrepresentable remote conflict."""
+
+        def compile_tenant_status(binding: object) -> RequestPlanFragment:
+            del binding
+            return RequestPlanFragment(
+                query_params={"tenant_id": 42},
+                local_predicates=(RequestLocalPredicate("status", "active", "filter"),),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "tenant": RequestFilter(remote_name="tenant_id", value_type=int),
+            "tenant_status": RequestFilter(
+                value_type=str,
+                compiler=compile_tenant_status,
+            ),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            with self.assertRaises(RequestPlanConflictError):
+                RemoteProject.filter(tenant=99).filter(tenant_status="active")
+
+    def test_chained_conflicting_remote_filter_fails_before_request(self) -> None:
+        with self.assertRaises(RequestPlanConflictError):
+            RemoteProject.filter(status="active").filter(status="inactive")
+
+        self.assertEqual(RemoteProject.Interface.calls, [])
+
     def test_chained_remote_exclude_normalizes_scalar_lookup_values(self) -> None:
         list(RemoteProject.filter(status="active").exclude(status="inactive"))
 
@@ -430,6 +703,231 @@ class TestRequestInterface(SimpleTestCase):
         call = RemoteProject.Interface.calls[-1]
         self.assertEqual(dict(call["plan"].query_params), {"state_not": "inactive"})
 
+    def test_compiler_exclude_keeps_transformed_alias_predicate(self) -> None:
+        """Compiler predicates retain their alias and transformed value for excludes."""
+
+        def compile_status_code(binding: RequestFilterBinding) -> RequestPlanFragment:
+            return RequestPlanFragment(
+                local_predicates=(
+                    RequestLocalPredicate("status", "inactive", binding.action),
+                )
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "status_code": RequestFilter(
+                value_type=int,
+                compiler=compile_status_code,
+            ),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            items = list(
+                RemoteProject.exclude(local_name__exact="Alpha Local").exclude(
+                    status_code=2
+                )
+            )
+
+        self.assertEqual(items, [])
+        plan = RemoteProject.Interface.calls[-1]["plan"]
+        self.assertEqual(
+            plan.local_predicates,
+            (
+                RequestLocalPredicate("local_name__exact", "Alpha Local", "exclude", 0),
+                RequestLocalPredicate("status", "inactive", "exclude", 1),
+            ),
+        )
+
+    def test_compiler_exclude_preserves_remote_and_local_contributions(self) -> None:
+        """Mixed compiler excludes retain the remote scope before local matching."""
+
+        def compile_tenant_status(binding: RequestFilterBinding) -> RequestPlanFragment:
+            return RequestPlanFragment(
+                query_params={"tenant_id": 42},
+                local_predicates=(
+                    RequestLocalPredicate("status", binding.value, binding.action),
+                ),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "tenant_status": RequestFilter(
+                value_type=str,
+                compiler=compile_tenant_status,
+            ),
+        }
+        tenant_items = (
+            {
+                "id": 1,
+                "name": "Alpha",
+                "status": "active",
+                "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                "local_name": "Alpha Local",
+            },
+            {
+                "id": 2,
+                "name": "Beta",
+                "status": "inactive",
+                "updated_at": datetime(2026, 3, 10, 9, 0, 0),
+                "local_name": "Beta Local",
+            },
+        )
+
+        plans: list[RequestQueryPlan] = []
+
+        def execute(plan: RequestQueryPlan) -> RequestQueryResult:
+            plans.append(plan)
+            if plan.query_params.get("tenant_id") == 42:
+                return RequestQueryResult(items=tenant_items, total_count=2)
+            return RequestQueryResult(
+                items=(
+                    *tenant_items,
+                    {
+                        "id": 3,
+                        "name": "Gamma",
+                        "status": "active",
+                        "updated_at": datetime(2026, 3, 9, 9, 0, 0),
+                        "local_name": "Gamma Local",
+                    },
+                ),
+                total_count=3,
+            )
+
+        with (
+            patch.object(RemoteProject.Interface, "filters", filters),
+            patch.object(
+                RemoteProject.Interface,
+                "execute_request_plan",
+                side_effect=execute,
+            ),
+        ):
+            items = list(RemoteProject.exclude(tenant_status="inactive"))
+
+        self.assertEqual([item.identification["id"] for item in items], [1])
+        self.assertEqual(len(plans), 1)
+        plan = plans[0]
+        self.assertEqual(dict(plan.query_params), {"tenant_id": 42})
+        self.assertEqual(
+            plan.local_predicates,
+            (RequestLocalPredicate("status", "inactive", "exclude", 0),),
+        )
+
+    def test_compound_mixed_compiler_exclude_fails_before_request(self) -> None:
+        """A mixed compiler exclusion cannot be combined into a flat NOT(AND)."""
+
+        def compile_tenant_status(binding: RequestFilterBinding) -> RequestPlanFragment:
+            return RequestPlanFragment(
+                query_params={"tenant_id": 42},
+                local_predicates=(
+                    RequestLocalPredicate("status", binding.value, binding.action),
+                ),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "tenant_status": RequestFilter(
+                value_type=str,
+                compiler=compile_tenant_status,
+            ),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            with self.assertRaises(RequestPlanConflictError):
+                RemoteProject.exclude(
+                    tenant_status="inactive",
+                    local_name__exact="Beta Local",
+                )
+
+        self.assertEqual(RemoteProject.Interface.calls, [])
+
+    def test_separate_remote_and_local_exclude_stays_wholly_local(self) -> None:
+        """Separate exclude fragments retain the group's NOT(AND) semantics."""
+        filters = {
+            **RemoteProject.Interface.filters,
+            "status": RequestFilter(
+                remote_name="state",
+                value_type=str,
+                supports_exclude=True,
+                exclude_remote_name="state_not",
+                allow_local_fallback=True,
+            ),
+        }
+        items = (
+            {
+                "id": 1,
+                "name": "Alpha",
+                "status": "active",
+                "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                "local_name": "Alpha Local",
+            },
+            {
+                "id": 2,
+                "name": "Beta",
+                "status": "active",
+                "updated_at": datetime(2026, 3, 10, 9, 0, 0),
+                "local_name": "Beta Local",
+            },
+        )
+        plans: list[RequestQueryPlan] = []
+
+        def execute(plan: RequestQueryPlan) -> RequestQueryResult:
+            plans.append(plan)
+            if plan.query_params.get("state_not") == "active":
+                return RequestQueryResult(items=(), total_count=0)
+            return RequestQueryResult(items=items, total_count=2)
+
+        with (
+            patch.object(RemoteProject.Interface, "filters", filters),
+            patch.object(
+                RemoteProject.Interface,
+                "execute_request_plan",
+                side_effect=execute,
+            ),
+        ):
+            result = list(
+                RemoteProject.exclude(
+                    status="active",
+                    local_name__exact="Beta Local",
+                )
+            )
+
+        self.assertEqual([item.identification["id"] for item in result], [1])
+        self.assertEqual(dict(plans[0].query_params), {})
+        self.assertEqual(
+            plans[0].local_predicates,
+            (
+                RequestLocalPredicate("status", "active", "exclude", 0),
+                RequestLocalPredicate("local_name__exact", "Beta Local", "exclude", 0),
+            ),
+        )
+
+    def test_conflicting_mixed_compiler_exclude_fails_before_request(self) -> None:
+        """A remote conflict cannot discard the remote half of a mixed exclude."""
+
+        def compile_tenant_status(binding: RequestFilterBinding) -> RequestPlanFragment:
+            return RequestPlanFragment(
+                query_params={"tenant_id": 42},
+                local_predicates=(
+                    RequestLocalPredicate("status", binding.value, binding.action),
+                ),
+            )
+
+        filters = {
+            **RemoteProject.Interface.filters,
+            "tenant": RequestFilter(
+                remote_name="tenant_id",
+                value_type=int,
+                supports_exclude=True,
+            ),
+            "tenant_status": RequestFilter(
+                value_type=str,
+                compiler=compile_tenant_status,
+            ),
+        }
+        with patch.object(RemoteProject.Interface, "filters", filters):
+            with self.assertRaises(RequestPlanConflictError):
+                RemoteProject.exclude(tenant=99).exclude(tenant_status="inactive")
+
+        self.assertEqual(RemoteProject.Interface.calls, [])
+
     def test_all_uses_unfiltered_collection_request(self) -> None:
         list(RemoteProject.all())
 
@@ -444,6 +942,52 @@ class TestRequestInterface(SimpleTestCase):
         self.assertEqual(items[0].name, "Alpha")
         call = RemoteProject.Interface.calls[-1]
         self.assertEqual(dict(call["plan"].query_params), {})
+
+    def test_local_fallback_uses_request_field_values_users_read(self) -> None:
+        bare = PayloadProject.filter(display_name="ALPHA")
+        exact = PayloadProject.filter(display_name__exact="ALPHA")
+        defaulted = PayloadProject.filter(optional_label="UNKNOWN")
+
+        self.assertEqual([item.identification["id"] for item in bare], [1])
+        self.assertEqual([item.identification["id"] for item in exact], [1])
+        self.assertEqual([item.identification["id"] for item in defaulted], [1])
+
+    def test_local_fallback_propagates_missing_required_request_fields(self) -> None:
+        with self.assertRaises(MissingRequestPayloadFieldError):
+            list(PayloadProject.filter(required_label="required"))
+
+    def test_lazy_request_filters_preserve_repeated_call_groups(self) -> None:
+        bucket = RemoteProject.filter(local_name__exact="Alpha Local").filter(
+            local_name__exact="Beta Local"
+        )
+
+        self.assertEqual(list(bucket), [])
+
+    def test_lazy_request_exclude_negates_each_local_call_group(self) -> None:
+        bucket = RemoteProject.exclude(
+            local_name__exact="Alpha Local", local_status__exact="inactive"
+        ).exclude(local_status__exact="inactive")
+
+        self.assertEqual([item.identification["id"] for item in bucket], [1])
+
+    def test_tuple_in_lookup_is_one_operand_through_manager_and_bucket(self) -> None:
+        manager_bucket = RemoteProject.filter(status__in=("active",))
+        materialized_bucket = (
+            RemoteProject.all()
+            .with_instances(tuple(RemoteProject.all()))
+            .filter(status__in=("active",))
+        )
+
+        self.assertEqual([item.identification["id"] for item in manager_bucket], [1])
+        self.assertEqual(
+            [item.identification["id"] for item in materialized_bucket], [1]
+        )
+
+    def test_supported_local_predicate_with_no_matches_returns_empty(self) -> None:
+        self.assertEqual(
+            list(RemoteProject.filter(status__in=("missing",))),
+            [],
+        )
 
     def test_request_plan_pickle_preserves_body_and_metadata(self) -> None:
         plan = RequestQueryPlan(
@@ -468,11 +1012,181 @@ class TestRequestInterface(SimpleTestCase):
         )
         self.assertEqual(dict(round_tripped.metadata), {"request_id": "req-1"})
 
-    def test_len_reflects_current_page_size_not_remote_total(self) -> None:
+    def test_count_reflects_represented_rows_and_exposes_remote_total(self) -> None:
         bucket = RemoteProject.filter(page=1, page_size=1)
+        response = RequestQueryResult(
+            items=(
+                {
+                    "id": 1,
+                    "name": "Alpha",
+                    "status": "active",
+                    "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                    "local_name": "Alpha Local",
+                },
+            ),
+            total_count=100,
+        )
 
-        self.assertEqual(len(bucket), 1)
-        self.assertEqual(bucket.count(), 2)
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=response,
+        ):
+            self.assertEqual(len(bucket), 1)
+            self.assertEqual(bucket.count(), 1)
+            self.assertEqual(bucket.total_count, 100)
+
+    def test_incomplete_remote_page_cannot_satisfy_manager_get(self) -> None:
+        with self.assertRaisesRegex(
+            RequestIncompleteResultError,
+            "cannot establish global uniqueness",
+        ):
+            RemoteProject.get(page=1, page_size=1)
+
+    def test_sort_preserves_incomplete_response_metadata(self) -> None:
+        response = RequestQueryResult(
+            items=(
+                {
+                    "id": 1,
+                    "name": "Alpha",
+                    "status": "active",
+                    "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                    "local_name": "Alpha Local",
+                },
+            ),
+            total_count=100,
+            page=2,
+            page_size=1,
+        )
+
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=response,
+        ):
+            for fields in ((), ("name",)):
+                with self.subTest(fields=fields):
+                    bucket = RemoteProject.all().sort(*fields)
+
+                    self.assertEqual(bucket.total_count, 100)
+                    self.assertEqual(bucket.upstream_page, 2)
+                    self.assertEqual(bucket.upstream_page_size, 1)
+                    self.assertFalse(bucket.response_is_complete)
+                    with self.assertRaises(RequestIncompleteResultError):
+                        bucket.get()
+
+    def test_noop_calls_after_sort_preserve_incomplete_response_metadata(self) -> None:
+        """No-op calls keep a sorted partial or unknown response incomplete."""
+        item = {
+            "id": 1,
+            "name": "Alpha",
+            "status": "active",
+            "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+            "local_name": "Alpha Local",
+        }
+        for label, total_count in (("partial", 100), ("unknown", None)):
+            for method_name in ("all", "filter", "exclude"):
+                with self.subTest(response=label, method=method_name):
+                    response = RequestQueryResult(
+                        items=(item,),
+                        total_count=total_count,
+                        page=2,
+                        page_size=1,
+                    )
+                    with patch.object(
+                        RemoteProject.Interface,
+                        "execute_request_plan",
+                        return_value=response,
+                    ):
+                        sorted_bucket = RemoteProject.all().sort("name")
+                        bucket = getattr(sorted_bucket, method_name)()
+
+                        self.assertEqual(bucket.total_count, total_count)
+                        self.assertEqual(bucket.upstream_page, 2)
+                        self.assertEqual(bucket.upstream_page_size, 1)
+                        self.assertFalse(bucket.response_is_complete)
+                        with self.assertRaises(RequestIncompleteResultError):
+                            bucket.get()
+
+    def test_missing_total_one_row_cannot_satisfy_manager_get(self) -> None:
+        response = RequestQueryResult(
+            items=(
+                {
+                    "id": 1,
+                    "name": "Alpha",
+                    "status": "active",
+                    "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                    "local_name": "Alpha Local",
+                },
+            )
+        )
+
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=response,
+        ):
+            with self.assertRaisesRegex(
+                RequestIncompleteResultError,
+                "did not provide total_count",
+            ):
+                RemoteProject.get()
+
+    def test_complete_one_row_can_satisfy_manager_get(self) -> None:
+        response = RequestQueryResult(
+            items=(
+                {
+                    "id": 1,
+                    "name": "Alpha",
+                    "status": "active",
+                    "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                    "local_name": "Alpha Local",
+                },
+            ),
+            total_count=1,
+        )
+
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            return_value=response,
+        ):
+            self.assertEqual(RemoteProject.get().identification, {"id": 1})
+
+    def test_zero_and_multiple_rows_keep_cardinality_error(self) -> None:
+        empty = RequestQueryResult(items=(), total_count=0)
+        multiple = RequestQueryResult(
+            items=(
+                {
+                    "id": 1,
+                    "name": "Alpha",
+                    "status": "active",
+                    "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                    "local_name": "Alpha Local",
+                },
+                {
+                    "id": 2,
+                    "name": "Beta",
+                    "status": "inactive",
+                    "updated_at": datetime(2026, 3, 10, 9, 0, 0),
+                    "local_name": "Beta Local",
+                },
+            ),
+            total_count=2,
+        )
+
+        for response in (empty, multiple):
+            with self.subTest(response=response):
+                with patch.object(
+                    RemoteProject.Interface,
+                    "execute_request_plan",
+                    return_value=response,
+                ):
+                    with self.assertRaisesRegex(
+                        RequestSingleItemRequiredError,
+                        "requires exactly one item",
+                    ):
+                        RemoteProject.get()
 
     def test_execute_request_plan_normalizes_transport_response_before_serializing(
         self,
@@ -569,19 +1283,72 @@ class TestRequestInterface(SimpleTestCase):
             {"q": "alpha"},
         )
 
-    def test_operation_specific_filters_fall_back_to_interface_filters(self) -> None:
+    def test_named_operation_supported_filter_with_no_matches_returns_empty(
+        self,
+    ) -> None:
         items = list(
+            RemoteProject.Interface.query_operation("search", search_only="missing")
+        )
+
+        self.assertEqual(items, [])
+        self.assertEqual(
+            [call["operation"] for call in RemoteProject.Interface.calls],
+            ["search"],
+        )
+        self.assertEqual(
+            dict(RemoteProject.Interface.calls[0]["plan"].body),
+            {"q": "missing"},
+        )
+
+    def test_explicit_operation_filters_reject_interface_filter(self) -> None:
+        with self.assertRaises(UnknownRequestFilterError):
+            RemoteProject.Interface.query_operation("search", status="active")
+
+        with self.assertRaises(UnknownRequestFilterError):
+            RemoteProject.Interface.query_operation("search", status__exact="active")
+
+        self.assertEqual(RemoteProject.Interface.calls, [])
+
+        list(
             RemoteProject.Interface.query_operation(
-                "search",
-                search_only="alpha",
-                status="active",
+                "search", search_only__exact="alpha"
             )
         )
 
-        self.assertEqual(len(items), 1)
-        plan = RemoteProject.Interface.calls[-1]["plan"]
+        self.assertEqual(
+            dict(RemoteProject.Interface.calls[-1]["plan"].body),
+            {"q": "alpha"},
+        )
+
+    def test_none_operation_filters_inherit_interface_filters(self) -> None:
+        class InheritedFilterProject(GeneralManager):
+            class Interface(RequestInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    filters: ClassVar[dict[str, RequestFilter]] = {
+                        "status": RequestFilter(remote_name="state", value_type=str),
+                    }
+                    query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                        "detail": RequestQueryOperation(
+                            name="detail",
+                            method="GET",
+                            path="/items/{id}",
+                        ),
+                        "list": RequestQueryOperation(
+                            name="list",
+                            method="GET",
+                            path="/items",
+                            filters=None,
+                        ),
+                    }
+
+        plan = InheritedFilterProject.filter(status="active").request_plan
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
         self.assertEqual(dict(plan.query_params), {"state": "active"})
-        self.assertEqual(dict(plan.body), {"q": "alpha"})
 
     def test_explicit_empty_operation_filters_do_not_inherit_interface_filters(
         self,
@@ -618,6 +1385,8 @@ class TestRequestInterface(SimpleTestCase):
             EmptyFilterProject.Interface.get_query_operation("search").filters,
             {},
         )
+        with self.assertRaises(UnknownRequestFilterError):
+            EmptyFilterProject.Interface.query_operation("search", status="active")
 
     def test_prefetched_payload_is_used_for_attributes(self) -> None:
         project = RemoteProject.filter(status="active").first()
@@ -938,6 +1707,7 @@ class TestRequestInterface(SimpleTestCase):
                 self.assertEqual(raw_items, (matching_payload,))
                 self.assertIs(raw_items[0], matching_payload)
                 self.assertEqual(bucket._count_override, 1)
+                self.assertIsNone(bucket.total_count)
 
         self.assertEqual(bucket.count(), 1)
         execute_plan.assert_called_once()
@@ -1076,7 +1846,7 @@ class TestRequestInterface(SimpleTestCase):
     def test_lookup_normalization_preserves_tuple_arity(self) -> None:
         self.assertEqual(
             RequestBucket._normalize_lookup_kwargs({"page": (1, 2)}),
-            {"page": (1, 2)},
+            {"page": ((1, 2),)},
         )
 
     def test_direct_manager_read_uses_detail_operation(self) -> None:

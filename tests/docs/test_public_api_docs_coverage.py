@@ -154,11 +154,31 @@ def test_file_upload_guides_cover_required_security_and_operation_topics() -> No
     assert missing_terms == []
 
 
-def test_graphql_sort_examples_use_generated_lowercase_enum_values() -> None:
+def test_graphql_order_examples_use_typed_enum_inputs() -> None:
     guide = (DOCS_ROOT / "howto" / "expose_via_graphql.md").read_text(encoding="utf-8")
 
-    assert "projectList(filter: $filters, sortBy: name, page: 1, pageSize: 20)" in guide
-    assert 'projectList(groupBy: ["status"], sortBy: status, reverse: true)' in guide
+    assert (
+        "projectList(filter: $filters, orderBy: [{field: name}], page: 1, pageSize: 20)"
+        in guide
+    )
+    assert (
+        'projectGroups(groupBy: ["status"], orderBy: [{field: status, direction: DESC}])'
+        in guide
+    )
+    assert "without those fields omit `sums` entirely" in guide
+
+
+def test_migration_guides_describe_lossy_index_keys_and_replacement_sorting() -> None:
+    migration_guide = (DOCS_ROOT / "howto" / "migrate-to-stable-api.md").read_text(
+        encoding="utf-8"
+    )
+    remote_guide = (
+        DOCS_ROOT / "examples" / "remote_manager_interface_end_to_end.md"
+    ).read_text(encoding="utf-8")
+
+    assert "collision-resistant but not reversible" in migration_guide
+    assert "stored metadata" in migration_guide
+    assert "one complete bucket sort call" in remote_guide
 
 
 def test_manager_permission_guide_distinguishes_conditional_instance_gates() -> None:

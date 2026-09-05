@@ -219,7 +219,7 @@ class GraphQLWarmUpRegistryTests(SimpleTestCase):
             cache="dependency",
             timeout=None,
             refresh_at=None,
-            version=1,
+            version=2,
         )
 
         register_graphql_warmup_recipe(recipe)

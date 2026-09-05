@@ -9,7 +9,7 @@ exposes them as thin classmethods / staticmethods for backward compatibility.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Iterable, Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from typing import (
@@ -22,9 +22,14 @@ from typing import (
 import graphene
 from graphql import GraphQLError
 
-from django.utils import timezone
-
 from general_manager.conf import get_setting
+from general_manager.api.graphql_ordering import (
+    GraphQLOrderingInputError,
+    create_ordering_types,
+    graphql_name_for_path,
+    order_by_to_sort_terms,
+)
+from general_manager.bucket._ordering import SortTerm, sort_items
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
@@ -33,11 +38,13 @@ from general_manager.search.backend_registry import get_search_backend
 from general_manager.search.backend import SearchHit
 from general_manager.search.registry import (
     get_search_config,
+    get_type_label,
     validate_filter_keys,
 )
 from general_manager.utils.filter_parser import create_filter_function
 from general_manager.api.graphql_errors import (
     MeasurementScalar,
+    PageInfo,
     map_field_to_graphene_base_type,
     get_read_permission_filter,
 )
@@ -74,7 +81,6 @@ GrapheneReadMapper = Callable[
 ]
 SearchResolverPayload = dict[str, object]
 SearchHitEntry = tuple[float | None, SearchHit, GeneralManager]
-SortableValue = float | datetime | str | None
 SearchTotalMode = Literal["exact", "bounded"]
 _BAD_USER_INPUT_CODE = "BAD_USER_INPUT"
 _PAGE_MUST_BE_POSITIVE = "page must be a positive integer."
@@ -84,6 +90,35 @@ SEARCH_TOTAL_MODE_ERROR = "must be one of: exact, bounded."
 SEARCH_TOTAL_SCAN_LIMIT_ERROR = (
     "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT must be a positive integer."
 )
+
+
+class SearchOrderingError(GraphQLError):
+    """GraphQL errors raised while validating generated search ordering."""
+
+    @classmethod
+    def enum_alias_collision(
+        cls,
+        graphql_name: str,
+        existing: str,
+        field: str,
+    ) -> "SearchOrderingError":
+        return cls(
+            f"Search ordering enum member {graphql_name!r} maps to both "
+            f"{existing!r} and {field!r}."
+        )
+
+    @classmethod
+    def unsupported_field(
+        cls,
+        fields: str,
+        manager_name: str,
+        index_name: str,
+    ) -> "SearchOrderingError":
+        return cls(
+            f"Ordering field(s) {fields} are not sortable for {manager_name} "
+            f"on index {index_name!r}.",
+            extensions={"code": _BAD_USER_INPUT_CODE},
+        )
 
 
 def _bad_user_input_error(message: str) -> GraphQLError:
@@ -148,53 +183,26 @@ def get_graphql_search_total_scan_limit() -> int:
     return raw_limit
 
 
-def normalize_search_sort_value(value: object) -> SortableValue:
-    """Normalise a search sort value to a comparable type."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float, Decimal)):
-        return float(value)
-    if isinstance(value, datetime):
-        if timezone.is_naive(value):
-            return timezone.make_aware(value)
-        return value
-    if isinstance(value, date):
-        return timezone.make_aware(datetime.combine(value, datetime.min.time()))
-    if isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value)
-        except ValueError:
-            return value
-        if timezone.is_naive(parsed):
-            parsed = timezone.make_aware(parsed)
-        return parsed
-    return str(value)
-
-
 def sort_search_hit_entries(
     entries: list[SearchHitEntry],
     *,
-    sort_by: str | None,
-    sort_desc: bool,
+    terms: tuple[SortTerm, ...],
 ) -> None:
     """Sort retained search entries using GraphQL search response semantics."""
-    if sort_by:
-
-        def _sort_key(
-            item: SearchHitEntry,
-        ) -> tuple[bool, SortableValue]:
-            """Return a null-last comparable key for an indexed search hit."""
-            value = item[1].data.get(sort_by) if item[1].data else None
-            normalized = normalize_search_sort_value(value)
-            return (normalized is None, normalized)
-
-        entries.sort(key=_sort_key)
-        if sort_desc:
-            null_start = next(
-                (index for index, item in enumerate(entries) if _sort_key(item)[0]),
-                len(entries),
-            )
-            entries[:null_start] = reversed(entries[:null_start])
+    if terms:
+        entries[:] = sort_items(
+            entries,
+            terms,
+            value_for=lambda entry, field: entry[1].data.get(field)
+            if entry[1].data
+            else None,
+            identity_for=lambda entry: (
+                entry[1].type,
+                entry[1].identification,
+                entry[1].index,
+                entry[1].id,
+            ),
+        )
     else:
         entries.sort(key=lambda item: item[0] or 0, reverse=True)
 
@@ -203,13 +211,12 @@ def trim_search_hit_entries_to_window(
     entries: list[SearchHitEntry],
     *,
     requested_count: int,
-    sort_by: str | None,
-    sort_desc: bool,
+    terms: tuple[SortTerm, ...],
 ) -> None:
     """Keep only entries that can still appear in the requested global page."""
     if len(entries) <= requested_count:
         return
-    sort_search_hit_entries(entries, sort_by=sort_by, sort_desc=sort_desc)
+    sort_search_hit_entries(entries, terms=terms)
     del entries[requested_count:]
 
 
@@ -296,11 +303,15 @@ def merge_permission_filters(
 
     Returns:
         If *permission_filters* is empty, returns *filters* or ``None``.
-        Otherwise returns a list of merged dicts (one per permission set), or
-        ``None`` if the resulting list would be empty.
-        Permission filter keys override matching base filter keys in each merged
-        group. When *permission_filters* is empty, a non-empty *filters* mapping
-        is returned unchanged rather than copied. Empty permission constraints,
+    Otherwise returns a list of backend filter dicts (one per permission set),
+    or ``None`` if the resulting list would be empty. When a user and
+    permission mapping use the same lookup key, the backend group retains the
+    complete user mapping and omits that permission criterion. The later
+    per-instance permission check enforces every permission criterion against
+    the hydrated manager. This preserves their conjunction without losing
+    either value in the portable mapping format. When *permission_filters* is
+    empty, a non-empty *filters* mapping is returned unchanged rather than
+    copied. Empty permission constraints,
         ``{"filter": {}}``, and ``{"exclude": {}}`` all produce a copy of the
         base filter for that alternative; exclude-only constraints still rely on
         later per-instance authorization. This helper raises no search-specific
@@ -310,8 +321,10 @@ def merge_permission_filters(
         return filters or None
     groups: list[GraphQLFilterMapping] = []
     for permission_filter in permission_filters:
+        permission_mapping = permission_filter.get("filter", {})
         combined = dict(filters or {})
-        combined.update(permission_filter.get("filter", {}))
+        for key, value in permission_mapping.items():
+            combined.setdefault(key, value)
         groups.append(combined)
     return groups or None
 
@@ -465,7 +478,7 @@ def create_search_result_type(
 
     Returns:
         A ``SearchResult`` Graphene ObjectType with ``results``, ``total``,
-        ``total_is_exact``, ``took_ms``, and ``raw`` fields.
+        ``total_is_exact``, ``page_info``, and ``took_ms`` fields.
     """
     return type(
         "SearchResult",
@@ -474,8 +487,8 @@ def create_search_result_type(
             "results": graphene.List(union_type),
             "total": graphene.Int(),
             "total_is_exact": graphene.Boolean(),
+            "page_info": graphene.Field(PageInfo),
             "took_ms": graphene.Int(),
-            "raw": graphene.JSONString(),
         },
     )
 
@@ -933,6 +946,61 @@ def normalize_filter_input(
 # ---------------------------------------------------------------------------
 
 
+def _search_sortable_field_union(
+    manager_classes: Iterable[type[GeneralManager]],
+) -> dict[str, str]:
+    """Return the configured sortable-field union for the global search enum."""
+    fields: dict[str, str] = {}
+    for manager_class in manager_classes:
+        config = get_search_config(manager_class)
+        if config is None:
+            continue
+        for index_config in config.indexes:
+            for field in index_config.sorts:
+                graphql_name = graphql_name_for_path(field)
+                existing = fields.get(graphql_name)
+                if existing is not None and existing != field:
+                    raise SearchOrderingError.enum_alias_collision(
+                        graphql_name,
+                        existing,
+                        field,
+                    )
+                fields[graphql_name] = field
+    return fields
+
+
+def _validate_search_ordering(
+    manager_classes: Iterable[type[GeneralManager]],
+    *,
+    index_name: str,
+    terms: tuple[SortTerm, ...],
+) -> None:
+    """Ensure every selected manager exposes every term on the selected index."""
+    if not terms:
+        return
+    requested_fields = {term.field for term in terms}
+    for manager_class in manager_classes:
+        config = get_search_config(manager_class)
+        configured_fields = (
+            {
+                field
+                for index_config in config.indexes
+                if index_config.name == index_name
+                for field in index_config.sorts
+            }
+            if config is not None
+            else set()
+        )
+        unsupported = requested_fields - configured_fields
+        if unsupported:
+            fields = ", ".join(sorted(unsupported))
+            raise SearchOrderingError.unsupported_field(
+                fields,
+                manager_class.__name__,
+                index_name,
+            )
+
+
 def register_search_query(
     query_fields: dict[str, GrapheneFieldType],
     manager_registry: dict[str, type[GeneralManager]],
@@ -953,9 +1021,9 @@ def register_search_query(
     the resolver payload is the post-permission authorized total, not the
     backend raw total. In bounded mode, ``total`` is the authorized count found
     before the per-manager scan cap and ``total_is_exact`` tells callers whether
-    that count is exact. Sorting uses hit ``data[sort_by]`` when available and
-    does not validate the sort field ahead of comparison. Configured filter-key
-    validation runs on the parsed top-level search filters before permission
+    that count is exact. Typed ordering validates selected search-index
+    capabilities before any backend request. Configured filter-key validation
+    runs on the parsed top-level search filters before permission
     filters or relation normalizers are applied; exclude-derived permission keys
     are not validated by this search helper.
 
@@ -993,6 +1061,12 @@ def register_search_query(
         return None, search_result_type
 
     result_type = create_search_result_type(union_type)
+    sortable_union = _search_sortable_field_union(type_map.values())
+    ordering_types = create_ordering_types(
+        None,
+        scope="",
+        field_paths=sortable_union,
+    )
 
     def resolver(
         _root: object,
@@ -1001,8 +1075,7 @@ def register_search_query(
         index: str | None = None,
         types: list[str] | None = None,
         filters: GraphQLSearchFilterInput = None,
-        sort_by: str | None = None,
-        sort_desc: bool = False,
+        order_by: object = None,
         total_mode: str | None = None,
         page: int | None = None,
         page_size: int | None = None,
@@ -1015,8 +1088,7 @@ def register_search_query(
         hit identification, applies read permission filters/instance checks, and
         returns paginated authorized manager instances. Omitted ``page`` and
         ``page_size`` values default to ``1`` and ``10`` respectively. Supplied
-        non-positive values raise a ``GraphQLError``. Backend raw payloads are
-        collected once per backend request in the ``raw`` list.
+        non-positive values raise a ``GraphQLError``.
         """
         index_name = index or "global"
         current_page, limit = _resolve_search_pagination(page, page_size)
@@ -1030,14 +1102,33 @@ def register_search_query(
         backend = get_search_backend()
         manager_classes: list[type[GeneralManager]]
         if types:
-            manager_classes = [type_map[name] for name in types if name in type_map]
+            manager_classes = []
+            seen_type_names: set[str] = set()
+            for type_name in types:
+                if type_name in seen_type_names:
+                    continue
+                seen_type_names.add(type_name)
+                manager_class = type_map.get(type_name)
+                if manager_class is not None:
+                    manager_classes.append(manager_class)
         else:
             manager_classes = list(type_map.values())
+        try:
+            ordering_terms = order_by_to_sort_terms(
+                order_by,
+                allowed_fields=sortable_union.values(),
+            )
+        except GraphQLOrderingInputError as exc:
+            raise _bad_user_input_error(str(exc)) from exc
+        _validate_search_ordering(
+            manager_classes,
+            index_name=index_name,
+            terms=ordering_terms,
+        )
 
         hits: list[SearchHitEntry] = []
         total = 0
         took_ms: int | None = None
-        raw: list[object] = []
         requested_count = offset + limit
         fetch_limit = max(requested_count, limit)
         resolved_total_mode = normalize_search_total_mode(total_mode)
@@ -1049,7 +1140,7 @@ def register_search_query(
         total_is_exact = True
 
         for manager_class in manager_classes:
-            type_label = manager_class.__name__
+            type_label = get_type_label(manager_class)
             permission_plan = get_read_permission_filter(manager_class, info)
             decision = getattr(permission_plan, "decision", "conditional")
             if decision == "deny_all":
@@ -1087,20 +1178,29 @@ def register_search_query(
                     limit=query_limit,
                     offset=offset_cursor,
                     types=[type_label],
-                    sort_by=sort_by,
-                    sort_desc=sort_desc,
+                    sort=tuple(term.signed_field for term in ordering_terms)
+                    if ordering_terms
+                    else None,
                 )
                 took_ms = (
                     result.took_ms
                     if took_ms is None
                     else took_ms + (result.took_ms or 0)
                 )
-                raw.append(result.raw)
                 if not result.hits:
                     break
                 scanned_hits_for_manager += len(result.hits)
                 offset_cursor += len(result.hits)
                 for hit in result.hits:
+                    if hit.type != type_label:
+                        logger.debug(
+                            "discarded search hit with unexpected type",
+                            context={
+                                "expected_type": type_label,
+                                "received_type": hit.type,
+                            },
+                        )
+                        continue
                     try:
                         instance = manager_class(**hit.identification)
                     except (TypeError, ValueError, KeyError) as exc:
@@ -1125,8 +1225,7 @@ def register_search_query(
                 trim_search_hit_entries_to_window(
                     hits,
                     requested_count=requested_count,
-                    sort_by=sort_by,
-                    sort_desc=sort_desc,
+                    terms=ordering_terms,
                 )
                 if len(result.hits) < query_limit:
                     break
@@ -1157,7 +1256,7 @@ def register_search_query(
                     },
                 )
 
-        sort_search_hit_entries(hits, sort_by=sort_by, sort_desc=sort_desc)
+        sort_search_hit_entries(hits, terms=ordering_terms)
 
         items: list[GeneralManager] = []
         for _, _hit, instance in hits[offset : offset + limit]:
@@ -1167,8 +1266,15 @@ def register_search_query(
             "results": items,
             "total": total,
             "total_is_exact": total_is_exact,
+            "page_info": {
+                "total_count": total if total_is_exact else None,
+                "page_size": limit,
+                "current_page": current_page,
+                "total_pages": (
+                    (total + limit - 1) // limit if total_is_exact else None
+                ),
+            },
             "took_ms": took_ms,
-            "raw": raw,
         }
 
     query_fields["search"] = graphene.Field(
@@ -1177,11 +1283,18 @@ def register_search_query(
         index=graphene.String(),
         types=graphene.List(graphene.String),
         filters=graphene.JSONString(),
-        sort_by=graphene.String(),
-        sort_desc=graphene.Boolean(),
         total_mode=graphene.String(),
         page=graphene.Int(),
         page_size=graphene.Int(),
+        **(
+            {
+                "order_by": graphene.Argument(
+                    graphene.List(graphene.NonNull(ordering_types.input_type))
+                )
+            }
+            if ordering_types
+            else {}
+        ),
         resolver=resolver,
     )
 

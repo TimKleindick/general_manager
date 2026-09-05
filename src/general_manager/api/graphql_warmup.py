@@ -17,7 +17,7 @@ from general_manager.api.property import GraphQLProperty
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.conf import get_setting
 from general_manager.logging import get_logger
-from general_manager.utils.make_cache_key import make_cache_key
+from general_manager.utils._make_cache_key import make_cache_key
 from general_manager.api.graphql_warmup_registry import (
     GraphQLWarmUpIdentification,
     GraphQLWarmUpRecipe,

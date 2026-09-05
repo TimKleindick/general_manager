@@ -10,14 +10,14 @@ from general_manager.interface.capabilities.core.observability import (
     LoggingObservabilityCapability,
 )
 from general_manager.interface.capabilities.remote_manager import (
+    RemoteManagerCreateCapability,
+    RemoteManagerDeleteCapability,
     RemoteManagerQueryCapability,
+    RemoteManagerUpdateCapability,
 )
 from general_manager.interface.capabilities.request import (
-    RequestCreateCapability,
-    RequestDeleteCapability,
     RequestLifecycleCapability,
     RequestReadCapability,
-    RequestUpdateCapability,
     RequestValidationCapability,
 )
 
@@ -29,9 +29,9 @@ REMOTE_MANAGER_CAPABILITIES: CapabilitySet = CapabilitySet(
         InterfaceCapabilityConfig(RequestReadCapability),
         InterfaceCapabilityConfig(RequestValidationCapability),
         InterfaceCapabilityConfig(RemoteManagerQueryCapability),
-        InterfaceCapabilityConfig(RequestCreateCapability),
-        InterfaceCapabilityConfig(RequestUpdateCapability),
-        InterfaceCapabilityConfig(RequestDeleteCapability),
+        InterfaceCapabilityConfig(RemoteManagerCreateCapability),
+        InterfaceCapabilityConfig(RemoteManagerUpdateCapability),
+        InterfaceCapabilityConfig(RemoteManagerDeleteCapability),
         InterfaceCapabilityConfig(LoggingObservabilityCapability),
     ),
 )

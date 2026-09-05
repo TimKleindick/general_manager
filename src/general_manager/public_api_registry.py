@@ -389,9 +389,9 @@ DATAFRAME_EXPORTS: LazyExportMap = {
 
 
 UTILS_EXPORTS: LazyExportMap = {
-    "none_to_zero": ("general_manager.utils.none_to_zero", "none_to_zero"),
-    "args_to_kwargs": ("general_manager.utils.args_to_kwargs", "args_to_kwargs"),
-    "make_cache_key": ("general_manager.utils.make_cache_key", "make_cache_key"),
+    "none_to_zero": ("general_manager.utils._none_to_zero", "none_to_zero"),
+    "args_to_kwargs": ("general_manager.utils._args_to_kwargs", "args_to_kwargs"),
+    "make_cache_key": ("general_manager.utils._make_cache_key", "make_cache_key"),
     "UnknownInputFieldError": (
         "general_manager.utils.filter_parser",
         "UnknownInputFieldError",

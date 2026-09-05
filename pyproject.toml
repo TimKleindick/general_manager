@@ -153,7 +153,7 @@ strict = true
 explicit_package_bases = true
 namespace_packages = true
 mypy_path = ["src"]
-files = ["src"]
+files = ["src", "tests/typing"]
 exclude = ["^build/", "^dist/", "^docs/", "^example_project/", "^site/"]
 
 [[tool.mypy.overrides]]

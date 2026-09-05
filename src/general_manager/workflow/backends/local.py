@@ -61,6 +61,7 @@ class LocalWorkflowEngine:
         reserved_input = deepcopy(source_input)
         reserved_metadata = deepcopy({} if metadata is None else dict(metadata))
         wait_for_execution: Event | None = None
+        wait_for_execution_id: str | None = None
         if correlation_id:
             correlation_key = (workflow.workflow_id, correlation_id)
             with self._lock:
@@ -78,6 +79,7 @@ class LocalWorkflowEngine:
                             wait_for_execution = self._correlation_events.get(
                                 correlation_key
                             )
+                            wait_for_execution_id = existing.execution_id
                             should_create_placeholder = False
                 if should_create_placeholder:
                     placeholder = WorkflowExecution(
@@ -98,12 +100,13 @@ class LocalWorkflowEngine:
             if wait_for_execution is not None:
                 wait_for_execution.wait()
                 with self._lock:
-                    existing_id = self._correlation_index.get(correlation_key)
-                    if existing_id is None:
+                    if (
+                        wait_for_execution_id is None
+                    ):  # pragma: no cover - guarded above
                         raise WorkflowExecutionNotFoundError(execution_id)
-                    existing = self._executions.get(existing_id)
+                    existing = self._executions.get(wait_for_execution_id)
                     if existing is None:
-                        raise WorkflowExecutionNotFoundError(existing_id)
+                        raise WorkflowExecutionNotFoundError(wait_for_execution_id)
                     return existing
         output_data: WorkflowPayload | None = {}
         state: WorkflowState = "completed"
@@ -128,13 +131,17 @@ class LocalWorkflowEngine:
             metadata=reserved_metadata,
         )
         with self._lock:
-            self._executions[execution_id] = execution
+            current = self._executions.get(execution_id)
+            if current is not None and current.state == "cancelled":
+                execution = current
+            else:
+                self._executions[execution_id] = execution
             if correlation_id:
                 correlation_key = (workflow.workflow_id, correlation_id)
-                self._correlation_index[correlation_key] = execution_id
-                event = self._correlation_events.pop(correlation_key, None)
-                if event is not None:
-                    event.set()
+                if self._correlation_index.get(correlation_key) == execution_id:
+                    event = self._correlation_events.pop(correlation_key, None)
+                    if event is not None:
+                        event.set()
         return execution
 
     def resume(
@@ -216,6 +223,12 @@ class LocalWorkflowEngine:
                 metadata=execution.metadata,
             )
             self._executions[execution_id] = updated
+            if execution.correlation_id:
+                correlation_key = (execution.workflow_id, execution.correlation_id)
+                if self._correlation_index.get(correlation_key) == execution_id:
+                    event = self._correlation_events.pop(correlation_key, None)
+                    if event is not None:
+                        event.set()
         return updated
 
     def status(self, execution_id: str) -> WorkflowExecution:

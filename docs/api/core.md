@@ -296,6 +296,13 @@ Iteration yields keys from `manager_class.Interface.get_attributes()` first in
 that mapping's order, then `GraphQLProperty` values declared directly on the
 manager class in class-`__dict__` order; duplicate names are not filtered.
 
+The explicit grouped-result API is `keys`, `members`, `count`, and
+`sum(field)`. `keys` is a detached mapping of the configured grouping values;
+`members` preserves the original managers rather than aggregating relations;
+and `count` counts those members. `sum(field)` supports `int`, `float`,
+`Decimal`, and `Measurement`, ignores null values, returns `None` when every
+value is null, and rejects booleans and other nonnumeric fields.
+
 `id`, empty buckets, and all-`None` inputs aggregate to `None`. Repeated manager
 values with the same class and identification collapse to that manager;
 distinct managers and bucket values are combined with `|`. Lists are
@@ -473,11 +480,13 @@ returns a bucket containing exactly the supplied manager instances. `instances`
 must contain instances of the bucket's manager class; pass them in source
 iteration order when the existing ordering matters. An empty iterable returns
 an empty bucket. The base implementation starts from `none()` and unions the
-instances, while concrete backends keep their native representation:
-`DatabaseBucket` selects matching manager IDs in source-queryset order,
+instances, while concrete backends preserve the represented subset:
+`DatabaseBucket` retains the supplied instances, order, and duplicates,
 `RequestBucket` materializes the items without re-executing its request plan,
 and `CalculationBucket` materializes the declared identifications while
-retaining its filter, exclude, sort, and historical context.
+retaining its filter, exclude, sort, and historical context. Database subsets
+continue to use native Django `filter()` and `exclude()` semantics, including
+exclusions whose conditions match different rows of a multivalued relation.
 
 The method returns the concrete bucket family and raises the backend's existing
 `TypeError` subclass for an instance from the wrong manager class. It raises
@@ -580,8 +589,9 @@ existing-model managers. It keeps Django queryset laziness for builder methods
 such as `filter()`, `exclude()`, `all()`, `sort()`, and slicing, then wraps model
 rows as the configured manager class when terminal operations evaluate the
 query. The constructor accepts a Django `QuerySet`, the manager class, optional
-filter/exclude snapshots, optional `search_date`, sort metadata, and the
-run-scoped cache flag. Those lookup snapshots are copied into bucket-owned
+filter/exclude snapshots, optional `search_date`, and the run-scoped cache
+flag. Use `sort(*signed_fields)` for ordering; its signed state is private to
+derived buckets and snapshots. Those lookup snapshots are copied into bucket-owned
 dictionaries, so mutating the original mappings after construction does not
 change the bucket.
 
@@ -652,17 +662,17 @@ when no group remains; it does not enforce uniqueness. `first()` and `last()`
 return a group or `None`, while `count()` and `len(bucket)` count groups.
 
 Scalar indexing returns a `GroupManager`. Slicing unions the selected groups'
-underlying basis buckets and returns a new `GroupBucket`; an empty slice raises
-`EmptyGroupBucketSliceError`, and non-int/non-slice indexes raise
+underlying basis buckets and returns a new `GroupBucket`; an empty slice returns
+an empty `GroupBucket`, and non-int/non-slice indexes raise
 `InvalidGroupBucketIndexError`. `all()` returns `self`. `none()` returns a new
 empty grouped bucket with the same manager class and grouping keys. Membership
 checks test whether the supplied manager instance is present in the underlying
 basis bucket, not whether a matching group key exists.
 
-`sort(key, reverse=False)` sorts the current groups in memory by one attribute
-name or a tuple of attribute names, returning a new grouped bucket with the same
-basis bucket and sorted group list. Missing sort attributes propagate
-`AttributeError`, and incomparable values propagate Python `TypeError`. The `|`
+`sort(*fields)` sorts the current groups in memory by signed attribute names,
+where a leading `-` makes that field descending. It returns a new grouped bucket
+with the same basis bucket and sorted group list. Null values remain last in
+either direction. The `|`
 operator combines compatible grouped buckets by unioning their basis buckets and
 regrouping; operands must be `GroupBucket` instances of the same concrete class,
 manager class, and grouping-key tuple. Mismatches raise
@@ -690,12 +700,15 @@ manager or `None`, `get(**kwargs)` requires exactly one match and raises
 `MissingCalculationMatchError` or `MultipleCalculationMatchError` otherwise,
 `count()` and `len(bucket)` count generated combinations, scalar indexing
 returns a manager instance, slicing returns a new bucket with cached
-combinations, and `none()` returns an empty bucket with the same manager class,
-sort key, and reverse flag while clearing raw and parsed filters/excludes.
-Sorting accepts one key or a tuple of keys and can sort either raw inputs or
-computed properties. Missing sort attributes raise `AttributeError`,
-incomparable sort values raise `TypeError`, and computed-property exceptions
-propagate unchanged when the bucket materializes. Invalid calculation interfaces raise
+combinations, and `none()` returns an empty bucket with the same manager class
+and ordering while clearing raw and parsed filters/excludes. Sorting accepts
+signed fields such as `sort("name", "-created_at")` and can sort either raw
+inputs or declared sortable computed properties. Null values remain last in
+either direction. Mixed scalar values order by category—booleans, numbers,
+temporal values, strings, then bytes—without parsing date-looking strings or
+coercing exact numeric values to floats; unsupported runtime value domains
+raise `TypeError`.
+Invalid calculation interfaces raise
 `InvalidCalculationInterfaceError`, incompatible bucket unions raise
 `IncompatibleBucketTypeError` or `IncompatibleBucketManagerError`, cyclic input
 dependencies raise `CyclicDependencyError`, and required inputs without an
@@ -725,15 +738,19 @@ request plan; their follow-up `filter()` and `exclude()` calls validate the same
 request lookup rules and then operate on the contained manager instances in
 memory. Missing attributes do not match materialized filters. These methods
 return `RequestBucket` instances. Materialized `filter()` combines lookup keys
-with AND semantics; materialized `exclude()` removes an item when any supplied
-lookup matches, so a missing attribute does not exclude that item. Lookup suffix
+with AND semantics; each materialized `exclude()` call removes an item only when
+all lookups from that call match. Lazy buckets preserve these call groups too:
+every independently representable binding is pushed to the request, while a
+conflicting binding becomes a local predicate only when its declaration explicitly
+allows a readable local fallback. Unrepresentable conflicts fail during planning,
+so repeated lookup names are never overwritten. Lookup suffix
 semantics come from request filters: bare or unknown suffixes are exact matches,
 supported suffixes include comparisons, `contains`, `icontains`, `in`, and
 `isnull`, and incompatible comparisons return `False`.
 The constructor accepts the manager class, request interface class, operation
 name, optional request plan, optional filter/exclude lookup maps, optional
-serialized manager items, optional raw request payloads, and an optional count
-override. Lookup maps are copied into bucket-owned dictionaries. Supplying
+serialized manager items, and optional raw request payloads. Lookup maps are
+copied into bucket-owned dictionaries. Supplying
 `items` creates a concrete manager-item bucket; supplying `raw_items` rebuilds
 manager instances from `extract_identification()` and installs each raw payload
 as the manager interface's request payload cache.
@@ -754,16 +771,17 @@ instance also produces a concrete item bucket; incompatible bucket types raise
 classes raise `RequestBucketManagerMismatchError`.
 Only `bucket | other` is implemented here; `manager | bucket` follows the
 manager's own union behavior. Union order is left items followed by right items,
-and duplicates are not removed. Equality compares manager class and operation
+with duplicate complete manager identities removed. Equality compares manager class and operation
 name first; when both sides still have request plans it compares plan plus
 compiled filters/excludes, otherwise it materializes and compares the ordered
 sequence of each item’s `identification` mapping.
-`sort(key, reverse=False)` materializes the bucket, accepts one attribute name or
-a tuple of attribute names, and raises `RequestBucketSortAttributeError` when an
-item lacks a requested attribute. Tuple keys sort lexicographically by the
-resolved attribute values. Nested attribute paths are not parsed; each key part
-is passed directly to `getattr`. Python `TypeError` propagates for incomparable
-values such as mixed unrelated types.
+`sort(*fields)` materializes the bucket and accepts signed attribute paths, such
+as `sort("name", "-updated_at")`. It raises
+`RequestBucketSortAttributeError` when an item lacks a requested attribute.
+Null values remain last in either direction; heterogeneous scalar values use
+the category order booleans, numbers, temporal values, strings, then bytes;
+date-looking strings are not parsed. Unsupported runtime domains raise
+`TypeError`.
 
 Pickle-restored buckets keep their operation name and request plan metadata, but
 unpickling does not execute a request. Iteration after unpickling uses whatever
@@ -775,21 +793,26 @@ stored, iteration after unpickling yields the empty serialized item set even
 when request-plan metadata is present. Normal pickle failures for unserializable
 manager instances propagate from Python's pickle machinery.
 
-`get()` requires exactly one result and raises `RequestSingleItemRequiredError`
-otherwise. `count()` always materializes first. After materialization the current
-count override wins; lazy materialization installs the upstream `total_count`
-when the response provides one, installs the local fallback item count when local
-predicates are applied, and otherwise falls back to the number of materialized
-items. A constructor `count_override` on a still-lazy bucket can therefore be
-replaced by the count observed during request execution. Local fallback
-predicates reject partial remote pages with
-`RequestLocalPaginationUnsupportedError` when the upstream `total_count` does not
-match the returned item count.
-Slices, unions, and `none()` are concrete buckets whose count override is their
-concrete item count; `all()` always returns a new bucket rather than `self`.
-`__contains__` delegates to tuple membership over materialized manager objects,
-so it uses normal manager equality/identity rather than request lookup
-semantics.
+`get()` requires exactly one represented result and raises
+`RequestSingleItemRequiredError` for zero or multiple rows. A request-plan bucket
+with one row also raises `RequestIncompleteResultError` when it cannot establish
+global uniqueness: `total_count` must be supplied and equal the fetched response
+length. This intentionally rejects legacy adapters that omit a total. Use the
+configured detail read, an explicit materialized subset, or `first()` when
+global uniqueness is not needed. `count()` and `len()` both describe represented
+rows. The optional `total_count` property exposes the upstream response total
+separately, and becomes `None` after local filtering changes membership. Local
+fallback predicates reject partial remote pages with
+`RequestLocalPaginationUnsupportedError` when the upstream `total_count` does
+not match the returned item count.
+When a normalized request response explicitly supplies positive `page` and
+`page_size` coordinates, `upstream_page` and `upstream_page_size` retain that
+source provenance until a concrete membership-changing operation creates a
+local subset. These coordinates do not make an unknown response total complete.
+Slices, unions, and `none()` are concrete buckets whose count is their concrete
+item count; `all()` always returns a new bucket rather than `self`.
+`__contains__` checks complete materialized manager identity, including concrete
+manager class and snapshot context.
 
 ::: general_manager.rule.rule.Rule
 

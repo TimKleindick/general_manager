@@ -30,6 +30,7 @@ from general_manager.cache.run_context import (
     ORM_RELATION_MANAGER_PREFIX,
     TRUSTED_ORM_MANAGER_PREFIX,
     CalculationRunContext,
+    _RunCacheKey,
     current_calculation_run_context,
 )
 from general_manager.cache.signals import data_change, post_data_change, pre_data_change
@@ -505,10 +506,16 @@ def test_data_change_mixed_run_cache_invalidation_work(
             context.set(key, value)
         context.set_dependency_cache_hits(dependency_hits)
 
+        def is_targeted_run_value(key: Hashable) -> bool:
+            return (
+                isinstance(key, _RunCacheKey)
+                and isinstance(key.key, tuple)
+                and bool(key.key)
+                and key.key[0] in RUN_CACHE_PREFIXES
+            )
+
         initial_targeted_count = sum(
-            1
-            for key in context._values
-            if isinstance(key, tuple) and key and key[0] in RUN_CACHE_PREFIXES
+            1 for key in context._values if is_targeted_run_value(key)
         )
         assert initial_targeted_count == 6_000
         assert len(context._values) == 6_500
@@ -557,12 +564,14 @@ def test_data_change_mixed_run_cache_invalidation_work(
         assert result is target
         assert len(observed_phase_snapshots) == 2
         for snapshot in observed_phase_snapshots:
-            assert not any(
-                isinstance(key, tuple) and key and key[0] in RUN_CACHE_PREFIXES
-                for key in snapshot
-            )
-            assert snapshot == unrelated_values
-        assert context._values == unrelated_values
+            assert not any(is_targeted_run_value(key) for key in snapshot)
+            assert snapshot == {
+                _RunCacheKey(None, key): value
+                for key, value in unrelated_values.items()
+            }
+        assert context._values == {
+            _RunCacheKey(None, key): value for key, value in unrelated_values.items()
+        }
         assert all(
             context.get_dependency_cache_hit(key) is hit
             for key, hit in dependency_hits.items()

@@ -181,141 +181,48 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self.assertEqual(data["commercialsList"]["pageInfo"]["totalCount"], 10)
         self.assertEqual(data["commercialsList"]["pageInfo"]["totalPages"], 2)
 
-    def test_grouped_query_sorts_groups_by_the_same_key_in_reverse(self):
-        query = """
-        query {
-            commercialsList(groupBy: ["name"], sortBy: name, reverse: true) {
-                items {
-                    name
-                }
-                pageInfo {
-                    totalCount
-                }
+    def test_page_without_size_uses_effective_default_size(self):
+        response = self.query(
+            """
+            query {
+              commercialsList(page: 2) {
+                items { id }
+                pageInfo { pageSize currentPage totalPages totalCount }
+              }
             }
-        }
-        """
-
-        response = self.query(query)
-
-        self.assertResponseNoErrors(response)
-        payload = response.json()["data"]["commercialsList"]
-        names = [item["name"] for item in payload["items"]]
-        self.assertGreaterEqual(len(names), 2)
-        self.assertEqual(names, sorted(names, reverse=True))
-        self.assertEqual(payload["pageInfo"]["totalCount"], len(names))
-
-    def test_grouped_query_keeps_reverse_sort_order_when_paginated(self):
-        grouped_names = sorted(
-            {commercial.name for commercial in self.commercials.all()}, reverse=True
+            """
         )
-        self.assertGreaterEqual(len(grouped_names), 6)
-        query = """
-        query {
-            commercialsList(
-                groupBy: ["name"]
-                sortBy: name
-                reverse: true
-                page: 2
-                pageSize: 3
-            ) {
-                items {
-                    name
-                }
-                pageInfo {
-                    totalCount
-                }
-            }
-        }
-        """
-
-        response = self.query(query)
 
         self.assertResponseNoErrors(response)
         payload = response.json()["data"]["commercialsList"]
-        names = [item["name"] for item in payload["items"]]
-        self.assertEqual(names, sorted(names, reverse=True))
-        self.assertEqual(names, grouped_names[3:6])
-        self.assertEqual(payload["pageInfo"]["totalCount"], len(grouped_names))
-
-    def test_grouped_compound_relation_sort(self):
-        zulu = self.commercials.Factory.create(name="Zulu")
-        alpha_one = self.commercials.Factory.create(name="Alpha")
-        alpha_two = self.commercials.Factory.create(name="Alpha")
-        self.project.Factory.create(name="Beta", commercials=zulu)
-        self.project.Factory.create(name="Zed", commercials=alpha_one)
-        self.project.Factory.create(name="Able", commercials=alpha_two)
-        query = """
-        query {
-          projectList(
-            groupBy: ["name"]
-            sortBy: [commercials__name, name]
-          ) {
-            items { name commercials { name } }
-          }
-        }
-        """
-
-        response = self.query(query)
-
-        self.assertResponseNoErrors(response)
-        items = response.json()["data"]["projectList"]["items"]
-        self.assertEqual([item["name"] for item in items], ["Able", "Zed", "Beta"])
-
-    def test_grouped_query_resolves_relation_grouped_by_scalar_id(self):
-        commercials = self.commercials.Factory.create(name="Shared")
-        self.project.Factory.create(name="First", commercials=commercials)
-        self.project.Factory.create(name="Second", commercials=commercials)
-        query = """
-        query {
-          projectList(groupBy: ["commercials_id"]) {
-            items { commercials { id name } }
-          }
-        }
-        """
-
-        response = self.query(query)
-
-        self.assertResponseNoErrors(response)
-        items = response.json()["data"]["projectList"]["items"]
+        self.assertEqual(payload["items"], [])
         self.assertEqual(
-            items,
-            [{"commercials": {"id": commercials.id, "name": "Shared"}}],
+            payload["pageInfo"],
+            {"pageSize": 10, "currentPage": 2, "totalPages": 1, "totalCount": 10},
         )
 
-    def test_grouped_compound_relation_sort_applies_pagination_after_sorting(self):
-        self._create_projects_for_relation_sorting()
-        query = """
-        query {
-          projectList(
-            groupBy: ["name"]
-            sortBy: [commercials__name, name]
-            page: 2
-            pageSize: 2
-          ) {
-            items { name }
-            pageInfo {
-              totalCount
-              currentPage
-              pageSize
-            }
-          }
-        }
-        """
+    def test_list_rejects_zero_pagination_values(self):
+        for arguments in ("page: 0", "pageSize: 0"):
+            with self.subTest(arguments=arguments):
+                response = self.query(
+                    f"""
+                    query {{
+                      commercialsList({arguments}) {{ items {{ id }} }}
+                    }}
+                    """
+                )
 
-        response = self.query(query)
-
-        self.assertResponseNoErrors(response)
-        payload = response.json()["data"]["projectList"]
-        self.assertEqual([item["name"] for item in payload["items"]], ["Beta"])
-        self.assertEqual(payload["pageInfo"]["totalCount"], 3)
-        self.assertEqual(payload["pageInfo"]["currentPage"], 2)
-        self.assertEqual(payload["pageInfo"]["pageSize"], 2)
+                self.assertResponseHasErrors(response)
+                self.assertIn(
+                    "must be a positive integer",
+                    response.json()["errors"][0]["message"],
+                )
 
     def test_project_list_sorts_direct_manager_by_identifier(self):
         alpha, zulu, _projects = self._create_projects_for_relation_sorting()
         query = """
         query {
-          projectList(sortBy: commercials) {
+          projectList(orderBy: [{field: commercials}]) {
             items { commercials { id } }
           }
         }
@@ -335,7 +242,7 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self._create_projects_for_relation_sorting()
         query = """
         query {
-          projectList(sortBy: [commercials__name, name]) {
+          projectList(orderBy: [{field: commercials__name}, {field: name}]) {
             items { name }
           }
         }
@@ -352,8 +259,10 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         query = """
         query {
           projectList(
-            sortBy: [commercials__name, name]
-            reverse: true
+            orderBy: [
+              {field: commercials__name, direction: DESC}
+              {field: name, direction: DESC}
+            ]
           ) {
             items { name }
           }
@@ -370,7 +279,7 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self._create_projects_for_relation_sorting()
         query = """
         query {
-          projectList(sortBy: [name_length, commercials__name]) {
+          projectList(orderBy: [{field: nameLength}, {field: commercials__name}]) {
             items { name }
           }
         }
@@ -387,8 +296,10 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         query = """
         query {
           projectList(
-            sortBy: [name_length, commercials__name]
-            reverse: true
+            orderBy: [
+              {field: nameLength, direction: DESC}
+              {field: commercials__name, direction: DESC}
+            ]
           ) {
             items { name }
           }
@@ -405,7 +316,7 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self._create_projects_for_relation_sorting()
         query = """
         query {
-          projectList(sortBy: [name_length, commercials]) {
+          projectList(orderBy: [{field: nameLength}, {field: commercials}]) {
             items { name }
           }
         }
@@ -420,8 +331,8 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
     def test_project_list_accepts_compound_sort_variable(self):
         self._create_projects_for_relation_sorting()
         query = """
-        query SortedProjects($sort: [ProjectSortByOptions!]) {
-          projectList(sortBy: $sort) {
+        query SortedProjects($order: [ProjectOrderBy!]) {
+          projectList(orderBy: $order) {
             items { name }
           }
         }
@@ -429,7 +340,12 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
 
         response = self.query(
             query,
-            variables={"sort": ["commercials__name", "name"]},
+            variables={
+                "order": [
+                    {"field": "commercials__name"},
+                    {"field": "name"},
+                ]
+            },
         )
 
         self.assertResponseNoErrors(response)
@@ -440,8 +356,8 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         _alpha, _zulu, projects = self._create_projects_for_relation_sorting()
         query = """
         query {
-          nullSort: projectList(sortBy: null) { items { id } }
-          emptySort: projectList(sortBy: []) { items { id } }
+          nullSort: projectList(orderBy: null) { items { id } }
+          emptySort: projectList(orderBy: []) { items { id } }
           omittedSort: projectList { items { id } }
         }
         """
@@ -465,25 +381,23 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         response = self.query(
             """
             query {
-              projectList(sortBy: [name, null]) { items { id } }
+              projectList(orderBy: [{field: name}, null]) { items { id } }
             }
             """
         )
 
         self.assertResponseHasErrors(response)
         errors = response.json()["errors"]
-        self.assertIn(
-            "Expected value of type 'ProjectSortByOptions!'", errors[0]["message"]
-        )
+        self.assertIn("Expected value of type 'ProjectOrderBy!'", errors[0]["message"])
         self.assertIn("found null", errors[0]["message"])
 
-    def test_project_sort_enum_exposes_only_direct_relation_scalars(self):
+    def test_project_order_enum_exposes_only_direct_relation_scalars(self):
         query = """
         query {
-          projectOptions: __type(name: "ProjectSortByOptions") {
+          projectOptions: __type(name: "ProjectOrderField") {
             enumValues { name }
           }
-          commercialsOptions: __type(name: "CommercialsSortByOptions") {
+          commercialsOptions: __type(name: "CommercialsOrderField") {
             enumValues { name }
           }
         }
@@ -509,7 +423,7 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         )
         self.assertNotIn("project_list", commercials_values)
 
-    def test_relation_list_uses_related_manager_compound_sort_enum(self):
+    def test_relation_list_uses_scoped_typed_order_input(self):
         query = """
         query {
           __type(name: "CommercialsType") {
@@ -535,43 +449,50 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response)
         fields = response.json()["data"]["__type"]["fields"]
         project_list = next(field for field in fields if field["name"] == "projectList")
-        sort_by = next(arg for arg in project_list["args"] if arg["name"] == "sortBy")
-        self.assertEqual(sort_by["type"]["kind"], "LIST")
-        self.assertEqual(sort_by["type"]["ofType"]["kind"], "NON_NULL")
+        order_by = next(arg for arg in project_list["args"] if arg["name"] == "orderBy")
+        self.assertEqual(order_by["type"]["kind"], "LIST")
+        self.assertEqual(order_by["type"]["ofType"]["kind"], "NON_NULL")
         self.assertEqual(
-            sort_by["type"]["ofType"]["ofType"]["name"],
-            "ProjectSortByOptions",
+            order_by["type"]["ofType"]["ofType"]["name"],
+            "ProjectRelationOrderBy",
         )
 
-    def test_empty_grouped_query_with_pagination_returns_empty_page(self):
-        """Grouped pagination returns an empty GraphQL page when no rows match."""
-        query = """
-        query {
-            commercialsList(
-                filter: {name: "No matching commercial"}
-                groupBy: ["name"]
-                pageSize: 5
-            ) {
-                items {
-                    name
+    def test_project_order_input_requires_field_and_defaults_direction_to_asc(self):
+        response = self.query(
+            """
+            query {
+              __type(name: "ProjectOrderBy") {
+                inputFields {
+                  name
+                  defaultValue
+                  type { kind name ofType { kind name } }
                 }
-                pageInfo {
-                    totalCount
-                    currentPage
-                    totalPages
-                }
+              }
+              queryType: __type(name: "Query") {
+                fields { name args { name } }
+              }
             }
-        }
-        """
-
-        response = self.query(query)
+            """
+        )
 
         self.assertResponseNoErrors(response)
-        payload = response.json()["data"]["commercialsList"]
-        self.assertEqual(payload["items"], [])
-        self.assertEqual(payload["pageInfo"]["totalCount"], 0)
-        self.assertEqual(payload["pageInfo"]["currentPage"], 1)
-        self.assertEqual(payload["pageInfo"]["totalPages"], 0)
+        fields = response.json()["data"]["__type"]["inputFields"]
+        field = next(item for item in fields if item["name"] == "field")
+        direction = next(item for item in fields if item["name"] == "direction")
+        self.assertEqual(field["type"]["kind"], "NON_NULL")
+        self.assertEqual(field["type"]["ofType"]["name"], "ProjectOrderField")
+        self.assertEqual(direction["type"]["kind"], "NON_NULL")
+        self.assertEqual(direction["type"]["ofType"]["name"], "OrderDirection")
+        self.assertEqual(direction["defaultValue"], "ASC")
+        query_fields = response.json()["data"]["queryType"]["fields"]
+        project_list = next(
+            field for field in query_fields if field["name"] == "projectList"
+        )
+        argument_names = {argument["name"] for argument in project_list["args"]}
+        self.assertIn("orderBy", argument_names)
+        self.assertNotIn("sortBy", argument_names)
+        self.assertNotIn("reverse", argument_names)
+        self.assertNotIn("groupBy", argument_names)
 
     def test_query_commercials_with_project_list(self):
         """
@@ -652,7 +573,7 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         query {
           commercialsList(filter: {name: "Nested Parent"}) {
             items {
-              projectList(sortBy: [name_length, commercials__name, name]) {
+              projectList(orderBy: [{field: nameLength}, {field: commercials__name}, {field: name}]) {
                 items { name }
               }
             }

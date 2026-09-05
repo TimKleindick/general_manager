@@ -1,5 +1,6 @@
 # type: ignore
 from datetime import date
+from decimal import Decimal
 from typing import ClassVar
 from unittest.mock import patch
 from django.test import TestCase
@@ -129,6 +130,25 @@ class GroupBucketTests(TestCase):
         )
         self.assertEqual(grouped.values_list("category", flat=True), ("A", "B"))
 
+    def test_group_sum_accepts_optional_numeric_annotation(self):
+        """Nullable numeric metadata keeps non-null values in Python sums."""
+        DummyInterface.attr_types["optional_amount"] = {"type": int | None}
+        try:
+            group = GroupManager(
+                DummyManager,
+                {},
+                ListBucket(
+                    [
+                        DummyManager(optional_amount=2),
+                        DummyManager(optional_amount=None),
+                    ]
+                ),
+            )
+
+            self.assertEqual(group.sum("optional_amount"), 2)
+        finally:
+            del DummyInterface.attr_types["optional_amount"]
+
     def test_group_bucket_projection_preserves_sorted_and_sliced_order(self):
         items = [
             DummyManager(category="A", amount=1),
@@ -137,7 +157,7 @@ class GroupBucketTests(TestCase):
         ]
         grouped = GroupBucket(DummyManager, ("category",), ListBucket(items))
 
-        sorted_grouped = grouped.sort("category", reverse=True)
+        sorted_grouped = grouped.sort("-category")
         self.assertEqual(
             sorted_grouped.values_list("category", "amount"),
             (("C", 3), ("B", 2), ("A", 1)),
@@ -353,7 +373,7 @@ class GroupBucketTests(TestCase):
             [gm.b for gm in sorted_gm],
             ["a", "b", "c", "d"],
         )
-        reverse_sorted_gm = gb.sort("b", reverse=True)
+        reverse_sorted_gm = gb.sort("-b")
         self.assertEqual(
             [gm.b for gm in reverse_sorted_gm],
             ["d", "c", "b", "a"],
@@ -468,6 +488,28 @@ class GroupManagerCombineValueTests(TestCase):
         )
         result = gm.combine_value("field")
         self.assertEqual(result, Measurement(3, "m"))
+
+    def test_explicit_group_api_preserves_members_and_sums_decimals(self):
+        """Replacing explicit group members or Decimal sums breaks grouped callers."""
+        entries = [
+            DummyManager(category="A", field=Decimal("1.5")),
+            DummyManager(category="A", field=Decimal("2.5")),
+        ]
+        DummyInterface.attr_types["field"] = {"type": Decimal}
+        members = ListBucket(entries)
+        group = GroupManager(DummyManager, {"category": "A"}, members)
+
+        self.assertEqual(group.keys, {"category": "A"})
+        self.assertIs(group.members, members)
+        self.assertEqual(group.count, 2)
+        self.assertEqual(group.sum("field"), Decimal("4.0"))
+
+    def test_explicit_group_sum_rejects_boolean_fields(self):
+        """Treating bool as numeric would leak legacy any() aggregation into sums."""
+        group = self.helper_make_group_manager([True, False], bool)
+
+        with self.assertRaises(TypeError):
+            group.sum("field")
 
     def test_combine_distinct_managers_preserves_union_bucket(self):
         class RelatedInterface:

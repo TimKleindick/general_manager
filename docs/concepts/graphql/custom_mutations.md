@@ -172,9 +172,10 @@ field-specific lists should provide the remaining restrictions. `__mutate__`
 follows normal class inheritance and must be a `list` containing only strings;
 tuples, mixed lists, and other sequences deny the global gate. An empty
 field-specific list allows that field gate. Field gates are collected only from
-non-dunder attributes declared directly on the concrete permission class whose
-value is a `list` containing only strings. Mixed lists, tuples, and other
-sequences are ignored. The positional form is equivalent:
+non-dunder attributes across the permission class MRO whose value is a `list`
+containing only strings; a child declaration replaces an inherited declaration
+for the same field. Mixed lists, tuples, and other sequences are ignored. The
+positional form is equivalent:
 
 ```python
 @graph_ql_mutation(PublishProjectPermission)

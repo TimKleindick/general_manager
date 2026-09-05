@@ -23,6 +23,7 @@ from general_manager.cache.run_context_lru import (
     resolve_run_context_cache_max_bytes,
 )
 from general_manager.cache import run_context_lru
+from general_manager.cache import run_context
 
 HANDOFF_TIMEOUT_SECONDS = 5
 
@@ -474,6 +475,21 @@ def test_eviction_target_uses_floor_of_ninety_five_percent(
     expected_target: int,
 ) -> None:
     assert run_context_lru._eviction_target(configured_bytes) == expected_target
+
+
+def test_run_cache_entry_measurement_includes_captured_dependencies() -> None:
+    """LRU admission measures cached dependency metadata with its result."""
+    value = bytearray(64)
+    entry_type = getattr(run_context, "_RunCacheEntry", None)
+    assert entry_type is not None
+    entry = entry_type(
+        value=value,
+        dependencies=frozenset({("Project", "all", "{}")}),
+    )
+
+    assert estimate_cache_entry_size("key", entry, stop_after=None) > (
+        estimate_cache_entry_size("key", value, stop_after=None)
+    )
 
 
 @pytest.mark.parametrize(

@@ -54,8 +54,8 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(len(humans), 2)
 
         # Check if the height is stored correctly
-        self.assertEqual(humans[0].height, "170 cm")
-        self.assertEqual(humans[1].height, "180 cm")
+        self.assertEqual(str(humans[0].height), "170 centimeter")
+        self.assertEqual(str(humans[1].height), "180 centimeter")
 
         # Test filtering by measurement field
         filtered_humans = self.TestHuman.filter(height="170 cm")
@@ -99,23 +99,23 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             ignore_permission=True,  # Ignore permission for testing
         )
         human.height += Measurement(10, "cm")
-        self.assertEqual(human.height, "180 cm")
+        self.assertEqual(str(human.height), "180 centimeter")
 
         # Test subtraction of measurements
         human.height -= Measurement(5, "cm")
-        self.assertEqual(human.height, "175 cm")
+        self.assertEqual(str(human.height), "175 centimeter")
 
         # Test multiplication of measurement value
         human.height *= 2
-        self.assertEqual(human.height, "350 cm")
+        self.assertEqual(str(human.height), "350 centimeter")
 
         # Test division of measurement value
         human.height /= 2
-        self.assertEqual(human.height, "175 cm")
+        self.assertEqual(str(human.height), "175 centimeter")
 
         updated_human = human.update(height=human.height, ignore_permission=True)
         self.assertIs(updated_human, human)
-        self.assertEqual(updated_human.height, "175 cm")
+        self.assertEqual(str(updated_human.height), "175 centimeter")
 
     def test_measurement_field_validation(self):
         """

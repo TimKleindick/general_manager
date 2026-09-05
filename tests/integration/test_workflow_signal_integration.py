@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, ClassVar
+from uuid import uuid4
 
 from django.db.models import CharField
 
@@ -15,7 +17,15 @@ from general_manager.workflow.backend_registry import configure_workflow_engine
 from general_manager.workflow.backend_registry import get_workflow_engine
 from general_manager.workflow.backends.local import LocalWorkflowEngine
 from general_manager.workflow.engine import WorkflowDefinition, WorkflowExecution
-from general_manager.workflow.event_registry import InMemoryEventRegistry, WorkflowEvent
+from general_manager.workflow.event_registry import (
+    DatabaseEventRegistry,
+    InMemoryEventRegistry,
+    WorkflowEvent,
+)
+from general_manager.workflow.models import (
+    WorkflowDeliveryAttempt,
+    WorkflowEventRecord,
+)
 from general_manager.workflow.signal_bridge import (
     connect_workflow_signal_bridge,
     disconnect_workflow_signal_bridge,
@@ -167,6 +177,258 @@ class WorkflowSignalIntegrationTests(GeneralManagerTransactionTestCase):
         assert attempts["count"] == 3
         assert len(self.dead_letters) == 1
         assert self.dead_letters[0][1] == "handler failed"
+
+    def test_durable_registration_id_reuses_completed_delivery_in_fresh_registry(
+        self,
+    ) -> None:
+        calls: list[str] = []
+
+        def make_handler() -> Callable[[WorkflowEvent], None]:
+            def handler(event: WorkflowEvent) -> None:
+                calls.append(event.event_id)
+
+            return handler
+
+        event = WorkflowEvent(
+            event_id="project-status-durable-registration",
+            event_type="general_manager.manager.updated",
+            event_name="manager_updated",
+            payload={},
+        )
+        first_registry = DatabaseEventRegistry()
+        first_registry.register(
+            "manager_updated",
+            handler=make_handler(),
+            registration_id="project-status-email-v1",
+        )
+
+        assert first_registry.publish_sync(event) is True
+
+        fresh_registry = DatabaseEventRegistry()
+        fresh_registry.register(
+            "manager_updated",
+            handler=make_handler(),
+            registration_id="project-status-email-v1",
+        )
+
+        assert fresh_registry.publish_sync(event) is True
+        attempts = WorkflowDeliveryAttempt.objects.filter(
+            event__event_id=event.event_id
+        )
+        assert attempts.count() == 1
+        assert attempts.get().handler_registration_id == "project-status-email-v1"
+        assert calls == [event.event_id]
+
+    def test_durable_registration_ids_keep_distinct_bound_handlers(self) -> None:
+        calls: list[str] = []
+
+        class Handler:
+            def __init__(self, label: str) -> None:
+                self.label = label
+
+            def handle(self, _event: WorkflowEvent) -> None:
+                calls.append(self.label)
+
+        registry = DatabaseEventRegistry()
+        registry.register(
+            "manager_updated",
+            handler=Handler("first").handle,
+            registration_id="manager-updated-first",
+        )
+        registry.register(
+            "manager_updated",
+            handler=Handler("second").handle,
+            registration_id="manager-updated-second",
+        )
+
+        assert registry.publish_sync(
+            WorkflowEvent(
+                event_id="distinct-bound-handlers",
+                event_type="general_manager.manager.updated",
+                event_name="manager_updated",
+                payload={},
+            )
+        )
+        assert calls == ["first", "second"]
+
+    def test_durable_delivery_pairs_do_not_collide_when_ids_contain_colons(
+        self,
+    ) -> None:
+        calls: list[str] = []
+
+        def make_handler(label: str) -> Callable[[WorkflowEvent], None]:
+            def handler(_event: WorkflowEvent) -> None:
+                calls.append(label)
+
+            return handler
+
+        first_registry = DatabaseEventRegistry()
+        first_registry.register(
+            "manager_updated",
+            handler=make_handler("first"),
+            registration_id="b",
+        )
+        second_registry = DatabaseEventRegistry()
+        second_registry.register(
+            "manager_updated",
+            handler=make_handler("second"),
+            registration_id="a:b",
+        )
+
+        assert first_registry.publish_sync(
+            WorkflowEvent(
+                event_id="e:a",
+                event_type="general_manager.manager.updated",
+                event_name="manager_updated",
+                payload={},
+            )
+        )
+        assert second_registry.publish_sync(
+            WorkflowEvent(
+                event_id="e",
+                event_type="general_manager.manager.updated",
+                event_name="manager_updated",
+                payload={},
+            )
+        )
+        assert calls == ["first", "second"]
+        assert WorkflowDeliveryAttempt.objects.count() == 2
+
+    def test_durable_registration_preserves_existing_legacy_delivery_key(
+        self,
+    ) -> None:
+        calls: list[str] = []
+
+        def handler(event: WorkflowEvent) -> None:
+            calls.append(event.event_id)
+
+        registration_id = "l" * 40
+        registry = DatabaseEventRegistry()
+        registry.register(
+            "manager_updated",
+            handler=handler,
+            registration_id=registration_id,
+        )
+        legacy_event = WorkflowEvent(
+            event_id="legacy-event",
+            event_type="general_manager.manager.updated",
+            event_name="manager_updated",
+            payload={},
+        )
+        legacy_record = WorkflowEventRecord.objects.create(
+            event_id=legacy_event.event_id,
+            event_type=legacy_event.event_type,
+            event_name=legacy_event.event_name,
+            payload={},
+            metadata={},
+        )
+        legacy_attempt = WorkflowDeliveryAttempt.objects.create(
+            event=legacy_record,
+            handler_registration_id=registration_id,
+            idempotency_key=f"{legacy_event.event_id}:{registration_id}",
+            status=WorkflowDeliveryAttempt.STATUS_COMPLETED,
+        )
+
+        assert registry.publish_sync(legacy_event)
+
+        legacy_attempt.refresh_from_db()
+        assert (
+            legacy_attempt.idempotency_key
+            == f"{legacy_event.event_id}:{registration_id}"
+        )
+        assert len(legacy_attempt.idempotency_key) <= 255
+        assert calls == []
+
+    def test_durable_registration_id_uses_bounded_key_for_255_character_id(
+        self,
+    ) -> None:
+        calls: list[str] = []
+
+        def handler(event: WorkflowEvent) -> None:
+            calls.append(event.event_id)
+
+        registration_id = "x" * 255
+        registry = DatabaseEventRegistry()
+        registry.register(
+            "manager_updated",
+            handler=handler,
+            registration_id=registration_id,
+        )
+        event = WorkflowEvent(
+            event_id=str(uuid4()),
+            event_type="general_manager.manager.updated",
+            event_name="manager_updated",
+            payload={},
+        )
+
+        assert registry.publish_sync(event)
+
+        new_attempt = WorkflowDeliveryAttempt.objects.get(
+            event__event_id=event.event_id
+        )
+        assert new_attempt.idempotency_key.startswith("v3_")
+        assert len(new_attempt.idempotency_key) < 255
+        assert calls == [event.event_id]
+
+    def test_new_delivery_key_coexists_with_matching_legacy_v2_key(self) -> None:
+        calls: list[str] = []
+        legacy_registration_id = (
+            "54b13d932c0be6b8e657aa98a227763b7f91e2581ceef09617586c59f32babb3"
+        )
+
+        def make_handler(label: str) -> Callable[[WorkflowEvent], None]:
+            def handler(_event: WorkflowEvent) -> None:
+                calls.append(label)
+
+            return handler
+
+        legacy_event = WorkflowEvent(
+            event_id="v2",
+            event_type="general_manager.manager.updated",
+            event_name="manager_updated",
+            payload={},
+        )
+        legacy_record = WorkflowEventRecord.objects.create(
+            event_id=legacy_event.event_id,
+            event_type=legacy_event.event_type,
+            event_name=legacy_event.event_name,
+            payload={},
+            metadata={},
+        )
+        legacy_attempt = WorkflowDeliveryAttempt.objects.create(
+            event=legacy_record,
+            handler_registration_id=legacy_registration_id,
+            idempotency_key=f"v2:{legacy_registration_id}",
+            status=WorkflowDeliveryAttempt.STATUS_PENDING,
+        )
+        legacy_registry = DatabaseEventRegistry()
+        legacy_registry.register(
+            "manager_updated",
+            handler=make_handler("legacy"),
+            registration_id=legacy_registration_id,
+        )
+        new_registry = DatabaseEventRegistry()
+        new_registry.register(
+            "manager_updated",
+            handler=make_handler("new"),
+            registration_id="new-registration",
+        )
+
+        assert legacy_registry.publish_sync(legacy_event)
+        assert new_registry.publish_sync(
+            WorkflowEvent(
+                event_id="new-event",
+                event_type="general_manager.manager.updated",
+                event_name="manager_updated",
+                payload={},
+            )
+        )
+
+        legacy_attempt.refresh_from_db()
+        new_attempt = WorkflowDeliveryAttempt.objects.get(event__event_id="new-event")
+        assert calls == ["legacy", "new"]
+        assert legacy_attempt.idempotency_key == f"v2:{legacy_registration_id}"
+        assert new_attempt.idempotency_key.startswith("v3_")
 
     def test_django_post_data_change_signal_triggers_workflow_path(self) -> None:
         signal_actions: list[str | None] = []

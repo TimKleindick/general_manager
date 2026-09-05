@@ -2,7 +2,7 @@
 from typing import ClassVar
 from unittest.mock import patch
 
-from django.db.models import CASCADE, CharField, ForeignKey
+from django.db.models import CASCADE, CharField, ForeignKey, IntegerField
 from django.test import override_settings
 from django.core.management import call_command
 
@@ -37,6 +37,7 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=200)
                 status = CharField(max_length=50)
+                rank = IntegerField(null=True, blank=True)
 
             class Permission(ManagerBasedPermission):
                 __read__: ClassVar[list[str]] = ["public"]
@@ -48,9 +49,9 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
                 indexes: ClassVar[list[IndexConfig]] = [
                     IndexConfig(
                         name="global",
-                        fields=["name", "status"],
+                        fields=["name", "status", "rank"],
                         filters=["status"],
-                        sorts=["name"],
+                        sorts=["name", "rank"],
                     )
                 ]
 
@@ -58,6 +59,7 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=200)
                 status = CharField(max_length=50)
+                rank = IntegerField(null=True, blank=True)
 
             class Permission(ManagerBasedPermission):
                 __read__: ClassVar[list[str]] = ["public"]
@@ -69,9 +71,9 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
                 indexes: ClassVar[list[IndexConfig]] = [
                     IndexConfig(
                         name="global",
-                        fields=["name", "status"],
+                        fields=["name", "status", "rank"],
                         filters=["status"],
-                        sorts=["name"],
+                        sorts=["name", "rank"],
                     )
                 ]
 
@@ -114,6 +116,7 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
         query {
             search(index: "global", query: "Alpha") {
                 total
+                pageInfo { totalCount pageSize currentPage totalPages }
                 results {
                     __typename
                     ... on ProjectType { id name status }
@@ -126,6 +129,10 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response)
         payload = response.json()["data"]["search"]
         self.assertEqual(payload["total"], 2)
+        self.assertEqual(
+            payload["pageInfo"],
+            {"totalCount": 2, "pageSize": 10, "currentPage": 1, "totalPages": 1},
+        )
         self.assertEqual(len(payload["results"]), 2)
         type_names = {item["__typename"] for item in payload["results"]}
         self.assertEqual(type_names, {"ProjectType", "ProjectTeamType"})
@@ -170,7 +177,7 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
         """
         query = """
         query {
-            search(index: "global", query: "", sortBy: "name") {
+            search(index: "global", query: "", orderBy: [{field: name}]) {
                 results {
                     __typename
                     ... on ProjectType { name }
@@ -188,10 +195,29 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
             ["Alpha Project", "Alpha Team", "Beta Project", "Beta Team", "Gamma Team"],
         )
 
+    def test_search_schema_exposes_typed_order_by_without_legacy_sort_arguments(self):
+        response = self.query(
+            """
+            query {
+              __type(name: "Query") {
+                fields { name args { name } }
+              }
+            }
+            """
+        )
+
+        self.assertResponseNoErrors(response)
+        fields = response.json()["data"]["__type"]["fields"]
+        search = next(field for field in fields if field["name"] == "search")
+        argument_names = {argument["name"] for argument in search["args"]}
+        self.assertIn("orderBy", argument_names)
+        self.assertNotIn("sortBy", argument_names)
+        self.assertNotIn("sortDesc", argument_names)
+
     def test_graphql_search_pagination(self):
         query = """
         query {
-            search(index: "global", query: "", sortBy: "name", page: 2, pageSize: 2) {
+            search(index: "global", query: "", orderBy: [{field: name}], page: 2, pageSize: 2) {
                 results {
                     __typename
                     ... on ProjectType { name }
@@ -206,6 +232,74 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
         names = [item["name"] for item in payload["results"]]
         self.assertEqual(names, ["Beta Project", "Beta Team"])
 
+    def test_graphql_search_mixed_order_terms_trim_nulls_and_keep_ties_stable(self):
+        self.Project.Factory.create(name="Zulu", status="ordered", rank=1)
+        self.Project.Factory.create(name="Tie", status="ordered", rank=1)
+        self.ProjectTeam.Factory.create(name="Tie", status="ordered", rank=1)
+        self.Project.Factory.create(name="Other", status="ordered", rank=2)
+        self.ProjectTeam.Factory.create(name="Later", status="ordered", rank=3)
+        self.Project.Factory.create(name="Null", status="ordered", rank=None)
+        indexer = SearchIndexer(get_search_backend())
+        indexer.reindex_manager(self.Project)
+        indexer.reindex_manager(self.ProjectTeam)
+
+        response = self.query(
+            """
+            query {
+              first: search(
+                index: "global"
+                query: ""
+                filters: "{\\"status\\": \\"ordered\\"}"
+                orderBy: [{field: rank, direction: ASC}, {field: name, direction: DESC}]
+                page: 1
+                pageSize: 3
+              ) {
+                total
+                results {
+                  __typename
+                  ... on ProjectType { name }
+                  ... on ProjectTeamType { name }
+                }
+              }
+              second: search(
+                index: "global"
+                query: ""
+                filters: "{\\"status\\": \\"ordered\\"}"
+                orderBy: [{field: rank, direction: ASC}, {field: name, direction: DESC}]
+                page: 2
+                pageSize: 3
+              ) {
+                total
+                results {
+                  __typename
+                  ... on ProjectType { name }
+                  ... on ProjectTeamType { name }
+                }
+              }
+            }
+            """
+        )
+
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]
+        self.assertEqual(payload["first"]["total"], 6)
+        self.assertEqual(payload["second"]["total"], 6)
+        self.assertEqual(
+            [
+                (item["__typename"], item["name"])
+                for item in payload["first"]["results"]
+            ],
+            [
+                ("ProjectType", "Zulu"),
+                ("ProjectType", "Tie"),
+                ("ProjectTeamType", "Tie"),
+            ],
+        )
+        self.assertEqual(
+            [item["name"] for item in payload["second"]["results"]],
+            ["Other", "Later", "Null"],
+        )
+
     def test_graphql_search_sorted_pagination_includes_later_manager_hits(self):
         self.Project.Factory.create(name="Zulu Project", status="public")
         self.Project.Factory.create(name="Zzz Project", status="public")
@@ -216,7 +310,7 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
 
         query = """
         query {
-            search(index: "global", query: "", sortBy: "name", pageSize: 2) {
+            search(index: "global", query: "", orderBy: [{field: name}], pageSize: 2) {
                 results {
                     __typename
                     ... on ProjectType { name }
@@ -272,10 +366,10 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
         self.assertIn("totalMode must be one of", error["message"])
         self.assertEqual(error.get("extensions", {}).get("code"), "BAD_USER_INPUT")
 
-    def test_graphql_search_sort_desc(self):
+    def test_graphql_search_descending_order_direction(self):
         query = """
         query {
-            search(index: "global", query: "", sortBy: "name", sortDesc: true) {
+            search(index: "global", query: "", orderBy: [{field: name, direction: DESC}]) {
                 results {
                     __typename
                     ... on ProjectType { name }

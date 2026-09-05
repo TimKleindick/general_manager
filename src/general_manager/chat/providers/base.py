@@ -4,15 +4,10 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, Self
+from typing import Any, Final, Protocol, Self
 
 
-@dataclass(frozen=True)
-class Message:
-    """One chat message sent to or returned from an LLM provider."""
-
-    role: str
-    content: str
+TOOL_RESULT_MISSING: Final = object()
 
 
 @dataclass(frozen=True)
@@ -46,6 +41,18 @@ class ToolCallEvent:
     id: str
     name: str
     args: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Message:
+    """Provider-neutral chat history, including structured tool exchanges."""
+
+    role: str
+    content: str
+    tool_calls: tuple[ToolCallEvent, ...] = ()
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    tool_result: Any = TOOL_RESULT_MISSING
 
 
 @dataclass(frozen=True)

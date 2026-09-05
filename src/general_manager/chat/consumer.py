@@ -50,6 +50,7 @@ from general_manager.chat.settings import (
 from general_manager.chat.system_prompt import build_system_prompt
 from general_manager.chat.tools import (
     ScopeChatContext,
+    execute_confirmed_chat_mutation,
     execute_chat_tool,
     get_tool_definitions,
 )
@@ -202,18 +203,26 @@ class ChatConsumer(_ChatConsumerBase):
         tool_name: str | None = None,
         tool_args: dict[str, Any] | None = None,
         tool_result: Any = None,
+        tool_call_id: str | None = None,
+        tool_calls: list[dict[str, Any]] | None = None,
     ) -> None:
         from general_manager.chat.models import append_chat_message
 
         if self.conversation is not None:
             try:
+                message_kwargs: dict[str, Any] = {
+                    "role": role,
+                    "content": content,
+                    "tool_name": tool_name,
+                    "tool_args": tool_args,
+                    "tool_result": tool_result,
+                }
+                if tool_call_id is not None:
+                    message_kwargs["tool_call_id"] = tool_call_id
+                if tool_calls is not None:
+                    message_kwargs["tool_calls"] = tool_calls
                 await sync_to_async(append_chat_message)(
-                    self.conversation,
-                    role=role,
-                    content=content,
-                    tool_name=tool_name,
-                    tool_args=tool_args,
-                    tool_result=tool_result,
+                    self.conversation, **message_kwargs
                 )
             except Exception:  # noqa: BLE001
                 ...
@@ -239,7 +248,7 @@ class ChatConsumer(_ChatConsumerBase):
             session = self.scope.get("session")
             session_key = getattr(session, "session_key", None)
             if session is not None and not session_key:
-                session.save()
+                await sync_to_async(session.save)()
                 session_key = getattr(session, "session_key", None)
             self.session_key = session_key
             provider_cls = import_provider()
@@ -344,7 +353,7 @@ class ChatConsumer(_ChatConsumerBase):
         try:
             if self.conversation is None:
                 self.conversation = await self._get_persistent_conversation()
-            rate_limit_result = enforce_chat_rate_limit(self.scope)
+            rate_limit_result = await sync_to_async(enforce_chat_rate_limit)(self.scope)
             if rate_limit_result is not None:
                 await self.send_json(
                     {
@@ -355,7 +364,6 @@ class ChatConsumer(_ChatConsumerBase):
                     }
                 )
                 return
-            history = await self._load_history()
             await self._record_message(role="user", content=text)
             history = await self._load_history()
             emit_chat_audit_event(
@@ -363,9 +371,20 @@ class ChatConsumer(_ChatConsumerBase):
                 {"message": text, "session_key": self.session_key},
             )
             messages = [Message(role="system", content=build_system_prompt())]
-            messages.extend(
-                Message(role=item["role"], content=item["content"]) for item in history
-            )
+            if self.conversation is not None:
+                from general_manager.chat.context import prepare_conversation_messages
+
+                messages = await prepare_conversation_messages(
+                    self.conversation,
+                    self.provider,
+                    allow_summarization=not get_planned_chat_settings().enabled,
+                    scope=self.scope,
+                )
+            else:
+                messages.extend(
+                    Message(role=item["role"], content=item["content"])
+                    for item in history
+                )
             emit_chat_message_received(
                 user=self.scope.get("user"),
                 message=text,
@@ -400,6 +419,7 @@ class ChatConsumer(_ChatConsumerBase):
     ) -> None:
         tool_calls = list(tool_calls or [])
         assistant_chunks: list[str] = []
+        provider_tool_events: list[ToolCallEvent] = []
         self._provider_task = asyncio.current_task()
         recover_missing_tools = bool(
             get_chat_settings().get("recover_missing_tool_calls", False)
@@ -415,30 +435,25 @@ class ChatConsumer(_ChatConsumerBase):
                             {"type": "text_chunk", "content": event.content}
                         )
                 elif isinstance(event, ToolCallEvent):
-                    max_retries = int(
-                        get_chat_settings().get("max_retries_per_message", 8)
-                    )
-                    if event.name != "mutate" and tool_retries >= max_retries:
-                        await self.send_json(
-                            {
-                                "type": "error",
-                                "message": "Chat tool retry limit exceeded.",
-                                "code": "tool_retry_limit",
-                            }
+                    provider_tool_events.append(event)
+                    continue
+                elif isinstance(event, DoneEvent):
+                    if provider_tool_events:
+                        await sync_to_async(enforce_chat_rate_limit)(
+                            self.scope,
+                            input_tokens=event.usage.input_tokens,
+                            output_tokens=event.usage.output_tokens,
+                            count_request=False,
+                        )
+                        await self._handle_tool_batch(
+                            provider_tool_events,
+                            messages,
+                            history,
+                            tool_retries=tool_retries,
+                            tool_calls=tool_calls,
+                            recovered_missing_tools=recovered_missing_tools,
                         )
                         return
-                    should_resume = await self._handle_tool_call(
-                        event,
-                        messages,
-                        history,
-                        tool_retries=tool_retries,
-                        tool_calls=tool_calls,
-                        recovered_missing_tools=recovered_missing_tools,
-                    )
-                    if not should_resume:
-                        return
-                    return
-                elif isinstance(event, DoneEvent):
                     if assistant_chunks:
                         assistant_message = "".join(assistant_chunks)
                         if (
@@ -528,7 +543,7 @@ class ChatConsumer(_ChatConsumerBase):
                             recovered_missing_tools=True,
                         )
                         return
-                    enforce_chat_rate_limit(
+                    await sync_to_async(enforce_chat_rate_limit)(
                         self.scope,
                         input_tokens=event.usage.input_tokens,
                         output_tokens=event.usage.output_tokens,
@@ -543,6 +558,15 @@ class ChatConsumer(_ChatConsumerBase):
                             },
                         }
                     )
+            if provider_tool_events:
+                await self._handle_tool_batch(
+                    provider_tool_events,
+                    messages,
+                    history,
+                    tool_retries=tool_retries,
+                    tool_calls=tool_calls,
+                    recovered_missing_tools=recovered_missing_tools,
+                )
         finally:
             self._provider_task = None
 
@@ -594,18 +618,14 @@ class ChatConsumer(_ChatConsumerBase):
         callbacks = SchedulerCallbacks(enforce_rate_limit=enforce_chat_rate_limit)
         try:
             if self.conversation is not None:
-                from general_manager.chat.models import build_conversation_context
+                from general_manager.chat.context import prepare_conversation_messages
 
-                context = await sync_to_async(build_conversation_context)(
-                    self.conversation
+                planned_messages = await prepare_conversation_messages(
+                    self.conversation,
+                    self.provider,
+                    allow_summarization=False,
+                    scope=self.scope,
                 )
-                planned_messages = [
-                    Message(role="system", content=build_system_prompt()),
-                    *(
-                        Message(role=item.role, content=item.content)
-                        for item in context
-                    ),
-                ]
             planned_turn = await prepare_planned_turn(
                 text,
                 planned_messages,
@@ -640,7 +660,163 @@ class ChatConsumer(_ChatConsumerBase):
             if self._active_turn is not None and not self._active_turn.done():
                 self._active_turn.set_result(None)
 
+    async def _handle_tool_batch(
+        self,
+        events: list[ToolCallEvent],
+        messages: list[Message],
+        history: list[dict[str, str]],
+        *,
+        tool_retries: int,
+        tool_calls: list[dict[str, Any]] | None = None,
+        recovered_missing_tools: bool = False,
+    ) -> bool:
+        """Execute a completed non-mutation tool batch before continuing once."""
+        if len(events) > 1 and any(event.name == "mutate" for event in events):
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Request mutations one at a time.",
+                    "code": "mutation_batch_unsupported",
+                }
+            )
+            return False
+        if len(events) == 1:
+            return await self._handle_single_tool_call(
+                events[0],
+                messages,
+                history,
+                tool_retries=tool_retries,
+                tool_calls=tool_calls,
+                recovered_missing_tools=recovered_missing_tools,
+            )
+
+        max_retries = int(get_chat_settings().get("max_retries_per_message", 8))
+        if tool_retries + len(events) > max_retries:
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Chat tool retry limit exceeded.",
+                    "code": "tool_retry_limit",
+                }
+            )
+            return False
+
+        tool_calls = list(tool_calls or [])
+        results: list[tuple[ToolCallEvent, Any]] = []
+        for event in events:
+            emit_chat_audit_event(
+                "tool_call",
+                {
+                    "tool_name": event.name,
+                    "args": event.args,
+                    "session_key": self.session_key,
+                },
+            )
+            await self.send_json(
+                {
+                    "type": "tool_call",
+                    "id": event.id,
+                    "name": event.name,
+                    "args": event.args,
+                }
+            )
+            result = await sync_to_async(execute_chat_tool)(
+                event.name, event.args, ScopeChatContext.from_scope(self.scope)
+            )
+            tool_calls.append(
+                {"name": event.name, "args": dict(event.args), "result": result}
+            )
+            emit_chat_tool_called(
+                user=self.scope.get("user"),
+                tool_name=event.name,
+                args=event.args,
+                result=result,
+            )
+            results.append((event, result))
+
+        messages.append(Message(role="assistant", content="", tool_calls=tuple(events)))
+        await self._record_message(
+            role="assistant",
+            content="",
+            tool_calls=[
+                {"id": event.id, "name": event.name, "args": event.args}
+                for event in events
+            ],
+        )
+        for event, result in results:
+            emit_chat_audit_event(
+                "tool_result",
+                {
+                    "tool_name": event.name,
+                    "args": event.args,
+                    "result": result,
+                    "session_key": self.session_key,
+                },
+            )
+            await self.send_json(
+                {
+                    "type": "tool_result",
+                    "id": event.id,
+                    "name": event.name,
+                    "result": result,
+                }
+            )
+            tool_message = Message(
+                role="tool",
+                content=self._serialize_tool_result(result),
+                tool_call_id=event.id,
+                tool_name=event.name,
+                tool_result=result,
+            )
+            messages.append(tool_message)
+            await self._record_message(
+                role="tool",
+                content=tool_message.content,
+                tool_name=event.name,
+                tool_args=dict(event.args),
+                tool_result=result,
+                tool_call_id=event.id,
+            )
+
+        if tool_retries + len(events) >= max_retries:
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Chat tool retry limit exceeded.",
+                    "code": "tool_retry_limit",
+                }
+            )
+            return True
+        await self._stream_provider_turn(
+            messages,
+            history,
+            tool_retries=tool_retries + len(events),
+            tool_calls=tool_calls,
+            recovered_missing_tools=recovered_missing_tools,
+        )
+        return True
+
     async def _handle_tool_call(
+        self,
+        event: ToolCallEvent,
+        messages: list[Message],
+        history: list[dict[str, str]],
+        *,
+        tool_retries: int,
+        tool_calls: list[dict[str, Any]] | None = None,
+        recovered_missing_tools: bool = False,
+    ) -> bool:
+        """Retain the single-call compatibility entry point."""
+        return await self._handle_tool_batch(
+            [event],
+            messages,
+            history,
+            tool_retries=tool_retries,
+            tool_calls=tool_calls,
+            recovered_missing_tools=recovered_missing_tools,
+        )
+
+    async def _handle_single_tool_call(
         self,
         event: ToolCallEvent,
         messages: list[Message],
@@ -684,6 +860,12 @@ class ChatConsumer(_ChatConsumerBase):
             and result.get("status") == "confirmation_required"
             and event.name == "mutate"
         ):
+            messages.append(Message(role="assistant", content="", tool_calls=(event,)))
+            await self._record_message(
+                role="assistant",
+                content="",
+                tool_calls=[{"id": event.id, "name": event.name, "args": event.args}],
+            )
             timeout_seconds = int(
                 get_chat_settings().get("confirm_timeout_seconds", 30)
             )
@@ -776,13 +958,22 @@ class ChatConsumer(_ChatConsumerBase):
         messages.append(
             Message(
                 role="assistant",
-                content=(
-                    f"Called tool {event.name}. The next message is the tool "
-                    "result; answer from it exactly."
-                ),
+                content="",
+                tool_calls=(event,),
             )
         )
-        tool_message = Message(role="tool", content=self._serialize_tool_result(result))
+        await self._record_message(
+            role="assistant",
+            content="",
+            tool_calls=[{"id": event.id, "name": event.name, "args": event.args}],
+        )
+        tool_message = Message(
+            role="tool",
+            content=self._serialize_tool_result(result),
+            tool_call_id=event.id,
+            tool_name=event.name,
+            tool_result=result,
+        )
         messages.append(tool_message)
         await self._record_message(
             role="tool",
@@ -790,6 +981,7 @@ class ChatConsumer(_ChatConsumerBase):
             tool_name=event.name,
             tool_args=dict(event.args),
             tool_result=result,
+            tool_call_id=event.id,
         )
         next_tool_retries = tool_retries + (0 if event.name == "mutate" else 1)
         max_retries = int(get_chat_settings().get("max_retries_per_message", 8))
@@ -890,14 +1082,10 @@ class ChatConsumer(_ChatConsumerBase):
             await self._cancel_confirmation_timeout()
             self._pending_confirmation = None
             if confirmed:
-                result = await sync_to_async(execute_chat_tool)(
-                    "mutate",
-                    {
-                        "mutation": pending["mutation"],
-                        "input": pending["input"],
-                        "confirmed": True,
-                    },
-                    ScopeChatContext.from_scope(self.scope),
+                result = await sync_to_async(execute_confirmed_chat_mutation)(
+                    mutation=pending["mutation"],
+                    input=pending["input"],
+                    context=ScopeChatContext.from_scope(self.scope),
                 )
             else:
                 result = {"status": "cancelled", "reason": cancellation_reason}
@@ -935,26 +1123,36 @@ class ChatConsumer(_ChatConsumerBase):
                 }
             )
             messages = list(pending["messages"])
+            history = list(pending["history"])
             messages.append(
                 Message(
-                    role="assistant",
-                    content=(
-                        "Called tool mutate. The next message is the tool result; "
-                        "answer from it exactly."
-                    ),
+                    role="tool",
+                    content=tool_content,
+                    tool_call_id=confirmation_id,
+                    tool_name="mutate",
+                    tool_result=result,
                 )
             )
-            messages.append(Message(role="tool", content=tool_content))
             await self._record_message(
                 role="tool",
                 content=tool_content,
                 tool_name="mutate",
                 tool_args={"mutation": pending["mutation"], "input": pending["input"]},
                 tool_result=result,
+                tool_call_id=confirmation_id,
             )
-            await self._stream_provider_turn(
-                messages, list(pending["history"]), tool_retries=0
-            )
+            if bool(pending.get("rebuild_context_after_tool_result")):
+                from general_manager.chat.context import prepare_conversation_messages
+                from general_manager.chat.models import ChatConversation
+
+                if isinstance(self.conversation, ChatConversation):
+                    messages = await prepare_conversation_messages(
+                        self.conversation,
+                        self.provider,
+                        scope=self.scope,
+                    )
+                    history = await self._load_history()
+            await self._stream_provider_turn(messages, history, tool_retries=0)
         finally:
             if not followup_turn.done():
                 followup_turn.set_result(None)
@@ -983,18 +1181,22 @@ class ChatConsumer(_ChatConsumerBase):
             )
             if db_pending is not None:
                 history = await self._load_history()
+                restored_messages = [
+                    Message(role=item["role"], content=item["content"])
+                    for item in history
+                ]
                 pending = {
                     "id": db_pending.confirmation_id,
                     "mutation": db_pending.mutation_name,
                     "input": db_pending.payload.get("input", {}),
-                    "messages": [Message(role="system", content=build_system_prompt())]
-                    + [
-                        Message(role=item["role"], content=item["content"])
-                        for item in history
+                    "messages": [
+                        Message(role="system", content=build_system_prompt()),
+                        *restored_messages,
                     ],
                     "history": history,
                     "expires_at": db_pending.expires_at,
                     "durable": False,
+                    "rebuild_context_after_tool_result": True,
                 }
         if pending is None or confirmation_id != pending.get("id"):
             await self.send_json(

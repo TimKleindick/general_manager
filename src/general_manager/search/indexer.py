@@ -131,16 +131,14 @@ def _serialize_document(
     provided_data: Mapping[str, object] = {}
     if config.to_document is not None:
         provided_data = dict(config.to_document(instance))
-    for field_config in index_config.iter_fields():
-        data[field_config.name] = provided_data.get(
-            field_config.name,
-            extract_value(instance, field_config.name),
-        )
-    for filter_field in index_config.filters:
-        data.setdefault(
-            filter_field,
-            provided_data.get(filter_field, extract_value(instance, filter_field)),
-        )
+    field_names = [field_config.name for field_config in index_config.iter_fields()]
+    for field_name in (*field_names, *index_config.filters, *index_config.sorts):
+        if field_name in data:
+            continue
+        if field_name in provided_data:
+            data[field_name] = provided_data[field_name]
+        else:
+            data[field_name] = extract_value(instance, field_name)
 
     return SearchDocument(
         id=doc_id,

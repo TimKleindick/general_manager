@@ -1,4 +1,7 @@
-from django.db import models
+from contextlib import suppress
+
+from django.db import connections, models, transaction as django_transaction
+from django.test import override_settings
 from django.db.models import CharField, IntegerField, SmallIntegerField, TextField
 from decimal import Decimal
 from typing import ClassVar, Any
@@ -14,6 +17,7 @@ from general_manager.utils.testing import (
     run_registered_startup_hooks,
 )
 from general_manager.as_of import as_of
+from tests.utils.database import create_test_models, drop_test_models
 from django.utils import timezone
 from unittest.mock import patch
 from datetime import timedelta
@@ -926,3 +930,230 @@ class ReadOnlySchemaConcreteFieldsIntegrationTests(GeneralManagerTransactionTest
             self.Item.Interface._model,
         )
         self.assertEqual(warnings, [])
+
+
+class _SecondaryDatabaseRouter:
+    def db_for_read(self, model, **hints):
+        return "secondary"
+
+    def db_for_write(self, model, **hints):
+        return "secondary"
+
+
+class ReadOnlySecondaryDatabaseRoutingTests(GeneralManagerTransactionTestCase):
+    """Exercise synchronization against separate default and secondary tables."""
+
+    databases: ClassVar[set[str]] = {"default", "secondary"}
+    _secondary_created_models: ClassVar[list[type[models.Model]]] = []
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        class SecondaryStatus(GeneralManager):
+            code: str
+            label: str
+
+            _data: ClassVar[list[dict[str, str]]] = []
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=20, unique=True)
+                label = CharField(max_length=100)
+                database = "secondary"
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class SecondaryCategory(GeneralManager):
+            code: str
+            label: str
+
+            _data: ClassVar[list[dict[str, str]]] = []
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=20, unique=True)
+                label = CharField(max_length=100)
+                database = "secondary"
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class SecondaryProduct(GeneralManager):
+            sku: str
+            category: SecondaryCategory
+
+            _data: ClassVar[list[dict[str, object]]] = []
+
+            class Interface(ReadOnlyInterface):
+                sku = CharField(max_length=20, unique=True)
+                category = models.ForeignKey(
+                    SecondaryCategory.Interface._model,
+                    on_delete=models.CASCADE,
+                )
+                database = "secondary"
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.SecondaryStatus = SecondaryStatus
+        cls.SecondaryCategory = SecondaryCategory
+        cls.SecondaryProduct = SecondaryProduct
+        cls.general_manager_classes = [
+            SecondaryStatus,
+            SecondaryCategory,
+            SecondaryProduct,
+        ]
+        superclass_setup_complete = False
+        try:
+            super().setUpClass()
+            superclass_setup_complete = True
+            cls._secondary_created_models = create_test_models(
+                connections["secondary"],
+                (
+                    SecondaryStatus.Interface._model,
+                    SecondaryStatus.Interface._model.history.model,
+                    SecondaryCategory.Interface._model,
+                    SecondaryCategory.Interface._model.history.model,
+                    SecondaryProduct.Interface._model,
+                    SecondaryProduct.Interface._model.history.model,
+                ),
+            )
+        except Exception:
+            if superclass_setup_complete:
+                with suppress(Exception):
+                    super().tearDownClass()
+            raise
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cleanup_error: Exception | None = None
+        try:
+            with connections["secondary"].schema_editor() as editor:
+                drop_test_models(editor, reversed(cls._secondary_created_models))
+        except Exception as error:  # noqa: BLE001 - superclass cleanup must run.
+            cleanup_error = error
+        cls._secondary_created_models = []
+        try:
+            super().tearDownClass()
+        except Exception as error:  # noqa: BLE001 - preserve the first cleanup error.
+            if cleanup_error is None:
+                cleanup_error = error
+        if cleanup_error is not None:
+            raise cleanup_error
+
+    def setUp(self) -> None:
+        super().setUp()
+        models_to_clear = (
+            self.SecondaryProduct.Interface._model,
+            self.SecondaryCategory.Interface._model,
+            self.SecondaryStatus.Interface._model,
+        )
+        for alias in ("default", "secondary"):
+            for model in models_to_clear:
+                model.all_objects.using(alias).all().delete()
+        self.SecondaryStatus._data = []
+        self.SecondaryCategory._data = []
+        self.SecondaryProduct._data = []
+
+    @override_settings(DATABASE_ROUTERS=[_SecondaryDatabaseRouter()])
+    def test_sync_uses_router_when_interface_alias_is_unspecified(self) -> None:
+        with patch.object(self.SecondaryStatus.Interface, "database", None):
+            self.test_sync_reads_updates_and_reconciles_on_secondary_only()
+
+    @override_settings(DATABASE_ROUTERS=[_SecondaryDatabaseRouter()])
+    def test_router_selected_sync_transaction_rolls_back(self) -> None:
+        with patch.object(self.SecondaryStatus.Interface, "database", None):
+            self.test_injected_transaction_rolls_back_secondary_after_later_write_fails()
+
+    def test_sync_reads_updates_and_reconciles_on_secondary_only(self) -> None:
+        """Secondary payload reconciliation leaves the default alias untouched."""
+        model = self.SecondaryStatus.Interface._model
+        model.objects.using("default").create(code="DEFAULT", label="default")
+        model.objects.using("secondary").create(code="STALE", label="stale")
+        self.SecondaryStatus._data = [{"code": "SECONDARY", "label": "current"}]
+
+        capability = self.SecondaryStatus.Interface.require_capability(
+            "read_only_management",
+            expected_type=ReadOnlyManagementCapability,
+        )
+        capability.sync_data(self.SecondaryStatus.Interface)
+
+        assert list(
+            model.all_objects.using("default").values_list("code", "label")
+        ) == [("DEFAULT", "default")]
+        assert list(model.objects.using("secondary").values_list("code", "label")) == [
+            ("SECONDARY", "current")
+        ]
+        assert list(
+            model.all_objects.using("secondary").values_list("code", "is_active")
+        ) == [("STALE", False), ("SECONDARY", True)]
+
+    def test_injected_transaction_rolls_back_secondary_after_later_write_fails(
+        self,
+    ) -> None:
+        """An explicit Django transaction keeps the secondary batch atomic."""
+        model = self.SecondaryStatus.Interface._model
+        self.SecondaryStatus._data = [
+            {"code": "FIRST", "label": "persist only if transaction leaks"},
+            {"code": "FAIL", "label": "raise before second write"},
+        ]
+        capability = self.SecondaryStatus.Interface.require_capability(
+            "read_only_management",
+            expected_type=ReadOnlyManagementCapability,
+        )
+
+        original_save = model.save
+
+        def fail_second_save(instance: models.Model, *args: object, **kwargs: object):
+            assert kwargs["using"] == "secondary"
+            assert connections["secondary"].in_atomic_block
+            if instance.code == "FAIL":
+                raise RuntimeError
+            return original_save(instance, *args, **kwargs)
+
+        with (
+            patch.object(model, "save", autospec=True, side_effect=fail_second_save),
+            self.assertRaises(RuntimeError),
+        ):
+            capability.sync_data(
+                self.SecondaryStatus.Interface,
+                transaction=django_transaction,
+            )
+
+        assert model.objects.using("secondary").count() == 0
+        assert model.objects.using("default").count() == 0
+
+    def test_sync_resolves_relation_lookups_on_secondary_only(self) -> None:
+        """Foreign-key lookup selects the related row from the configured alias."""
+        category_model = self.SecondaryCategory.Interface._model
+        product_model = self.SecondaryProduct.Interface._model
+        category_model.objects.using("default").create(
+            code="SHARED",
+            label="default category",
+        )
+        category_model.objects.using("secondary").create(
+            code="SHARED",
+            label="stale category",
+        )
+        self.SecondaryCategory._data = [
+            {"code": "SHARED", "label": "secondary category"}
+        ]
+        self.SecondaryProduct._data = [
+            {"sku": "SECONDARY", "category": {"code": "SHARED"}}
+        ]
+
+        capability = self.SecondaryProduct.Interface.require_capability(
+            "read_only_management",
+            expected_type=ReadOnlyManagementCapability,
+        )
+        capability.sync_data(self.SecondaryProduct.Interface)
+
+        assert (
+            category_model.objects.using("default").get(code="SHARED").label
+            == "default category"
+        )
+        assert product_model.objects.using("default").count() == 0
+        product = (
+            product_model.objects.using("secondary")
+            .select_related("category")
+            .get(sku="SECONDARY")
+        )
+        assert product.category.label == "secondary category"

@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from django.conf import settings
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 
 from general_manager.workflow.backends.celery import CeleryWorkflowEngine
@@ -89,7 +90,9 @@ class WorkflowProductionRegistryTests(TestCase):
         handled: list[str] = []
         registry = DatabaseEventRegistry()
         registry.register(
-            "invoice.created", handler=lambda event: handled.append(event.event_id)
+            "invoice.created",
+            handler=lambda event: handled.append(event.event_id),
+            registration_id="test-prod-persists-and-routes",
         )
 
         event = WorkflowEvent(
@@ -104,7 +107,7 @@ class WorkflowProductionRegistryTests(TestCase):
             event__event_id="evt-prod-1", status=WorkflowOutbox.STATUS_PROCESSED
         ).exists()
         assert WorkflowDeliveryAttempt.objects.filter(
-            idempotency_key__startswith="evt-prod-1:"
+            idempotency_key__startswith="v3_"
         ).exists()
 
     @override_settings(
@@ -114,7 +117,9 @@ class WorkflowProductionRegistryTests(TestCase):
         calls: list[str] = []
         registry = DatabaseEventRegistry()
         registry.register(
-            "invoice.created", handler=lambda event: calls.append(event.event_id)
+            "invoice.created",
+            handler=lambda event: calls.append(event.event_id),
+            registration_id="test-prod-deduplicates-event-id",
         )
         event = WorkflowEvent(
             event_id="evt-prod-2",
@@ -132,7 +137,9 @@ class WorkflowProductionRegistryTests(TestCase):
         handled: list[str] = []
         registry = DatabaseEventRegistry()
         registry.register(
-            "invoice.created", handler=lambda event: handled.append(event.event_id)
+            "invoice.created",
+            handler=lambda event: handled.append(event.event_id),
+            registration_id="test-prod-publish-sync",
         )
         event = WorkflowEvent(
             event_id="evt-publish-sync",
@@ -144,7 +151,7 @@ class WorkflowProductionRegistryTests(TestCase):
         assert handled == ["evt-publish-sync"]
         assert WorkflowEventRecord.objects.filter(event_id="evt-publish-sync").exists()
         assert WorkflowDeliveryAttempt.objects.filter(
-            idempotency_key__startswith="evt-publish-sync:"
+            idempotency_key__startswith="v3_"
         ).exists()
 
     @override_settings(
@@ -154,7 +161,9 @@ class WorkflowProductionRegistryTests(TestCase):
         handled: list[str] = []
         registry = DatabaseEventRegistry()
         registry.register(
-            "invoice.created", handler=lambda event: handled.append(event.event_id)
+            "invoice.created",
+            handler=lambda event: handled.append(event.event_id),
+            registration_id="test-prod-claim-token",
         )
         event = WorkflowEvent(
             event_id="evt-claim-token",
@@ -189,7 +198,9 @@ class WorkflowProductionRegistryTests(TestCase):
         calls: list[str] = []
         registry = DatabaseEventRegistry()
         registry.register(
-            "invoice.created", handler=lambda event: calls.append(event.event_id)
+            "invoice.created",
+            handler=lambda event: calls.append(event.event_id),
+            registration_id="test-prod-stale-claim-token",
         )
         event = WorkflowEvent(
             event_id="evt-stale-claim",
@@ -231,6 +242,7 @@ class WorkflowProductionRegistryTests(TestCase):
             "invoice.created",
             handler=lambda _event: None,
             when=lambda _event: False,
+            registration_id="test-prod-filtered-handlers",
         )
         event = WorkflowEvent(
             event_id="evt-not-handled",
@@ -245,6 +257,36 @@ class WorkflowProductionRegistryTests(TestCase):
         assert outbox.status == WorkflowOutbox.STATUS_PROCESSED
 
     @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}
+    )
+    def test_dead_letter_entry_does_not_route_until_explicitly_redriven(self) -> None:
+        calls: list[str] = []
+        registry = DatabaseEventRegistry()
+        registry.register(
+            "invoice.created",
+            handler=lambda event: calls.append(event.event_id),
+            registration_id="test-prod-dead-letter-redrive",
+        )
+        event = WorkflowEvent(
+            event_id="evt-dead-letter-direct",
+            event_type="invoice.created",
+            payload={},
+        )
+
+        assert registry.publish(event) is False
+        outbox = WorkflowOutbox.objects.get(event__event_id=event.event_id)
+        WorkflowOutbox.objects.filter(pk=outbox.pk).update(
+            status=WorkflowOutbox.STATUS_DEAD_LETTER
+        )
+
+        assert registry.process_outbox_entry(int(outbox.pk)) is False
+        assert calls == []
+
+        call_command("workflow_replay_dead_letters", limit=1)
+        assert registry.process_outbox_entry(int(outbox.pk)) is True
+        assert calls == [event.event_id]
+
+    @override_settings(
         GENERAL_MANAGER={
             "WORKFLOW_MODE": "production",
             "WORKFLOW_ASYNC": True,
@@ -256,7 +298,9 @@ class WorkflowProductionRegistryTests(TestCase):
         calls: list[str] = []
         registry = DatabaseEventRegistry()
         registry.register(
-            "invoice.created", handler=lambda event: calls.append(event.event_id)
+            "invoice.created",
+            handler=lambda event: calls.append(event.event_id),
+            registration_id="test-prod-stale-claim-budget",
         )
         event = WorkflowEvent(
             event_id="evt-claim-budget",
@@ -297,6 +341,7 @@ class WorkflowProductionRegistryTests(TestCase):
         registry.register(
             "invoice.created",
             handler=lambda event: calls.append(event.event_id),
+            registration_id="test-prod-running-attempt",
         )
         event = WorkflowEvent(
             event_id="evt-running-attempt",
@@ -333,7 +378,11 @@ class WorkflowProductionRegistryTests(TestCase):
     )
     def test_process_outbox_entry_counts_duplicate_suppression_once(self) -> None:
         registry = DatabaseEventRegistry()
-        registry.register("invoice.created", handler=lambda _event: None)
+        registry.register(
+            "invoice.created",
+            handler=lambda _event: None,
+            registration_id="test-prod-duplicate-suppression",
+        )
         event = WorkflowEvent(
             event_id="evt-dup-suppression",
             event_type="invoice.created",
@@ -387,8 +436,18 @@ class WorkflowProductionRegistryTests(TestCase):
         def when_two(_event: WorkflowEvent) -> bool:
             return True
 
-        registry.register("invoice.created", handler=handler, when=when_one)
-        registry.register("invoice.created", handler=handler, when=when_two)
+        registry.register(
+            "invoice.created",
+            handler=handler,
+            when=when_one,
+            registration_id="test-prod-routing-options-one",
+        )
+        registry.register(
+            "invoice.created",
+            handler=handler,
+            when=when_two,
+            registration_id="test-prod-routing-options-two",
+        )
         event = WorkflowEvent(
             event_id="evt-reg-id",
             event_type="invoice.created",
@@ -415,8 +474,16 @@ class WorkflowProductionRegistryTests(TestCase):
         def handler(event: WorkflowEvent) -> None:
             calls.append(event.event_id)
 
-        registry.register("invoice.created", handler=handler)
-        registry.register("invoice.created", handler=handler)
+        registry.register(
+            "invoice.created",
+            handler=handler,
+            registration_id="test-prod-identical-registration",
+        )
+        registry.register(
+            "invoice.created",
+            handler=handler,
+            registration_id="test-prod-identical-registration",
+        )
         event = WorkflowEvent(
             event_id="evt-reg-identical",
             event_type="invoice.created",
@@ -464,7 +531,9 @@ class WorkflowProductionRegistryTests(TestCase):
         handled: list[str] = []
         registry = DatabaseEventRegistry()
         registry.register(
-            "invoice.created", handler=lambda event: handled.append(event.event_id)
+            "invoice.created",
+            handler=lambda event: handled.append(event.event_id),
+            registration_id="test-prod-finalize-fail",
         )
         event = WorkflowEvent(
             event_id="evt-finalize-fail",
@@ -525,6 +594,65 @@ class WorkflowProductionEngineTests(TestCase):
         assert (
             WorkflowExecutionRecord.objects.filter(workflow_id="wf-dedupe").count() == 1
         )
+
+    @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": False}
+    )
+    def test_correlation_insert_race_recovers_and_keeps_transaction_usable(
+        self,
+    ) -> None:
+        engine = CeleryWorkflowEngine()
+        WorkflowExecutionRecord.objects.create(
+            execution_id="exec-correlation-winner",
+            workflow_id="wf-correlation-race",
+            state="pending",
+            input_data={},
+            correlation_id="corr-race",
+            metadata={},
+        )
+        original_lookup = engine._get_existing_correlation_execution
+        lookup_calls = 0
+
+        def miss_once(workflow_id: str, correlation_id: str):
+            nonlocal lookup_calls
+            lookup_calls += 1
+            if lookup_calls == 1:
+                return None
+            return original_lookup(workflow_id, correlation_id)
+
+        # Force a database insert conflict on every supported backend. MariaDB
+        # does not enforce the conditional correlation uniqueness constraint.
+        with (
+            patch.object(engine, "_get_existing_correlation_execution", miss_once),
+            patch(
+                "general_manager.workflow.backends.celery.uuid4",
+                return_value="exec-correlation-winner",
+            ),
+        ):
+            execution = engine.start(
+                WorkflowDefinition(workflow_id="wf-correlation-race"),
+                correlation_id="corr-race",
+            )
+
+        assert execution.execution_id == "exec-correlation-winner"
+        assert lookup_calls == 2
+        assert (
+            WorkflowExecutionRecord.objects.filter(
+                workflow_id="wf-correlation-race", correlation_id="corr-race"
+            ).count()
+            == 1
+        )
+        WorkflowExecutionRecord.objects.create(
+            execution_id="exec-correlation-after-race",
+            workflow_id="wf-after-correlation-race",
+            state="completed",
+            input_data={},
+            output_data={},
+            metadata={},
+        )
+        assert WorkflowExecutionRecord.objects.filter(
+            execution_id="exec-correlation-after-race"
+        ).exists()
 
     @override_settings(
         GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": False}

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import atexit
+from collections.abc import Iterable
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event
+from threading import Barrier, Event, Lock, Thread
 from typing import Any, ClassVar
 from unittest.mock import patch
 
@@ -13,9 +15,11 @@ from django.test import TransactionTestCase
 from django.utils.crypto import get_random_string
 
 from general_manager.permission.audit import (
+    AuditLoggerClosedError,
     PermissionAuditEvent,
     DatabaseAuditLogger,
     FileAuditLogger,
+    _BufferedAuditLogger,
     configure_audit_logger,
     configure_audit_logger_from_settings,
     get_audit_logger,
@@ -619,8 +623,8 @@ class PermissionAuditTests(TransactionTestCase):
         self.assertFalse(event.bypassed)
         self.assertIsNone(event.metadata)
 
-    def test_file_audit_logger_closed_logger_ignores_events(self) -> None:
-        """Test that a closed FileAuditLogger ignores new events."""
+    def test_file_audit_logger_closed_logger_rejects_events(self) -> None:
+        """Test that a closed FileAuditLogger rejects new events."""
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "audit.log"
             logger = FileAuditLogger(path, batch_size=1, flush_interval=0.1)
@@ -635,7 +639,6 @@ class PermissionAuditTests(TransactionTestCase):
             logger.record(event)
             logger.close()
 
-            # Record after close should be ignored
             event2 = PermissionAuditEvent(
                 action="create",
                 attributes=("field2",),
@@ -643,7 +646,8 @@ class PermissionAuditTests(TransactionTestCase):
                 user=self.user,
                 manager="TestManager",
             )
-            logger.record(event2)
+            with self.assertRaises(AuditLoggerClosedError):
+                logger.record(event2)
 
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
@@ -812,7 +816,7 @@ class PermissionAuditTests(TransactionTestCase):
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
 
-    def test_file_logger_no_worker_close_ignores_later_records(self) -> None:
+    def test_file_logger_no_worker_close_rejects_later_records(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "audit.log"
             logger = FileAuditLogger.__new__(FileAuditLogger)
@@ -821,6 +825,10 @@ class PermissionAuditTests(TransactionTestCase):
             logger._flush_interval = 0.1
             logger._use_worker = False
             logger._closed = Event()
+            logger._worker_stopped = Event()
+            logger._worker_stopped.set()
+            logger._state_lock = Lock()
+            logger._worker_failure = None
             logger._queue = None
             logger._worker = None
             logger._path.parent.mkdir(parents=True, exist_ok=True)
@@ -833,6 +841,206 @@ class PermissionAuditTests(TransactionTestCase):
             )
 
             logger.close()
-            logger.record(event)
+            with self.assertRaises(AuditLoggerClosedError):
+                logger.record(event)
 
             self.assertFalse(path.exists())
+
+    def test_worker_flush_drains_without_closing_the_logger(self) -> None:
+        """A successful flush leaves the worker able to persist later events."""
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "audit.log"
+            logger = FileAuditLogger(path, batch_size=10, flush_interval=0.01)
+            first = PermissionAuditEvent(
+                action="read",
+                attributes=("first",),
+                granted=True,
+                user=self.user,
+                manager="TestManager",
+            )
+            second = PermissionAuditEvent(
+                action="read",
+                attributes=("second",),
+                granted=True,
+                user=self.user,
+                manager="TestManager",
+            )
+
+            logger.record(first)
+            logger.flush()
+            logger.record(second)
+            logger.flush()
+            logger.close()
+
+            payloads = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(
+                [payload["attributes"] for payload in payloads],
+                [["first"], ["second"]],
+            )
+
+    def test_synchronous_flush_waits_for_an_accepted_in_flight_record(self) -> None:
+        """Synchronous flush shares the record acceptance lock used by SQLite loggers."""
+
+        class SynchronousGateLogger(_BufferedAuditLogger):
+            def __init__(self) -> None:
+                self.started = Event()
+                self.release = Event()
+                self.persisted: list[PermissionAuditEvent] = []
+                super().__init__(use_worker=False)
+
+            def _handle_batch(self, events: Iterable[PermissionAuditEvent]) -> None:
+                self.started.set()
+                self.release.wait(timeout=1)
+                self.persisted.extend(events)
+
+        logger = SynchronousGateLogger()
+        event = PermissionAuditEvent(
+            action="read",
+            attributes=("field",),
+            granted=True,
+            user=self.user,
+            manager="TestManager",
+        )
+        record_thread = Thread(target=logger.record, args=(event,))
+        flush_finished = Event()
+        flush_thread = Thread(target=lambda: (logger.flush(), flush_finished.set()))
+
+        record_thread.start()
+        self.assertTrue(logger.started.wait(timeout=1))
+        flush_thread.start()
+        self.assertFalse(flush_finished.wait(timeout=0.05))
+        logger.release.set()
+        record_thread.join(timeout=1)
+        flush_thread.join(timeout=1)
+
+        self.assertFalse(record_thread.is_alive())
+        self.assertFalse(flush_thread.is_alive())
+        self.assertTrue(flush_finished.is_set())
+        self.assertEqual(logger.persisted, [event])
+
+    def test_worker_close_rejects_later_records(self) -> None:
+        """Closing is a terminal boundary instead of silently dropping events."""
+        with TemporaryDirectory() as tmp_dir:
+            logger = FileAuditLogger(Path(tmp_dir) / "audit.log", flush_interval=0.01)
+            logger.close()
+
+            with self.assertRaises(AuditLoggerClosedError):
+                logger.record(
+                    PermissionAuditEvent(
+                        action="read",
+                        attributes=("field",),
+                        granted=True,
+                        user=self.user,
+                        manager="TestManager",
+                    )
+                )
+
+    def test_worker_close_race_drains_accepted_event_or_rejects_it(self) -> None:
+        """A close/record race has a deterministic result at the acceptance boundary."""
+
+        class GateLogger(_BufferedAuditLogger):
+            def __init__(self) -> None:
+                self.started = Event()
+                self.release = Event()
+                self.persisted: list[PermissionAuditEvent] = []
+                super().__init__(batch_size=1, flush_interval=0.01)
+
+            def _handle_batch(self, events: Iterable[PermissionAuditEvent]) -> None:
+                self.started.set()
+                self.release.wait(timeout=1)
+                self.persisted.extend(events)
+
+        logger = GateLogger()
+        first = PermissionAuditEvent(
+            action="read",
+            attributes=("first",),
+            granted=True,
+            user=self.user,
+            manager="TestManager",
+        )
+        raced = PermissionAuditEvent(
+            action="read",
+            attributes=("raced",),
+            granted=True,
+            user=self.user,
+            manager="TestManager",
+        )
+        logger.record(first)
+        self.assertTrue(logger.started.wait(timeout=1))
+
+        barrier = Barrier(3)
+        accepted: list[bool] = []
+        close_errors: list[Exception] = []
+
+        def submit() -> None:
+            barrier.wait(timeout=1)
+            try:
+                logger.record(raced)
+            except RuntimeError:
+                accepted.append(False)
+            else:
+                accepted.append(True)
+
+        def close() -> None:
+            barrier.wait(timeout=1)
+            try:
+                logger.close()
+            except Exception as error:  # noqa: BLE001 - assertion below
+                close_errors.append(error)
+
+        submission = Thread(target=submit)
+        closer = Thread(target=close)
+        submission.start()
+        closer.start()
+        barrier.wait(timeout=1)
+        submission.join(timeout=1)
+        self.assertFalse(submission.is_alive())
+        logger.release.set()
+        closer.join(timeout=1)
+
+        self.assertFalse(closer.is_alive())
+        self.assertEqual(close_errors, [])
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(
+            [event.attributes for event in logger.persisted],
+            [("first",)] + ([("raced",)] if accepted[0] else []),
+        )
+
+    def test_worker_failure_reaches_flush_and_close_callers(self) -> None:
+        """A failing worker wakes lifecycle callers and reports its persistence error."""
+
+        class SinkUnavailableError(OSError):
+            def __init__(self) -> None:
+                super().__init__("audit sink unavailable")
+
+        class FailingLogger(_BufferedAuditLogger):
+            def __init__(self) -> None:
+                self.failed = Event()
+                super().__init__(batch_size=1, flush_interval=0.01)
+
+            def _handle_batch(self, events: Iterable[PermissionAuditEvent]) -> None:
+                self.failed.set()
+                raise SinkUnavailableError
+
+        event = PermissionAuditEvent(
+            action="read",
+            attributes=("field",),
+            granted=True,
+            user=self.user,
+            manager="TestManager",
+        )
+        logger = FailingLogger()
+        try:
+            logger.record(event)
+            with self.assertRaisesRegex(SinkUnavailableError, "audit sink unavailable"):
+                logger.flush()
+            self.assertTrue(logger.failed.is_set())
+            with self.assertRaisesRegex(SinkUnavailableError, "audit sink unavailable"):
+                logger.close()
+            with self.assertRaises(AuditLoggerClosedError):
+                logger.record(event)
+        finally:
+            atexit.unregister(logger.close)

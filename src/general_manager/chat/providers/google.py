@@ -19,7 +19,7 @@ from general_manager.chat.providers._shared import (
     TokenUsage,
     ToolDefinition,
 )
-from general_manager.chat.providers.base import BaseLLMProvider
+from general_manager.chat.providers.base import BaseLLMProvider, TOOL_RESULT_MISSING
 from general_manager.chat.settings import get_chat_settings
 
 
@@ -42,6 +42,65 @@ def _normalize_tool_calls(chunk: Any) -> list[Any]:
         return function_calls
     tool_calls = getattr(chunk, "tool_calls", None)
     return tool_calls if isinstance(tool_calls, list) else []
+
+
+def _tool_result(message: Message) -> dict[str, Any]:
+    """Return a Gemini-compatible structured function response payload."""
+    if message.tool_result is TOOL_RESULT_MISSING:
+        parsed = parse_tool_arguments(message.content)
+        return parsed if parsed else {"result": message.content}
+    if isinstance(message.tool_result, dict):
+        return message.tool_result
+    if isinstance(message.tool_result, list):
+        return {"result": message.tool_result}
+    if message.tool_result is not None:
+        return {"result": message.tool_result}
+    return {"result": message.tool_result}
+
+
+def _build_contents(messages: list[Message]) -> tuple[str | None, list[dict[str, Any]]]:
+    """Encode neutral history using Gemini roles and function parts."""
+    system_contents: list[str] = []
+    contents: list[dict[str, Any]] = []
+    for message in messages:
+        if message.role == "system":
+            system_contents.append(message.content)
+            continue
+        if message.role == "tool" and message.tool_name is not None:
+            function_response: dict[str, Any] = {
+                "name": message.tool_name,
+                "response": _tool_result(message),
+            }
+            if message.tool_call_id is not None:
+                function_response["id"] = message.tool_call_id
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [{"function_response": function_response}],
+                }
+            )
+            continue
+        parts: list[dict[str, Any]] = []
+        if message.content:
+            parts.append({"text": message.content})
+        parts.extend(
+            {
+                "function_call": {
+                    "id": call.id,
+                    "name": call.name,
+                    "args": call.args,
+                }
+            }
+            for call in message.tool_calls
+        )
+        contents.append(
+            {
+                "role": "model" if message.role == "assistant" else message.role,
+                "parts": parts,
+            }
+        )
+    system = "\n\n".join(system_contents) if system_contents else None
+    return system, contents
 
 
 class GeminiProvider(BaseLLMProvider):
@@ -100,26 +159,27 @@ class GeminiProvider(BaseLLMProvider):
         """Stream Gemini text, tool calls, and usage events for one chat turn."""
         config = self.provider_config
         client = self._build_async_client(config)
+        system, contents = _build_contents(messages)
+        request_config: dict[str, Any] = {
+            "tools": [
+                {
+                    "function_declarations": [
+                        {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.input_schema,
+                        }
+                    ]
+                }
+                for tool in tools
+            ]
+        }
+        if system is not None:
+            request_config["system_instruction"] = system
         stream = await client.aio.models.generate_content_stream(
             model=config["model"],
-            contents=[
-                {"role": message.role, "parts": [{"text": message.content}]}
-                for message in messages
-            ],
-            config={
-                "tools": [
-                    {
-                        "function_declarations": [
-                            {
-                                "name": tool.name,
-                                "description": tool.description,
-                                "parameters": tool.input_schema,
-                            }
-                        ]
-                    }
-                    for tool in tools
-                ]
-            },
+            contents=contents,
+            config=request_config,
         )
         usage = TokenUsage()
         async for chunk in stream:
@@ -130,8 +190,11 @@ class GeminiProvider(BaseLLMProvider):
                 name = _get_call_value(tool_call, "name")
                 args = parse_tool_arguments(_get_call_value(tool_call, "args", {}))
                 if isinstance(name, str):
+                    call_id = _get_call_value(tool_call, "id")
                     yield ToolCallEvent(
-                        id=f"gemini-tool-{index}",
+                        id=call_id
+                        if isinstance(call_id, str) and call_id
+                        else f"gemini-tool-{index}",
                         name=name,
                         args=args,
                     )

@@ -75,6 +75,22 @@ class OrmBucketManagersRunCacheEntry:
     dependencies: frozenset["Dependency"]
 
 
+@dataclass(frozen=True)
+class _RunCacheEntry:
+    """Decorated run-cache result plus dependencies to replay on a hit."""
+
+    value: object
+    dependencies: frozenset["Dependency"]
+
+
+@dataclass(frozen=True, slots=True)
+class _RunCacheKey:
+    """Private run-cache storage key retaining the originating snapshot."""
+
+    snapshot: str | None
+    key: Hashable
+
+
 class CalculationRunContext:
     """
     Cache calculation work for one request, graph, bulk operation, or task.
@@ -324,10 +340,7 @@ class CalculationRunContext:
     @staticmethod
     def _scoped_key(key: Hashable) -> Hashable:
         """Namespace a run value by the active historical snapshot."""
-        fingerprint = as_of_cache_fingerprint()
-        if fingerprint is None:
-            return key
-        return ("as_of", fingerprint, key)
+        return _RunCacheKey(as_of_cache_fingerprint(), key)
 
     def __enter__(self) -> "CalculationRunContext":
         """Activate this context and return it for the `with` block."""
@@ -585,20 +598,13 @@ class CalculationRunContext:
                 self._remove_dependency_cache_hit(key)
 
     def discard_prefix(self, prefix: tuple[Hashable, ...]) -> None:
-        """Discard cached tuple keys whose leading items equal `prefix`."""
-        fingerprint = as_of_cache_fingerprint()
+        """Discard tuple keys whose leading items equal `prefix` in every snapshot."""
         for key in list(self._values):
-            if fingerprint is None:
-                matches = isinstance(key, tuple) and key[: len(prefix)] == prefix
-            else:
-                matches = (
-                    isinstance(key, tuple)
-                    and key[:2] == ("as_of", fingerprint)
-                    and len(key) == 3
-                    and isinstance(key[2], tuple)
-                    and key[2][: len(prefix)] == prefix
-                )
-            if matches:
+            if (
+                isinstance(key, _RunCacheKey)
+                and isinstance(key.key, tuple)
+                and key.key[: len(prefix)] == prefix
+            ):
                 self._remove_run_value(key)
 
     def get_orm_bucket_result(self, key: Hashable) -> object:

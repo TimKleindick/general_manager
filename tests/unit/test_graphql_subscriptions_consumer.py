@@ -300,6 +300,10 @@ class GraphQLSubscriptionConsumerSubscribeTests(unittest.TestCase):
                     return_value=document,
                 ),
                 patch(
+                    "general_manager.api.graphql_subscription_consumer.validate",
+                    return_value=[],
+                ),
+                patch(
                     "general_manager.api.graphql_subscription_consumer.subscribe",
                     new_callable=AsyncMock,
                     return_value=object(),

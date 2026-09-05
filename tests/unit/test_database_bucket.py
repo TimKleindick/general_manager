@@ -1,6 +1,8 @@
 # type: ignore
 
+import pickle
 from datetime import UTC, datetime
+from inspect import signature
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -22,6 +24,8 @@ from general_manager.bucket.database_bucket import (
     QuerysetFilteringError,
     _restore_database_bucket_from_primary_keys,
 )
+from general_manager.bucket.base_bucket import Bucket
+from general_manager.manager.group_manager import GroupManager
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import CalculationRunContext
@@ -391,6 +395,37 @@ class DatabaseBucketTestCase(TestCase):
         # Base bucket with all users
         self.bucket = DatabaseBucket(User.objects.all(), UserManager)
 
+    def test_constructor_rejects_legacy_ordering_metadata(self):
+        """Database ordering is public only through signed ``sort`` fields."""
+        parameters = signature(DatabaseBucket).parameters
+
+        self.assertNotIn("sort_keys", parameters)
+        self.assertNotIn("sort_reverse", parameters)
+        with self.assertRaises(TypeError):
+            DatabaseBucket(User.objects.all(), UserManager, sort_keys=("username",))
+        with self.assertRaises(TypeError):
+            DatabaseBucket(User.objects.all(), UserManager, sort_reverse=True)
+
+    def test_signed_ordering_survives_filter_exclude_clone_and_pickle(self):
+        """Private signed metadata preserves cache identity through derivation."""
+        source = (
+            self.bucket.sort("-username", "id")
+            .filter(username__in=["alice", "bob", "carol"])
+            .exclude(username="bob")
+        )
+
+        clone = source.all()
+        restored = pickle.loads(pickle.dumps(source))  # noqa: S301
+
+        expected = [self.u3.id, self.u1.id]
+        self.assertEqual([manager.identification["id"] for manager in source], expected)
+        self.assertEqual([manager.identification["id"] for manager in clone], expected)
+        self.assertEqual(
+            [manager.identification["id"] for manager in restored], expected
+        )
+        self.assertEqual(source._sort_fields, ("-username", "id"))
+        self.assertEqual(restored._sort_fields, source._sort_fields)
+
     def test_iter_and_len_and_count(self):
         # __iter__ yields UserManager instances
         """
@@ -404,6 +439,63 @@ class DatabaseBucketTestCase(TestCase):
         # __len__ and count()
         self.assertEqual(len(self.bucket), 3)
         self.assertEqual(self.bucket.count(), 3)
+
+    def test_empty_database_subset_validates_lookup_names(self):
+        derived = self.bucket.with_instances([])
+        self.assertEqual(list(derived.filter(username__icontains="a")), [])
+        with self.assertRaises(QuerysetFilteringError):
+            derived.filter(nonexistent_field="x")
+        with self.assertRaises(QuerysetFilteringError):
+            derived.exclude(nonexistent_field="x")
+
+    def test_materialized_database_filter_tracks_native_lookup_dependencies(self):
+        selected = [UserManager(self.u1.pk), UserManager(self.u2.pk)]
+        derived = self.bucket.with_instances(selected)
+        with DependencyTracker() as expected:
+            self.bucket.filter(id__in={self.u1.pk, self.u2.pk}).filter(
+                username__iexact="ALICE"
+            ).count()
+        with DependencyTracker() as actual:
+            self.assertEqual(derived.filter(username__iexact="ALICE").count(), 1)
+        self.assertTrue(expected)
+        self.assertEqual(actual, expected)
+
+    def test_materialized_annotations_drop_unrelated_source_filter_joins(self):
+        first = Group.objects.create(name="First")
+        second = Group.objects.create(name="Second")
+        self.u1.groups.add(first, second)
+        source = DatabaseBucket(
+            User.objects.annotate(group_count=models.Count("groups")).filter(
+                groups__name="First"
+            ),
+            UserManager,
+        )
+        derived = source.with_instances([UserManager(self.u1.pk)])
+        self.assertEqual(
+            [item.identification["id"] for item in derived.filter(group_count=2)],
+            [self.u1.pk],
+        )
+
+    def test_materialized_filters_preserve_related_annotations(self):
+        group = Group.objects.create(name="Selected")
+        self.u1.groups.add(group)
+        source = DatabaseBucket(
+            User.objects.annotate(group_count=models.Count("groups")).filter(
+                username="alice"
+            ),
+            UserManager,
+        )
+        selected = source.with_instances(
+            [UserManager(self.u1.pk), UserManager(self.u2.pk)]
+        )
+        self.assertEqual(
+            [item.identification["id"] for item in selected.filter(group_count=0)],
+            [self.u2.pk],
+        )
+        self.assertEqual(
+            [item.identification["id"] for item in selected.exclude(group_count=0)],
+            [self.u1.pk],
+        )
 
     def test_native_projection_avoids_manager_construction(self) -> None:
         bucket = DatabaseBucket(
@@ -517,16 +609,13 @@ class DatabaseBucketTestCase(TestCase):
             NativeUserManager,
             {"username__startswith": ["a"]},
             {"username": ["bob"]},
-            sort_keys=("username",),
-            sort_reverse=True,
-        )
+        ).sort("-username")
 
         expected_sort_identifier = serialize_dependency_identifier(
             {
-                "__sort__username": {
+                "__sort__-username": {
                     "filters": {"username__startswith": "a"},
                     "excludes": {"username": "bob"},
-                    "reverse": True,
                 }
             }
         )
@@ -1075,16 +1164,12 @@ class DatabaseBucketTestCase(TestCase):
             User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
             UserManager,
             {"username__in": [["alice", "bob"]]},
-            sort_keys=("username",),
-            sort_reverse=False,
-        )
+        ).sort("username")
         descending = DatabaseBucket(
             User.objects.filter(username__in=["alice", "bob"]).order_by("-username"),
             UserManager,
             {"username__in": [["alice", "bob"]]},
-            sort_keys=("username",),
-            sort_reverse=True,
-        )
+        ).sort("-username")
 
         with CalculationRunContext(), self.assertNumQueries(2):
             self.assertEqual(
@@ -1141,22 +1226,16 @@ class DatabaseBucketTestCase(TestCase):
 
     def test_tracking_sorted_all_bucket_keeps_empty_mappings_in_sort_payload(self):
         """Sorted buckets still publish empty filters/excludes for sort identity."""
-        bucket = DatabaseBucket(
-            User.objects.all(),
-            UserManager,
-            sort_keys=("username",),
-            sort_reverse=True,
-        )
+        bucket = DatabaseBucket(User.objects.all(), UserManager).sort("-username")
 
         with DependencyTracker() as dependencies:
             bucket._track_effective_dependencies()
 
         expected_sort_identifier = serialize_dependency_identifier(
             {
-                "__sort__username": {
+                "__sort__-username": {
                     "filters": {},
                     "excludes": {},
-                    "reverse": True,
                 }
             }
         )
@@ -1400,7 +1479,7 @@ class DatabaseBucketTestCase(TestCase):
         with CalculationRunContext(), self.assertNumQueries(1):
             self.assertEqual(bucket.count(), 3)
 
-    def test_union_bucket_bypasses_run_scoped_result_reuse(self):
+    def test_union_bucket_materializes_exact_rows_before_run_context(self):
         first = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
         second = DatabaseBucket(User.objects.filter(username="bob"), UserManager)
         first_union = first | second
@@ -1408,7 +1487,7 @@ class DatabaseBucketTestCase(TestCase):
             User.objects.filter(username="alice"), UserManager
         ) | DatabaseBucket(User.objects.filter(username="bob"), UserManager)
 
-        with CalculationRunContext(), self.assertNumQueries(2):
+        with CalculationRunContext(), self.assertNumQueries(0):
             self.assertEqual(
                 sorted(manager.identification["id"] for manager in first_union),
                 sorted([self.u1.id, self.u2.id]),
@@ -1548,10 +1627,177 @@ class DatabaseBucketTestCase(TestCase):
         self.assertEqual(mgr2.identification["id"], self.u3.id)
         # slice
         subbucket = self.bucket[:2]
-        self.assertIsInstance(subbucket, DatabaseBucket)
         self.assertEqual(len(subbucket), 2)
         ids = [mgr.identification["id"] for mgr in subbucket]
         self.assertListEqual(ids, [self.u1.id, self.u2.id])
+
+    def test_slice_and_exact_subset_preserve_selected_manager_objects(self):
+        """Follow-up operations cannot re-query past a slice or exact subset."""
+        source = DatabaseBucket(User.objects.order_by("username"), NativeUserManager)
+        sliced = source[:1]
+        selected = NativeUserManager(self.u3.id)
+
+        self.assertEqual(
+            [
+                manager.identification["id"]
+                for manager in sliced.filter(username="alice")
+            ],
+            [self.u1.id],
+        )
+        exact = source.with_instances([selected, selected])
+        self.assertEqual(list(exact), [selected, selected])
+        self.assertIs(exact[0], selected)
+
+    def test_materialized_database_subsets_keep_orm_lookups_and_exact_order(self):
+        """Derived subsets evaluate Django lookups without restoring source membership."""
+        alice = NativeUserManager(self.u1.id)
+        carol = NativeUserManager(self.u3.id)
+        only_alice = DatabaseBucket(
+            User.objects.filter(username="alice"), NativeUserManager
+        )
+        only_carol = DatabaseBucket(
+            User.objects.filter(username="carol"), NativeUserManager
+        )
+
+        union = only_alice | only_carol
+        supplied = only_alice.with_instances([carol, alice, carol])
+
+        self.assertEqual(
+            [
+                item.identification["id"]
+                for item in union.filter(username__icontains="AR")
+            ],
+            [self.u3.id],
+        )
+        self.assertEqual(
+            [
+                item.identification["id"]
+                for item in union.exclude(username__iexact="ALICE")
+            ],
+            [self.u3.id],
+        )
+        self.assertEqual(
+            [
+                item.identification["id"]
+                for item in supplied.filter(username__iexact="CAROL")
+            ],
+            [self.u3.id, self.u3.id],
+        )
+        self.assertEqual(
+            [
+                item.identification["id"]
+                for item in supplied.exclude(username__icontains="AR")
+            ],
+            [self.u1.id],
+        )
+
+    def test_materialized_exclude_matches_native_multivalued_relation_semantics(self):
+        first = Group.objects.create(name="First")
+        second = Group.objects.create(name="Second")
+        self.u1.groups.add(first, second)
+        self.u2.groups.add(first)
+        source = DatabaseBucket(User.objects.order_by("username"), NativeUserManager)
+        conditions = {"groups__name": "First", "groups__id": second.pk}
+        native_ids = [
+            item.identification["id"] for item in source.exclude(**conditions)
+        ]
+        self.assertEqual(native_ids, [self.u2.pk, self.u3.pk])
+        alice, bob, carol = list(source)
+        variants = {
+            "slice": source[:2],
+            "union": source | source,
+            "instances": source.with_instances([carol, alice, bob, carol]),
+        }
+        for kind, derived in variants.items():
+            with self.subTest(kind=kind):
+                expected = [
+                    item for item in derived if item.identification["id"] in native_ids
+                ]
+                actual = list(derived.exclude(**conditions))
+                self.assertEqual(actual, expected)
+                for result, original in zip(actual, expected, strict=True):
+                    self.assertIs(result, original)
+
+    def test_materialized_database_subset_preserves_query_annotations(self):
+        source = self.bucket.filter(username_length__gte=5)
+        derived = source.with_instances([UserManager(self.u2.id)])
+
+        self.assertEqual(
+            [
+                item.identification["id"]
+                for item in derived.filter(username_length__lte=3)
+            ],
+            [self.u2.id],
+        )
+
+    def test_materialized_database_subset_drops_source_relation_membership(self):
+        group = Group.objects.create(name="selected")
+        self.u1.groups.add(group)
+        source = DatabaseBucket(
+            User.objects.filter(groups__name=group.name), NativeUserManager
+        )
+        derived = source.with_instances([NativeUserManager(self.u2.id)])
+
+        self.assertEqual(
+            [item.identification["id"] for item in derived.filter(username="bob")],
+            [self.u2.id],
+        )
+
+    def test_materialized_database_subset_pickle_restores_lookup_provenance(self):
+        source = DatabaseBucket(
+            User.objects.filter(username="alice"), NativeUserManager
+        )
+        derived = source.with_instances([NativeUserManager(self.u3.id)])
+        restored = pickle.loads(pickle.dumps(derived))  # noqa: S301 - local test data
+
+        self.assertEqual(
+            [
+                item.identification["id"]
+                for item in restored.filter(username__iexact="CAROL")
+            ],
+            [self.u3.id],
+        )
+
+    def test_native_database_union_accepts_nested_materialized_results(self):
+        source = DatabaseBucket(User.objects.order_by("username"), NativeUserManager)
+
+        self.assertEqual(
+            [item.identification["id"] for item in source | source[:1]],
+            [self.u1.id, self.u2.id, self.u3.id],
+        )
+        self.assertEqual(
+            [item.identification["id"] for item in source | (source | source)],
+            [self.u1.id, self.u2.id, self.u3.id],
+        )
+
+    def test_group_combines_three_database_bucket_values(self):
+        class ValueInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {"value": {"type": Bucket}}
+
+        class ValueManager:
+            Interface = ValueInterface
+
+        class Entry:
+            def __init__(self, value):
+                self.value = value
+
+        source = DatabaseBucket(User.objects.order_by("username"), NativeUserManager)
+        grouped = GroupManager(
+            ValueManager,
+            {},
+            [
+                Entry(source.filter(username="alice")),
+                Entry(source.filter(username="bob")),
+                Entry(source.filter(username="carol")),
+            ],
+        )
+
+        self.assertEqual(
+            [item.identification["id"] for item in grouped.combine_value("value")],
+            [self.u3.id, self.u2.id, self.u1.id],
+        )
 
     def test_all(self):
         """
@@ -1608,33 +1854,29 @@ class DatabaseBucketTestCase(TestCase):
             {"username__in": [["alice", "bob"]]},
             {"is_staff": [True]},
             search_date=search_date,
-            sort_keys=("username",),
-            sort_reverse=True,
-        )
+        ).sort("-username")
         reduced = bucket.__reduce__()
         restore_func, args = reduced
 
         self.assertEqual(restore_func, _restore_database_bucket_from_primary_keys)
         self.assertEqual(args[0], User)
-        self.assertEqual(args[2], (self.u1.pk, self.u2.pk))
+        self.assertEqual(args[2], (self.u2.pk, self.u1.pk))
         self.assertEqual(args[3], bucket.filters)
         self.assertEqual(args[4], bucket.excludes)
         self.assertEqual(args[5], bucket._data.db)
         self.assertEqual(args[6], bucket._search_date)
-        self.assertEqual(args[7], bucket._sort_keys)
-        self.assertEqual(args[8], bucket._sort_reverse)
+        self.assertEqual(args[7], bucket._sort_fields)
         self.assertFalse(any(isinstance(arg, QuerySet) for arg in args))
 
         restored = restore_func(*args)
         self.assertEqual(
             [manager.identification["id"] for manager in restored],
-            [self.u1.pk, self.u2.pk],
+            [self.u2.pk, self.u1.pk],
         )
         self.assertEqual(restored.filters, bucket.filters)
         self.assertEqual(restored.excludes, bucket.excludes)
         self.assertEqual(restored._search_date, bucket._search_date)
-        self.assertEqual(restored._sort_keys, bucket._sort_keys)
-        self.assertEqual(restored._sort_reverse, bucket._sort_reverse)
+        self.assertEqual(restored._sort_fields, bucket._sort_fields)
 
     def test_restore_rejects_duplicate_primary_key_snapshots(self):
         """
@@ -1649,8 +1891,7 @@ class DatabaseBucketTestCase(TestCase):
                 {},
                 "default",
                 None,
-                None,
-                False,
+                (),
             )
 
     def test_restore_rejects_undated_or_differently_dated_snapshot_in_context(self):
@@ -1671,8 +1912,7 @@ class DatabaseBucketTestCase(TestCase):
                         {},
                         "default",
                         encoded_date,
-                        None,
-                        False,
+                        (),
                     )
 
     def test_or_union_with_bucket(self):
@@ -1683,19 +1923,19 @@ class DatabaseBucketTestCase(TestCase):
         b1 = self.bucket.filter(username="alice")
         b2 = self.bucket.filter(username="carol")
         union = b1 | b2
-        self.assertIsInstance(union, DatabaseBucket)
         self.assertEqual(len(union), 2)
         ids = sorted([mgr.identification["id"] for mgr in union])
         self.assertListEqual(ids, sorted([self.u1.id, self.u3.id]))
 
-    def test_or_union_preserves_dependency_filter_metadata(self):
+    def test_or_union_preserves_left_first_manager_instances(self):
         b1 = self.bucket.filter(username="alice").exclude(is_staff=True)
         b2 = self.bucket.filter(username="carol").exclude(is_staff=False)
 
         union = b1 | b2
 
-        self.assertEqual(union.filters, {"username": ["alice", "carol"]})
-        self.assertEqual(union.excludes, {"is_staff": [True, False]})
+        self.assertEqual(
+            [manager.identification["id"] for manager in union], [self.u1.id]
+        )
 
     def test_or_with_manager(self):
         """
@@ -1762,9 +2002,33 @@ class DatabaseBucketTestCase(TestCase):
         )
 
         # reverse ordering
-        rev = self.bucket.sort("username", reverse=True)
+        rev = self.bucket.sort("-username")
         # highest username first
         self.assertEqual(rev.first().identification["id"], self.u3.id)
+
+    def test_sort_adds_primary_key_tie_breaker_for_orm_and_python_properties(self):
+        first = User.objects.create(username="tie_a")
+        second = User.objects.create(username="tie_b")
+        source = User.objects.filter(pk__in=(first.pk, second.pk)).order_by("-pk")
+        bucket = DatabaseBucket(source, UserManager)
+
+        native = bucket.sort("username_length")
+        python_property = bucket.sort("negative_length")
+
+        self.assertEqual(
+            [manager.identification["id"] for manager in native],
+            [first.pk, second.pk],
+        )
+        table_name = connection.ops.quote_name(User._meta.db_table)
+        primary_key = connection.ops.quote_name(User._meta.pk.column)
+        self.assertRegex(
+            str(native._data.query),
+            rf"ORDER BY .*{table_name}\.{primary_key} ASC$",
+        )
+        self.assertEqual(
+            [manager.identification["id"] for manager in python_property],
+            [first.pk, second.pk],
+        )
 
     def test_property_filter_and_sort(self):
         bucket = self.bucket.filter(username_length__gte=4)
@@ -1799,15 +2063,13 @@ class DatabaseBucketTestCase(TestCase):
 
     def test_slice_with_step_and_negative_slice(self):
         """
-        Ensures slicing with steps and negative ranges behave consistently and preserve type.
+        Ensures slicing with steps and negative ranges preserve selected rows.
         """
         step_bucket = self.bucket[0:3:2]
-        self.assertIsInstance(step_bucket, DatabaseBucket)
         ids = [mgr.identification["id"] for mgr in step_bucket]
         self.assertListEqual(ids, [self.u1.id, self.u3.id])
 
         neg_slice = self.bucket[::-1]
-        self.assertIsInstance(neg_slice, DatabaseBucket)
         ids_rev = [mgr.identification["id"] for mgr in neg_slice]
         self.assertListEqual(ids_rev, [self.u3.id, self.u2.id, self.u1.id])
 
@@ -1911,12 +2173,12 @@ class DatabaseBucketTestCase(TestCase):
         """
         Ensure property-based sort supports direction and returns consistent ordering.
         """
-        desc_sorted = self.bucket.sort("username_length", reverse=True)
+        desc_sorted = self.bucket.sort("-username_length")
         ids_desc = [m.identification["id"] for m in desc_sorted]
         # Both alice and carol have same length; bob shortest
         self.assertEqual(ids_desc[-1], self.u2.id)
 
-        asc_sorted = self.bucket.sort("username_length", reverse=False)
+        asc_sorted = self.bucket.sort("username_length")
         ids_asc = [m.identification["id"] for m in asc_sorted]
         self.assertEqual(ids_asc[0], self.u2.id)
 

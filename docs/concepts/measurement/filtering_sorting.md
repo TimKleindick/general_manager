@@ -23,7 +23,7 @@ projects = Project.all().sort("total_capex")
 Use descending order for highest values first:
 
 ```python
-projects = Project.all().sort(("total_capex", True))
+projects = Project.all().sort("-total_capex")
 ```
 
 ## GraphQL filters

@@ -58,6 +58,13 @@ class TestFactoryMethods(SimpleTestCase):
                     f"Run {i}: {delta_date} is not in the expected range.",
                 )
 
+    def test__lazy_delta_date_falls_back_when_base_attribute_is_missing(self):
+        result = lazy_delta_date(0, "missing_start_date").evaluate(
+            SimpleNamespace(), 1, None
+        )
+
+        self.assertEqual(result, date.today())
+
     def test__lazy_project_name(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):

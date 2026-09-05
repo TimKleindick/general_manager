@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import time
 from collections.abc import Callable, Iterable
 from importlib import import_module
@@ -16,6 +15,7 @@ from general_manager.search.backend import (
     SearchHit,
     SearchResult,
 )
+from general_manager.bucket._ordering import normalize_ordering
 
 
 def _load_meilisearch_api_error() -> type[Exception] | None:
@@ -31,6 +31,15 @@ def _load_meilisearch_api_error() -> type[Exception] | None:
 MeilisearchApiError = _load_meilisearch_api_error()
 
 
+class MeilisearchOrderingConfigurationError(SearchBackendError):
+    """Raised when an index does not give explicit sorting first priority."""
+
+    def __init__(self, index_name: str) -> None:
+        super().__init__(
+            f"Meilisearch index {index_name!r} must place the sort ranking rule first."
+        )
+
+
 class _MeilisearchIndex(Protocol):
     """Subset of Meilisearch index APIs used by this adapter."""
 
@@ -43,6 +52,8 @@ class _MeilisearchIndex(Protocol):
     def search(self, query: str, payload: Mapping[str, object]) -> object: ...
 
     def get_documents(self, payload: Mapping[str, object]) -> object: ...
+
+    def get_settings(self) -> object: ...
 
 
 class _MeilisearchClient(Protocol):
@@ -87,15 +98,13 @@ class MeilisearchBackend:
 
     The adapter stores the original GeneralManager document id in
     ``gm_document_id`` and uses a Meilisearch-safe deterministic ``id`` for the
-    primary key. Already-safe ids are kept unchanged when they match
-    ``^[A-Za-z0-9_-]{1,511}$``. All other ids, including empty strings and
-    Unicode strings, are converted to ``"gm_" + sha256(str(id)).hexdigest()``;
-    the mapping is stable and collision-resistant but not reversible. It accepts
-    a preconfigured client for tests or advanced deployments, otherwise imports
-    ``meilisearch.Client`` at runtime.
+    primary key. Every original id, including already-safe ids, empty strings,
+    and Unicode strings, is converted to
+    ``"gm_" + sha256(str(id)).hexdigest()``. The mapping is stable and
+    collision-resistant but not reversible. It accepts a preconfigured client
+    for tests or advanced deployments, otherwise imports ``meilisearch.Client``
+    at runtime.
     """
-
-    _ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,511}$")
 
     def __init__(
         self,
@@ -154,6 +163,9 @@ class MeilisearchBackend:
         searchable_fields = self._string_sequence_setting(settings, "searchable_fields")
         filterable_fields = self._string_sequence_setting(settings, "filterable_fields")
         sortable_fields = self._string_sequence_setting(settings, "sortable_fields")
+        ranking_rules = self._ranking_rules_with_sort_first(index, settings)
+        task = index.update_settings({"rankingRules": ranking_rules})
+        self._wait_for_task(task)
         if searchable_fields is not None:
             task = index.update_settings(
                 {"searchableAttributes": list(searchable_fields)}
@@ -223,11 +235,10 @@ class MeilisearchBackend:
         Reads pages of up to 1000 documents using fields ``id``,
         ``gm_document_id``, and ``type``. ``types=None`` and ``types=[]`` both
         include every type. When a filter is present, matching is exact against
-        the stored ``type`` value. ``gm_document_id`` is preferred; legacy
-        documents without it fall back to ``id``. The fallback also applies when
-        ``gm_document_id`` is falsey, such as an empty string. Duplicate ids
-        collapse into one set entry, and malformed document entries without
-        either field are ignored.
+        the stored ``type`` value. ``gm_document_id`` is preferred; only legacy
+        documents where it is missing or ``None`` fall back to ``id``. An empty
+        original id remains empty. Duplicate ids collapse into one set entry,
+        and malformed document entries without either field are ignored.
         """
         index = self._get_or_create_index(index_name)
         document_ids: set[str] = set()
@@ -248,9 +259,9 @@ class MeilisearchBackend:
                 document_type = self._read_document_field(document, "type")
                 if type_filter and document_type not in type_filter:
                     continue
-                document_id = self._read_document_field(
-                    document, "gm_document_id"
-                ) or self._read_document_field(document, "id")
+                document_id = self._read_document_field(document, "gm_document_id")
+                if document_id is None:
+                    document_id = self._read_document_field(document, "id")
                 if document_id is not None:
                     document_ids.add(str(document_id))
 
@@ -271,8 +282,7 @@ class MeilisearchBackend:
         *,
         filters: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
         filter_expression: str | None = None,
-        sort_by: str | None = None,
-        sort_desc: bool = False,
+        sort: Sequence[str] | None = None,
         limit: int = 10,
         offset: int = 0,
         types: Sequence[str] | None = None,
@@ -287,8 +297,8 @@ class MeilisearchBackend:
                 sequence of mappings representing OR groups; keys may include
                 nested lookups (e.g., "field__lookup").
             filter_expression (str | None): Raw Meilisearch filter expression to use instead of `filters`.
-            sort_by (str | None): Field name to sort results by.
-            sort_desc (bool): If true, sort in descending order; otherwise ascending.
+            sort (Sequence[str] | None): Signed field names to sort in order.
+                Prefix a field with ``-`` for descending order.
             limit (int): Maximum number of results to return.
             offset (int): Number of results to skip.
             types (Sequence[str] | None): Sequence of document type names to restrict results to the `type` field.
@@ -305,14 +315,19 @@ class MeilisearchBackend:
             with structured filters. String rendering uses ``str(value)`` and
             escapes backslashes and double quotes; this also applies to numbers,
             booleans, and ``None``. Empty `in` lists produce an empty
-            parenthesized clause. ``sort_by`` is treated as one raw field name
-            and the adapter appends ``:asc`` or ``:desc``; it does not validate,
-            split, or escape the sort field. Malformed hit entries are skipped.
+            parenthesized clause. ``sort`` is normalized as signed field names
+            and forwarded as ordered Meilisearch ``field:direction`` entries.
+            A sorted query reads the index settings and raises
+            ``MeilisearchOrderingConfigurationError`` unless ``sort`` has the
+            highest ranking-rule priority. Malformed hit entries are skipped.
             Missing hit ``id``/``gm_document_id`` and ``type`` become empty
             strings, missing ``identification`` and ``data`` become empty
             mappings, and missing ``_rankingScore`` becomes ``None``.
         """
         index = self._get_or_create_index(index_name)
+        terms = normalize_ordering(sort if sort is not None else ())
+        if terms and not self._sort_has_priority(index):
+            raise MeilisearchOrderingConfigurationError(index_name)
         payload: dict[str, object] = {
             "limit": limit,
             "offset": offset,
@@ -324,16 +339,19 @@ class MeilisearchBackend:
         )
         if filter_expr:
             payload["filter"] = filter_expr
-        if sort_by:
-            direction = "desc" if sort_desc else "asc"
-            payload["sort"] = [f"{sort_by}:{direction}"]
+        if terms:
+            payload["sort"] = [
+                f"{term.field}:{'desc' if term.descending else 'asc'}" for term in terms
+            ]
 
         response = self._as_mapping(index.search(query, payload))
         hits = [
             SearchHit(
-                id=self._string_field(hit, "gm_document_id")
-                or self._string_field(hit, "id")
-                or "",
+                id=(
+                    str(self._read_document_field(hit, "gm_document_id"))
+                    if self._read_document_field(hit, "gm_document_id") is not None
+                    else self._string_field(hit, "id") or ""
+                ),
                 type=self._string_field(hit, "type") or "",
                 identification=self._dict_field(hit, "identification"),
                 score=self._float_field(hit, "_rankingScore"),
@@ -348,6 +366,32 @@ class MeilisearchBackend:
             took_ms=self._int_field(response, "processingTimeMs"),
             raw=response,
         )
+
+    @staticmethod
+    def _ranking_rules_with_sort_first(
+        index: _MeilisearchIndex, settings: Mapping[str, object]
+    ) -> list[str]:
+        configured = settings.get("ranking_rules")
+        if isinstance(configured, Sequence) and not isinstance(
+            configured, (str, bytes)
+        ):
+            rules = [str(rule) for rule in configured]
+        else:
+            payload = MeilisearchBackend._as_mapping(index.get_settings())
+            raw_rules = payload.get("rankingRules", ())
+            rules = (
+                [str(rule) for rule in raw_rules]
+                if isinstance(raw_rules, Sequence)
+                and not isinstance(raw_rules, (str, bytes))
+                else []
+            )
+        return ["sort", *(rule for rule in rules if rule != "sort")]
+
+    @staticmethod
+    def _sort_has_priority(index: _MeilisearchIndex) -> bool:
+        settings = MeilisearchBackend._as_mapping(index.get_settings())
+        rules = settings.get("rankingRules")
+        return isinstance(rules, Sequence) and bool(rules) and rules[0] == "sort"
 
     def _get_or_create_index(self, index_name: str) -> _MeilisearchIndex:
         """
@@ -478,7 +522,8 @@ class MeilisearchBackend:
                 if parts:
                     group_clauses.append(" AND ".join(parts))
             if group_clauses:
-                clauses.append(" OR ".join(f"({clause})" for clause in group_clauses))
+                grouped_filters = " OR ".join(f"({clause})" for clause in group_clauses)
+                clauses.append(f"({grouped_filters})")
         if not clauses:
             return None
         return " AND ".join(clauses)
@@ -548,13 +593,11 @@ class MeilisearchBackend:
         if task is None:
             return None
         if isinstance(task, Mapping):
-            value = (
-                task.get("taskUid")
-                or task.get("task_uid")
-                or task.get("uid")
-                or task.get("taskId")
-            )
-            return value
+            for key in ("taskUid", "task_uid", "uid", "taskId"):
+                value = cast(object | None, task.get(key))
+                if value is not None:
+                    return value
+            return None
         for name in ("task_uid", "taskUid", "uid", "task_id"):
             attr_value = cast(object | None, getattr(task, name, None))
             if attr_value is not None:
@@ -702,11 +745,11 @@ class MeilisearchBackend:
             raw_id: Original document identifier; will be converted to string.
 
         Returns:
-            str: The input string if it matches the allowed ID pattern (1-511 characters: letters, digits, underscore, hyphen). Otherwise a deterministic fallback string prefixed with "gm_" derived from the input.
+            str: A deterministic hash-based identifier in the ``gm_`` namespace.
+                Every source ID is encoded so legacy safe IDs cannot collide
+                with a formerly hashed unsafe ID.
         """
         value = str(raw_id)
-        if MeilisearchBackend._ID_PATTERN.match(value):
-            return value
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
         return f"gm_{digest}"
 

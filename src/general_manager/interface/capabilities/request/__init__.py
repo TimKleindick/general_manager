@@ -54,6 +54,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 RequestLookupValue = object
 RequestLookupMap = dict[str, tuple[RequestLookupValue, ...]]
+RequestLookupGroups = tuple[RequestLookupMap, ...]
 RequestAttributeMetadata = dict[str, object]
 RequestAttributeResolver = Callable[["RequestInterface"], object]
 FragmentValue = TypeVar("FragmentValue")
@@ -545,12 +546,26 @@ class RequestQueryCapability(BaseCapability):
         missing local fallback, or fragment conflicts.
         """
         ensure_as_of_read_supported(interface_cls)
-        self._build_request_plan(
-            interface_cls,
-            operation_name=operation_name,
-            filters=self._copy_lookup_map(filters),
-            excludes=self._copy_lookup_map(excludes),
-        )
+        validated = False
+        for action, lookup_map in (
+            ("filter", self._copy_lookup_map(filters)),
+            ("exclude", self._copy_lookup_map(excludes)),
+        ):
+            for lookup_key, values in lookup_map.items():
+                self._build_request_plan(
+                    interface_cls,
+                    operation_name=operation_name,
+                    filters={lookup_key: values} if action == "filter" else {},
+                    excludes={lookup_key: values} if action == "exclude" else {},
+                )
+                validated = True
+        if not validated:
+            self._build_request_plan(
+                interface_cls,
+                operation_name=operation_name,
+                filters={},
+                excludes={},
+            )
 
     def for_operation(
         self,
@@ -573,6 +588,8 @@ class RequestQueryCapability(BaseCapability):
         operation_name: str | None = None,
         filters: Mapping[str, tuple[RequestLookupValue, ...]] | None = None,
         excludes: Mapping[str, tuple[RequestLookupValue, ...]] | None = None,
+        filter_call_groups: RequestLookupGroups | None = None,
+        exclude_call_groups: RequestLookupGroups | None = None,
     ) -> RequestBucket["GeneralManager"]:
         """
         Compile a request query plan, track its dependency, and return a lazy bucket.
@@ -583,13 +600,21 @@ class RequestQueryCapability(BaseCapability):
         materialized.
         """
         ensure_as_of_read_supported(interface_cls)
-        filter_map = self._copy_lookup_map(filters)
-        exclude_map = self._copy_lookup_map(excludes)
+        filter_groups = self._copy_lookup_groups(filter_call_groups)
+        exclude_groups = self._copy_lookup_groups(exclude_call_groups)
+        if not filter_groups and filters:
+            filter_groups = (self._copy_lookup_map(filters),)
+        if not exclude_groups and excludes:
+            exclude_groups = (self._copy_lookup_map(excludes),)
+        filter_map = self._combine_lookup_groups(filter_groups)
+        exclude_map = self._combine_lookup_groups(exclude_groups)
         request_plan = self._build_request_plan(
             interface_cls,
             operation_name=operation_name,
             filters=filter_map,
             excludes=exclude_map,
+            filter_call_groups=filter_groups,
+            exclude_call_groups=exclude_groups,
         )
         self._track_request_dependency(interface_cls, request_plan)
         return RequestBucket(
@@ -599,6 +624,8 @@ class RequestQueryCapability(BaseCapability):
             request_plan=request_plan,
             filters=filter_map,
             excludes=exclude_map,
+            filter_call_groups=filter_groups,
+            exclude_call_groups=exclude_groups,
         )
 
     @staticmethod
@@ -677,6 +704,23 @@ class RequestQueryCapability(BaseCapability):
             return {}
         return {key: tuple(items) for key, items in values.items()}
 
+    @classmethod
+    def _copy_lookup_groups(
+        cls,
+        groups: RequestLookupGroups | None,
+    ) -> RequestLookupGroups:
+        if not groups:
+            return ()
+        return tuple(cls._copy_lookup_map(group) for group in groups if group)
+
+    @staticmethod
+    def _combine_lookup_groups(groups: RequestLookupGroups) -> RequestLookupMap:
+        combined: RequestLookupMap = {}
+        for group in groups:
+            for key, values in group.items():
+                combined[key] = (*combined.get(key, ()), *values)
+        return combined
+
     def _build_request_plan(
         self,
         interface_cls: type["RequestInterface"],
@@ -684,6 +728,8 @@ class RequestQueryCapability(BaseCapability):
         operation_name: str | None,
         filters: Mapping[str, tuple[RequestLookupValue, ...]],
         excludes: Mapping[str, tuple[RequestLookupValue, ...]],
+        filter_call_groups: RequestLookupGroups | None = None,
+        exclude_call_groups: RequestLookupGroups | None = None,
     ) -> RequestQueryPlan:
         operation = interface_cls.get_query_operation(operation_name)
         query_params: RequestMutablePayload = {}
@@ -692,26 +738,35 @@ class RequestQueryCapability(BaseCapability):
         body: RequestMutablePayload = {}
         local_predicates: list[RequestLocalPredicate] = []
 
-        lookup_sources: tuple[
-            tuple[RequestAction, Mapping[str, tuple[RequestLookupValue, ...]]],
-            ...,
-        ] = (("filter", filters), ("exclude", excludes))
-        for action, lookup_map in lookup_sources:
-            for lookup_key, values in lookup_map.items():
-                spec = self._get_filter_spec(interface_cls, operation, lookup_key)
-                for value in values:
-                    fragment = self._compile_fragment(
-                        spec=spec,
-                        lookup_key=lookup_key,
-                        value=value,
-                        action=action,
-                        operation_name=operation.name,
-                    )
-                    self._merge_fragment(query_params, fragment.query_params, "query")
-                    self._merge_fragment(headers, fragment.headers, "headers")
-                    self._merge_fragment(path_params, fragment.path_params, "path")
-                    self._merge_fragment(body, fragment.body, "body")
-                    local_predicates.extend(fragment.local_predicates)
+        filter_groups = filter_call_groups or (
+            (self._copy_lookup_map(filters),) if filters else ()
+        )
+        exclude_groups = exclude_call_groups or (
+            (self._copy_lookup_map(excludes),) if excludes else ()
+        )
+        self._compile_lookup_groups(
+            interface_cls=interface_cls,
+            operation=operation,
+            action="filter",
+            groups=filter_groups,
+            query_params=query_params,
+            headers=headers,
+            path_params=path_params,
+            body=body,
+            local_predicates=local_predicates,
+        )
+        self._compile_lookup_groups(
+            interface_cls=interface_cls,
+            operation=operation,
+            action="exclude",
+            groups=exclude_groups,
+            call_group_offset=len(filter_groups),
+            query_params=query_params,
+            headers=headers,
+            path_params=path_params,
+            body=body,
+            local_predicates=local_predicates,
+        )
 
         return RequestQueryPlan(
             operation_name=operation.name,
@@ -725,8 +780,255 @@ class RequestQueryCapability(BaseCapability):
             local_predicates=tuple(local_predicates),
             filters=filters,
             excludes=excludes,
+            filter_call_groups=filter_groups,
+            exclude_call_groups=exclude_groups,
             metadata=operation.metadata,
         )
+
+    def _compile_lookup_groups(
+        self,
+        *,
+        interface_cls: type["RequestInterface"],
+        operation: RequestQueryOperation,
+        action: RequestAction,
+        groups: RequestLookupGroups,
+        call_group_offset: int = 0,
+        query_params: RequestMutablePayload,
+        headers: dict[str, str],
+        path_params: RequestMutablePayload,
+        body: RequestMutablePayload,
+        local_predicates: list[RequestLocalPredicate],
+    ) -> None:
+        """Compile every representable group without weakening its semantics."""
+        for group_index, group in enumerate(groups, start=call_group_offset):
+            bindings = [
+                (
+                    lookup_key,
+                    value,
+                    self._get_filter_spec(interface_cls, operation, lookup_key),
+                )
+                for lookup_key, values in group.items()
+                for value in values
+            ]
+            fragments = [
+                self._compile_fragment(
+                    spec=spec,
+                    lookup_key=lookup_key,
+                    value=value,
+                    action=action,
+                    operation_name=operation.name,
+                    call_group=group_index,
+                )
+                for lookup_key, value, spec in bindings
+            ]
+            if action == "exclude":
+                self._compile_exclude_group(
+                    interface_cls=interface_cls,
+                    bindings=bindings,
+                    fragments=fragments,
+                    call_group=group_index,
+                    query_params=query_params,
+                    headers=headers,
+                    path_params=path_params,
+                    body=body,
+                    local_predicates=local_predicates,
+                )
+                continue
+            for (lookup_key, value, spec), fragment in zip(
+                bindings, fragments, strict=True
+            ):
+                conflict = self._fragment_conflict(
+                    query_params, headers, path_params, body, fragment
+                )
+                if conflict is None:
+                    self._merge_compiled_fragment(
+                        query_params, headers, path_params, body, fragment
+                    )
+                else:
+                    local_predicates.extend(
+                        self._deferred_local_predicate(
+                            interface_cls,
+                            spec,
+                            lookup_key,
+                            value,
+                            action,
+                            group_index,
+                            conflict,
+                        ).local_predicates
+                    )
+                local_predicates.extend(
+                    self._with_predicate_group(
+                        fragment.local_predicates,
+                        call_group=group_index,
+                    )
+                )
+
+    def _compile_exclude_group(
+        self,
+        *,
+        interface_cls: type["RequestInterface"],
+        bindings: list[tuple[str, RequestLookupValue, RequestFilter]],
+        fragments: list[RequestPlanFragment],
+        call_group: int,
+        query_params: RequestMutablePayload,
+        headers: dict[str, str],
+        path_params: RequestMutablePayload,
+        body: RequestMutablePayload,
+        local_predicates: list[RequestLocalPredicate],
+    ) -> None:
+        """Push an exclude group only when its complete NOT(AND) is representable."""
+        has_local_predicates = any(fragment.local_predicates for fragment in fragments)
+        has_mixed_fragment = any(
+            fragment.local_predicates
+            and self._fragment_has_remote_contribution(fragment)
+            for fragment in fragments
+        )
+        if len(fragments) > 1 and has_mixed_fragment:
+            # A mixed compiler fragment can preserve its own remote scope and
+            # local predicate. Combining it with another lookup would require
+            # representing a larger NOT(AND) expression remotely, which this
+            # flat request plan cannot do without weakening it.
+            raise RequestPlanConflictError(location="query", key=bindings[0][0])
+        pending_query = dict(query_params)
+        pending_headers = dict(headers)
+        pending_path = dict(path_params)
+        pending_body = dict(body)
+        conflict: tuple[RequestLocation, str] | None = None
+        for fragment in fragments:
+            conflict = self._fragment_conflict(
+                pending_query, pending_headers, pending_path, pending_body, fragment
+            )
+            if conflict is not None:
+                break
+            self._merge_compiled_fragment(
+                pending_query, pending_headers, pending_path, pending_body, fragment
+            )
+        if has_mixed_fragment:
+            if conflict is not None:
+                # Deferring only the local half of a mixed compiler fragment
+                # would broaden this exclusion, so it cannot be represented.
+                raise RequestPlanConflictError(location=conflict[0], key=conflict[1])
+            query_params.update(pending_query)
+            headers.update(pending_headers)
+            path_params.update(pending_path)
+            body.update(pending_body)
+            for fragment in fragments:
+                local_predicates.extend(
+                    self._with_predicate_group(
+                        fragment.local_predicates,
+                        call_group=call_group,
+                    )
+                )
+            return
+        if conflict is None and not has_local_predicates:
+            query_params.update(pending_query)
+            headers.update(pending_headers)
+            path_params.update(pending_path)
+            body.update(pending_body)
+            return
+        for (lookup_key, value, spec), fragment in zip(
+            bindings, fragments, strict=True
+        ):
+            if fragment.local_predicates:
+                local_predicates.extend(
+                    self._with_predicate_group(
+                        fragment.local_predicates,
+                        call_group=call_group,
+                    )
+                )
+                continue
+            local_predicates.extend(
+                self._deferred_local_predicate(
+                    interface_cls,
+                    spec,
+                    lookup_key,
+                    value,
+                    "exclude",
+                    call_group,
+                    conflict or ("query", lookup_key),
+                ).local_predicates
+            )
+
+    @staticmethod
+    def _fragment_has_remote_contribution(fragment: RequestPlanFragment) -> bool:
+        """Return whether a compiler fragment constrains the outbound request."""
+        return bool(
+            fragment.query_params
+            or fragment.headers
+            or fragment.path_params
+            or fragment.body
+        )
+
+    @staticmethod
+    def _with_predicate_group(
+        predicates: tuple[RequestLocalPredicate, ...],
+        *,
+        call_group: int,
+    ) -> tuple[RequestLocalPredicate, ...]:
+        """Assign the call group without changing compiler predicate semantics."""
+        return tuple(
+            RequestLocalPredicate(
+                lookup_key=predicate.lookup_key,
+                value=predicate.value,
+                action=predicate.action,
+                call_group=call_group,
+            )
+            for predicate in predicates
+        )
+
+    @staticmethod
+    def _fragment_conflict(
+        query_params: Mapping[str, object],
+        headers: Mapping[str, str],
+        path_params: Mapping[str, object],
+        body: Mapping[str, object],
+        fragment: RequestPlanFragment,
+    ) -> tuple[RequestLocation, str] | None:
+        for location, target, updates in (
+            ("query", query_params, fragment.query_params),
+            ("headers", headers, fragment.headers),
+            ("path", path_params, fragment.path_params),
+            ("body", body, fragment.body),
+        ):
+            for key, value in updates.items():
+                if key in target and target[key] != value:
+                    return cast(RequestLocation, location), key
+        return None
+
+    def _deferred_local_predicate(
+        self,
+        interface_cls: type["RequestInterface"],
+        spec: RequestFilter,
+        lookup_key: str,
+        value: RequestLookupValue,
+        action: RequestAction,
+        call_group: int,
+        conflict: tuple[RequestLocation, str],
+    ) -> RequestPlanFragment:
+        field_name = lookup_key.split("__", maxsplit=1)[0]
+        if not spec.local_fallback or (
+            field_name not in interface_cls.fields
+            and field_name not in interface_cls.input_fields
+        ):
+            raise RequestPlanConflictError(location=conflict[0], key=conflict[1])
+        return RequestPlanFragment(
+            local_predicates=(
+                RequestLocalPredicate(lookup_key, value, action, call_group),
+            )
+        )
+
+    def _merge_compiled_fragment(
+        self,
+        query_params: RequestMutablePayload,
+        headers: dict[str, str],
+        path_params: RequestMutablePayload,
+        body: RequestMutablePayload,
+        fragment: RequestPlanFragment,
+    ) -> None:
+        self._merge_fragment(query_params, fragment.query_params, "query")
+        self._merge_fragment(headers, fragment.headers, "headers")
+        self._merge_fragment(path_params, fragment.path_params, "path")
+        self._merge_fragment(body, fragment.body, "body")
 
     @staticmethod
     def _get_filter_spec(
@@ -734,10 +1036,15 @@ class RequestQueryCapability(BaseCapability):
         operation: RequestQueryOperation,
         lookup_key: str,
     ) -> RequestFilter:
-        if operation.filters is not None and lookup_key in operation.filters:
-            spec = operation.filters.get(lookup_key)
+        canonical_lookup_key = lookup_key.removesuffix("__exact")
+        if operation.filters is None:
+            spec = interface_cls.filters.get(lookup_key) or interface_cls.filters.get(
+                canonical_lookup_key
+            )
         else:
-            spec = interface_cls.filters.get(lookup_key)
+            spec = operation.filters.get(lookup_key) or operation.filters.get(
+                canonical_lookup_key
+            )
         if spec is None:
             raise UnknownRequestFilterError(lookup_key, operation.name)
         if not spec.applies_to_operation(operation.name):
@@ -752,6 +1059,7 @@ class RequestQueryCapability(BaseCapability):
         value: RequestLookupValue,
         action: RequestAction,
         operation_name: str,
+        call_group: int,
     ) -> RequestPlanFragment:
         spec.validate_value(lookup_key, value)
         binding = RequestFilterBinding(
@@ -767,7 +1075,9 @@ class RequestQueryCapability(BaseCapability):
         if not spec.remote:
             if spec.local_fallback:
                 return RequestPlanFragment(
-                    local_predicates=(RequestLocalPredicate(lookup_key, value, action),)
+                    local_predicates=(
+                        RequestLocalPredicate(lookup_key, value, action, call_group),
+                    )
                 )
             if action == "filter":
                 raise RequestLocalFallbackRequiredError(lookup_key)
@@ -776,7 +1086,9 @@ class RequestQueryCapability(BaseCapability):
         if action == "exclude" and not spec.allow_exclude:
             if spec.local_fallback:
                 return RequestPlanFragment(
-                    local_predicates=(RequestLocalPredicate(lookup_key, value, action),)
+                    local_predicates=(
+                        RequestLocalPredicate(lookup_key, value, action, call_group),
+                    )
                 )
             raise RequestExcludeNotSupportedError(lookup_key, operation_name)
 

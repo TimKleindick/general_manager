@@ -1254,8 +1254,19 @@ exception when the value is invalid. `RequestResponseNormalizer` receives a raw
 transport response plus interface, operation, and plan, and must return a
 `RequestQueryResult`.
 
+Custom query adapters should return `RequestQueryResult(items=..., total_count=...)`
+with `total_count` only when it describes the same remote query. A response that
+is already a remote page must additionally provide both positive, non-boolean
+`page` and `page_size` coordinates; omit both for an unpaginated response.
+Before this provenance contract, adapters could return a page as ordinary items
+and GraphQL might slice it again. Now GraphQL reuses matching coordinates and
+reports the upstream page honestly. A missing total never proves completeness:
+adapters without a complete result or declared upstream pagination controls must
+expect GraphQL to return null global totals after local authorization and to
+reject global ordering, grouping, or mismatched page requests rather than guess.
+
 `RequestOperation(name, path, ...)` requires `name` and `path`. Optional
-constructor fields are `method="GET"`, `collection=False`, `filters={}`,
+constructor fields are `method="GET"`, `collection=False`, `filters=None`,
 `metadata={}`, `static_query_params={}`, `static_headers={}`, `static_body=None`,
 and `timeout=None`. For request interfaces, pass `filters=None` when a declared
 operation should inherit the interface-level filter mapping; an explicit mapping,
@@ -1285,6 +1296,16 @@ cloning emits `request.pre_create` and `_parent_class` assignment emits
 `request.post_create`. Create/update/delete accept
 `creator_id` and `history_comment` for manager API compatibility but do not send
 those values to the remote service.
+
+A compiler fragment may contribute both outbound request values and local
+predicates. A single mixed exclusion preserves both contributions; a conflict or
+additional lookup in that exclusion is rejected when the flat request plan cannot
+represent its full negated expression. Local predicates are grouped by their
+originating manager call, even when a compiler emits a different predicate
+action. Sorting a request bucket keeps response provenance, and subsequent
+no-op `all()`, `filter()`, and `exclude()` calls keep that provenance too, so a
+partial response or one without a total cannot establish global uniqueness.
+
 `RequestInterface.execute_request_plan()` treats only `create`, `update`, and
 `delete` as mutation actions; every other action string resolves a query
 operation using `plan.operation_name`. Missing mutation operations raise

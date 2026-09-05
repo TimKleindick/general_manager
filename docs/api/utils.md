@@ -1,13 +1,13 @@
 # Utilities API
 
-::: general_manager.utils.none_to_zero.none_to_zero
+::: general_manager.utils._none_to_zero.none_to_zero
 
 `none_to_zero(value)` returns the integer `0` only when `value is None`.
 Non-`None` `int`, `float`, and `Measurement` values are returned unchanged,
 without copying or coercion, so existing falsey numeric values such as `0` and
 `0.0` remain the original values.
 
-::: general_manager.utils.args_to_kwargs.args_to_kwargs
+::: general_manager.utils._args_to_kwargs.args_to_kwargs
 
 `args_to_kwargs(args, keys, existing_kwargs=None)` materializes `keys` once,
 maps positional values to those keys in order, and merges `existing_kwargs`
@@ -32,7 +32,7 @@ then legacy top-level `settings.<key>`, then `default`. Only dict-valued
 ignored. A nested value of `None` is returned as configured. Unexpected settings
 attribute errors are not wrapped.
 
-::: general_manager.utils.make_cache_key.make_cache_key
+::: general_manager.utils._make_cache_key.make_cache_key
 
 `make_cache_key(func, args, kwargs)` treats `kwargs=None` as empty kwargs and
 copies supplied mappings with `dict(...)`, including falsey custom mappings. It

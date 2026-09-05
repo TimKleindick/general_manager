@@ -12,7 +12,7 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.search.backend import SearchDocument
 from general_manager.search.backends.dev import DevSearchBackend
-from general_manager.search.config import IndexConfig
+from general_manager.search.config import IndexConfig, SearchConfigSpec
 from general_manager.search.indexer import SearchIndexer
 from general_manager.search.models import (
     SEARCH_INDEX_DIRTY_REASON_INITIALIZATION,
@@ -133,6 +133,10 @@ class StableDocumentProjectInterface(ProjectInterface):
     pass
 
 
+class FallbackAccessError(AssertionError):
+    """Raised when a provided document field incorrectly reads its fallback."""
+
+
 class StableDocumentProject(GeneralManager):
     Interface = StableDocumentProjectInterface
 
@@ -185,6 +189,70 @@ class SearchIndexerTests(SimpleTestCase):
         hit = result.hits[0]
         assert hit.identification == {"id": 1}
         assert "secret" not in hit.data
+
+    def test_indexer_serializes_sort_only_fields(self) -> None:
+        """Sort-only fields are available in the indexed document payload."""
+        original_indexes = Project.SearchConfig.indexes
+        original_to_document = Project.SearchConfig.to_document
+        original_data = dict(ProjectInterface.data_store[1])
+        Project.SearchConfig.indexes = [
+            IndexConfig(
+                name="global",
+                fields=["name"],
+                filters=["status"],
+                sorts=["priority"],
+            )
+        ]
+        ProjectInterface.data_store[1] = {**original_data, "priority": "10"}
+        self.addCleanup(setattr, Project.SearchConfig, "indexes", original_indexes)
+        self.addCleanup(
+            setattr,
+            Project.SearchConfig,
+            "to_document",
+            original_to_document,
+        )
+        self.addCleanup(ProjectInterface.data_store.__setitem__, 1, original_data)
+        Project.SearchConfig.to_document = staticmethod(
+            lambda instance: {
+                "name": instance._interface.get_data()["name"],
+                "status": instance._interface.get_data()["status"],
+                "priority": instance._interface.get_data()["priority"],
+            }
+        )
+
+        backend = DevSearchBackend()
+        SearchIndexer(backend).index_instance(Project(id=1))
+
+        result = backend.search("global", "Alpha")
+        assert result.hits[0].data["priority"] == "10"
+
+    def test_indexer_preserves_provided_none_without_reading_fallback(self) -> None:
+        """A custom document value must not evaluate its unavailable fallback."""
+
+        class BrokenProject(Project):
+            @property
+            def name(self) -> object:
+                raise FallbackAccessError
+
+        config = SearchConfigSpec(
+            indexes=(IndexConfig(name="global", fields=["name"]),),
+            to_document=lambda _instance: {"name": None},
+        )
+        with (
+            patch.object(
+                indexer_module,
+                "get_index_config",
+                return_value=config.indexes[0],
+            ),
+            patch.object(indexer_module, "get_type_label", return_value="Project"),
+        ):
+            document = indexer_module._serialize_document(
+                BrokenProject(id=1),
+                index_name="global",
+                config=config,
+            )
+
+        assert document.data["name"] is None
 
     def test_indexer_delete_instance(self) -> None:
         """

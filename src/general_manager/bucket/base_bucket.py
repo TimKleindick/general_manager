@@ -241,15 +241,14 @@ class Bucket(ABC, Generic[GeneralManagerType]):
     @abstractmethod
     def sort(
         self,
-        key: tuple[str, ...] | str,
-        reverse: bool = False,
+        *fields: str,
     ) -> Bucket[GeneralManagerType]:
         """
         Return a sorted bucket.
 
         Parameters:
-            key (str | tuple[str, ...]): Attribute name(s) used for sorting.
-            reverse (bool): Whether to sort in descending order.
+            fields: Signed attribute names used for sorting. Prefix a field
+                with ``-`` for descending order.
 
         Returns:
             Bucket[GeneralManagerType]: Sorted bucket instance.
@@ -499,7 +498,6 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         retain that order. Backends may override this compatibility fallback to
         avoid repeated unions or unsupported lookups.
         """
-        subset = self.none()
-        for instance in instances:
-            subset = subset | instance
-        return subset
+        from general_manager.bucket._materialized_bucket import MaterializedBucket
+
+        return MaterializedBucket(self._manager_class, tuple(instances))

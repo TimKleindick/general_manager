@@ -53,8 +53,12 @@ def _write_module(module_name: str, names: Iterable[str], imports: list[str]) ->
     else:
         lines.append("__all__: list[str] = []")
     lines.append("")
-    lines.extend(imports)
-    lines.append("")
+    for import_line in imports:
+        if len(import_line) <= 88:
+            lines.append(import_line)
+            continue
+        prefix, imported = import_line.split(" import ", maxsplit=1)
+        lines.extend((f"{prefix} import (", f"    {imported},", ")"))
 
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

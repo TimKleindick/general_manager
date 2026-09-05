@@ -58,6 +58,9 @@ class GraphQLRegistry:
     page_type_registry: dict[str, type[graphene.ObjectType]] = field(
         default_factory=dict
     )
+    group_page_type_registry: dict[str, type[graphene.ObjectType]] = field(
+        default_factory=dict
+    )
     subscription_payload_registry: dict[str, type[graphene.ObjectType]] = field(
         default_factory=dict
     )

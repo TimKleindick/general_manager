@@ -374,95 +374,26 @@ class GraphQLHelperTests(SimpleTestCase):
 
         assert grouped._group_by_keys == ("name",)
 
-    def test_apply_sorting_normalizes_enum_and_propagates_reverse(self) -> None:
-        queryset = mock.Mock()
-        sorted_queryset = mock.Mock()
-        queryset.sort.return_value = sorted_queryset
-        sort_by = type("SortBy", (), {"value": "name"})()
-
-        result = apply_sorting(queryset, sort_by, reverse=True)
-
-        assert result is sorted_queryset
-        queryset.sort.assert_called_once_with(("name",), reverse=True)
-
-    def test_apply_sorting_normalizes_multiple_enums_in_order(self) -> None:
-        queryset = mock.Mock()
-        sorted_queryset = mock.Mock()
-        queryset.sort.return_value = sorted_queryset
-        sort_by = [
-            type("SortBy", (), {"value": "status"})(),
-            type("SortBy", (), {"value": "employee__name"})(),
-        ]
-
-        result = apply_sorting(queryset, sort_by, reverse=True)
-
-        assert result is sorted_queryset
-        queryset.sort.assert_called_once_with(
-            ("status", "employee__name"), reverse=True
-        )
-
-    def test_apply_sorting_normalizes_tuple_of_enums_in_order(self) -> None:
-        queryset = mock.Mock()
-        sorted_queryset = mock.Mock()
-        queryset.sort.return_value = sorted_queryset
-        sort_by = (
-            type("SortBy", (), {"value": "status"})(),
-            type("SortBy", (), {"value": "employee__name"})(),
-        )
-
-        result = apply_sorting(queryset, sort_by, reverse=True)
-
-        assert result is sorted_queryset
-        queryset.sort.assert_called_once_with(
-            ("status", "employee__name"), reverse=True
-        )
-
-    def test_apply_sorting_accepts_scalar_string(self) -> None:
-        queryset = mock.Mock()
-        sorted_queryset = mock.Mock()
-        queryset.sort.return_value = sorted_queryset
-
-        result = apply_sorting(queryset, "name", reverse=True)
-
-        assert result is sorted_queryset
-        queryset.sort.assert_called_once_with(("name",), reverse=True)
-
-    def test_apply_sorting_preserves_ordered_string_sequence(self) -> None:
+    def test_apply_sorting_converts_independent_typed_directions(self) -> None:
         queryset = mock.Mock()
         sorted_queryset = mock.Mock()
         queryset.sort.return_value = sorted_queryset
 
         result = apply_sorting(
             queryset,
-            ["status", "employee__name"],
-            reverse=True,
+            [
+                {"field": "status", "direction": "DESC"},
+                {"field": "employee__name", "direction": "ASC"},
+            ],
         )
 
         assert result is sorted_queryset
-        queryset.sort.assert_called_once_with(
-            ("status", "employee__name"), reverse=True
-        )
+        queryset.sort.assert_called_once_with("-status", "employee__name")
 
-    def test_apply_sorting_preserves_ordered_string_tuple(self) -> None:
-        queryset = mock.Mock()
-        sorted_queryset = mock.Mock()
-        queryset.sort.return_value = sorted_queryset
-
-        result = apply_sorting(
-            queryset,
-            ("status", "employee__name"),
-            reverse=True,
-        )
-
-        assert result is sorted_queryset
-        queryset.sort.assert_called_once_with(
-            ("status", "employee__name"), reverse=True
-        )
-
-    def test_apply_sorting_is_noop_without_sort_key(self) -> None:
+    def test_apply_sorting_is_noop_without_order_by(self) -> None:
         queryset = mock.Mock()
 
-        result = apply_sorting(queryset, None, reverse=True)
+        result = apply_sorting(queryset, None)
 
         assert result is queryset
         queryset.sort.assert_not_called()
@@ -471,23 +402,20 @@ class GraphQLHelperTests(SimpleTestCase):
         queryset = mock.Mock()
         sorted_queryset = mock.Mock()
         queryset.sort.return_value = sorted_queryset
-        sort_by = type("SortBy", (), {"value": "name"})()
-
         result = apply_query_parameters(
             queryset,
             filter_input=None,
             exclude_input=None,
-            sort_by=sort_by,
-            reverse=True,
+            order_by=[{"field": "name", "direction": "DESC"}],
         )
 
         assert result is sorted_queryset
-        queryset.sort.assert_called_once_with(("name",), reverse=True)
+        queryset.sort.assert_called_once_with("-name")
 
-    def test_apply_sorting_is_noop_for_empty_sort_list(self) -> None:
+    def test_apply_sorting_is_noop_for_empty_order_by_list(self) -> None:
         queryset = mock.Mock()
 
-        result = apply_sorting(queryset, [], reverse=True)
+        result = apply_sorting(queryset, [])
 
         assert result is queryset
         queryset.sort.assert_not_called()
@@ -616,8 +544,8 @@ class GraphQLHelperTests(SimpleTestCase):
                 events.append(("exclude", kwargs))
                 return self
 
-            def sort(self, key: tuple[str, ...], *, reverse: bool) -> "RecordingBucket":
-                events.append(("sort", key))
+            def sort(self, *fields: str) -> "RecordingBucket":
+                events.append(("sort", fields))
                 return self
 
         bucket = RecordingBucket()
@@ -633,7 +561,9 @@ class GraphQLHelperTests(SimpleTestCase):
         )
 
         result = apply_query_parameter_plan(
-            bucket, plan, sort_by=type("SortBy", (), {"value": "name"})(), reverse=True
+            bucket,
+            plan,
+            order_by=[{"field": "name", "direction": "DESC"}],
         )
 
         assert result is bucket
@@ -641,13 +571,13 @@ class GraphQLHelperTests(SimpleTestCase):
             ("filter", {"subject__id": 1}),
             ("exclude", {"result": 2}),
             ("exclude", {"period__lt": 1, "period__gt": 2}),
-            ("sort", ("name",)),
+            ("sort", ("-name",)),
         ]
 
-    def test_apply_sorting_is_noop_for_empty_sort_tuple(self) -> None:
+    def test_apply_sorting_is_noop_for_empty_order_by_tuple(self) -> None:
         queryset = mock.Mock()
 
-        result = apply_sorting(queryset, (), reverse=True)
+        result = apply_sorting(queryset, ())
 
         assert result is queryset
         queryset.sort.assert_not_called()
@@ -682,16 +612,16 @@ class GraphQLHelperTests(SimpleTestCase):
         )
         empty_grouped = SimpleBucket(_DummyManager).group_by("name")
 
-        with pytest.raises(ValueError, match="pagination values"):
+        with pytest.raises(ValueError, match="page must be a positive integer"):
             apply_pagination(queryset, page=-1, page_size=10)
 
-        with pytest.raises(ValueError, match="pagination values"):
+        with pytest.raises(ValueError, match="pageSize must be a positive integer"):
             apply_pagination(queryset, page=1, page_size=-10)
 
-        with pytest.raises(ValueError, match="pagination values"):
+        with pytest.raises(ValueError, match="page must be a positive integer"):
             apply_pagination(empty_grouped, page=-1, page_size=10)
 
-        with pytest.raises(ValueError, match="pagination values"):
+        with pytest.raises(ValueError, match="pageSize must be a positive integer"):
             apply_pagination(empty_grouped, page=1, page_size=-10)
 
     def test_measurement_scalar_invalid(self) -> None:
@@ -739,6 +669,7 @@ class GraphQLHelperTests(SimpleTestCase):
             "_query_fields": GraphQL._query_fields,
             "_subscription_fields": GraphQL._subscription_fields,
             "_page_type_registry": GraphQL._page_type_registry,
+            "_group_page_type_registry": GraphQL._group_page_type_registry,
             "_subscription_payload_registry": GraphQL._subscription_payload_registry,
             "graphql_type_registry": GraphQL.graphql_type_registry,
             "graphql_output_type_registry": GraphQL.graphql_output_type_registry,
@@ -753,6 +684,7 @@ class GraphQLHelperTests(SimpleTestCase):
             GraphQL._query_fields = {"name": field}
             GraphQL._subscription_fields = {"sub": field}
             GraphQL._page_type_registry = {"page": object_type}
+            GraphQL._group_page_type_registry = {"groupPage": object_type}
             GraphQL._subscription_payload_registry = {"payload": object_type}
             GraphQL.graphql_type_registry = {"manager": object_type}
             GraphQL.graphql_output_type_registry = {"output": object_type}
@@ -769,6 +701,10 @@ class GraphQLHelperTests(SimpleTestCase):
                 (snapshot.query_fields, GraphQL._query_fields),
                 (snapshot.subscription_fields, GraphQL._subscription_fields),
                 (snapshot.page_type_registry, GraphQL._page_type_registry),
+                (
+                    snapshot.group_page_type_registry,
+                    GraphQL._group_page_type_registry,
+                ),
                 (
                     snapshot.subscription_payload_registry,
                     GraphQL._subscription_payload_registry,
@@ -800,6 +736,9 @@ class GraphQLHelperTests(SimpleTestCase):
             GraphQL._query_fields = original_values["_query_fields"]
             GraphQL._subscription_fields = original_values["_subscription_fields"]
             GraphQL._page_type_registry = original_values["_page_type_registry"]
+            GraphQL._group_page_type_registry = original_values[
+                "_group_page_type_registry"
+            ]
             GraphQL._subscription_payload_registry = original_values[
                 "_subscription_payload_registry"
             ]

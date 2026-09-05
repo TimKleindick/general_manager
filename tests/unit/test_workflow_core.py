@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from threading import Event, Thread
+from unittest.mock import patch
+from uuid import UUID
 
 import pytest
 from django.test import SimpleTestCase
@@ -590,6 +592,245 @@ class WorkflowCoreTests(SimpleTestCase):
         assert first.state == "failed"
         assert second.state == "completed"
         assert first.execution_id != second.execution_id
+
+    def test_local_engine_cancellation_wins_when_handler_completes(self) -> None:
+        engine = LocalWorkflowEngine()
+        handler_started = Event()
+        release_handler = Event()
+        execution_id = "00000000-0000-0000-0000-000000000020"
+
+        def handler(_payload: dict[str, object]) -> dict[str, object]:
+            handler_started.set()
+            assert release_handler.wait(timeout=2)
+            return {"done": True}
+
+        workflow = WorkflowDefinition(
+            workflow_id="wf-local-cancel-complete", handler=handler
+        )
+        with patch(
+            "general_manager.workflow.backends.local.uuid4",
+            return_value=UUID("00000000-0000-0000-0000-000000000020"),
+        ):
+            worker = Thread(
+                target=lambda: engine.start(workflow, correlation_id="corr-cancel")
+            )
+            worker.start()
+            assert handler_started.wait(timeout=2)
+
+            cancelled = engine.cancel(execution_id, reason="stop now")
+            release_handler.set()
+            worker.join(timeout=2)
+
+        assert not worker.is_alive()
+        assert cancelled.state == "cancelled"
+        assert engine.status(execution_id).state == "cancelled"
+        assert engine.status(execution_id).error == "stop now"
+        assert engine.status(execution_id).output_data is None
+
+    def test_local_engine_cancellation_wins_when_handler_fails(self) -> None:
+        engine = LocalWorkflowEngine()
+        handler_started = Event()
+        release_handler = Event()
+        execution_id = "00000000-0000-0000-0000-000000000021"
+
+        def handler(_payload: dict[str, object]) -> dict[str, object]:
+            handler_started.set()
+            assert release_handler.wait(timeout=2)
+            raise RuntimeError("handler failure")  # noqa: TRY003
+
+        workflow = WorkflowDefinition(
+            workflow_id="wf-local-cancel-fail", handler=handler
+        )
+        with patch(
+            "general_manager.workflow.backends.local.uuid4",
+            return_value=UUID("00000000-0000-0000-0000-000000000021"),
+        ):
+            worker = Thread(
+                target=lambda: engine.start(workflow, correlation_id="corr-cancel")
+            )
+            worker.start()
+            assert handler_started.wait(timeout=2)
+
+            engine.cancel(execution_id, reason="stop now")
+            release_handler.set()
+            worker.join(timeout=2)
+
+        assert not worker.is_alive()
+        assert engine.status(execution_id).state == "cancelled"
+        assert engine.status(execution_id).error == "stop now"
+        assert engine.status(execution_id).output_data is None
+
+    def test_local_cancellation_retry_keeps_later_waiter_bound_to_retry(self) -> None:
+        engine = LocalWorkflowEngine()
+        a_started = Event()
+        b_started = Event()
+        b_waiter_joined = Event()
+        release_a = Event()
+        release_b = Event()
+        results: dict[str, WorkflowExecution] = {}
+
+        class TrackingCorrelationEvent(Event):
+            def wait(self, timeout: float | None = None) -> bool:
+                b_waiter_joined.set()
+                return super().wait(timeout)
+
+        def handler(payload: dict[str, object]) -> dict[str, object]:
+            attempt = payload["attempt"]
+            if attempt == "a":
+                a_started.set()
+                assert release_a.wait(timeout=2)
+            else:
+                b_started.set()
+                assert release_b.wait(timeout=2)
+            return {"attempt": attempt}
+
+        workflow = WorkflowDefinition(
+            workflow_id="wf-local-cancel-retry-waiter", handler=handler
+        )
+
+        def start(name: str, attempt: str) -> None:
+            results[name] = engine.start(
+                workflow, {"attempt": attempt}, correlation_id="corr-cancel-retry"
+            )
+
+        with (
+            patch(
+                "general_manager.workflow.backends.local.uuid4",
+                side_effect=[
+                    UUID("00000000-0000-0000-0000-000000000030"),
+                    UUID("00000000-0000-0000-0000-000000000031"),
+                    UUID("00000000-0000-0000-0000-000000000032"),
+                ],
+            ),
+            patch(
+                "general_manager.workflow.backends.local.Event",
+                TrackingCorrelationEvent,
+            ),
+        ):
+            a_worker = Thread(target=start, args=("a", "a"))
+            b_worker = Thread(target=start, args=("b", "b"))
+            b_waiter = Thread(target=start, args=("waiter", "b"))
+            try:
+                a_worker.start()
+                assert a_started.wait(timeout=2)
+
+                engine.cancel("00000000-0000-0000-0000-000000000030")
+                b_worker.start()
+                assert b_started.wait(timeout=2)
+                b_waiter.start()
+                assert b_waiter_joined.wait(timeout=2)
+
+                release_a.set()
+                a_worker.join(timeout=2)
+                assert not a_worker.is_alive()
+                assert b_waiter.is_alive()
+
+                release_b.set()
+                b_worker.join(timeout=2)
+                b_waiter.join(timeout=2)
+            finally:
+                release_a.set()
+                release_b.set()
+                a_worker.join(timeout=2)
+                b_worker.join(timeout=2)
+                b_waiter.join(timeout=2)
+
+        assert not b_worker.is_alive()
+        assert not b_waiter.is_alive()
+        assert results["a"].state == "cancelled"
+        assert results["b"].execution_id == "00000000-0000-0000-0000-000000000031"
+        assert results["waiter"].execution_id == results["b"].execution_id
+        assert results["waiter"].output_data == {"attempt": "b"}
+
+    def test_local_cancellation_wakes_existing_waiter_with_cancelled_snapshot(
+        self,
+    ) -> None:
+        engine = LocalWorkflowEngine()
+        a_started = Event()
+        b_started = Event()
+        a_waiter_joined = Event()
+        a_waiter_woken = Event()
+        allow_a_waiter_return = Event()
+        release_a = Event()
+        release_b = Event()
+        results: dict[str, WorkflowExecution] = {}
+
+        class PausedCorrelationEvent(Event):
+            def wait(self, timeout: float | None = None) -> bool:
+                a_waiter_joined.set()
+                result = super().wait(timeout)
+                a_waiter_woken.set()
+                assert allow_a_waiter_return.wait(timeout=2)
+                return result
+
+        def handler(payload: dict[str, object]) -> dict[str, object]:
+            attempt = payload["attempt"]
+            if attempt == "a":
+                a_started.set()
+                assert release_a.wait(timeout=2)
+            else:
+                b_started.set()
+                assert release_b.wait(timeout=2)
+            return {"attempt": attempt}
+
+        workflow = WorkflowDefinition(
+            workflow_id="wf-local-cancel-wake-waiter", handler=handler
+        )
+
+        def start(name: str, attempt: str) -> None:
+            results[name] = engine.start(
+                workflow, {"attempt": attempt}, correlation_id="corr-cancel-wake"
+            )
+
+        with (
+            patch(
+                "general_manager.workflow.backends.local.uuid4",
+                side_effect=[
+                    UUID("00000000-0000-0000-0000-000000000033"),
+                    UUID("00000000-0000-0000-0000-000000000034"),
+                    UUID("00000000-0000-0000-0000-000000000035"),
+                ],
+            ),
+            patch(
+                "general_manager.workflow.backends.local.Event",
+                PausedCorrelationEvent,
+            ),
+        ):
+            a_worker = Thread(target=start, args=("a", "a"))
+            a_waiter = Thread(target=start, args=("waiter", "a"))
+            b_worker = Thread(target=start, args=("b", "b"))
+            try:
+                a_worker.start()
+                assert a_started.wait(timeout=2)
+                a_waiter.start()
+                assert a_waiter_joined.wait(timeout=2)
+
+                engine.cancel("00000000-0000-0000-0000-000000000033")
+                assert a_waiter_woken.wait(timeout=2)
+
+                b_worker.start()
+                assert b_started.wait(timeout=2)
+                allow_a_waiter_return.set()
+                a_waiter.join(timeout=2)
+
+                release_a.set()
+                release_b.set()
+                a_worker.join(timeout=2)
+                b_worker.join(timeout=2)
+            finally:
+                allow_a_waiter_return.set()
+                release_a.set()
+                release_b.set()
+                a_worker.join(timeout=2)
+                a_waiter.join(timeout=2)
+                b_worker.join(timeout=2)
+
+        assert not a_waiter.is_alive()
+        assert not a_worker.is_alive()
+        assert not b_worker.is_alive()
+        assert results["waiter"].execution_id == "00000000-0000-0000-0000-000000000033"
+        assert results["waiter"].state == "cancelled"
+        assert results["b"].execution_id == "00000000-0000-0000-0000-000000000035"
 
     def test_local_engine_reserves_correlation_id_during_inflight_start(self) -> None:
         engine = LocalWorkflowEngine()

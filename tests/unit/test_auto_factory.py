@@ -1,13 +1,16 @@
 from django.test import SimpleTestCase, TransactionTestCase
+from django.test.utils import isolate_apps
 from django.db import models, connection, connections
 from django.core.exceptions import ValidationError
+from factory import SubFactory, post_generation
 from factory.django import DjangoModelFactory
-from factory.declarations import LazyAttributeSequence
+from factory.declarations import LazyAttributeSequence, LazyFunction
 from general_manager.factory.auto_factory import (
     AutoFactory,
     InvalidGeneratedObjectError,
     UndefinedAdjustmentMethodError,
 )
+from general_manager.factory.factories import get_field_value
 from types import SimpleNamespace
 from typing import Any, ClassVar, Iterable
 from unittest.mock import MagicMock, Mock, patch
@@ -83,6 +86,47 @@ class DummyModel3(models.Model):
         app_label = "general_manager"
 
 
+class NestedChildModel(models.Model):
+    label = models.CharField(max_length=100)
+    tags = models.ManyToManyField(DummyModel, blank=True)
+
+    class Meta:
+        app_label = "general_manager"
+
+
+class NestedParentModel(models.Model):
+    child = models.ForeignKey(NestedChildModel, on_delete=models.CASCADE)
+    tags = models.ManyToManyField(DummyModel, blank=True)
+
+    class Meta:
+        app_label = "general_manager"
+
+
+class RecursiveNodeModel(models.Model):
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    tags = models.ManyToManyField(DummyModel, blank=True)
+
+    class Meta:
+        app_label = "general_manager"
+
+
+class RecursiveNodeFactory(AutoFactory):
+    interface = DummyInterface
+    parent = SubFactory(
+        "tests.unit.test_auto_factory.RecursiveNodeFactory",
+        parent=None,
+        tags=[],
+    )
+
+    class Meta:
+        model = RecursiveNodeModel
+
+
 class AutoFactoryTestCase(TransactionTestCase):
     databases: ClassVar[set[str]] = {"default", "secondary"}
     database_alias = "secondary"
@@ -102,6 +146,9 @@ class AutoFactoryTestCase(TransactionTestCase):
             schema.create_model(DummyModel)
             schema.create_model(DummyModel2)
             schema.create_model(DummyModel3)
+            schema.create_model(NestedChildModel)
+            schema.create_model(NestedParentModel)
+            schema.create_model(RecursiveNodeModel)
 
     @classmethod
     def tearDownClass(cls):
@@ -111,6 +158,9 @@ class AutoFactoryTestCase(TransactionTestCase):
         super().tearDownClass()
         cls._wrap_patcher.stop()
         with connection.schema_editor() as schema:
+            schema.delete_model(RecursiveNodeModel)
+            schema.delete_model(NestedParentModel)
+            schema.delete_model(NestedChildModel)
             schema.delete_model(DummyModel3)
             schema.delete_model(DummyModel2)
             schema.delete_model(DummyModel)
@@ -283,6 +333,90 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertIsInstance(instance, DummyModel2)
         self.assertEqual(instance.description, "Test Description")  # type: ignore
         self.assertEqual(instance.dummy_model, dummy_model_instance)  # type: ignore
+
+    def test_foreign_key_attname_overrides_generated_relation_for_build_and_create(
+        self,
+    ):
+        related = self.factory_class.create(name="Related", value=1)
+
+        built = self.factory_class2.build(
+            description="Raw id build",
+            dummy_model_id=related.pk,
+        )
+        created = self.factory_class2.create(
+            description="Raw id create",
+            dummy_model_id=related.pk,
+        )
+
+        self.assertEqual(built.dummy_model_id, related.pk)
+        self.assertEqual(created.dummy_model_id, related.pk)
+
+    def test_foreign_key_attname_override_skips_declared_relation_factory(self):
+        related = self.factory_class.create(name="Related", value=1)
+        declared_factory_calls = 0
+
+        def declared_relation() -> DummyModel:
+            nonlocal declared_factory_calls
+            declared_factory_calls += 1
+            return self.factory_class.create(name="Declared", value=2)
+
+        class DeclaredRelationFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_model = LazyFunction(declared_relation)
+
+            class Meta:
+                model = DummyModel2
+
+        instance = DeclaredRelationFactory.create(
+            description="Raw ID takes precedence",
+            dummy_model_id=related.pk,
+        )
+
+        self.assertEqual(instance.dummy_model_id, related.pk)
+        self.assertEqual(declared_factory_calls, 0)
+
+    def test_declared_foreign_key_attname_skips_automatic_relation_generation(self):
+        related = self.factory_class.create(name="Related", value=1)
+
+        class DeclaredRawIdFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_model_id = LazyFunction(lambda: related.pk)
+
+            class Meta:
+                model = DummyModel2
+
+        with patch(
+            "general_manager.factory.auto_factory.get_field_value",
+            wraps=get_field_value,
+        ) as get_value:
+            instance = DeclaredRawIdFactory.create(
+                description="Declared raw ID",
+            )
+
+        self.assertEqual(instance.dummy_model_id, related.pk)
+        self.assertNotIn(
+            "dummy_model",
+            [call.args[0].name for call in get_value.call_args_list],
+        )
+
+    def test_conflicting_foreign_key_name_and_attname_overrides_are_rejected(self):
+        first = self.factory_class.create(name="First", value=1)
+        second = self.factory_class.create(name="Second", value=2)
+
+        matching = self.factory_class2.create(
+            description="Matching relation",
+            dummy_model=first,
+            dummy_model_id=first.pk,
+        )
+
+        with self.assertRaisesRegex(ValueError, "dummy_model and dummy_model_id"):
+            self.factory_class2.create(
+                description="Conflicting relation",
+                dummy_model=first,
+                dummy_model_id=second.pk,
+            )
+
+        self.assertEqual(matching.dummy_model_id, first.pk)
 
     def test_generate_instance_reuses_existing_foreign_key_by_default(self):
         existing = self.factory_class.create(name="Existing", value=1)
@@ -508,6 +642,227 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertIn(dummy_model_instance, instance.dummy_m2m.all())
         self.assertIn(dummy_model_instance2, instance.dummy_m2m.all())
 
+    def test_subfactory_many_to_many_values_do_not_replace_parent_hook_values(self):
+        parent_tag = self.factory_class.create(name="Parent tag", value=1)
+        child_tag = self.factory_class.create(name="Child tag", value=2)
+
+        class ChildFactory(AutoFactory):
+            interface = DummyInterface
+            label = "Child"
+            tags = LazyFunction(lambda: [child_tag])
+
+            class Meta:
+                model = NestedChildModel
+
+        class ParentFactory(AutoFactory):
+            interface = DummyInterface
+            child = SubFactory(ChildFactory)
+
+            class Meta:
+                model = NestedParentModel
+                skip_postgeneration_save = True
+
+            @post_generation
+            def assign_parent_tags(self, create, extracted, **kwargs):
+                if create:
+                    self.tags.set([parent_tag])
+
+        parent = ParentFactory.create()
+
+        self.assertEqual(list(parent.tags.all()), [parent_tag])
+        self.assertEqual(list(parent.child.tags.all()), [child_tag])
+
+    def test_nested_many_to_many_declared_and_explicit_empty_overrides(self):
+        parent_tag = self.factory_class.create(name="Parent tag", value=1)
+        child_tag = self.factory_class.create(name="Child tag", value=2)
+
+        class ChildFactory(AutoFactory):
+            interface = DummyInterface
+            label = "Child"
+            tags = LazyFunction(lambda: [child_tag])
+
+            class Meta:
+                model = NestedChildModel
+
+        class ParentFactory(AutoFactory):
+            interface = DummyInterface
+            child = SubFactory(ChildFactory)
+            tags = LazyFunction(lambda: [parent_tag])
+
+            class Meta:
+                model = NestedParentModel
+
+        declared = ParentFactory.create()
+        cleared = ParentFactory.create(tags=[])
+        child_cleared = ChildFactory.create(tags=[])
+
+        self.assertEqual(list(declared.tags.all()), [parent_tag])
+        self.assertEqual(list(declared.child.tags.all()), [child_tag])
+        self.assertEqual(list(cleared.tags.all()), [])
+        self.assertEqual(list(cleared.child.tags.all()), [child_tag])
+        self.assertEqual(list(child_cleared.tags.all()), [])
+
+    def test_recursive_factory_many_to_many_values_are_build_step_local(self):
+        parent_tag = self.factory_class.create(name="Recursive parent", value=1)
+
+        parent = RecursiveNodeFactory.create(tags=[parent_tag])
+
+        self.assertEqual(list(parent.tags.all()), [parent_tag])
+        self.assertEqual(list(parent.parent.tags.all()), [])
+
+    def test_declared_many_to_many_values_persist_and_empty_override_clears(self):
+        related = self.factory_class.create(name="FK", value=1)
+        declared_option = self.factory_class.create(name="Declared M2M", value=2)
+
+        class DeclaredManyToManyFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_m2m = LazyFunction(lambda: [declared_option])
+
+            class Meta:
+                model = DummyModel2
+
+        declared = DeclaredManyToManyFactory.create(
+            description="Uses declared M2M",
+            dummy_model=related,
+        )
+        cleared = DeclaredManyToManyFactory.create(
+            description="Clears declared M2M",
+            dummy_model=related,
+            dummy_m2m=[],
+        )
+
+        self.assertEqual(list(declared.dummy_m2m.all()), [declared_option])
+        self.assertEqual(list(cleared.dummy_m2m.all()), [])
+
+    def test_adjust_kwargs_many_to_many_transformations_apply_to_declared_and_caller_values(
+        self,
+    ):
+        related = self.factory_class.create(name="FK", value=1)
+        declared_tag = self.factory_class.create(name="Declared", value=2)
+        caller_tag = self.factory_class.create(name="Caller", value=3)
+        adjusted_tag = self.factory_class.create(name="Adjusted", value=4)
+
+        class TransformingManyToManyFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_m2m = LazyFunction(lambda: [declared_tag])
+
+            class Meta:
+                model = DummyModel2
+
+            @classmethod
+            def _adjust_kwargs(cls, **kwargs: object) -> dict[str, object]:
+                if "dummy_m2m" in kwargs:
+                    kwargs["dummy_m2m"] = [adjusted_tag]
+                return super()._adjust_kwargs(**kwargs)
+
+        declared = TransformingManyToManyFactory.create(
+            description="Transformed declared M2M",
+            dummy_model=related,
+        )
+        caller_supplied = TransformingManyToManyFactory.create(
+            description="Transformed caller M2M",
+            dummy_model=related,
+            dummy_m2m=[caller_tag],
+        )
+
+        self.assertEqual(list(declared.dummy_m2m.all()), [adjusted_tag])
+        self.assertEqual(list(caller_supplied.dummy_m2m.all()), [adjusted_tag])
+
+    def test_nested_creation_inside_adjust_kwargs_restores_outer_m2m_context(self):
+        related = self.factory_class.create(name="FK", value=1)
+        inner_declared_tag = self.factory_class.create(name="Inner declared", value=2)
+        inner_adjusted_tag = self.factory_class.create(name="Inner adjusted", value=3)
+        outer_declared_tag = self.factory_class.create(name="Outer declared", value=4)
+        outer_adjusted_tag = self.factory_class.create(name="Outer adjusted", value=5)
+
+        class InnerFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_m2m = LazyFunction(lambda: [inner_declared_tag])
+
+            class Meta:
+                model = DummyModel2
+
+            @classmethod
+            def _adjust_kwargs(cls, **kwargs: object) -> dict[str, object]:
+                if "dummy_m2m" in kwargs:
+                    kwargs["dummy_m2m"] = [inner_adjusted_tag]
+                return super()._adjust_kwargs(**kwargs)
+
+        class OuterFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_m2m = LazyFunction(lambda: [outer_declared_tag])
+
+            class Meta:
+                model = DummyModel2
+
+            @classmethod
+            def _adjust_kwargs(cls, **kwargs: object) -> dict[str, object]:
+                if "dummy_m2m" in kwargs:
+                    kwargs["dummy_m2m"] = [outer_adjusted_tag]
+                    InnerFactory.create(
+                        description="Inner",
+                        dummy_model=related,
+                    )
+                return super()._adjust_kwargs(**kwargs)
+
+        outer = OuterFactory.create(
+            description="Outer",
+            dummy_model=related,
+        )
+
+        self.assertEqual(list(outer.dummy_m2m.all()), [outer_adjusted_tag])
+        inner_m2m_values = [
+            list(instance.dummy_m2m.all())
+            for instance in DummyModel2.objects.filter(description="Inner")
+        ]
+        self.assertTrue(inner_m2m_values)
+        self.assertTrue(
+            all(values == [inner_adjusted_tag] for values in inner_m2m_values)
+        )
+
+    def test_nested_post_generation_owns_required_many_to_many_field(self):
+        chosen_tag = self.factory_class.create(name="Chosen", value=1)
+        unwanted_tag = self.factory_class.create(name="Unwanted", value=2)
+        field = NestedChildModel._meta.get_field("tags")
+        original_blank = field.blank
+        field.blank = False
+        try:
+
+            class ChildFactory(AutoFactory):
+                interface = DummyInterface
+                label = "Child"
+
+                class Meta:
+                    model = NestedChildModel
+
+                @post_generation
+                def tags(self, create, extracted, **kwargs):
+                    if create:
+                        self.tags.set([chosen_tag])
+
+            class ParentFactory(AutoFactory):
+                interface = DummyInterface
+                child = SubFactory(ChildFactory)
+
+                class Meta:
+                    model = NestedParentModel
+
+            with (
+                patch(
+                    "general_manager.factory.factories._RNG.randint",
+                    return_value=1,
+                ),
+                patch(
+                    "general_manager.factory.factories._RNG.sample",
+                    return_value=[unwanted_tag],
+                ),
+            ):
+                parent = ParentFactory.create()
+        finally:
+            field.blank = original_blank
+
+        self.assertEqual(list(parent.child.tags.all()), [chosen_tag])
+
     def test_generate_instance_without_many_to_many_value_leaves_blank_m2m_empty(
         self,
     ):
@@ -703,6 +1058,32 @@ class AutoFactoryTestCase(TransactionTestCase):
             self.assertEqual(instance.dummy_model, dummy_model_instance)
             with self.assertRaises(ValueError):
                 instance.dummy_m2m.count()
+
+    def test_adjustment_list_create_assigns_many_to_many_per_result(self):
+        related = self.factory_class.create(name="FK", value=1)
+        first_tag = self.factory_class.create(name="First tag", value=2)
+        second_tag = self.factory_class.create(name="Second tag", value=3)
+
+        def custom_generate_function(**kwargs: Any) -> list[dict[str, Any]]:
+            return [
+                {
+                    "description": f"{kwargs['description']} {index}",
+                    "dummy_model": kwargs["dummy_model"],
+                }
+                for index in range(2)
+            ]
+
+        self.factory_class2._adjustmentMethod = custom_generate_function
+        instances = self.factory_class2.create(
+            description="Adjusted",
+            dummy_model=related,
+            dummy_m2m=[first_tag, second_tag],
+        )
+
+        self.assertIsInstance(instances, list)
+        self.assertEqual(len(instances), 2)
+        for instance in instances:
+            self.assertEqual(list(instance.dummy_m2m.all()), [first_tag, second_tag])
 
     def test_edge_helpers_cover_error_and_fallback_paths(self):
         """
@@ -1220,3 +1601,40 @@ class FactoriesHelpersTeardownTests(SimpleTestCase):
             [call.args[0] for call in cleanup_editor.delete_model.call_args_list],
             [DummyModel2, DummyModel],
         )
+
+
+class AutoFactoryRelationTargetTests(SimpleTestCase):
+    @isolate_apps("tests")
+    def test_relation_name_and_attname_compare_non_primary_target_field(self):
+        class Parent(models.Model):
+            code = models.CharField(max_length=20, unique=True)
+
+            class Meta:
+                app_label = "tests"
+
+        class Child(models.Model):
+            parent = models.ForeignKey(
+                Parent, to_field="code", on_delete=models.CASCADE
+            )
+            owner = models.OneToOneField(
+                Parent, to_field="code", on_delete=models.CASCADE
+            )
+
+            class Meta:
+                app_label = "tests"
+
+        class ChildFactory(AutoFactory):
+            interface = DummyInterface
+
+            class Meta:
+                model = Child
+
+        parent = Parent(pk=123, code="ABC")
+        for name in ("parent", "owner"):
+            with self.subTest(relation=name):
+                kwargs = {"parent": parent, "owner": parent, f"{name}_id": "ABC"}
+                instance = ChildFactory.build(**kwargs)
+                self.assertEqual(getattr(instance, f"{name}_id"), "ABC")
+                kwargs[f"{name}_id"] = "OTHER"
+                with self.assertRaisesRegex(ValueError, f"{name} and {name}_id"):
+                    ChildFactory.build(**kwargs)

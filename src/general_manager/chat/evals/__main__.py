@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.compare:
         from django.utils.module_loading import import_string
 
-        provider_paths = [p.strip() for p in args.compare.split(",")]
+        provider_paths = list(dict.fromkeys(p.strip() for p in args.compare.split(",")))
         results_by_provider: dict[str, list[EvalResult]] = {}
         for path in provider_paths:
             provider_cls = import_string(path)
@@ -113,8 +113,7 @@ def main(argv: list[str] | None = None) -> None:
                 tier=args.tier,
                 tags=args.tag,
             )
-            label = path.rsplit(".", 1)[-1]
-            results_by_provider[label] = results
+            results_by_provider[path] = results
         report = print_compare_report(results_by_provider)
         print(report)
         if not all(

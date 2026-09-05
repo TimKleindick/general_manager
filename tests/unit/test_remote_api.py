@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
@@ -17,8 +18,9 @@ from general_manager.api.remote_api import (
     _build_query_view,
     get_remote_api_config,
     build_remote_api_registry,
+    _apply_ordering,
 )
-from general_manager.interface import RemoteManagerInterface
+from general_manager.interface import RemoteManagerInterface, RequestInterface
 from general_manager.interface.interfaces.remote_manager import (
     _normalize_remote_envelope,
 )
@@ -27,6 +29,7 @@ from general_manager.interface.requests import (
     RequestField,
     RequestQueryOperation,
     RequestQueryPlan,
+    RequestQueryResult,
     RequestSchemaError,
     RequestTransportResponse,
 )
@@ -35,6 +38,22 @@ from general_manager.manager.input import Input
 
 
 class RemoteAPIRegistryTests(SimpleTestCase):
+    def test_query_ordering_passes_mixed_directions_in_one_bucket_call(self) -> None:
+        """A remote ordering sequence must stay one mixed-direction operation."""
+
+        class RecordingBucket:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, ...]] = []
+
+            def sort(self, *fields: str) -> "RecordingBucket":
+                self.calls.append(fields)
+                return self
+
+        bucket = RecordingBucket()
+
+        assert _apply_ordering(bucket, ["name", "-date"]) is bucket
+        self.assertEqual(bucket.calls, [("name", "-date")])
+
     def test_get_remote_api_config_handles_missing_interface_identifier_type(
         self,
     ) -> None:
@@ -129,6 +148,203 @@ class RemoteAPIRegistryTests(SimpleTestCase):
 
 
 class RemoteManagerInterfaceValidationTests(SimpleTestCase):
+    def test_request_backed_query_view_preserves_matching_upstream_page(self) -> None:
+        class PageProject(GeneralManager):
+            class Interface(RequestInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                        "detail": RequestQueryOperation(
+                            name="detail",
+                            method="GET",
+                            path="/page-projects/{id}",
+                        ),
+                        "list": RequestQueryOperation(
+                            name="list", method="GET", path="/page-projects"
+                        ),
+                    }
+
+                @classmethod
+                def execute_request_plan(
+                    cls, plan: RequestQueryPlan
+                ) -> RequestQueryResult:
+                    del cls, plan
+                    return RequestQueryResult(
+                        items=({"id": 3, "name": "Third"},),
+                        total_count=4,
+                        page=2,
+                        page_size=1,
+                    )
+
+        config = RemoteAPIConfig(
+            manager_cls=PageProject,
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=True,
+            allow_detail=False,
+            allow_create=False,
+            allow_update=False,
+            allow_delete=False,
+            websocket_invalidation=False,
+            protocol_version="v1",
+            identifier_type=int,
+        )
+
+        with patch(
+            "general_manager.api.remote_api._serialize_manager",
+            return_value={"id": 3, "name": "Third"},
+        ):
+            response = _build_query_view(config)(
+                RequestFactory().post(
+                    "/gm/projects/query",
+                    data=json.dumps({"page": 2, "page_size": 1}),
+                    content_type="application/json",
+                )
+            )
+        payload = json.loads(response.content.decode("utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["items"], [{"id": 3, "name": "Third"}])
+        self.assertEqual(payload["total_count"], 4)
+        self.assertEqual(payload["metadata"]["page"], 2)
+        self.assertEqual(payload["metadata"]["page_size"], 1)
+
+    def test_request_backed_query_view_rejects_partial_global_operations(
+        self,
+    ) -> None:
+        coordinates = {"page": 2, "page_size": 1}
+
+        class PageProject(GeneralManager):
+            class Interface(RequestInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                        "detail": RequestQueryOperation(
+                            name="detail",
+                            method="GET",
+                            path="/page-projects/{id}",
+                        ),
+                        "list": RequestQueryOperation(
+                            name="list", method="GET", path="/page-projects"
+                        ),
+                    }
+
+                @classmethod
+                def execute_request_plan(
+                    cls, plan: RequestQueryPlan
+                ) -> RequestQueryResult:
+                    del cls, plan
+                    return RequestQueryResult(
+                        items=({"id": 3, "name": "Third"},),
+                        total_count=4,
+                        page=coordinates["page"],
+                        page_size=coordinates["page_size"],
+                    )
+
+        config = RemoteAPIConfig(
+            manager_cls=PageProject,
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=True,
+            allow_detail=False,
+            allow_create=False,
+            allow_update=False,
+            allow_delete=False,
+            websocket_invalidation=False,
+            protocol_version="v1",
+            identifier_type=int,
+        )
+        view = _build_query_view(config)
+        factory = RequestFactory()
+
+        for body in (
+            {"page": 1, "page_size": 1},
+            {"ordering": ["name"]},
+        ):
+            with self.subTest(body=body):
+                response = view(
+                    factory.post(
+                        "/gm/projects/query",
+                        data=json.dumps(body),
+                        content_type="application/json",
+                    )
+                )
+                payload = json.loads(response.content.decode("utf-8"))
+
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(payload["error_code"], "unsupported_global_operation")
+
+    def test_remote_manager_query_view_forwards_global_controls_once(self) -> None:
+        recorded_plans: list[RequestQueryPlan] = []
+
+        class PageProject(GeneralManager):
+            class Interface(RemoteManagerInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    base_url = "https://remote.example.test"
+                    remote_manager = "page-projects"
+                    protocol_version = "v1"
+
+                @classmethod
+                def execute_request_plan(
+                    cls, plan: RequestQueryPlan
+                ) -> RequestQueryResult:
+                    del cls
+                    recorded_plans.append(plan)
+                    return RequestQueryResult(
+                        items=({"id": 3, "name": "Third"},),
+                        total_count=4,
+                        page=2,
+                        page_size=1,
+                    )
+
+        config = RemoteAPIConfig(
+            manager_cls=PageProject,
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=True,
+            allow_detail=False,
+            allow_create=False,
+            allow_update=False,
+            allow_delete=False,
+            websocket_invalidation=False,
+            protocol_version="v1",
+            identifier_type=int,
+        )
+
+        with patch(
+            "general_manager.api.remote_api._serialize_manager",
+            return_value={"id": 3, "name": "Third"},
+        ):
+            response = _build_query_view(config)(
+                RequestFactory().post(
+                    "/gm/projects/query",
+                    data=json.dumps({"page": 2, "page_size": 1, "ordering": ["-name"]}),
+                    content_type="application/json",
+                )
+            )
+        payload = json.loads(response.content.decode("utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["items"], [{"id": 3, "name": "Third"}])
+        self.assertEqual(len(recorded_plans), 1)
+        self.assertEqual(
+            recorded_plans[0].body,
+            {
+                "filters": {},
+                "excludes": {},
+                "page": 2,
+                "page_size": 1,
+                "ordering": ["-name"],
+            },
+        )
+
     def test_default_base_path_is_gm(self) -> None:
         class RemoteProject(GeneralManager):
             class Interface(RemoteManagerInterface):
@@ -147,6 +363,71 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
         self.assertEqual(
             RemoteProject.Interface.get_query_operation("list").path,
             "/gm/projects/query",
+        )
+
+    def test_remote_manager_client_encodes_history_comments_in_metadata(
+        self,
+    ) -> None:
+        class RemoteProject(GeneralManager):
+            class Interface(RemoteManagerInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+                recorded_plans: ClassVar[list[RequestQueryPlan]] = []
+
+                @classmethod
+                def execute_request_plan(
+                    cls, plan: RequestQueryPlan
+                ) -> RequestQueryResult:
+                    cls.recorded_plans.append(plan)
+                    if plan.action == "delete":
+                        return RequestQueryResult(items=())
+                    return RequestQueryResult(
+                        items=(
+                            {
+                                "id": 13,
+                                "name": str(
+                                    plan.body["name"]
+                                    if plan.body is not None
+                                    else "Current"
+                                ),
+                            },
+                        )
+                    )
+
+                class Meta:
+                    base_url = "http://testserver"
+                    remote_manager = "projects"
+                    protocol_version = "v1"
+
+        created = RemoteProject.create(
+            name="Gamma",
+            history_comment="created remotely",
+            ignore_permission=True,
+        )
+        created.update(
+            name="Delta",
+            history_comment="updated remotely",
+            ignore_permission=True,
+        )
+        created.delete(history_comment="deleted remotely", ignore_permission=True)
+
+        self.assertEqual(
+            [
+                plan.body
+                for plan in RemoteProject.Interface.recorded_plans
+                if plan.action in {"create", "update", "delete"}
+            ],
+            [
+                {
+                    "name": "Gamma",
+                    "__metadata__": {"history_comment": "created remotely"},
+                },
+                {
+                    "name": "Delta",
+                    "__metadata__": {"history_comment": "updated remotely"},
+                },
+                {"__metadata__": {"history_comment": "deleted remotely"}},
+            ],
         )
 
     def test_item_view_unsupported_methods_do_not_instantiate_manager(self) -> None:
@@ -205,7 +486,11 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
 
         self.assertEqual(patch_response.status_code, 200)
         manager_cls.assert_called_once_with(id=7)
-        manager_instance.update.assert_called_once_with(name="Updated")
+        manager_instance.update.assert_called_once_with(
+            creator_id=None,
+            history_comment=None,
+            name="Updated",
+        )
 
         manager_cls.reset_mock()
         manager_instance.reset_mock()
@@ -214,7 +499,195 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
 
         self.assertEqual(delete_response.status_code, 200)
         manager_cls.assert_called_once_with(id=7)
-        manager_instance.delete.assert_called_once_with()
+        manager_instance.delete.assert_called_once_with(
+            creator_id=None,
+            history_comment=None,
+        )
+
+    def test_create_view_rejects_mutation_controls_before_calling_manager(
+        self,
+    ) -> None:
+        factory = RequestFactory()
+        manager_cls = MagicMock()
+        config = RemoteAPIConfig(
+            manager_cls=manager_cls,
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=False,
+            allow_detail=False,
+            allow_create=True,
+            allow_update=False,
+            allow_delete=False,
+            websocket_invalidation=False,
+            protocol_version="v1",
+            identifier_type=int,
+        )
+        create_view = _build_create_view(config)
+
+        for control, value in (
+            ("ignore_permission", True),
+            ("creator_id", 666),
+            ("history_comment", "top-level control"),
+        ):
+            with self.subTest(control=control):
+                response = create_view(
+                    factory.post(
+                        "/gm/projects",
+                        data=json.dumps({"name": "Blocked", control: value}),
+                        content_type="application/json",
+                    )
+                )
+                payload = json.loads(response.content.decode("utf-8"))
+
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(payload["error_code"], "invalid_request")
+                manager_cls.create.assert_not_called()
+
+    def test_create_view_uses_authenticated_actor_and_metadata_comment(self) -> None:
+        factory = RequestFactory()
+        manager_instance = MagicMock()
+        manager_cls = MagicMock()
+        manager_cls.create.return_value = manager_instance
+        config = RemoteAPIConfig(
+            manager_cls=manager_cls,
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=False,
+            allow_detail=False,
+            allow_create=True,
+            allow_update=False,
+            allow_delete=False,
+            websocket_invalidation=False,
+            protocol_version="v1",
+            identifier_type=int,
+        )
+        request = factory.post(
+            "/gm/projects",
+            data=json.dumps(
+                {
+                    "name": "Gamma",
+                    "__metadata__": {"history_comment": "created remotely"},
+                }
+            ),
+            content_type="application/json",
+        )
+        request.user = SimpleNamespace(pk=23)
+
+        with patch(
+            "general_manager.api.remote_api._serialize_manager",
+            return_value={"id": 13, "name": "Gamma"},
+        ):
+            response = _build_create_view(config)(request)
+
+        self.assertEqual(response.status_code, 201)
+        manager_cls.create.assert_called_once_with(
+            creator_id=23,
+            history_comment="created remotely",
+            name="Gamma",
+        )
+
+    def test_item_view_rejects_unknown_metadata_before_updating_manager(self) -> None:
+        factory = RequestFactory()
+        manager_instance = MagicMock()
+        manager_cls = MagicMock(return_value=manager_instance)
+        config = RemoteAPIConfig(
+            manager_cls=manager_cls,
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=False,
+            allow_detail=False,
+            allow_create=False,
+            allow_update=True,
+            allow_delete=False,
+            websocket_invalidation=False,
+            protocol_version="v1",
+            identifier_type=int,
+        )
+
+        response = _build_item_view(config)(
+            factory.patch(
+                "/gm/projects/7",
+                data=json.dumps(
+                    {
+                        "name": "Blocked",
+                        "__metadata__": {"ignore_permission": True},
+                    }
+                ),
+                content_type="application/json",
+            ),
+            "7",
+        )
+        payload = json.loads(response.content.decode("utf-8"))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(payload["error_code"], "invalid_request")
+        manager_instance.update.assert_not_called()
+
+    def test_item_view_rejects_non_object_metadata_before_updating_manager(
+        self,
+    ) -> None:
+        factory = RequestFactory()
+        manager_instance = MagicMock()
+        manager_cls = MagicMock(return_value=manager_instance)
+        config = RemoteAPIConfig(
+            manager_cls=manager_cls,
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=False,
+            allow_detail=False,
+            allow_create=False,
+            allow_update=True,
+            allow_delete=False,
+            websocket_invalidation=False,
+            protocol_version="v1",
+            identifier_type=int,
+        )
+
+        response = _build_item_view(config)(
+            factory.patch(
+                "/gm/projects/7",
+                data=json.dumps({"name": "Blocked", "__metadata__": None}),
+                content_type="application/json",
+            ),
+            "7",
+        )
+        payload = json.loads(response.content.decode("utf-8"))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(payload["error_code"], "invalid_request")
+        manager_instance.update.assert_not_called()
+
+    def test_item_view_passes_authenticated_actor_and_comment_to_delete(self) -> None:
+        factory = RequestFactory()
+        manager_instance = MagicMock()
+        manager_cls = MagicMock(return_value=manager_instance)
+        config = RemoteAPIConfig(
+            manager_cls=manager_cls,
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=False,
+            allow_detail=False,
+            allow_create=False,
+            allow_update=False,
+            allow_delete=True,
+            websocket_invalidation=False,
+            protocol_version="v1",
+            identifier_type=int,
+        )
+        request = factory.delete(
+            "/gm/projects/7",
+            data=json.dumps({"__metadata__": {"history_comment": None}}),
+            content_type="application/json",
+        )
+        request.user = SimpleNamespace(pk=23)
+
+        response = _build_item_view(config)(request, "7")
+
+        self.assertEqual(response.status_code, 200)
+        manager_instance.delete.assert_called_once_with(
+            creator_id=23,
+            history_comment=None,
+        )
 
     def test_item_view_sanitizes_exception_text(self) -> None:
         factory = RequestFactory()
@@ -435,7 +908,11 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             )
 
         self.assertEqual(response.status_code, 201)
-        manager_cls.create.assert_called_once_with(name="Gamma")
+        manager_cls.create.assert_called_once_with(
+            creator_id=None,
+            history_comment=None,
+            name="Gamma",
+        )
 
     def test_create_view_maps_runtime_error_to_internal_error(self) -> None:
         factory = RequestFactory()
@@ -560,6 +1037,47 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             _normalize_remote_envelope(
                 RequestTransportResponse(
                     payload={"items": ["bad-item"]},  # type: ignore[list-item]
+                    status_code=200,
+                ),
+                RemoteManagerInterface,
+                RequestQueryOperation(name="list", method="GET", path="/projects"),
+                RequestQueryPlan(
+                    operation_name="list",
+                    action="filter",
+                    method="GET",
+                    path="/projects",
+                ),
+            )
+
+    def test_remote_envelope_preserves_known_page_coordinates(self) -> None:
+        result = _normalize_remote_envelope(
+            RequestTransportResponse(
+                payload={
+                    "items": [{"id": 3, "name": "Third"}],
+                    "total_count": 4,
+                    "metadata": {"page": 2, "page_size": 1},
+                },
+                status_code=200,
+            ),
+            RemoteManagerInterface,
+            RequestQueryOperation(name="list", method="GET", path="/projects"),
+            RequestQueryPlan(
+                operation_name="list", action="filter", method="GET", path="/projects"
+            ),
+        )
+
+        self.assertEqual(result.page, 2)
+        self.assertEqual(result.page_size, 1)
+        self.assertEqual(result.total_count, 4)
+
+    def test_remote_envelope_rejects_boolean_page_coordinates(self) -> None:
+        with self.assertRaises(RequestSchemaError):
+            _normalize_remote_envelope(
+                RequestTransportResponse(
+                    payload={
+                        "items": [],
+                        "metadata": {"page": True, "page_size": 1},
+                    },
                     status_code=200,
                 ),
                 RemoteManagerInterface,
