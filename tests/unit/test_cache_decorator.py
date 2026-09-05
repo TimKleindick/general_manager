@@ -1,3 +1,6 @@
+import asyncio
+import functools
+
 from django.test import SimpleTestCase
 from django.core.cache import cache
 from unittest import mock
@@ -12,11 +15,12 @@ from general_manager.cache.dependency_cache import (
 from general_manager.cache.dependency_index import (
     begin_dependency_data_change,
     end_dependency_data_change,
+    invalidate_manager_cache,
 )
 from general_manager.cache.dependency_publish import CachePublishAborted
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.api import as_of, current_as_of_date
-from general_manager.utils.make_cache_key import make_cache_key
+from general_manager.utils._make_cache_key import make_cache_key
 import pickle
 import threading
 import time
@@ -99,6 +103,11 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         cache.clear()
 
         self.fake_cache = FakeCacheBackend()
+        self._backend_validation_patcher = mock.patch(
+            "general_manager.cache.cache_decorator._is_default_cache_backend",
+            side_effect=lambda backend: backend is self.fake_cache or backend is cache,
+        )
+        self._backend_validation_patcher.start()
         self.record_calls = []
 
         # record_fn saves a copy of the set that the real tracker gives
@@ -122,6 +131,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         with DependencyTracker():
             pass
         cache.clear()
+        self._backend_validation_patcher.stop()
 
     def assert_dependency_cache_hit(self, key, value, dependencies=None):
         hit = read_dependency_cache_hit(self.fake_cache, key)
@@ -1029,7 +1039,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             stored_key
             for stored_key in self.fake_cache.store
             if isinstance(stored_key, str)
-            and stored_key.startswith("dependency_cache_prefetch_manifest:")
+            and stored_key.startswith("gm:prefetch:v2:manifest:")
             and ":segment:" not in stored_key
             and not stored_key.endswith((":bundle", ":values", ":segments"))
         )
@@ -1175,6 +1185,41 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.assertIn(key, self.fake_cache.get_calls)
 
 
+class TestCacheDecoratorBackendSelection(SimpleTestCase):
+    def tearDown(self):
+        cache.clear()
+
+    def test_dependency_scope_rejects_custom_backend_before_wrapped_call(self):
+        custom_cache = FakeCacheBackend()
+        calls = 0
+
+        def record_fn(_key, _dependencies):
+            raise AssertionError
+
+        def sample_function():
+            nonlocal calls
+            calls += 1
+            return "value"
+
+        with self.assertRaisesRegex(ValueError, "default cache"):
+            cached(
+                cache="dependency",
+                cache_backend=custom_cache,
+                record_fn=record_fn,
+            )(sample_function)
+
+        self.assertEqual(calls, 0)
+
+    def test_dependency_scope_accepts_resolved_default_backend(self):
+        resolved_default = cache._connections[cache._alias]
+
+        @cached(cache="dependency", cache_backend=resolved_default)
+        def sample_function():
+            return "value"
+
+        self.assertEqual(sample_function(), "value")
+
+
 class TestCacheDecoratorScopes(SimpleTestCase):
     def test_bare_cached_decorator_reuses_value_inside_context_only(self):
         calls = 0
@@ -1278,6 +1323,161 @@ class TestCacheDecoratorScopes(SimpleTestCase):
 
         self.assertEqual(sample(3), 6)
         self.assertEqual(calls, 2)
+
+    def test_prewarmed_run_cache_replays_dependencies_for_outer_invalidation(self):
+        """An outer dependency cache retains dependencies from a run-cache hit."""
+        state = {"value": 2}
+        inner_calls = 0
+        outer_calls = 0
+
+        @cached
+        def inner() -> int:
+            nonlocal inner_calls
+            inner_calls += 1
+            DependencyTracker.track("AuditWidget", "all", "{}")
+            return state["value"]
+
+        @cached(cache="dependency")
+        def outer() -> int:
+            nonlocal outer_calls
+            outer_calls += 1
+            return inner()
+
+        with CalculationRunContext():
+            self.assertEqual(inner(), 2)
+            self.assertEqual(outer(), 2)
+
+        outer_key = make_cache_key(outer, (), {})
+        self.assertIn(outer_key, invalidate_manager_cache("AuditWidget"))
+        state["value"] = 3
+
+        self.assertEqual(outer(), 3)
+        self.assertEqual(inner_calls, 2)
+        self.assertEqual(outer_calls, 2)
+
+    def test_cached_rejects_declared_async_callables_at_decoration(self):
+        """Declared coroutine and async-generator callables cannot be cached."""
+
+        async def coroutine_function() -> int:
+            return 7
+
+        async def async_generator_function():
+            yield 7
+
+        class AsyncCallable:
+            async def __call__(self) -> int:
+                return 7
+
+        class StaticAsyncCallable:
+            @staticmethod
+            async def __call__() -> int:
+                return 7
+
+        class ClassAsyncCallable:
+            @classmethod
+            async def __call__(cls) -> int:
+                del cls
+                return 7
+
+        class PartialMethodAsyncCallable:
+            async def async_call(self) -> int:
+                return 7
+
+            __call__ = functools.partialmethod(async_call)
+
+        class SyncCallable:
+            def __call__(self) -> int:
+                return 7
+
+        for callable_object in (
+            coroutine_function,
+            async_generator_function,
+            AsyncCallable(),
+            StaticAsyncCallable(),
+            ClassAsyncCallable(),
+            functools.partial(AsyncCallable()),
+            PartialMethodAsyncCallable(),
+        ):
+            with self.subTest(callable_object=callable_object):
+                with self.assertRaisesRegex(TypeError, "async"):
+                    cached(callable_object)
+
+        self.assertTrue(callable(cached(SyncCallable())))
+
+    def test_run_cache_rejects_runtime_awaitables_without_reusing_or_cancelling_them(
+        self,
+    ):
+        """Dynamic awaitables are neither retained nor left as live coroutines."""
+        calls = 0
+        created_coroutines = []
+
+        async def dynamic_result() -> int:
+            return 7
+
+        @cached
+        def returns_coroutine():
+            nonlocal calls
+            calls += 1
+            coroutine = dynamic_result()
+            created_coroutines.append(coroutine)
+            return coroutine
+
+        loop = asyncio.new_event_loop()
+        future = loop.create_future()
+        future_calls = 0
+
+        @cached
+        def returns_external_future():
+            nonlocal future_calls
+            future_calls += 1
+            return future
+
+        try:
+            with CalculationRunContext():
+                for _ in range(2):
+                    with self.assertRaisesRegex(TypeError, "awaitable"):
+                        returns_coroutine()
+                    with self.assertRaisesRegex(TypeError, "awaitable"):
+                        returns_external_future()
+        finally:
+            loop.close()
+
+        self.assertEqual(calls, 2)
+        self.assertTrue(
+            all(coroutine.cr_frame is None for coroutine in created_coroutines)
+        )
+        self.assertEqual(future_calls, 2)
+        self.assertFalse(future.cancelled())
+
+    def test_persistent_cache_scopes_do_not_store_runtime_awaitables(self):
+        """Timeout and dependency caches reject dynamic awaitables before writes."""
+        created_coroutines = []
+        fake_cache = FakeCacheBackend()
+
+        async def dynamic_result() -> int:
+            return 7
+
+        for cache_scope in ("timeout", "dependency"):
+            with self.subTest(cache_scope=cache_scope):
+                decorator_arguments = {"cache": cache_scope}
+                if cache_scope == "timeout":
+                    decorator_arguments.update(
+                        {"timeout": 1, "cache_backend": fake_cache}
+                    )
+
+                @cached(**decorator_arguments)
+                def returns_coroutine():
+                    coroutine = dynamic_result()
+                    created_coroutines.append(coroutine)
+                    return coroutine
+
+                with self.assertRaisesRegex(TypeError, "awaitable"):
+                    returns_coroutine()
+
+        self.assertEqual(fake_cache.store, {})
+        self.assertTrue(
+            all(coroutine.cr_frame is None for coroutine in created_coroutines)
+        )
 
     def test_run_scope_isolated_by_sequential_as_of_contexts(self):
         calls = 0

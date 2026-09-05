@@ -38,14 +38,41 @@ def _merge_usage(current: TokenUsage, event_usage: Any) -> TokenUsage:
 
 def _split_system_messages(
     messages: list[Message],
-) -> tuple[str | None, list[dict[str, str]]]:
+) -> tuple[str | None, list[dict[str, Any]]]:
     system_contents: list[str] = []
-    provider_messages: list[dict[str, str]] = []
+    provider_messages: list[dict[str, Any]] = []
     for message in messages:
         if message.role == "system":
             system_contents.append(message.content)
+        elif message.role == "tool" and message.tool_call_id is not None:
+            provider_messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": message.tool_call_id,
+                            "content": message.content,
+                        }
+                    ],
+                }
+            )
         else:
-            provider_messages.append({"role": message.role, "content": message.content})
+            content: str | list[dict[str, Any]] = message.content
+            if message.tool_calls:
+                content = []
+                if message.content:
+                    content.append({"type": "text", "text": message.content})
+                content.extend(
+                    {
+                        "type": "tool_use",
+                        "id": call.id,
+                        "name": call.name,
+                        "input": call.args,
+                    }
+                    for call in message.tool_calls
+                )
+            provider_messages.append({"role": message.role, "content": content})
     system = "\n\n".join(system_contents) if system_contents else None
     return system, provider_messages
 

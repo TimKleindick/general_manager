@@ -236,7 +236,10 @@ def test_main_compare_mode_runs_each_provider_and_prints_report(capsys):
     assert run_eval_suite_sync.call_args_list[0].args[1] is None
     assert run_eval_suite_sync.call_args_list[0].kwargs["tags"] == ["regression"]
     print_compare_report.assert_called_once_with(
-        {"FirstProvider": [first_result], "SecondProvider": [second_result]}
+        {
+            "demo.FirstProvider": [first_result],
+            "demo.SecondProvider": [second_result],
+        }
     )
     assert capsys.readouterr().out == "comparison\n"
 
@@ -265,7 +268,43 @@ def test_main_compare_mode_exits_on_failed_result(capsys):
 
     assert exit_info.value.code == 1
     print_compare_report.assert_called_once_with(
-        {"FirstProvider": [first_result], "SecondProvider": [second_result]}
+        {
+            "demo.FirstProvider": [first_result],
+            "demo.SecondProvider": [second_result],
+        }
+    )
+    assert capsys.readouterr().out == "comparison\n"
+
+
+def test_main_compare_mode_deduplicates_paths_and_retains_same_named_failures(capsys):
+    first_result = SimpleNamespace(passed=False)
+    second_result = SimpleNamespace(passed=True)
+
+    with (
+        patch("django.setup"),
+        patch(
+            "django.utils.module_loading.import_string",
+            side_effect=[_Provider, _OtherProvider],
+        ) as import_string,
+        patch(
+            "general_manager.chat.evals.runner.run_eval_suite_sync",
+            side_effect=[[first_result], [second_result]],
+        ) as run_eval_suite_sync,
+        patch(
+            "general_manager.chat.evals.runner.print_compare_report",
+            return_value="comparison",
+        ) as print_compare_report,
+    ):
+        with pytest.raises(SystemExit) as exit_info:
+            eval_cli.main(["--compare", "a.Same,a.Same,b.Same"])
+
+    assert exit_info.value.code == 1
+    assert import_string.call_args_list[0].args == ("a.Same",)
+    assert import_string.call_args_list[1].args == ("b.Same",)
+    assert import_string.call_count == 2
+    assert run_eval_suite_sync.call_count == 2
+    print_compare_report.assert_called_once_with(
+        {"a.Same": [first_result], "b.Same": [second_result]}
     )
     assert capsys.readouterr().out == "comparison\n"
 

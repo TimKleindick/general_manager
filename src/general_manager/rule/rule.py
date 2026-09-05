@@ -9,6 +9,7 @@ from collections.abc import Container, Iterable, Mapping, Sequence, Sized
 from operator import eq, ge, gt, le, lt, ne
 from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar, cast
 from decimal import Decimal
+from types import CodeType
 
 from django.core.exceptions import NON_FIELD_ERRORS
 from django.utils.module_loading import import_string
@@ -113,6 +114,16 @@ class InvalidRuleHandlerConfigurationError(TypeError):
         )
 
 
+class RuleSourceAmbiguityError(ValueError):
+    """Raised when a rule callable cannot be isolated in its source."""
+
+    def __init__(self, callable_name: str) -> None:
+        super().__init__(
+            f"Cannot isolate rule callable {callable_name!r} from its source; "
+            "the callable source positions are ambiguous."
+        )
+
+
 class Rule(Generic[GeneralManagerType]):
     """
     Encapsulate a boolean predicate and derive contextual error messages from its AST.
@@ -159,11 +170,21 @@ class Rule(Generic[GeneralManagerType]):
         self._param_names = tuple(parameters.keys())
         self._primary_param = self._param_names[0] if self._param_names else None
 
-        # 1) Extract source, strip decorators, and dedent
-        src = textwrap.dedent(inspect.getsource(func))
+        # 1) Extract source, unwrap supported decorators, and dedent.
+        source_callable = inspect.unwrap(func)
+        source_lines, source_start_line = inspect.getsourcelines(source_callable)
+        raw_src = "".join(source_lines)
+        src = textwrap.dedent(raw_src)
 
-        # 2) Parse AST and attach parent references
-        self._tree = ast.parse(src)
+        # 2) Select the callable AST and attach parent references.
+        parsed_tree = ast.parse(src)
+        self._tree = self._select_callable_tree(
+            source_callable,
+            parsed_tree,
+            source_start_line,
+            raw_src,
+            src,
+        )
         for parent in ast.walk(self._tree):
             for child in ast.iter_child_nodes(parent):
                 child.parent = parent  # type: ignore
@@ -234,6 +255,193 @@ class Rule(Generic[GeneralManagerType]):
     def ignore_if_none(self) -> bool:
         return self._ignore_if_none
 
+    @staticmethod
+    def _source_position_points(
+        code: CodeType,
+        source_start_line: int,
+        raw_source: str,
+        source: str,
+    ) -> list[tuple[int, int]]:
+        """Return dedented source points covered by a callable's bytecode."""
+        raw_lines = raw_source.splitlines()
+        source_lines = source.splitlines()
+        points: list[tuple[int, int]] = []
+
+        for start_line, _end_line, start_col, end_col in code.co_positions():
+            if (
+                start_line is None
+                or start_col is None
+                or end_col is None
+                or (start_col == 0 and end_col == 0)
+            ):
+                continue
+
+            relative_line = start_line - source_start_line + 1
+            if not 1 <= relative_line <= len(source_lines):
+                continue
+
+            raw_line = raw_lines[relative_line - 1]
+            source_line = source_lines[relative_line - 1]
+            raw_indent = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+            source_indent = source_line[: len(source_line) - len(source_line.lstrip())]
+            indent_delta = len(raw_indent) - len(source_indent)
+            column = start_col - indent_delta
+            if column >= 0:
+                points.append((relative_line, column))
+
+        return points
+
+    @staticmethod
+    def _position_in_node(node: ast.AST, line: int, column: int) -> bool:
+        """Return whether a source point falls within an AST node."""
+        node_line = getattr(node, "lineno", None)
+        node_column = getattr(node, "col_offset", None)
+        node_end_line = getattr(node, "end_lineno", None)
+        node_end_column = getattr(node, "end_col_offset", None)
+        if (
+            not isinstance(node_line, int)
+            or not isinstance(node_column, int)
+            or not isinstance(node_end_line, int)
+            or not isinstance(node_end_column, int)
+        ):
+            return False
+
+        return (
+            (node_line, node_column)
+            <= (line, column)
+            < (
+                node_end_line,
+                node_end_column,
+            )
+        )
+
+    @staticmethod
+    def _callable_body(node: ast.AST) -> ast.AST:
+        """Return an AST containing only a callable's evaluated body."""
+        if isinstance(node, ast.Lambda):
+            return node.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return ast.Module(body=node.body, type_ignores=[])
+        raise TypeError(type(node).__name__)
+
+    @staticmethod
+    def _lambda_parameters_match(node: ast.Lambda, code: CodeType) -> bool:
+        """Return whether an AST lambda has the code object's parameters."""
+        args = node.args
+        parameter_names = [argument.arg for argument in (*args.posonlyargs, *args.args)]
+        if args.vararg is not None:
+            parameter_names.append(args.vararg.arg)
+        parameter_names.extend(argument.arg for argument in args.kwonlyargs)
+        if args.kwarg is not None:
+            parameter_names.append(args.kwarg.arg)
+
+        if len(args.posonlyargs) + len(args.args) != code.co_argcount:
+            return False
+        if len(args.kwonlyargs) != code.co_kwonlyargcount:
+            return False
+        if (args.vararg is not None) != bool(code.co_flags & inspect.CO_VARARGS):
+            return False
+        if (args.kwarg is not None) != bool(code.co_flags & inspect.CO_VARKEYWORDS):
+            return False
+
+        return parameter_names == list(code.co_varnames[: len(parameter_names)])
+
+    @classmethod
+    def _select_callable_tree(
+        cls,
+        source_callable: object,
+        parsed_tree: ast.AST,
+        source_start_line: int,
+        raw_source: str,
+        source: str,
+    ) -> ast.AST:
+        """Select and isolate the source AST for the wrapped callable."""
+        code = getattr(source_callable, "__code__", None)
+        if not isinstance(code, CodeType):
+            return parsed_tree
+
+        callable_nodes = [
+            node
+            for node in ast.walk(parsed_tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+        ]
+        if not callable_nodes:
+            return parsed_tree
+
+        relative_first_line = code.co_firstlineno - source_start_line + 1
+        line_nodes = [
+            node for node in callable_nodes if node.lineno == relative_first_line
+        ]
+        candidates: Sequence[ast.AST]
+        if code.co_name == "<lambda>":
+            candidates = [
+                node
+                for node in (line_nodes or callable_nodes)
+                if isinstance(node, ast.Lambda)
+            ]
+            parameter_nodes = [
+                node
+                for node in candidates
+                if isinstance(node, ast.Lambda)
+                and cls._lambda_parameters_match(node, code)
+            ]
+            if parameter_nodes:
+                candidates = parameter_nodes
+        else:
+            named_nodes = [
+                node
+                for node in callable_nodes
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == code.co_name
+            ]
+            candidates = named_nodes or line_nodes or callable_nodes
+
+        if len(candidates) > 1:
+            points = cls._source_position_points(
+                code,
+                source_start_line,
+                raw_source,
+                source,
+            )
+            scores = {
+                node: sum(
+                    cls._position_in_node(node, line, column) for line, column in points
+                )
+                for node in candidates
+            }
+            best_score = max(scores.values(), default=0)
+            best_nodes = [node for node, score in scores.items() if score == best_score]
+            if best_score > 0:
+                if len(best_nodes) == 1:
+                    candidates = best_nodes
+                else:
+                    lambda_nodes = [
+                        node for node in best_nodes if isinstance(node, ast.Lambda)
+                    ]
+                    if len(lambda_nodes) == len(best_nodes):
+                        latest_body_start = max(
+                            (node.body.lineno, node.body.col_offset)
+                            for node in lambda_nodes
+                        )
+                        tightest_nodes = [
+                            node
+                            for node in lambda_nodes
+                            if (node.body.lineno, node.body.col_offset)
+                            == latest_body_start
+                        ]
+                        if len(tightest_nodes) == 1:
+                            candidates = tightest_nodes
+
+        if len(candidates) != 1:
+            callable_name = getattr(
+                source_callable,
+                "__qualname__",
+                getattr(source_callable, "__name__", repr(source_callable)),
+            )
+            raise RuleSourceAmbiguityError(str(callable_name))
+
+        return cls._callable_body(candidates[0])
+
     def evaluate(self, x: GeneralManagerType) -> Optional[bool]:
         """
         Evaluate the rule's predicate against a GeneralManager instance and record evaluation context.
@@ -246,6 +454,7 @@ class Rule(Generic[GeneralManagerType]):
         Returns:
             `True` if the predicate evaluates to true, `False` if it evaluates to false, `None` if evaluation was skipped because a referenced value was `None` and `ignore_if_none` is enabled.
         """
+        self._last_result = None
         self._last_input = x
         self._last_args = {}
         if self._primary_param is not None:

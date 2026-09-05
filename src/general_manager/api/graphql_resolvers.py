@@ -18,19 +18,18 @@ from typing import (
     Awaitable,
     Generic,
     TYPE_CHECKING,
-    TypeAlias,
     TypeVar,
     TypedDict,
     cast,
 )
 
-import graphene
-from graphql import OperationType
+from graphql import GraphQLError, OperationType
 from graphql.language.ast import FieldNode, FragmentSpreadNode, InlineFragmentNode
 
 from general_manager.logging import get_logger
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.group_bucket import GroupBucket
+from general_manager.bucket.request_bucket import RequestBucket
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
 from general_manager.api.graphql_errors import get_read_permission_filter
@@ -47,6 +46,10 @@ from general_manager.permission.graphql_capabilities import (
     get_capability_context,
     get_graphql_capabilities,
 )
+from general_manager.api.graphql_ordering import (
+    GraphQLOrderingInputError,
+    order_by_to_sort_terms,
+)
 from general_manager.utils.filter_parser import UnknownInputFieldError
 from general_manager.utils.type_checks import safe_issubclass
 
@@ -61,18 +64,14 @@ GeneralManagerT = TypeVar("GeneralManagerT", bound=GeneralManager)
 ResolverValueT = TypeVar("ResolverValueT")
 GraphQLFilterInput = Mapping[str, object] | str | None
 GraphQLFilterMapping = dict[str, object]
-GraphQLSortInput: TypeAlias = (
-    graphene.Enum
-    | str
-    | list[graphene.Enum | str]
-    | tuple[graphene.Enum | str, ...]
-    | None
-)
 NormalizedFilterPlan = dict[str, GraphQLFilterMapping]
 FilterNormalizer = Callable[[GraphQLFilterMapping], NormalizedFilterPlan]
 ManagerFilterNormalizer = Callable[
     [type[GeneralManager], GraphQLFilterMapping],
     NormalizedFilterPlan,
+]
+GroupingValidator = Callable[
+    [Bucket[GeneralManager], list[str] | None, object, "GraphQLResolveInfo"], None
 ]
 BaseListGetter = Callable[[object, bool], Bucket[GeneralManager] | None]
 Resolver = Callable[..., object]
@@ -87,10 +86,10 @@ def _ensure_as_of_compatible(value: object) -> None:
 
 
 class PageInfoPayload(TypedDict):
-    total_count: int
+    total_count: int | None
     page_size: int | None
     current_page: int
-    total_pages: int
+    total_pages: int | None
 
 
 class ListResolverPayload(TypedDict):
@@ -131,6 +130,16 @@ class ReadAuthorizationResult(Generic[GeneralManagerT]):
     denied_count: int | None
     backend_shape: str
     requires_instance_check: bool
+    instance_check_reasons: tuple[str, ...]
+
+
+@dataclass(slots=True)
+class ReadAuthorizationPreparation(Generic[GeneralManagerT]):
+    """Permission prefilters retained until the final row gate is applied."""
+
+    queryset: Bucket[GeneralManagerT]
+    permission_plan: ReadPermissionPlan
+    backend_shape: str
     instance_check_reasons: tuple[str, ...]
 
 
@@ -269,31 +278,24 @@ def partition_calculation_query_plan(
     )
 
 
-def _normalize_sort_keys(sort_by: GraphQLSortInput) -> tuple[str, ...]:
-    """Normalize GraphQL sort input into an ordered tuple of field keys."""
-    if not sort_by:
-        return ()
-    values = sort_by if isinstance(sort_by, (list, tuple)) else (sort_by,)
-    return tuple(cast(str, getattr(value, "value", value)) for value in values)
-
-
 def apply_sorting(
     queryset: Bucket[GeneralManager] | GroupBucket[GeneralManager],
-    sort_by: GraphQLSortInput,
-    reverse: bool,
+    order_by: object,
 ) -> Bucket[GeneralManager] | GroupBucket[GeneralManager]:
-    """Sort by ordered GraphQL keys, leaving empty input unchanged."""
-    sort_keys = _normalize_sort_keys(sort_by)
-    if not sort_keys:
+    """Sort by typed GraphQL order inputs, leaving empty input unchanged."""
+    try:
+        terms = order_by_to_sort_terms(order_by)
+    except GraphQLOrderingInputError as exc:
+        raise GraphQLError(str(exc)) from exc
+    if not terms:
         return queryset
-    return queryset.sort(sort_keys, reverse=reverse)
+    return queryset.sort(*(term.signed_field for term in terms))
 
 
 def apply_query_parameter_plan(
     queryset: Bucket[GeneralManager],
     plan: QueryParameterPlan,
-    sort_by: GraphQLSortInput,
-    reverse: bool,
+    order_by: object,
 ) -> Bucket[GeneralManager]:
     """Apply a normalized query-parameter plan to *queryset*."""
     if plan.filters:
@@ -305,7 +307,7 @@ def apply_query_parameter_plan(
 
     return cast(
         Bucket[GeneralManager],
-        apply_sorting(queryset, sort_by, reverse),
+        apply_sorting(queryset, order_by),
     )
 
 
@@ -313,8 +315,7 @@ def apply_query_parameters(
     queryset: Bucket[GeneralManager],
     filter_input: GraphQLFilterInput,
     exclude_input: GraphQLFilterInput,
-    sort_by: GraphQLSortInput,
-    reverse: bool,
+    order_by: object,
     *,
     filter_normalizer: FilterNormalizer | None = None,
 ) -> Bucket[GeneralManager]:
@@ -340,8 +341,7 @@ def apply_query_parameters(
     Parameters:
         filter_input: Filters to apply, as a mapping or JSON string.
         exclude_input: Exclusions to apply, as a mapping or JSON string.
-        sort_by: Field or ordered fields to sort by (Graphene Enum values).
-        reverse: If ``True``, reverse the sort order.
+        order_by: Typed GraphQL ordering inputs with independent directions.
 
     Returns:
         The queryset after filters, exclusions, and sorting are applied.
@@ -354,7 +354,7 @@ def apply_query_parameters(
         exclude_input,
         filter_normalizer,
     )
-    return apply_query_parameter_plan(queryset, plan, sort_by, reverse)
+    return apply_query_parameter_plan(queryset, plan, order_by)
 
 
 def apply_permission_filters(
@@ -403,7 +403,83 @@ def apply_read_authorization(
     Unrestricted plans that do not require instance checks return the original
     queryset without evaluating it to compute counts.
     """
-    permission_plan = get_read_permission_filter(general_manager_class, info)
+    preparation = prepare_read_authorization(
+        queryset,
+        general_manager_class,
+        info,
+    )
+    return finalize_read_authorization(
+        preparation,
+        general_manager_class,
+        info,
+        source=source,
+    )
+
+
+def finalize_read_authorization(
+    preparation: ReadAuthorizationPreparation[GeneralManagerT],
+    general_manager_class: type[GeneralManagerT],
+    info: GraphQLResolveInfo,
+    *,
+    source: str,
+) -> ReadAuthorizationResult[GeneralManagerT]:
+    """Run the row gate for an already-prefiltered authorization preparation."""
+    permission_plan = preparation.permission_plan
+    if permission_plan.decision == "deny_all":
+        return ReadAuthorizationResult(
+            queryset=preparation.queryset,
+            candidate_count=0,
+            authorized_count=0,
+            denied_count=0,
+            backend_shape=preparation.backend_shape,
+            requires_instance_check=False,
+            instance_check_reasons=(),
+        )
+
+    if permission_plan.decision == "allow_all":
+        return ReadAuthorizationResult(
+            queryset=preparation.queryset,
+            candidate_count=None,
+            authorized_count=None,
+            denied_count=None,
+            backend_shape=preparation.backend_shape,
+            requires_instance_check=False,
+            instance_check_reasons=(),
+        )
+
+    result = filter_queryset_by_read_permission(
+        preparation.queryset,
+        general_manager_class,
+        info,
+        requires_instance_check=permission_plan.requires_instance_check,
+        instance_check_reasons=preparation.instance_check_reasons,
+        backend_shape=preparation.backend_shape,
+    )
+    if result.requires_instance_check:
+        log_read_authorization_summary(
+            general_manager_class=general_manager_class,
+            source=source,
+            result=result,
+        )
+    return result
+
+
+def prepare_read_authorization(
+    queryset: Bucket[GeneralManagerT],
+    general_manager_class: type[GeneralManagerT],
+    info: GraphQLResolveInfo,
+    *,
+    permission_plan: ReadPermissionPlan | None = None,
+) -> ReadAuthorizationPreparation[GeneralManagerT]:
+    """Apply only permission pushdowns, leaving any row gate for the caller.
+
+    Request-backed resolvers use this seam to compile permission filters into
+    their final upstream query before reading response provenance. Callers must
+    subsequently pass the preparation through ``finalize_read_authorization``.
+    """
+    permission_plan = permission_plan or get_read_permission_filter(
+        general_manager_class, info
+    )
     backend_shape = get_backend_shape(general_manager_class)
     instance_check_reasons = resolve_instance_check_reasons(
         permission_plan,
@@ -411,24 +487,18 @@ def apply_read_authorization(
     )
 
     if permission_plan.decision == "deny_all":
-        return ReadAuthorizationResult(
+        return ReadAuthorizationPreparation(
             queryset=queryset.none(),
-            candidate_count=0,
-            authorized_count=0,
-            denied_count=0,
+            permission_plan=permission_plan,
             backend_shape=backend_shape,
-            requires_instance_check=False,
             instance_check_reasons=(),
         )
 
     if permission_plan.decision == "allow_all":
-        return ReadAuthorizationResult(
+        return ReadAuthorizationPreparation(
             queryset=queryset,
-            candidate_count=None,
-            authorized_count=None,
-            denied_count=None,
+            permission_plan=permission_plan,
             backend_shape=backend_shape,
-            requires_instance_check=False,
             instance_check_reasons=(),
         )
 
@@ -439,16 +509,12 @@ def apply_read_authorization(
         and not permission_plan.filters[0].get("filter")
         and not permission_plan.filters[0].get("exclude")
     ):
-        result = ReadAuthorizationResult(
+        return ReadAuthorizationPreparation(
             queryset=queryset,
-            candidate_count=None,
-            authorized_count=None,
-            denied_count=None,
+            permission_plan=permission_plan,
             backend_shape=backend_shape,
-            requires_instance_check=False,
             instance_check_reasons=instance_check_reasons,
         )
-        return result
 
     if permission_plan.filters:
         filtered_queryset = None
@@ -464,21 +530,12 @@ def apply_read_authorization(
             )
     assert filtered_queryset is not None
 
-    result = filter_queryset_by_read_permission(
-        filtered_queryset,
-        general_manager_class,
-        info,
-        requires_instance_check=permission_plan.requires_instance_check,
-        instance_check_reasons=instance_check_reasons,
+    return ReadAuthorizationPreparation(
+        queryset=filtered_queryset,
+        permission_plan=permission_plan,
         backend_shape=backend_shape,
+        instance_check_reasons=instance_check_reasons,
     )
-    if result.requires_instance_check:
-        log_read_authorization_summary(
-            general_manager_class=general_manager_class,
-            source=source,
-            result=result,
-        )
-    return result
 
 
 def filter_queryset_by_read_permission(
@@ -631,42 +688,149 @@ def log_read_authorization_summary(
 class InvalidPaginationValueError(ValueError):
     """Raised when pagination arguments cannot produce a valid page."""
 
-    def __init__(self) -> None:
-        super().__init__("pagination values must be non-negative")
+    def __init__(self, field_name: str) -> None:
+        super().__init__(f"{field_name} must be a positive integer")
+
+
+@dataclass(frozen=True, slots=True)
+class EffectivePagination:
+    """Normalized public pagination arguments and their observable defaults."""
+
+    requested: bool
+    page: int
+    page_size: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class RequestPaginationProvenance:
+    """Upstream page metadata captured before local subset materialization."""
+
+    page: int | None
+    page_size: int | None
+    total_count: int | None
+    is_complete: bool
+
+    @property
+    def is_partial(self) -> bool:
+        return not self.is_complete
+
+
+def normalize_pagination(
+    page: int | None,
+    page_size: int | None,
+) -> EffectivePagination:
+    """Normalize list pagination once, preserving the unpaginated no-arg mode."""
+    requested = page is not None or page_size is not None
+    for field_name, value in (("page", page), ("pageSize", page_size)):
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value <= 0
+        ):
+            raise InvalidPaginationValueError(field_name)
+    if not requested:
+        return EffectivePagination(requested=False, page=1, page_size=None)
+    return EffectivePagination(
+        requested=True,
+        page=1 if page is None else page,
+        page_size=10 if page_size is None else page_size,
+    )
+
+
+def _request_pagination_provenance(
+    queryset: Bucket[GeneralManager] | GroupBucket[GeneralManager],
+) -> RequestPaginationProvenance | None:
+    """Materialize request response metadata before any local subset operation."""
+    if not isinstance(queryset, RequestBucket):
+        return None
+    return RequestPaginationProvenance(
+        page=queryset.upstream_page,
+        page_size=queryset.upstream_page_size,
+        total_count=queryset.total_count,
+        is_complete=queryset.response_is_complete,
+    )
+
+
+def _is_remote_request_bucket(
+    queryset: Bucket[GeneralManager] | GroupBucket[GeneralManager],
+) -> bool:
+    return isinstance(queryset, RequestBucket) and bool(
+        getattr(queryset._interface_cls, "supports_upstream_query_controls", False)
+    )
+
+
+def _request_global_operation_error(operation: str) -> GraphQLError:
+    return GraphQLError(
+        f"Request source cannot apply global {operation} to an incomplete response "
+        "without declared upstream support."
+    )
+
+
+def _requested_request_global_operation(
+    pagination: EffectivePagination,
+    group_by: list[str] | None,
+    order_by: object,
+) -> str | None:
+    """Return the first global Request operation requested by the client."""
+    if pagination.requested:
+        return "pagination"
+    if group_by is not None:
+        return "grouping"
+    try:
+        return "ordering" if order_by_to_sort_terms(order_by) else None
+    except GraphQLOrderingInputError as exc:
+        raise GraphQLError(str(exc)) from exc
+
+
+def _forward_remote_request_controls(
+    queryset: Bucket[GeneralManager],
+    pagination: EffectivePagination,
+    order_by: object,
+) -> tuple[Bucket[GeneralManager], bool]:
+    """Forward supported RemoteManager page/order controls before materialization."""
+    if not _is_remote_request_bucket(queryset):
+        return queryset, False
+    try:
+        terms = order_by_to_sort_terms(order_by)
+    except GraphQLOrderingInputError as exc:
+        raise GraphQLError(str(exc)) from exc
+    controls: dict[str, object] = {}
+    if pagination.requested:
+        controls["page"] = pagination.page
+        controls["page_size"] = pagination.page_size
+    if terms:
+        controls["ordering"] = [term.signed_field for term in terms]
+    if not controls:
+        return queryset, False
+    return queryset.filter(**controls), bool(terms)
 
 
 def apply_pagination(
     queryset: Bucket[GeneralManager] | GroupBucket[GeneralManager],
     page: int | None,
     page_size: int | None,
+    *,
+    normalized: EffectivePagination | None = None,
 ) -> Bucket[GeneralManager] | GroupBucket[GeneralManager]:
     """
     Return a paginated slice of *queryset*.
 
     Returns the full queryset when neither ``page`` nor ``page_size`` is
     given. Defaults to page 1 / size 10 when only one parameter is provided.
-    Negative ``page`` or ``page_size`` values raise ``ValueError`` before
-    slicing. Falsey explicit values such as ``page=0`` or ``page_size=0`` also
-    fall back through those defaults for slicing.
+    Zero, negative, boolean, and non-integer controls raise ``ValueError``
+    before slicing.
     Already-empty grouped buckets are returned unchanged when pagination is
     requested, preserving their shape without invoking an invalid empty slice.
     The returned object keeps the same bucket/group-bucket shape as the slice
     operation exposes. Slice errors from the bucket implementation propagate
     unchanged.
     """
-    if page is not None and page < 0:
-        raise InvalidPaginationValueError
-    if page_size is not None and page_size < 0:
-        raise InvalidPaginationValueError
-    if page is not None or page_size is not None:
+    effective = normalized or normalize_pagination(page, page_size)
+    if effective.requested:
         if isinstance(queryset, GroupBucket) and len(queryset) == 0:
             return queryset
-        page = page or 1
-        page_size = page_size or 10
-        offset = (page - 1) * page_size
+        offset = (effective.page - 1) * cast(int, effective.page_size)
         queryset = cast(
             Bucket[GeneralManager] | GroupBucket[GeneralManager],
-            queryset[offset : offset + page_size],
+            queryset[offset : offset + cast(int, effective.page_size)],
         )
     return queryset
 
@@ -814,6 +978,22 @@ def measurement_to_graphql_payload(
     }
 
 
+def resolve_measurement_output(
+    value: object,
+    target_unit: str | None = None,
+) -> object:
+    """Recursively convert Measurement values for GraphQL object/list outputs."""
+    if value is None or isinstance(value, Measurement):
+        return measurement_to_graphql_payload(value, target_unit)
+    if isinstance(value, list):
+        return [resolve_measurement_output(item, target_unit) for item in value]
+    if isinstance(value, tuple):
+        return tuple(resolve_measurement_output(item, target_unit) for item in value)
+    if isinstance(value, set):
+        return [resolve_measurement_output(item, target_unit) for item in value]
+    return measurement_to_graphql_payload(value, target_unit)
+
+
 def create_measurement_resolver(field_name: str) -> Resolver:
     """
     Return a resolver for a :class:`~general_manager.measurement.Measurement` field.
@@ -831,8 +1011,8 @@ def create_measurement_resolver(field_name: str) -> Resolver:
     ) -> object:
         _ensure_as_of_compatible(self)
 
-        def resolve_measurement() -> dict[str, object] | None:
-            return measurement_to_graphql_payload(
+        def resolve_measurement() -> object:
+            return resolve_measurement_output(
                 getattr(self, field_name),
                 target_unit,
             )
@@ -871,17 +1051,17 @@ def create_list_resolver(
     base_getter: BaseListGetter,
     fallback_manager_class: type[GeneralManager],
     filter_normalizer: ManagerFilterNormalizer | None = None,
+    grouping_validator: GroupingValidator | None = None,
 ) -> Resolver:
     """
     Build a resolver for list fields that applies filters, permissions, and pagination.
 
-    The generated resolver accepts nullable ``filter``, ``exclude``, ``sort_by``,
-    ``page``, ``page_size``, and ``group_by`` values. ``reverse`` and
-    ``include_inactive`` default to ``False``. The generated GraphQL schema uses
-    camelCase names such as ``sortBy``, ``pageSize``, ``groupBy``, and
-    ``includeInactive``. ``sort_by`` accepts a single key or an ordered list of
-    keys. If it is ``None`` or empty, no sorting is attempted even when
-    ``reverse`` is true.
+    The generated resolver accepts nullable ``filter``, ``exclude``,
+    ``order_by``, ``page``, ``page_size``, and ``group_by`` values.
+    ``include_inactive`` defaults to ``False``. The generated GraphQL schema
+    uses camelCase names such as ``orderBy``, ``pageSize``, ``groupBy``, and
+    ``includeInactive``. ``order_by`` accepts ordered typed objects; omitted or
+    empty input leaves the existing order unchanged.
 
     The resolver obtains a base bucket from ``base_getter(self,
     include_inactive)``. Only ``None`` triggers fallback: ``Manager.all()`` when
@@ -924,11 +1104,12 @@ def create_list_resolver(
         ``pageInfo`` contains ``total_count``, ``page_size``,
         ``current_page``, and ``total_pages`` using the Python-side field names;
         Graphene exposes them as camelCase in the GraphQL schema. ``current_page``
-        is ``page or 1``. ``page_size`` reports the original ``page_size``
-        argument, not the effective slicing default. ``total_pages`` is computed
-        from a truthy original ``page_size`` and otherwise reported as ``1``.
-        Negative pagination values raise ``InvalidPaginationValueError`` before
-        slicing.
+        reports effective pagination values: supplied single controls default
+        the missing coordinate to page 1 / size 10, while ordinary no-argument
+        lists remain unpaginated with ``page_size=None``. ``total_pages`` is
+        zero for an exact empty result and ``None`` when the source total is
+        incomplete. Invalid pagination values raise
+        ``InvalidPaginationValueError`` before slicing.
     """
 
     def resolver(
@@ -936,8 +1117,7 @@ def create_list_resolver(
         info: GraphQLResolveInfo,
         filter: GraphQLFilterInput = None,
         exclude: GraphQLFilterInput = None,
-        sort_by: GraphQLSortInput = None,
-        reverse: bool = False,
+        order_by: object = None,
         page: int | None = None,
         page_size: int | None = None,
         group_by: list[str] | None = None,
@@ -970,9 +1150,14 @@ def create_list_resolver(
             exclude,
             filter_normalizer=bound_filter_normalizer,
         )
+        effective_pagination = normalize_pagination(page, page_size)
         from general_manager.interface import CalculationInterface
 
         interface = getattr(manager_class, "Interface", None)
+        is_request_source = isinstance(base_queryset, RequestBucket)
+        remote_ordering_forwarded = False
+        request_provenance: RequestPaginationProvenance | None = None
+        authorization_result: ReadAuthorizationResult[GeneralManager]
         if isinstance(interface, type) and issubclass(interface, CalculationInterface):
             input_plan, deferred_plan = partition_calculation_query_plan(
                 manager_class,
@@ -982,7 +1167,6 @@ def create_list_resolver(
                 base_queryset,
                 input_plan,
                 None,
-                reverse,
             )
             if (
                 input_plan.filters
@@ -990,17 +1174,142 @@ def create_list_resolver(
                 or input_plan.normalized_excludes
             ):
                 input_queryset = input_queryset.with_instances(input_queryset)
-            qs = apply_permission_filters(input_queryset, manager_class, info)
-            qs = apply_query_parameter_plan(qs, deferred_plan, None, reverse)
+            authorization_result = apply_read_authorization(
+                input_queryset,
+                manager_class,
+                info,
+                source="list",
+            )
+            qs = authorization_result.queryset
+            qs = apply_query_parameter_plan(qs, deferred_plan, None)
+        elif is_request_source:
+            permission_plan = get_read_permission_filter(manager_class, info)
+            if permission_plan.decision == "deny_all":
+                authorization_result = finalize_read_authorization(
+                    prepare_read_authorization(
+                        base_queryset,
+                        manager_class,
+                        info,
+                        permission_plan=permission_plan,
+                    ),
+                    manager_class,
+                    info,
+                    source="list",
+                )
+                qs = authorization_result.queryset
+            else:
+                unsupported_operation = _requested_request_global_operation(
+                    effective_pagination,
+                    group_by,
+                    order_by,
+                )
+                if (
+                    len(permission_plan.filters) > 1
+                    and unsupported_operation is not None
+                ):
+                    raise _request_global_operation_error(unsupported_operation)
+                planned_source = apply_query_parameter_plan(base_queryset, plan, None)
+                authorization_preparation = prepare_read_authorization(
+                    planned_source,
+                    manager_class,
+                    info,
+                    permission_plan=permission_plan,
+                )
+                planned_source = authorization_preparation.queryset
+                if isinstance(planned_source, RequestBucket):
+                    planned_source, remote_ordering_forwarded = (
+                        _forward_remote_request_controls(
+                            planned_source,
+                            effective_pagination,
+                            order_by,
+                        )
+                    )
+                    authorization_preparation.queryset = planned_source
+                    request_provenance = _request_pagination_provenance(planned_source)
+                else:
+                    request_provenance = RequestPaginationProvenance(
+                        page=None,
+                        page_size=None,
+                        total_count=None,
+                        is_complete=False,
+                    )
+                assert request_provenance is not None
+                if request_provenance.is_partial:
+                    if effective_pagination.requested and (
+                        request_provenance.page != effective_pagination.page
+                        or request_provenance.page_size
+                        != effective_pagination.page_size
+                    ):
+                        raise _request_global_operation_error("pagination")
+                    if group_by is not None:
+                        raise _request_global_operation_error("grouping")
+                    if order_by is not None and not remote_ordering_forwarded:
+                        try:
+                            has_ordering = bool(order_by_to_sort_terms(order_by))
+                        except GraphQLOrderingInputError as exc:
+                            raise GraphQLError(str(exc)) from exc
+                        if has_ordering:
+                            raise _request_global_operation_error("ordering")
+                authorization_result = finalize_read_authorization(
+                    authorization_preparation,
+                    manager_class,
+                    info,
+                    source="list",
+                )
+                qs = authorization_result.queryset
         else:
-            qs = apply_permission_filters(base_queryset, manager_class, info)
-            qs = apply_query_parameter_plan(qs, plan, None, reverse)
+            authorization_result = apply_read_authorization(
+                base_queryset,
+                manager_class,
+                info,
+                source="list",
+            )
+            qs = authorization_result.queryset
+            qs = apply_query_parameter_plan(qs, plan, None)
+        if grouping_validator is not None:
+            grouping_validator(qs, group_by, order_by, info)
         qs_grouped = apply_grouping(qs, group_by)
-        qs_sorted = apply_sorting(qs_grouped, sort_by, reverse)
+        qs_sorted = apply_sorting(
+            qs_grouped,
+            None if remote_ordering_forwarded else order_by,
+        )
 
-        total_count = len(qs_sorted)
+        if request_provenance is None or request_provenance.is_complete:
+            total_count: int | None = len(qs_sorted)
+        elif authorization_result.requires_instance_check:
+            total_count = None
+        else:
+            total_count = request_provenance.total_count
 
-        qs_paginated = apply_pagination(qs_sorted, page, page_size)
+        metadata_pagination = effective_pagination
+        if (
+            not effective_pagination.requested
+            and request_provenance is not None
+            and request_provenance.page is not None
+        ):
+            metadata_pagination = EffectivePagination(
+                requested=True,
+                page=request_provenance.page,
+                page_size=request_provenance.page_size,
+            )
+
+        upstream_page_matches = (
+            request_provenance is not None
+            and request_provenance.page == metadata_pagination.page
+            and request_provenance.page_size == metadata_pagination.page_size
+            and metadata_pagination.requested
+            and group_by is None
+        )
+        qs_paginated = (
+            qs_sorted
+            if upstream_page_matches
+            else apply_pagination(
+                qs_sorted,
+                page,
+                page_size,
+                normalized=metadata_pagination,
+            )
+        )
         items: object
         if hasattr(qs_paginated, "groups"):
             items = qs_paginated
@@ -1038,10 +1347,19 @@ def create_list_resolver(
 
         page_info: PageInfoPayload = {
             "total_count": total_count,
-            "page_size": page_size,
-            "current_page": page or 1,
+            "page_size": metadata_pagination.page_size,
+            "current_page": metadata_pagination.page,
             "total_pages": (
-                ((total_count + page_size - 1) // page_size) if page_size else 1
+                None
+                if total_count is None
+                else 0
+                if total_count == 0
+                else (
+                    (total_count + metadata_pagination.page_size - 1)
+                    // metadata_pagination.page_size
+                    if metadata_pagination.page_size is not None
+                    else 1
+                )
             ),
         }
         return {

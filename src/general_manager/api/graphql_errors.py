@@ -389,25 +389,24 @@ class PageInfo(ObjectType):
     generated page fields expose it, but callers should not import it directly.
 
     ``total_count`` is counted after permission filters, client filters, excludes,
-    sorting, and grouping, but before slicing the current page. Out-of-range pages
-    therefore return empty ``items`` with the same filtered ``total_count``.
+    sorting, and grouping, but before slicing the current page when the resolver
+    has a complete local result. It is ``None`` when a partial request response
+    cannot prove an authorized global total. Out-of-range pages therefore return
+    empty ``items`` with the same known filtered ``total_count``.
     ``current_page`` is 1-based and defaults to ``1`` when the client omits a
     page argument. ``page_size`` is nullable and remains ``None`` when no explicit
     page size was requested. ``total_pages`` is computed from ``page_size`` when
-    present; without ``page_size`` it is ``1``, including empty result sets.
+    present; without ``page_size`` it is ``1`` for nonempty local results and
+    ``0`` for empty results. Unknown totals leave ``total_pages`` as ``None``.
     Pagination argument validation belongs to generated field/resolver code, not
-    this metadata type. Generated fields currently add no validation beyond
-    Graphene's integer coercion. Non-positive values are not normalized here.
-    ``page_size=0`` behaves as omitted pagination for ``total_pages`` because it
-    is falsy. Negative ``page_size`` or ``current_page`` values are passed to
-    resolver slicing unchanged and should be treated as internal/legacy behavior
-    rather than a public pagination contract.
+    this metadata type. Public list and search pagination require positive
+    integer values.
     """
 
-    total_count = Int(required=True)
+    total_count = Int(required=False)
     page_size = Int(required=False)
     current_page = Int(required=True)
-    total_pages = Int(required=True)
+    total_pages = Int(required=False)
 
 
 # ---------------------------------------------------------------------------

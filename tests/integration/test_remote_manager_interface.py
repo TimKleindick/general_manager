@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from asgiref.testing import ApplicationCommunicator
 from asgiref.sync import sync_to_async
+from django.contrib.auth import get_user_model
 from django.db.models import CharField
 from django.http import HttpResponse
 from django.test import Client, override_settings
@@ -25,6 +26,7 @@ from general_manager.interface.requests import (
     RequestNotFoundError,
     RequestField,
     RequestPlan,
+    RequestPlanConflictError,
     RequestTransportRequest,
     RequestTransportResponse,
     RequestTransportStatusError,
@@ -82,7 +84,7 @@ class DjangoClientTransport(SharedRequestTransport):
         response = self.client.generic(
             request.method,
             full_path,
-            data=body,
+            data=body if body is not None else b"",
             content_type="application/json",
             **{
                 "HTTP_X_GENERAL_MANAGER_PROTOCOL_VERSION": request.headers.get(
@@ -329,6 +331,90 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
             content_type="application/json",
         )
         self.assertEqual(hidden_response.status_code, 404)
+
+    def test_remote_manager_keeps_independent_groups_on_request(self) -> None:
+        bucket = (
+            self.RemoteProject.filter(status="active")
+            .filter(page=1, page_size=1, ordering="-name")
+            .filter(name="Alpha")
+        )
+
+        self.assertEqual([item.name for item in bucket], ["Alpha"])
+        self.assertEqual(
+            dict(bucket.request_plan.body or {})["filters"],
+            {"status": "active", "name": "Alpha"},
+        )
+        self.assertEqual(dict(bucket.request_plan.body or {})["page"], 1)
+        self.assertEqual(dict(bucket.request_plan.body or {})["page_size"], 1)
+        self.assertEqual(dict(bucket.request_plan.body or {})["ordering"], "-name")
+        self.assertEqual(bucket.request_plan.local_predicates, ())
+
+    def test_remote_manager_rejects_conflicting_repeated_filter(self) -> None:
+        conflicts = (
+            ({"status": "active"}, {"status": "inactive"}),
+            ({"page": 1}, {"page": 2}),
+            ({"page_size": 1}, {"page_size": 2}),
+            ({"ordering": "name"}, {"ordering": "-name"}),
+        )
+
+        with patch.object(self.transport, "send", wraps=self.transport.send) as send:
+            for initial, conflicting in conflicts:
+                with self.subTest(initial=initial, conflicting=conflicting):
+                    with self.assertRaises(RequestPlanConflictError):
+                        self.RemoteProject.filter(**initial).filter(**conflicting)
+
+        send.assert_not_called()
+
+    def test_remote_manager_rejects_multiple_exclude_groups(self) -> None:
+        with self.assertRaises(RequestPlanConflictError):
+            self.RemoteProject.exclude(status="active").exclude(name="Alpha")
+
+    def test_remote_manager_keeps_arbitrary_later_remote_filter_in_plan(self) -> None:
+        bucket = self.RemoteProject.filter(status="active").filter(remote_only="opaque")
+
+        self.assertEqual(
+            dict(bucket.request_plan.body or {})["filters"],
+            {"status": "active", "remote_only": "opaque"},
+        )
+        self.assertEqual(bucket.request_plan.local_predicates, ())
+
+    def test_remote_payload_cannot_bypass_denied_row_update(self) -> None:
+        path = f"/internal/gm/projects/{self.project.id}"
+        with patch.object(self.Project.Permission, "__update__", ["isAuthenticated"]):
+            denied = self.client.patch(
+                path,
+                data=json.dumps({"name": "Denied"}),
+                content_type="application/json",
+            )
+            forged = self.client.patch(
+                path,
+                data=json.dumps({"name": "Forged", "ignore_permission": True}),
+                content_type="application/json",
+            )
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(forged.status_code, 400)
+        self.assertEqual(self.Project(id=self.project.id).name, "Alpha")
+
+    def test_authenticated_patch_records_actor_and_metadata_comment(self) -> None:
+        user = get_user_model().objects.create_user(username="remote-editor")
+        self.client.force_login(user)
+        response = self.client.patch(
+            f"/internal/gm/projects/{self.project.id}",
+            data=json.dumps(
+                {
+                    "name": "Edited",
+                    "__metadata__": {"history_comment": "remote review regression"},
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        updated = self.Project(id=self.project.id)
+        self.assertEqual(updated.name, "Edited")
+        latest = updated.history.order_by("-history_date").first()
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.history_user_id, user.pk)
+        self.assertEqual(latest.history_change_reason, "remote review regression")
 
     def test_remote_manager_interface_mutations_round_trip(self) -> None:
         created = self.RemoteProject.create(

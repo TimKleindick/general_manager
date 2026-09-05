@@ -214,7 +214,11 @@ class EvidenceRecord:
 
 
 class EvidenceStore:
-    """Turn-local evidence collection with explicit requirement linking."""
+    """Turn-local evidence collection with explicit requirement linking.
+
+    Records remain in memory until the owning turn ends. Methods return the
+    immutable records they add or link; this store does not persist evidence.
+    """
 
     def __init__(self) -> None:
         self._records: dict[str, EvidenceRecord] = {}
@@ -226,6 +230,7 @@ class EvidenceStore:
         *,
         requirement: EvidenceRequirement | None = None,
     ) -> EvidenceRecord:
+        """Add and return a record, optionally linking it to a requirement."""
         if not isinstance(record, EvidenceRecord):
             _type_error("record must be an EvidenceRecord.")
         if record.evidence_id in self._records:

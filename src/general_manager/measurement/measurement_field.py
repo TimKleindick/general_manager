@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.db.models.expressions import Col
+from django.db.models.signals import post_init, pre_init
 from decimal import Decimal, InvalidOperation
 import pint
 from general_manager.measurement.measurement import (
@@ -206,6 +208,99 @@ class MeasurementField(MeasurementFieldBase):
 
         # Descriptor override
         setattr(cls, name, self)
+        self._install_default_initializer(cls)
+
+    def _install_default_initializer(self, cls: type[models.Model]) -> None:
+        """Apply logical defaults during Django model initialization."""
+
+        if cls.__dict__.get("_measurement_default_signals_initialized", False):
+            return
+
+        supplied_name_stack: ContextVar[tuple[set[str], ...]] = ContextVar(
+            f"measurement_default_supplied_names_{id(cls)}",
+            default=(),
+        )
+
+        def record_supplied_names(
+            sender: type[models.Model],
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            if sender is not cls:
+                return
+            signal_args = kwargs["args"]
+            signal_kwargs = kwargs["kwargs"]
+            if not isinstance(signal_args, tuple) or not isinstance(
+                signal_kwargs, dict
+            ):
+                return
+            supplied_names = set(signal_kwargs)
+            supplied_names.update(
+                field.attname
+                for field in sender._meta.concrete_fields[: len(signal_args)]
+            )
+            supplied_name_stack.set((*supplied_name_stack.get(), supplied_names))
+
+        def apply_measurement_defaults(
+            sender: type[models.Model],
+            instance: models.Model,
+            **_kwargs: object,
+        ) -> None:
+            if sender is not cls:
+                return
+            stack = supplied_name_stack.get()
+            if not stack:
+                return
+            supplied_names = stack[-1]
+            supplied_name_stack.set(stack[:-1])
+            try:
+                for field in instance._meta.get_fields():
+                    if isinstance(field, MeasurementField):
+                        field._apply_default(instance, supplied_names)
+            finally:
+                supplied_name_stack.set(stack[:-1])
+
+        original_init = cls.__init__
+
+        def clear_failed_initialization_state(
+            instance: models.Model,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            previous_stack = supplied_name_stack.get()
+            try:
+                original_init(instance, *args, **kwargs)
+            except BaseException:
+                supplied_name_stack.set(previous_stack)
+                raise
+
+        pre_init.connect(record_supplied_names, sender=cls, weak=False)
+        post_init.connect(apply_measurement_defaults, sender=cls, weak=False)
+        cls.__init__ = clear_failed_initialization_state  # type: ignore[method-assign, assignment]
+        cls._measurement_default_signals_initialized = True  # type: ignore[attr-defined]
+
+    def _apply_default(self, instance: models.Model, supplied_names: set[str]) -> None:
+        """Materialize one logical default into its paired backing fields."""
+
+        if (
+            not self.has_default()
+            or self.name in supplied_names
+            or self.value_attr in supplied_names
+            or self.unit_attr in supplied_names
+        ):
+            return
+
+        if (
+            self.value_attr not in instance.__dict__
+            or self.unit_attr not in instance.__dict__
+        ):
+            return
+        value = instance.__dict__[self.value_attr]
+        unit = instance.__dict__[self.unit_attr]
+        if value is not None or unit not in (None, ""):
+            return
+        default_value = self.get_default()
+        self._store_value(instance, default_value)
 
     def _remap_constraints_to_value_field(
         self,
@@ -546,8 +641,10 @@ class MeasurementField(MeasurementFieldBase):
         return Measurement(magnitude, str(unit))
 
     # ------------ Descriptor ------------
-    def __get__(  # type: ignore
-        self, instance: models.Model | None, owner: None = None
+    def __get__(  # type: ignore[override]
+        self,
+        instance: models.Model | None,
+        owner: type[models.Model] | None = None,
     ) -> MeasurementField | Measurement | None:
         """
         Resolve the field value on an instance, reconstructing the measurement when possible.
@@ -578,6 +675,17 @@ class MeasurementField(MeasurementFieldBase):
         return self._from_stored_components(val, unit)
 
     def __set__(
+        self,
+        instance: models.Model,
+        value: Measurement | str | None,
+    ) -> None:
+        """Assign an editable measurement value through the public descriptor."""
+
+        if not self.editable:
+            raise MeasurementFieldNotEditableError(self.name)
+        self._store_value(instance, value)
+
+    def _store_value(
         self,
         instance: models.Model,
         value: Measurement | str | None,
@@ -626,8 +734,6 @@ class MeasurementField(MeasurementFieldBase):
                 does not make exact non-wrapped Pint subclasses part of this
                 field's stable API.
         """
-        if not self.editable:
-            raise MeasurementFieldNotEditableError(self.name)
         if value is None:
             setattr(instance, self.value_attr, None)
             setattr(instance, self.unit_attr, None)

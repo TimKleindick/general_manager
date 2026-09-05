@@ -325,6 +325,271 @@ class _GeminiFunctionCallClient:
 
 
 class AdditionalProviderTests(unittest.TestCase):
+    @staticmethod
+    def _tool_exchange_messages() -> list[Message]:
+        calls = (
+            ToolCallEvent(
+                id="call-query",
+                name="query",
+                args={"manager": "PartManager", "fields": ["name"]},
+            ),
+            ToolCallEvent(
+                id="call-search",
+                name="search_managers",
+                args={"query": "parts", "limit": 2},
+            ),
+        )
+        return [
+            Message(role="user", content="Find parts"),
+            Message(role="assistant", content="", tool_calls=calls),
+            Message(
+                role="tool",
+                content='{"status":"success","rows":[{"name":"A"}]}',
+                tool_call_id="call-query",
+                tool_name="query",
+                tool_result={"status": "success", "rows": [{"name": "A"}]},
+            ),
+            Message(
+                role="tool",
+                content='{"status":"success","matches":["PartManager"]}',
+                tool_call_id="call-search",
+                tool_name="search_managers",
+                tool_result={"status": "success", "matches": ["PartManager"]},
+            ),
+        ]
+
+    def test_openai_request_preserves_multiple_tool_call_ids_and_results(self) -> None:
+        client = _OpenAIClient()
+
+        async def run() -> None:
+            with patch.object(
+                OpenAIProvider, "_build_async_client", return_value=client
+            ):
+                _ = [
+                    event
+                    async for event in OpenAIProvider().complete(
+                        self._tool_exchange_messages(), []
+                    )
+                ]
+
+        asyncio.run(run())
+
+        messages = client.chat.completions.calls[0]["messages"]
+        assert messages[1] == {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-query",
+                    "type": "function",
+                    "function": {
+                        "name": "query",
+                        "arguments": '{"manager": "PartManager", "fields": ["name"]}',
+                    },
+                },
+                {
+                    "id": "call-search",
+                    "type": "function",
+                    "function": {
+                        "name": "search_managers",
+                        "arguments": '{"query": "parts", "limit": 2}',
+                    },
+                },
+            ],
+        }
+        assert messages[2:] == [
+            {
+                "role": "tool",
+                "tool_call_id": "call-query",
+                "content": '{"status":"success","rows":[{"name":"A"}]}',
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-search",
+                "content": '{"status":"success","matches":["PartManager"]}',
+            },
+        ]
+
+    def test_anthropic_request_preserves_multiple_tool_call_ids_and_results(
+        self,
+    ) -> None:
+        client = _AnthropicClient()
+
+        async def run() -> None:
+            with patch.object(
+                AnthropicProvider, "_build_async_client", return_value=client
+            ):
+                _ = [
+                    event
+                    async for event in AnthropicProvider().complete(
+                        self._tool_exchange_messages(), []
+                    )
+                ]
+
+        asyncio.run(run())
+
+        messages = client.messages.calls[0]["messages"]
+        assert messages[1] == {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "call-query",
+                    "name": "query",
+                    "input": {"manager": "PartManager", "fields": ["name"]},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "call-search",
+                    "name": "search_managers",
+                    "input": {"query": "parts", "limit": 2},
+                },
+            ],
+        }
+        assert messages[2:] == [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call-query",
+                        "content": '{"status":"success","rows":[{"name":"A"}]}',
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call-search",
+                        "content": '{"status":"success","matches":["PartManager"]}',
+                    }
+                ],
+            },
+        ]
+
+    def test_gemini_request_preserves_multiple_tool_call_ids_and_results(self) -> None:
+        client = _GeminiClient()
+
+        async def run() -> None:
+            with patch.object(
+                GeminiProvider, "_build_async_client", return_value=client
+            ):
+                _ = [
+                    event
+                    async for event in GeminiProvider().complete(
+                        self._tool_exchange_messages(), []
+                    )
+                ]
+
+        asyncio.run(run())
+
+        contents = client.aio.models.calls[0]["contents"]
+        assert contents[1] == {
+            "role": "model",
+            "parts": [
+                {
+                    "function_call": {
+                        "id": "call-query",
+                        "name": "query",
+                        "args": {"manager": "PartManager", "fields": ["name"]},
+                    }
+                },
+                {
+                    "function_call": {
+                        "id": "call-search",
+                        "name": "search_managers",
+                        "args": {"query": "parts", "limit": 2},
+                    }
+                },
+            ],
+        }
+        assert contents[2:] == [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "id": "call-query",
+                            "name": "query",
+                            "response": {"status": "success", "rows": [{"name": "A"}]},
+                        }
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "id": "call-search",
+                            "name": "search_managers",
+                            "response": {
+                                "status": "success",
+                                "matches": ["PartManager"],
+                            },
+                        }
+                    }
+                ],
+            },
+        ]
+
+    def test_gemini_request_preserves_falsey_and_null_tool_results(self) -> None:
+        client = _GeminiClient()
+        messages = [
+            Message(
+                role="tool",
+                content="false",
+                tool_call_id="call-false",
+                tool_name="is_available",
+                tool_result=False,
+            ),
+            Message(
+                role="tool",
+                content="null",
+                tool_call_id="call-null",
+                tool_name="lookup_optional",
+                tool_result=None,
+            ),
+        ]
+
+        async def run() -> None:
+            with patch.object(
+                GeminiProvider, "_build_async_client", return_value=client
+            ):
+                _ = [event async for event in GeminiProvider().complete(messages, [])]
+
+        asyncio.run(run())
+
+        contents = client.aio.models.calls[0]["contents"]
+        assert contents == [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "id": "call-false",
+                            "name": "is_available",
+                            "response": {"result": False},
+                        }
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "id": "call-null",
+                            "name": "lookup_optional",
+                            "response": {"result": None},
+                        }
+                    }
+                ],
+            },
+        ]
+
     def test_openai_from_config_uses_instance_model_without_changing_legacy_settings(
         self,
     ) -> None:

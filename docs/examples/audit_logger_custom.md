@@ -59,8 +59,9 @@ class KafkaAuditLogger(_BufferedAuditLogger):
 ```
 
 - The worker thread flushes automatically on application exit.
-- Call `close()` (or `flush()`) during test teardown to ensure all events are processed.
-- After `close()` or `flush()`, later `record()` calls are ignored.
+- Call `flush()` when accepted events must be persisted while the logger stays open; call `close()` at the terminal lifecycle boundary.
+- After `close()`, later `record()` calls raise `AuditLoggerClosedError`. A successful `flush()` does not close the logger.
+- `close()` waits for accepted events to drain and re-raises worker persistence failures. It has no timeout, so a stuck persistence operation remains visible as a blocked close rather than a false-success return.
 
 ## Wiring the Kafka producer
 

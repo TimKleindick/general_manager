@@ -423,6 +423,138 @@ class TestingUtilityDependencyOrderingTests(SimpleTestCase):
 
         self.assertEqual(calls, [[object]])
 
+    def test_generated_subclass_runs_inherited_setup_once(self) -> None:
+        """Generated subclasses retain parent hooks without re-entering setup wrappers."""
+        from general_manager.utils import testing as testing_module
+
+        calls: list[type] = []
+
+        class Parent(testing_module.GeneralManagerTransactionTestCase):
+            general_manager_classes: ClassVar[list] = []
+
+            @classmethod
+            def setUpClass(cls) -> None:
+                calls.append(cls)
+                super().setUpClass()
+
+        class Child(Parent):
+            pass
+
+        connection = MagicMock()
+        connection.introspection.table_names.return_value = []
+        connection.schema_editor.return_value.__enter__.return_value = MagicMock()
+        with (
+            patch.object(testing_module, "connection", connection),
+            patch.object(testing_module, "_default_graphql_url_clear"),
+            patch.object(testing_module, "_default_remote_api_url_clear"),
+            patch.object(
+                testing_module.GeneralmanagerConfig,
+                "initialize_general_manager_classes",
+            ),
+            patch.object(
+                testing_module.GeneralmanagerConfig,
+                "handle_remote_api",
+            ),
+            patch.object(
+                testing_module.GeneralmanagerConfig,
+                "install_startup_hook_runner",
+            ),
+            patch.object(testing_module.GeneralmanagerConfig, "register_system_checks"),
+            patch.object(
+                testing_module.GeneralmanagerConfig,
+                "handle_graph_ql",
+            ) as handle_graph_ql,
+            patch.object(testing_module.GraphQLTransactionTestCase, "setUpClass"),
+        ):
+            Child.setUpClass()
+
+        self.assertEqual(calls, [Child])
+        handle_graph_ql.assert_called_once_with([])
+
+    def test_child_setup_delegation_runs_parent_hook_and_harness_once(self) -> None:
+        """A child hook can delegate to its parent without nesting the harness."""
+        from general_manager.utils import testing as testing_module
+
+        calls: list[str] = []
+
+        class Parent(testing_module.GeneralManagerTransactionTestCase):
+            general_manager_classes: ClassVar[list] = []
+
+            @classmethod
+            def setUpClass(cls) -> None:
+                calls.append("parent")
+                super().setUpClass()
+
+        class Child(Parent):
+            @classmethod
+            def setUpClass(cls) -> None:
+                calls.append("child")
+                super().setUpClass()
+
+        connection = MagicMock()
+        connection.introspection.table_names.return_value = []
+        connection.schema_editor.return_value.__enter__.return_value = MagicMock()
+        with (
+            patch.object(testing_module, "connection", connection),
+            patch.object(testing_module, "_default_graphql_url_clear"),
+            patch.object(testing_module, "_default_remote_api_url_clear"),
+            patch.object(
+                testing_module.GeneralmanagerConfig,
+                "initialize_general_manager_classes",
+            ),
+            patch.object(testing_module.GeneralmanagerConfig, "handle_remote_api"),
+            patch.object(
+                testing_module.GeneralmanagerConfig,
+                "install_startup_hook_runner",
+            ),
+            patch.object(testing_module.GeneralmanagerConfig, "register_system_checks"),
+            patch.object(
+                testing_module.GeneralmanagerConfig,
+                "handle_graph_ql",
+            ) as handle_graph_ql,
+            patch.object(testing_module.GraphQLTransactionTestCase, "setUpClass"),
+        ):
+            Child.setUpClass()
+
+        self.assertEqual(calls, ["child", "parent"])
+        handle_graph_ql.assert_called_once_with([])
+
+    def test_generated_subclass_runs_inherited_teardown_once(self) -> None:
+        """Inherited teardown delegates to the shared harness exactly once."""
+        from general_manager.utils import testing as testing_module
+
+        calls: list[type] = []
+
+        class Parent(testing_module.GeneralManagerTransactionTestCase):
+            general_manager_classes: ClassVar[list] = []
+
+            @classmethod
+            def tearDownClass(cls) -> None:
+                calls.append(cls)
+                super().tearDownClass()
+
+        class Child(Parent):
+            pass
+
+        with (
+            patch.object(testing_module, "_default_graphql_url_clear"),
+            patch.object(testing_module, "_default_remote_api_url_clear"),
+            patch.object(testing_module, "_restore_graphene_cursor_wrappers"),
+            patch.object(testing_module.GraphQL, "reset_registry"),
+            patch.object(Parent, "_drop_created_test_models"),
+            patch.object(Parent, "_unregister_created_test_models"),
+            patch.object(Parent, "_clear_test_manager_registries"),
+            patch.object(Parent, "_restore_fallback_app_lookup"),
+            patch.object(Parent, "_reset_created_test_state"),
+            patch.object(
+                testing_module.GraphQLTransactionTestCase, "tearDownClass"
+            ) as base_teardown,
+        ):
+            Child.tearDownClass()
+
+        self.assertEqual(calls, [Child])
+        base_teardown.assert_called_once_with()
+
 
 class GeneralManagerTransactionTestCaseTeardownTests(SimpleTestCase):
     """Tests for failure-safe dynamic model setup and teardown."""
@@ -476,6 +608,7 @@ class GeneralManagerTransactionTestCaseTeardownTests(SimpleTestCase):
             patch.object(testing_module, "connection", mocked_connection),
             patch.object(testing_module, "_default_graphql_url_clear"),
             patch.object(testing_module, "_default_remote_api_url_clear"),
+            patch.object(testing_module.GraphQL, "reset_registry") as reset_registry,
             patch.object(global_apps, "clear_cache"),
             patch.object(testing_module.GraphQLTransactionTestCase, "tearDownClass"),
         ):
@@ -486,6 +619,7 @@ class GeneralManagerTransactionTestCaseTeardownTests(SimpleTestCase):
             [child_model, parent_model],
         )
         mocked_connection.constraint_checks_disabled.assert_called_once_with()
+        reset_registry.assert_called_once_with()
 
     def test_teardown_runs_global_cleanup_when_model_deletion_raises(self) -> None:
         """A DDL failure does not leak dynamic model or manager state."""

@@ -197,7 +197,6 @@ def execute_chat_tool(
         return mutate(
             mutation=str(args.get("mutation", "")),
             input=args.get("input", {}),
-            confirmed=bool(args.get("confirmed", False)),
             context=context,
         )
     raise UnknownChatToolError(name)
@@ -686,3 +685,18 @@ def mutate(
         raise ValueError("; ".join(_extract_error_message(error) for error in errors))
     payload = getattr(result, "data", {}).get(mutation, {})
     return {"status": "executed", "data": payload}
+
+
+def execute_confirmed_chat_mutation(
+    *,
+    mutation: str,
+    input: Mapping[str, Any],
+    context: ChatToolContext | None,
+) -> dict[str, Any]:
+    """Execute a mutation after a transport has claimed client approval."""
+    return mutate(
+        mutation=mutation,
+        input=input,
+        confirmed=True,
+        context=context,
+    )

@@ -5,10 +5,11 @@ from __future__ import annotations
 import calendar
 import builtins
 import inspect
+import math
 from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast
 
 from general_manager.manager.general_manager import GeneralManager
@@ -54,6 +55,11 @@ class InvalidNumericRangeError(ValueError):
         messages = {
             "step": "NumericRangeDomain step must be greater than zero.",
             "bounds": "NumericRangeDomain min_value must be <= max_value.",
+            "finite": "NumericRangeDomain bounds and step must be finite.",
+            "advancement": (
+                "NumericRangeDomain step must advance values in its numeric "
+                "representation."
+            ),
         }
         super().__init__(messages[reason])
 
@@ -167,6 +173,24 @@ def _add_numeric_step(
     return current + step
 
 
+def _add_numeric_step_checked(
+    current: int | float | Decimal,
+    step: int | float | Decimal,
+) -> int | float | Decimal:
+    try:
+        return _add_numeric_step(current, step)
+    except (DecimalException, OverflowError) as error:
+        raise InvalidNumericRangeError("advancement") from error
+
+
+def _numeric_is_finite(value: int | float | Decimal) -> bool:
+    if isinstance(value, Decimal):
+        return value.is_finite()
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return True
+
+
 def _float_tolerance(step: int | float | Decimal) -> float:
     return max(1e-12, abs(float(step)) * 1e-9)
 
@@ -238,38 +262,65 @@ class NumericRangeDomain(InputDomain[int | float | Decimal]):
         max_value: int | float | Decimal,
         step: int | float | Decimal = 1,
     ) -> None:
+        if not all(
+            _numeric_is_finite(candidate) for candidate in (min_value, max_value, step)
+        ):
+            raise InvalidNumericRangeError("finite")
         if step <= 0:
             raise InvalidNumericRangeError("step")
         if min_value > max_value:
             raise InvalidNumericRangeError("bounds")
+        if (
+            min_value < max_value
+            and _add_numeric_step_checked(min_value, step) <= min_value
+        ):
+            raise InvalidNumericRangeError("advancement")
         object.__setattr__(self, "kind", "numeric_range")
         object.__setattr__(self, "min_value", min_value)
         object.__setattr__(self, "max_value", max_value)
         object.__setattr__(self, "step", step)
 
     def contains(self, value: int | float | Decimal) -> bool:
+        if not _numeric_is_finite(value):
+            return False
         if any(
             isinstance(candidate, Decimal)
             for candidate in (self.min_value, self.max_value, self.step, value)
         ):
-            decimal_value = Decimal(str(value))
-            decimal_min = Decimal(str(self.min_value))
-            decimal_max = Decimal(str(self.max_value))
-            decimal_step = Decimal(str(self.step))
-            decimal_tolerance = _decimal_tolerance(decimal_step)
-            if decimal_value < decimal_min - decimal_tolerance:
-                return False
-            if decimal_value > decimal_max + decimal_tolerance:
-                return False
-            decimal_current = decimal_min
-            while decimal_current <= decimal_max + decimal_tolerance:
-                if abs(decimal_current - decimal_value) <= decimal_tolerance:
-                    return True
-                decimal_current = cast(
-                    Decimal,
-                    _add_numeric_step(decimal_current, decimal_step),
-                )
-            return False
+            try:
+                decimal_value = Decimal(str(value))
+                decimal_min = Decimal(str(self.min_value))
+                decimal_max = Decimal(str(self.max_value))
+                decimal_step = Decimal(str(self.step))
+                decimal_tolerance = _decimal_tolerance(decimal_step)
+                if (
+                    decimal_value < decimal_min
+                    and decimal_min - decimal_value > decimal_tolerance
+                ):
+                    return False
+                if (
+                    decimal_value > decimal_max
+                    and decimal_value - decimal_max > decimal_tolerance
+                ):
+                    return False
+                decimal_current = decimal_min
+                while True:
+                    if abs(decimal_current - decimal_value) <= decimal_tolerance:
+                        return True
+                    if (
+                        decimal_current > decimal_max
+                        or abs(decimal_current - decimal_max) <= decimal_tolerance
+                    ):
+                        return False
+                    next_decimal_current = cast(
+                        Decimal,
+                        _add_numeric_step_checked(decimal_current, decimal_step),
+                    )
+                    if next_decimal_current <= decimal_current:
+                        raise InvalidNumericRangeError("advancement")
+                    decimal_current = next_decimal_current
+            except (DecimalException, OverflowError) as error:
+                raise InvalidNumericRangeError("advancement") from error
 
         if any(
             isinstance(candidate, float)
@@ -280,17 +331,27 @@ class NumericRangeDomain(InputDomain[int | float | Decimal]):
             float_max = float(self.max_value)
             float_step = float(self.step)
             float_tolerance = _float_tolerance(float_step)
-            if float_value < float_min - float_tolerance:
+            if float_value < float_min and float_min - float_value > float_tolerance:
                 return False
-            if float_value > float_max + float_tolerance:
+            if float_value > float_max and float_value - float_max > float_tolerance:
                 return False
             float_current = float_min
-            while float_current <= float_max + float_tolerance:
+            while math.isfinite(float_current):
                 if abs(float_current - float_value) <= float_tolerance:
                     return True
-                float_current = float(
-                    cast(float, _add_numeric_step(float_current, float_step))
+                if (
+                    float_current > float_max
+                    or abs(float_current - float_max) <= float_tolerance
+                ):
+                    return False
+                next_float_current = float(
+                    cast(float, _add_numeric_step_checked(float_current, float_step))
                 )
+                if next_float_current <= float_current:
+                    raise InvalidNumericRangeError("advancement")
+                if not math.isfinite(next_float_current):
+                    return False
+                float_current = next_float_current
             return False
 
         current = cast(int, self.min_value)
@@ -300,7 +361,15 @@ class NumericRangeDomain(InputDomain[int | float | Decimal]):
         while current <= max_value:
             if current == integer_value:
                 return True
-            current = cast(int, _add_numeric_step(current, step))
+            if current >= max_value:
+                return False
+            next_integer_current = cast(
+                int,
+                _add_numeric_step_checked(current, step),
+            )
+            if next_integer_current <= current:
+                raise InvalidNumericRangeError("advancement")
+            current = next_integer_current
         return False
 
     def metadata(self) -> dict[str, object]:
@@ -316,21 +385,28 @@ class NumericRangeDomain(InputDomain[int | float | Decimal]):
             isinstance(candidate, Decimal)
             for candidate in (self.min_value, self.max_value, self.step)
         ):
-            decimal_min = Decimal(str(self.min_value))
-            decimal_max = Decimal(str(self.max_value))
-            decimal_step = Decimal(str(self.step))
-            decimal_tolerance = _decimal_tolerance(decimal_step)
-            decimal_current = decimal_min
-            while decimal_current <= decimal_max + decimal_tolerance:
-                if abs(decimal_current - decimal_max) <= decimal_tolerance:
-                    yield decimal_max
-                    break
-                yield decimal_current
-                decimal_current = cast(
-                    Decimal,
-                    _add_numeric_step(decimal_current, decimal_step),
-                )
-            return
+            try:
+                decimal_min = Decimal(str(self.min_value))
+                decimal_max = Decimal(str(self.max_value))
+                decimal_step = Decimal(str(self.step))
+                decimal_tolerance = _decimal_tolerance(decimal_step)
+                decimal_current = decimal_min
+                while True:
+                    if abs(decimal_current - decimal_max) <= decimal_tolerance:
+                        yield decimal_max
+                        return
+                    if decimal_current > decimal_max:
+                        return
+                    yield decimal_current
+                    next_decimal_current = cast(
+                        Decimal,
+                        _add_numeric_step_checked(decimal_current, decimal_step),
+                    )
+                    if next_decimal_current <= decimal_current:
+                        raise InvalidNumericRangeError("advancement")
+                    decimal_current = next_decimal_current
+            except (DecimalException, OverflowError) as error:
+                raise InvalidNumericRangeError("advancement") from error
 
         if any(
             isinstance(candidate, float)
@@ -341,22 +417,36 @@ class NumericRangeDomain(InputDomain[int | float | Decimal]):
             float_step = float(self.step)
             float_tolerance = _float_tolerance(float_step)
             float_current = float_min
-            while float_current <= float_max + float_tolerance:
+            while math.isfinite(float_current):
                 if abs(float_current - float_max) <= float_tolerance:
                     yield float_max
-                    break
+                    return
+                if float_current > float_max:
+                    return
                 yield float_current
-                float_current = float(
-                    cast(float, _add_numeric_step(float_current, float_step))
+                next_float_current = float(
+                    cast(float, _add_numeric_step_checked(float_current, float_step))
                 )
-            return
+                if next_float_current <= float_current:
+                    raise InvalidNumericRangeError("advancement")
+                if not math.isfinite(next_float_current):
+                    return
+                float_current = next_float_current
 
         current = cast(int, self.min_value)
         max_value = cast(int, self.max_value)
         step = cast(int, self.step)
         while current <= max_value:
             yield current
-            current = cast(int, _add_numeric_step(current, step))
+            if current >= max_value:
+                return
+            next_integer_current = cast(
+                int,
+                _add_numeric_step_checked(current, step),
+            )
+            if next_integer_current <= current:
+                raise InvalidNumericRangeError("advancement")
+            current = next_integer_current
 
     def __contains__(self, value: object) -> bool:
         if not isinstance(value, (int, float, Decimal)):
@@ -428,9 +518,17 @@ class DateRangeDomain(InputDomain[date]):
             return _year_start(value)
         return _year_end(value)
 
+    def _normalize_if_representable(self, value: date) -> date | None:
+        try:
+            return self.normalize(value)
+        except (OverflowError, ValueError):
+            return None
+
     def contains(self, value: date) -> bool:
         date_value = value.date() if isinstance(value, datetime) else value
-        normalized = self.normalize(date_value)
+        normalized = self._normalize_if_representable(date_value)
+        if normalized is None:
+            return False
         if normalized > self.end:
             return False
         return normalized in self
@@ -445,27 +543,56 @@ class DateRangeDomain(InputDomain[date]):
         }
 
     def __iter__(self) -> Iterator[date]:
-        current = self.normalize(self.start)
+        current = self._normalize_if_representable(self.start)
+        if current is None:
+            return
         last = self.end
         while current <= last:
             yield current
-            current = self._advance(current)
+            next_current = self._next_if_representable(current)
+            if next_current is None:
+                return
+            current = next_current
 
     def __contains__(self, value: object) -> bool:
         if not isinstance(value, date):
             return False
         date_value = value.date() if isinstance(value, datetime) else value
-        normalized = self.normalize(date_value)
+        normalized = self._normalize_if_representable(date_value)
+        if normalized is None:
+            return False
         end = self.end
         if normalized > end:
             return False
-        current = self.normalize(self.start)
+        current = self._normalize_if_representable(self.start)
+        if current is None:
+            return False
         last = end
         while current <= last:
             if current == normalized:
                 return True
-            current = self._advance(current)
+            next_current = self._next_if_representable(current)
+            if next_current is None:
+                return False
+            current = next_current
         return False
+
+    def _next_if_representable(self, value: date) -> date | None:
+        if self.frequency == "day":
+            if value.toordinal() > date.max.toordinal() - self.step:
+                return None
+        elif self.frequency == "week_end":
+            increment = self.step * 7
+            if value.toordinal() > date.max.toordinal() - increment:
+                return None
+        elif self.frequency in {"month_start", "month_end", "quarter_end"}:
+            months = self.step * (3 if self.frequency == "quarter_end" else 1)
+            absolute_month = value.year * 12 + value.month - 1 + months
+            if absolute_month // 12 > date.max.year:
+                return None
+        elif value.year + self.step > date.max.year:
+            return None
+        return self._advance(value)
 
     def _advance(self, value: date) -> date:
         if self.frequency == "day":

@@ -8,14 +8,14 @@ Before executing a query, the resolver calls `get_read_permission_filter()`. Per
 
 ## Query arguments
 
-Each generated list field accepts `filter`, `exclude`, `sortBy`, `reverse`,
-`groupBy`, `page`, and `pageSize` arguments when the corresponding generated
-options exist. Python-side helpers use the names `sort_by`, `group_by`, and
-`page_size`; Graphene exposes them as camelCase by default. Top-level list
-queries and generated relation-list fields always include nullable `reverse`,
-`page`, `pageSize`, and `groupBy`. They include nullable `filter` and `exclude`
-only when a filter input type can be generated for the manager, and nullable
-`sortBy` only when the manager has sortable root scalar fields, root
+Each generated list field accepts `filter`, `exclude`, `orderBy`, `page`, and
+`pageSize` arguments when the corresponding generated options exist. Explicit
+group fields additionally accept `groupBy`. Python-side helpers use the names
+`order_by`, `group_by`, and `page_size`; Graphene exposes them as camelCase by
+default. Top-level list queries and generated relation-list fields always
+include nullable `page` and `pageSize`. They include nullable `filter` and `exclude` only
+when a filter input type can be generated for the manager, and nullable typed
+`orderBy` only when the manager has sortable root scalar fields, root
 `@graph_ql_property` values declared with `sortable=True`, or an eligible direct
 manager relation. Direct manager relations add the relation itself, which sorts
 by identifier, and one-hop related scalar interface fields such as
@@ -23,8 +23,8 @@ by identifier, and one-hop related scalar interface fields such as
 GraphQL properties on the related manager are not exposed as sort options.
 Top-level list queries also include nullable `includeInactive` when the manager
 uses soft delete; relation-list fields do not add `includeInactive`. Omitted
-`reverse` and `includeInactive` values default to `false`; omitted filter,
-exclude, sort, group, and pagination values default to `null` on the Python
+`includeInactive` defaults to `false`; omitted filter, exclude, order, group,
+and pagination values default to `null` on the Python
 side. Filters support Django lookups (`name__icontains`, `total_capex__gte`,
 etc.) and automatic casting of measurements and dates.
 `filter` and `exclude` may be GraphQL input objects or JSON strings that decode
@@ -70,67 +70,53 @@ Pagination is page-based. Responses include a `pageInfo` object with:
 
 `total_count` is computed after permission filtering, user filters, excludes,
 grouping, and sorting, but before pagination. If only one pagination argument
-is supplied, slicing defaults the other to `page=1` or `page_size=10`.
-Falsey explicit pagination values such as `page: 0` or `pageSize: 0` follow the
-same Python fallback for slicing. `currentPage` is reported as `page || 1`.
-`pageSize` reports the original GraphQL argument value, not the effective
-slicing default, so it remains `null` when only `page` is supplied and remains
-`0` for `pageSize: 0`. `totalPages` is computed from a truthy original
-`pageSize`; when `pageSize` is omitted or falsey it is reported as `1`, including
-empty result sets; with a positive explicit `pageSize`, an empty result has
-`totalPages: 0`. Negative `page` or `pageSize` values are rejected before slicing
-and surface as GraphQL `BAD_USER_INPUT` errors.
+is supplied, the other defaults to `page=1` or `page_size=10`. Explicit `page`
+and `pageSize` values must be positive; zero and negative values surface as
+GraphQL `BAD_USER_INPUT` errors before slicing. `pageInfo` always reports the
+effective page and page size. Empty known result sets report `totalPages: 0`,
+and an out-of-range positive page returns an empty page. Unpaginated nonempty
+lists report `currentPage: 1`, `pageSize: null`, and `totalPages: 1`.
+Request-backed lists only know the upstream total when their provider returns
+one, so fetched row count must not be presented as a global total.
 
 ## Grouping
 
-Use `groupBy` to return grouped list results instead of materialized manager
-items. `groupBy: null` leaves the list ungrouped. `groupBy: [""]` calls the
-bucket's default `group_by()` behavior, while every other list is forwarded as
-explicit group keys. Empty lists are still forwarded to the bucket as explicit
-grouping input. Bucket validation errors, such as unknown group keys, propagate
-through the GraphQL execution path.
+Generated entity and relation lists do not accept `groupBy`. Use their sibling
+`<manager>Groups` or `…Groups` field instead. Group fields require at least one
+`groupBy` key and return a page with `groups` and `pageInfo`. Each group exposes
+typed `keys`, paginated original `members`, and `count`. Managers with eligible
+numeric sum fields also expose typed `sums`; it is absent when no such fields
+exist. Keys that were not selected resolve as null. Empty group pages retain
+that shape and return an empty `groups` list with normal metadata.
 
-Grouped responses keep their `GroupBucket` shape on the Python side while the
-GraphQL page type still exposes the generated `items` field as a list of the
-manager's generated GraphQL item type. Pagination slices the grouped bucket, so
-pages contain grouped manager objects that resolve through the same item fields,
-rather than the original ungrouped rows. Because dependency-cache prefetching
-and capability warmups operate on materialized item lists, those warmups run
-only for ungrouped result pages. Dependency-cache prefetch is triggered for
-ungrouped pages only when selected item fields include dependency-cache-backed
-properties. Capability warmup is triggered for ungrouped pages only when
-`items.capabilities` is selected and the manager declares GraphQL permission
-capabilities. Invalid group keys propagate the bucket's validation error through
-GraphQL execution.
-
-If filtering produces no groups, a paginated grouped query returns an empty
-`items` list with the normal page metadata instead of raising the grouped-bucket
-empty-slice error. Negative `page` or `pageSize` values are still rejected before
-this empty-result shortcut.
+Filters and row authorization run before groups are formed. A denied grouping
+key fails the query before its values are read. Each selected sum verifies its
+field permission across the group's members before aggregation; a denied field
+returns a GraphQL field error. Group `orderBy` accepts only selected grouping
+keys, so aggregate ordering is unavailable. Group pagination slices groups and
+member pagination slices the original member managers.
 
 ## Sorting
 
-Use the generated `sortBy` enum with an ordered list of keys. GraphQL list
-coercion keeps an inline singleton such as `sortBy: name` valid. The first key
-is primary, later keys break ties, and `reverse: true` reverses every key. A
-direct manager field sorts by that manager's identifier, while a one-hop key
+Use the generated `orderBy` input with an ordered list of typed terms such as
+`[{field: name}, {field: date, direction: DESC}]`. The first key is primary,
+later keys break ties, and each term controls its own direction. A direct
+manager field sorts by that manager's identifier, while a one-hop key
 such as `commercials__name` sorts by an eligible related scalar. Collection
 relations, multi-hop paths, and computed GraphQL properties on related managers
 are excluded.
 
-Python-side tests and helper calls use `sort_by`. Buckets validate the requested
+Python-side tests and helper calls use `order_by`. Buckets validate the requested
 fields; invalid names trigger `ValidationError` with descriptive messages.
 Invalid GraphQL enum values and null list elements are rejected by Graphene
-before the resolver runs. When `sortBy` is omitted, `null`, or an empty list,
-sorting is skipped even if `reverse` is true.
+before the resolver runs. When `orderBy` is omitted, `null`, or an empty list,
+sorting is skipped.
 
-With `groupBy`, sorting runs on grouped manager objects after grouping; without
-`groupBy`, it runs on the individual records.
+For an explicit group field, sorting runs on grouped keys after grouping. Ordinary
+lists always sort individual records.
 
-Typed variables use a list declaration such as
-`$sort: [ProjectSortByOptions!]`; add an outer `!` only when the variable itself
-must be non-null. This replaces the earlier singleton declaration
-`$sort: ProjectSortByOptions`.
+Typed variables use a list declaration such as `$order: [ProjectOrderBy!]`;
+add an outer `!` only when the variable itself must be non-null.
 
 ## Extending filters
 

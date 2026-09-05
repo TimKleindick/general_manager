@@ -5,7 +5,15 @@ from unittest.mock import patch
 
 import pytest
 
-from general_manager.workflow.event_registry import InMemoryEventRegistry
+from general_manager.workflow.event_registry import (
+    DatabaseEventRegistry,
+    DurableHandlerRegistrationIdRequiredError,
+    InMemoryEventRegistry,
+    InvalidDurableHandlerRegistrationIdError,
+    WorkflowHandlerRegistrationConflictError,
+    WorkflowEvent,
+    WorkflowEventHandler,
+)
 from general_manager.workflow.signal_bridge import (
     _handle_post_data_change,
     connect_workflow_signal_bridge,
@@ -13,6 +21,61 @@ from general_manager.workflow.signal_bridge import (
     disconnect_workflow_signal_bridge,
     workflow_signal_bridge_enabled,
 )
+
+
+class _EqualCallable:
+    def __init__(self, calls: list[str], label: str) -> None:
+        self._calls = calls
+        self._label = label
+
+    def __call__(self, _event: WorkflowEvent) -> None:
+        self._calls.append(self._label)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _EqualCallable)
+
+
+class _BoundHandler:
+    def __init__(self, calls: list[str], label: str) -> None:
+        self._calls = calls
+        self._label = label
+
+    def handle(self, _event: WorkflowEvent) -> None:
+        self._calls.append(self._label)
+
+
+def _module_level_handler(_event: WorkflowEvent) -> None:
+    pass
+
+
+def _identity_handler(handler: WorkflowEventHandler) -> WorkflowEventHandler:
+    return handler
+
+
+_module_level_lambda = _identity_handler(lambda _event: None)
+
+
+class _SpoofedBoundCallable:
+    def __init__(self, calls: list[str], label: str, shared_self: object) -> None:
+        self._calls = calls
+        self._label = label
+        self.__func__ = _module_level_handler
+        self.__self__ = shared_self
+
+    def __call__(self, _event: WorkflowEvent) -> None:
+        self._calls.append(self._label)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _SpoofedBoundCallable)
+
+
+def _make_closure_handler() -> WorkflowEventHandler:
+    captured_event_ids: list[str] = []
+
+    def handler(event: WorkflowEvent) -> None:
+        captured_event_ids.append(event.event_id)
+
+    return handler
 
 
 def test_post_change_records_bounded_workflow_latency() -> None:
@@ -34,6 +97,161 @@ def test_post_change_records_bounded_workflow_latency() -> None:
 
     assert result is None
     record_phase.assert_called_once_with("workflow", 1.25, "analytics")
+
+
+def test_memory_registry_keeps_equal_but_distinct_callable_objects() -> None:
+    calls: list[str] = []
+    first = _EqualCallable(calls, "first")
+    second = _EqualCallable(calls, "second")
+    registry = InMemoryEventRegistry()
+
+    registry.register("manager_updated", handler=first)
+    registry.register("manager_updated", handler=second)
+
+    assert registry.publish(
+        WorkflowEvent(
+            event_id="equal-callables",
+            event_type="general_manager.manager.updated",
+            event_name="manager_updated",
+            payload={},
+        )
+    )
+    assert calls == ["first", "second"]
+
+
+def test_spoofed_bound_method_attributes_do_not_change_callable_identity() -> None:
+    calls: list[str] = []
+    shared_self = object()
+    first = _SpoofedBoundCallable(calls, "first", shared_self)
+    second = _SpoofedBoundCallable(calls, "second", shared_self)
+    memory_registry = InMemoryEventRegistry()
+
+    memory_registry.register("manager_updated", handler=first)
+    memory_registry.register("manager_updated", handler=second)
+
+    assert memory_registry.publish(
+        WorkflowEvent(
+            event_id="spoofed-bound-methods",
+            event_type="general_manager.manager.updated",
+            event_name="manager_updated",
+            payload={},
+        )
+    )
+    assert calls == ["first", "second"]
+
+    database_registry = DatabaseEventRegistry()
+    database_registry.register(
+        "manager_updated",
+        handler=first,
+        registration_id="spoofed-bound-method",
+    )
+    with pytest.raises(WorkflowHandlerRegistrationConflictError):
+        database_registry.register(
+            "manager_updated",
+            handler=second,
+            registration_id="spoofed-bound-method",
+        )
+
+
+def test_database_registry_requires_stable_id_for_dynamic_registration_callables() -> (
+    None
+):
+    registry = DatabaseEventRegistry()
+
+    with pytest.raises(DurableHandlerRegistrationIdRequiredError):
+        registry.register("manager_updated", handler=_BoundHandler([], "first").handle)
+
+    with pytest.raises(DurableHandlerRegistrationIdRequiredError):
+        registry.register("manager_updated", handler=_make_closure_handler())
+
+    with pytest.raises(DurableHandlerRegistrationIdRequiredError):
+        registry.register(
+            "manager_updated",
+            handler=_module_level_handler,
+            when=lambda _event: True,
+        )
+
+    with pytest.raises(DurableHandlerRegistrationIdRequiredError):
+        registry.register("manager_updated", handler=_module_level_lambda)
+
+
+@pytest.mark.parametrize("registration_id", ["", "   ", "x" * 256, 1])
+def test_database_registry_rejects_invalid_explicit_registration_id(
+    registration_id: object,
+) -> None:
+    with pytest.raises(InvalidDurableHandlerRegistrationIdError):
+        DatabaseEventRegistry().register(
+            "manager_updated",
+            handler=_make_closure_handler(),
+            registration_id=registration_id,  # type: ignore[arg-type]
+        )
+
+
+def test_durable_registration_id_is_idempotent_only_for_identical_configuration() -> (
+    None
+):
+    registry = DatabaseEventRegistry()
+    handler = _BoundHandler([], "first")
+
+    registry.register(
+        "manager_updated",
+        handler=handler.handle,
+        registration_id="project-status-workflow",
+    )
+    registry.register(
+        "manager_updated",
+        handler=handler.handle,
+        registration_id="project-status-workflow",
+    )
+
+    assert (
+        len(
+            registry._get_entries(
+                WorkflowEvent(
+                    event_id="idempotent-registration",
+                    event_type="general_manager.manager.updated",
+                    event_name="manager_updated",
+                    payload={},
+                )
+            )
+        )
+        == 1
+    )
+
+    with pytest.raises(WorkflowHandlerRegistrationConflictError):
+        registry.register(
+            "general_manager.manager.deleted",
+            handler=handler.handle,
+            registration_id="project-status-workflow",
+        )
+
+    with pytest.raises(WorkflowHandlerRegistrationConflictError):
+        registry.register(
+            "manager_updated",
+            handler=handler.handle,
+            registration_id="project-status-workflow",
+            retries=1,
+        )
+
+
+def test_database_registry_uses_module_level_handler_default_across_registries() -> (
+    None
+):
+    event = WorkflowEvent(
+        event_id="module-level-handler",
+        event_type="general_manager.manager.updated",
+        event_name="manager_updated",
+        payload={},
+    )
+    first_registry = DatabaseEventRegistry()
+    first_registry.register("manager_updated", handler=_module_level_handler)
+    fresh_registry = DatabaseEventRegistry()
+    fresh_registry.register("manager_updated", handler=_module_level_handler)
+
+    assert (
+        first_registry._get_entries(event)[0].registration_id
+        == fresh_registry._get_entries(event)[0].registration_id
+    )
 
 
 def test_post_change_records_workflow_latency_without_suppressing_exceptions() -> None:

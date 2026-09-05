@@ -2573,6 +2573,7 @@ class GraphQLAddSubscriptionFieldTests(unittest.TestCase):
         GraphQL._query_fields = self._snapshot.query_fields
         GraphQL._subscription_fields = self._snapshot.subscription_fields
         GraphQL._page_type_registry = self._snapshot.page_type_registry
+        GraphQL._group_page_type_registry = self._snapshot.group_page_type_registry
         GraphQL._subscription_payload_registry = (
             self._snapshot.subscription_payload_registry
         )

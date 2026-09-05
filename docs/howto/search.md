@@ -167,6 +167,12 @@ index setup, manager discovery, and reindexing errors propagate so CI or deploy
 scripts fail visibly.
 
 If you add or remove fields, filters, or sorts later, re-run with `--reindex`.
+Meilisearch document IDs use a hash-based physical key. If upgrading from an
+earlier version that preserved safe IDs, perform a fresh-index cutover before
+reindexing. Reconciliation compares logical document IDs and cannot distinguish
+old and new physical records that retain the same original ID, so ordinary
+upserts, `reindex_manager()`, and `reindex_manager_index()` cannot clean them
+up. Old and new physical records must not coexist.
 For DevSearch, run this command in the same process only when manually managing
 that process's in-memory projection; a separate command process cannot populate
 a running server's DevSearch backend.
@@ -177,7 +183,7 @@ Example query:
 
 ```graphql
 query SearchProjects($filters: JSONString) {
-  search(index: "global", query: "alpha", filters: $filters, sortBy: "name") {
+  search(index: "global", query: "alpha", filters: $filters, orderBy: [{field: name}]) {
     total
     totalIsExact
     results {

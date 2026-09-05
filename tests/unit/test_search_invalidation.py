@@ -55,8 +55,8 @@ class SecondOwner(GeneralManager):
 
 
 INDEXES = (
-    IndexConfig(name="global", fields=["id"]),
-    IndexConfig(name="private", fields=["id"]),
+    IndexConfig(name="global", fields=["logical_id"]),
+    IndexConfig(name="private", fields=["logical_id"]),
 )
 
 

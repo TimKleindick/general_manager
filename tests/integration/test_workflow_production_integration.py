@@ -69,6 +69,7 @@ class WorkflowProductionIntegrationTests(GeneralManagerTransactionTestCase):
                 and event.payload.get("changes", {}).get("status", {}).get("new")
                 == "active"
             ),
+            registration_id="workflow-production-manager-updated",
         )
         connect_workflow_signal_bridge(registry=self.registry)
 
@@ -140,7 +141,11 @@ class WorkflowProductionIntegrationTests(GeneralManagerTransactionTestCase):
         def always_failing(_event: WorkflowEvent) -> None:
             raise RuntimeError("broken handler")  # noqa: TRY003
 
-        failing_registry.register("manager_updated", handler=always_failing)
+        failing_registry.register(
+            "manager_updated",
+            handler=always_failing,
+            registration_id="workflow-production-always-failing",
+        )
         connect_workflow_signal_bridge(registry=failing_registry)
 
         with patch("general_manager.workflow.tasks.publish_outbox_batch.delay"):

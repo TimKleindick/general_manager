@@ -1,7 +1,7 @@
 from django.test import TestCase
 from collections.abc import Iterator, Mapping
 
-from general_manager.utils.args_to_kwargs import (
+from general_manager.utils._args_to_kwargs import (
     ConflictingKeywordError,
     TooManyArgumentsError,
     args_to_kwargs,

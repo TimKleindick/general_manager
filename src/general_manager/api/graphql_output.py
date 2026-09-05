@@ -12,7 +12,7 @@ from typing import Any, ForwardRef, Union, get_args, get_origin, get_type_hints
 
 import graphene
 
-from general_manager.api.graphql_resolvers import measurement_to_graphql_payload
+from general_manager.api.graphql_resolvers import resolve_measurement_output
 from general_manager.api.graphql_type import GraphQLType
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
@@ -445,15 +445,7 @@ def _resolve_output_measurement(
     value: object,
     target_unit: str | None,
 ) -> object:
-    if value is None or isinstance(value, Measurement):
-        return measurement_to_graphql_payload(value, target_unit)
-    if isinstance(value, list):
-        return [_resolve_output_measurement(item, target_unit) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_resolve_output_measurement(item, target_unit) for item in value)
-    if isinstance(value, set):
-        return [_resolve_output_measurement(item, target_unit) for item in value]
-    return measurement_to_graphql_payload(value, target_unit)
+    return resolve_measurement_output(value, target_unit)
 
 
 def create_output_field_resolver(

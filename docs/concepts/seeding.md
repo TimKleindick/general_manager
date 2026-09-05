@@ -41,9 +41,14 @@ self-relations, non-relation fields, and managers without model metadata.
 
 ## Batching and failures
 
-`--batch-size` controls how many rows are created per transaction. Each batch is
-wrapped in its own `transaction.atomic()` block, and there is no cross-manager
-transaction. By default, seeding stops on the first failure and reports the
+`--batch-size` controls how many factory invocations are requested per
+transaction. Each batch is wrapped in its own `transaction.atomic()` block on
+the selected manager database alias, and there is no cross-manager transaction.
+Progress counts the objects returned by `Factory.create_batch(...)`, flattening
+nested lists and tuples; a factory can fan out past the requested target. A
+`None` or recursively empty list/tuple result makes no progress and fails that
+batch rather than retrying forever. By default, seeding stops on the first
+failure and reports the
 manager, failed batch size, original error, rows created before failure, and
 remaining count. With `--continue-on-error`, later managers continue and the
 failing manager stops after its first failed batch. The final result includes a
@@ -65,7 +70,8 @@ manager. `--output-format json` prints a JSON array with `manager_name`,
 
 The command raises Django's `CommandError` for invalid selections, malformed
 targets, non-positive counts or batch sizes, unsupported output formats, and
-seeding failures. When called through `call_command()`, `--manager` and
+seeding failures. Count and batch-size validation happens before a dry run or
+factory call. When called through `call_command()`, `--manager` and
 `--target` use the public keyword names `manager=` and `target=`. The parser
 defines internal destinations named `managers` and `targets`, so code inside the
 command sees plural keys after Django normalizes options. Programmatic values

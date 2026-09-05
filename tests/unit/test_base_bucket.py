@@ -14,6 +14,9 @@ from general_manager.cache.run_context import CalculationRunContext
 
 # DummyBucket concrete implementation for testing
 class DummyManager:
+    def __init__(self, identifier: int = 0) -> None:
+        self.identification = {"id": identifier}
+
     class Interface:
         @staticmethod
         def get_attributes():
@@ -216,7 +219,7 @@ class DummyBucket(Bucket[int]):
         """
         return item in self._data
 
-    def sort(self, key, reverse=False):
+    def sort(self, *fields):
         """
         Create a new DummyBucket containing the bucket's elements in sorted order.
 
@@ -227,7 +230,9 @@ class DummyBucket(Bucket[int]):
         Returns:
             A new DummyBucket containing the sorted elements.
         """
-        sorted_data = sorted(self._data, key=key, reverse=reverse)
+        sorted_data = sorted(
+            self._data, reverse=bool(fields and fields[0].startswith("-"))
+        )
         return DummyBucket(self._manager_class, sorted_data)
 
 
@@ -318,12 +323,14 @@ class BucketTests(SimpleTestCase):
         self.assertIsNot(copy, self.bucket)
         self.assertEqual(copy, self.bucket)
 
-    def test_with_instances_uses_empty_bucket_and_unions_items_in_order(self):
-        """Keep the default subset fallback available to existing subclasses."""
-        subset = self.bucket.with_instances([2, 3, 1])
+    def test_with_instances_returns_an_exact_manager_subset(self):
+        """The shared fallback retains compatible supplied manager objects."""
+        first = DummyManager(2)
+        second = DummyManager(3)
+        subset = self.bucket.with_instances([first, second, first])
 
-        self.assertIsInstance(subset, DummyBucket)
-        self.assertEqual(list(subset), [2, 3, 1])
+        self.assertEqual(list(subset), [first, second, first])
+        self.assertIs(subset[0], first)
         self.assertEqual(list(self.bucket), [3, 1, 2])
 
     def test_get_no_kwargs(self):
@@ -380,9 +387,9 @@ class BucketTests(SimpleTestCase):
         """
         Tests that the sort method returns a new DummyBucket with elements sorted in ascending or descending order.
         """
-        asc = self.bucket.sort(key=None)
+        asc = self.bucket.sort()
         self.assertEqual(asc._data, [1, 2, 3])
-        desc = self.bucket.sort(key=None, reverse=True)
+        desc = self.bucket.sort("-value")
         self.assertEqual(desc._data, [3, 2, 1])
 
     def test_reduce(self):

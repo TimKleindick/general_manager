@@ -16,6 +16,8 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.urls import URLPattern, path
 
 from general_manager.logging import get_logger
+from general_manager.bucket._ordering import normalize_ordering
+from general_manager.bucket.request_bucket import RequestBucket
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
@@ -23,6 +25,11 @@ if TYPE_CHECKING:
 logger = get_logger("api.remote")
 
 _SEGMENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_MUTATION_CONTROL_KEYS = frozenset(
+    {"ignore_permission", "creator_id", "history_comment"}
+)
+_MUTATION_METADATA_KEY = "__metadata__"
+_MUTATION_METADATA_FIELDS = frozenset({"history_comment"})
 RemoteAPIView = Callable[[HttpRequest], HttpResponse]
 RemoteAPIItemView = Callable[[HttpRequest, str], HttpResponse]
 RemoteAPIRouteKey = tuple[str, str]
@@ -42,8 +49,8 @@ class RemoteAPIBucket(Protocol):
         """Return a bucket excluding lookup keyword matches."""
         ...
 
-    def sort(self, key: str, reverse: bool = False) -> "RemoteAPIBucket":
-        """Return a bucket sorted by one field."""
+    def sort(self, *fields: str) -> "RemoteAPIBucket":
+        """Return a bucket sorted by signed fields in precedence order."""
         ...
 
     def count(self) -> int:
@@ -66,8 +73,8 @@ class RemoteAPIMutableManager(Protocol):
         """Apply update payload values and return the updated manager."""
         ...
 
-    def delete(self) -> None:
-        """Delete the manager instance."""
+    def delete(self, **kwargs: object) -> None:
+        """Delete the manager instance with trusted mutation metadata."""
         ...
 
 
@@ -137,6 +144,13 @@ class RemoteAPIConfigurationError(ValueError):
         )
 
 
+class InvalidRemotePaginationError(ValueError):
+    """Raised when remote query controls cannot produce a valid page."""
+
+    def __init__(self) -> None:
+        super().__init__("page and page_size must be positive integers")
+
+
 class RemoteAPIRequestError(ValueError):
     """Raised when a remote API request cannot be parsed safely."""
 
@@ -147,6 +161,24 @@ class RemoteAPIRequestError(ValueError):
     @classmethod
     def non_object_json(cls) -> "RemoteAPIRequestError":
         return cls("JSON request body must decode to an object.")
+
+    @classmethod
+    def reserved_mutation_control(cls, key: str) -> "RemoteAPIRequestError":
+        return cls(f"Mutation request body cannot include reserved key {key!r}.")
+
+    @classmethod
+    def invalid_mutation_metadata(cls) -> "RemoteAPIRequestError":
+        return cls("Mutation request metadata must contain only history_comment.")
+
+
+class UnsupportedRequestGlobalOperationError(RemoteAPIRequestError):
+    """Raised when a partial request source cannot provide global semantics."""
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(
+            f"Request source cannot apply global {operation} to an incomplete response "
+            "without declared upstream support."
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,6 +429,31 @@ def _parse_json_body(request: HttpRequest) -> RemoteJSONPayload:
     return cast(RemoteJSONPayload, body)
 
 
+def _parse_mutation_body(request: HttpRequest) -> tuple[RemoteJSONPayload, str | None]:
+    """Separate schema values from supported remote mutation metadata."""
+    payload = _parse_json_body(request)
+    for control_key in _MUTATION_CONTROL_KEYS:
+        if control_key in payload:
+            raise RemoteAPIRequestError.reserved_mutation_control(control_key)
+
+    if _MUTATION_METADATA_KEY not in payload:
+        return payload, None
+    raw_metadata = payload.pop(_MUTATION_METADATA_KEY)
+    if not isinstance(raw_metadata, Mapping):
+        raise RemoteAPIRequestError.invalid_mutation_metadata()
+    if set(raw_metadata) - _MUTATION_METADATA_FIELDS:
+        raise RemoteAPIRequestError.invalid_mutation_metadata()
+    history_comment = raw_metadata.get("history_comment")
+    if not isinstance(history_comment, str | None):
+        raise RemoteAPIRequestError.invalid_mutation_metadata()
+    return payload, history_comment
+
+
+def _request_actor_id(request: HttpRequest) -> int | None:
+    """Return the authenticated request user's identifier for manager mutations."""
+    return cast(int | None, getattr(getattr(request, "user", None), "pk", None))
+
+
 def _coerce_identifier(config: RemoteAPIConfig, identifier: str) -> object:
     return int(identifier) if config.identifier_type is int else identifier
 
@@ -468,6 +525,8 @@ def _error_payload(
 
 
 def _remote_api_error_details(error: Exception) -> tuple[str, str, int]:
+    if isinstance(error, UnsupportedRequestGlobalOperationError):
+        return "Unsupported global operation.", "unsupported_global_operation", 400
     if isinstance(error, ObjectDoesNotExist):
         return "Resource not found.", "not_found", 404
     if isinstance(error, PermissionError):
@@ -513,14 +572,79 @@ def _apply_ordering(
     if ordering is None:
         return bucket
     ordering_values = [ordering] if isinstance(ordering, str) else list(ordering)
-    if not ordering_values:
+    terms = normalize_ordering(ordering_values)
+    if not terms:
         return bucket
-    ordered_bucket = bucket
-    for order_key in reversed(ordering_values):
-        reverse = order_key.startswith("-")
-        sort_key = order_key[1:] if reverse else order_key
-        ordered_bucket = ordered_bucket.sort(sort_key, reverse=reverse)
-    return ordered_bucket
+    return bucket.sort(*(term.signed_field for term in terms))
+
+
+def _resolve_remote_pagination(
+    page: object,
+    page_size: object,
+) -> tuple[int, int] | None:
+    """Normalize known remote query controls without accepting booleans as ints."""
+    if page is None and page_size is None:
+        return None
+    for value in (page, page_size):
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value <= 0
+        ):
+            raise InvalidRemotePaginationError()
+    return (
+        1 if page is None else cast(int, page),
+        10 if page_size is None else cast(int, page_size),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RequestQueryProvenance:
+    """Upstream Request response metadata captured before local operations."""
+
+    page: int | None
+    page_size: int | None
+    total_count: int | None
+    is_complete: bool
+
+
+def _request_query_provenance(
+    bucket: RemoteAPIBucket,
+) -> RequestQueryProvenance | None:
+    """Materialize Request response metadata before local sort or slicing."""
+    if not isinstance(bucket, RequestBucket):
+        return None
+    return RequestQueryProvenance(
+        page=bucket.upstream_page,
+        page_size=bucket.upstream_page_size,
+        total_count=bucket.total_count,
+        is_complete=bucket.response_is_complete,
+    )
+
+
+def _is_remote_request_bucket(bucket: RemoteAPIBucket) -> bool:
+    return isinstance(bucket, RequestBucket) and bool(
+        getattr(bucket._interface_cls, "supports_upstream_query_controls", False)
+    )
+
+
+def _forward_remote_request_controls(
+    bucket: RemoteAPIBucket,
+    pagination: tuple[int, int] | None,
+    ordering: RemoteOrdering,
+) -> tuple[RemoteAPIBucket, bool]:
+    """Compile supported page and ordering controls into one remote request."""
+    if not _is_remote_request_bucket(bucket):
+        return bucket, False
+    ordering_values = [ordering] if isinstance(ordering, str) else list(ordering or ())
+    terms = normalize_ordering(ordering_values)
+    controls: dict[str, object] = {}
+    if pagination is not None:
+        controls["page"] = pagination[0]
+        controls["page_size"] = pagination[1]
+    if terms:
+        controls["ordering"] = [term.signed_field for term in terms]
+    if not controls:
+        return bucket, False
+    return bucket.filter(**controls), bool(terms)
 
 
 def _build_query_view(config: RemoteAPIConfig) -> RemoteAPIView:
@@ -529,8 +653,10 @@ def _build_query_view(config: RemoteAPIConfig) -> RemoteAPIView:
     The view validates the `X-General-Manager-Protocol-Version` header, requires
     `POST`, starts with `manager_cls.all()`, accepts an object body containing
     optional `filters`, `excludes`, `ordering`, `page`, and `page_size`, applies
-    truthy `filters` and `excludes`, applies ordering, computes `total_count`,
-    and then slices only for positive integer pagination. The success envelope
+    truthy `filters` and `excludes`, then captures Request provenance before any
+    local ordering or slicing. Supported RemoteManager controls are forwarded in
+    that final query; incomplete generic sources reject global ordering or
+    mismatched pages. The success envelope
     includes `items`, `metadata.protocol_version`, `metadata.request_id`,
     response `X-Request-ID`, query-control metadata extras, and `total_count`.
     Errors are converted into sanitized JSON envelopes with an `X-Request-ID`.
@@ -552,26 +678,64 @@ def _build_query_view(config: RemoteAPIConfig) -> RemoteAPIView:
             body = _parse_json_body(request)
             filters = body.get("filters", {})
             excludes = body.get("excludes", {})
-            ordering = body.get("ordering")
-            page = body.get("page")
-            page_size = body.get("page_size")
+            ordering = cast(RemoteOrdering, body.get("ordering"))
+            pagination = _resolve_remote_pagination(
+                body.get("page"),
+                body.get("page_size"),
+            )
             bucket = manager_cls.all()
             if filters:
                 bucket = bucket.filter(**cast(Mapping[str, object], filters))
             if excludes:
                 bucket = bucket.exclude(**cast(Mapping[str, object], excludes))
-            bucket = _apply_ordering(bucket, cast(RemoteOrdering, ordering))
-            total_count = bucket.count()
-            if (
-                isinstance(page, int)
-                and isinstance(page_size, int)
-                and page > 0
-                and page_size > 0
-            ):
+            bucket, remote_ordering_forwarded = _forward_remote_request_controls(
+                bucket,
+                pagination,
+                ordering,
+            )
+            provenance = _request_query_provenance(bucket)
+            if provenance is not None and not provenance.is_complete:
+                if pagination is not None and pagination != (
+                    provenance.page,
+                    provenance.page_size,
+                ):
+                    raise UnsupportedRequestGlobalOperationError("pagination")
+                ordering_values = (
+                    [ordering] if isinstance(ordering, str) else list(ordering or ())
+                )
+                if (
+                    normalize_ordering(ordering_values)
+                    and not remote_ordering_forwarded
+                ):
+                    raise UnsupportedRequestGlobalOperationError("ordering")
+            bucket = (
+                bucket
+                if remote_ordering_forwarded
+                else _apply_ordering(bucket, ordering)
+            )
+            total_count = (
+                bucket.count()
+                if provenance is None or provenance.is_complete
+                else provenance.total_count
+            )
+            upstream_page_matches = (
+                provenance is not None
+                and pagination is not None
+                and pagination == (provenance.page, provenance.page_size)
+            )
+            if pagination is not None and not upstream_page_matches:
+                page, page_size = pagination
                 start = (page - 1) * page_size
                 end = start + page_size
                 bucket = bucket[start:end]
             items = [_serialize_manager(item) for item in bucket]
+            metadata_pagination = pagination
+            if metadata_pagination is None and provenance is not None:
+                metadata_pagination = (
+                    (provenance.page, provenance.page_size)
+                    if provenance.page is not None and provenance.page_size is not None
+                    else None
+                )
             return _success_payload(
                 items=items,
                 total_count=total_count,
@@ -579,8 +743,16 @@ def _build_query_view(config: RemoteAPIConfig) -> RemoteAPIView:
                 request_id=request_id,
                 metadata_extra={
                     "ordering": ordering,
-                    "page": page,
-                    "page_size": page_size,
+                    "page": (
+                        metadata_pagination[0]
+                        if metadata_pagination is not None
+                        else None
+                    ),
+                    "page_size": (
+                        metadata_pagination[1]
+                        if metadata_pagination is not None
+                        else None
+                    ),
                 },
             )
         except (
@@ -613,8 +785,10 @@ def _build_item_view(config: RemoteAPIConfig) -> RemoteAPIItemView:
     converting to `int` only when the interface `id` input type is exactly
     `int`; coercion failures are mapped to remote error envelopes. Disabled
     operations and unsupported methods return HTTP 405 without constructing a
-    manager. `PATCH` requires an object JSON body and calls
-    `manager.update(**payload)`. `DELETE` calls `manager.delete()`. Successful
+    manager. Mutation bodies contain schema values plus optional
+    ``__metadata__.history_comment``. `PATCH` calls `manager.update(...)` and
+    `DELETE` calls `manager.delete(...)` with the authenticated request actor.
+    Successful
     responses use the standard envelope; delete returns an empty item list.
     """
 
@@ -653,13 +827,17 @@ def _build_item_view(config: RemoteAPIConfig) -> RemoteAPIItemView:
                         error_code="method_not_allowed",
                         status=405,
                     )
+                payload, history_comment = _parse_mutation_body(request)
                 manager_cls = cast(RemoteAPIManagerClass, config.manager_cls)
                 update_manager = cast(
                     RemoteAPIMutableManager,
                     manager_cls(id=_coerce_identifier(config, identifier)),
                 )
-                payload = _parse_json_body(request)
-                updated = update_manager.update(**payload)
+                updated = update_manager.update(
+                    creator_id=_request_actor_id(request),
+                    history_comment=history_comment,
+                    **payload,
+                )
                 return _success_payload(
                     items=[_serialize_manager(updated)],
                     config=config,
@@ -674,12 +852,16 @@ def _build_item_view(config: RemoteAPIConfig) -> RemoteAPIItemView:
                         error_code="method_not_allowed",
                         status=405,
                     )
+                _, history_comment = _parse_mutation_body(request)
                 manager_cls = cast(RemoteAPIManagerClass, config.manager_cls)
                 delete_manager = cast(
                     RemoteAPIMutableManager,
                     manager_cls(id=_coerce_identifier(config, identifier)),
                 )
-                delete_manager.delete()
+                delete_manager.delete(
+                    creator_id=_request_actor_id(request),
+                    history_comment=history_comment,
+                )
                 return _success_payload(
                     items=[],
                     config=config,
@@ -718,8 +900,9 @@ def _build_create_view(config: RemoteAPIConfig) -> RemoteAPIView:
     """Return the `POST <base_path>/<resource_name>` create view.
 
     The view validates the protocol header, requires `POST`, requires an object
-    JSON body, calls the manager create operation, and returns the standard
-    envelope with HTTP 201. Disabled or unsupported methods return HTTP 405
+    JSON body, separates optional ``__metadata__.history_comment``, derives the
+    actor from the authenticated request user, calls the manager create
+    operation, and returns the standard envelope with HTTP 201. Disabled or unsupported methods return HTTP 405
     without calling `manager_cls.create()`. Errors are converted into sanitized
     JSON envelopes with an `X-Request-ID`.
     """
@@ -737,8 +920,12 @@ def _build_create_view(config: RemoteAPIConfig) -> RemoteAPIView:
         try:
             _check_protocol_version(request, config)
             manager_cls = cast(RemoteAPIManagerClass, config.manager_cls)
-            payload = _parse_json_body(request)
-            manager = manager_cls.create(**payload)
+            payload, history_comment = _parse_mutation_body(request)
+            manager = manager_cls.create(
+                creator_id=_request_actor_id(request),
+                history_comment=history_comment,
+                **payload,
+            )
             return _success_payload(
                 items=[_serialize_manager(manager)],
                 config=config,

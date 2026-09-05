@@ -3,11 +3,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
+from general_manager.workflow.models import WorkflowExecutionRecord
 from general_manager.workflow.tasks import (
     WORKFLOW_BEAT_SCHEDULE_KEY,
+    cancel_execution_task,
     configure_workflow_beat_schedule_from_settings,
+    execute_workflow_handler,
     publish_outbox_batch,
     route_outbox_claims_batch,
 )
@@ -90,3 +93,52 @@ class WorkflowBatchTaskTests(SimpleTestCase):
             dispatched = publish_outbox_batch()
         assert dispatched == 2
         delay.assert_called_once_with([(1, "t1"), (2, "t1")])
+
+
+class WorkflowExecutionTaskTests(TestCase):
+    def test_execute_workflow_handler_fails_non_callable_handler(self) -> None:
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-task-non-callable",
+            workflow_id="wf-task-non-callable",
+            state="pending",
+            input_data={"value": 1},
+            metadata={},
+        )
+
+        with patch("general_manager.workflow.tasks._resolve_handler", return_value=42):
+            execute_workflow_handler(
+                record.execution_id,
+                "tests.unit.test_workflow_tasks.NOT_A_HANDLER",
+                {"value": 1},
+            )
+
+        record.refresh_from_db()
+        assert record.state == "failed"
+        assert record.output_data is None
+        assert record.error is not None
+        assert "not callable" in record.error
+
+    def test_execute_workflow_handler_preserves_cancellation_during_handler(
+        self,
+    ) -> None:
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-task-cancel-during-handler",
+            workflow_id="wf-task-cancel-during-handler",
+            state="pending",
+            input_data={},
+            metadata={},
+        )
+
+        def handler(_payload: dict[str, object]) -> dict[str, object]:
+            assert cancel_execution_task(record.execution_id, reason="stop now")
+            return {"done": True}
+
+        with patch(
+            "general_manager.workflow.tasks._resolve_handler", return_value=handler
+        ):
+            execute_workflow_handler(record.execution_id, "test.handler")
+
+        record.refresh_from_db()
+        assert record.state == "cancelled"
+        assert record.error == "stop now"
+        assert record.output_data is None

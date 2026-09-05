@@ -19,6 +19,7 @@ from general_manager.seeding.manager_landscape import (
     execute_seed_plan,
     parse_target_overrides,
     select_seed_targets,
+    validate_seed_batch_size,
 )
 
 
@@ -191,6 +192,7 @@ class Command(BaseCommand):
 
         try:
             overrides = parse_target_overrides(target_overrides)
+            validate_seed_batch_size(batch_size)
             if include_all and selected_managers:
                 raise ManagerSelectionError.conflicting_selection()
             managers_by_name = discover_seedable_managers(

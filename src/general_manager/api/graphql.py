@@ -101,7 +101,6 @@ from general_manager.api.graphql_output import (
     resolve_output_type_hints,
 )
 from general_manager.api.graphql_resolvers import (
-    GraphQLSortInput,
     parse_input as _parse_input_fn,
     apply_query_parameters as _apply_query_parameters_fn,
     apply_permission_filters as _apply_permission_filters_fn,
@@ -114,6 +113,19 @@ from general_manager.api.graphql_resolvers import (
     create_list_resolver as _create_list_resolver_fn,
     create_resolver as _create_resolver_fn,
     resolve_with_read_permission as _resolve_with_read_permission_fn,
+)
+from general_manager.api.graphql_ordering import (
+    OrderingTypes,
+    clear_ordering_type_cache,
+    create_ordering_types,
+    sortable_field_paths,
+)
+from general_manager.api.graphql_groups import (
+    create_group_resolver as _create_group_resolver_fn,
+    create_group_types as _create_group_types_fn,
+    create_member_resolver as _create_member_resolver_fn,
+    eligible_group_key_fields as _eligible_group_key_fields_fn,
+    group_sortable_field_paths as _group_sortable_field_paths_fn,
 )
 from general_manager.api.graphql_relations import resolve_general_manager_type
 from general_manager.api.graphql_search import (
@@ -206,6 +218,17 @@ def _contains_graphql_output_type(
         _contains_graphql_output_type(argument, output_classes)
         for argument in get_args(annotation)
     )
+
+
+def _contains_measurement(annotation: object) -> bool:
+    """Return whether an annotation contains a Measurement output value."""
+    if isinstance(annotation, ForwardRef):
+        annotation = annotation.__forward_arg__
+    if isinstance(annotation, str):
+        return annotation.strip("'\"") == "Measurement"
+    if safe_issubclass(annotation, Measurement):
+        return True
+    return any(_contains_measurement(argument) for argument in get_args(annotation))
 
 
 class GraphQLOutputTypeError(ValueError):
@@ -347,6 +370,7 @@ class GraphQL:
     _query_fields: ClassVar[GraphQLFieldMap] = {}
     _subscription_fields: ClassVar[GraphQLFieldMap] = {}
     _page_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
+    _group_page_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     _subscription_payload_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     graphql_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     graphql_output_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
@@ -395,6 +419,7 @@ class GraphQL:
         cls._query_fields = {}
         cls._subscription_fields = {}
         cls._page_type_registry = {}
+        cls._group_page_type_registry = {}
         cls._subscription_payload_registry = {}
         cls.graphql_type_registry = {}
         cls.graphql_output_type_registry = {}
@@ -404,6 +429,7 @@ class GraphQL:
         cls._search_union = None
         cls._search_result_type = None
         cls._schema = None
+        clear_ordering_type_cache()
         from general_manager.chat.schema_index import clear_schema_index_cache
 
         clear_schema_index_cache()
@@ -433,6 +459,7 @@ class GraphQL:
             query_fields=dict(cls._query_fields),
             subscription_fields=dict(cls._subscription_fields),
             page_type_registry=dict(cls._page_type_registry),
+            group_page_type_registry=dict(cls._group_page_type_registry),
             subscription_payload_registry=dict(cls._subscription_payload_registry),
             graphql_type_registry=dict(cls.graphql_type_registry),
             graphql_output_type_registry=dict(cls.graphql_output_type_registry),
@@ -832,6 +859,62 @@ class GraphQL:
                     field_name,
                     resolved_field_type,
                 )
+            if (
+                field_name.endswith("_list")
+                and resolved_manager_type is not None
+                and _eligible_group_key_fields_fn(resolved_manager_type)
+            ):
+                relation_manager_type = resolved_manager_type
+                group_field_name = f"{field_name.removesuffix('_list')}_groups"
+                group_arguments = cls._group_list_arguments(
+                    relation_manager_type,
+                    include_inactive=False,
+                    scope="RelationGroups",
+                )
+                group_arguments["group_by"] = graphene.Argument(
+                    graphene.List(graphene.NonNull(graphene.String)),
+                    required=True,
+                )
+                member_arguments = cls._group_list_arguments(
+                    relation_manager_type,
+                    include_inactive=False,
+                    scope="GroupMembers",
+                )
+                fields[group_field_name] = graphene.Field(
+                    cls._get_or_create_group_page_type(
+                        relation_manager_type,
+                        member_arguments=member_arguments,
+                    ),
+                    **group_arguments,
+                )
+
+                def relation_group_base_getter(
+                    instance: object,
+                    _include_inactive: bool,
+                    *,
+                    _field_name: str = field_name,
+                ) -> Bucket[GeneralManager]:
+                    return cast(
+                        Bucket[GeneralManager],
+                        getattr(instance, _field_name),
+                    )
+
+                relation_group_page_resolver = _create_group_resolver_fn(
+                    relation_group_base_getter,
+                    relation_manager_type,
+                    filter_normalizer=_normalize_filter_input_fn,
+                )
+
+                def relation_group_resolver(
+                    manager_instance: GeneralManager,
+                    info: GraphQLResolveInfo,
+                    *,
+                    _resolver: GraphQLResolver = relation_group_page_resolver,
+                    **kwargs: object,
+                ) -> object:
+                    return _resolver(manager_instance, info, **kwargs)
+
+                fields[f"resolve_{group_field_name}"] = relation_group_resolver
 
         output_classes = {
             output_class.__name__: output_class
@@ -844,6 +927,32 @@ class GraphQL:
             attr_value,
         ) in generalManagerClass.Interface.get_graph_ql_properties().items():
             raw_hint = attr_value.graphql_type_hint
+
+            if _contains_measurement(raw_hint):
+                mapped = map_graphql_output_annotation(
+                    raw_hint,
+                    owner_name=generalManagerClass.__name__,
+                    field_name=attr_name,
+                    manager_registry=cls.manager_registry,
+                    manager_type_registry=cls.graphql_type_registry,
+                    output_class_registry=output_classes,
+                    output_type_registry=cls.graphql_output_type_registry,
+                    measurement_type=MeasurementType,
+                    scalar_mapper=cls._map_field_to_graphene_base_type,
+                )
+                mapped_field = cast(graphene.Field, mapped.field)
+                mapped_type = mapped_field.type
+                if isinstance(mapped_type, graphene.NonNull):
+                    mapped_type = mapped_type.of_type
+                fields[attr_name] = graphene.Field(
+                    mapped_type,
+                    target_unit=graphene.String(),
+                )
+                fields[f"resolve_{attr_name}"] = cls._create_resolver(
+                    attr_name,
+                    cast(type, mapped.resolver_type),
+                )
+                continue
 
             if _contains_graphql_output_type(raw_hint, output_classes):
                 mapped = map_graphql_output_annotation(
@@ -1096,65 +1205,19 @@ class GraphQL:
         return provider_factory()
 
     @staticmethod
-    def _sort_by_options(
+    def _ordering_types(
         generalManagerClass: type[GeneralManager],
-    ) -> type[graphene.Enum] | None:
-        """
-        Create a Graphene Enum of sortable field names for a GeneralManager subclass.
-
-        Parameters:
-            generalManagerClass (type[GeneralManager]): The GeneralManager subclass to inspect for sortable attributes and GraphQL properties.
-
-        Returns:
-            type[graphene.Enum] | None: A Graphene Enum type whose members are the sortable field names for the manager, or `None` if no sortable fields exist.
-        """
-        sort_options: dict[str, str] = {}
-        for (
-            field_name,
-            field_info,
-        ) in generalManagerClass.Interface.get_attribute_types().items():
-            field_type = field_info["type"]
-            related_manager = resolve_general_manager_type(
-                field_type, GraphQL.manager_registry
-            )
-            if related_manager is None:
-                sort_options[field_name] = field_name
-                continue
-            if field_info.get("relation_kind") == "collection":
-                continue
-
-            sort_options[field_name] = f"{field_name}__id"
-            for (
-                related_name,
-                related_info,
-            ) in related_manager.Interface.get_attribute_types().items():
-                if related_info.get("relation_kind") == "collection":
-                    continue
-                if (
-                    resolve_general_manager_type(
-                        related_info["type"], GraphQL.manager_registry
-                    )
-                    is not None
-                ):
-                    continue
-                option_name = f"{field_name}__{related_name}"
-                sort_options[option_name] = option_name
-
-        for (
-            prop_name,
-            prop,
-        ) in generalManagerClass.Interface.get_graph_ql_properties().items():
-            if prop.sortable is False:
-                continue
-            sort_options[prop_name] = prop_name
-
-        if not sort_options:
-            return None
-
-        return type(
-            f"{generalManagerClass.__name__}SortByOptions",
-            (graphene.Enum,),
-            sort_options,
+        *,
+        scope: str,
+    ) -> OrderingTypes | None:
+        """Build typed ordering inputs for one generated GraphQL scope."""
+        return create_ordering_types(
+            generalManagerClass,
+            scope=scope,
+            field_paths=sortable_field_paths(
+                generalManagerClass,
+                GraphQL.manager_registry,
+            ),
         )
 
     @classmethod
@@ -1288,9 +1351,9 @@ class GraphQL:
         `Measurement` types map to the `MeasurementType` object wrapper with a
         `target_unit` argument. `GeneralManager` relations map to a single
         Graphene field, while relation fields whose name ends with `_list` map to
-        a paginated list field with `reverse`, `page`, `page_size`, `group_by`,
-        generated relation filter/exclude inputs when available, and `sort_by`
-        when sortable fields exist. Other types map through the scalar base
+        a paginated list field with typed `order_by`, `page`, and `page_size`,
+        plus generated relation filter/exclude inputs when available. Explicit
+        sibling ``*_groups`` fields provide grouped results. Other types map through the scalar base
         mapper and may use `field_info["graphql_scalar"]` for supported scalar
         overrides such as `"bigint"`.
 
@@ -1318,20 +1381,18 @@ class GraphQL:
         elif safe_issubclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
                 attributes: GraphQLFieldMap = {
-                    "reverse": graphene.Boolean(),
                     "page": graphene.Int(),
                     "page_size": graphene.Int(),
-                    "group_by": graphene.List(graphene.String),
                 }
                 filter_options = GraphQL._create_filter_options(field_type)
                 if filter_options:
                     attributes["filter"] = graphene.Argument(filter_options)
                     attributes["exclude"] = graphene.Argument(filter_options)
 
-                sort_by_options = GraphQL._sort_by_options(field_type)
-                if sort_by_options:
-                    attributes["sort_by"] = graphene.Argument(
-                        graphene.List(graphene.NonNull(sort_by_options))
+                ordering_types = GraphQL._ordering_types(field_type, scope="Relation")
+                if ordering_types:
+                    attributes["order_by"] = graphene.Argument(
+                        graphene.List(graphene.NonNull(ordering_types.input_type))
                     )
 
                 page_type = GraphQL._get_or_create_page_type(
@@ -1384,8 +1445,7 @@ class GraphQL:
         queryset: Bucket[GeneralManager],
         filter_input: GraphQLFilterInput,
         exclude_input: GraphQLFilterInput,
-        sort_by: GraphQLSortInput,
-        reverse: bool,
+        order_by: object,
         filter_normalizer: GraphQLFilterNormalizer | None = None,
     ) -> Bucket[GeneralManager]:
         """Apply filter/exclude/sort to *queryset*. See ``graphql_resolvers.apply_query_parameters``."""
@@ -1393,8 +1453,7 @@ class GraphQL:
             queryset,
             filter_input,
             exclude_input,
-            sort_by,
-            reverse,
+            order_by,
             filter_normalizer=filter_normalizer,
         )
 
@@ -1504,6 +1563,83 @@ class GraphQL:
         return cls._page_type_registry[page_type_name]
 
     @classmethod
+    def _group_list_arguments(
+        cls,
+        general_manager_class: type[GeneralManager],
+        *,
+        include_inactive: bool,
+        scope: str,
+    ) -> GraphQLFieldMap:
+        """Build ordinary list controls shared by grouped pages and members."""
+        arguments: GraphQLFieldMap = {
+            "page": graphene.Int(),
+            "page_size": graphene.Int(),
+        }
+        filter_options = cls._create_filter_options(general_manager_class)
+        if filter_options:
+            arguments["filter"] = graphene.Argument(filter_options)
+            arguments["exclude"] = graphene.Argument(filter_options)
+        ordering_types = (
+            cls._group_ordering_types(general_manager_class, scope=scope)
+            if scope in {"Groups", "RelationGroups"}
+            else cls._ordering_types(general_manager_class, scope=scope)
+        )
+        if ordering_types:
+            arguments["order_by"] = graphene.Argument(
+                graphene.List(graphene.NonNull(ordering_types.input_type))
+            )
+        if include_inactive:
+            arguments["include_inactive"] = graphene.Boolean()
+        return arguments
+
+    @staticmethod
+    def _group_ordering_types(
+        general_manager_class: type[GeneralManager],
+        *,
+        scope: str,
+    ) -> OrderingTypes | None:
+        """Build order inputs from the same eligible keys accepted by groupBy."""
+        return create_ordering_types(
+            general_manager_class,
+            scope=scope,
+            field_paths=_group_sortable_field_paths_fn(
+                general_manager_class,
+                GraphQL.manager_registry,
+            ),
+        )
+
+    @classmethod
+    def _get_or_create_group_page_type(
+        cls,
+        general_manager_class: type[GeneralManager],
+        *,
+        member_arguments: Mapping[str, object],
+    ) -> type[graphene.ObjectType]:
+        """Generate the typed explicit grouping result for one manager."""
+        cached = cls._group_page_type_registry.get(general_manager_class.__name__)
+        if cached is not None:
+            return cached
+        member_page_type = cls._get_or_create_page_type(
+            general_manager_class.__name__ + "Page",
+            lambda: cls.graphql_type_registry[general_manager_class.__name__],
+        )
+        member_resolver = _create_member_resolver_fn(
+            general_manager_class,
+            filter_normalizer=_normalize_filter_input_fn,
+        )
+        generated = _create_group_types_fn(
+            general_manager_class,
+            member_page_type=member_page_type,
+            map_field=cls._map_field_to_graphene_read,
+            member_resolver=member_resolver,
+            member_arguments=member_arguments,
+        )
+        cls._group_page_type_registry[general_manager_class.__name__] = (
+            generated.page_type
+        )
+        return generated.page_type
+
+    @classmethod
     def _build_identification_arguments(
         cls, generalManagerClass: type[GeneralManager]
     ) -> GraphQLFieldMap:
@@ -1567,12 +1703,6 @@ class GraphQL:
         # resolver and field for the list query
         manager_field_name = pascal_to_snake(generalManagerClass.__name__)
         list_field_name = f"{manager_field_name}_list"
-        attributes: GraphQLFieldMap = {
-            "reverse": graphene.Boolean(),
-            "page": graphene.Int(),
-            "page_size": graphene.Int(),
-            "group_by": graphene.List(graphene.String),
-        }
         from general_manager.interface.capabilities.orm.support import (
             is_soft_delete_enabled,
         )
@@ -1582,17 +1712,12 @@ class GraphQL:
             type[OrmInterfaceBase[models.Model]],
             generalManagerClass.Interface,
         )
-        if is_soft_delete_enabled(interface_cls):
-            attributes["include_inactive"] = graphene.Boolean()
-        filter_options = cls._create_filter_options(generalManagerClass)
-        if filter_options:
-            attributes["filter"] = graphene.Argument(filter_options)
-            attributes["exclude"] = graphene.Argument(filter_options)
-        sort_by_options = cls._sort_by_options(generalManagerClass)
-        if sort_by_options:
-            attributes["sort_by"] = graphene.Argument(
-                graphene.List(graphene.NonNull(sort_by_options))
-            )
+        supports_include_inactive = is_soft_delete_enabled(interface_cls)
+        attributes = cls._group_list_arguments(
+            generalManagerClass,
+            include_inactive=supports_include_inactive,
+            scope="",
+        )
 
         page_type = cls._get_or_create_page_type(
             graphene_type.__name__ + "Page", graphene_type
@@ -1616,6 +1741,38 @@ class GraphQL:
         list_resolver = cls._create_list_resolver(_all_items, generalManagerClass)
         cls._query_fields[list_field_name] = list_field
         cls._query_fields[f"resolve_{list_field_name}"] = list_resolver
+
+        if _eligible_group_key_fields_fn(generalManagerClass):
+            group_field_name = f"{manager_field_name}_groups"
+            group_arguments = cls._group_list_arguments(
+                generalManagerClass,
+                include_inactive=supports_include_inactive,
+                scope="Groups",
+            )
+            group_arguments["group_by"] = graphene.Argument(
+                graphene.List(graphene.NonNull(graphene.String)),
+                required=True,
+            )
+            member_arguments = cls._group_list_arguments(
+                generalManagerClass,
+                include_inactive=False,
+                scope="GroupMembers",
+            )
+            group_page_type = cls._get_or_create_group_page_type(
+                generalManagerClass,
+                member_arguments=member_arguments,
+            )
+            cls._query_fields[group_field_name] = graphene.Field(
+                group_page_type,
+                **group_arguments,
+            )
+            cls._query_fields[f"resolve_{group_field_name}"] = (
+                _create_group_resolver_fn(
+                    _all_items,
+                    generalManagerClass,
+                    filter_normalizer=_normalize_filter_input_fn,
+                )
+            )
 
         # resolver and field for the single item query
         item_field_name = manager_field_name

@@ -29,7 +29,7 @@ EXECUTE_TOOL_EVENT_LOOP_ERROR = "execute_chat_tool ran in the event loop"
 
 
 def _execute_tool_off_event_loop(result: Any) -> Any:
-    def _execute(*_args: object) -> Any:
+    def _execute(*_args: object, **_kwargs: object) -> Any:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -93,6 +93,40 @@ class _ToolLoopProvider:
             return
         yield TextChunkEvent(content="final answer")
         yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=3))
+
+
+class _TwoCallsInOneCompletionProvider:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls.append({"messages": list(messages), "tools": tools})
+        if len(self.calls) == 1:
+            yield ToolCallEvent(
+                id="query-1",
+                name="query",
+                args={"manager": "Part", "fields": ["name"]},
+            )
+            yield ToolCallEvent(
+                id="search-2",
+                name="search_managers",
+                args={"query": "parts", "limit": 2},
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+            return
+        yield TextChunkEvent(content="Both calls completed.")
+        yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=3))
+
+
+class _MutationBatchProvider:
+    def __init__(self, events: list[ToolCallEvent]) -> None:
+        self.events = events
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        for event in self.events:
+            yield event
+        yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
 
 
 class _ConfirmResumeProvider:
@@ -1298,11 +1332,208 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 second_call_messages = consumer.provider.calls[1]["messages"]
                 assert second_call_messages[-1].role == "tool"
                 assert "PartManager" in second_call_messages[-1].content
+                assert second_call_messages[-1].tool_call_id == "tool-1"
+                assert second_call_messages[-1].tool_name == "search_managers"
+                assert second_call_messages[-1].tool_result == [
+                    {"manager": "PartManager"}
+                ]
                 assert second_call_messages[-2].role == "assistant"
-                assert (
-                    second_call_messages[-2].content
-                    == "Called tool search_managers. The next message is the tool result; answer from it exactly."
+                assert second_call_messages[-2].content == ""
+                assert second_call_messages[-2].tool_calls == (
+                    ToolCallEvent(
+                        id="tool-1",
+                        name="search_managers",
+                        args={"query": "parts"},
+                    ),
                 )
+
+        asyncio.run(run())
+
+    def test_receive_json_retains_every_call_from_one_completion(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _TwoCallsInOneCompletionProvider()
+        consumer.channel_name = "chat.tools.batch"
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    side_effect=[
+                        {"status": "success", "rows": [{"name": "A"}]},
+                        {"status": "success", "matches": ["PartManager"]},
+                    ],
+                ) as execute_tool,
+            ):
+                await consumer.receive_json({"type": "message", "text": "hello"})
+
+            assert execute_tool.call_count == 2
+            provider_messages = consumer.provider.calls[1]["messages"]
+            assert provider_messages[-3] == Message(
+                role="assistant",
+                content="",
+                tool_calls=(
+                    ToolCallEvent(
+                        id="query-1",
+                        name="query",
+                        args={"manager": "Part", "fields": ["name"]},
+                    ),
+                    ToolCallEvent(
+                        id="search-2",
+                        name="search_managers",
+                        args={"query": "parts", "limit": 2},
+                    ),
+                ),
+            )
+            assert provider_messages[-2].tool_call_id == "query-1"
+            assert provider_messages[-2].tool_result == {
+                "status": "success",
+                "rows": [{"name": "A"}],
+            }
+            assert provider_messages[-1].tool_call_id == "search-2"
+            assert provider_messages[-1].tool_result == {
+                "status": "success",
+                "matches": ["PartManager"],
+            }
+            assert [
+                call.args[0]["id"]
+                for call in mock_send_json.await_args_list
+                if call.args[0]["type"] == "tool_result"
+            ] == ["query-1", "search-2"]
+
+        asyncio.run(run())
+
+    def test_receive_json_rejects_mutation_batches_before_any_action(self) -> None:
+        batches = [
+            [
+                ToolCallEvent(
+                    id="mutate-1",
+                    name="mutate",
+                    args={"mutation": "createPart", "input": {"name": "A"}},
+                ),
+                ToolCallEvent(
+                    id="mutate-2",
+                    name="mutate",
+                    args={"mutation": "createPart", "input": {"name": "B"}},
+                ),
+            ],
+            [
+                ToolCallEvent(
+                    id="query-1",
+                    name="query",
+                    args={"manager": "Part", "fields": ["name"]},
+                ),
+                ToolCallEvent(
+                    id="mutate-1",
+                    name="mutate",
+                    args={"mutation": "createPart", "input": {"name": "A"}},
+                ),
+            ],
+        ]
+
+        async def run(batch: list[ToolCallEvent]) -> None:
+            consumer = ChatConsumer()
+            consumer.scope = {
+                "user": AnonymousUser(),
+                "session": _Session("existing-key"),
+            }
+            consumer.session_key = "existing-key"
+            consumer.provider = _MutationBatchProvider(batch)
+            consumer.channel_name = "chat.tools.mutation-batch"
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool"
+                ) as execute_tool,
+                patch(
+                    "general_manager.chat.models.create_pending_confirmation"
+                ) as create_pending,
+            ):
+                await consumer.receive_json({"type": "message", "text": "update"})
+
+            assert [call.args[0] for call in send_json.await_args_list] == [
+                {
+                    "type": "error",
+                    "message": "Request mutations one at a time.",
+                    "code": "mutation_batch_unsupported",
+                }
+            ]
+            execute_tool.assert_not_called()
+            create_pending.assert_not_called()
+
+        for batch in batches:
+            with self.subTest(batch=[event.id for event in batch]):
+                asyncio.run(run(batch))
+
+    def test_receive_json_rejects_batch_exceeding_retry_budget_before_actions(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _TwoCallsInOneCompletionProvider()
+        consumer.channel_name = "chat.tools.batch-budget"
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+                patch(
+                    "general_manager.chat.consumer.get_chat_settings",
+                    return_value={
+                        "max_retries_per_message": 1,
+                        "recover_missing_tool_calls": False,
+                    },
+                ),
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool"
+                ) as execute_tool,
+                patch(
+                    "general_manager.chat.consumer.enforce_chat_rate_limit",
+                    side_effect=[None, None],
+                ) as rate_limit,
+            ):
+                await consumer.receive_json({"type": "message", "text": "hello"})
+
+            assert [call.args[0] for call in send_json.await_args_list] == [
+                {
+                    "type": "error",
+                    "message": "Chat tool retry limit exceeded.",
+                    "code": "tool_retry_limit",
+                }
+            ]
+            execute_tool.assert_not_called()
+            rate_limit.assert_any_call(
+                consumer.scope,
+                input_tokens=1,
+                output_tokens=1,
+                count_request=False,
+            )
 
         asyncio.run(run())
 
@@ -1839,7 +2070,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
         }
         pending_state_at_execution: list[dict[str, object] | None] = []
 
-        def execute_confirmed_mutation(*_args: object) -> dict[str, object]:
+        def execute_confirmed_mutation(**_kwargs: object) -> dict[str, object]:
             pending_state_at_execution.append(consumer._pending_confirmation)
             return {"status": "executed", "data": {"success": True}}
 
@@ -1849,24 +2080,19 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     consumer, "send_json", new_callable=AsyncMock
                 ) as mock_send_json,
                 patch(
-                    "general_manager.chat.consumer.execute_chat_tool",
+                    "general_manager.chat.consumer.execute_confirmed_chat_mutation",
                     side_effect=execute_confirmed_mutation,
                 ) as execute_chat_tool,
             ):
                 await consumer.receive_json(
                     {"type": "confirm", "confirmation_id": "tool-9", "confirmed": True}
                 )
-                called_name, called_args, called_context = (
-                    execute_chat_tool.call_args.args
-                )
-                assert called_name == "mutate"
-                assert called_args == {
-                    "mutation": "createPart",
-                    "input": {"name": "Bolt"},
-                    "confirmed": True,
-                }
+                called_args = execute_chat_tool.call_args.kwargs
+                assert called_args["mutation"] == "createPart"
+                assert called_args["input"] == {"name": "Bolt"}
+                assert set(called_args) == {"mutation", "input", "context"}
                 assert pending_state_at_execution == [None]
-                assert called_context.user is consumer.scope["user"]
+                assert called_args["context"].user is consumer.scope["user"]
                 assert mock_send_json.await_args_list[0].args[0] == {
                     "type": "tool_result",
                     "id": "tool-9",
@@ -1908,7 +2134,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     consumer, "send_json", new_callable=AsyncMock
                 ) as mock_send_json,
                 patch(
-                    "general_manager.chat.consumer.execute_chat_tool",
+                    "general_manager.chat.consumer.execute_confirmed_chat_mutation",
                     side_effect=_execute_tool_off_event_loop({"status": "executed"}),
                 ) as execute_chat_tool,
                 patch.object(
@@ -1974,7 +2200,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     consumer, "send_json", new_callable=AsyncMock
                 ) as mock_send_json,
                 patch(
-                    "general_manager.chat.consumer.execute_chat_tool",
+                    "general_manager.chat.consumer.execute_confirmed_chat_mutation",
                     return_value={"status": "executed"},
                 ),
                 patch(
@@ -2039,7 +2265,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
             calls.append("claim")
             return object()
 
-        def execute_confirmed_mutation(*_args: object) -> dict[str, object]:
+        def execute_confirmed_mutation(**_kwargs: object) -> dict[str, object]:
             calls.append("execute")
             return {"status": "executed"}
 
@@ -2053,7 +2279,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     side_effect=claim_pending,
                 ) as claim_for_conversation,
                 patch(
-                    "general_manager.chat.consumer.execute_chat_tool",
+                    "general_manager.chat.consumer.execute_confirmed_chat_mutation",
                     side_effect=execute_confirmed_mutation,
                 ) as execute_chat_tool,
             ):
@@ -2112,7 +2338,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value=None,
                 ) as claim_for_conversation,
                 patch(
-                    "general_manager.chat.consumer.execute_chat_tool",
+                    "general_manager.chat.consumer.execute_confirmed_chat_mutation",
                 ) as execute_chat_tool,
             ):
                 await consumer.receive_json(
@@ -2293,7 +2519,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     "general_manager.chat.models.ChatPendingConfirmation.claim_for_conversation",
                 ) as claim_for_conversation,
                 patch(
-                    "general_manager.chat.consumer.execute_chat_tool",
+                    "general_manager.chat.consumer.execute_confirmed_chat_mutation",
                     return_value={"status": "executed"},
                 ) as execute_chat_tool,
             ):
@@ -2341,7 +2567,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     consumer, "send_json", new_callable=AsyncMock
                 ) as mock_send_json,
                 patch(
-                    "general_manager.chat.consumer.execute_chat_tool",
+                    "general_manager.chat.consumer.execute_confirmed_chat_mutation",
                     side_effect=original_error,
                 ),
                 patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
@@ -2443,7 +2669,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value=None,
                 ) as claim_for_conversation,
                 patch(
-                    "general_manager.chat.consumer.execute_chat_tool",
+                    "general_manager.chat.consumer.execute_confirmed_chat_mutation",
                 ) as execute_chat_tool,
                 patch.object(
                     consumer,
@@ -2511,7 +2737,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value=db_pending,
                 ),
                 patch(
-                    "general_manager.chat.consumer.execute_chat_tool",
+                    "general_manager.chat.consumer.execute_confirmed_chat_mutation",
                     return_value={"status": "executed"},
                 ),
             ):

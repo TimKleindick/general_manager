@@ -16,7 +16,7 @@ from django.core.cache import cache as django_cache
 GraphQLWarmUpCacheScope = Literal["dependency", "timeout"]
 GraphQLWarmUpIdentification = dict[str, object]
 
-RECIPE_VERSION = 2
+RECIPE_VERSION = 3
 KEY_PREFIX = "general_manager:graphql_warmup"
 RECIPE_INDEX_KEY = f"{KEY_PREFIX}:recipes"
 TIMEOUT_RECIPE_INDEX_KEY = f"{KEY_PREFIX}:timeout_recipes"

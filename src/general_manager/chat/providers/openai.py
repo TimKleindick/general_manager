@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from importlib.util import find_spec
+import json
 from types import MappingProxyType
 from typing import Any, Self
 
@@ -82,6 +83,32 @@ class OpenAIProvider(BaseLLMProvider):
             kwargs["api_key"] = str(api_key)
         return AsyncOpenAI(**kwargs)
 
+    @staticmethod
+    def _build_messages(messages: list[Message]) -> list[dict[str, Any]]:
+        """Encode neutral text and tool history for Chat Completions."""
+        provider_messages: list[dict[str, Any]] = []
+        for message in messages:
+            provider_message: dict[str, Any] = {
+                "role": message.role,
+                "content": message.content,
+            }
+            if message.tool_calls:
+                provider_message["tool_calls"] = [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": json.dumps(call.args),
+                        },
+                    }
+                    for call in message.tool_calls
+                ]
+            if message.role == "tool" and message.tool_call_id is not None:
+                provider_message["tool_call_id"] = message.tool_call_id
+            provider_messages.append(provider_message)
+        return provider_messages
+
     async def complete(
         self,
         messages: list[Message],
@@ -94,10 +121,7 @@ class OpenAIProvider(BaseLLMProvider):
             model=config["model"],
             stream=True,
             stream_options={"include_usage": True},
-            messages=[
-                {"role": message.role, "content": message.content}
-                for message in messages
-            ],
+            messages=self._build_messages(messages),
             tools=[
                 {
                     "type": "function",

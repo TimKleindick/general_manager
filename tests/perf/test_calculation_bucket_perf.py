@@ -372,8 +372,8 @@ def test_equivalent_5x10_plans_reuse_possible_values(
         },
         counters.constructors,
     )
-    first_bucket = CalculationBucket(manager, {}, {}, sort_key="a")
-    second_bucket = CalculationBucket(manager, {}, {}, sort_key="a")
+    first_bucket = CalculationBucket(manager).sort("a")
+    second_bucket = CalculationBucket(manager).sort("a")
 
     counters.reset()
     with CalculationRunContext():

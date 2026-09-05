@@ -27,4 +27,4 @@ repos:
         entry: mypy --strict
         language: system
         pass_filenames: false
-        files: ^src/
+        files: ^(src/|tests/typing/)

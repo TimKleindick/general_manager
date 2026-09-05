@@ -39,7 +39,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "choosing fields."
     ),
     "mutate": (
-        "Execute an allow-listed mutation via GraphQL only after user confirmation."
+        "Execute one allow-listed mutation via GraphQL only after user confirmation; "
+        "do not combine mutate with another tool call."
     ),
 }
 
@@ -127,10 +128,6 @@ TOOL_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                 "description": "Mutation input payload.",
                 "additionalProperties": True,
             },
-            "confirmed": {
-                "type": "boolean",
-                "description": "Set true only after the user clearly confirms the write action.",
-            },
         },
         "required": ["mutation", "input"],
         "additionalProperties": False,
@@ -178,7 +175,6 @@ TOOL_USAGE_EXAMPLES: tuple[tuple[str, dict[str, Any]], ...] = (
         {
             "mutation": "createPart",
             "input": {"name": "Bolt"},
-            "confirmed": True,
         },
     ),
 )

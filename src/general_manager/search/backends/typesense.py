@@ -89,8 +89,7 @@ class TypesenseBackend:
         *,
         filters: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
         filter_expression: str | None = None,
-        sort_by: str | None = None,
-        sort_desc: bool = False,
+        sort: Sequence[str] | None = None,
         limit: int = 10,
         offset: int = 0,
         types: Sequence[str] | None = None,
@@ -105,8 +104,7 @@ class TypesenseBackend:
                 mappings. Accepted for protocol compatibility but never
                 inspected.
             filter_expression (str | None): A raw filter expression string to apply instead of or in addition to `filters`.
-            sort_by (str | None): Field name to sort results by.
-            sort_desc (bool): If `True`, sort results in descending order; ascending otherwise.
+            sort: Signed fields accepted for protocol compatibility.
             limit (int): Maximum number of results to return.
             offset (int): Number of results to skip (for pagination).
             types (Sequence[str] | None): Optional list of document types to restrict the search to.

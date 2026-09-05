@@ -267,14 +267,14 @@ Generated top-level list fields and generated relation-list fields expose the
 following arguments when the manager has at least one sortable field:
 
 ```graphql
-sortBy: [<Manager>SortByOptions!]
-reverse: Boolean
+orderBy: [<Manager>OrderBy!]
 ```
 
-Both arguments are nullable. `sortBy` may be omitted, `null`, or an empty list;
-all three forms skip sorting, even when `reverse: true`. GraphQL list coercion
-also accepts one inline enum value, so `sortBy: name` remains valid. A typed
-variable uses the list form, for example `$sort: [ProjectSortByOptions!]`.
+The argument is nullable. `orderBy` may be omitted, `null`, or an empty list;
+all three forms skip sorting. Each entry requires a generated `OrderField` enum
+and accepts `direction: OrderDirection! = ASC`, so terms can independently use
+`ASC` or `DESC`. A typed variable uses the list form, for example
+`$order: [ProjectOrderBy!]`.
 The generated field returns the manager's paginated page type with its normal
 `items` and `pageInfo` fields; these arguments only change item ordering.
 
@@ -286,8 +286,8 @@ as `commercials__name`. Collection relations, multi-hop paths, and computed
 GraphQL properties on the related manager are not exposed as options. The
 generated enum is schema output, not a stable Python import.
 
-Keys are applied in list order: the first key is primary and later keys break
-ties. `reverse: true` reverses the complete compound ordering. For database
+Terms are applied in list order: the first field is primary and later fields
+break ties. Each term controls its own direction. For database
 buckets, eligible relation paths use the declared relation metadata and remain
 compatible with custom `filter_lookup` prefixes. Request and in-memory buckets
 resolve the same paths as attributes; missing attributes or incomparable values
@@ -482,21 +482,24 @@ truncation toward zero for those inputs.
 
 For pagination, treat the generated GraphQL `pageInfo` response field as the
 user-facing contract. `totalCount` is counted after permission filters, user
-filters, excludes, grouping, and sorting, but before page slicing. Without
-`groupBy`, sorting applies to records; with `groupBy`, sorting applies to the
-grouped manager objects after grouping and before pagination. Supplying
-only one of `page` or `pageSize` defaults the missing value to page 1 or size 10
-for slicing. Falsey explicit values such as `page: 0` or `pageSize: 0` follow
-the same fallbacks for slicing; `currentPage` is `page || 1`. The reported
-`pageSize` is the original argument value, not the effective slicing default, so
-it can be `null` when only `page` is supplied and `0` when `pageSize: 0` is
-supplied. `totalPages` is `1` when the original `pageSize` is omitted or falsey.
-With a positive explicit `pageSize`, an empty result has `totalPages: 0`.
-Negative `page` or `pageSize` values raise a GraphQL `BAD_USER_INPUT` error
-before slicing. An already-empty grouped result with pagination returns an empty
-`items` list and its normal page metadata; it does not raise the grouped-bucket
-empty-slice error. Do not import generated/internal Python pagination classes
-directly.
+filters, excludes, and sorting, but before page slicing when the
+source is complete. Request-backed pages whose authorization cannot prove a
+global total return `totalCount: null` and `totalPages: null`. Ordinary lists
+sort records; explicit `…Groups` fields sort selected grouping keys after
+grouping and before pagination. Ordinary lists remain unpaginated
+when both `page` and `pageSize` are omitted. Supplying either uses effective
+defaults of page 1 and size 10, which are also reported in `pageInfo`. Explicit
+zero or negative values are rejected. Empty known result sets report
+`totalPages: 0`; an out-of-range positive page returns an empty item list while
+retaining known metadata. An already-empty grouped result with pagination returns
+an empty `groups` list and its normal page metadata; it does not raise the
+grouped-bucket empty-slice error. Do not import generated/internal Python
+pagination classes directly.
+
+Global search always uses page 1 and size 10 defaults and exposes the same
+`pageInfo` shape alongside its existing `total` and `totalIsExact` fields. In
+bounded search mode, `total` remains the existing lower bound while `pageInfo`
+uses null totals until the authorized total is exact.
 
 ::: general_manager.api.mutation.graph_ql_mutation
 
@@ -777,8 +780,9 @@ be empty or JSON objects. `POST <base>/<resource>/query` accepts optional
 `filters`, `excludes`, `ordering`, `page`, and `page_size`. It starts with
 `manager_cls.all()`, applies `bucket.filter(**filters)` only when `filters` is
 truthy, applies `bucket.exclude(**excludes)` only when `excludes` is truthy,
-then applies ordering, computes `total_count`, and finally slices only for
-positive integer `page` and `page_size`; invalid pagination values are ignored.
+then applies ordering, computes `total_count`, and finally slices when either
+positive integer pagination control is supplied, defaulting the omitted control
+to page 1 or size 10. Zero, negative, and boolean pagination values are rejected.
 `ordering` may be one field name or an iterable of field names; entries prefixed
 with `-` sort descending and are applied in reverse order so multi-key ordering
 is stable with bucket chaining. `GET`, `PATCH`, and

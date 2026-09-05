@@ -391,13 +391,34 @@ Behavior:
 - after final failure, the dead-letter hook receives `(event, exception)`.
 
 Registration behavior:
-- identical registrations for the same event are deduplicated at registration time.
-- "identical" means the event key, handler, validator, predicate, retry count, retry predicate, and dead-letter handler resolve to the same registration identity.
-- callable identity uses `__module__ + "." + __qualname__` when available and `repr(...)` otherwise; the retry count is compared after clamping negative values to zero.
-- different `when`, `validator`, retry, or dead-letter settings still create separate registrations.
+- database registries use `registration_id` as the durable delivery identity. Importable module-level functions keep a deterministic default, while closures, bound methods, callable objects, and dynamic validators, predicates, retry predicates, or dead-letter callbacks need an explicit ID.
+- explicit IDs are exact non-blank strings of at most 255 characters. Their spelling and separators are preserved.
+- reusing an ID is idempotent only when the event route, callable objects, and routing configuration are identical. Reusing it for a different route, callback, or configuration raises `WorkflowHandlerRegistrationConflictError`.
+- in-memory registries keep distinct runtime callbacks distinct, even when callable objects compare equal.
 - handlers run in registration order inside each route bucket.
 - if an event matches both type and name routes, type-route handlers run first.
 - registrations skipped by `when=False` are not considered applicable for the publish return value.
+
+For durable registrations, use a stable ID that you own:
+
+```python
+from general_manager.workflow.event_registry import DatabaseEventRegistry
+
+database_registry = DatabaseEventRegistry()
+database_registry.register(
+    "manager_updated",
+    handler=start_project_status_workflow,
+    when=lambda event: event.payload.get("manager") == "Project",
+    registration_id="project-status-workflow-v1",
+)
+```
+
+Before changing durable IDs in a deployment, drain the outbox or explicitly
+reconcile the old registrations and delivery attempts. GeneralManager does not
+rewrite old delivery rows or automatically replay completed deliveries under a
+new ID. Existing rows continue to use their original keys; newly created rows
+use a bounded colon-free `v3_` digest keyed by the `(event, registration_id)`
+pair.
 
 Publish behavior:
 - synchronous registries return `True` if at least one applicable handler completed, even when another matching handler failed.

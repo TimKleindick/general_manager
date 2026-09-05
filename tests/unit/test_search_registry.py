@@ -132,6 +132,16 @@ class SearchRegistryTests(SimpleTestCase):
 
         assert settings.field_boosts["name"] == 0.5
 
+    def test_index_config_rejects_reserved_document_field_names(self) -> None:
+        """Reserved backend document fields fail during configuration."""
+        for field_name in ("id", "gm_document_id", "type", "identification", "data"):
+            for role in ("fields", "filters", "sorts"):
+                kwargs: dict[str, object] = {"fields": ["name"]}
+                kwargs[role] = [field_name]
+
+                with pytest.raises(ValueError, match="reserved"):
+                    IndexConfig(name="global", **kwargs)  # type: ignore[arg-type]
+
     def test_iter_index_configs(self) -> None:
         entries = list(iter_index_configs("global"))
         assert entries

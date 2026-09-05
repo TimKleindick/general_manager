@@ -20,6 +20,7 @@ import graphene
 from graphql import GraphQLError, GraphQLResolveInfo
 
 from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql_output import create_output_field_resolver
 from general_manager.manager.general_manager import GeneralManager
 
 from general_manager.utils.format_string import snake_to_camel
@@ -228,23 +229,109 @@ def _normalize_mutation_arguments(
     for name, annotation in annotations.items():
         if name not in normalized:
             continue
-
-        origin = get_origin(annotation)
-        if origin is list or origin is List:
-            inner = get_args(annotation)[0]
-            if _is_general_manager_type(inner) and normalized[name] is not None:
-                normalized[name] = [
-                    _normalize_manager_argument(inner, item)
-                    for item in _sequence_argument(normalized[name])
-                ]
-            continue
-
-        if _is_general_manager_type(annotation):
-            normalized[name] = _normalize_manager_argument(
-                annotation,
-                normalized[name],
-            )
+        normalized[name] = _normalize_mutation_value(
+            annotation,
+            normalized[name],
+        )
     return normalized
+
+
+def _unwrap_optional_annotation(annotation: object) -> tuple[bool, object]:
+    """Return whether *annotation* permits ``None`` and its concrete member."""
+    origin = get_origin(annotation)
+    if (origin is Union or origin is UnionType) and type(None) in get_args(annotation):
+        return True, next(
+            item for item in get_args(annotation) if item is not type(None)
+        )
+    return False, annotation
+
+
+def _normalize_mutation_value(annotation: object, value: object) -> object:
+    """Recursively normalize manager values while preserving explicit ``None``."""
+    if value is None:
+        return None
+    _, concrete = _unwrap_optional_annotation(annotation)
+    origin = get_origin(concrete)
+    if origin is list or origin is List:
+        inner = get_args(concrete)[0]
+        return [
+            _normalize_mutation_value(inner, item) for item in _sequence_argument(value)
+        ]
+    if _is_general_manager_type(concrete):
+        return _normalize_manager_argument(concrete, value)
+    return value
+
+
+def _mutation_input_type(annotation: object) -> object:
+    """Map nested mutation input annotations to unmounted Graphene types."""
+    nullable, concrete = _unwrap_optional_annotation(annotation)
+    origin = get_origin(concrete)
+    if origin is list or origin is List:
+        inner_annotation = get_args(concrete)[0]
+        inner_nullable, _ = _unwrap_optional_annotation(inner_annotation)
+        inner_type = _mutation_input_type(inner_annotation)
+        if not inner_nullable:
+            inner_type = graphene.NonNull(inner_type)
+        return graphene.List(inner_type)
+    if _is_general_manager_type(concrete):
+        if _uses_single_id_input(concrete):
+            return graphene.ID
+        return _get_or_create_manager_input_type(concrete)
+    del nullable
+    return GraphQL._map_field_to_graphene_base_type(cast(type, concrete))
+
+
+def _build_mutation_argument_field(
+    annotation: object,
+    **kwargs: object,
+) -> object:
+    """Mount one recursively mapped custom mutation argument."""
+    _, concrete = _unwrap_optional_annotation(annotation)
+    if _is_general_manager_type(concrete):
+        return _build_manager_argument_field(concrete, **kwargs)
+    input_type = _mutation_input_type(annotation)
+    if isinstance(input_type, graphene.List):
+        return graphene.List(input_type.of_type, **kwargs)
+    return cast(Callable[..., object], input_type)(**kwargs)
+
+
+def _populate_omitted_nullable_arguments(
+    signature: inspect.Signature,
+    annotations: MutationAnnotations,
+    kwargs: MutationKwargs,
+) -> MutationKwargs:
+    """Supply ``None`` only for omitted nullable parameters without defaults."""
+    populated = dict(kwargs)
+    for name, parameter in signature.parameters.items():
+        if name == "info" or name in populated:
+            continue
+        nullable, _ = _unwrap_optional_annotation(annotations[name])
+        if nullable and parameter.default is inspect.Parameter.empty:
+            populated[name] = None
+    return populated
+
+
+def _call_mutation_resolver(
+    fn: FuncT,
+    signature: inspect.Signature,
+    info: GraphQLResolveInfo,
+    kwargs: MutationKwargs,
+) -> object:
+    """Call a resolver while injecting ``info`` at its declared signature slot."""
+    positional: list[object] = []
+    keyword = dict(kwargs)
+    for name, parameter in signature.parameters.items():
+        if parameter.kind is inspect.Parameter.POSITIONAL_ONLY:
+            if name == "info":
+                positional.append(info)
+            elif name in keyword:
+                positional.append(keyword.pop(name))
+            elif parameter.default is not inspect.Parameter.empty:
+                positional.append(parameter.default)
+            continue
+        if name == "info":
+            keyword[name] = info
+    return fn(*positional, **keyword)
 
 
 def _sequence_argument(value: object) -> Sequence[object]:
@@ -356,52 +443,21 @@ def graph_ql_mutation(
             ann = hints.get(name)
             if ann is None:
                 raise MissingParameterTypeHintError(name, fn.__name__)
-            required = True
             default = param.default
             has_default = default is not inspect._empty
+            nullable, _ = _unwrap_optional_annotation(ann)
 
             # Prepare kwargs
             kwargs: MutationKwargs = {}
-            if required:
+            if not nullable:
                 kwargs["required"] = True
+            else:
+                kwargs["required"] = False
             if has_default:
                 kwargs["default_value"] = default
 
-            # Handle Optional[...] → not required
-            origin = get_origin(ann)
-            if (origin is Union or origin is UnionType) and type(None) in get_args(ann):
-                required = False
-                # extract inner type
-                ann = next(a for a in get_args(ann) if a is not type(None))
-                kwargs["required"] = False
-
             argument_annotations[name] = ann
-
-            # Resolve list types to List scalar
-            field: object
-            if get_origin(ann) is list or get_origin(ann) is List:
-                inner = get_args(ann)[0]
-                if _is_general_manager_type(inner):
-                    if _uses_single_id_input(inner):
-                        field = graphene.List(graphene.ID, **kwargs)
-                    else:
-                        field = graphene.List(
-                            _get_or_create_manager_input_type(inner),
-                            **kwargs,
-                        )
-                    arg_fields[name] = field
-                    continue
-                field = graphene.List(
-                    GraphQL._map_field_to_graphene_base_type(inner),
-                    **kwargs,
-                )
-            else:
-                if _is_general_manager_type(ann):
-                    field = _build_manager_argument_field(ann, **kwargs)
-                else:
-                    field = GraphQL._map_field_to_graphene_base_type(ann)(**kwargs)
-
-            arg_fields[name] = field
+            arg_fields[name] = _build_mutation_argument_field(ann, **kwargs)
 
         Arguments = type("Arguments", (), arg_fields)
 
@@ -409,6 +465,7 @@ def graph_ql_mutation(
         outputs: GrapheneFieldMap = {
             "success": graphene.Boolean(required=True),
         }
+        output_resolvers: GrapheneFieldMap = {}
         return_ann = hints.get("return")
         if return_ann is None:
             raise MissingMutationReturnAnnotationError(fn.__name__)
@@ -431,6 +488,10 @@ def graph_ql_mutation(
 
             outputs[field_name] = GraphQL._map_field_to_graphene_read(
                 basis_type, field_name
+            )
+            output_resolvers[f"resolve_{field_name}"] = create_output_field_resolver(
+                field_name,
+                basis_type,
             )
 
         # Define mutate method
@@ -460,9 +521,19 @@ def graph_ql_mutation(
                     argument_annotations,
                     kwargs,
                 )
+                normalized_kwargs = _populate_omitted_nullable_arguments(
+                    sig,
+                    argument_annotations,
+                    normalized_kwargs,
+                )
                 if permission:
                     permission.check(normalized_kwargs, info.context.user)
-                result = fn(info, **normalized_kwargs)
+                result = _call_mutation_resolver(
+                    fn,
+                    sig,
+                    info,
+                    normalized_kwargs,
+                )
                 data: MutationData = {}
                 if is_tuple_return:
                     result_values = result if isinstance(result, tuple) else (result,)
@@ -501,6 +572,7 @@ def graph_ql_mutation(
             "mutate": staticmethod(_mutate),
         }
         class_dict.update(outputs)
+        class_dict.update(output_resolvers)
 
         # Create Mutation class
         mutation_class = type(mutation_name, (graphene.Mutation,), class_dict)

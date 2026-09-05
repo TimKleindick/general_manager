@@ -8,7 +8,7 @@ from django.test import SimpleTestCase
 from django.test.utils import override_settings
 
 from general_manager.api.graphql import GraphQL
-from general_manager.chat.tools import mutate
+from general_manager.chat.tools import execute_chat_tool, get_tool_definitions, mutate
 
 
 class _Result:
@@ -235,6 +235,41 @@ class ChatMutationToolTests(SimpleTestCase):
             "mutation": "createPart",
             "input": {"name": "Bolt"},
         }
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.unit.test_chat_bootstrap.NoopProvider",
+                "allowed_mutations": ["createPart"],
+                "confirm_mutations": ["createPart"],
+            }
+        }
+    )
+    def test_provider_mutation_confirmation_argument_cannot_execute_a_write(
+        self,
+    ) -> None:
+        schema = _RecordingSchema(_Result(data={"createPart": {"success": True}}))
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        result = execute_chat_tool(
+            "mutate",
+            {
+                "mutation": "createPart",
+                "input": {"name": "Bolt"},
+                "confirmed": True,
+            },
+            SimpleNamespace(user=_User()),
+        )
+
+        assert result == {
+            "status": "confirmation_required",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+        }
+        assert schema.calls == []
+        tools = {tool["name"]: tool for tool in get_tool_definitions()}
+        assert "confirmed" not in tools["mutate"]["input_schema"]["properties"]
 
     @override_settings(
         GENERAL_MANAGER={

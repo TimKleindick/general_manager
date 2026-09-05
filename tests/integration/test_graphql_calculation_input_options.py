@@ -9,6 +9,7 @@ from django.test import override_settings
 from django.utils.crypto import get_random_string
 
 from general_manager.interface import CalculationInterface, DatabaseInterface
+from general_manager.api.property import graph_ql_property
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import DateRangeDomain, Input, NumericRangeDomain
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
@@ -92,6 +93,25 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
                     possible_values=NumericRangeDomain(1, 5, step=2),
                 )
 
+        class NonNumericGroupCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                code = Input(str, possible_values=lambda: ["only"])
+
+        class ConstantRow(GeneralManager):
+            class Interface(CalculationInterface):
+                pass
+
+            @graph_ql_property
+            def label(self) -> str:
+                return "constant"
+
+        class ConstantRowRelation(GeneralManager):
+            class Interface(CalculationInterface):
+                constant_row_list = Input(
+                    ConstantRow,
+                    possible_values=lambda: [ConstantRow()],
+                )
+
         class ManagerQueryCalculation(GeneralManager):
             class Interface(CalculationInterface):
                 department = Input(
@@ -118,6 +138,9 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         cls.YearlyDateCalculation = YearlyDateCalculation
         cls.DateDomainCalculation = DateDomainCalculation
         cls.NumericDomainCalculation = NumericDomainCalculation
+        cls.NonNumericGroupCalculation = NonNumericGroupCalculation
+        cls.ConstantRow = ConstantRow
+        cls.ConstantRowRelation = ConstantRowRelation
         cls.ManagerQueryCalculation = ManagerQueryCalculation
 
         cls.general_manager_classes = [
@@ -133,6 +156,9 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
             YearlyDateCalculation,
             DateDomainCalculation,
             NumericDomainCalculation,
+            NonNumericGroupCalculation,
+            ConstantRow,
+            ConstantRowRelation,
             ManagerQueryCalculation,
         ]
 
@@ -400,6 +426,90 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
 
         invalid_response = self.query(query, variables={"amount": 4})
         self._assert_error_contains(invalid_response, "Invalid value for amount")
+
+    def test_numeric_calculation_input_groups_expose_sums(self) -> None:
+        """Numeric calculation inputs remain valid typed group sum fields."""
+        response = self.query(
+            """
+            query {
+              numericDomainCalculationGroups(groupBy: ["amount"]) {
+                groups { keys { amount } count sums { amount } }
+              }
+            }
+            """
+        )
+
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["numericDomainCalculationGroups"]["groups"],
+            [
+                {"keys": {"amount": 1}, "count": 1, "sums": {"amount": 1}},
+                {"keys": {"amount": 3}, "count": 1, "sums": {"amount": 3}},
+                {"keys": {"amount": 5}, "count": 1, "sums": {"amount": 5}},
+            ],
+        )
+
+    def test_nonnumeric_calculation_group_schema_omits_sums(self) -> None:
+        """A string-only calculation exposes a valid group schema without sums."""
+        response = self.query(
+            """
+            query {
+              nonNumericGroupCalculationList { items { code } }
+              nonNumericGroupCalculationGroups(groupBy: ["code"]) {
+                groups { keys { code } count }
+              }
+              groupType: __type(name: "NonNumericGroupCalculationGroup") {
+                fields { name }
+              }
+            }
+            """
+        )
+
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]
+        self.assertEqual(
+            payload["nonNumericGroupCalculationList"]["items"], [{"code": "only"}]
+        )
+        self.assertEqual(
+            payload["nonNumericGroupCalculationGroups"]["groups"],
+            [{"keys": {"code": "only"}, "count": 1}],
+        )
+        self.assertNotIn(
+            "sums", {field["name"] for field in payload["groupType"]["fields"]}
+        )
+
+    def test_managers_without_eligible_group_keys_omit_root_and_relation_groups(
+        self,
+    ) -> None:
+        """An empty generated keys type must not invalidate ordinary GraphQL fields."""
+        response = self.query(
+            """
+            query {
+              constantRowList { items { label } }
+              constantRowRelationList { items { __typename } }
+              __schema {
+                queryType { fields { name } }
+                types { name fields { name } }
+              }
+            }
+            """
+        )
+
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]
+        root_fields = {
+            field["name"] for field in payload["__schema"]["queryType"]["fields"]
+        }
+        self.assertNotIn("constantRowGroups", root_fields)
+        relation_type = next(
+            item
+            for item in payload["__schema"]["types"]
+            if item["name"] == "ConstantRowRelationType"
+        )
+        self.assertNotIn(
+            "constantRowGroups",
+            {field["name"] for field in relation_type["fields"] or []},
+        )
 
     def test_from_manager_query_is_enforced_via_graphql(self) -> None:
         query = """

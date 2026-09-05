@@ -158,9 +158,12 @@ precedence over generated defaults.
 
 `Factory.create(...)` validates and saves every returned record, assigns any
 many-to-many values after saving, then wraps the saved models back into their
-`GeneralManager` class using the interface's identification fields. If a
-generated object is not a Django model instance, `InvalidGeneratedObjectError`
-is raised. If the interface has no parent manager, wrapping raises
+`GeneralManager` class using the interface's identification fields. A returned
+list from `_adjustmentMethod` saves its records in one atomic block on the
+interface's selected database alias; many-to-many assignment and wrapping
+happen after that block. If either later step fails, the record saves remain
+committed. A generated object that is not a Django model instance raises
+`InvalidGeneratedObjectError`. If the interface has no parent manager, wrapping raises
 `MissingManagerClassError`; if an identification field cannot be read from the
 generated model, wrapping raises `MissingIdentificationFieldError`.
 `Factory.build(...)` runs the same adjustment logic but returns unsaved model
@@ -173,8 +176,11 @@ one record per item; an empty list produces an empty result list. Other iterable
 shapes, non-dictionary list entries, or malformed record values are unsupported
 and fail later through normal Python unpacking, model assignment, validation, or
 save errors rather than through a custom AutoFactory exception. Lists are
-processed in order and AutoFactory does not add a transaction around the list,
-so a create-mode failure can leave earlier records saved.
+processed in order. In create mode, record saves from one returned list are
+atomic on the interface's selected database alias, so a failed later record
+rolls back earlier record saves from that list. This boundary does not include
+the later many-to-many assignment or wrapping steps, and it does not span
+separate factory calls or batches.
 
 Example:
 

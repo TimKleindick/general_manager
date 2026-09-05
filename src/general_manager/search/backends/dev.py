@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from threading import RLock
 
 from general_manager.search.backend import SearchDocument, SearchHit, SearchResult
+from general_manager.bucket._ordering import normalize_ordering, sort_items
 from general_manager.utils.filter_parser import apply_lookup
 
 
@@ -111,8 +112,7 @@ class DevSearchBackend:
         *,
         filters: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
         filter_expression: str | None = None,
-        sort_by: str | None = None,
-        sort_desc: bool = False,
+        sort: Sequence[str] | None = None,
         limit: int = 10,
         offset: int = 0,
         types: Sequence[str] | None = None,
@@ -145,14 +145,17 @@ class DevSearchBackend:
         sorting, and then pagination with `results[offset:offset + limit]`;
         negative values intentionally follow Python slice behavior.
         Scores sum matching field boosts, then multiply by `index_boost` when
-        set. Results sort by score descending unless `sort_by` is provided.
-        Sorting reads one raw document data field only. `None` and missing
+        set. Results sort by score descending unless `sort` is provided.
+        Sorting applies each signed document data field in sequence. `None` and missing
         fields are treated as missing and kept last for both ascending and
         descending sorts. `bool` values use Python's numeric ordering because
         `bool` is an `int` subclass. Other numeric values sort numerically,
         and every non-numeric, non-missing value is compared as `str(value)`.
-        Python's stable sort preserves insertion order for otherwise equal
-        keys, including equal-score default ordering. The backend stores
+        Explicit sort ties use complete logical document identity (type and
+        typed identification), then adapter document metadata, so page
+        membership agrees with manager ordering. Source insertion order is
+        preserved when no usable logical identity exists or identities are
+        equal, including equal-score default ordering. The backend stores
         document and settings objects by reference, returns hit data from the
         stored `SearchDocument.data` mapping, is
         process-local memory only, and does not provide persistence or ordinary
@@ -174,8 +177,9 @@ class DevSearchBackend:
                 mixed-type comparisons and invalid lookup/value combinations
                 return `False`, and `None` compares only through `exact`.
             filter_expression (str | None): Unsupported in this backend; passing a value raises NotImplementedError.
-            sort_by (str | None): One document data field name to sort results by; if omitted results are sorted by score.
-            sort_desc (bool): If True, sort results in descending order for the chosen sort key.
+            sort (Sequence[str] | None): Signed document data field names.
+                Prefix a field with ``-`` for descending order. If omitted,
+                results are sorted by score.
             limit (int): Maximum number of hits to return. Native slice
                 semantics apply, including for negative values.
             offset (int): Number of matching results to skip before collecting hits. Native slice semantics apply, including for negative values.
@@ -202,9 +206,7 @@ class DevSearchBackend:
         results: list[tuple[SearchDocument, float]] = []
 
         for doc_id, document in store.documents.items():
-            if types and document.type not in types:
-                continue
-            if filters and not self._passes_filters(document, filters):
+            if not self._matches_predicates(document, filters=filters, types=types):
                 continue
             score = self._score_document(
                 document, tokens, store.token_index.get(doc_id)
@@ -213,21 +215,19 @@ class DevSearchBackend:
                 continue
             results.append((document, score))
 
-        if sort_by:
-
-            def _value_key(
-                item: tuple[SearchDocument, float],
-            ) -> tuple[int, float, str]:
-                """Build a stable sort key for numeric, string, and missing values."""
-                value = item[0].data.get(sort_by)
-                if value is None:
-                    return (2, 0.0, "")
-                if isinstance(value, (int, float)):
-                    return (0, float(value), "")
-                return (1, 0.0, str(value))
-
-            results.sort(key=_value_key, reverse=sort_desc)
-            results.sort(key=lambda item: item[0].data.get(sort_by) is None)
+        terms = normalize_ordering(sort if sort is not None else ())
+        if terms:
+            results = sort_items(
+                results,
+                terms,
+                value_for=lambda item, field: item[0].data.get(field),
+                identity_for=lambda item: (
+                    item[0].type,
+                    item[0].identification,
+                    item[0].index,
+                    item[0].id,
+                ),
+            )
         else:
             results.sort(key=lambda item: item[1], reverse=True)
         sliced = results[offset : offset + limit]
@@ -414,3 +414,15 @@ class DevSearchBackend:
             if not apply_lookup(doc_value, lookup, value):
                 return False
         return True
+
+    def _matches_predicates(
+        self,
+        document: SearchDocument,
+        *,
+        filters: Mapping[str, object] | Sequence[Mapping[str, object]] | None,
+        types: Sequence[str] | None,
+    ) -> bool:
+        """Return whether a document satisfies both type and filter predicates."""
+        if types and document.type not in types:
+            return False
+        return not filters or self._passes_filters(document, filters)

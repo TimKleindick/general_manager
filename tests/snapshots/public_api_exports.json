@@ -1081,7 +1081,7 @@
       "UnknownInputFieldError"
     ],
     "args_to_kwargs": [
-      "general_manager.utils.args_to_kwargs",
+      "general_manager.utils._args_to_kwargs",
       "args_to_kwargs"
     ],
     "camel_to_snake": [
@@ -1093,11 +1093,11 @@
       "create_filter_function"
     ],
     "make_cache_key": [
-      "general_manager.utils.make_cache_key",
+      "general_manager.utils._make_cache_key",
       "make_cache_key"
     ],
     "none_to_zero": [
-      "general_manager.utils.none_to_zero",
+      "general_manager.utils._none_to_zero",
       "none_to_zero"
     ],
     "parse_filters": [

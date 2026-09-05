@@ -8,6 +8,14 @@ the same predicate should run for both `create()` and `update()`.
 Keep the predicate in source code that Python can inspect. Attach it through the
 interface `Meta.rules` list:
 
+Rule uses the callable's Python 3.12 code positions to isolate the predicate
+body before it derives referenced fields. This keeps same-line or nested
+lambdas scoped to their own attributes. If source positions cannot identify a
+single callable, construction raises a focused source-ambiguity error; split
+the expressions into separate source locations when that occurs. An evaluation
+clears its previous result before extracting values or invoking the predicate,
+so an exception cannot leave a stale failure available for a later message.
+
 ```python
 from django.db.models import CASCADE, CharField, ForeignKey, IntegerField
 

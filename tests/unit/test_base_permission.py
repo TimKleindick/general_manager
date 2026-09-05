@@ -214,6 +214,14 @@ class BasePermissionTests(TestCase):
         result = self.permission_obj.validate_permission_string("dummy:pass&dummy:fail")
         self.assertFalse(result)
 
+    def test_can_read_instance_returns_false_when_all_candidates_are_denied(self):
+        """A concrete denied read candidate is an ordinary boolean denial."""
+        DummyPermission.read_permissions = {"name": "dummy:deny"}
+        permission_data = PermissionDataManager({"name": "value"})
+        permission = DummyPermission(permission_data, self.dummy_user)
+
+        self.assertFalse(permission.can_read_instance())
+
     def test_validate_permission_string_short_circuits_on_false(self):
         """A denied fragment should stop later permission lookups."""
         result = self.permission_obj.validate_permission_string(

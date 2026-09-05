@@ -27,24 +27,19 @@ from general_manager.api.graphql_warmup_registry import (
     register_graphql_warmup_recipe,
 )
 from general_manager.api.property import GraphQLProperty, graph_ql_property
+from general_manager.manager import GeneralManager
+from general_manager.interface import CalculationInterface
 
 
-class WarmUpObject:
+class WarmUpObject(GeneralManager):
     """Timeout-backed warm-up manager used by executor tests."""
 
     calls = 0
     seen_search_dates: ClassVar[list[object]] = []
 
     def __init__(self, id: int) -> None:
-        """Store identification for recipe reconstruction."""
-        self.identification = {"id": id}
-        self.id = id
-        self._effective_search_date = current_as_of_date()
+        super().__init__(id)
         type(self).seen_search_dates.append(current_as_of_date())
-
-    def __str__(self) -> str:
-        """Return a deterministic representation for cache-key generation."""
-        return f"WarmUpObject(**{{'id': {self.id}}})"
 
     @classmethod
     def all(cls) -> list["WarmUpObject"]:
@@ -56,9 +51,15 @@ class WarmUpObject:
         """Return a computed score and count evaluations."""
         type(self).calls += 1
         type(self).seen_search_dates.append(current_as_of_date())
-        return self.id * 10
+        return int(self.identification["id"]) * 10
 
-    class Interface:
+    class Interface(CalculationInterface):
+        input_fields: ClassVar[dict] = {}
+        _as_of_behavior = "transparent"
+
+        def __init__(self, id: int) -> None:
+            self.identification = {"id": id}
+
         """Expose the warmable GraphQL property for tests."""
 
         @staticmethod
@@ -67,19 +68,10 @@ class WarmUpObject:
             return {"score": WarmUpObject.score}
 
 
-class DependencyWarmUpObject:
+class DependencyWarmUpObject(GeneralManager):
     """Dependency-backed warm-up manager used by recipe tests."""
 
     calls = 0
-
-    def __init__(self, id: int) -> None:
-        """Store identification for dependency recipe reconstruction."""
-        self.identification = {"id": id}
-        self.id = id
-
-    def __str__(self) -> str:
-        """Return a deterministic representation for cache-key generation."""
-        return f"DependencyWarmUpObject(**{{'id': {self.id}}})"
 
     @classmethod
     def all(cls) -> list["DependencyWarmUpObject"]:
@@ -90,9 +82,14 @@ class DependencyWarmUpObject:
     def score(self) -> int:
         """Return a dependency-backed score and count evaluations."""
         type(self).calls += 1
-        return self.id * 100
+        return int(self.identification["id"]) * 100
 
-    class Interface:
+    class Interface(CalculationInterface):
+        input_fields: ClassVar[dict] = {}
+
+        def __init__(self, id: int) -> None:
+            self.identification = {"id": id}
+
         """Expose dependency-backed warmable properties for tests."""
 
         @staticmethod
@@ -101,19 +98,10 @@ class DependencyWarmUpObject:
             return {"score": DependencyWarmUpObject.score}
 
 
-class AlternateWarmUpObject:
+class AlternateWarmUpObject(GeneralManager):
     """Second timeout-backed manager for shared property-name filtering tests."""
 
     calls = 0
-
-    def __init__(self, id: int) -> None:
-        """Store identification for recipe reconstruction."""
-        self.identification = {"id": id}
-        self.id = id
-
-    def __str__(self) -> str:
-        """Return a deterministic representation for cache-key generation."""
-        return f"AlternateWarmUpObject(**{{'id': {self.id}}})"
 
     @classmethod
     def all(cls) -> list["AlternateWarmUpObject"]:
@@ -124,9 +112,14 @@ class AlternateWarmUpObject:
     def score(self) -> int:
         """Return a computed score and count evaluations."""
         type(self).calls += 1
-        return self.id * 20
+        return int(self.identification["id"]) * 20
 
-    class Interface:
+    class Interface(CalculationInterface):
+        input_fields: ClassVar[dict] = {}
+
+        def __init__(self, id: int) -> None:
+            self.identification = {"id": id}
+
         """Expose the warmable GraphQL property for tests."""
 
         @staticmethod
@@ -135,13 +128,8 @@ class AlternateWarmUpObject:
             return {"score": AlternateWarmUpObject.score}
 
 
-class FailingWarmUpObject:
+class FailingWarmUpObject(GeneralManager):
     """Warm-up manager whose property raises during evaluation."""
-
-    def __init__(self, id: int) -> None:
-        """Store identification for failure logging."""
-        self.identification = {"id": id}
-        self.id = id
 
     @classmethod
     def all(cls) -> list["FailingWarmUpObject"]:
@@ -153,7 +141,12 @@ class FailingWarmUpObject:
         """Raise to exercise warm-up failure isolation."""
         raise RuntimeError("boom")
 
-    class Interface:
+    class Interface(CalculationInterface):
+        input_fields: ClassVar[dict] = {}
+
+        def __init__(self, id: int) -> None:
+            self.identification = {"id": id}
+
         """Expose the failing warmable property for tests."""
 
         @staticmethod
@@ -504,15 +497,10 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
     def test_warm_up_records_no_recipe_for_local_manager_path(self) -> None:
         """Local manager classes are evaluated but not persisted as recipes."""
 
-        class LocalWarmUpObject:
+        class LocalWarmUpObject(GeneralManager):
             """Local manager whose import path cannot be reconstructed."""
 
             calls = 0
-
-            def __init__(self, id: int) -> None:
-                """Store identification for local warm-up."""
-                self.identification = {"id": id}
-                self.id = id
 
             @classmethod
             def all(cls) -> list["LocalWarmUpObject"]:
@@ -523,10 +511,15 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
             def score(self) -> int:
                 """Return a score and count local evaluations."""
                 type(self).calls += 1
-                return self.id
+                return int(self.identification["id"])
 
-            class Interface:
+            class Interface(CalculationInterface):
                 """Expose the local warmable property for tests."""
+
+                input_fields: ClassVar[dict] = {}
+
+                def __init__(self, id: int) -> None:
+                    self.identification = {"id": id}
 
                 @staticmethod
                 def get_graph_ql_properties() -> dict[str, GraphQLProperty]:
@@ -564,13 +557,31 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_rejects_non_mapping_identification(self) -> None:
         """Invalid instance identification raises a deliberate TypeError."""
-        with self.assertRaises(TypeError):
+        with (
+            patch(
+                "general_manager.cache.cache_decorator.make_cache_key",
+                return_value="key",
+            ),
+            patch(
+                "general_manager.api.graphql_warmup.make_cache_key", return_value="key"
+            ),
+            self.assertRaises(TypeError),
+        ):
             warm_up_graphql_properties([InvalidIdentificationWarmUpObject])
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_rejects_non_string_identification_keys(self) -> None:
         """Recipe identification keys must be valid kwargs."""
-        with self.assertRaises(TypeError):
+        with (
+            patch(
+                "general_manager.cache.cache_decorator.make_cache_key",
+                return_value="key",
+            ),
+            patch(
+                "general_manager.api.graphql_warmup.make_cache_key", return_value="key"
+            ),
+            self.assertRaises(TypeError),
+        ):
             warm_up_graphql_properties([NonStringIdentificationKeyWarmUpObject])
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})

@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import cast
+from typing import ClassVar, cast
 from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase
@@ -18,8 +18,10 @@ from general_manager.api.graphql_prefetch import (
 )
 from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.run_context import CalculationRunContext
+from general_manager.interface import CalculationInterface
+from general_manager.manager import GeneralManager
 from general_manager.api.property import GraphQLProperty, graph_ql_property
-from general_manager.utils.make_cache_key import make_cache_key
+from general_manager.utils._make_cache_key import make_cache_key
 
 
 def _prop() -> GraphQLProperty:
@@ -165,23 +167,25 @@ class GraphQLPrefetchSelectionTests(SimpleTestCase):
         self.assertEqual(selected, set())
 
 
-class PlannedObject:
-    def __init__(self, value: int) -> None:
-        self.value = value
-
+class PlannedObject(GeneralManager):
     @graph_ql_property(cache="dependency")
     def computed_value(self) -> int:
-        return self.value * 2
+        return int(self.identification["value"]) * 2
 
     @graph_ql_property(cache="dependency")
     def other_computed_value(self) -> int:
-        return self.value * 4
+        return int(self.identification["value"]) * 4
 
     @graph_ql_property(cache="run")
     def run_value(self) -> int:
-        return self.value * 3
+        return int(self.identification["value"]) * 3
 
-    class Interface:
+    class Interface(CalculationInterface):
+        input_fields: ClassVar[dict] = {}
+
+        def __init__(self, value: int) -> None:
+            self.identification = {"value": value}
+
         @staticmethod
         def get_graph_ql_properties() -> dict[str, GraphQLProperty]:
             return {

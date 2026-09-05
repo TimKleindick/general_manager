@@ -10,6 +10,8 @@ from django.test import SimpleTestCase
 
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_cache import (
+    DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION,
+    DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION,
     DEPENDENCY_CACHE_ENTRY_VERSION,
     DependencyCacheEntry,
     DependencyCacheHit,
@@ -178,6 +180,18 @@ class DependencyCacheEntryTests(SimpleTestCase):
             marker,
         )
 
+    def test_empty_legacy_dependencies_are_valid_hit(self) -> None:
+        cache_backend = PickleCache()
+        cache_backend.set("cache-a", "value", None)
+        cache_backend.set("cache-a:deps", (), None)
+
+        hit = read_dependency_cache_hit(cache_backend, "cache-a")
+
+        self.assertIsInstance(hit, DependencyCacheHit)
+        assert isinstance(hit, DependencyCacheHit)
+        self.assertEqual(hit.value, "value")
+        self.assertEqual(hit.dependencies, frozenset())
+
     def test_plain_dict_value_is_not_misclassified_as_combined_payload(self) -> None:
         cache_backend = PickleCache()
         value = {
@@ -311,6 +325,24 @@ class DependencyCacheEntryTests(SimpleTestCase):
             read_many_dependency_cache_hits(cache_backend, ["cache-a"]), {}
         )
 
+    def test_bulk_read_mixed_entries_preserves_input_order(self) -> None:
+        cache_backend = PickleCache()
+        dependencies: set[Dependency] = {("Project", "identification", '{"id": 1}')}
+        cache_backend.set("legacy", "legacy-value", None)
+        cache_backend.set("legacy:deps", dependencies, None)
+        cache_backend.set(
+            "combined",
+            make_dependency_cache_entry("combined-value", dependencies),
+            None,
+        )
+
+        hits = read_many_dependency_cache_hits(cache_backend, ["legacy", "combined"])
+
+        self.assertEqual(list(hits), ["legacy", "combined"])
+        self.assertEqual(
+            [hits[key].value for key in hits], ["legacy-value", "combined-value"]
+        )
+
     def test_bulk_read_falls_back_to_single_reads_without_get_many(self) -> None:
         cache_backend = PickleCacheWithoutGetMany()
         dependencies: set[Dependency] = {("Project", "identification", '{"id": 1}')}
@@ -333,7 +365,7 @@ class DependencyCacheEntryTests(SimpleTestCase):
         cache_backend.set(
             "bundle",
             DependencyCachePrefetchBundle(
-                version=1,
+                version=DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION,
                 entries={
                     "cache-a": valid_entry,
                     "cache-legacy": DependencyCacheEntry(
@@ -385,16 +417,39 @@ class DependencyCacheEntryTests(SimpleTestCase):
             {},
         )
 
+    def test_prefetch_bundle_readers_reject_version_one_payloads(self) -> None:
+        """The v2 namespace does not revive pre-migration bundle payloads."""
+        cache_backend = PickleCache()
+        cache_backend.set(
+            "bundle",
+            DependencyCachePrefetchBundle(version=1, entries={}),
+            None,
+        )
+        cache_backend.set(
+            "values",
+            DependencyCachePrefetchValueBundle(version=1, values={"cache-a": 1}),
+            None,
+        )
+
+        self.assertEqual(
+            read_dependency_cache_prefetch_bundle_entries(cache_backend, "bundle"),
+            {},
+        )
+        self.assertEqual(
+            read_dependency_cache_prefetch_bundle_values(cache_backend, "values"),
+            {},
+        )
+
     def test_prefetch_bundle_readers_reject_non_mapping_payloads(self) -> None:
         class DirectCache:
             def __init__(self) -> None:
                 self.store: dict[str, object] = {
                     "bundle": DependencyCachePrefetchBundle(
-                        version=1,
+                        version=DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION,
                         entries="not a mapping",  # type: ignore[arg-type]
                     ),
                     "values": DependencyCachePrefetchValueBundle(
-                        version=1,
+                        version=DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION,
                         values="not a mapping",  # type: ignore[arg-type]
                     ),
                 }
@@ -454,7 +509,7 @@ class DependencyCacheEntryTests(SimpleTestCase):
         cache_backend.set(
             "bundle",
             DependencyCachePrefetchBundle(
-                version=1,
+                version=DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION,
                 entries={
                     "cache-a": valid_entry,
                     "cache-future": DependencyCacheEntry(
@@ -476,7 +531,7 @@ class DependencyCacheEntryTests(SimpleTestCase):
         cache_backend.set(
             "values",
             DependencyCachePrefetchValueBundle(
-                version=1,
+                version=DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION,
                 values={
                     "cache-a": "ready",
                     1: "ignored",  # type: ignore[dict-item]

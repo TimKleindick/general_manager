@@ -42,7 +42,9 @@ class MutationPermission:
     denies only when no base class provides it. ``__mutate__`` and field-specific
     values must be ``list`` instances whose items are all strings. Invalid
     ``__mutate__`` values deny the global gate; invalid field values are ignored.
-    Field-specific lists are collected only from the concrete class dictionary.
+    Field-specific lists are collected across the permission class MRO, with a
+    valid child declaration overriding an inherited declaration of the same
+    field.
     """
 
     __mutate__: ClassVar[list[str]]
@@ -95,13 +97,16 @@ class MutationPermission:
     def __get_attribute_permissions(
         self,
     ) -> dict[str, list[str]]:
-        """Collect concrete-class ``list[str]`` field permission declarations."""
+        """Collect ``list[str]`` field declarations across the class MRO."""
         attribute_permissions: dict[str, list[str]] = {}
-        for attribute, value in self.__class__.__dict__.items():
-            if attribute.startswith("__"):
-                continue
-            if isinstance(value, list) and all(isinstance(item, str) for item in value):
-                attribute_permissions[attribute] = list(value)
+        for permission_class in reversed(self.__class__.__mro__):
+            for attribute, value in vars(permission_class).items():
+                if attribute.startswith("__"):
+                    continue
+                if isinstance(value, list) and all(
+                    isinstance(item, str) for item in value
+                ):
+                    attribute_permissions[attribute] = list(value)
         return attribute_permissions
 
     def describe_permissions(self, attribute: str) -> tuple[str, ...]:

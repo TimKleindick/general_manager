@@ -1,10 +1,9 @@
 """Database-backed bucket implementation for GeneralManager collections."""
 
 from __future__ import annotations
-from collections.abc import Callable, Hashable, Iterable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from operator import attrgetter
 from typing import TYPE_CHECKING, Generator, TypeGuard, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, FieldDoesNotExist, FieldError
@@ -13,6 +12,12 @@ from django.db.models.sql.query import Query
 from simple_history.models import HistoricalChanges
 
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket._ordering import (
+    SortTerm,
+    normalize_ordering,
+    resolve_ordering_value,
+    sort_items,
+)
 from general_manager.as_of import (
     HistoricalContextConflictError,
     SearchDateInput,
@@ -52,6 +57,15 @@ MAX_RUN_SCOPED_BUCKET_RESULT_ROWS = 1000
 _QUERY_SIGNATURE_NOT_COMPUTED = object()
 _FIRST_ROW_CACHE_MISS = object()
 _FIRST_ROW_CACHE_NONE = object()
+
+
+def _ordering_path_getter(field: str) -> Callable[[object], object]:
+    """Build a relation-aware value accessor for Python ordering fallback."""
+
+    def getter(value: object) -> object:
+        return resolve_ordering_value(value, field)
+
+    return getter
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,8 +224,7 @@ def _restore_database_bucket_from_primary_keys(
     exclude_definitions: FilterDefinitions,
     database_alias: str | None,
     search_date: datetime | date | None,
-    sort_keys: tuple[str, ...] | None,
-    sort_reverse: bool,
+    sort_fields: tuple[str, ...],
 ) -> DatabaseBucket[GeneralManagerType]:
     active = current_as_of_date()
     if active is not None:
@@ -235,15 +248,15 @@ def _restore_database_bucket_from_primary_keys(
             output_field=models.IntegerField(),
         )
         queryset = manager.filter(pk__in=primary_keys).order_by(preserved_order)
-    return DatabaseBucket(
+    bucket = DatabaseBucket(
         queryset,
         manager_class,
         filter_definitions,
         exclude_definitions,
         search_date=search_date,
-        sort_keys=sort_keys,
-        sort_reverse=sort_reverse,
     )
+    bucket._sort_fields = sort_fields
+    return bucket
 
 
 class DatabaseBucket(Bucket[GeneralManagerType]):
@@ -257,8 +270,6 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         exclude_definitions: FilterDefinitions | None = None,
         *,
         search_date: datetime | date | None = None,
-        sort_keys: tuple[str, ...] | None = None,
-        sort_reverse: bool = False,
         run_scoped_cacheable: bool = True,
     ) -> None:
         """
@@ -275,8 +286,6 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             filter_definitions (FilterDefinitions | None): Pre-existing filter expressions captured from parent buckets.
             exclude_definitions (FilterDefinitions | None): Pre-existing exclusion expressions captured from parent buckets.
             search_date (datetime | date | None): Optional timestamp applied when instantiating manager instances.
-            sort_keys (tuple[str, ...] | None): Property names used by a previous bucket sort operation.
-            sort_reverse (bool): Whether sorted keys should be interpreted in descending order for dependency tracking.
             run_scoped_cacheable (bool): Whether terminal results from this bucket are safe to reuse inside the active calculation run.
 
         Returns:
@@ -291,8 +300,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             exclude_definitions
         )
         self._search_date = search_date
-        self._sort_keys = sort_keys
-        self._sort_reverse = sort_reverse
+        self._sort_fields: tuple[str, ...] = ()
         self._run_scoped_cacheable = run_scoped_cacheable
         self._query_signature_cache: tuple[Hashable, ...] | None | object = (
             _QUERY_SIGNATURE_NOT_COMPUTED
@@ -332,10 +340,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self.filters,
             self.excludes,
             search_date=self._search_date,
-            sort_keys=self._sort_keys,
-            sort_reverse=self._sort_reverse,
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
+        bucket._sort_fields = self._sort_fields
         bucket._set_trusted_query_signature(self._trusted_query_signature)
         return bucket
 
@@ -411,8 +418,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 self.excludes,
                 self._data.db,
                 self._search_date,
-                self._sort_keys,
-                self._sort_reverse,
+                self._sort_fields,
             ),
         )
 
@@ -517,8 +523,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 "trusted",
                 self._trusted_query_signature,
                 self._search_date,
-                self._sort_keys,
-                self._sort_reverse,
+                self._sort_fields,
             )
             self._query_signature_cache = signature
             return signature
@@ -554,8 +559,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             sql,
             tuple(params),
             self._search_date,
-            self._sort_keys,
-            self._sort_reverse,
+            self._sort_fields,
         )
         self._query_signature_cache = signature
         return signature
@@ -771,7 +775,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def _track_effective_dependencies(self) -> None:
         """Record the bucket's effective filter/exclude state when it is evaluated."""
         manager_name = type.__getattribute__(self._manager_class, "__name__")
-        needs_sort_payload = bool(self._sort_keys)
+        needs_sort_payload = bool(self._sort_fields)
         normalized_filters = (
             self._normalize_dependency_mapping(self.filters)
             if self.filters or needs_sort_payload
@@ -796,17 +800,16 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 "exclude",
                 serialize_dependency_identifier(normalized_excludes),
             )
-        if self._sort_keys:
-            for sort_key in self._sort_keys:
+        if self._sort_fields:
+            for sort_field in self._sort_fields:
                 payload = {
                     "filters": normalized_filters,
                     "excludes": normalized_excludes,
-                    "reverse": self._sort_reverse,
                 }
                 DependencyTracker._track_validated(
                     manager_name,
                     "filter",
-                    serialize_dependency_identifier({f"__sort__{sort_key}": payload}),
+                    serialize_dependency_identifier({f"__sort__{sort_field}": payload}),
                 )
 
     @staticmethod
@@ -1050,15 +1053,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def __or__(
         self,
         other: Bucket[GeneralManagerType] | GeneralManagerType,
-    ) -> DatabaseBucket[GeneralManagerType]:
+    ) -> Bucket[GeneralManagerType]:
         """
-        Produce a new DatabaseBucket representing the union of this bucket with another DatabaseBucket or a GeneralManager instance of the same manager class.
+        Produce an exact left-first materialized union with a compatible bucket
+        or manager instance.
 
         Parameters:
             other (Bucket[GeneralManagerType] | GeneralManagerType): The bucket or manager instance to merge with this bucket.
 
         Returns:
-            DatabaseBucket[GeneralManagerType]: A new bucket containing the combined items from both operands.
+            Bucket[GeneralManagerType]: An exact subset retaining the left
+            instances and order while removing duplicate manager identities.
 
         Raises:
             DatabaseBucketTypeMismatchError: If `other` is not a DatabaseBucket of the same class and not a compatible GeneralManager.
@@ -1066,13 +1071,15 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             DatabaseBucketSearchDateMismatchError: If both buckets target the same manager but have different search dates.
         """
         self._ensure_as_of_compatible()
+        from general_manager.bucket._materialized_bucket import MaterializedBucket
+
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
             other._ensure_as_of_compatible()
-            return self.__or__(
-                self._manager_class.filter(
-                    id__in=[other.identification["id"]],
-                    search_date=self._search_date,
+            return (
+                MaterializedBucket(
+                    self._manager_class, tuple(self), snapshot=self._search_date
                 )
+                | other
             )
         if not isinstance(other, self.__class__):
             raise DatabaseBucketTypeMismatchError(self.__class__, type(other))
@@ -1085,21 +1092,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             raise DatabaseBucketSearchDateMismatchError(
                 self._search_date, other._search_date
             )
-        filters = self._copy_filter_definitions(self.filters)
-        for key, values in other.filters.items():
-            filters.setdefault(key, []).extend(values)
-        excludes = self._copy_filter_definitions(self.excludes)
-        for key, values in other.excludes.items():
-            excludes.setdefault(key, []).extend(values)
-        return self.__class__(
-            self._data | other._data,
-            self._manager_class,
-            filters,
-            excludes,
-            search_date=self._search_date,
-            sort_keys=self._sort_keys,
-            sort_reverse=self._sort_reverse,
-            run_scoped_cacheable=False,
+        return MaterializedBucket(
+            self._manager_class, tuple(self), snapshot=self._search_date
+        ) | MaterializedBucket(
+            self._manager_class, tuple(other), snapshot=self._search_date
         )
 
     def __merge_filter_definitions(
@@ -1262,10 +1258,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             merged_filter,
             self.excludes,
             search_date=search_date,
-            sort_keys=self._sort_keys,
-            sort_reverse=self._sort_reverse,
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
+        bucket._sort_fields = self._sort_fields
         if not annotations and not python_filters:
             bucket._set_trusted_query_signature(
                 self._trusted_query_signature_with("filter", orm_kwargs)
@@ -1341,10 +1336,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self.filters,
             merged_exclude,
             search_date=search_date,
-            sort_keys=self._sort_keys,
-            sort_reverse=self._sort_reverse,
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
+        bucket._sort_fields = self._sort_fields
         if not annotations and not python_filters:
             bucket._set_trusted_query_signature(
                 self._trusted_query_signature_with("exclude", orm_kwargs)
@@ -1459,10 +1453,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self.filters,
             self.excludes,
             search_date=self._search_date,
-            sort_keys=self._sort_keys,
-            sort_reverse=self._sort_reverse,
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
+        bucket._sort_fields = self._sort_fields
         bucket._set_trusted_query_signature(self._trusted_query_signature)
         return bucket
 
@@ -1512,32 +1505,34 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def __getitem__(
         self, item: int | slice
-    ) -> GeneralManagerType | DatabaseBucket[GeneralManagerType]:
+    ) -> GeneralManagerType | Bucket[GeneralManagerType]:
         """
         Access manager instances by index or obtain a sliced bucket.
 
-        Slices return a lazy DatabaseBucket. Scalar indexes return a manager
-        instance; when a run-scoped snapshot path is used, negative scalar
-        indexes raise ValueError. Otherwise normal Django queryset indexing
-        exceptions propagate.
+        Slices evaluate only the requested queryset range and return an exact
+        materialized subset. Scalar indexes return a manager instance; when a
+        run-scoped snapshot path is used, negative scalar indexes raise
+        ValueError. Otherwise normal Django queryset indexing exceptions
+        propagate.
 
         Parameters:
             item (int | slice): Index of the desired row or slice object describing a range.
 
         Returns:
-            GeneralManagerType | DatabaseBucket[GeneralManagerType]: Manager instance for single indices or bucket wrapping the sliced queryset.
+            GeneralManagerType | Bucket[GeneralManagerType]: Manager instance
+            for single indices or an exact subset for slices.
         """
         self._ensure_as_of_compatible()
         if isinstance(item, slice):
-            return self.__class__(
-                self._data[item],
+            from general_manager.bucket._materialized_bucket import MaterializedBucket
+
+            self._track_effective_dependencies()
+            return MaterializedBucket(
                 self._manager_class,
-                self.filters,
-                self.excludes,
-                search_date=self._search_date,
-                sort_keys=self._sort_keys,
-                sort_reverse=self._sort_reverse,
-                run_scoped_cacheable=self._run_scoped_cacheable,
+                tuple(
+                    self._build_manager_from_instance(row) for row in self._data[item]
+                ),
+                snapshot=self._search_date,
             )
         self._track_effective_dependencies()
         rows = self._peek_run_scoped_rows()
@@ -1648,17 +1643,22 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def sort(
         self,
-        key: tuple[str, ...] | str,
-        reverse: bool = False,
+        *fields: str,
     ) -> DatabaseBucket[GeneralManagerType]:
         """
         Return a new DatabaseBucket ordered by the given property name(s).
 
-        Accepts a single property name or a tuple of property names. Properties with ORM annotations are applied at the database level; properties without ORM annotations are evaluated in Python and the resulting records are re-ordered while preserving a queryset result. Python-only sorts materialize candidate rows, sort them in memory, then preserve that materialized order with a Django `Case` annotation. Stable ordering and preservation of manager wrapping are maintained.
+        Each signed field controls its own direction: prefix a field with ``-``
+        for descending order. Properties with ORM annotations are applied at the
+        database level; properties without ORM annotations are evaluated in
+        Python and the resulting records are re-ordered while preserving a
+        queryset result. Python-only sorts materialize candidate rows, sort
+        them in memory, then preserve that materialized order with a Django
+        `Case` annotation. Stable ordering and preservation of manager wrapping
+        are maintained, with null values last in either direction.
 
         Parameters:
-            key (str | tuple[str, ...]): Property name or sequence of property names to sort by, applied in order of appearance.
-            reverse (bool): If True, sort each specified key in descending order.
+            fields: Signed property names, applied in order of appearance.
 
         Returns:
             DatabaseBucket[GeneralManagerType]: A new bucket whose underlying queryset is ordered according to the requested keys.
@@ -1669,10 +1669,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             QuerysetOrderingError: If the ORM rejects the constructed ordering (e.g., invalid field or incompatible ordering expression).
         """
         self._ensure_as_of_compatible()
-        if isinstance(key, str):
-            key = (key,)
+        terms = normalize_ordering(fields)
+        if not terms:
+            return self.all()
+        key = tuple(term.field for term in terms)
         properties = self._manager_class.Interface.get_graph_ql_properties()
         attribute_types = self._manager_class.Interface.get_attribute_types()
+        self._validate_ordering_paths(terms, properties, attribute_types)
         annotations: dict[str, QueryAnnotation] = {}
         python_keys: list[str] = []
         qs = self._data
@@ -1706,12 +1709,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 attribute_root = normalized_key.split("__", maxsplit=1)[0]
                 field_info = attribute_types.get(attribute_root)
                 if field_info is None or field_info.get("relation_kind") != "direct":
-                    model_getters[nested_key] = attrgetter(
-                        nested_key.replace("__", ".")
-                    )
+                    model_getters[nested_key] = _ordering_path_getter(nested_key)
                     continue
 
-                manager_getters[nested_key] = attrgetter(nested_key.replace("__", "."))
+                manager_getters[nested_key] = _ordering_path_getter(nested_key)
                 filter_lookup = field_info.get("filter_lookup")
                 relation_root = (
                     filter_lookup if isinstance(filter_lookup, str) else attribute_root
@@ -1744,7 +1745,30 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                         values.append(model_getters[k](obj))
                 return tuple(values)
 
-            objs.sort(key=key_func, reverse=reverse)
+            primary_key = qs.model._meta.pk
+            if primary_key is None:
+                raise QuerysetOrderingError(FieldError("The model has no primary key."))
+            primary_key_name = primary_key.name
+            has_primary_key_term = any(
+                term.field
+                in {
+                    primary_key_name,
+                    primary_key.attname,
+                }
+                for term in terms
+            )
+            ordering_terms = (
+                terms if has_primary_key_term else (*terms, SortTerm(primary_key_name))
+            )
+            objs = sort_items(
+                objs,
+                ordering_terms,
+                value_for=lambda obj, field: (
+                    obj.pk
+                    if field == primary_key_name and field not in key
+                    else key_func(obj)[key.index(field)]
+                ),
+            )
             ordered_ids = [obj.pk for obj in objs]
             case = models.Case(
                 *[models.When(pk=pk, then=pos) for pos, pk in enumerate(ordered_ids)],
@@ -1766,8 +1790,22 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 return f"{filter_lookup}__{remainder}"
 
             order_fields = [
-                f"-{orm_sort_key(k)}" if reverse else orm_sort_key(k) for k in key
+                (
+                    models.F(orm_sort_key(term.field)).desc(nulls_last=True)
+                    if term.descending
+                    else models.F(orm_sort_key(term.field)).asc(nulls_last=True)
+                )
+                for term in terms
             ]
+            primary_key = qs.model._meta.pk
+            if primary_key is None:
+                raise QuerysetOrderingError(FieldError("The model has no primary key."))
+            primary_key_name = primary_key.name
+            if not any(
+                orm_sort_key(term.field) in {primary_key_name, primary_key.attname}
+                for term in terms
+            ):
+                order_fields.append(models.F(primary_key_name).asc())
             try:
                 qs = qs.order_by(*order_fields)
             except (FieldError, TypeError, ValueError) as error:
@@ -1779,13 +1817,59 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self.filters,
             self.excludes,
             search_date=self._search_date,
-            sort_keys=key,
-            sort_reverse=reverse,
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
+        bucket._sort_fields = tuple(term.signed_field for term in terms)
         if not annotations and not python_keys:
             bucket._set_trusted_query_signature(self._trusted_query_signature)
         return bucket
+
+    def _validate_ordering_paths(
+        self,
+        terms: Sequence[SortTerm],
+        properties: Mapping[str, object],
+        attribute_types: Mapping[str, Mapping[str, object]],
+    ) -> None:
+        """Validate ORM paths now, before an empty queryset can hide a typo."""
+        for term in terms:
+            field_name = term.field
+            parts = field_name.split("__")
+            if parts[0] in properties:
+                if len(parts) == 1:
+                    continue
+                raise QuerysetOrderingError(
+                    FieldError(f"Cannot resolve keyword {field_name!r} into field.")
+                )
+
+            field_info = attribute_types.get(parts[0], {})
+            filter_lookup = field_info.get("filter_lookup")
+            model_parts = [
+                filter_lookup if isinstance(filter_lookup, str) else parts[0],
+                *parts[1:],
+            ]
+            current_model = self._data.model
+            for position, part in enumerate(model_parts):
+                try:
+                    model_field = current_model._meta.get_field(part)
+                except FieldDoesNotExist as error:
+                    if (
+                        position == 0
+                        and parts[0] in attribute_types
+                        and len(parts) == 1
+                    ):
+                        # Some interface fields are computed on the manager and
+                        # are evaluated by the existing Python ordering path.
+                        break
+                    raise QuerysetOrderingError(
+                        FieldError(f"Cannot resolve keyword {field_name!r} into field.")
+                    ) from error
+                if position + 1 == len(model_parts):
+                    continue
+                if not model_field.is_relation or model_field.related_model is None:
+                    raise QuerysetOrderingError(
+                        FieldError(f"Cannot resolve keyword {field_name!r} into field.")
+                    )
+                current_model = model_field.related_model
 
     def none(self) -> DatabaseBucket[GeneralManagerType]:
         """
@@ -1807,15 +1891,18 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def with_instances(
         self,
         instances: Iterable[GeneralManagerType],
-    ) -> DatabaseBucket[GeneralManagerType]:
-        """Return a source-ordered subset selected by manager primary keys."""
+    ) -> Bucket[GeneralManagerType]:
+        """Return the exact supplied manager objects in their supplied order."""
         self._ensure_as_of_compatible()
-        ids: list[object] = []
-        for instance in instances:
+        from general_manager.bucket._materialized_bucket import MaterializedBucket
+
+        selected = tuple(instances)
+        for instance in selected:
             if not isinstance(instance, GeneralManager) or (
                 instance.__class__ != self._manager_class
             ):
                 raise DatabaseBucketTypeMismatchError(self.__class__, type(instance))
             instance._ensure_as_of_compatible()
-            ids.append(instance.identification["id"])
-        return self.filter(id__in=ids) if ids else self.none()
+        return MaterializedBucket(
+            self._manager_class, selected, snapshot=self._search_date
+        )

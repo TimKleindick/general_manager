@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
 from asgiref.sync import async_to_sync
@@ -77,7 +77,7 @@ async def _collect_streaming_content(response: Any) -> bytes:
 
 
 def _execute_tool_off_event_loop(result: Any) -> Any:
-    def _execute(*_args: object) -> Any:
+    def _execute(*_args: object, **_kwargs: object) -> Any:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -103,6 +103,25 @@ class _SummaryProvider:
         del messages, tools
         yield TextChunkEvent(content=" brief")
         yield TextChunkEvent(content=" summary ")
+
+
+class _NeverCompletingSummaryProvider:
+    provider_config: ClassVar[dict[str, float]] = {"timeout_seconds": 0.03}
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        while True:
+            await asyncio.sleep(0.001)
+            yield TextChunkEvent(content="still streaming")
+
+
+class _UsageSummaryProvider:
+    provider_config: ClassVar[dict[str, float]] = {"timeout_seconds": 1}
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        yield TextChunkEvent(content="summary")
+        yield DoneEvent(usage=TokenUsage(input_tokens=3, output_tokens=5))
 
 
 class _MutateSuccessProvider:
@@ -131,6 +150,66 @@ class _QueryLoopProvider:
             name="query",
             args={"manager": "Part", "fields": ["name"]},
         )
+
+
+class _TwoQueryRoundProvider:
+    def __init__(self) -> None:
+        self.calls: list[list[Message]] = []
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+        self.calls.append(list(messages))
+        if len(self.calls) == 1:
+            yield ToolCallEvent(
+                id="query-1",
+                name="query",
+                args={"manager": "Part", "fields": ["name"]},
+            )
+            return
+        if len(self.calls) == 2:
+            yield ToolCallEvent(
+                id="search-2",
+                name="search_managers",
+                args={"query": "parts", "limit": 2},
+            )
+            return
+        yield TextChunkEvent(content="Both calls completed.")
+        yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=3))
+
+
+class _TwoCallsInOneCompletionProvider:
+    def __init__(self) -> None:
+        self.calls: list[list[Message]] = []
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+        self.calls.append(list(messages))
+        if len(self.calls) == 1:
+            yield ToolCallEvent(
+                id="query-1",
+                name="query",
+                args={"manager": "Part", "fields": ["name"]},
+            )
+            yield ToolCallEvent(
+                id="search-2",
+                name="search_managers",
+                args={"query": "parts", "limit": 2},
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+            return
+        yield TextChunkEvent(content="Both calls completed.")
+        yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=3))
+
+
+class _MutationBatchProvider:
+    def __init__(self, events: list[ToolCallEvent]) -> None:
+        self.events = events
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        for event in self.events:
+            yield event
+        yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
 
 
 class _EmptyThenTextProvider:
@@ -194,6 +273,26 @@ class ChatViewHelperTests(SimpleTestCase):
 
         assert summary == "brief summary"
 
+    def test_summary_deadline_bounds_continuous_chunks(self) -> None:
+        with self.assertRaises(asyncio.TimeoutError):
+            async_to_sync(_summarize_messages_with_provider)(
+                _NeverCompletingSummaryProvider(),
+                [SimpleNamespace(role="user", tool_name="", content="hello")],
+            )
+
+    def test_summary_accounts_reported_usage_without_counting_a_request(self) -> None:
+        with patch("general_manager.chat.context.enforce_chat_rate_limit") as limit:
+            summary = async_to_sync(_summarize_messages_with_provider)(
+                _UsageSummaryProvider(),
+                [SimpleNamespace(role="user", tool_name="", content="hello")],
+                scope={"user": None},
+            )
+
+        assert summary == "summary"
+        limit.assert_called_once_with(
+            {"user": None}, input_tokens=3, output_tokens=5, count_request=False
+        )
+
     def test_build_messages_updates_empty_summary_when_history_is_long(self) -> None:
         conversation = SimpleNamespace(summary_text="")
         old_message = SimpleNamespace(role="user", content="old", tool_name="")
@@ -203,30 +302,32 @@ class ChatViewHelperTests(SimpleTestCase):
 
         with (
             patch(
-                "general_manager.chat.views.get_chat_settings",
+                "general_manager.chat.context.get_chat_settings",
                 return_value={"summarize_after": 1, "max_recent_messages": 1},
             ),
             patch(
-                "general_manager.chat.views.get_conversation_messages",
+                "general_manager.chat.context.get_conversation_messages",
                 return_value=[old_message, recent_message],
             ),
             patch(
                 "general_manager.chat.views._summarize_messages_with_provider",
                 new=AsyncMock(return_value="summary"),
             ),
-            patch("general_manager.chat.views.update_conversation_summary") as update,
+            patch("general_manager.chat.context.update_conversation_summary") as update,
             patch(
-                "general_manager.chat.views.build_conversation_context",
+                "general_manager.chat.context.build_conversation_context",
                 return_value=[recent_message],
             ),
             patch(
-                "general_manager.chat.views.build_system_prompt",
+                "general_manager.chat.context.build_system_prompt",
                 return_value="system",
             ),
         ):
             messages = async_to_sync(_build_messages)(conversation, object())
 
-        update.assert_called_once_with(conversation, summary_text="summary")
+        update.assert_called_once_with(
+            conversation, summary_text="summary", summarized_through=old_message
+        )
         assert [message.role for message in messages] == ["system", "assistant"]
 
     def test_build_messages_planned_mode_reuses_summary_without_provider_call(
@@ -244,11 +345,11 @@ class ChatViewHelperTests(SimpleTestCase):
 
         with (
             patch(
-                "general_manager.chat.views.get_chat_settings",
+                "general_manager.chat.context.get_chat_settings",
                 return_value={"summarize_after": 1, "max_recent_messages": 1},
             ),
             patch(
-                "general_manager.chat.views.get_conversation_messages",
+                "general_manager.chat.context.get_conversation_messages",
                 return_value=[old_message, recent_message],
             ),
             patch(
@@ -256,11 +357,11 @@ class ChatViewHelperTests(SimpleTestCase):
                 new=AsyncMock(),
             ) as summarize,
             patch(
-                "general_manager.chat.views.build_conversation_context",
+                "general_manager.chat.context.build_conversation_context",
                 return_value=[summary_message, recent_message],
             ),
             patch(
-                "general_manager.chat.views.build_system_prompt",
+                "general_manager.chat.context.build_system_prompt",
                 return_value="system",
             ),
         ):
@@ -287,11 +388,11 @@ class ChatViewHelperTests(SimpleTestCase):
 
         with (
             patch(
-                "general_manager.chat.views.get_chat_settings",
+                "general_manager.chat.context.get_chat_settings",
                 return_value={"summarize_after": 1, "max_recent_messages": 1},
             ),
             patch(
-                "general_manager.chat.views.get_conversation_messages",
+                "general_manager.chat.context.get_conversation_messages",
                 return_value=[old_message, recent_message],
             ),
             patch(
@@ -299,11 +400,11 @@ class ChatViewHelperTests(SimpleTestCase):
                 new=AsyncMock(),
             ) as summarize,
             patch(
-                "general_manager.chat.views.build_conversation_context",
+                "general_manager.chat.context.build_conversation_context",
                 return_value=[recent_message],
             ),
             patch(
-                "general_manager.chat.views.build_system_prompt",
+                "general_manager.chat.context.build_system_prompt",
                 return_value="system",
             ),
         ):
@@ -443,6 +544,247 @@ class ChatViewHelperTests(SimpleTestCase):
             "message": "Chat tool retry limit exceeded.",
             "code": "tool_retry_limit",
         }
+
+    def test_run_provider_turn_keeps_prior_structured_tool_exchange_for_later_call(
+        self,
+    ) -> None:
+        provider = _TwoQueryRoundProvider()
+
+        with (
+            patch(
+                "general_manager.chat.views.get_chat_settings",
+                return_value={
+                    "max_retries_per_message": 8,
+                    "recover_missing_tool_calls": False,
+                },
+            ),
+            patch("general_manager.chat.views.get_tool_definitions", return_value=[]),
+            patch(
+                "general_manager.chat.views.execute_chat_tool",
+                side_effect=[
+                    {"status": "success", "rows": [{"name": "A"}]},
+                    {"status": "success", "matches": ["PartManager"]},
+                ],
+            ),
+            patch("general_manager.chat.views.append_chat_message"),
+            patch("general_manager.chat.views.enforce_chat_rate_limit"),
+            patch("general_manager.chat.views.emit_chat_tool_called"),
+        ):
+            events = async_to_sync(_run_provider_turn)(
+                scope={},
+                conversation=object(),
+                provider=provider,
+                messages=[Message(role="user", content="Find parts")],
+                transport="sse",
+            )
+
+        history = provider.calls[2]
+        assert history[-4] == Message(
+            role="assistant",
+            content="",
+            tool_calls=(
+                ToolCallEvent(
+                    id="query-1",
+                    name="query",
+                    args={"manager": "Part", "fields": ["name"]},
+                ),
+            ),
+        )
+        assert history[-3] == Message(
+            role="tool",
+            content='{"rows": [{"name": "A"}], "status": "success"}',
+            tool_call_id="query-1",
+            tool_name="query",
+            tool_result={"status": "success", "rows": [{"name": "A"}]},
+        )
+        assert history[-2] == Message(
+            role="assistant",
+            content="",
+            tool_calls=(
+                ToolCallEvent(
+                    id="search-2",
+                    name="search_managers",
+                    args={"query": "parts", "limit": 2},
+                ),
+            ),
+        )
+        assert history[-1] == Message(
+            role="tool",
+            content='{"matches": ["PartManager"], "status": "success"}',
+            tool_call_id="search-2",
+            tool_name="search_managers",
+            tool_result={"status": "success", "matches": ["PartManager"]},
+        )
+        assert [event["id"] for event in events if event["type"] == "tool_result"] == [
+            "query-1",
+            "search-2",
+        ]
+
+    def test_run_provider_turn_retains_every_call_from_one_completion(self) -> None:
+        provider = _TwoCallsInOneCompletionProvider()
+
+        with (
+            patch(
+                "general_manager.chat.views.get_chat_settings",
+                return_value={
+                    "max_retries_per_message": 8,
+                    "recover_missing_tool_calls": False,
+                },
+            ),
+            patch("general_manager.chat.views.get_tool_definitions", return_value=[]),
+            patch(
+                "general_manager.chat.views.execute_chat_tool",
+                side_effect=[
+                    {"status": "success", "rows": [{"name": "A"}]},
+                    {"status": "success", "matches": ["PartManager"]},
+                ],
+            ) as execute_tool,
+            patch("general_manager.chat.views.append_chat_message"),
+            patch("general_manager.chat.views.enforce_chat_rate_limit"),
+            patch("general_manager.chat.views.emit_chat_tool_called"),
+        ):
+            events = async_to_sync(_run_provider_turn)(
+                scope={},
+                conversation=object(),
+                provider=provider,
+                messages=[Message(role="user", content="Find parts")],
+                transport="sse",
+            )
+
+        assert execute_tool.call_count == 2
+        assert provider.calls[1][-3] == Message(
+            role="assistant",
+            content="",
+            tool_calls=(
+                ToolCallEvent(
+                    id="query-1",
+                    name="query",
+                    args={"manager": "Part", "fields": ["name"]},
+                ),
+                ToolCallEvent(
+                    id="search-2",
+                    name="search_managers",
+                    args={"query": "parts", "limit": 2},
+                ),
+            ),
+        )
+        assert provider.calls[1][-2].tool_call_id == "query-1"
+        assert provider.calls[1][-2].tool_result == {
+            "status": "success",
+            "rows": [{"name": "A"}],
+        }
+        assert provider.calls[1][-1].tool_call_id == "search-2"
+        assert provider.calls[1][-1].tool_result == {
+            "status": "success",
+            "matches": ["PartManager"],
+        }
+        assert [event["id"] for event in events if event["type"] == "tool_result"] == [
+            "query-1",
+            "search-2",
+        ]
+
+    def test_run_provider_turn_rejects_mutation_batches_before_any_action(self) -> None:
+        batches = [
+            [
+                ToolCallEvent(
+                    id="mutate-1",
+                    name="mutate",
+                    args={"mutation": "createPart", "input": {"name": "A"}},
+                ),
+                ToolCallEvent(
+                    id="mutate-2",
+                    name="mutate",
+                    args={"mutation": "createPart", "input": {"name": "B"}},
+                ),
+            ],
+            [
+                ToolCallEvent(
+                    id="query-1",
+                    name="query",
+                    args={"manager": "Part", "fields": ["name"]},
+                ),
+                ToolCallEvent(
+                    id="mutate-1",
+                    name="mutate",
+                    args={"mutation": "createPart", "input": {"name": "A"}},
+                ),
+            ],
+        ]
+
+        for batch in batches:
+            with self.subTest(batch=[event.id for event in batch]):
+                with (
+                    patch(
+                        "general_manager.chat.views.get_chat_settings",
+                        return_value={
+                            "max_retries_per_message": 8,
+                            "recover_missing_tool_calls": False,
+                        },
+                    ),
+                    patch(
+                        "general_manager.chat.views.get_tool_definitions",
+                        return_value=[],
+                    ),
+                    patch(
+                        "general_manager.chat.views.execute_chat_tool"
+                    ) as execute_tool,
+                    patch(
+                        "general_manager.chat.views.create_pending_confirmation"
+                    ) as create_pending,
+                    patch("general_manager.chat.views.enforce_chat_rate_limit"),
+                ):
+                    events = async_to_sync(_run_provider_turn)(
+                        scope={},
+                        conversation=object(),
+                        provider=_MutationBatchProvider(batch),
+                        messages=[Message(role="user", content="Update parts")],
+                        transport="sse",
+                    )
+
+                assert events == [
+                    {
+                        "type": "error",
+                        "message": "Request mutations one at a time.",
+                        "code": "mutation_batch_unsupported",
+                    }
+                ]
+                execute_tool.assert_not_called()
+                create_pending.assert_not_called()
+
+    def test_run_provider_turn_rejects_batch_exceeding_retry_budget_before_actions(
+        self,
+    ) -> None:
+        with (
+            patch(
+                "general_manager.chat.views.get_chat_settings",
+                return_value={
+                    "max_retries_per_message": 1,
+                    "recover_missing_tool_calls": False,
+                },
+            ),
+            patch("general_manager.chat.views.get_tool_definitions", return_value=[]),
+            patch("general_manager.chat.views.execute_chat_tool") as execute_tool,
+            patch("general_manager.chat.views.enforce_chat_rate_limit") as rate_limit,
+        ):
+            events = async_to_sync(_run_provider_turn)(
+                scope={},
+                conversation=object(),
+                provider=_TwoCallsInOneCompletionProvider(),
+                messages=[Message(role="user", content="Find parts")],
+                transport="sse",
+            )
+
+        assert events == [
+            {
+                "type": "error",
+                "message": "Chat tool retry limit exceeded.",
+                "code": "tool_retry_limit",
+            }
+        ]
+        execute_tool.assert_not_called()
+        rate_limit.assert_called_once_with(
+            {}, input_tokens=1, output_tokens=1, count_request=False
+        )
 
     def test_run_provider_turn_recovers_empty_response_after_tool_result(self) -> None:
         provider = _EmptyThenTextProvider()
@@ -1007,6 +1349,7 @@ class ChatViewHelperTests(SimpleTestCase):
         }
         pending.save.assert_not_called()
         append_message.assert_called_once()
+        assert append_message.call_args.kwargs["tool_call_id"] == "confirm-1"
 
     def test_execute_confirmation_request_executes_confirmed_mutation_off_event_loop(
         self,
@@ -1033,12 +1376,12 @@ class ChatViewHelperTests(SimpleTestCase):
                 return_value=pending,
             ),
             patch(
-                "general_manager.chat.views.execute_chat_tool",
+                "general_manager.chat.views.execute_confirmed_chat_mutation",
                 side_effect=_execute_tool_off_event_loop({"status": "executed"}),
             ) as execute_tool,
             patch("general_manager.chat.views.emit_chat_tool_called"),
             patch("general_manager.chat.views.emit_chat_mutation_executed"),
-            patch("general_manager.chat.views.append_chat_message"),
+            patch("general_manager.chat.views.append_chat_message") as append_message,
             patch(
                 "general_manager.chat.views.import_provider",
                 return_value=Mock(return_value=object()),
@@ -1061,6 +1404,7 @@ class ChatViewHelperTests(SimpleTestCase):
             "name": "mutate",
             "result": {"status": "executed"},
         }
+        assert append_message.call_args.kwargs["tool_call_id"] == "confirm-async"
 
     def test_execute_confirmation_request_claims_before_confirmed_mutation(
         self,
@@ -1082,7 +1426,7 @@ class ChatViewHelperTests(SimpleTestCase):
             calls.append("claim")
             return pending
 
-        def execute_confirmed_mutation(*_args: object) -> dict[str, object]:
+        def execute_confirmed_mutation(**_kwargs: object) -> dict[str, object]:
             calls.append("execute")
             return {"status": "executed"}
 
@@ -1096,7 +1440,7 @@ class ChatViewHelperTests(SimpleTestCase):
                 side_effect=claim_pending,
             ) as claim_pending_mock,
             patch(
-                "general_manager.chat.views.execute_chat_tool",
+                "general_manager.chat.views.execute_confirmed_chat_mutation",
                 side_effect=execute_confirmed_mutation,
             ) as execute_tool,
             patch("general_manager.chat.views.emit_chat_tool_called"),

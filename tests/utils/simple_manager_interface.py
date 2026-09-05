@@ -146,7 +146,7 @@ class SimpleBucket(Bucket):
         """
         return item in self._data
 
-    def sort(self, key, reverse: bool = False):
+    def sort(self, *fields: str):
         """
         Return a new SimpleBucket with items sorted by the specified key function.
 
@@ -157,7 +157,14 @@ class SimpleBucket(Bucket):
         Returns:
             SimpleBucket: A new bucket containing the sorted items.
         """
-        sorted_data = sorted(self._data, key=key, reverse=reverse)  # type: ignore
+        if not fields:
+            return SimpleBucket(self._manager_class, self._data)
+        field = fields[0].removeprefix("-")
+        sorted_data = sorted(
+            self._data,
+            key=lambda item: getattr(item, field),
+            reverse=fields[0].startswith("-"),
+        )
         return SimpleBucket(self._manager_class, sorted_data)
 
 

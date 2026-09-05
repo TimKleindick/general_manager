@@ -45,7 +45,7 @@ class Project(GeneralManager):
 Field and index rules:
 - `fields`: searchable fields for full-text matching.
 - `filters`: filterable fields allowed in `filters` (plus the built-in `type`).
-- `sorts`: sortable fields allowed for `sort_by` / `sortBy`.
+- `sorts`: sortable fields allowed for typed GraphQL `orderBy` terms.
 - `FieldConfig.boost`: per-field boost (must be > 0).
 - `IndexConfig.boost`: per-index boost (must be > 0; used by DevSearch).
 - `IndexConfig.min_score`: reserved for backend-specific use (not applied by
@@ -181,10 +181,12 @@ including updates caused by related-data invalidation. Changing the result can
 leave the old backend document behind until reconciliation removes it.
 
 GraphQL search applies `get_read_permission_filter()` to the search query and
-then re-checks permissions on instantiated results. User filters are merged with
-permission filters and may expand into OR groups when multiple permission
-filters are present. In each group, permission `"filter"` keys override matching
-user filter keys before the backend search runs. Permission `"exclude"` mappings
+then re-checks permissions on instantiated results. User filters are conjoined
+with permission filters, which may expand into OR groups when multiple permission
+filters are present. Compatible criteria are combined for backend prefiltering;
+when a user and permission criterion share the same lookup key, the complete
+user mapping is sent to the backend and the permission criterion is enforced
+after hydration so neither value is discarded. Permission `"exclude"` mappings
 are not sent to the backend prefilter; they are enforced during the later
 per-instance authorization pass. Empty permission constraints such as `{}`,
 `{"filter": {}}`, or `{"exclude": {}}` create an unrestricted backend group
@@ -193,11 +195,11 @@ the instance check. When a manager has no permission filter alternatives, the
 user filter mapping is passed through unchanged.
 
 Static read decisions use fast paths. A manager with `deny_all` is skipped
-entirely: GraphQL does not call the search backend for it, and it contributes no
-raw backend payload or backend timing to the response. A manager with
+entirely: GraphQL does not call the search backend for it or add backend timing
+to the response. A manager with
 `allow_all` still queries the backend with the user's filters, but adds no
-permission filter group and does not run per-hit instance checks. Its backend
-`raw` payload and reported `took_ms` retain the normal response semantics.
+permission filter group and does not run per-hit instance checks. Its reported
+`took_ms` retains the normal response semantics.
 Conditional mapping and `None` callbacks retain the existing behavior: mapping
 filters prefilter hits, exclude mappings and unfilterable rules are resolved by
 the later permission pass, and aggregate authorization logging occurs only when
@@ -210,7 +212,7 @@ When GraphQL is auto-created, a global `search` query is added. It accepts:
 - `index`: index name (defaults to `global`).
 - `types`: optional list of manager class names to restrict results.
 - `filters`: JSON string or list of filter items.
-- `sortBy` / `sortDesc`: optional sort field and direction.
+- `orderBy`: optional typed sort terms with independent directions.
 - `totalMode`: optional total-count mode, either `exact` or `bounded`.
 - `page` / `pageSize`: pagination controls.
 
@@ -221,7 +223,6 @@ Results are returned as a union of manager GraphQL types:
   post-permission count; `false` means bounded mode stopped scanning before it
   could prove no more backend hits remain, so `total` is a lower bound.
 - `took_ms`: nullable integer field containing accumulated backend search time in milliseconds when reported.
-- `raw`: nullable JSON string field containing a list of backend-specific raw response payloads.
 
 Omitted `page` defaults to `1` and omitted `pageSize` defaults to `10`.
 Explicit `0` or negative pagination values are rejected as GraphQL
@@ -234,9 +235,10 @@ names are ignored. Malformed hit identification that raises `TypeError`,
 `ValueError`, or `KeyError` while constructing the manager is skipped. Invalid
 configured filter keys are reported as GraphQL errors. Backend lookup/search
 errors, other manager construction errors, permission errors, and sort
-comparison errors propagate. `sortBy` is not validated ahead of time; sorting
-reads each hit's `data[sortBy]` when present and otherwise sorts that hit as
-`null`/last before applying `sortDesc`.
+comparison errors propagate. `orderBy` uses the configured sortable-field union
+for its enum, then validates every requested term against each selected type and
+index before backend fetching. Local retained-window and final comparison use
+the shared type-aware ordering semantics, with nulls last.
 
 GraphQL search totals default to exact mode for backward compatibility:
 
@@ -270,7 +272,7 @@ Example query:
 
 ```graphql
 query SearchProjects($filters: JSONString) {
-  search(index: "global", query: "alpha", filters: $filters, sortBy: "name") {
+  search(index: "global", query: "alpha", filters: $filters, orderBy: [{field: name}]) {
     total
     totalIsExact
     results {
@@ -559,8 +561,8 @@ comparisons and invalid lookup/value combinations return `False`, and `None`
 compares only through `exact`.
 
 Scores sum matching field boosts and then multiply by `index_boost` when set.
-Results sort by score descending unless `sort_by` names one raw
-`SearchDocument.data` field. For field sorting, `None` and missing fields are
+Results sort by score descending unless `sort` supplies signed raw
+`SearchDocument.data` fields. For field sorting, `None` and missing fields are
 treated as missing and kept last for ascending and descending sorts. Booleans
 follow Python numeric ordering because `bool` is an `int` subclass; other
 numbers sort numerically, and every non-numeric, non-missing value sorts by
@@ -780,8 +782,8 @@ Adapter behavior:
   lists produce `()`. A raw `filter_expression` takes precedence over
   structured filters and `types`, so `types` is ignored when
   `filter_expression` is provided.
-- `sort_by` is treated as one raw field name. The backend appends `:asc` or
-  `:desc`; it does not validate, split, or escape sort fields.
+- `sort` is a signed field sequence. The backend appends `:asc` or `:desc` for
+  each term and does not validate, split, or escape field names.
 - Search hit parsing is defensive: malformed hit entries are skipped and
   missing `id`/`gm_document_id` and `type` become empty strings, missing
   `identification` and `data` become empty mappings, and missing

@@ -121,7 +121,7 @@ def lazy_delta_date(avg_delta_days: int, base_attribute: str) -> LazyAttribute:
         raise ValueError(_AVG_DELTA_DAYS_ERROR)
     return _lazy_attribute(
         lambda instance: (
-            (getattr(instance, base_attribute) or date.today())
+            (getattr(instance, base_attribute, None) or date.today())
             + timedelta(days=_RNG.randint(avg_delta_days // 2, avg_delta_days * 3 // 2))
         )
     )

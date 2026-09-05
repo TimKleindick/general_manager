@@ -97,15 +97,32 @@ def _normalize_remote_envelope(
         raise RequestSchemaError.non_object_json_payload()
     if not isinstance(payload_metadata, Mapping):
         raise RequestSchemaError.non_object_json_payload()
-    if total_count is not None and not isinstance(total_count, int):
+    if total_count is not None and (
+        not isinstance(total_count, int) or isinstance(total_count, bool)
+    ):
         raise RequestSchemaError.non_object_json_payload()
     if "error" in payload:
         raise RequestConfigurationError.unmapped_remote_error(interface_cls.__name__)
     metadata.update(cast(RequestPayload, payload_metadata))
+    page = payload_metadata.get("page")
+    page_size = payload_metadata.get("page_size")
+    if (page is None) != (page_size is None):
+        raise RequestSchemaError.non_object_json_payload()
+    if page is not None and (
+        not isinstance(page, int)
+        or isinstance(page, bool)
+        or page <= 0
+        or not isinstance(page_size, int)
+        or isinstance(page_size, bool)
+        or page_size <= 0
+    ):
+        raise RequestSchemaError.non_object_json_payload()
     return RequestQueryResult(
         items=tuple(cast(RequestPayload, item) for item in items),
         total_count=total_count,
         metadata=metadata,
+        page=page,
+        page_size=page_size,
     )
 
 
@@ -134,6 +151,8 @@ class RemoteManagerInterface(RequestInterface):
     request operation, schema, transport, serializer, or validator errors from
     the underlying request interface.
     """
+
+    supports_upstream_query_controls: ClassVar[bool] = True
 
     base_url: ClassVar[str] = ""
     base_path: ClassVar[str] = "/gm"

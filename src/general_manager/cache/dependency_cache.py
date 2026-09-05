@@ -12,8 +12,8 @@ from general_manager.cache.dependency_index import Dependency
 
 DEPENDENCY_CACHE_ENTRY_VERSION = 2
 TRUSTED_DEPENDENCY_CACHE_ENTRY_VERSION = 3
-DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION = 1
-DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION = 1
+DEPENDENCY_CACHE_PREFETCH_BUNDLE_VERSION = 2
+DEPENDENCY_CACHE_PREFETCH_VALUE_BUNDLE_VERSION = 2
 _VALID_DEPENDENCY_ACTIONS = frozenset(
     {"filter", "exclude", "identification", "request_query", "all"}
 )
@@ -372,8 +372,9 @@ def read_dependency_cache_hit(
     Combined entries store a `DependencyCacheEntry` at `cache_key`. Legacy split
     entries store the cached value at `cache_key` and dependencies at
     `{cache_key}:deps`. A present legacy value with a missing dependency key is
-    a hit with an empty dependency set. Legacy dependency payloads must be
-    iterable dependency tuples; malformed payloads are treated as misses.
+    a hit with an empty dependency set. When the dependency key is present, its
+    payload must be iterable dependency tuples; malformed payloads are treated
+    as misses.
     Unknown future combined-entry versions are treated as misses and return
     `sentinel`.
 
@@ -384,8 +385,8 @@ def read_dependency_cache_hit(
 
     Returns:
         A `DependencyCacheHit` for combined or legacy entries, or `sentinel`
-        when the main key is absent or holds an unsupported future entry
-        version.
+        when the main key is absent, holds an unsupported future entry version,
+        or has malformed legacy dependency metadata.
 
     Raises:
         Exception: Backend `get()` errors propagate unchanged.
@@ -420,8 +421,8 @@ def read_many_dependency_cache_hits(
     payloads. A present legacy value whose dependency key is absent from that
     second bulk read is returned as a hit with an empty dependency set. Backends
     without `get_many()` fall back to single-key reads. Missing main keys and
-    unknown future combined-entry versions are omitted. Legacy entries with
-    malformed dependency payloads are omitted.
+    unknown future combined-entry versions are omitted. Legacy entries with a
+    present malformed dependency payload are omitted.
 
     Args:
         cache_backend: Backend used for cache reads.
@@ -465,7 +466,7 @@ def read_many_dependency_cache_hits(
                 value=payloads[key],
                 dependencies=dependencies,
             )
-    return hits
+    return {key: hits[key] for key in keys if key in hits}
 
 
 def replay_dependency_cache_hit(hit: DependencyCacheHit) -> None:

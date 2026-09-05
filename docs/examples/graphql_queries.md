@@ -4,8 +4,8 @@
 
 ```graphql
 query ProjectList($page: Int!, $pageSize: Int!) {
-  projectList(page: $page, pageSize: $pageSize, orderBy: ["-start_date"]) {
-    results {
+  projectList(page: $page, pageSize: $pageSize, orderBy: [{field: startDate, direction: DESC}]) {
+    items {
       id
       name
       startDate
@@ -18,45 +18,45 @@ query ProjectList($page: Int!, $pageSize: Int!) {
 }
 ```
 
-## Sort grouped pages
+## Sort explicit group pages
 
-`sortBy` orders grouped manager objects after `groupBy` and before pagination.
+`orderBy` orders selected group keys after grouping and before pagination.
 This keeps descending group order stable across pages:
 
 ```graphql
 query ProjectsByStatus {
-  projectList(
+  projectGroups(
     groupBy: ["status"]
-    sortBy: status
-    reverse: true
+    orderBy: [{field: status, direction: DESC}]
     page: 1
     pageSize: 10
   ) {
-    items { status }
+    groups { keys { status } count }
     pageInfo { totalCount currentPage totalPages pageSize }
   }
 }
 ```
 
-If the filter produces no groups, the same query shape returns `items: []` and
+If the filter produces no groups, the same query shape returns `groups: []` and
 page metadata rather than an empty-group slicing error.
 
 ## Group by a related manager identity
 
-Grouping by a scalar foreign-key identifier preserves the related manager in
-the aggregated result. Repeated rows pointing to the same related manager
-collapse to one object; distinct managers remain available through their union
-bucket:
+Grouping by a scalar foreign-key identifier preserves each original related
+manager under the group's paginated members:
 
 ```graphql
 query ProjectsByCommercial {
-  projectList(groupBy: ["commercials_id"]) {
-    items { commercials { id name } }
+  projectGroups(groupBy: ["commercials_id"]) {
+    groups {
+      keys { commercialsId }
+      members { items { commercials { id name } } }
+    }
   }
 }
 ```
 
-The generated resolver applies the same bucket and `GroupManager` behavior as
+The generated resolver applies the same explicit grouped-result behavior as
 the Python API. See the [grouped-data concept](../concepts/models_entities.md#grouped-data),
 [GraphQL how-to](../howto/expose_via_graphql.md#query-generated-lists), and
 [core API reference](../api/core.md#general_manager.manager.group_manager.GroupManager)
@@ -116,13 +116,13 @@ the [API reference](../api/graphql.md#relation-annotation-compatibility).
 
 ## Sort by a compound relation key
 
-Generated list fields accept an ordered `sortBy` list. This request sorts
+Generated list fields accept typed `orderBy` terms. This request sorts
 projects by the related commercial name first, then by project name and unique
 project ID to make ties deterministic:
 
 ```graphql
-query ProjectsByCommercialName($sort: [ProjectSortByOptions!]) {
-  projectList(sortBy: $sort, page: 1, pageSize: 20) {
+query ProjectsByCommercialName($order: [ProjectOrderBy!]) {
+  projectList(orderBy: $order, page: 1, pageSize: 20) {
     items {
       id
       name
@@ -139,12 +139,12 @@ query ProjectsByCommercialName($sort: [ProjectSortByOptions!]) {
 ```
 
 ```json
-{"sort": ["commercials__name", "name", "id"]}
+{"order": [{"field": "commercials__name"}, {"field": "name"}, {"field": "id"}]}
 ```
 
-The enum values must be exposed by the generated `ProjectSortByOptions` type.
-GraphQL also accepts a single inline value such as `sortBy: name`; an empty
-list is a no-op. See the [sorting concept](../concepts/graphql/filters_pagination.md#sorting),
+The enum values are exposed by the generated `ProjectOrderField` type. Each
+input has a required field and an `ASC` default direction; an empty list is a
+no-op. See the [sorting concept](../concepts/graphql/filters_pagination.md#sorting),
 the [generated-list how-to](../howto/expose_via_graphql.md#query-generated-lists),
 and the [GraphQL API reference](../api/graphql.md#compound-list-sorting) for
 the supported relation paths and error behavior.

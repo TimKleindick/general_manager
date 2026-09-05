@@ -181,13 +181,14 @@ class RequestInterface(InterfaceBase):
             mutation_capabilities.append(
                 InterfaceCapabilityConfig(RequestDeleteCapability)
             )
-        existing_handlers = {
-            config.handler for config in iter_capability_entries(base_capabilities)
+        existing_capability_names = {
+            getattr(config.handler, "name", None)
+            for config in iter_capability_entries(base_capabilities)
         }
         cls.configured_capabilities = base_capabilities + tuple(
             capability
             for capability in mutation_capabilities
-            if capability.handler not in existing_handlers
+            if capability.handler.name not in existing_capability_names
         )
         cls.capability_overrides = dict(getattr(cls, "capability_overrides", {}))
         for name, override in cls._build_configured_capability_overrides().items():
@@ -426,4 +427,6 @@ class RequestInterface(InterfaceBase):
             items=cast(tuple[RequestPayload, ...], normalized_items),
             total_count=result.total_count,
             metadata=result.metadata,
+            page=result.page,
+            page_size=result.page_size,
         )

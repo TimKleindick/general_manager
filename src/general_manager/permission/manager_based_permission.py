@@ -547,10 +547,14 @@ class _ConfiguredManagerPermission(BasePermission):
     def __get_attribute_permissions(
         self,
     ) -> dict[str, dict[permission_type, list[str]]]:
-        attribute_permissions = {}
-        for attribute in self.__class__.__dict__:
-            if not attribute.startswith("__"):
-                attribute_permissions[attribute] = getattr(self, attribute)
+        attribute_permissions: dict[str, dict[permission_type, list[str]]] = {}
+        for permission_class in reversed(self.__class__.__mro__):
+            for attribute, value in vars(permission_class).items():
+                if attribute.startswith("__") or not isinstance(value, dict):
+                    continue
+                attribute_permissions[attribute] = cast(
+                    dict[permission_type, list[str]], value
+                )
         return attribute_permissions
 
     def _get_base_permissions(self, action: permission_type) -> list[str]:

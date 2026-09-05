@@ -148,7 +148,7 @@ class OrderedItems(GeneralManager):
             or []
         )
 
-        fallback_items = list(Item.all().sort(("name", "id")))
+        fallback_items = list(Item.all().sort("name", "id"))
         items_by_id = {item.id: item for item in fallback_items}
 
         preferred_items: list[Item] = []
@@ -181,7 +181,7 @@ class OrderedItems(GeneralManager):
 The algorithm does not rely on the database preserving the order of an `IN`
 query:
 
-1. `Item.all().sort(("name", "id"))` loads every eligible item in a stable
+1. `Item.all().sort("name", "id")` loads every eligible item in a stable
    fallback order. The ID breaks ties between equal names.
 2. `items_by_id` makes each preferred-ID lookup independent of database result
    order.

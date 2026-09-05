@@ -303,6 +303,15 @@ class GMTestCaseMeta(type):
             type: The newly created test case class whose `setUpClass` has been augmented for GeneralManager testing.
         """
         user_setup = attrs.get("setUpClass")
+        if user_setup is None:
+            for base in bases:
+                for inherited_base in base.__mro__:
+                    inherited_setup = vars(inherited_base).get("_gm_user_setup")
+                    if inherited_setup is not None:
+                        user_setup = inherited_setup
+                        break
+                if user_setup is not None:
+                    break
         fallback_app = cast(str | None, attrs.get("fallback_app", "general_manager"))
         # MERKE dir das echte GraphQLTransactionTestCase.setUpClass
         base_setup = cast(_ClassSetUpDescriptor, GraphQLTransactionTestCase.setUpClass)
@@ -315,6 +324,21 @@ class GMTestCaseMeta(type):
 
             Executes user-defined setup before clearing generated URL state and creating missing managed-model tables. It then initializes GeneralManager and GraphQL schema state and finally invokes the base GraphQLTransactionTestCase.setUpClass. If setup fails, every successfully tracked table and related global test state is cleaned up before the original failure is re-raised.
             """
+
+            def run_user_setup() -> None:
+                if isinstance(user_setup, classmethod):
+                    cast(_ClassSetUpDescriptor, user_setup).__func__(cls)
+                else:
+                    cast(
+                        Callable[[type["GeneralManagerTransactionTestCase"]], None],
+                        user_setup,
+                    )(cls)
+
+            if getattr(cls, "_gm_user_setup_active", False):
+                if user_setup is not None:
+                    run_user_setup()
+                return
+
             GraphQL.reset_registry()
 
             if fallback_app is not None:
@@ -329,13 +353,11 @@ class GMTestCaseMeta(type):
             try:
                 # 1) user-defined setUpClass (if any)
                 if user_setup:
-                    if isinstance(user_setup, classmethod):
-                        cast(_ClassSetUpDescriptor, user_setup).__func__(cls)
-                    else:
-                        cast(
-                            Callable[[type["GeneralManagerTransactionTestCase"]], None],
-                            user_setup,
-                        )(cls)
+                    cls._gm_user_setup_active = True
+                    try:
+                        run_user_setup()
+                    finally:
+                        cls._gm_user_setup_active = False
                 # 2) clear URL patterns
                 _default_graphql_url_clear()
                 _default_remote_api_url_clear()
@@ -399,6 +421,7 @@ class GMTestCaseMeta(type):
                 cls._cleanup_failed_class_setup()
                 raise
 
+        attrs["_gm_user_setup"] = user_setup
         attrs["setUpClass"] = classmethod(wrapped_setUpClass)
         return super().__new__(mcs, name, bases, attrs)
 
@@ -496,6 +519,7 @@ class GeneralManagerTransactionTestCase(
     fallback_app: str | None = "general_manager"
     _gm_created_tables: ClassVar[set[str]] = set()
     _gm_created_models: ClassVar[list[type[models.Model]]] = []
+    _gm_user_setup_active: ClassVar[bool] = False
 
     @classmethod
     def _clear_test_manager_registries(cls) -> None:
@@ -626,6 +650,8 @@ class GeneralManagerTransactionTestCase(
         - Restores the original app-config lookup function.
         - Resets the test-class created-table and created-model tracking.
         - Removes Graphene cursor instrumentation before Django restores database guards.
+        - Resets the GraphQL registry so registered manager names cannot leak into
+          following SimpleTestCase classes.
 
         Cleanup actions continue after an error, including the superclass teardown,
         and the first cleanup error is re-raised after all actions have run.
@@ -642,6 +668,7 @@ class GeneralManagerTransactionTestCase(
             cls._restore_fallback_app_lookup,
             cls._reset_created_test_state,
             _restore_graphene_cursor_wrappers,
+            GraphQL.reset_registry,
             super().tearDownClass,
         )
         for cleanup_action in cleanup_actions:

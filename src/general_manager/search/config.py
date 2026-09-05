@@ -9,6 +9,19 @@ from typing import Literal, Protocol, cast
 from general_manager.manager.general_manager import GeneralManager
 
 
+_RESERVED_DOCUMENT_FIELD_NAMES = frozenset(
+    {"id", "gm_document_id", "type", "identification", "data"}
+)
+
+
+class ReservedDocumentFieldNameError(ValueError):
+    """Raised when an application field collides with a document envelope key."""
+
+    def __init__(self, field_name: str) -> None:
+        """Initialize the error with the rejected configured field name."""
+        super().__init__(f"Search field name {field_name!r} is reserved.")
+
+
 class InvalidFieldBoostError(ValueError):
     """Raised when a field boost is invalid."""
 
@@ -70,6 +83,8 @@ class FieldConfig:
     Raises:
         InvalidFieldBoostError: If `boost` is not `None` and is less than or
             equal to zero.
+        ReservedDocumentFieldNameError: If `name` collides with the search
+            document envelope.
     """
 
     name: str
@@ -77,6 +92,8 @@ class FieldConfig:
 
     def __post_init__(self) -> None:
         """Validate the configured boost value after initialization."""
+        if self.name in _RESERVED_DOCUMENT_FIELD_NAMES:
+            raise ReservedDocumentFieldNameError(self.name)
         if self.boost is not None and self.boost <= 0:
             raise InvalidFieldBoostError
 
@@ -99,6 +116,8 @@ class IndexConfig:
             equal to zero.
         InvalidIndexMinScoreError: If `min_score` is not `None` and is less
             than zero.
+        ReservedDocumentFieldNameError: If any configured field, filter, or
+            sort name collides with the search document envelope.
     """
 
     name: str
@@ -110,6 +129,20 @@ class IndexConfig:
 
     def __post_init__(self) -> None:
         """Validate index-level boost and minimum score after initialization."""
+        for field_config in self.fields:
+            field_name = (
+                field_config.name
+                if isinstance(field_config, FieldConfig)
+                else field_config
+            )
+            if (
+                isinstance(field_name, str)
+                and field_name in _RESERVED_DOCUMENT_FIELD_NAMES
+            ):
+                raise ReservedDocumentFieldNameError(field_name)
+        for field_name in (*self.filters, *self.sorts):
+            if field_name in _RESERVED_DOCUMENT_FIELD_NAMES:
+                raise ReservedDocumentFieldNameError(field_name)
         if self.boost is not None and self.boost <= 0:
             raise InvalidIndexBoostError
         if self.min_score is not None and self.min_score < 0:

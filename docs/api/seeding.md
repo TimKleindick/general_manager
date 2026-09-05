@@ -55,14 +55,20 @@ does not add unselected dependencies. `build_seed_plan(...)` returns ordered
 `SeedPlanRow` objects and reports unselected required dependencies by manager
 class name.
 
-`execute_seed_plan(...)` dependency-orders targets again, reads
-`manager.all().count()` for each ordered target, initializes
-`SeedExecutionResult.created[manager_name] = 0` for every ordered target, creates
-only the missing rows, and calls `Factory.create_batch(size)` in batches of at
-most `batch_size`. Each batch uses its own `transaction.atomic()` block; there is
-no cross-manager transaction. Invalid batch sizes raise `ManagerSelectionError`.
-Factory failures raise `ManagerSeedFailure` by default, including the manager
-name, failed batch size, original error, created count, and remaining count.
+`execute_seed_plan(...)` validates every direct target count before any factory
+call, dependency-orders targets, reads `manager.all().count()` for each ordered
+target, and initializes `SeedExecutionResult.created[manager_name] = 0` for
+every ordered target. It calls `Factory.create_batch(size)` with at most
+`batch_size` requested invocations while returned-object progress remains below
+the target. Progress recursively flattens list and tuple results, so factory
+fan-out can make `created` exceed the requested missing count. A `None` or
+recursively empty list/tuple result raises a failure inside the batch
+transaction. Each batch uses its own
+`transaction.atomic()` block on the selected manager database alias; there is
+no cross-manager transaction. Invalid batch sizes raise
+`ManagerSelectionError`. Factory failures raise `ManagerSeedFailure` by default,
+including the manager name, failed batch size, original error, created count,
+and remaining count.
 With `continue_on_error=True`, the failing manager stops after the first failed
 batch, the failure is collected as a `SeedFailure`, and later managers continue.
 The returned `SeedExecutionResult.created` value is a concrete immutable

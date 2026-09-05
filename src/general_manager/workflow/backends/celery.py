@@ -225,20 +225,21 @@ class CeleryWorkflowEngine:
                         state = "failed"
                         error = f"Failed to resolve workflow handler path '{handler_path}': {exc}"
             try:
-                record = WorkflowExecutionRecord.objects.create(
-                    execution_id=execution_id,
-                    workflow_id=workflow.workflow_id,
-                    state=state,
-                    input_data=dict(input_data or {}),
-                    output_data=output_data,
-                    correlation_id=correlation_id,
-                    started_at=started_at,
-                    ended_at=started_at
-                    if state in {"completed", "failed", "cancelled"}
-                    else None,
-                    error=error,
-                    metadata=merged_metadata,
-                )
+                with transaction.atomic():
+                    record = WorkflowExecutionRecord.objects.create(
+                        execution_id=execution_id,
+                        workflow_id=workflow.workflow_id,
+                        state=state,
+                        input_data=dict(input_data or {}),
+                        output_data=output_data,
+                        correlation_id=correlation_id,
+                        started_at=started_at,
+                        ended_at=started_at
+                        if state in {"completed", "failed", "cancelled"}
+                        else None,
+                        error=error,
+                        metadata=merged_metadata,
+                    )
             except IntegrityError:
                 if not correlation_id:
                     raise

@@ -20,7 +20,11 @@ from general_manager.workflow.models import WorkflowOutbox
 )
 def test_workflow_outbox_batch_claim_perf_smoke() -> None:
     registry = DatabaseEventRegistry()
-    registry.register("invoice.created", handler=lambda _event: None)
+    registry.register(
+        "invoice.created",
+        handler=lambda _event: None,
+        registration_id="workflow-outbox-batch-claim-perf",
+    )
 
     total_events = 200
     with patch.object(

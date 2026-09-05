@@ -97,6 +97,16 @@ chat. They also accept an explicit mapping through `from_config(config)` and
 expose the copied, read-only mapping through `provider_config`; planned profile
 construction uses these two hooks without changing legacy settings.
 
+An explicitly named `provider_profiles` entry is always constructed with its
+own `provider_config`, including `{}`. It never inherits credentials, model, or
+endpoint values from the legacy `provider_config`. Only an omitted
+`provider_profiles` mapping creates the implicit legacy profile.
+
+Provider history keeps tool call IDs, names, arguments, and results as
+structured data. The built-in adapters translate that history to each SDK's
+native tool-call and tool-result format; custom providers receive it through
+the `Message` tool fields.
+
 Two timeout keys apply to every adapter at the GeneralManager provider loop:
 
 - `timeout_seconds` defaults to `60` and limits the wait for the first provider
@@ -163,6 +173,11 @@ Each event is encoded as `data: <JSON>\n\n` and the response content type is
 or an SSE client that supports POST rather than the browser's GET-only
 `EventSource` constructor.
 
+The server creates an anonymous session before SSE headers are sent, so the
+response includes a usable Django session cookie even before its first event.
+Chat stores a deterministic hash only when a signed-cookie value exceeds the
+conversation key column limit; the cookie itself is unchanged.
+
 Resolve a pending SSE confirmation through:
 
 ```http
@@ -201,6 +216,17 @@ Resolve a mutation confirmation:
 Only one turn and one pending confirmation may be active on a socket. Unknown
 event types produce `bad_event`; an overlapping message produces
 `turn_in_progress` or `confirmation_pending`.
+
+## Persistent context
+
+Long legacy HTTP, SSE, and WebSocket turns share one bounded-context path. It
+retains recent messages and summarizes the older prefix using the selected
+provider's whole-request timeout. A summary records the exact last message it
+covers; a missing or outdated marker regenerates the summary rather than
+reusing unknown coverage. Tool windows retain each selected assistant call
+group and only that group's linked results. Historical rows without a stored
+call identity are labeled assistant context, never sent as native tool-result
+messages.
 
 ## Server event contract
 
@@ -289,6 +315,7 @@ error signal for server-side observability.
 | `turn_in_progress` | WebSocket | Another turn is still streaming on this socket. Wait for its terminal event. |
 | `rate_limited` | HTTP, SSE, WebSocket | The actor exceeded a configured budget. Retry after `retry_after_seconds`. |
 | `tool_retry_limit` | HTTP, SSE, WebSocket | The model exceeded `max_retries_per_message`; the turn is terminal. |
+| `mutation_batch_unsupported` | HTTP, SSE, WebSocket | A completion requested `mutate` with another tool call. Request one mutation in a completion by itself. |
 | `confirmation_required_transport` | HTTP | A confirmed mutation needs SSE or WebSocket. Retry the workflow on a confirmation-capable transport. |
 | `chat_error` | HTTP, SSE, WebSocket | An unexpected server or provider failure. Show the generic message and correlate server-side logs or signals. |
 
@@ -307,12 +334,17 @@ The discovery strategy exposes:
 | `get_manager_schema` | `manager` | Fields, filters, descriptions, and relations |
 | `find_path` | `from_manager`, `to_manager` | Exposed relation path or no path |
 | `query` | `manager`, `filters`, `fields`, `limit`, `offset` | Bounded GraphQL data page |
-| `mutate` | `mutation`, `input`, `confirmed` | Mutation result, denial, or confirmation requirement |
+| `mutate` | `mutation`, `input` | Mutation result, denial, or confirmation requirement |
 
 Only managers with `chat_exposed = True` are accepted. Query fields, nested
 selections, filters, limits, and offsets are validated against the indexed
 schema before execution. Mutations require an authenticated user and an exact
 name in `allowed_mutations`.
+
+Read-only tool calls may be batched in one provider completion. A completion
+that includes `mutate` and any other tool call is rejected before any tool runs;
+request each mutation by itself so the client-confirmation protocol can retain
+one pending write safely.
 
 ## Persistence and cleanup
 
@@ -325,7 +357,13 @@ python manage.py migrate
 `ChatConversation` belongs to an authenticated user or anonymous Django
 session. `ChatMessage` records ordered conversation and tool items.
 `ChatPendingConfirmation` stores confirmation state, including expiry and
-resolution metadata, until cleanup removes the record.
+resolution metadata, until cleanup removes the record. A successful HTTP or
+WebSocket confirmation atomically claims the pending record scoped to the
+current authenticated actor or anonymous session before the server executes the
+mutation. This prevents durable approval replay across processes when
+persistence is enabled. When persistence is unavailable, a WebSocket pending
+confirmation remains owned by that socket session and can be consumed once; it
+does not provide cross-process replay protection.
 
 Prune stale conversations and resolved or expired confirmations using:
 
@@ -705,8 +743,10 @@ an exposed relation path.
 `EvidenceStore` owns turn-local records and links them to compatible
 `EvidenceRequirement` objects. `canonical_call_identity()` produces stable
 canonical JSON for a tool name and its arguments. `calculate_evidence()` allows
-only the operations in `CALCULATION_OPERATIONS` and stores the derived value as
-another immutable evidence record.
+only the operations in `CALCULATION_OPERATIONS` and returns the derived value as
+another immutable evidence record. Add that returned record to an
+`EvidenceStore` explicitly when it should participate in later requirement
+resolution; the calculation helper does not persist it itself.
 
 ::: general_manager.chat.planned.evidence.EvidenceError
 

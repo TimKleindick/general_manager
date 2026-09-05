@@ -126,6 +126,20 @@ def test_select_seed_targets_supports_repeated_managers_and_overrides() -> None:
     ]
 
 
+@pytest.mark.parametrize("invalid_count", [0, -1, True, "2"])
+def test_select_seed_targets_rejects_non_positive_or_non_integer_counts(
+    invalid_count: object,
+) -> None:
+    with pytest.raises(ManagerSelectionError, match="greater than zero"):
+        select_seed_targets(
+            managers_by_name={"Project": _SeedableProject},
+            selected_names=["Project"],
+            include_all=False,
+            default_count=2,
+            overrides={"Project": invalid_count},  # type: ignore[dict-item]
+        )
+
+
 def test_select_seed_targets_rejects_unknown_manager() -> None:
     with pytest.raises(ManagerSelectionError, match="Unknown manager"):
         select_seed_targets(
@@ -350,6 +364,40 @@ class _FailingManager:
         return _AllResult(0)
 
 
+class _EmptyFactory:
+    created_batches: ClassVar[list[int]] = []
+
+    @classmethod
+    def create_batch(cls, count: int) -> list[object]:
+        cls.created_batches.append(count)
+        return []
+
+
+class _EmptyManager:
+    Factory = _EmptyFactory
+
+    @classmethod
+    def all(cls) -> _AllResult:
+        return _AllResult(0)
+
+
+class _NestedResultFactory:
+    created_batches: ClassVar[list[int]] = []
+
+    @classmethod
+    def create_batch(cls, count: int) -> list[list[object]]:
+        cls.created_batches.append(count)
+        return [[object(), object()], []]
+
+
+class _NestedResultManager:
+    Factory = _NestedResultFactory
+
+    @classmethod
+    def all(cls) -> _AllResult:
+        return _AllResult(0)
+
+
 class _FactoryExplodedError(RuntimeError):
     pass
 
@@ -359,6 +407,8 @@ def _reset_counting_state() -> None:
     _CountingFactory.created_batches = []
     _CountingManager.existing_count = 0
     _PartiallyFailingFactory.created_batches = []
+    _EmptyFactory.created_batches = []
+    _NestedResultFactory.created_batches = []
 
 
 @pytest.mark.django_db
@@ -391,7 +441,7 @@ def test_execute_seed_plan_skips_when_existing_rows_meet_target() -> None:
     assert _CountingFactory.created_batches == []
 
 
-@pytest.mark.parametrize("batch_size", [0, -1])
+@pytest.mark.parametrize("batch_size", [0, -1, True])
 @pytest.mark.django_db
 def test_execute_seed_plan_rejects_invalid_batch_size(batch_size: int) -> None:
     with pytest.raises(ManagerSelectionError, match="--batch-size"):
@@ -401,6 +451,25 @@ def test_execute_seed_plan_rejects_invalid_batch_size(batch_size: int) -> None:
             batch_size=batch_size,
             continue_on_error=False,
         )
+
+
+@pytest.mark.django_db
+def test_execute_seed_plan_validates_all_target_counts_before_creating_rows() -> None:
+    with pytest.raises(ManagerSelectionError, match="greater than zero"):
+        execute_seed_plan(
+            targets=[
+                SeedTarget("_CountingManager", 1),
+                SeedTarget("_EmptyManager", 0),
+            ],
+            managers_by_name={
+                "_CountingManager": _CountingManager,
+                "_EmptyManager": _EmptyManager,
+            },
+            batch_size=1,
+            continue_on_error=False,
+        )
+
+    assert _CountingFactory.created_batches == []
 
 
 @pytest.mark.django_db
@@ -455,3 +524,29 @@ def test_execute_seed_plan_failure_reports_partial_progress() -> None:
     assert result.failures[0].created_count == 2
     assert result.failures[0].remaining_count == 3
     assert result.failures[0].batch_size == 2
+
+
+@pytest.mark.django_db
+def test_execute_seed_plan_fails_on_empty_batch_without_retrying() -> None:
+    with pytest.raises(ManagerSeedFailure, match="returned no created objects"):
+        execute_seed_plan(
+            targets=[SeedTarget("_EmptyManager", 1)],
+            managers_by_name={"_EmptyManager": _EmptyManager},
+            batch_size=1,
+            continue_on_error=False,
+        )
+
+    assert _EmptyFactory.created_batches == [1]
+
+
+@pytest.mark.django_db
+def test_execute_seed_plan_counts_nested_factory_results_as_actual_rows() -> None:
+    result = execute_seed_plan(
+        targets=[SeedTarget("_NestedResultManager", 3)],
+        managers_by_name={"_NestedResultManager": _NestedResultManager},
+        batch_size=2,
+        continue_on_error=False,
+    )
+
+    assert result.created == {"_NestedResultManager": 4}
+    assert _NestedResultFactory.created_batches == [2, 1]

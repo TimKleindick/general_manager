@@ -81,7 +81,7 @@ class SearchBackend(Protocol):
 
     The portable contract is intentionally narrow: method shapes, document
     identity by index/name/id, object-valued payloads, basic structured filter
-    transport, type restrictions, one-field sorting, paginated results, and the
+    transport, type restrictions, signed multi-field sorting, paginated results, and the
     broad error boundary below. Backend-specific behavior is part of the public
     adapter contract, not an omission from this protocol. That includes exact
     settings support and merge/replace behavior, duplicate IDs inside one batch,
@@ -179,8 +179,7 @@ class SearchBackend(Protocol):
         *,
         filters: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
         filter_expression: str | None = None,
-        sort_by: str | None = None,
-        sort_desc: bool = False,
+        sort: Sequence[str] | None = None,
         limit: int = 10,
         offset: int = 0,
         types: Sequence[str] | None = None,
@@ -204,8 +203,8 @@ class SearchBackend(Protocol):
                 `filters` and `types`. The portable protocol intentionally
                 makes no precedence promise beyond passing all supplied values
                 to the adapter.
-            sort_by: Field name to sort results by.
-            sort_desc: If true, sort results in descending order.
+            sort: Signed field names in precedence order; ``-`` selects
+                descending order for one field.
             limit: Maximum number of hits to return. The protocol does not
                 clamp or validate negative values; concrete backends define
                 invalid-value behavior.

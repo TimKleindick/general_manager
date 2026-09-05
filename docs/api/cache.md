@@ -28,14 +28,19 @@ The namespace applies consistently across cache scopes:
 - `cache="dependency"` uses distinct backend keys and dependency metadata per
   historical instant.
 
-GraphQL warm-up recipes use recipe format version 2 and retain the effective
+Call keys use the `gm:call:v2` namespace. Dependency-prefetch manifests and
+bundles use a separate version-2 namespace. GraphQL warm-up recipes use recipe
+format version 3 and retain the effective
 `search_date`. Background warm-up re-enters that snapshot before reconstructing
 the manager and refreshes the original historical cache key. Older or otherwise
 version-incompatible recipes are ignored. Deploying this key and recipe format
 can therefore cause a one-time cold cache, especially for historical entries;
-allow normal traffic or the configured warm-up jobs to repopulate it.
+allow normal traffic or re-register warm-up recipes through the configured
+warm-up jobs to repopulate it.
 
 ::: general_manager.cache.cache_decorator.cached
+
+::: general_manager.cache.cache_decorator.UnsupportedDependencyCacheBackendError
 
 `cached(func=None, timeout=None, cache_backend=django_cache,
 record_fn=record_dependencies, *, cache="run")` wraps a callable with one of
@@ -59,12 +64,19 @@ with CalculationRunContext():
     second = expensive_total(10)  # Same run-local value.
 ```
 
+Run-cached calls capture manager dependencies and model arguments on a miss.
+Each retained run entry contains the result and its captured dependencies, so a
+later hit can replay them into an enclosing `DependencyTracker`. This keeps an
+outer dependency-cached calculation invalidatable even when its inner run-cached
+calculation was prewarmed earlier in the run.
+
 Use `cache="dependency"` when the result should persist across runs and be
 invalidated by tracked manager dependencies. On a miss, the wrapped callable runs
 inside a `DependencyTracker`; model arguments are also collected after the call.
-The value and dependency metadata are published together. If a data-change
-generation moves during computation or publication is blocked by an active data
-change, the fresh result is returned but no dependency cache entry is published.
+The dependency metadata is recorded before the value is stored. If recording
+fails, or a data-change generation moves during computation or publication is
+blocked by an active data change, the fresh result is returned but no dependency
+cache entry is published.
 Concurrent workers for the same key coordinate with a compute lease; waiters
 reuse a published hit when available.
 
@@ -81,19 +93,30 @@ decorator validates only whether `timeout` is present; exact timeout ranges and
 special values are delegated to the configured backend. Use `cache="none"` to
 preserve the decorator shape while disabling cache reads and writes.
 
-Invalid cache names raise `UnsupportedCacheScopeError`. Missing or unexpected
-timeouts raise `CacheTimeoutConfigurationError`. Backend `get`/`set` errors,
-wrapped-callable errors, dependency tracking errors, compute-lease errors, and
-custom `record_fn` errors propagate. `CachePublishAborted` is handled by
-returning the freshly computed result without storing a dependency cache entry.
+Invalid cache names raise `UnsupportedCacheScopeError`. Dependency caching
+accepts Django's default cache proxy or its resolved default instance; another
+backend raises `UnsupportedDependencyCacheBackendError` before the wrapped
+callable runs. Timeout caching continues to accept a configured backend. Missing
+or unexpected timeouts raise `CacheTimeoutConfigurationError`. Backend
+`get`/`set` errors, wrapped-callable errors, dependency tracking errors,
+compute-lease errors, and custom `record_fn` errors propagate.
+`CachePublishAborted` is handled by returning the freshly computed result without
+storing a dependency cache entry.
+`cached` accepts synchronous callables only: coroutine functions, async
+generators, and callable objects with an async `__call__` raise
+`UnsupportedCachedCallableError` while decorating. A synchronous callable that
+dynamically returns an awaitable raises `UncacheableCachedResultError` before
+the awaitable is stored. Newly created native coroutines are closed on this
+error; caller-owned futures are never cancelled.
 
 ::: general_manager.cache.cache_decorator.CacheBackend
 
 `CacheBackend` is the minimal protocol accepted by `cached`: `get(key,
 default)` must return a cached object or the exact `default` value when absent,
 and `set(key, value, timeout=None)` stores any backend-serializable Python
-object. Return values from `set()` are ignored. Dependency and timeout scopes use
-the backend; run and none scopes do not.
+object. Return values from `set()` are ignored. Timeout scope uses the
+configured backend; dependency scope uses Django's default cache identity; run
+and none scopes do not use the backend.
 
 ::: general_manager.cache.dependency_cache.DependencyCacheEntry
 
@@ -127,10 +150,10 @@ value remains the cached result and `{cache_key}:deps` is read for dependency
 metadata, defaulting to an empty dependency set when missing. Falsey cached
 values such as `None`, `False`, `0`, `[]`, and `{}` are valid hits as long as
 the backend distinguishes absence by returning the exact sentinel/default object.
-Legacy dependency payloads must be iterable dependency tuples; a missing
-dependency key and other falsey dependency payloads become an empty dependency
-set, while truthy non-iterable dependency payloads raise through normal
-`frozenset(...)` conversion.
+Legacy dependency payloads must be iterable dependency tuples. A missing
+dependency key produces an empty dependency set; an explicitly stored empty
+list, tuple, or set is also valid. A present falsey non-iterable or malformed
+payload is treated as a miss.
 
 `read_many_dependency_cache_hits(cache_backend, cache_keys)` collapses duplicate
 keys while preserving first-seen order. Backends with `get_many()` use one bulk
@@ -138,8 +161,8 @@ read for main payloads and one additional bulk read for legacy dependency keys
 when legacy entries are present. If a legacy main value is present but its
 dependency key is absent from the second bulk read, the hit is returned with an
 empty dependency set. Backends without `get_many()` fall back to single-key
-reads. Missing main keys and future-version entries are omitted from the
-returned mapping. Backend read errors and malformed legacy dependency payloads
+reads. Missing main keys, future-version entries, and malformed legacy
+dependency payloads are omitted from the returned mapping. Backend read errors
 propagate.
 
 `replay_dependency_cache_hit(hit)` forwards each dependency tuple to

@@ -152,6 +152,9 @@ calls `refresh_due_graphql_warmup_recipes` directly. Schedulers that execute
 management commands can run `graphql_warmup_refresh_due` instead.
 
 Warm-up recipes are stored through the configured Django cache backend. The
+current recipe format is version 3; version-incompatible recipes are ignored,
+so deploys from an earlier format require recipe re-registration through the
+normal warm-up job before cached values are refreshed. The
 registry uses only `get`, `set`, `add`, and `delete`; custom backends passed to
 the lower-level registry helpers must provide those methods. `get(key, default)`
 returns a cached object or `default`, `set(...)` and `delete(...)` return values

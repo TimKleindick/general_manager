@@ -1,15 +1,10 @@
 """Helpers for caching GeneralManager computations with dependency tracking."""
 
 from collections.abc import Callable, Iterable
-from functools import wraps
+from functools import partial, wraps
 from hashlib import sha256
-from typing import (
-    Literal,
-    Protocol,
-    TypeVar,
-    cast,
-    overload,
-)
+import inspect
+from typing import Literal, ParamSpec, Protocol, TypeVar, cast, overload
 
 from django.core.cache import cache as django_cache
 
@@ -45,10 +40,11 @@ from general_manager.cache.dependency_publish import (
 from general_manager.cache.run_context import (
     current_calculation_run_context,
     ensure_calculation_run_context,
+    _RunCacheEntry,
 )
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
 from general_manager.logging import get_logger
-from general_manager.utils.make_cache_key import make_cache_key
+from general_manager.utils._make_cache_key import make_cache_key
 
 
 class CacheBackend(Protocol):
@@ -70,15 +66,27 @@ class CacheBackend(Protocol):
 
 
 RecordFn = Callable[[str, set[Dependency]], None]
-FuncT = TypeVar("FuncT", bound=Callable[..., object])
+P = ParamSpec("P")
+R = TypeVar("R")
 CacheScope = Literal["dependency", "run", "timeout", "none"]
 
 _SENTINEL = object()
 _RUN_CACHE_MISS = object()
-_DEPENDENCY_CACHE_PREFETCH_MANIFEST_PREFIX = "dependency_cache_prefetch_manifest"
-_DEPENDENCY_CACHE_PREFETCH_ATTEMPT_PREFIX = "dependency_cache_prefetch_attempt"
-_DEPENDENCY_CACHE_PREFETCH_VALUE_PREFIX = "dependency_cache_prefetch_value"
+_DEPENDENCY_CACHE_PREFETCH_MANIFEST_PREFIX = "gm:prefetch:v2:manifest"
+_DEPENDENCY_CACHE_PREFETCH_ATTEMPT_PREFIX = "gm:prefetch:v2:attempt"
+_DEPENDENCY_CACHE_PREFETCH_VALUE_PREFIX = "gm:prefetch:v2:value"
 logger = get_logger("cache.decorator")
+
+
+def _is_default_cache_backend(cache_backend: CacheBackend) -> bool:
+    """Return whether ``cache_backend`` is Django's default cache identity."""
+    if cache_backend is django_cache:
+        return True
+    try:
+        resolved_default = django_cache._connections[django_cache._alias]  # type: ignore[attr-defined]
+    except (AttributeError, KeyError):
+        return False
+    return cache_backend is resolved_default
 
 
 class UnsupportedCacheScopeError(ValueError):
@@ -86,6 +94,16 @@ class UnsupportedCacheScopeError(ValueError):
 
     def __init__(self, scope: object) -> None:
         super().__init__(f"Unsupported cache scope: {scope}")
+
+
+class UnsupportedDependencyCacheBackendError(ValueError):
+    """Raised when dependency caching receives a non-default backend."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            'cache="dependency" requires Django\'s default cache proxy or '
+            "its resolved default backend"
+        )
 
 
 class CacheTimeoutConfigurationError(ValueError):
@@ -100,8 +118,75 @@ class CacheTimeoutConfigurationError(ValueError):
         return cls('timeout is only supported with cache="timeout"')
 
 
+class UnsupportedCachedCallableError(TypeError):
+    """Raised when `cached` receives a callable with declared async behavior."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "cached only supports synchronous callables; async is unsupported"
+        )
+
+
+class UncacheableCachedResultError(TypeError):
+    """Raised when a synchronous callable dynamically returns an awaitable."""
+
+    def __init__(self) -> None:
+        super().__init__("cached cannot store an awaitable result")
+
+
+def _unwrap_partial_callable(value: object) -> object:
+    """Return the callable target after resolving any partial wrappers."""
+    while isinstance(value, partial):
+        value = value.func
+    return value
+
+
+def _has_declared_async_behavior(callable_object: Callable[..., object]) -> bool:
+    """Return whether a callable or its resolved `__call__` declares async work."""
+    target = _unwrap_partial_callable(callable_object)
+    if inspect.iscoroutinefunction(target) or inspect.isasyncgenfunction(target):
+        return True
+    try:
+        call_method = object.__getattribute__(target, "__call__")
+    except AttributeError:
+        return False
+    call_target = _unwrap_partial_callable(call_method)
+    return inspect.iscoroutinefunction(call_target) or inspect.isasyncgenfunction(
+        call_target
+    )
+
+
+def _reject_awaitable_cache_result(result: object) -> None:
+    """Reject dynamic awaitables without cancelling awaitables owned by callers."""
+    if not inspect.isawaitable(result):
+        return
+    if (
+        inspect.iscoroutine(result)
+        and inspect.getcoroutinestate(result) == inspect.CORO_CREATED
+    ):
+        result.close()
+    raise UncacheableCachedResultError
+
+
+def _replay_run_cache_entry_dependencies(entry: _RunCacheEntry) -> None:
+    """Replay a decorated run-cache entry into every active dependency tracker."""
+    for class_name, operation, identifier in entry.dependencies:
+        DependencyTracker._track_validated(class_name, operation, identifier)
+
+
 @overload
-def cached(func: FuncT) -> FuncT: ...
+def cached(func: Callable[P, R]) -> Callable[P, R]: ...
+
+
+@overload
+def cached(
+    func: Callable[P, R],
+    timeout: int | None = None,
+    cache_backend: CacheBackend = django_cache,
+    record_fn: RecordFn = record_dependencies,
+    *,
+    cache: CacheScope = "run",
+) -> Callable[P, R]: ...
 @overload
 def cached(
     func: None = None,
@@ -110,17 +195,17 @@ def cached(
     record_fn: RecordFn = record_dependencies,
     *,
     cache: CacheScope = "run",
-) -> Callable[[FuncT], FuncT]: ...
+) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
 
 def cached(
-    func: FuncT | None = None,
+    func: Callable[P, R] | None = None,
     timeout: int | None = None,
     cache_backend: CacheBackend = django_cache,
     record_fn: RecordFn = record_dependencies,
     *,
     cache: CacheScope = "run",
-) -> FuncT | Callable[[FuncT], FuncT]:
+) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     """
     Decorate a callable with one of GeneralManager's cache strategies.
 
@@ -135,7 +220,7 @@ def cached(
     The decorator supports both ``@cached`` and ``@cached(...)`` forms and
     preserves the wrapped function's type signature for static type checkers.
     Cache keys are built from the wrapped callable plus positional and keyword
-    arguments through :func:`general_manager.utils.make_cache_key.make_cache_key`.
+    arguments through :func:`general_manager.utils._make_cache_key.make_cache_key`.
 
     Parameters:
         func: Function being decorated when used as ``@cached``. Leave unset
@@ -144,8 +229,10 @@ def cached(
             ``cache`` is ``"timeout"`` and invalid with any other cache mode.
             The decorator validates only presence/absence; accepted value ranges
             are delegated to the configured backend.
-        cache_backend: Backend used to read and write dependency or timeout
-            cached results. ``cache="run"`` and ``cache="none"`` do not use it.
+        cache_backend: Backend used to read and write timeout-cached results.
+            Dependency caching accepts only Django's default cache proxy or its
+            resolved default instance. ``cache="run"`` and ``cache="none"``
+            do not use it.
         record_fn: Callback invoked with ``(cache_key, dependencies)`` when
             ``cache`` is ``"dependency"`` and the default dependency publisher
             is not batching the write in a run context.
@@ -162,6 +249,9 @@ def cached(
         UnsupportedCacheScopeError: If ``cache`` is not one of
             ``"dependency"``, ``"run"``, ``"timeout"``, or ``"none"`` at
             runtime.
+        UnsupportedDependencyCacheBackendError: If ``cache="dependency"`` is
+            configured with a backend other than Django's default cache proxy
+            or its resolved default instance.
         CacheTimeoutConfigurationError: If ``cache="timeout"`` has no timeout
             or a timeout is supplied for another cache mode.
         Cache backend errors: Propagated from ``cache_backend.get`` or
@@ -174,8 +264,9 @@ def cached(
             entry.
         DependencyLockTimeoutError: Propagated from ``record_fn`` (i.e.
             :func:`~general_manager.cache.dependency_index.record_dependencies`) when the
-            dependency-index lock cannot be acquired within the configured timeout. The cached
-            value has already been stored at that point; only the dependency metadata is lost.
+            dependency-index lock cannot be acquired within the configured timeout. The
+            dependency publisher records metadata before storing the cached value, so the
+            cache entry is not published when recording fails.
     """
     if cache not in {"dependency", "run", "timeout", "none"}:
         raise UnsupportedCacheScopeError(cache)
@@ -183,6 +274,8 @@ def cached(
         raise CacheTimeoutConfigurationError.missing_timeout()
     if timeout is not None and cache != "timeout":
         raise CacheTimeoutConfigurationError.unexpected_timeout()
+    if cache == "dependency" and not _is_default_cache_backend(cache_backend):
+        raise UnsupportedDependencyCacheBackendError
 
     def dependency_cache_prefetch_manifest_key(
         decorated_func: Callable[..., object],
@@ -301,7 +394,9 @@ def cached(
         if hits:
             context.set_dependency_cache_hits(hits)  # type: ignore[attr-defined]
 
-    def decorator(decorated_func: FuncT) -> FuncT:
+    def decorator(decorated_func: Callable[P, R]) -> Callable[P, R]:
+        if _has_declared_async_behavior(decorated_func):
+            raise UnsupportedCachedCallableError
         prefetch_manifest_key = (
             dependency_cache_prefetch_manifest_key(decorated_func)
             if cache == "dependency"
@@ -309,7 +404,7 @@ def cached(
         )
 
         @wraps(decorated_func)
-        def wrapper(*args: object, **kwargs: object) -> object:
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             if cache == "none":
                 return decorated_func(*args, **kwargs)
 
@@ -319,16 +414,40 @@ def cached(
                 if active_context is not None:
                     cached_run_value = active_context.get(key, _RUN_CACHE_MISS)
                     if cached_run_value is not _RUN_CACHE_MISS:
-                        return cached_run_value
-                    result = decorated_func(*args, **kwargs)
-                    active_context.set(key, result)
+                        if isinstance(cached_run_value, _RunCacheEntry):
+                            _replay_run_cache_entry_dependencies(cached_run_value)
+                            return cast(R, cached_run_value.value)
+                        return cast(R, cached_run_value)
+                    with DependencyTracker() as dependencies:
+                        result = decorated_func(*args, **kwargs)
+                        ModelDependencyCollector.add_args(dependencies, args, kwargs)
+                    _reject_awaitable_cache_result(result)
+                    active_context.set(
+                        key,
+                        _RunCacheEntry(
+                            value=result,
+                            dependencies=frozenset(dependencies),
+                        ),
+                    )
                     return result
                 with ensure_calculation_run_context() as context:
                     cached_run_value = context.get(key, _RUN_CACHE_MISS)
                     if cached_run_value is not _RUN_CACHE_MISS:
-                        return cached_run_value
-                    result = decorated_func(*args, **kwargs)
-                    context.set(key, result)
+                        if isinstance(cached_run_value, _RunCacheEntry):
+                            _replay_run_cache_entry_dependencies(cached_run_value)
+                            return cast(R, cached_run_value.value)
+                        return cast(R, cached_run_value)
+                    with DependencyTracker() as dependencies:
+                        result = decorated_func(*args, **kwargs)
+                        ModelDependencyCollector.add_args(dependencies, args, kwargs)
+                    _reject_awaitable_cache_result(result)
+                    context.set(
+                        key,
+                        _RunCacheEntry(
+                            value=result,
+                            dependencies=frozenset(dependencies),
+                        ),
+                    )
                     return result
 
             key = make_cache_key(decorated_func, args, kwargs)
@@ -344,9 +463,10 @@ def cached(
                             "cache": cache,
                         },
                     )
-                    return cached_result
+                    return cast(R, cached_result)
 
                 result = decorated_func(*args, **kwargs)
+                _reject_awaitable_cache_result(result)
                 cache_backend.set(key, result, timeout)
                 logger.debug(
                     "cache miss stored",
@@ -359,7 +479,7 @@ def cached(
                 )
                 return result
 
-            def return_cached_hit(hit: DependencyCacheHit, message: str) -> object:
+            def return_cached_hit(hit: DependencyCacheHit, message: str) -> R:
                 replay_dependency_cache_hit(hit)
                 logger.debug(
                     message,
@@ -369,7 +489,7 @@ def cached(
                         "cache": cache,
                     },
                 )
-                return hit.value
+                return cast(R, hit.value)
 
             def prefetched_value_from_context(context: object) -> object:
                 if DependencyTracker.is_active():
@@ -387,7 +507,7 @@ def cached(
             if prefetch_context is not None:
                 prefetched_value = prefetched_value_from_context(prefetch_context)
                 if prefetched_value is not _SENTINEL:
-                    return prefetched_value
+                    return cast(R, prefetched_value)
                 prefetched_hit = prefetch_context.get_dependency_cache_hit(
                     key, _SENTINEL
                 )
@@ -403,7 +523,7 @@ def cached(
                     )
                     prefetched_value = prefetched_value_from_context(prefetch_context)
                     if prefetched_value is not _SENTINEL:
-                        return prefetched_value
+                        return cast(R, prefetched_value)
                     prefetched_hit = prefetch_context.get_dependency_cache_hit(
                         key, _SENTINEL
                     )
@@ -449,6 +569,7 @@ def cached(
                 with DependencyTracker() as dependencies:
                     result = decorated_func(*args, **kwargs)
                     ModelDependencyCollector.add_args(dependencies, args, kwargs)
+                _reject_awaitable_cache_result(result)
 
                 def record_many(
                     entries: Iterable[tuple[str, Iterable[Dependency]]],
@@ -515,9 +636,9 @@ def cached(
             return result
 
         # fix for python 3.14:
-        wrapper.__annotations__ = decorated_func.__annotations__
+        wrapper.__annotations__ = getattr(decorated_func, "__annotations__", {})
 
-        return cast(FuncT, wrapper)
+        return wrapper
 
     if func is None:
         return decorator

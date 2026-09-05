@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -14,7 +15,7 @@ from general_manager.bucket.excel_bucket import (
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.interface import ExcelInterface
-from general_manager.interface.excel import ExcelCharField
+from general_manager.interface.excel import ExcelCharField, ExcelMeta
 from general_manager.manager.general_manager import GeneralManager
 
 
@@ -26,6 +27,18 @@ def save_workbook(path: Path) -> None:
     sheet.append(["SKU-1", "Alpha"])
     sheet.append(["SKU-2", "Beta"])
     workbook.save(path)
+
+
+class PickleProduct(GeneralManager):
+    class Interface(ExcelInterface):
+        sku = ExcelCharField(unique=True)
+        name = ExcelCharField()
+
+        class Meta:
+            workbook = "task12-pickle.xlsx"
+            sheet = "Products"
+            header_row = 1
+            key = "sku"
 
 
 class TempPathMixin:
@@ -63,7 +76,7 @@ class ExcelBucketTests(TempPathMixin, SimpleTestCase):
         self.assertEqual(len(bucket), 2)
         self.assertIn(Product(sku="SKU-1"), bucket)
         self.assertEqual(
-            [item.sku for item in bucket.sort(("name", "sku"), reverse=True)],
+            [item.sku for item in bucket.sort("-name", "-sku")],
             ["SKU-2", "SKU-1"],
         )
         self.assertIsNone(bucket.none().first())
@@ -181,6 +194,68 @@ class ExcelBucketTests(TempPathMixin, SimpleTestCase):
 
         self.assertIsInstance(bucket, ExcelBucket)
         self.assertEqual([item.sku for item in bucket], ["SKU-1", "SKU-2"])
+
+    def test_with_instances_preserves_duplicate_object_references(self) -> None:
+        path = self.temp_path("products.xlsx")
+        save_workbook(path)
+
+        class Product(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                name = ExcelCharField()
+
+                class Meta:
+                    workbook = str(path)
+                    sheet = "Products"
+                    header_row = 1
+                    key = "sku"
+
+        outside = Product(sku="SKU-2")
+        subset = Product.filter(name="Alpha").with_instances([outside, outside])
+
+        self.assertEqual(list(subset), [outside, outside])
+        self.assertIs(subset[0], outside)
+
+    def test_native_exclude_preserves_each_call_group(self) -> None:
+        """Excel exclusions negate a conjunction from each exclude call."""
+        path = self.temp_path("rows.xlsx")
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Rows"
+        sheet.append(["sku", "a", "b"])
+        sheet.append(["SKU-1", "1", "1"])
+        sheet.append(["SKU-2", "1", "2"])
+        sheet.append(["SKU-3", "2", "2"])
+        workbook.save(path)
+
+        class Row(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                a = ExcelCharField()
+                b = ExcelCharField()
+
+                class Meta:
+                    workbook = str(path)
+                    sheet = "Rows"
+                    header_row = 1
+                    key = "sku"
+
+        self.assertEqual(
+            [item.sku for item in Row.exclude(a="1", b="1")], ["SKU-2", "SKU-3"]
+        )
+        self.assertEqual(
+            [item.sku for item in Row.exclude(a="1").exclude(b="1")], ["SKU-3"]
+        )
+        self.assertEqual(
+            [item.sku for item in Row.filter(a="1").filter()], ["SKU-1", "SKU-2"]
+        )
+        self.assertEqual(
+            [item.sku for item in Row.exclude()], ["SKU-1", "SKU-2", "SKU-3"]
+        )
+        self.assertEqual(
+            [item.sku for item in Row.exclude(a="1", b="1").exclude()],
+            ["SKU-2", "SKU-3"],
+        )
 
     def test_cross_manager_excel_bucket_union_raises_type_error(self) -> None:
         path = self.temp_path("products.xlsx")
@@ -537,4 +612,54 @@ class ExcelBucketTests(TempPathMixin, SimpleTestCase):
             ExcelBucketLookupError,
             "Unknown Excel field lookup 'missing' for Product",
         ):
-            Product.all().sort(("name", "missing"))
+            Product.all().sort("name", "missing")
+
+
+class ExcelBucketPickleTests(TempPathMixin, SimpleTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.workbook_path = self.temp_path("pickle-products.xlsx")
+        save_workbook(self.workbook_path)
+        self.original_meta = PickleProduct.Interface.excel_meta
+        PickleProduct.Interface.excel_meta = ExcelMeta(
+            workbook=str(self.workbook_path),
+            sheet="Products",
+            header_row=1,
+            key="sku",
+        )
+        self.addCleanup(self._restore_meta)
+
+    def _restore_meta(self) -> None:
+        PickleProduct.Interface.excel_meta = self.original_meta
+
+    def test_pickle_preserves_excel_constraints_identity_and_order(self) -> None:
+        filters = (("sku__in", ["SKU-1", "SKU-2"]),)
+        excludes = (("name__exact", "Never"),)
+        filter_groups = (
+            (("sku__in", ["SKU-1", "SKU-2"]),),
+            (("name__contains", "a"),),
+        )
+        exclude_groups = (
+            (("name__exact", "Never"),),
+            (("sku__exact", "NOPE"),),
+        )
+        bucket = ExcelBucket(
+            PickleProduct,
+            PickleProduct.Interface,
+            filters=filters,
+            excludes=excludes,
+            keys=("SKU-2", "SKU-1"),
+            filter_groups=filter_groups,
+            exclude_groups=exclude_groups,
+        )
+
+        restored = pickle.loads(pickle.dumps(bucket))  # noqa: S301 - local test data
+
+        self.assertIs(restored._manager_class, PickleProduct)
+        self.assertIs(restored._interface_cls, PickleProduct.Interface)
+        self.assertEqual(restored._filters, filters)
+        self.assertEqual(restored._excludes, excludes)
+        self.assertEqual(restored._filter_groups, filter_groups)
+        self.assertEqual(restored._exclude_groups, exclude_groups)
+        self.assertEqual(restored._keys, ("SKU-2", "SKU-1"))
+        self.assertEqual([item.sku for item in restored], ["SKU-2", "SKU-1"])

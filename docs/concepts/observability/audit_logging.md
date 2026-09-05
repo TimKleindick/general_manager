@@ -54,9 +54,9 @@ Each audit logger receives a ``PermissionAuditEvent`` instance containing:
 
 ### FileAuditLogger
 
-Streams events as newline-delimited JSON to the given path. The parent directory is created automatically and records are appended. It uses a background worker with batching to keep request latency low. Call `flush()` or `close()` during tests and shutdown paths where you need to guarantee queued records have been written; after closing, later `record()` calls are ignored.
+Streams events as newline-delimited JSON to the given path. The parent directory is created automatically and records are appended. It uses a background worker with batching to keep request latency low. Call `flush()` when accepted records must be written while logging continues; call `close()` at the terminal lifecycle boundary. `close()` rejects later `record()` calls, waits for accepted events to drain, and reports a worker persistence failure. It has no timeout, so a stuck persistence operation remains visible as a blocked close rather than a false-success return.
 
-`DatabaseAuditLogger` persists events via Django’s ORM (default table: `general_manager_permissionauditlog`). The logger creates the table on demand; on SQLite it falls back to synchronous writes for compatibility with in-memory tests. Use `using` to target a different database or `table_name` for custom storage. On non-SQLite databases it uses the same background-worker lifecycle as `FileAuditLogger`, so call `flush()` or `close()` when deterministic persistence matters.
+`DatabaseAuditLogger` persists events via Django’s ORM (default table: `general_manager_permissionauditlog`). The logger creates the table on demand; on SQLite it falls back to synchronous writes for compatibility with in-memory tests. Use `using` to target a different database or `table_name` for custom storage. On non-SQLite databases it uses the same background-worker lifecycle as `FileAuditLogger`; on every backend, `flush()` is reusable and `close()` is terminal.
 
 ```python
 # apps.py

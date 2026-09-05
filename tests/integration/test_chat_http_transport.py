@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import patch
@@ -10,10 +11,18 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import Client, TestCase
 from django.test.utils import override_settings
+from django.utils import timezone
 
 from general_manager.api.graphql import GraphQL
 from general_manager.chat.bootstrap import ensure_chat_http_routes
-from general_manager.chat.models import ChatMessage, ChatPendingConfirmation
+from general_manager.chat.models import (
+    ChatConversation,
+    ChatMessage,
+    ChatPendingConfirmation,
+    append_chat_message,
+    build_conversation_context,
+    provider_messages_from_context,
+)
 from tests import test_urls
 
 
@@ -88,6 +97,75 @@ class HttpIntegrationProvider:
             )
 
             yield TextChunkEvent(content=f"tool:{last_message.content}")
+            yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+
+        return _stream()
+
+
+class ConfirmedMutationHttpProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+        self.calls += 1
+
+        async def _stream():
+            from general_manager.chat.providers.base import (
+                DoneEvent,
+                TextChunkEvent,
+                TokenUsage,
+                ToolCallEvent,
+            )
+
+            if self.calls == 1:
+                yield ToolCallEvent(
+                    id="tool-provider-confirmed",
+                    name="mutate",
+                    args={
+                        "mutation": "createPart",
+                        "input": {"name": "Bolt"},
+                        "confirmed": True,
+                    },
+                )
+                yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+                return
+            yield TextChunkEvent(content=f"confirmed:{messages[-1].content}")
+            yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+
+        return _stream()
+
+
+class ConfirmationLinkHttpProvider:
+    """Require a native linked tool result before the confirmation follow-up."""
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+
+        async def _stream():
+            from general_manager.chat.providers.base import (
+                DoneEvent,
+                TextChunkEvent,
+                TokenUsage,
+                ToolCallEvent,
+            )
+
+            last_message = messages[-1]
+            if last_message.role == "user":
+                yield ToolCallEvent(
+                    id="tool-linked-confirmation",
+                    name="mutate",
+                    args={"mutation": "createPart", "input": {"name": "Bolt"}},
+                )
+                yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+                return
+            if (
+                last_message.role == "tool"
+                and last_message.tool_call_id == "tool-linked-confirmation"
+            ):
+                yield TextChunkEvent(content="native confirmation linked")
+            else:
+                yield TextChunkEvent(content="confirmation link missing")
             yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
 
         return _stream()
@@ -294,8 +372,11 @@ class _Result:
 
 
 class _Schema:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
     def execute(self, query_text: str, context_value=None):  # type: ignore[no-untyped-def]
-        del query_text, context_value
+        self.calls.append({"query": query_text, "context": context_value})
         return _Result(data={"createPart": {"success": True}})
 
 
@@ -323,7 +404,8 @@ class ChatHttpTransportTests(TestCase):
         )
         self.client.force_login(self.user)
 
-        GraphQL._schema = _Schema()  # type: ignore[assignment]
+        self.schema = _Schema()
+        GraphQL._schema = self.schema  # type: ignore[assignment]
 
     def tearDown(self) -> None:
         test_urls.urlpatterns[:] = []
@@ -630,6 +712,35 @@ class ChatHttpTransportTests(TestCase):
         assert observed_after_first == [(True, False)]
         assert LazySseProvider.yielded is True
 
+    def test_sse_sets_session_cookie_before_streaming_and_reuses_conversation(
+        self,
+    ) -> None:
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=HttpIntegrationProvider,
+        ):
+            first = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "hello"}),
+                content_type="application/json",
+            )
+
+        assert "sessionid" in first.cookies
+        async_to_sync(_collect_streaming_content)(first)
+
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=HttpIntegrationProvider,
+        ):
+            second = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "again"}),
+                content_type="application/json",
+            )
+        async_to_sync(_collect_streaming_content)(second)
+
+        assert ChatConversation.objects.count() == 1
+
     def test_http_post_rejects_confirmed_mutations(self) -> None:
         with patch(
             "general_manager.chat.views.import_provider",
@@ -800,6 +911,214 @@ class ChatHttpTransportTests(TestCase):
         assert payload["events"][1]["type"] == "text_chunk"
         assert payload["events"][-1]["type"] == "done"
 
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": (
+                    "tests.integration.test_chat_http_transport."
+                    "ConfirmationLinkHttpProvider"
+                ),
+                "url": "/chat/",
+                "allowed_mutations": ["createPart"],
+                "confirm_mutations": ["createPart"],
+                "max_recent_messages": 1,
+                "summarize_after": 1,
+            }
+        }
+    )
+    def test_sse_confirmation_persists_native_link_for_followup_context(self) -> None:
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=ConfirmationLinkHttpProvider,
+        ):
+            response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "create a part"}),
+                content_type="application/json",
+            )
+            async_to_sync(_collect_streaming_content)(response)
+            pending = ChatPendingConfirmation.objects.get(
+                confirmation_id="tool-linked-confirmation", resolved_at__isnull=True
+            )
+
+            confirm = self.client.post(
+                "/chat/confirm/",
+                data=json.dumps(
+                    {"confirmation_id": pending.confirmation_id, "confirmed": True}
+                ),
+                content_type="application/json",
+            )
+            replay = self.client.post(
+                "/chat/confirm/",
+                data=json.dumps(
+                    {"confirmation_id": pending.confirmation_id, "confirmed": True}
+                ),
+                content_type="application/json",
+            )
+
+        assert confirm.json()["events"][1] == {
+            "type": "text_chunk",
+            "content": "native confirmation linked",
+        }
+        assert replay.json()["events"] == [
+            {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+        ]
+        assert len(self.schema.calls) == 1
+
+        conversation = pending.conversation
+        conversation.refresh_from_db()
+        declaration = ChatMessage.objects.get(
+            conversation=conversation,
+            role="assistant",
+            tool_calls__0__id=pending.confirmation_id,
+        )
+        result = ChatMessage.objects.get(
+            conversation=conversation,
+            role="tool",
+            tool_call_id=pending.confirmation_id,
+        )
+        assert result.tool_result == confirm.json()["events"][0]["result"]
+        assert declaration.tool_calls == [
+            {
+                "id": pending.confirmation_id,
+                "name": "mutate",
+                "args": {"mutation": "createPart", "input": {"name": "Bolt"}},
+            }
+        ]
+
+        append_chat_message(conversation, role="user", content="follow up")
+        reloaded_context = provider_messages_from_context(
+            build_conversation_context(conversation)
+        )
+        linked_results = [
+            message
+            for message in reloaded_context
+            if message.role == "tool"
+            and message.tool_call_id == pending.confirmation_id
+        ]
+        assert len(linked_results) == 1
+        assert linked_results[0].tool_result == result.tool_result
+
+    def test_sse_provider_confirmation_argument_stays_pending_without_writing(
+        self,
+    ) -> None:
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=ConfirmedMutationHttpProvider,
+        ):
+            response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "create a part"}),
+                content_type="application/json",
+            )
+            body = async_to_sync(_collect_streaming_content)(response).decode()
+
+        assert '"type": "confirm_mutation"' in body
+        assert '"id": "tool-provider-confirmed"' in body
+        assert self.schema.calls == []
+
+    def test_confirm_claim_rejects_wrong_actor_without_writing(self) -> None:
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=HttpIntegrationProvider,
+        ):
+            response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "create a part"}),
+                content_type="application/json",
+            )
+            async_to_sync(_collect_streaming_content)(response)
+        pending = ChatPendingConfirmation.objects.get(
+            confirmation_id="tool-create", resolved_at__isnull=True
+        )
+        other_client = Client()
+        other_user = get_user_model().objects.create_user(
+            username="other-chat-user",
+            email="other-chat@example.com",
+            password="pw",  # noqa: S106
+        )
+        other_client.force_login(other_user)
+
+        response = other_client.post(
+            "/chat/confirm/",
+            data=json.dumps(
+                {"confirmation_id": pending.confirmation_id, "confirmed": True}
+            ),
+            content_type="application/json",
+        )
+
+        assert response.json()["events"] == [
+            {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+        ]
+        assert self.schema.calls == []
+
+    def test_confirm_claim_rejects_expired_pending_without_writing(self) -> None:
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=HttpIntegrationProvider,
+        ):
+            response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "create a part"}),
+                content_type="application/json",
+            )
+            async_to_sync(_collect_streaming_content)(response)
+        pending = ChatPendingConfirmation.objects.get(
+            confirmation_id="tool-create", resolved_at__isnull=True
+        )
+        ChatPendingConfirmation.objects.filter(pk=pending.pk).update(
+            expires_at=timezone.now() - timedelta(seconds=1)
+        )
+
+        response = self.client.post(
+            "/chat/confirm/",
+            data=json.dumps(
+                {"confirmation_id": pending.confirmation_id, "confirmed": True}
+            ),
+            content_type="application/json",
+        )
+
+        assert response.json()["events"] == [
+            {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+        ]
+        assert self.schema.calls == []
+
+    def test_confirm_claim_executes_once_and_rejects_replay(self) -> None:
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=HttpIntegrationProvider,
+        ):
+            response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "create a part"}),
+                content_type="application/json",
+            )
+            async_to_sync(_collect_streaming_content)(response)
+            pending = ChatPendingConfirmation.objects.get(
+                confirmation_id="tool-create", resolved_at__isnull=True
+            )
+            first = self.client.post(
+                "/chat/confirm/",
+                data=json.dumps(
+                    {"confirmation_id": pending.confirmation_id, "confirmed": True}
+                ),
+                content_type="application/json",
+            )
+            second = self.client.post(
+                "/chat/confirm/",
+                data=json.dumps(
+                    {"confirmation_id": pending.confirmation_id, "confirmed": True}
+                ),
+                content_type="application/json",
+            )
+
+        assert first.json()["events"][0]["type"] == "tool_result"
+        assert second.json()["events"] == [
+            {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+        ]
+        assert len(self.schema.calls) == 1
+
     def test_sse_and_confirm_allow_reused_stable_tool_id_after_resolution(
         self,
     ) -> None:
@@ -902,7 +1221,7 @@ class ChatHttpTransportTests(TestCase):
 
         with (
             patch(
-                "general_manager.chat.views.execute_chat_tool",
+                "general_manager.chat.views.execute_confirmed_chat_mutation",
                 side_effect=original_error,
             ),
             patch("general_manager.chat.views.emit_chat_error") as chat_error,

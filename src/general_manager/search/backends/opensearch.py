@@ -91,8 +91,7 @@ class OpenSearchBackend:
         *,
         filters: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
         filter_expression: str | None = None,
-        sort_by: str | None = None,
-        sort_desc: bool = False,
+        sort: Sequence[str] | None = None,
         limit: int = 10,
         offset: int = 0,
         types: Sequence[str] | None = None,
@@ -106,8 +105,7 @@ class OpenSearchBackend:
             filters: Optional structured filters. Accepted for protocol
                 compatibility but never inspected.
             filter_expression (str | None): Optional boolean-style filter expression string to further constrain results.
-            sort_by (str | None): Optional field name to sort results by.
-            sort_desc (bool): If true, sort results in descending order; otherwise sort ascending.
+            sort: Signed fields accepted for protocol compatibility.
             limit (int): Maximum number of results to return.
             offset (int): Number of results to skip (for pagination).
             types (Sequence[str] | None): Optional sequence of document types to restrict the search to.

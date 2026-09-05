@@ -2,7 +2,15 @@ from unittest.mock import patch
 
 from django.test import TestCase
 from general_manager.measurement.measurement import Measurement, ureg
-from decimal import Decimal
+from decimal import (
+    Decimal,
+    Inexact,
+    ROUND_DOWN,
+    ROUND_UP,
+    Rounded,
+    getcontext,
+    localcontext,
+)
 from random import Random
 import pickle
 from pint.errors import DimensionalityError, UndefinedUnitError
@@ -105,6 +113,34 @@ class MeasurementTestCase(TestCase):
         second_cache = measurement_module._multiplicative_conversion_factor.cache_info()
         self.assertGreaterEqual(second_cache.hits, first_cache.hits + len(cases))
 
+    def test_cached_conversion_factor_is_independent_of_caller_context(self):
+        from general_manager.measurement import measurement as measurement_module
+
+        measurement_module._multiplicative_conversion_factor.cache_clear()
+        results: list[Decimal] = []
+        for precision, rounding in ((2, ROUND_DOWN), (28, ROUND_UP), (80, ROUND_DOWN)):
+            with localcontext() as context:
+                context.prec = precision
+                context.rounding = rounding
+                context.Emax = 3
+                context.Emin = -3
+                context.traps[Inexact] = True
+                context.traps[Rounded] = True
+                original = context.copy()
+                results.append(Measurement(Decimal("1"), "meter").to("inch").magnitude)
+                self.assertEqual(context.prec, original.prec)
+                self.assertEqual(context.rounding, original.rounding)
+                self.assertEqual(context.Emin, original.Emin)
+                self.assertEqual(context.Emax, original.Emax)
+                self.assertEqual(context.flags, original.flags)
+                self.assertEqual(context.traps, original.traps)
+
+        self.assertEqual(results, [results[0], results[0], results[0]])
+        self.assertGreaterEqual(
+            measurement_module._multiplicative_conversion_factor.cache_info().hits,
+            2,
+        )
+
     def test_compound_currency_conversion_requires_exchange_rate(self):
         from general_manager.measurement.measurement import MissingExchangeRateError
 
@@ -187,13 +223,11 @@ class MeasurementTestCase(TestCase):
         with self.assertRaises(MissingExchangeRateError):
             m.to("meter")
 
-    def test_currency_to_non_currency_conversion_uses_exchange_rate_fallback(self):
+    def test_currency_exchange_rate_does_not_convert_to_physical_unit(self):
         m = Measurement(2, "EUR")
 
-        converted = m.to("meter", exchange_rate=3.0)
-
-        self.assertEqual(converted.magnitude, Decimal("6"))
-        self.assertEqual(converted.unit, "meter")
+        with self.assertRaises(DimensionalityError):
+            m.to("meter", exchange_rate=3.0)
 
     def test_invalid_target_unit_conversion_raises_pint_error(self):
         m = Measurement(1, "kilogram")
@@ -230,7 +264,7 @@ class MeasurementTestCase(TestCase):
         self.assertEqual(converted.unit, "degree_Fahrenheit")
         self.assertAlmostEqual(float(converted.magnitude), 77.0)
 
-    def test_offset_conversion_still_uses_pint_fallback(self):
+    def test_offset_conversion_uses_decimal_temperature_conversion(self):
         from general_manager.measurement import measurement as measurement_module
 
         measurement_module._multiplicative_conversion_factor.cache_clear()
@@ -241,7 +275,7 @@ class MeasurementTestCase(TestCase):
         self.assertAlmostEqual(float(converted.magnitude), 77.0)
         self.assertEqual(
             measurement_module._multiplicative_conversion_factor.cache_info().currsize,
-            1,
+            0,
         )
 
     def test_offset_unit_from_string_conversion(self):
@@ -314,9 +348,11 @@ class MeasurementTestCase(TestCase):
 
         with patch.object(ureg, "parse_units", wraps=ureg.parse_units) as mocked:
             Measurement(1, "kg")
+            first_measurement_calls = mocked.call_count
             Measurement(2, "kg")
 
-        self.assertEqual(mocked.call_count, 1)
+        self.assertGreater(first_measurement_calls, 0)
+        self.assertEqual(mocked.call_count, first_measurement_calls)
 
     def test_currency_component_uses_cached_parse_unit(self):
         from general_manager.measurement import measurement as measurement_module
@@ -375,7 +411,7 @@ class MeasurementTestCase(TestCase):
             1,
         )
 
-    def test_measurement_reuses_canonical_values_until_quantity_is_exposed(self):
+    def test_exposed_quantity_cannot_mutate_measurement(self):
         measurement = Measurement(Decimal("1.2300"), "kg / m ** 3")
 
         self.assertIs(measurement.unit, measurement.unit)
@@ -384,8 +420,8 @@ class MeasurementTestCase(TestCase):
         exposed_quantity = measurement.quantity
         exposed_quantity.ito("g / cm ** 3")
 
-        self.assertEqual(measurement.unit, "gram / centimeter ** 3")
-        self.assertNotEqual(measurement.magnitude, Decimal("1.23"))
+        self.assertEqual(measurement.unit, "kilogram / meter ** 3")
+        self.assertEqual(measurement.magnitude, Decimal("1.23"))
 
     def test_unit_uses_offset_cache_preserves_quantity_input(self):
         from general_manager.measurement.measurement import _unit_uses_offset
@@ -650,12 +686,9 @@ class MeasurementTestCase(TestCase):
 
         self.assertEqual(m1, m2)
         self.assertNotEqual(m1, m3)
-        with self.assertRaises(ValueError):
-            _ = m1 == "not a measurement"
-        with self.assertRaises(TypeError):
-            _ = m1 == 10
-        with self.assertRaises(ValueError):
-            _ = m1 == Measurement(10, "second")
+        self.assertFalse(m1 == "not a measurement")
+        self.assertFalse(m1 == 10)
+        self.assertFalse(m1 == Measurement(10, "second"))
 
     def test_inequality(self):
         """
@@ -668,12 +701,9 @@ class MeasurementTestCase(TestCase):
 
         self.assertFalse(m1 != m2)
         self.assertTrue(m1 != m3)
-        with self.assertRaises(ValueError):
-            _ = m1 != "not a measurement"
-        with self.assertRaises(TypeError):
-            _ = m1 != 10
-        with self.assertRaises(ValueError):
-            _ = m1 != Measurement(10, "second")
+        self.assertTrue(m1 != "not a measurement")
+        self.assertTrue(m1 != 10)
+        self.assertTrue(m1 != Measurement(10, "second"))
 
     def test_comparison(self):
         """
@@ -734,6 +764,163 @@ class MeasurementTestCase(TestCase):
         right = Measurement(Decimal("273.1500000006"), "K")
 
         self.assertNotEqual(left, right)
+
+    def test_pure_temperature_equality_and_hash_use_canonical_kelvin_bins(self):
+        first = Measurement(Decimal("273.1500000004"), "K")
+        second = Measurement(Decimal("0.0000000004"), "degC")
+        third = Measurement(Decimal("32.0000000004"), "degF")
+
+        self.assertEqual(first, second)
+        self.assertEqual(second, third)
+        self.assertEqual(first, third)
+        self.assertEqual(hash(first), hash(second))
+        self.assertEqual(hash(second), hash(third))
+        self.assertEqual({first}, {second, third})
+
+    def test_temperature_ordering_uses_the_same_canonical_bin_as_equality(self):
+        lower = Measurement(Decimal("1.0000000001"), "K")
+        higher = Measurement(Decimal("1.0000000002"), "K")
+
+        self.assertEqual(lower, higher)
+        self.assertFalse(lower < higher)
+        self.assertFalse(lower > higher)
+        self.assertTrue(lower <= higher)
+        self.assertTrue(lower >= higher)
+
+    def test_reaumur_temperature_uses_the_canonical_kelvin_bin(self):
+        reaumur = Measurement(Decimal("0.0000000001"), "degRe")
+        kelvin = Measurement(Decimal("273.1500000001"), "K")
+
+        self.assertEqual(reaumur, kelvin)
+        self.assertEqual(hash(reaumur), hash(kelvin))
+
+    def test_reference_and_prefixed_rankine_temperatures_use_precise_kelvin_scale(self):
+        atomic = Measurement(Decimal("1"), "atomic_unit_of_temperature")
+        millirankine = Measurement(Decimal("1"), "millidegree_Rankine")
+        atomic_kelvin = Measurement(Decimal("315775.0248039855"), "K")
+        millirankine_kelvin = Measurement(
+            Decimal("0.00055555555555555555555555555555555555555555555555555555556"),
+            "K",
+        )
+
+        self.assertEqual(atomic.to("K").magnitude, Decimal("315775.0248039855"))
+        self.assertEqual(
+            millirankine.to("K").magnitude,
+            Decimal("0.00055555555555555555555555555555555555555555555555555555556"),
+        )
+        self.assertEqual(atomic, atomic_kelvin)
+        self.assertEqual(millirankine, millirankine_kelvin)
+        self.assertEqual(hash(atomic), hash(atomic_kelvin))
+        self.assertEqual(hash(millirankine), hash(millirankine_kelvin))
+
+    def test_prefixed_rankine_uses_the_exact_base_scale_in_both_directions(self):
+        rankine = Measurement(Decimal("1E9"), "degree_Rankine")
+        millirankine = Measurement(Decimal("1E12"), "millidegree_Rankine")
+        delta_fahrenheit = Measurement(Decimal("1E9"), "delta_degF")
+
+        self.assertEqual(millirankine.to("degree_Rankine").magnitude, Decimal("1E9"))
+        self.assertEqual(rankine.to("millidegree_Rankine").magnitude, Decimal("1E12"))
+        self.assertEqual(rankine, millirankine)
+        self.assertEqual(hash(rankine), hash(millirankine))
+        self.assertEqual(rankine, delta_fahrenheit)
+        self.assertEqual(hash(rankine), hash(delta_fahrenheit))
+
+    def test_generic_offset_temperature_conversion_preserves_long_decimal(self):
+        reaumur = Decimal("1.123456789123456789123456789")
+        kelvin = Decimal("274.55432098640432098640432098625")
+
+        self.assertEqual(Measurement(reaumur, "degRe").to("K").magnitude, kelvin)
+        self.assertEqual(Measurement(kelvin, "K").to("degRe").magnitude, reaumur)
+
+    def test_delta_temperature_uses_the_canonical_kelvin_bin(self):
+        delta_celsius = Measurement(Decimal("0.0000000004"), "delta_degC")
+        kelvin = Measurement(Decimal("0"), "K")
+
+        self.assertEqual(delta_celsius, kelvin)
+        self.assertEqual(hash(delta_celsius), hash(kelvin))
+
+    def test_composite_pure_temperature_uses_the_canonical_kelvin_bin(self):
+        composite = Measurement(Decimal("0.0000000000001"), "K * km / m")
+        kelvin = Measurement(Decimal("0.0000000001"), "K")
+
+        self.assertEqual(composite, kelvin)
+        self.assertEqual(hash(composite), hash(kelvin))
+        self.assertFalse(composite < kelvin)
+        self.assertTrue(composite >= kelvin)
+
+    def test_temperature_bins_use_half_even_rounding_at_positive_and_negative_ties(
+        self,
+    ):
+        positive_tie = Measurement(Decimal("273.1500000005"), "K")
+        positive_even_bin = Measurement(Decimal("273.15"), "K")
+        positive_next_bin = Measurement(Decimal("273.1500000015"), "K")
+        positive_rounded_up = Measurement(Decimal("273.150000002"), "K")
+        negative_tie = Measurement(Decimal("-0.0000000005"), "K")
+        zero = Measurement(Decimal("0"), "K")
+        negative_next_bin = Measurement(Decimal("-0.0000000015"), "K")
+        negative_rounded_away = Measurement(Decimal("-0.000000002"), "K")
+
+        self.assertEqual(positive_tie, positive_even_bin)
+        self.assertEqual(positive_next_bin, positive_rounded_up)
+        self.assertEqual(negative_tie, zero)
+        self.assertEqual(negative_next_bin, negative_rounded_away)
+
+    def test_large_temperature_exponents_retain_affine_offset_in_canonical_bins(
+        self,
+    ):
+        celsius = Measurement(Decimal("1E+100"), "degC")
+        kelvin = Measurement(Decimal("1E+100"), "K")
+
+        self.assertNotEqual(celsius, kelvin)
+
+    def test_offset_conversion_and_bypass_constructors_preserve_long_decimal(self):
+        value = Decimal("123456789.123456789123456789123456789")
+        expected_kelvin = Decimal("123457062.273456789123456789123456789")
+
+        converted = Measurement(value, "degC").to("K")
+        from_parts = Measurement._from_canonical_parts(value, "meter")
+        from_quantity = Measurement._from_quantity(ureg.Quantity(value, "meter"))
+
+        self.assertEqual(converted.magnitude, expected_kelvin)
+        self.assertEqual(from_parts.magnitude, value)
+        self.assertEqual(from_quantity.magnitude, value)
+        exposed_quantity = from_quantity.quantity
+        exposed_quantity.ito("centimeter")
+        self.assertEqual(from_quantity.magnitude, value)
+
+    def test_equality_returns_false_for_strings_and_incompatible_dimensions(self):
+        measurement = Measurement(Decimal("1"), "meter")
+
+        self.assertNotEqual(measurement, "1 meter")
+        self.assertNotEqual(measurement, Measurement(Decimal("1"), "second"))
+        self.assertNotIn("1 meter", {measurement})
+
+    def test_long_decimal_construction_preserves_magnitude_and_context(self):
+        value = Decimal("123456789.123456789123456789123456789")
+        original_precision = getcontext().prec
+
+        with localcontext() as context:
+            context.prec = 6
+            measurement = Measurement(value, "meter")
+            self.assertEqual(context.prec, 6)
+
+        self.assertEqual(getcontext().prec, original_precision)
+        self.assertEqual(measurement.magnitude, value)
+
+    def test_hash_and_set_membership_are_independent_of_ambient_precision(self):
+        measurement = Measurement(Decimal("123456789.123456789123456789"), "cm")
+
+        with localcontext() as context:
+            context.prec = 6
+            low_precision_hash = hash(measurement)
+            measurements = {measurement}
+
+        with localcontext() as context:
+            context.prec = 50
+            high_precision_hash = hash(measurement)
+            self.assertIn(measurement, measurements)
+
+        self.assertEqual(low_precision_hash, high_precision_hash)
 
     def test_percentage_values(self):
         """
@@ -848,7 +1035,7 @@ class MeasurementTestCase(TestCase):
 
             self.assertEqual(str(result.quantity.units), "EUR")
 
-        quantity.assert_called_once()
+        self.assertEqual(quantity.call_count, 2)
 
     def test_scalar_multiplication_defers_result_quantity_until_exposed(self):
         measurement = Measurement(25, "kilogram")
@@ -862,7 +1049,7 @@ class MeasurementTestCase(TestCase):
 
             self.assertEqual(str(result.quantity.units), "kilogram")
 
-        quantity.assert_called_once()
+        self.assertEqual(quantity.call_count, 2)
 
     def test_calculation_with_other_dimension_and_currency(self):
         """
@@ -917,17 +1104,11 @@ class MeasurementTestCase(TestCase):
         self.assertIn(str(m3), ["200 meter * EUR", "200 EUR * meter"])
         self.assertEqual(str(m3.to("EUR * kilometer")), "0.2 EUR * kilometer")
 
-    def test_measurement_multiplication_reuses_pint_result_quantity(self):
+    def test_measurement_multiplication_defensively_copies_pint_result_quantity(self):
         m1 = Measurement(100, "EUR")
         m2 = Measurement(2, "meter")
 
-        with patch(
-            "general_manager.measurement.measurement._build_quantity",
-            side_effect=AssertionError(
-                "measurement multiplication should not rebuild the Pint result"
-            ),
-        ):
-            result = m1 * m2
+        result = m1 * m2
 
         self.assertIn(str(result), ["200 meter * EUR", "200 EUR * meter"])
         self.assertEqual(str(result.to("EUR * kilometer")), "0.2 EUR * kilometer")
@@ -951,17 +1132,11 @@ class MeasurementTestCase(TestCase):
         self.assertEqual(right_result.unit, "EUR")
         self.assertEqual(right_result.magnitude, Decimal("36"))
 
-    def test_measurement_division_reuses_pint_result_quantity(self):
+    def test_measurement_division_defensively_copies_pint_result_quantity(self):
         m1 = Measurement(100, "EUR")
         m2 = Measurement(2, "meter")
 
-        with patch(
-            "general_manager.measurement.measurement._build_quantity",
-            side_effect=AssertionError(
-                "measurement division should not rebuild the Pint result"
-            ),
-        ):
-            result = m1 / m2
+        result = m1 / m2
 
         self.assertEqual(str(result), "50 EUR / meter")
 

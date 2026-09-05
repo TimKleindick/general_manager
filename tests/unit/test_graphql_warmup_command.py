@@ -16,6 +16,13 @@ class GraphQLWarmUpCommandTests(SimpleTestCase):
         with self.assertRaisesRegex(CommandError, "Invalid GraphQL manager path"):
             call_command("graphql_warmup", "--manager", "missing.Manager")
 
+    def test_non_manager_dotted_path_raises_command_error_before_warmup(self) -> None:
+        """Importable non-manager paths cannot reach warm-up discovery."""
+        with self.assertRaisesRegex(
+            CommandError, "GraphQL manager path must be a manager"
+        ):
+            call_command("graphql_warmup", "--manager", "builtins.int")
+
 
 class GraphQLWarmUpRefreshDueCommandTests(SimpleTestCase):
     """Verify the timeout-recipe refresh management command."""

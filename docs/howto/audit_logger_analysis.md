@@ -88,6 +88,6 @@ denied = logger.model.objects.filter(granted=False).order_by("-created_at")
 
 - In unit tests, inject a stub logger implementing `record()` to capture events.
 - Assert that permission checks produce both success and failure entries.
-- Call `close()` or `flush()` on buffered loggers (`FileAuditLogger`, and `DatabaseAuditLogger` on non-SQLite databases) in teardown hooks to ensure the worker thread finishes processing events. After a logger is closed, later `record()` calls are ignored.
+- Call `flush()` on buffered loggers (`FileAuditLogger`, and `DatabaseAuditLogger` on non-SQLite databases) whenever accepted events must be persisted while logging continues. Call `close()` only at the terminal lifecycle boundary: it rejects later `record()` calls, waits for accepted events to drain, and re-raises a worker persistence failure. Repeated `close()` calls return after a successful close and report the retained failure after an unsuccessful one. There is no close timeout, so a persistence operation that never returns keeps `close()` blocked rather than reporting false success.
 
 With logging enabled and observed, you can prove your permission model behaves as intended and quickly diagnose unexpected access results.

@@ -114,6 +114,9 @@ def test_calculate_evidence_reads_only_query_evidence_by_structured_path() -> No
             {"evidence_id": "ev-query", "path": ["data", 1, "value"]},
         ],
     }
+    assert store.get("ev-calc") is None
+    assert store.add(result) is result
+    assert store.get("ev-calc") is result
 
 
 @pytest.mark.parametrize("operation", ["sum", "average", "minimum", "maximum"])

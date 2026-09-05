@@ -44,6 +44,12 @@ JSON-normalized; database registries rely on Django field serialization.
 
 ::: general_manager.workflow.event_registry.DatabaseEventRegistry
 
+::: general_manager.workflow.event_registry.DurableHandlerRegistrationIdRequiredError
+
+::: general_manager.workflow.event_registry.InvalidDurableHandlerRegistrationIdError
+
+::: general_manager.workflow.event_registry.WorkflowHandlerRegistrationConflictError
+
 ::: general_manager.workflow.event_registry.InvalidWorkflowEventRegistryOptionsError
 
 ::: general_manager.workflow.event_registry.InvalidWorkflowEventRegistryError
@@ -237,11 +243,11 @@ signal caller.
 `start(...)` deep-copies input data and metadata into the returned
 `WorkflowExecution`, deep-copies handler input, completes immediately when no
 handler is configured, and records handler exceptions as failed executions. A
-non-empty `correlation_id` reuses the existing local execution for the same
-workflow id, including failed executions. Concurrent starts with the same local
-correlation key wait for the in-flight start and return its completed or failed
-snapshot. `resume(...)` only accepts waiting executions, stores a deep copy of
-the supplied signal under `metadata["resume_signal"]` when a signal is provided,
+non-empty `correlation_id` reuses an active or completed execution for the same
+workflow id; failed and cancelled executions are fresh retry attempts. Concurrent
+starts with the same local correlation key wait for the in-flight start and
+return its snapshot. `resume(...)` only accepts waiting executions, stores a
+deep copy of the supplied signal under `metadata["resume_signal"]` when a signal is provided,
 and completes the execution. `cancel(...)` only accepts active executions and
 stores the optional reason as `WorkflowExecution.error`. `status(...)`,
 `resume(...)`, and `cancel(...)` raise `WorkflowExecutionNotFoundError` for

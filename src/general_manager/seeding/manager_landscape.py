@@ -40,6 +40,15 @@ class SeedableManagerRuntime(Protocol):
         ...
 
 
+def _manager_database_alias(manager: object) -> str | None:
+    """Return an ORM seed manager's configured database alias, if it has one."""
+    interface = getattr(manager, "Interface", None)
+    database_alias = getattr(interface, "database", None)
+    return (
+        database_alias if isinstance(database_alias, str) and database_alias else None
+    )
+
+
 class InvalidSeedTargetError(ValueError):
     """Raised when a seed target argument cannot be parsed."""
 
@@ -91,6 +100,16 @@ class ManagerSelectionError(ValueError):
     @classmethod
     def conflicting_selection(cls) -> ManagerSelectionError:
         return cls("--all and --manager are mutually exclusive.")
+
+
+class ZeroSeedProgressError(RuntimeError):
+    """Raised when a factory invocation reports no created objects."""
+
+    def __init__(self, manager_name: str, requested_count: int) -> None:
+        super().__init__(
+            f"Factory for {manager_name} returned no created objects "
+            f"for requested batch size {requested_count}."
+        )
 
 
 class SeedableManagerCollisionError(ValueError):
@@ -267,7 +286,10 @@ def select_seed_targets(
             unknown, or an override targets an unselected manager.
     """
 
-    if default_count < 1:
+    if not _is_positive_integer(default_count):
+        raise ManagerSelectionError.invalid_count()
+
+    if any(not _is_positive_integer(count) for count in overrides.values()):
         raise ManagerSelectionError.invalid_count()
 
     selected_names = list(selected_names or [])
@@ -406,9 +428,14 @@ def execute_seed_plan(
     target receives a ``created`` entry initialized to zero. If the existing
     count already meets the target, no factory call is made for that manager.
     Missing rows are created with ``Factory.create_batch(size)`` in batches of at
-    most ``batch_size``.
+    most ``batch_size``. Progress counts returned created objects rather than
+    requested invocations: nested lists and tuples are flattened, while ``None``
+    and empty containers make no progress and fail the current batch transaction.
 
-    Each batch runs in its own ``transaction.atomic()`` block with no
+    Each batch runs in its own transaction block on the manager interface's
+    configured database alias. Managers without an ORM database declaration
+    retain the unqualified ``transaction.atomic()`` behavior used by custom
+    factories. There is no
     cross-manager atomicity, so prior manager batches and earlier batches for a
     failing manager can remain committed regardless of ``continue_on_error``.
     With ``continue_on_error=True``, the failing manager stops after its first
@@ -423,8 +450,9 @@ def execute_seed_plan(
             original error, rows created before failure, and remaining count.
     """
 
-    if batch_size < 1:
-        raise ManagerSelectionError.invalid_batch_size()
+    validate_seed_batch_size(batch_size)
+    if any(not _is_positive_integer(target.count) for target in targets):
+        raise ManagerSelectionError.invalid_count()
 
     ordered_targets = order_targets_by_dependencies(targets, managers_by_name)
     created: dict[str, int] = {}
@@ -432,14 +460,26 @@ def execute_seed_plan(
 
     for target in ordered_targets:
         manager = cast(SeedableManagerRuntime, managers_by_name[target.manager_name])
+        database_alias = _manager_database_alias(manager)
         existing = int(manager.all().count())
         remaining = max(target.count - existing, 0)
         created[target.manager_name] = 0
         while remaining > 0:
             size = min(batch_size, remaining)
             try:
-                with transaction.atomic():
-                    manager.Factory.create_batch(size)
+                atomic = (
+                    transaction.atomic(using=database_alias)
+                    if database_alias is not None
+                    else transaction.atomic()
+                )
+                with atomic:
+                    batch_result = manager.Factory.create_batch(size)
+                    batch_created = _count_created_objects(batch_result)
+                    _ensure_seed_progress(
+                        batch_created,
+                        target.manager_name,
+                        size,
+                    )
             except Exception as exc:
                 failure = ManagerSeedFailure(
                     target.manager_name,
@@ -460,13 +500,43 @@ def execute_seed_plan(
                     )
                 )
                 break
-            created[target.manager_name] += size
-            remaining -= size
+            created[target.manager_name] += batch_created
+            remaining -= batch_created
 
     return SeedExecutionResult(
         created=MappingProxyType(dict(created)),
         failures=tuple(failures),
     )
+
+
+def validate_seed_batch_size(batch_size: object) -> None:
+    """Raise when a seed batch size is not a positive integer."""
+    if not _is_positive_integer(batch_size):
+        raise ManagerSelectionError.invalid_batch_size()
+
+
+def _is_positive_integer(value: object) -> bool:
+    """Return whether ``value`` is an integer greater than zero, excluding bool."""
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _count_created_objects(result: object) -> int:
+    """Count actual factory results, flattening list and tuple fan-out values."""
+    if result is None:
+        return 0
+    if isinstance(result, (list, tuple)):
+        return sum(_count_created_objects(item) for item in result)
+    return 1
+
+
+def _ensure_seed_progress(
+    created_count: int,
+    manager_name: str,
+    requested_count: int,
+) -> None:
+    """Raise when a factory result contains no created objects."""
+    if created_count == 0:
+        raise ZeroSeedProgressError(manager_name, requested_count)
 
 
 def _required_manager_dependencies(manager: type[object]) -> set[type[object]]:

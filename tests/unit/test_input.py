@@ -1,3 +1,7 @@
+import math
+import sys
+from itertools import islice
+
 from django.test import TestCase
 from decimal import Decimal
 from datetime import timedelta
@@ -6,6 +10,7 @@ from unittest.mock import patch
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.input import (
     DateRangeDomain,
+    InvalidNumericRangeError,
     Input,
     NumericRangeDomain,
     _invoke_callable,
@@ -439,6 +444,40 @@ class TestInput(TestCase):
         )
         self.assertEqual(list(domain), [date(2024, 1, 15)])
 
+    def test_date_range_domain_date_max_is_inclusive_without_overflow(self):
+        self.assertEqual(list(DateRangeDomain(date.max, date.max)), [date.max])
+
+    def test_date_range_domain_stops_before_successor_overflow(self):
+        domain = DateRangeDomain(
+            date.max - timedelta(days=1),
+            date.max,
+            step=2,
+        )
+
+        self.assertEqual(list(domain), [date.max - timedelta(days=1)])
+        self.assertFalse(domain.contains(date.max))
+
+    def test_date_range_domain_week_end_normalization_at_date_max_is_safe(self):
+        domain = DateRangeDomain(
+            date.max,
+            date.max,
+            frequency="week_end",
+        )
+
+        self.assertEqual(list(domain), [])
+        self.assertFalse(domain.contains(date.max))
+        self.assertNotIn(date.max, domain)
+
+        earlier_week_end = date.max - timedelta(days=5)
+        valid_domain = DateRangeDomain(
+            date.max - timedelta(days=6),
+            date.max,
+            frequency="week_end",
+        )
+        self.assertEqual(list(valid_domain), [earlier_week_end])
+        self.assertTrue(valid_domain.contains(earlier_week_end))
+        self.assertIn(earlier_week_end, valid_domain)
+
     def test_date_range_domain_year_end_frequency(self):
         domain = DateRangeDomain(
             date(2020, 1, 1),
@@ -488,6 +527,80 @@ class TestInput(TestCase):
     def test_numeric_range_domain_zero_step_raises(self):
         with self.assertRaises(ValueError):
             NumericRangeDomain(1, 10, step=0)
+
+    def test_numeric_range_domain_rejects_non_finite_values(self):
+        invalid_ranges = (
+            (math.nan, 1.0, 1.0),
+            (1.0, math.nan, 1.0),
+            (1.0, 2.0, math.nan),
+            (-math.inf, 1.0, 1.0),
+            (1.0, math.inf, 1.0),
+            (1.0, 2.0, math.inf),
+            (1.0, 2.0, -math.inf),
+            (Decimal("NaN"), Decimal("2"), Decimal("1")),
+        )
+        for min_value, max_value, step in invalid_ranges:
+            with self.subTest(min_value=min_value, max_value=max_value, step=step):
+                with self.assertRaises(InvalidNumericRangeError):
+                    NumericRangeDomain(min_value, max_value, step=step)
+
+    def test_numeric_range_domain_rejects_stagnant_float_step(self):
+        with self.assertRaises(InvalidNumericRangeError):
+            NumericRangeDomain(1e20, 1e20 + 1e6, step=1.0)
+
+    def test_numeric_range_domain_stops_when_float_step_later_stagnates(self):
+        domain = NumericRangeDomain(
+            float(2**53 - 1),
+            float(2**53 + 100),
+            step=1.0,
+        )
+
+        with self.assertRaises(InvalidNumericRangeError):
+            list(islice(domain, 3))
+        with self.assertRaises(InvalidNumericRangeError):
+            domain.contains(float(2**53 + 100))
+
+    def test_numeric_range_domain_does_not_yield_float_infinity(self):
+        domain = NumericRangeDomain(0.0, sys.float_info.max, step=1e308)
+
+        self.assertEqual(list(islice(domain, 4)), [0.0, 1e308])
+
+    def test_numeric_range_domain_translates_decimal_overflow(self):
+        with self.assertRaises(InvalidNumericRangeError):
+            NumericRangeDomain(
+                Decimal("1e999999"),
+                Decimal("9e999999"),
+                step=Decimal("9e999999"),
+            )
+
+    def test_numeric_range_domain_translates_decimal_iteration_overflow(self):
+        domain = NumericRangeDomain(
+            Decimal("-9e999999"),
+            Decimal("9e999999"),
+            step=Decimal("1e999999"),
+        )
+
+        with self.assertRaises(InvalidNumericRangeError):
+            next(iter(domain))
+
+    def test_numeric_range_domain_translates_decimal_membership_overflow(self):
+        domain = NumericRangeDomain(
+            Decimal("-9e999999"),
+            Decimal("9e999999"),
+            step=Decimal("1e999999"),
+        )
+
+        with self.assertRaises(InvalidNumericRangeError):
+            domain.contains(Decimal("0"))
+
+    def test_numeric_range_domain_singleton_does_not_need_advancement(self):
+        domain = NumericRangeDomain(
+            sys.float_info.max,
+            sys.float_info.max,
+            step=1e308,
+        )
+
+        self.assertEqual(list(domain), [sys.float_info.max])
 
     def test_date_range_domain_contains_boundary(self):
         domain = DateRangeDomain(

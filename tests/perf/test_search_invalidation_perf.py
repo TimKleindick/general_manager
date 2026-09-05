@@ -70,7 +70,7 @@ def test_resolver_overflow_consumes_only_limit_plus_one_targets() -> None:
             yield owner(id=target_id)
 
     class SearchConfig:
-        indexes = (IndexConfig(name="global", fields=["id"]),)
+        indexes = (IndexConfig(name="global", fields=["logical_id"]),)
         invalidation_rules = (SearchInvalidationRule(source=Source, resolve=resolve),)
 
     with (

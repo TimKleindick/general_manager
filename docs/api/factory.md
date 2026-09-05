@@ -31,10 +31,14 @@ The generation order is:
 6. `_generate()` applies many-to-many assignments to saved create-strategy
    model instances, then wraps those model instances into manager instances.
 
-Call-time keyword arguments override generated defaults. Foreign-key and
-one-to-one values are normalized through the related model resolver, so callers
-may pass a Django model instance, a GeneralManager wrapper, or an identifier
-value that Django accepts.
+Call-time keyword arguments override declared and generated defaults. For a
+foreign key or one-to-one relation named `parent`, pass a Django model instance,
+a GeneralManager wrapper, or `None` at the relation-name key (`parent`). Pass a
+raw identifier only at the Django attname key (`parent_id`). An explicit attname
+value also suppresses a declaration or automatic default under the relation
+name. Supplying both keys is allowed only when they identify the same related
+row; conflicting values raise `ValueError`. Explicit `None` remains subject to
+the relation's normal Django validation.
 
 Automatic relation defaults use `reuse_existing` mode unless configured
 otherwise. Foreign-key and one-to-one defaults prefer reusable existing related
@@ -70,10 +74,14 @@ arguments and returns either one `dict[str, object]` record payload or a
 `list[dict[str, object]]` for fan-out creation. AutoFactory does not validate
 that shape before using it: unsupported return values fail through normal Python
 unpacking, model assignment, `full_clean()`, save, or factory_boy errors. Lists
-are processed in order; an empty list returns an empty list. AutoFactory does
-not create a transaction around an adjustment-method list, so create-mode
-failures can leave earlier records saved. When create-strategy wrapping cannot
-find the parent manager class it raises
+are processed in order; an empty list returns an empty list. In create mode,
+all records from one returned list are saved in one `transaction.atomic()` block
+on the interface's selected database alias, so a later record failure rolls
+back earlier record saves from that same list. Many-to-many assignment and
+manager wrapping happen after that inner block and can still fail after the
+record saves commit. There is no transaction shared across separate factory
+calls, batches, or managers. When create-strategy wrapping cannot find the
+parent manager class it raises
 `MissingManagerClassError`; when an identification value cannot be read from a
 generated model, it raises `MissingIdentificationFieldError`. Non-model factory
 outputs raise `InvalidGeneratedObjectError`, and invalid `Meta.model`

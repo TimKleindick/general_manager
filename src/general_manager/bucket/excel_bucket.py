@@ -6,6 +6,7 @@ from collections.abc import Generator, Iterable, Mapping
 from typing import Any, Protocol, cast
 
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
+from general_manager.bucket._ordering import normalize_ordering, sort_items
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.dependency_matching import lookup_spec_from_key
@@ -26,6 +27,8 @@ SUPPORTED_EXCEL_LOOKUPS = frozenset(
         "in",
     }
 )
+type ExcelConstraints = tuple[tuple[str, Any], ...]
+type ExcelConstraintGroups = tuple[ExcelConstraints, ...]
 
 
 class ExcelSingleItemRequiredError(ValueError):
@@ -83,6 +86,26 @@ class _ExcelInterfaceType(Protocol):
     def sync_from_excel(cls, *, force: bool = False) -> object: ...
 
 
+def _restore_excel_bucket(
+    manager_class: type[GeneralManagerType],
+    interface_cls: _ExcelInterfaceType,
+    filters: ExcelConstraints,
+    excludes: ExcelConstraints,
+    keys: tuple[Any, ...] | None,
+    filter_groups: ExcelConstraintGroups,
+    exclude_groups: ExcelConstraintGroups,
+) -> ExcelBucket[GeneralManagerType]:
+    return ExcelBucket(
+        manager_class,
+        interface_cls,
+        filters=filters,
+        excludes=excludes,
+        keys=keys,
+        filter_groups=filter_groups,
+        exclude_groups=exclude_groups,
+    )
+
+
 class ExcelBucket(Bucket[GeneralManagerType]):
     def __init__(
         self,
@@ -92,14 +115,40 @@ class ExcelBucket(Bucket[GeneralManagerType]):
         filters: Mapping[str, Any] | Iterable[tuple[str, Any]] | None = None,
         excludes: Mapping[str, Any] | Iterable[tuple[str, Any]] | None = None,
         keys: tuple[Any, ...] | None = None,
+        filter_groups: ExcelConstraintGroups | None = None,
+        exclude_groups: ExcelConstraintGroups | None = None,
     ) -> None:
         super().__init__(manager_class)
         self._interface_cls = interface_cls
         self._filters = self._normalize_reserved_constraints(filters)
         self._excludes = self._normalize_reserved_constraints(excludes)
+        self._filter_groups = (
+            filter_groups
+            if filter_groups is not None
+            else ((self._filters,) if self._filters else ())
+        )
+        self._exclude_groups = (
+            exclude_groups
+            if exclude_groups is not None
+            else ((self._excludes,) if self._excludes else ())
+        )
         self.filters = self._dependency_payload(self._filters)
         self.excludes = self._dependency_payload(self._excludes)
         self._keys = keys
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        return (
+            _restore_excel_bucket,
+            (
+                self._manager_class,
+                self._interface_cls,
+                self._filters,
+                self._excludes,
+                self._keys,
+                self._filter_groups,
+                self._exclude_groups,
+            ),
+        )
 
     @staticmethod
     def _normalize_constraints(
@@ -132,7 +181,12 @@ class ExcelBucket(Bucket[GeneralManagerType]):
             yield self._manager_class(**{self._interface_cls.excel_meta.key: key})
 
     def filter(self, **kwargs: Any) -> ExcelBucket[GeneralManagerType]:
-        """Return a bucket narrowed to rows matching every lookup."""
+        """Return a bucket narrowed to rows matching every lookup.
+
+        An empty call returns an independent equivalent bucket.
+        """
+        if not kwargs:
+            return self.all()
         constraints = self._normalize_reserved_constraints(kwargs)
         self._validate_lookups(lookup for lookup, _expected in constraints)
         return ExcelBucket(
@@ -141,10 +195,17 @@ class ExcelBucket(Bucket[GeneralManagerType]):
             filters=(*self._filters, *constraints),
             excludes=self._excludes,
             keys=self._keys,
+            filter_groups=(*self._filter_groups, constraints),
+            exclude_groups=self._exclude_groups,
         )
 
     def exclude(self, **kwargs: Any) -> ExcelBucket[GeneralManagerType]:
-        """Return a bucket without rows matching any supplied lookup."""
+        """Return a bucket without rows matching all lookups from one call.
+
+        An empty call returns an independent equivalent bucket.
+        """
+        if not kwargs:
+            return self.all()
         constraints = self._normalize_reserved_constraints(kwargs)
         self._validate_lookups(lookup for lookup, _expected in constraints)
         return ExcelBucket(
@@ -153,6 +214,8 @@ class ExcelBucket(Bucket[GeneralManagerType]):
             filters=self._filters,
             excludes=(*self._excludes, *constraints),
             keys=self._keys,
+            filter_groups=self._filter_groups,
+            exclude_groups=(*self._exclude_groups, constraints),
         )
 
     def all(self) -> ExcelBucket[GeneralManagerType]:
@@ -163,6 +226,8 @@ class ExcelBucket(Bucket[GeneralManagerType]):
             filters=self._filters,
             excludes=self._excludes,
             keys=self._keys,
+            filter_groups=self._filter_groups,
+            exclude_groups=self._exclude_groups,
         )
 
     def count(self) -> int:
@@ -190,13 +255,17 @@ class ExcelBucket(Bucket[GeneralManagerType]):
     def __getitem__(
         self,
         item: int | slice,
-    ) -> GeneralManagerType | ExcelBucket[GeneralManagerType]:
+    ) -> GeneralManagerType | Bucket[GeneralManagerType]:
         keys = self._matching_keys()
         if isinstance(item, slice):
-            return ExcelBucket(
+            from general_manager.bucket._materialized_bucket import MaterializedBucket
+
+            return MaterializedBucket(
                 self._manager_class,
-                self._interface_cls,
-                keys=keys[item],
+                tuple(
+                    self._manager_class(**{self._interface_cls.excel_meta.key: key})
+                    for key in keys[item]
+                ),
             )
         return self._manager_class(**{self._interface_cls.excel_meta.key: keys[item]})
 
@@ -210,8 +279,10 @@ class ExcelBucket(Bucket[GeneralManagerType]):
     def __or__(
         self,
         other: Bucket[GeneralManagerType] | GeneralManagerType,
-    ) -> ExcelBucket[GeneralManagerType]:
-        keys = list(self._matching_keys())
+    ) -> Bucket[GeneralManagerType]:
+        from general_manager.bucket._materialized_bucket import MaterializedBucket
+
+        items = tuple(self)
         if isinstance(other, ExcelBucket):
             if (
                 other._manager_class is not self._manager_class
@@ -222,29 +293,29 @@ class ExcelBucket(Bucket[GeneralManagerType]):
                     other,
                     other_manager_class=other._manager_class,
                 )
-            keys.extend(other._matching_keys())
+            return MaterializedBucket(self._manager_class, items) | MaterializedBucket(
+                self._manager_class, tuple(other)
+            )
         elif isinstance(other, self._manager_class):
-            keys.append(other.identification[self._interface_cls.excel_meta.key])
+            return MaterializedBucket(self._manager_class, items) | other
         else:
             raise ExcelBucketUnionError(self._manager_class, other)
-        return ExcelBucket(
-            self._manager_class,
-            self._interface_cls,
-            keys=tuple(dict.fromkeys(keys)),
-        )
 
     def sort(
         self,
-        key: tuple[str, ...] | str,
-        reverse: bool = False,
+        *fields: str,
     ) -> ExcelBucket[GeneralManagerType]:
         """Return a bucket ordered by one or more Excel field names."""
-        key_names = (key,) if isinstance(key, str) else key
-        self._validate_field_names(key_names)
+        terms = normalize_ordering(fields)
+        if not terms:
+            return self
+        self._validate_field_names(tuple(term.field for term in terms))
         rows = self._matching_rows()
-        rows.sort(
-            key=lambda row: tuple(row.values[name] for name in key_names),
-            reverse=reverse,
+        rows = sort_items(
+            rows,
+            terms,
+            value_for=lambda row, field: row.values[field],
+            identity_for=lambda row: row.key,
         )
         return ExcelBucket(
             self._manager_class,
@@ -264,12 +335,24 @@ class ExcelBucket(Bucket[GeneralManagerType]):
         rows = list(mirror.rows.values())
         if self._keys is not None:
             rows = [mirror.rows[key] for key in self._keys if key in mirror.rows]
-        for lookup, expected in self._filters:
-            matcher = create_filter_function(lookup, expected)
-            rows = [row for row in rows if matcher(_ExcelRowView(row.values))]
-        for lookup, expected in self._excludes:
-            matcher = create_filter_function(lookup, expected)
-            rows = [row for row in rows if not matcher(_ExcelRowView(row.values))]
+        for group in self._filter_groups:
+            matchers = tuple(
+                create_filter_function(lookup, expected) for lookup, expected in group
+            )
+            rows = [
+                row
+                for row in rows
+                if all(matcher(_ExcelRowView(row.values)) for matcher in matchers)
+            ]
+        for group in self._exclude_groups:
+            matchers = tuple(
+                create_filter_function(lookup, expected) for lookup, expected in group
+            )
+            rows = [
+                row
+                for row in rows
+                if not all(matcher(_ExcelRowView(row.values)) for matcher in matchers)
+            ]
         return rows
 
     def _matching_keys(self) -> tuple[Any, ...]:

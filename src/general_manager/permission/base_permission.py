@@ -228,7 +228,12 @@ class BasePermission(ABC):
         """Return whether an action without attribute payload is allowed."""
 
     def can_read_instance(self) -> bool:
-        """Return whether the current user may see that the instance exists."""
+        """Return whether the current user may see that the instance exists.
+
+        A concrete candidate set whose fields all deny access returns ``False``.
+        The implementation still raises ``NotImplementedError`` when no
+        candidate field can be inferred from the permission context.
+        """
         if self._is_superuser():
             return True
         permission_plan = self.get_read_permission_plan()
@@ -257,6 +262,9 @@ class BasePermission(ABC):
         for attribute in candidate_attributes:
             if self.check_permission("read", attribute):
                 return True
+
+        if candidate_attributes:
+            return False
 
         raise NotImplementedError(
             "can_read_instance() requires an explicit implementation when no "
@@ -493,7 +501,8 @@ class BasePermission(ABC):
         request_user: UserLike | object,
     ) -> None:
         """
-        Validate that the request_user has delete permission for every attribute of the given manager instance.
+        Validate that the request_user has delete permission for every attribute
+        of the given manager instance, or the operation gate when it has none.
 
         This resolves the provided request_user to a User/AnonymousUser, evaluates delete permission for each attribute present on manager_instance, collects any denied attributes into error messages, and raises PermissionCheckError if any permissions are denied.
 
@@ -511,6 +520,20 @@ class BasePermission(ABC):
         permission_attributes = cls._iter_permission_attributes(manager_instance)
         if Permission._is_superuser():
             if audit_logging_enabled():
+                if not permission_attributes:
+                    emit_permission_audit_event(
+                        PermissionAuditEvent(
+                            action="delete",
+                            attributes=(),
+                            granted=True,
+                            user=request_user,
+                            manager=manager_name,
+                            permissions=Permission.describe_operation_permissions(
+                                "delete"
+                            ),
+                            bypassed=True,
+                        )
+                    )
                 for key in permission_attributes:
                     emit_permission_audit_event(
                         PermissionAuditEvent(
@@ -527,6 +550,29 @@ class BasePermission(ABC):
 
         errors: list[str] = []
         user_identifier = getattr(request_user, "id", None)
+        if not permission_attributes:
+            is_allowed = Permission.check_operation_permission("delete")
+            if audit_logging_enabled():
+                emit_permission_audit_event(
+                    PermissionAuditEvent(
+                        action="delete",
+                        attributes=(),
+                        granted=is_allowed,
+                        user=request_user,
+                        manager=manager_name,
+                        permissions=Permission.describe_operation_permissions("delete"),
+                    )
+                )
+            if not is_allowed:
+                logger.info(
+                    "permission denied",
+                    context={
+                        "manager": manager_name,
+                        "action": "delete",
+                        "user_id": user_identifier,
+                    },
+                )
+                errors.append("Delete permission denied")
         for key in permission_attributes:
             is_allowed = Permission.check_permission("delete", key)
             if audit_logging_enabled():

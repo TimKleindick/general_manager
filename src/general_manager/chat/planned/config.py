@@ -54,6 +54,7 @@ class ProviderProfile:
     provider_path: str
     provider_config: Mapping[str, Any]
     trust_group: str
+    configured: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ def _implicit_profile(settings: Mapping[str, Any]) -> ProviderProfile:
         provider_path=str(settings["provider"]),
         provider_config=MappingProxyType(deepcopy(dict(provider_config))),
         trust_group="default",
+        configured=False,
     )
 
 
@@ -148,6 +150,7 @@ def _normalize_profiles(
             provider_path=provider_path,
             provider_config=MappingProxyType(deepcopy(dict(provider_config))),
             trust_group=trust_group,
+            configured=True,
         )
     return MappingProxyType(profiles), True
 
@@ -228,7 +231,7 @@ def profile_for_role(settings: PlannedChatSettings, role: str) -> ProviderProfil
 def build_profile_provider(profile: ProviderProfile) -> BaseLLMProvider:
     """Build a provider from a profile without changing legacy settings."""
     provider_cls = import_string(profile.provider_path)
-    if profile.provider_config:
+    if profile.configured or profile.provider_config:
         from_config = getattr(provider_cls, "from_config", None)
         if not callable(from_config):
             raise _error(_detail(_CONFIGURED_CONSTRUCTION, profile_name=profile.name))

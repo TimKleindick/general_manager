@@ -457,6 +457,42 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
 
         asyncio.run(run_test())
 
+    def test_invalid_subscription_documents_fail_before_execution(self) -> None:
+        async def run_test() -> None:
+            cases = {
+                "unknown": "subscription { unknownField }",
+                "argument": "subscription { onProjectChange(id: [7]) { action } }",
+                "multiple": 'subscription { one: onProjectChange(id: "1") { action } two: onProjectChange(id: "1") { action } }',
+            }
+            for operation_id, query in cases.items():
+                communicator, _ = await self._connect()
+                await self._send_json(communicator, {"type": "connection_init"})
+                await communicator.receive_output()
+
+                with patch(
+                    "general_manager.api.graphql_subscription_consumer.subscribe"
+                ) as subscribe_mock:
+                    await self._send_json(
+                        communicator,
+                        {
+                            "id": operation_id,
+                            "type": "subscribe",
+                            "payload": {"query": query},
+                        },
+                    )
+                    error = json.loads((await communicator.receive_output())["text"])
+                    self.assertEqual(error["type"], "error", operation_id)
+                    self.assertTrue(error["payload"])
+                    self.assertEqual(
+                        json.loads((await communicator.receive_output())["text"]),
+                        {"type": "complete", "id": operation_id},
+                    )
+                    subscribe_mock.assert_not_called()
+
+                await self._disconnect(communicator)
+
+        asyncio.run(run_test())
+
     def test_subscribe_returns_execution_result(self) -> None:
         """
         Verifies that a GraphQL subscription that yields an ExecutionResult sends a `next` message containing the result data and then a `complete` message for the subscription id.
@@ -484,7 +520,9 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
                     {
                         "id": "sub-exec",
                         "type": "subscribe",
-                        "payload": {"query": "subscription { dummy }"},
+                        "payload": {
+                            "query": 'subscription { onProjectChange(id: "1") { action } }'
+                        },
                     },
                 )
                 next_msg = await communicator.receive_output()
