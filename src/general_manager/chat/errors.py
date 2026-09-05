@@ -14,6 +14,7 @@ PLANNED_PUBLIC_MESSAGES = {
     "deadline_exceeded": "The request reached its time limit.",
     "provider_failed": "The provider could not complete the request.",
     "synthesis_failed": "I could not produce a grounded answer from the available data.",
+    "rate_limited": "Chat rate limit exceeded. Try again later.",
 }
 
 
@@ -23,15 +24,32 @@ class PublicChatError:
 
     code: str
     message: str
+    retry_after_seconds: int | None = None
 
     def as_event(self) -> dict[str, Any]:
         """Render the error as the public chat event payload."""
-        return {"type": "error", "message": self.message, "code": self.code}
+        event: dict[str, Any] = {
+            "type": "error",
+            "message": self.message,
+            "code": self.code,
+        }
+        if self.retry_after_seconds is not None:
+            event["retry_after_seconds"] = self.retry_after_seconds
+        return event
 
 
 def public_chat_error(_exc: Exception) -> PublicChatError:
     """Map an internal exception to a generic public chat error."""
     planned_reason = getattr(_exc, "public_reason", None)
+    retry_after = getattr(_exc, "retry_after_seconds", None)
+    if (
+        planned_reason == "rate_limited"
+        and type(retry_after) is int
+        and retry_after >= 0
+    ):
+        return PublicChatError(
+            "rate_limited", PLANNED_PUBLIC_MESSAGES["rate_limited"], retry_after
+        )
     if isinstance(planned_reason, str):
         return planned_public_error(planned_reason)
     if isinstance(_exc, TimeoutError):

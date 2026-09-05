@@ -13,7 +13,11 @@ from django.test import TransactionTestCase
 from django.test.utils import override_settings
 from django.utils import timezone
 
-from general_manager.chat.consumer import ChatConsumer, _has_tool_after_last_user
+from general_manager.chat.consumer import (
+    ChatConsumer,
+    _has_tool_after_last_user,
+    _iter_provider_events,
+)
 from general_manager.chat.models import ChatConversation, ChatPendingConfirmation
 from general_manager.chat.providers.base import (
     DoneEvent,
@@ -73,6 +77,19 @@ class _TimeoutProvider:
         del messages, tools
         raise TimeoutError("provider timed out")  # noqa: TRY003
         yield  # pragma: no cover
+
+
+class _ClosableDoneProvider:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        try:
+            yield DoneEvent(usage=TokenUsage())
+            await asyncio.sleep(1)
+        finally:
+            self.closed = True
 
 
 class _ToolLoopProvider:
@@ -501,6 +518,21 @@ class ChatConsumerConnectTests(unittest.TestCase):
 
 
 class ChatConsumerMessageTests(unittest.TestCase):
+    def test_provider_iterator_closes_a_stream_after_done(self) -> None:
+        provider = _ClosableDoneProvider()
+
+        async def run() -> None:
+            events = [
+                event
+                async for event in _iter_provider_events(
+                    provider, [Message(role="user", content="hello")], []
+                )
+            ]
+            assert events == [DoneEvent(usage=TokenUsage())]
+            assert provider.closed is True
+
+        asyncio.run(run())
+
     def test_has_tool_after_last_user_returns_false_without_user_or_tool(self) -> None:
         assert _has_tool_after_last_user([]) is False
         assert (
@@ -1108,9 +1140,12 @@ class ChatConsumerMessageTests(unittest.TestCase):
             ):
                 await consumer.receive_json({"type": "message", "text": "hello"})
 
-            assert limit.call_count == 2
+            assert limit.call_count == 3
             assert limit.call_args_list[0].kwargs == {}
             assert limit.call_args_list[1].kwargs == {
+                "count_request": False,
+            }
+            assert limit.call_args_list[2].kwargs == {
                 "input_tokens": 1,
                 "output_tokens": 2,
                 "count_request": False,
@@ -1321,7 +1356,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 }
                 assert mock_send_json.await_args_list[3].args[0] == {
                     "type": "done",
-                    "usage": {"input_tokens": 2, "output_tokens": 3},
+                    "usage": {"input_tokens": 3, "output_tokens": 4},
                 }
                 called_name, called_args, called_context = (
                     execute_chat_tool.call_args.args
@@ -1515,7 +1550,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 ) as execute_tool,
                 patch(
                     "general_manager.chat.consumer.enforce_chat_rate_limit",
-                    side_effect=[None, None],
+                    side_effect=[None, None, None],
                 ) as rate_limit,
             ):
                 await consumer.receive_json({"type": "message", "text": "hello"})
@@ -1654,7 +1689,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     "message": "Chat tool retry limit exceeded.",
                     "code": "tool_retry_limit",
                 }
-                assert len(consumer.provider.calls) == 2
+                assert len(consumer.provider.calls) == 3
 
         asyncio.run(run())
 
@@ -1705,7 +1740,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
             }
             assert sent_messages[-1] == {
                 "type": "done",
-                "usage": {"input_tokens": 2, "output_tokens": 2},
+                "usage": {"input_tokens": 3, "output_tokens": 3},
             }
             assert consumer._history_cache is not None
             assert consumer._history_cache[-1]["content"] == (
@@ -1763,7 +1798,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
             }
             assert sent_messages[-1] == {
                 "type": "done",
-                "usage": {"input_tokens": 2, "output_tokens": 2},
+                "usage": {"input_tokens": 4, "output_tokens": 4},
             }
             assert len(consumer.provider.calls) == 3
             recovery_messages = consumer.provider.calls[2]["messages"]
@@ -1842,7 +1877,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
             }
             assert sent_messages[-1] == {
                 "type": "done",
-                "usage": {"input_tokens": 4, "output_tokens": 4},
+                "usage": {"input_tokens": 10, "output_tokens": 10},
             }
             assert provider.calls[2][-1].content
             assert (

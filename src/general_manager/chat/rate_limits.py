@@ -75,24 +75,22 @@ def enforce_chat_rate_limit(
             }
 
     has_token_usage = input_tokens > 0 or output_tokens > 0
-    check_existing_token_usage = count_request and not has_token_usage
+    # A caller can make a no-count admission check between provider rounds.  It
+    # must still reject an already exhausted token budget; otherwise a round
+    # which lands exactly on the limit can start arbitrary tool work.
+    check_existing_token_usage = not has_token_usage
     input_budget = rate_limit.get("input_tokens")
+    exceeded = False
     if isinstance(input_budget, int) and input_budget > 0:
         if input_tokens > 0:
             total = _increment(identifier, "input_tokens", input_tokens, window_seconds)
             if total > input_budget:
-                return {
-                    "scope": identifier,
-                    "retry_after_seconds": window_seconds,
-                }
+                exceeded = True
         elif (
             check_existing_token_usage
             and _counter_total(identifier, "input_tokens") >= input_budget
         ):
-            return {
-                "scope": identifier,
-                "retry_after_seconds": window_seconds,
-            }
+            exceeded = True
 
     token_budget = rate_limit.get("tokens")
     total_tokens = input_tokens + output_tokens
@@ -100,18 +98,12 @@ def enforce_chat_rate_limit(
         if total_tokens > 0:
             total = _increment(identifier, "tokens", total_tokens, window_seconds)
             if total > token_budget:
-                return {
-                    "scope": identifier,
-                    "retry_after_seconds": window_seconds,
-                }
+                exceeded = True
         elif (
             check_existing_token_usage
             and _counter_total(identifier, "tokens") >= token_budget
         ):
-            return {
-                "scope": identifier,
-                "retry_after_seconds": window_seconds,
-            }
+            exceeded = True
 
     output_budget = rate_limit.get("output_tokens")
     if isinstance(output_budget, int) and output_budget > 0:
@@ -120,18 +112,17 @@ def enforce_chat_rate_limit(
                 identifier, "output_tokens", output_tokens, window_seconds
             )
             if total > output_budget:
-                return {
-                    "scope": identifier,
-                    "retry_after_seconds": window_seconds,
-                }
+                exceeded = True
         elif (
             check_existing_token_usage
             and _counter_total(identifier, "output_tokens") >= output_budget
         ):
-            return {
-                "scope": identifier,
-                "retry_after_seconds": window_seconds,
-            }
+            exceeded = True
+    if exceeded:
+        return {
+            "scope": identifier,
+            "retry_after_seconds": window_seconds,
+        }
     return None
 
 

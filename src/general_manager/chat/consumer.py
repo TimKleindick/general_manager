@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
+import inspect
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -54,6 +55,7 @@ from general_manager.chat.tools import (
     execute_chat_tool,
     get_tool_definitions,
 )
+from general_manager.chat.turns import TurnState
 
 if TYPE_CHECKING:
     from general_manager.chat.models import ChatConversation
@@ -99,14 +101,32 @@ async def _iter_provider_events(
     stream_timeout = float(provider_config.get("stream_timeout_seconds", 30))
     stream = provider.complete(messages, tools).__aiter__()
     first_chunk = True
-    while True:
-        timeout = request_timeout if first_chunk else stream_timeout
-        try:
-            event = await asyncio.wait_for(stream.__anext__(), timeout=timeout)
-        except StopAsyncIteration:
-            return
-        first_chunk = False
-        yield event
+    stream_closed = False
+    try:
+        while True:
+            timeout = request_timeout if first_chunk else stream_timeout
+            try:
+                event = await asyncio.wait_for(stream.__anext__(), timeout=timeout)
+            except StopAsyncIteration:
+                return
+            first_chunk = False
+            if isinstance(event, DoneEvent):
+                close = getattr(stream, "aclose", None)
+                if callable(close):
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
+                stream_closed = True
+            yield event
+            if isinstance(event, DoneEvent):
+                return
+    finally:
+        if not stream_closed:
+            close = getattr(stream, "aclose", None)
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
 
 
 def _last_user_text(messages: list[Message]) -> str:
@@ -371,6 +391,7 @@ class ChatConsumer(_ChatConsumerBase):
                 {"message": text, "session_key": self.session_key},
             )
             messages = [Message(role="system", content=build_system_prompt())]
+            turn_state = TurnState.from_settings(get_chat_settings())
             if self.conversation is not None:
                 from general_manager.chat.context import prepare_conversation_messages
 
@@ -379,6 +400,7 @@ class ChatConsumer(_ChatConsumerBase):
                     self.provider,
                     allow_summarization=not get_planned_chat_settings().enabled,
                     scope=self.scope,
+                    turn_state=turn_state,
                 )
             else:
                 messages.extend(
@@ -391,7 +413,7 @@ class ChatConsumer(_ChatConsumerBase):
                 conversation_id=getattr(self.conversation, "pk", None),
             )
             started_background_turn = await self._stream_message_turn(
-                text, messages, history
+                text, messages, history, turn_state=turn_state
             )
         except Exception as exc:  # noqa: BLE001
             emit_chat_error(
@@ -416,18 +438,47 @@ class ChatConsumer(_ChatConsumerBase):
         tool_retries: int,
         tool_calls: list[dict[str, Any]] | None = None,
         recovered_missing_tools: bool = False,
+        turn_state: TurnState | None = None,
+        allow_tools: bool = True,
     ) -> None:
         tool_calls = list(tool_calls or [])
         assistant_chunks: list[str] = []
         provider_tool_events: list[ToolCallEvent] = []
-        self._provider_task = asyncio.current_task()
         recover_missing_tools = bool(
             get_chat_settings().get("recover_missing_tool_calls", False)
         )
+        turn_state = turn_state or TurnState.from_settings(get_chat_settings())
+        turn_state.tool_retries = tool_retries
+        if not turn_state.reserve_round():
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Chat turn limit exceeded.",
+                    "code": "turn_limit",
+                }
+            )
+            return
+        rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+            self.scope, count_request=False
+        )
+        if isinstance(rate_limited, dict):
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Chat rate limit exceeded. Try again later.",
+                    "code": "rate_limited",
+                    "retry_after_seconds": rate_limited["retry_after_seconds"],
+                }
+            )
+            return
+        self._provider_task = asyncio.current_task()
+        provider_events = _iter_provider_events(
+            self.provider,
+            messages,
+            self._build_tool_definitions() if allow_tools else [],
+        )
         try:
-            async for event in _iter_provider_events(
-                self.provider, messages, self._build_tool_definitions()
-            ):
+            async for event in provider_events:
                 if isinstance(event, TextChunkEvent):
                     assistant_chunks.append(event.content)
                     if not recover_missing_tools:
@@ -438,13 +489,35 @@ class ChatConsumer(_ChatConsumerBase):
                     provider_tool_events.append(event)
                     continue
                 elif isinstance(event, DoneEvent):
-                    if provider_tool_events:
-                        await sync_to_async(enforce_chat_rate_limit)(
-                            self.scope,
-                            input_tokens=event.usage.input_tokens,
-                            output_tokens=event.usage.output_tokens,
-                            count_request=False,
+                    turn_state.record_usage(event.usage)
+                    rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+                        self.scope,
+                        input_tokens=event.usage.input_tokens,
+                        output_tokens=event.usage.output_tokens,
+                        count_request=False,
+                    )
+                    if isinstance(rate_limited, dict):
+                        await self.send_json(
+                            {
+                                "type": "error",
+                                "message": "Chat rate limit exceeded. Try again later.",
+                                "code": "rate_limited",
+                                "retry_after_seconds": rate_limited[
+                                    "retry_after_seconds"
+                                ],
+                            }
                         )
+                        return
+                    if provider_tool_events:
+                        if not allow_tools:
+                            await self.send_json(
+                                {
+                                    "type": "error",
+                                    "message": "Chat tool retry limit exceeded.",
+                                    "code": "tool_retry_limit",
+                                }
+                            )
+                            return
                         await self._handle_tool_batch(
                             provider_tool_events,
                             messages,
@@ -452,6 +525,7 @@ class ChatConsumer(_ChatConsumerBase):
                             tool_retries=tool_retries,
                             tool_calls=tool_calls,
                             recovered_missing_tools=recovered_missing_tools,
+                            turn_state=turn_state,
                         )
                         return
                     if assistant_chunks:
@@ -480,6 +554,7 @@ class ChatConsumer(_ChatConsumerBase):
                                 tool_retries=tool_retries,
                                 tool_calls=tool_calls,
                                 recovered_missing_tools=True,
+                                turn_state=turn_state,
                             )
                             return
                         if (
@@ -505,6 +580,7 @@ class ChatConsumer(_ChatConsumerBase):
                                 tool_retries=tool_retries,
                                 tool_calls=tool_calls,
                                 recovered_missing_tools=True,
+                                turn_state=turn_state,
                             )
                             return
                         if recover_missing_tools:
@@ -541,24 +617,28 @@ class ChatConsumer(_ChatConsumerBase):
                             tool_retries=tool_retries,
                             tool_calls=tool_calls,
                             recovered_missing_tools=True,
+                            turn_state=turn_state,
                         )
                         return
-                    await sync_to_async(enforce_chat_rate_limit)(
-                        self.scope,
-                        input_tokens=event.usage.input_tokens,
-                        output_tokens=event.usage.output_tokens,
-                        count_request=False,
-                    )
                     await self.send_json(
                         {
                             "type": "done",
                             "usage": {
-                                "input_tokens": event.usage.input_tokens,
-                                "output_tokens": event.usage.output_tokens,
+                                "input_tokens": turn_state.usage.input_tokens,
+                                "output_tokens": turn_state.usage.output_tokens,
                             },
                         }
                     )
             if provider_tool_events:
+                if not allow_tools:
+                    await self.send_json(
+                        {
+                            "type": "error",
+                            "message": "Chat tool retry limit exceeded.",
+                            "code": "tool_retry_limit",
+                        }
+                    )
+                    return
                 await self._handle_tool_batch(
                     provider_tool_events,
                     messages,
@@ -566,9 +646,13 @@ class ChatConsumer(_ChatConsumerBase):
                     tool_retries=tool_retries,
                     tool_calls=tool_calls,
                     recovered_missing_tools=recovered_missing_tools,
+                    turn_state=turn_state,
                 )
         finally:
-            self._provider_task = None
+            try:
+                await provider_events.aclose()
+            finally:
+                self._provider_task = None
 
     @staticmethod
     def _planned_catalog_summary(settings: Any) -> dict[str, Any]:
@@ -595,11 +679,15 @@ class ChatConsumer(_ChatConsumerBase):
         text: str,
         messages: list[Message],
         history: list[dict[str, str]],
+        *,
+        turn_state: TurnState | None = None,
     ) -> bool:
         """Plan after admission, retaining the unchanged legacy turn as fallback."""
         planned_settings = get_planned_chat_settings()
         if not planned_settings.enabled:
-            await self._stream_provider_turn(messages, history, tool_retries=0)
+            await self._stream_provider_turn(
+                messages, history, tool_retries=0, turn_state=turn_state
+            )
             return False
         self._provider_task = asyncio.create_task(
             self._stream_planned_turn(text, messages, history, planned_settings)
@@ -669,6 +757,8 @@ class ChatConsumer(_ChatConsumerBase):
         tool_retries: int,
         tool_calls: list[dict[str, Any]] | None = None,
         recovered_missing_tools: bool = False,
+        turn_state: TurnState | None = None,
+        allow_tools: bool = True,
     ) -> bool:
         """Execute a completed non-mutation tool batch before continuing once."""
         if len(events) > 1 and any(event.name == "mutate" for event in events):
@@ -688,6 +778,8 @@ class ChatConsumer(_ChatConsumerBase):
                 tool_retries=tool_retries,
                 tool_calls=tool_calls,
                 recovered_missing_tools=recovered_missing_tools,
+                turn_state=turn_state,
+                allow_tools=allow_tools,
             )
 
         max_retries = int(get_chat_settings().get("max_retries_per_message", 8))
@@ -704,6 +796,19 @@ class ChatConsumer(_ChatConsumerBase):
         tool_calls = list(tool_calls or [])
         results: list[tuple[ToolCallEvent, Any]] = []
         for event in events:
+            rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+                self.scope, count_request=False
+            )
+            if isinstance(rate_limited, dict):
+                await self.send_json(
+                    {
+                        "type": "error",
+                        "message": "Chat rate limit exceeded. Try again later.",
+                        "code": "rate_limited",
+                        "retry_after_seconds": rate_limited["retry_after_seconds"],
+                    }
+                )
+                return False
             emit_chat_audit_event(
                 "tool_call",
                 {
@@ -778,21 +883,14 @@ class ChatConsumer(_ChatConsumerBase):
                 tool_call_id=event.id,
             )
 
-        if tool_retries + len(events) >= max_retries:
-            await self.send_json(
-                {
-                    "type": "error",
-                    "message": "Chat tool retry limit exceeded.",
-                    "code": "tool_retry_limit",
-                }
-            )
-            return True
         await self._stream_provider_turn(
             messages,
             history,
             tool_retries=tool_retries + len(events),
             tool_calls=tool_calls,
             recovered_missing_tools=recovered_missing_tools,
+            turn_state=turn_state,
+            allow_tools=tool_retries + len(events) < max_retries,
         )
         return True
 
@@ -805,6 +903,8 @@ class ChatConsumer(_ChatConsumerBase):
         tool_retries: int,
         tool_calls: list[dict[str, Any]] | None = None,
         recovered_missing_tools: bool = False,
+        turn_state: TurnState | None = None,
+        allow_tools: bool = True,
     ) -> bool:
         """Retain the single-call compatibility entry point."""
         return await self._handle_tool_batch(
@@ -814,6 +914,8 @@ class ChatConsumer(_ChatConsumerBase):
             tool_retries=tool_retries,
             tool_calls=tool_calls,
             recovered_missing_tools=recovered_missing_tools,
+            turn_state=turn_state,
+            allow_tools=allow_tools,
         )
 
     async def _handle_single_tool_call(
@@ -825,8 +927,43 @@ class ChatConsumer(_ChatConsumerBase):
         tool_retries: int,
         tool_calls: list[dict[str, Any]] | None = None,
         recovered_missing_tools: bool = False,
+        turn_state: TurnState | None = None,
+        allow_tools: bool = True,
     ) -> bool:
         tool_calls = list(tool_calls or [])
+        turn_state = turn_state or TurnState.from_settings(get_chat_settings())
+        rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+            self.scope, count_request=False
+        )
+        if isinstance(rate_limited, dict):
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Chat rate limit exceeded. Try again later.",
+                    "code": "rate_limited",
+                    "retry_after_seconds": rate_limited["retry_after_seconds"],
+                }
+            )
+            return False
+        max_retries = int(get_chat_settings().get("max_retries_per_message", 8))
+        if event.name != "mutate" and tool_retries >= max_retries:
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Chat tool retry limit exceeded.",
+                    "code": "tool_retry_limit",
+                }
+            )
+            return False
+        if event.name == "mutate" and not turn_state.reserve_mutation():
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "Chat mutation limit exceeded.",
+                    "code": "mutation_limit",
+                }
+            )
+            return False
         emit_chat_audit_event(
             "tool_call",
             {
@@ -887,7 +1024,10 @@ class ChatConsumer(_ChatConsumerBase):
                         self.conversation,
                         confirmation_id=event.id,
                         mutation_name=str(result["mutation"]),
-                        payload={"input": result["input"]},
+                        payload={
+                            "input": result["input"],
+                            "_gm_turn_state": turn_state.as_payload(),
+                        },
                         timeout_seconds=timeout_seconds,
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -922,6 +1062,7 @@ class ChatConsumer(_ChatConsumerBase):
                 "history": history,
                 "expires_at": timezone.now() + timedelta(seconds=timeout_seconds),
                 "durable": durable,
+                "turn_state": turn_state,
             }
             self._confirmation_waiter = asyncio.get_running_loop().create_future()
             self._confirmation_timeout_task = asyncio.create_task(
@@ -985,21 +1126,14 @@ class ChatConsumer(_ChatConsumerBase):
         )
         next_tool_retries = tool_retries + (0 if event.name == "mutate" else 1)
         max_retries = int(get_chat_settings().get("max_retries_per_message", 8))
-        if event.name != "mutate" and next_tool_retries >= max_retries:
-            await self.send_json(
-                {
-                    "type": "error",
-                    "message": "Chat tool retry limit exceeded.",
-                    "code": "tool_retry_limit",
-                }
-            )
-            return True
         await self._stream_provider_turn(
             messages,
             history,
             tool_retries=next_tool_retries,
             tool_calls=tool_calls,
             recovered_missing_tools=recovered_missing_tools,
+            turn_state=turn_state,
+            allow_tools=next_tool_retries < max_retries,
         )
         return True
 
@@ -1150,9 +1284,18 @@ class ChatConsumer(_ChatConsumerBase):
                         self.conversation,
                         self.provider,
                         scope=self.scope,
+                        turn_state=pending.get("turn_state"),
                     )
                     history = await self._load_history()
-            await self._stream_provider_turn(messages, history, tool_retries=0)
+            await self._stream_provider_turn(
+                messages,
+                history,
+                tool_retries=(
+                    pending.get("turn_state")
+                    or TurnState.from_settings(get_chat_settings())
+                ).tool_retries,
+                turn_state=pending.get("turn_state"),
+            )
         finally:
             if not followup_turn.done():
                 followup_turn.set_result(None)
@@ -1170,6 +1313,21 @@ class ChatConsumer(_ChatConsumerBase):
             return
 
         from general_manager.chat.models import ChatPendingConfirmation
+
+        if confirmed:
+            rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+                self.scope, count_request=False
+            )
+            if isinstance(rate_limited, dict):
+                await self.send_json(
+                    {
+                        "type": "error",
+                        "message": "Chat rate limit exceeded. Try again later.",
+                        "code": "rate_limited",
+                        "retry_after_seconds": rate_limited["retry_after_seconds"],
+                    }
+                )
+                return
 
         db_pending: Any | None = None
         if pending is None and self.conversation is not None:
@@ -1196,6 +1354,9 @@ class ChatConsumer(_ChatConsumerBase):
                     "history": history,
                     "expires_at": db_pending.expires_at,
                     "durable": False,
+                    "turn_state": TurnState.from_payload(
+                        get_chat_settings(), db_pending.payload
+                    ),
                     "rebuild_context_after_tool_result": True,
                 }
         if pending is None or confirmation_id != pending.get("id"):

@@ -90,6 +90,13 @@ and avoid writes unless the user requested one. A project can append
 domain-specific instructions with the `system_prompt` chat setting.
 
 `max_retries_per_message` bounds non-mutation tool calls in one turn.
+`max_mutations_per_message` defaults to 8 and bounds writes, including writes
+that pause for confirmation. `max_total_rounds_per_message` can impose a lower
+finite cap across legacy provider, recovery, and summary rounds. When omitted, its
+budget is derived from the read and mutation limits so a normal final answer
+still has room after allowed tool calls. The final `done` event reports the
+aggregate token use from all provider rounds in that user turn, including
+resumed confirmations. Planned reads retain their separate orchestration budgets.
 `recover_missing_tool_calls` can add one corrective prompt when a model answers
 a data question without the required tool call or returns an empty answer after
 using tools. Recovery never fabricates tool output and does not bypass the tool

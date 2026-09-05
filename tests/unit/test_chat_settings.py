@@ -98,6 +98,12 @@ class ChatSettingsTests(SimpleTestCase):
         assert settings["audit"]["level"] == "messages"
         assert "token" in settings["audit"]["redact_fields"]
 
+    @override_settings(GENERAL_MANAGER={"CHAT": {"max_total_rounds_per_message": 0}})
+    def test_validate_chat_settings_rejects_a_zero_total_round_cap(self) -> None:
+        GraphQL.reset_registry()
+        with pytest.raises(ChatConfigurationError, match="max_total_rounds"):
+            validate_chat_settings()
+
     @override_settings(GENERAL_MANAGER={"CHAT": {"permission": 123}})
     def test_get_permission_callable_rejects_invalid_permission_type(self) -> None:
         with pytest.raises(ChatConfigurationError, match="Chat permission"):

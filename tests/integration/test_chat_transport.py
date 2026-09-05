@@ -482,7 +482,7 @@ class ChatTransportIntegrationTests(TransactionTestCase):
                     )
                     assert done_event == {
                         "type": "done",
-                        "usage": {"input_tokens": 2, "output_tokens": 2},
+                        "usage": {"input_tokens": 3, "output_tokens": 3},
                     }
 
                     await self._send_json(

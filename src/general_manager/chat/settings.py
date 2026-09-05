@@ -24,6 +24,8 @@ DEFAULT_CHAT_SETTINGS: dict[str, Any] = {
     "max_results": 200,
     "query_timeout_seconds": None,
     "max_retries_per_message": 3,
+    "max_total_rounds_per_message": None,
+    "max_mutations_per_message": 8,
     "rate_limit": {
         "requests": 60,
         "window_seconds": 3600,
@@ -79,6 +81,11 @@ class ChatConfigurationError(ValueError):
     def invalid_planned_settings(cls, detail: str) -> ChatConfigurationError:
         """Build an error for invalid planned-chat configuration."""
         return cls(f"Invalid planned chat settings: {detail}")
+
+    @classmethod
+    def invalid_turn_limit(cls, name: str) -> ChatConfigurationError:
+        """Build the error for an invalid bounded-turn setting."""
+        return cls(f"Chat setting {name} must be a non-negative integer or null.")
 
 
 class ProviderDependencyError(Exception):
@@ -212,6 +219,16 @@ def get_chat_permission() -> Any:
 def validate_chat_settings() -> dict[str, Any]:
     """Validate chat settings and return the normalized configuration."""
     settings = get_chat_settings()
+    value = settings.get("max_total_rounds_per_message")
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+    ):
+        raise ChatConfigurationError.invalid_turn_limit("max_total_rounds_per_message")
+    value = settings.get("max_mutations_per_message")
+    if value is None or (
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+    ):
+        raise ChatConfigurationError.invalid_turn_limit("max_mutations_per_message")
     schema = GraphQL.get_schema()
     if schema is None:
         raise ChatConfigurationError.missing_graphql_schema()

@@ -41,6 +41,8 @@ GENERAL_MANAGER = {
 | `max_results` | `200` | Maximum query page size accepted by the chat query tool. |
 | `query_timeout_seconds` | `None` | Optional database query timeout in seconds. It is converted to milliseconds for supported database execution. |
 | `max_retries_per_message` | `3` | Maximum non-mutation tool-loop retries in one user turn. |
+| `max_mutations_per_message` | `8` | Maximum mutation tool executions in one user turn, including a mutation resumed after confirmation. Set `0` to disallow writes for a turn. |
+| `max_total_rounds_per_message` | `None` | Optional positive cap for legacy provider rounds in a turn, including summaries and recovery. When omitted, the cap is `max_retries_per_message + max_mutations_per_message + 2`. Planned reads retain their separate orchestration budgets. |
 | `tool_strategy` | `"discovery"` | `discovery` exposes the stable discovery tool set; `direct` adds one query tool per exposed manager. |
 | `recover_missing_tool_calls` | `False` | Add bounded recovery prompts when a model answers without required tools or returns no answer after tools. |
 | `system_prompt` | `""` | Project-specific instructions appended to the built-in system prompt. |
@@ -66,6 +68,10 @@ Positive integer limits are enforced through the Django cache. The scope is
 the authenticated user ID, then the anonymous session key, then the client IP.
 `None`, zero, and negative values do not create a budget for that counter.
 Provider usage events supply token counts.
+
+Once a token budget is exhausted, GeneralManager records the completed
+provider usage and rejects the next tool, confirmation write, summary, or
+provider round. A `rate_limited` event includes `retry_after_seconds`.
 
 ### Audit settings
 
@@ -315,6 +321,8 @@ error signal for server-side observability.
 | `turn_in_progress` | WebSocket | Another turn is still streaming on this socket. Wait for its terminal event. |
 | `rate_limited` | HTTP, SSE, WebSocket | The actor exceeded a configured budget. Retry after `retry_after_seconds`. |
 | `tool_retry_limit` | HTTP, SSE, WebSocket | The model exceeded `max_retries_per_message`; the turn is terminal. |
+| `mutation_limit` | HTTP, SSE, WebSocket | The turn exhausted `max_mutations_per_message`; no further mutation is executed. |
+| `turn_limit` | HTTP, SSE, WebSocket | The turn exhausted `max_total_rounds_per_message`; no further provider round is started. |
 | `mutation_batch_unsupported` | HTTP, SSE, WebSocket | A completion requested `mutate` with another tool call. Request one mutation in a completion by itself. |
 | `confirmation_required_transport` | HTTP | A confirmed mutation needs SSE or WebSocket. Retry the workflow on a confirmation-capable transport. |
 | `chat_error` | HTTP, SSE, WebSocket | An unexpected server or provider failure. Show the generic message and correlate server-side logs or signals. |

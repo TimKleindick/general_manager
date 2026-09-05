@@ -523,6 +523,7 @@ async def _run_turn(
             ),
             "",
         )
+        executed_tools: list[tuple[ToolCallEvent, Any]] = []
         for tc in tool_calls_this_round:
             if recover_missing_tools and _should_block_relationship_data_query(
                 user_text=last_user_text,
@@ -648,17 +649,26 @@ async def _run_turn(
                 result = {"error": str(exc)}
             record.tool_results.append(result)
             _stream_line(stream, f"tool_result {tc.name}: {_to_json(result)}")
-            serialized = json.dumps(result, default=str)
+            executed_tools.append((tc, result))
+
+        if executed_tools:
             messages.append(
                 Message(
                     role="assistant",
-                    content=(
-                        f"Called tool {tc.name}. The next message is the tool "
-                        "result; answer from it exactly."
-                    ),
+                    content="",
+                    tool_calls=tuple(tool_call for tool_call, _ in executed_tools),
                 )
             )
-            messages.append(Message(role="tool", content=serialized))
+            for tool_call, result in executed_tools:
+                messages.append(
+                    Message(
+                        role="tool",
+                        content=json.dumps(result, default=str),
+                        tool_call_id=tool_call.id,
+                        tool_name=tool_call.name,
+                        tool_result=result,
+                    )
+                )
     else:
         last_user_text = next(
             (
@@ -736,16 +746,24 @@ def _execute_recovery_tool(
     record.tool_results.append(result)
     _stream_line(stream, f"tool_call {tool_name}: {_to_json(tool_args)}")
     _stream_line(stream, f"tool_result {tool_name}: {_to_json(result)}")
+    call_id = f"eval-recovery-{len(record.tool_calls)}"
+    tool_call = ToolCallEvent(id=call_id, name=tool_name, args=tool_args)
     messages.append(
         Message(
             role="assistant",
-            content=(
-                f"Called tool {tool_name}. The next message is the tool "
-                "result; answer from it exactly."
-            ),
+            content="",
+            tool_calls=(tool_call,),
         )
     )
-    messages.append(Message(role="tool", content=json.dumps(result, default=str)))
+    messages.append(
+        Message(
+            role="tool",
+            content=json.dumps(result, default=str),
+            tool_call_id=call_id,
+            tool_name=tool_name,
+            tool_result=result,
+        )
+    )
 
 
 def _build_answer_recovery_message(
