@@ -422,6 +422,10 @@ class RequestBucket(Bucket[GeneralManagerType]):
                 targets an unsupported request location.
         """
         if self.request_plan is None:
+            if not kwargs:
+                return self._from_items(
+                    self._ensure_items(), preserve_response_provenance=True
+                )
             self._validate_materialized_filters(kwargs)
             return self._from_items(
                 tuple(
@@ -529,7 +533,9 @@ class RequestBucket(Bucket[GeneralManagerType]):
     def all(self) -> "RequestBucket[GeneralManagerType]":
         """Return a new request bucket for the same query plan or concrete items."""
         if self.request_plan is None:
-            return self._from_items(self._ensure_items())
+            return self._from_items(
+                self._ensure_items(), preserve_response_provenance=True
+            )
         handler = self._query_handler()
         return handler.build_bucket(
             self._interface_cls,

@@ -1998,11 +1998,13 @@ class _DatabaseMaterializedBucket(MaterializedBucket[GeneralManagerType]):
             return identification[lookup]
         return identification["id"]
 
-    def _matching_primary_keys(self, kwargs: dict[str, object]) -> set[object]:
+    def _matching_primary_keys(
+        self, kwargs: dict[str, object], *, exclude: bool = False
+    ) -> set[object]:
         primary_keys = {self._primary_key_for(item) for item in self._items}
         lookup = self._primary_key_lookup()
         filtered = self._lookup_bucket().filter(**{f"{lookup}__in": primary_keys})
-        filtered = filtered.filter(**kwargs)
+        filtered = filtered.exclude(**kwargs) if exclude else filtered.filter(**kwargs)
         filtered._track_effective_dependencies()
         return set(filtered._data.values_list(lookup, flat=True))
 
@@ -2021,9 +2023,9 @@ class _DatabaseMaterializedBucket(MaterializedBucket[GeneralManagerType]):
     ) -> "_DatabaseMaterializedBucket[GeneralManagerType]":
         if not kwargs:
             return cast(_DatabaseMaterializedBucket[GeneralManagerType], self.all())
-        matching = self._matching_primary_keys(kwargs)
+        retained = self._matching_primary_keys(kwargs, exclude=True)
         return self._new(
-            item for item in self._items if self._primary_key_for(item) not in matching
+            item for item in self._items if self._primary_key_for(item) in retained
         )
 
 

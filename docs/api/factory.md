@@ -22,7 +22,8 @@ The generation order is:
    mode.
 2. factory_boy dispatches to `_build()` or `_create()`.
 3. `_adjust_kwargs()` removes many-to-many values from constructor kwargs and
-   coerces foreign-key/one-to-one values.
+   coerces foreign-key/one-to-one values. Its adjusted many-to-many values are
+   retained for that individual factory build and assigned after creation.
 4. If `_adjustmentMethod` is configured, it receives those generated/default
    filled, many-to-many-stripped, relation-coerced kwargs and returns one or
    more record payloads. Otherwise the normalized kwargs are assigned directly.
@@ -30,6 +31,8 @@ The generation order is:
    strategy only constructs unsaved model instances.
 6. `_generate()` applies many-to-many assignments to saved create-strategy
    model instances, then wraps those model instances into manager instances.
+   A post-generation declaration named for a many-to-many field owns that
+   field's assignment and prevents automatic regeneration.
 
 Call-time keyword arguments override declared and generated defaults. For a
 foreign key or one-to-one relation named `parent`, pass a Django model instance,

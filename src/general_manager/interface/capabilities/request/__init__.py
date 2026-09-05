@@ -760,6 +760,7 @@ class RequestQueryCapability(BaseCapability):
             operation=operation,
             action="exclude",
             groups=exclude_groups,
+            call_group_offset=len(filter_groups),
             query_params=query_params,
             headers=headers,
             path_params=path_params,
@@ -791,6 +792,7 @@ class RequestQueryCapability(BaseCapability):
         operation: RequestQueryOperation,
         action: RequestAction,
         groups: RequestLookupGroups,
+        call_group_offset: int = 0,
         query_params: RequestMutablePayload,
         headers: dict[str, str],
         path_params: RequestMutablePayload,
@@ -798,7 +800,7 @@ class RequestQueryCapability(BaseCapability):
         local_predicates: list[RequestLocalPredicate],
     ) -> None:
         """Compile every representable group without weakening its semantics."""
-        for group_index, group in enumerate(groups):
+        for group_index, group in enumerate(groups, start=call_group_offset):
             bindings = [
                 (
                     lookup_key,
@@ -875,6 +877,18 @@ class RequestQueryCapability(BaseCapability):
         local_predicates: list[RequestLocalPredicate],
     ) -> None:
         """Push an exclude group only when its complete NOT(AND) is representable."""
+        has_local_predicates = any(fragment.local_predicates for fragment in fragments)
+        has_mixed_fragment = any(
+            fragment.local_predicates
+            and self._fragment_has_remote_contribution(fragment)
+            for fragment in fragments
+        )
+        if len(fragments) > 1 and has_mixed_fragment:
+            # A mixed compiler fragment can preserve its own remote scope and
+            # local predicate. Combining it with another lookup would require
+            # representing a larger NOT(AND) expression remotely, which this
+            # flat request plan cannot do without weakening it.
+            raise RequestPlanConflictError(location="query", key=bindings[0][0])
         pending_query = dict(query_params)
         pending_headers = dict(headers)
         pending_path = dict(path_params)
@@ -889,9 +903,24 @@ class RequestQueryCapability(BaseCapability):
             self._merge_compiled_fragment(
                 pending_query, pending_headers, pending_path, pending_body, fragment
             )
-        if conflict is None and not any(
-            fragment.local_predicates for fragment in fragments
-        ):
+        if has_mixed_fragment:
+            if conflict is not None:
+                # Deferring only the local half of a mixed compiler fragment
+                # would broaden this exclusion, so it cannot be represented.
+                raise RequestPlanConflictError(location=conflict[0], key=conflict[1])
+            query_params.update(pending_query)
+            headers.update(pending_headers)
+            path_params.update(pending_path)
+            body.update(pending_body)
+            for fragment in fragments:
+                local_predicates.extend(
+                    self._with_predicate_group(
+                        fragment.local_predicates,
+                        call_group=call_group,
+                    )
+                )
+            return
+        if conflict is None and not has_local_predicates:
             query_params.update(pending_query)
             headers.update(pending_headers)
             path_params.update(pending_path)
@@ -919,6 +948,16 @@ class RequestQueryCapability(BaseCapability):
                     conflict or ("query", lookup_key),
                 ).local_predicates
             )
+
+    @staticmethod
+    def _fragment_has_remote_contribution(fragment: RequestPlanFragment) -> bool:
+        """Return whether a compiler fragment constrains the outbound request."""
+        return bool(
+            fragment.query_params
+            or fragment.headers
+            or fragment.path_params
+            or fragment.body
+        )
 
     @staticmethod
     def _with_predicate_group(

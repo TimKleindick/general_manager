@@ -734,6 +734,135 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertEqual(list(declared.dummy_m2m.all()), [declared_option])
         self.assertEqual(list(cleared.dummy_m2m.all()), [])
 
+    def test_adjust_kwargs_many_to_many_transformations_apply_to_declared_and_caller_values(
+        self,
+    ):
+        related = self.factory_class.create(name="FK", value=1)
+        declared_tag = self.factory_class.create(name="Declared", value=2)
+        caller_tag = self.factory_class.create(name="Caller", value=3)
+        adjusted_tag = self.factory_class.create(name="Adjusted", value=4)
+
+        class TransformingManyToManyFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_m2m = LazyFunction(lambda: [declared_tag])
+
+            class Meta:
+                model = DummyModel2
+
+            @classmethod
+            def _adjust_kwargs(cls, **kwargs: object) -> dict[str, object]:
+                if "dummy_m2m" in kwargs:
+                    kwargs["dummy_m2m"] = [adjusted_tag]
+                return super()._adjust_kwargs(**kwargs)
+
+        declared = TransformingManyToManyFactory.create(
+            description="Transformed declared M2M",
+            dummy_model=related,
+        )
+        caller_supplied = TransformingManyToManyFactory.create(
+            description="Transformed caller M2M",
+            dummy_model=related,
+            dummy_m2m=[caller_tag],
+        )
+
+        self.assertEqual(list(declared.dummy_m2m.all()), [adjusted_tag])
+        self.assertEqual(list(caller_supplied.dummy_m2m.all()), [adjusted_tag])
+
+    def test_nested_creation_inside_adjust_kwargs_restores_outer_m2m_context(self):
+        related = self.factory_class.create(name="FK", value=1)
+        inner_declared_tag = self.factory_class.create(name="Inner declared", value=2)
+        inner_adjusted_tag = self.factory_class.create(name="Inner adjusted", value=3)
+        outer_declared_tag = self.factory_class.create(name="Outer declared", value=4)
+        outer_adjusted_tag = self.factory_class.create(name="Outer adjusted", value=5)
+
+        class InnerFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_m2m = LazyFunction(lambda: [inner_declared_tag])
+
+            class Meta:
+                model = DummyModel2
+
+            @classmethod
+            def _adjust_kwargs(cls, **kwargs: object) -> dict[str, object]:
+                if "dummy_m2m" in kwargs:
+                    kwargs["dummy_m2m"] = [inner_adjusted_tag]
+                return super()._adjust_kwargs(**kwargs)
+
+        class OuterFactory(AutoFactory):
+            interface = DummyInterface
+            dummy_m2m = LazyFunction(lambda: [outer_declared_tag])
+
+            class Meta:
+                model = DummyModel2
+
+            @classmethod
+            def _adjust_kwargs(cls, **kwargs: object) -> dict[str, object]:
+                if "dummy_m2m" in kwargs:
+                    kwargs["dummy_m2m"] = [outer_adjusted_tag]
+                    InnerFactory.create(
+                        description="Inner",
+                        dummy_model=related,
+                    )
+                return super()._adjust_kwargs(**kwargs)
+
+        outer = OuterFactory.create(
+            description="Outer",
+            dummy_model=related,
+        )
+
+        self.assertEqual(list(outer.dummy_m2m.all()), [outer_adjusted_tag])
+        inner_m2m_values = [
+            list(instance.dummy_m2m.all())
+            for instance in DummyModel2.objects.filter(description="Inner")
+        ]
+        self.assertTrue(inner_m2m_values)
+        self.assertTrue(
+            all(values == [inner_adjusted_tag] for values in inner_m2m_values)
+        )
+
+    def test_nested_post_generation_owns_required_many_to_many_field(self):
+        chosen_tag = self.factory_class.create(name="Chosen", value=1)
+        unwanted_tag = self.factory_class.create(name="Unwanted", value=2)
+        field = NestedChildModel._meta.get_field("tags")
+        original_blank = field.blank
+        field.blank = False
+        try:
+
+            class ChildFactory(AutoFactory):
+                interface = DummyInterface
+                label = "Child"
+
+                class Meta:
+                    model = NestedChildModel
+
+                @post_generation
+                def tags(self, create, extracted, **kwargs):
+                    if create:
+                        self.tags.set([chosen_tag])
+
+            class ParentFactory(AutoFactory):
+                interface = DummyInterface
+                child = SubFactory(ChildFactory)
+
+                class Meta:
+                    model = NestedParentModel
+
+            with (
+                patch(
+                    "general_manager.factory.factories._RNG.randint",
+                    return_value=1,
+                ),
+                patch(
+                    "general_manager.factory.factories._RNG.sample",
+                    return_value=[unwanted_tag],
+                ),
+            ):
+                parent = ParentFactory.create()
+        finally:
+            field.blank = original_blank
+
+        self.assertEqual(list(parent.child.tags.all()), [chosen_tag])
+
     def test_generate_instance_without_many_to_many_value_leaves_blank_m2m_empty(
         self,
     ):

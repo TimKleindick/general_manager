@@ -480,11 +480,13 @@ returns a bucket containing exactly the supplied manager instances. `instances`
 must contain instances of the bucket's manager class; pass them in source
 iteration order when the existing ordering matters. An empty iterable returns
 an empty bucket. The base implementation starts from `none()` and unions the
-instances, while concrete backends keep their native representation:
-`DatabaseBucket` selects matching manager IDs in source-queryset order,
+instances, while concrete backends preserve the represented subset:
+`DatabaseBucket` retains the supplied instances, order, and duplicates,
 `RequestBucket` materializes the items without re-executing its request plan,
 and `CalculationBucket` materializes the declared identifications while
-retaining its filter, exclude, sort, and historical context.
+retaining its filter, exclude, sort, and historical context. Database subsets
+continue to use native Django `filter()` and `exclude()` semantics, including
+exclusions whose conditions match different rows of a multivalued relation.
 
 The method returns the concrete bucket family and raises the backend's existing
 `TypeError` subclass for an instance from the wrong manager class. It raises
