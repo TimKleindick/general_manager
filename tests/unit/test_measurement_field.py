@@ -1,11 +1,15 @@
 # tests.py
 
+import gc
+import weakref
+
 from django.test import TestCase
 from django.test import TransactionTestCase
 from django.test.utils import isolate_apps
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.db.migrations.writer import MigrationWriter
+from django.db.migrations.state import ModelState, ProjectState
 from general_manager.measurement.measurement import (
     Measurement,
     ureg,
@@ -390,6 +394,61 @@ class MeasurementFieldTests(TestCase):
         self.assertEqual(rebuilt.default.magnitude, default.magnitude)
         self.assertEqual(rebuilt.default.unit, default.unit)
 
+    def test_discarded_migration_models_are_collected(self):
+        def render_model():
+            state = ProjectState()
+            state.add_model(
+                ModelState(
+                    "probe",
+                    "Measured",
+                    fields=[
+                        ("id", models.AutoField(primary_key=True)),
+                        (
+                            "amount",
+                            MeasurementField(
+                                base_unit="EUR", default="0 EUR", null=True
+                            ),
+                        ),
+                    ],
+                )
+            )
+            return state.apps.get_model("probe", "Measured")
+
+        refs = [weakref.ref(render_model()) for _ in range(5)]
+        gc.collect()
+        self.assertTrue(all(ref() is None for ref in refs))
+
+    @isolate_apps("tests")
+    def test_live_default_receivers_survive_collection_and_reinstallation(self):
+        calls = []
+
+        def default_length():
+            calls.append(None)
+            return Measurement(2, "meter")
+
+        class DefaultedModel(models.Model):
+            length = MeasurementField(
+                base_unit="meter", default=default_length, null=True
+            )
+
+            class Meta:
+                app_label = "tests"
+
+        field = DefaultedModel._meta.get_field("length")
+        original_init = DefaultedModel.__init__
+        for _ in range(3):
+            field._install_default_initializer(DefaultedModel)
+        self.assertIs(DefaultedModel.__init__, original_init)
+        gc.collect()
+
+        self.assertEqual(DefaultedModel().length, Measurement(2, "meter"))
+        self.assertIsNone(DefaultedModel(length=None).length)
+        self.assertEqual(
+            DefaultedModel(length=Measurement(7, "meter")).length,
+            Measurement(7, "meter"),
+        )
+        self.assertEqual(calls, [None])
+
     @isolate_apps("tests")
     def test_scalar_measurement_default_populates_paired_fields_once(self):
         class DefaultedModel(models.Model):
@@ -546,6 +605,7 @@ class MeasurementFieldTests(TestCase):
             class Meta:
                 app_label = "tests"
 
+        gc.collect()
         for model in (Parent, Proxy, Child):
             with self.subTest(model=model.__name__):
                 calls.clear()
