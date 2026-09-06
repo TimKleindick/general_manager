@@ -274,8 +274,14 @@ class MeasurementField(MeasurementFieldBase):
                 supplied_name_stack.set(previous_stack)
                 raise
 
-        pre_init.connect(record_supplied_names, sender=cls, weak=False)
-        post_init.connect(apply_measurement_defaults, sender=cls, weak=False)
+        # Keep receivers alive with their model, without global signals retaining
+        # discarded migration models and their related model graphs.
+        cls._measurement_default_signal_receivers = (  # type: ignore[attr-defined]
+            record_supplied_names,
+            apply_measurement_defaults,
+        )
+        pre_init.connect(record_supplied_names, sender=cls, weak=True)
+        post_init.connect(apply_measurement_defaults, sender=cls, weak=True)
         cls.__init__ = clear_failed_initialization_state  # type: ignore[method-assign, assignment]
         cls._measurement_default_signals_initialized = True  # type: ignore[attr-defined]
 
