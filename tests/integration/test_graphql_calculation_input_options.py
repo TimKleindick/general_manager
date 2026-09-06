@@ -456,7 +456,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
             query {
               nonNumericGroupCalculationList { items { code } }
               nonNumericGroupCalculationGroups(groupBy: ["code"]) {
-                groups { keys { code } count }
+                groups { keys { code } count sums { code } }
               }
               groupType: __type(name: "NonNumericGroupCalculationGroup") {
                 fields { name }
@@ -472,7 +472,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(
             payload["nonNumericGroupCalculationGroups"]["groups"],
-            [{"keys": {"code": "only"}, "count": 1}],
+            [{"keys": {"code": "only"}, "count": 1, "sums": {"code": "only"}}],
         )
         self.assertIn(
             "sums", {field["name"] for field in payload["groupType"]["fields"]}
