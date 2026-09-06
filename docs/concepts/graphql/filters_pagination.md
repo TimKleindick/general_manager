@@ -85,9 +85,12 @@ Generated entity and relation lists do not accept `groupBy`. Use their sibling
 `<manager>Groups` or `…Groups` field instead. Group fields require at least one
 `groupBy` key and return a page with `groups` and `pageInfo`. Each group exposes
 typed `keys`, paginated original `members`, and `count`. Managers with eligible
-numeric sum fields also expose typed `sums`; it is absent when no such fields
+numeric or text fields also expose typed `sums`; it is absent when no such fields
 exist. Keys that were not selected resolve as null. Empty group pages retain
 that shape and return an empty `groups` list with normal metadata.
+
+Under `sums`, numbers are added and strings are deduplicated in encounter order
+and joined with `", "`. Null values are excluded; an all-null field returns null.
 
 Filters and row authorization run before groups are formed. A denied grouping
 key fails the query before its values are read. Each selected sum verifies its

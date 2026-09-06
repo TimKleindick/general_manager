@@ -321,8 +321,11 @@ query SortedProjects($order: [ProjectOrderBy!]) {
 Every manager also receives a sibling `<manager>Groups` field, and every
 generated relation list receives a matching `…Groups` sibling. A group page has
 `groups` and `pageInfo`; each group exposes typed `keys`, ordinary paginated
-`members`, and `count`. Managers with eligible numeric sum fields also expose
+`members`, and `count`. Managers with eligible numeric or text fields also expose
 typed `sums`; groups for managers without those fields omit `sums` entirely.
+Under `sums`, numbers are added and strings are deduplicated in encounter order
+and joined with `", "`. Null values are excluded; an all-null field returns null.
+
 Supply at least one `groupBy` field name. Filtering and row authorization run
 before grouping. A grouping key that is unreadable for any authorized member
 fails the query, while an unreadable sum produces a normal GraphQL field error

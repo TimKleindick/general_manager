@@ -449,8 +449,8 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
             ],
         )
 
-    def test_nonnumeric_calculation_group_schema_omits_sums(self) -> None:
-        """A string-only calculation exposes a valid group schema without sums."""
+    def test_text_calculation_group_schema_exposes_sums(self) -> None:
+        """A string-only calculation exposes text sums."""
         response = self.query(
             """
             query {
@@ -474,7 +474,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
             payload["nonNumericGroupCalculationGroups"]["groups"],
             [{"keys": {"code": "only"}, "count": 1}],
         )
-        self.assertNotIn(
+        self.assertIn(
             "sums", {field["name"] for field in payload["groupType"]["fields"]}
         )
 
