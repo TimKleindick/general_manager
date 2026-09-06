@@ -1,8 +1,6 @@
 # GeneralManager Agent Guidelines
 
-Follow the published CONTRIBUTING.md so that every change looks and feels the
-same as work done by maintainers. The highlights below are the minimum bar for
-agents executing tasks in this repository.
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) for repository-specific contribution, validation, and release requirements.
 
 ## Commit and Branch Discipline
 
@@ -45,6 +43,3 @@ agents executing tasks in this repository.
   work to avoid duplication.
 - Do not modify version numbers manually; semantic-release handles tagging and
   PyPI publishing based on your commit history.
-
-By following these rules every contribution stays aligned with the official
-CONTRIBUTING policy and is easy for maintainers to review.
