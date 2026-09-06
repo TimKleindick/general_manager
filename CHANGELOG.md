@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.79.2 (2026-09-06)
+
+### Bug Fixes
+
+- Aggregate unique text values in GraphQL group sums
+  ([`26bc456`](https://github.com/TimKleindick/general_manager/commit/26bc4568b14c62c0f39748789b2d24d4b398620d))
+
+### Documentation
+
+- Clarify agent contribution guidance
+  ([`1dec9b7`](https://github.com/TimKleindick/general_manager/commit/1dec9b73ac47d3b2aeb162592bf2538f40b869e1))
+
+### Testing
+
+- Exercise GraphQL calculation text sum serialization
+  ([`57e4ee7`](https://github.com/TimKleindick/general_manager/commit/57e4ee76facdfd172bc6bd9d7e0ddb3e6bf59b2c))
+
+
 ## v0.79.1 (2026-09-06)
 
 ### Bug Fixes
