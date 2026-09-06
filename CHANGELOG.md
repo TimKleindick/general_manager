@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.79.1 (2026-09-06)
+
+### Bug Fixes
+
+- **chat**: Bound turns and account for complete provider usage
+  ([`2a972bc`](https://github.com/TimKleindick/general_manager/commit/2a972bc3014729698f017e94d4924f44a8072248))
+
+- **chat**: Preserve usage and terminal ordering during cleanup
+  ([`deef356`](https://github.com/TimKleindick/general_manager/commit/deef356160ff60337a1cb36006cc27459f75a3b1))
+
+
 ## v0.79.0 (2026-09-05)
 
 ### Bug Fixes
