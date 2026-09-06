@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.79.3 (2026-09-06)
+
+### Bug Fixes
+
+- Release discarded measurement model signal receivers
+  ([`f7ba333`](https://github.com/TimKleindick/general_manager/commit/f7ba333e18e75856e075fcc8408b319c5579a306))
+
+
 ## v0.79.2 (2026-09-06)
 
 ### Bug Fixes
