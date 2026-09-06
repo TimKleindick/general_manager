@@ -100,6 +100,37 @@ class TestGraphQLGroups(GeneralManagerTransactionTestCase):
             {"First", "Second"},
         )
 
+    def test_text_sums_are_unique_and_exclude_null(self) -> None:
+        commercial = self.group_commercial.Factory.create(name="Commercial")
+        for name, texts in [
+            ("Mixed", ["Schraube", None, "Mutter", "Schraube"]),
+            ("Null", [None, None]),
+            ("Empty", ["", None, ""]),
+        ]:
+            for value in texts:
+                self.group_project.Factory.create(
+                    name=name, group_key=value, amount=1, commercial=commercial
+                )
+        response = self.query(
+            """
+            query {
+              groupProjectGroups(groupBy: ["name"]) {
+                groups { keys { name } sums { groupKey amount } }
+              }
+            }
+            """
+        )
+        self.assertResponseNoErrors(response)
+        groups = response.json()["data"]["groupProjectGroups"]["groups"]
+        self.assertEqual(
+            {group["keys"]["name"]: group["sums"] for group in groups},
+            {
+                "Mixed": {"groupKey": "Schraube, Mutter", "amount": 4},
+                "Null": {"groupKey": None, "amount": 2},
+                "Empty": {"groupKey": "", "amount": 3},
+            },
+        )
+
     def test_measurement_sum_accepts_target_unit(self) -> None:
         commercial = self.group_commercial.Factory.create(name="Commercial")
         self.group_project.Factory.create(

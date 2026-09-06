@@ -94,7 +94,10 @@ def create_group_types(
                 )
             else:
                 sum_fields[field_name] = map_field(sum_type, field_name, field_info)
-            sum_resolvers[f"resolve_{field_name}"] = _sum_resolver(field_name)
+            sum_resolvers[f"resolve_{field_name}"] = _sum_resolver(
+                field_name,
+                text_values=sum_type is not None and issubclass(sum_type, str),
+            )
 
     key_type = type(
         f"{manager_class.__name__}GroupKeys",
@@ -201,7 +204,7 @@ def _is_sum_type(field_type: object) -> bool:
     return (
         concrete_type is not None
         and not issubclass(concrete_type, bool)
-        and issubclass(concrete_type, (int, float, Decimal, Measurement))
+        and issubclass(concrete_type, (int, float, Decimal, Measurement, str))
     )
 
 
@@ -288,13 +291,22 @@ def _measurement_key_resolver(field_name: str) -> Callable[..., object]:
     return resolver
 
 
-def _sum_resolver(field_name: str) -> Callable[..., object]:
+def _sum_resolver(
+    field_name: str, *, text_values: bool = False
+) -> Callable[..., object]:
     def resolver(
         group: GroupManager[GeneralManager],
         info: GraphQLResolveInfo,
         target_unit: str | None = None,
     ) -> object:
         _validate_group_field_permission(group, info, field_name)
+        if text_values:
+            values = dict.fromkeys(
+                str(value)
+                for member in group.members
+                if (value := getattr(member, field_name)) is not None
+            )
+            return ", ".join(values) if values else None
         value = group.sum(field_name)
         if isinstance(value, Measurement):
             return measurement_to_graphql_payload(value, target_unit)
