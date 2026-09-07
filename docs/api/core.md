@@ -308,15 +308,16 @@ values with the same class and identification collapse to that manager;
 distinct managers and bucket values are combined with `|`. Lists are
 concatenated, dicts are merged with later values overwriting earlier keys,
 strings are de-duplicated in encounter order and joined by `", "`, booleans use
-`any()` before numeric handling, numeric and `Measurement` values are summed,
-and date/time values use `max()`. The aggregation branch is chosen from
-interface metadata or a concrete `GraphQLProperty` return annotation, not from
-every runtime value, so mixed runtime values follow the selected branch and may
-raise from that operation.
-GraphQL property annotations use the first `typing.get_args()` entry when
-present, otherwise the annotation object itself; unsupported non-class
-annotations raise `MissingGroupAttributeError`. `hash(group)` recursively
-freezes manager instances, mappings, lists, tuples, and sets before hashing.
+`any()` before numeric handling, numeric (including `Decimal`) and
+`Measurement` values are summed, and date/time values use `max()`. The
+aggregation branch is chosen from
+interface metadata or a `GraphQLProperty` return annotation, including inherited
+properties, not from every runtime value. Mixed runtime values follow the
+selected branch and may raise from that operation. Optional and `Annotated`
+wrappers are unwrapped, and parameterized containers use their runtime class.
+Ambiguous unions and unsupported annotations raise `MissingGroupAttributeError`.
+`hash(group)` recursively freezes manager instances, mappings, lists, tuples,
+and sets before hashing.
 Mapping entries are sorted by their frozen key/value tuples, sets become
 `frozenset` values, and the final hash is suitable only for unchanged
 in-process group state, not as a persistent cross-process identifier. Missing
