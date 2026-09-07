@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from decimal import Decimal
 from types import UnionType
-from typing import Generic, Union, cast, get_args, get_origin
+from typing import Annotated, Generic, Union, cast, get_args, get_origin
 from datetime import datetime, date, time
 from general_manager.api.property import GraphQLProperty
 from general_manager.measurement import Measurement
@@ -69,16 +69,54 @@ class NonNumericGroupSumError(TypeError):
         super().__init__(f"{field} is not a numeric group sum field.")
 
 
-def group_sum_value_type(field_type: object) -> type[object] | None:
-    """Return the concrete numeric member of a supported optional annotation."""
+def _group_value_type(field_type: object) -> type[object] | None:
+    """Return the runtime class represented by a supported field annotation."""
     if get_origin(field_type) in {Union, UnionType}:
         members = [
             member for member in get_args(field_type) if member is not type(None)
         ]
         if len(members) != 1:
             return None
-        field_type = members[0]
-    return field_type if isinstance(field_type, type) else None
+        return _group_value_type(members[0])
+    if get_origin(field_type) is Annotated:
+        annotation_args = get_args(field_type)
+        if not annotation_args:
+            return None
+        return _group_value_type(annotation_args[0])
+
+    origin = get_origin(field_type)
+    if isinstance(field_type, type):
+        return field_type
+    return origin if isinstance(origin, type) else None
+
+
+def group_sum_value_type(field_type: object) -> type[object] | None:
+    """Return the concrete member of a supported group sum annotation."""
+    return _group_value_type(field_type)
+
+
+def _group_property_type(
+    manager_class: type[object],
+    attribute: str,
+) -> object | None:
+    """Find a GraphQLProperty annotation on metadata or the manager MRO."""
+    get_properties = getattr(
+        getattr(manager_class, "Interface", None),
+        "get_graph_ql_properties",
+        None,
+    )
+    if callable(get_properties):
+        properties = get_properties()
+        if hasattr(properties, "get"):
+            property_value = properties.get(attribute)
+            if isinstance(property_value, GraphQLProperty):
+                return property_value.graphql_type_hint
+
+    for current_class in manager_class.__mro__:
+        property_value = vars(current_class).get(attribute)
+        if isinstance(property_value, GraphQLProperty):
+            return property_value.graphql_type_hint
+    return None
 
 
 class _GroupKeys(dict[str, object]):
@@ -279,9 +317,9 @@ class GroupManager(Generic[GeneralManagerType]):
         Raises:
             MissingGroupAttributeError: If the attribute does not exist or its
                 type cannot be determined on the manager. `GraphQLProperty`
-                annotations use the first `typing.get_args()` entry when
-                present, otherwise the annotation object itself; unsupported
-                non-class annotations raise this error.
+                annotations and interface metadata may use supported optional,
+                annotated, or parameterized container types; unsupported
+                annotations raise this error.
             Exception: Exceptions raised while reading grouped record
                 attributes, unioning bucket/manager values, merging containers,
                 summing values, or comparing date/time values propagate
@@ -292,16 +330,10 @@ class GroupManager(Generic[GeneralManagerType]):
 
         attribute_types = self._manager_class.Interface.get_attribute_types()
         attr_info = attribute_types.get(item)
-        data_type = attr_info["type"] if attr_info else None
-        if data_type is None and item in self._manager_class.__dict__:
-            attr_value = self._manager_class.__dict__[item]
-            if isinstance(attr_value, GraphQLProperty):
-                type_hints = get_args(attr_value.graphql_type_hint)
-                data_type = (
-                    type_hints[0]
-                    if type_hints
-                    else cast(type, attr_value.graphql_type_hint)
-                )
+        data_type: object = attr_info["type"] if attr_info else None
+        if data_type is None:
+            data_type = _group_property_type(self._manager_class, item)
+        data_type = _group_value_type(data_type)
         if data_type is None or not isinstance(data_type, type):
             raise MissingGroupAttributeError(self.__class__.__name__, item)
 
@@ -353,8 +385,8 @@ class GroupManager(Generic[GeneralManagerType]):
             new_data = ", ".join(text_data)
         elif issubclass(data_type, bool):
             new_data = any(total_data)
-        elif issubclass(data_type, (int, float, Measurement)):
-            new_data = sum(cast(list[int | float | Measurement], total_data))
+        elif issubclass(data_type, (int, float, Decimal, Measurement)):
+            new_data = sum(cast(list[int | float | Decimal | Measurement], total_data))
         elif issubclass(data_type, (datetime, date, time)):
             new_data = max(cast(list[datetime | date | time], total_data))
 

@@ -248,6 +248,15 @@ GENERAL_MANAGER = {
 
 For bucket-returning fields, the schema registers list fields and page types. `PageInfo` exposes `total_count`, `current_page`, `total_pages`, and optional `page_size` so clients can implement cursor-less pagination quickly.
 
+Generated root and bucket relation fields have `…List` and `…Groups` siblings.
+Groups require `groupBy` and use a distinct grouped item type inside the normal
+page envelope. Grouped singular manager relations become `…List` / `…Groups`
+collections of original managers; these operations can be nested recursively.
+Plain `List[GraphQLType]` fields retain their output shape and gain no query
+arguments or grouping companions. See the
+[grouping contract](filters_pagination.md#grouping) for aggregate values,
+relation cardinality, permissions, and migration.
+
 ## Extending the schema
 
 - Override `_map_field_to_graphene_read` to customise how specific Python types map to GraphQL fields (for example, using Relay nodes).

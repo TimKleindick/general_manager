@@ -165,7 +165,7 @@ def test_graphql_order_examples_use_typed_enum_inputs() -> None:
         'projectGroups(groupBy: ["status"], orderBy: [{field: status, direction: DESC}])'
         in guide
     )
-    assert "without those fields omit `sums` entirely" in guide
+    assert "fields are no longer generated" in guide
 
 
 def test_migration_guides_describe_lossy_index_keys_and_replacement_sorting() -> None:

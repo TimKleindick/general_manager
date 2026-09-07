@@ -874,6 +874,36 @@ class ReadOnlyRecursionPreventionIntegrationTests(GeneralManagerTransactionTestC
         self.assertEqual(self.Alpha.Interface._model.objects.count(), 1)
         self.assertEqual(self.Beta.Interface._model.objects.count(), 1)
 
+    def test_grouped_direct_and_reverse_relations_keep_separate_sources(self) -> None:
+        """A generated direct-relation page must not overwrite a reverse bucket."""
+        alpha = self.Alpha.Interface._model.objects.create(code="A")
+        self.Beta.Interface._model.objects.create(code="Reverse", alpha=alpha)
+        direct = self.Beta.Interface._model.objects.create(code="Direct")
+        alpha.beta = direct
+        alpha.save(update_fields=["beta"])
+
+        response = self.query(
+            """
+            query {
+              alphaGroups(groupBy: ["code"]) {
+                items {
+                  betaList { items { code } }
+                  betaGroups(groupBy: ["code"]) { items { code } }
+                  betaRelationList { items { code } }
+                  betaRelationGroups(groupBy: ["code"]) { items { code } }
+                }
+              }
+            }
+            """
+        )
+
+        self.assertResponseNoErrors(response)
+        item = response.json()["data"]["alphaGroups"]["items"][0]
+        self.assertEqual(item["betaList"], {"items": [{"code": "Reverse"}]})
+        self.assertEqual(item["betaGroups"], item["betaList"])
+        self.assertEqual(item["betaRelationList"], {"items": [{"code": "Direct"}]})
+        self.assertEqual(item["betaRelationGroups"], item["betaRelationList"])
+
 
 class ReadOnlySchemaConcreteFieldsIntegrationTests(GeneralManagerTransactionTestCase):
     """Integration tests for schema validation with non-concrete fields."""

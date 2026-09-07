@@ -485,14 +485,14 @@ user-facing contract. `totalCount` is counted after permission filters, user
 filters, excludes, and sorting, but before page slicing when the
 source is complete. Request-backed pages whose authorization cannot prove a
 global total return `totalCount: null` and `totalPages: null`. Ordinary lists
-sort records; explicit `…Groups` fields sort selected grouping keys after
-grouping and before pagination. Ordinary lists remain unpaginated
+sort records; grouped endpoints sort eligible aggregate scalars after grouping
+and before pagination, and `totalCount` counts groups. Ordinary lists remain unpaginated
 when both `page` and `pageSize` are omitted. Supplying either uses effective
 defaults of page 1 and size 10, which are also reported in `pageInfo`. Explicit
 zero or negative values are rejected. Empty known result sets report
 `totalPages: 0`; an out-of-range positive page returns an empty item list while
 retaining known metadata. An already-empty grouped result with pagination returns
-an empty `groups` list and its normal page metadata; it does not raise the
+an empty `items` list and its normal page metadata; it does not raise the
 grouped-bucket empty-slice error. Do not import generated/internal Python
 pagination classes directly.
 
@@ -807,3 +807,20 @@ to `400/validation_error`, `RuntimeError` to `500/internal_error`, and caught
 `AttributeError`, `LookupError`, `RemoteAPIConfigurationError`, `TypeError`,
 `ValueError`, and `RemoteAPIRequestError` subclasses map to
 `400/invalid_request`.
+
+
+### Grouped bucket endpoints
+
+Generated `…Groups` fields require `groupBy` and return flat aggregate `items`
+with the normal `pageInfo` envelope. Ordinary `…List` fields return records and
+do not accept grouping. Grouped singular relations expose distinct original
+managers through `…List` and `…Groups`; bucket-backed collections support the
+same operations recursively. Each collection applies source permissions and
+filters before grouping, aggregate sorting before pagination, and field
+permissions before reading values.
+
+Grouped item types are distinct from ordinary manager types. There are no
+legacy `keys`, `sums`, `members` or `count` wrappers. Plain
+`List[GraphQLType]` properties remain output collections without query controls.
+See the [grouping contract](../concepts/graphql/filters_pagination.md#grouping)
+for aggregation rules, identity handling and backend restrictions.

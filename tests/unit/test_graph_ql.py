@@ -104,6 +104,7 @@ def _restore_graphql_registry(snapshot: GraphQLRegistry) -> None:
     GraphQL._query_fields = snapshot.query_fields
     GraphQL._subscription_fields = snapshot.subscription_fields
     GraphQL._page_type_registry = snapshot.page_type_registry
+    GraphQL._group_type_registry = snapshot.group_type_registry
     GraphQL._group_page_type_registry = snapshot.group_page_type_registry
     GraphQL._subscription_payload_registry = snapshot.subscription_payload_registry
     GraphQL.graphql_type_registry = snapshot.graphql_type_registry
@@ -1545,27 +1546,6 @@ class MeasurementTypeTests(TestCase):
 
 
 class GraphQLTests(TestCase):
-    def test_registry_snapshot_restores_group_page_types(self) -> None:
-        """Snapshots include generated grouping page types as independent mappings."""
-        original = GraphQL.get_registry_snapshot()
-        self.addCleanup(_restore_graphql_registry, original)
-        GraphQL.reset_registry()
-
-        group_page_type = type("GroupedProjectPage", (graphene.ObjectType,), {})
-        GraphQL._group_page_type_registry["Project"] = group_page_type
-        snapshot = GraphQL.get_registry_snapshot()
-        self.assertIsNot(
-            GraphQL._group_page_type_registry,
-            snapshot.group_page_type_registry,
-        )
-        GraphQL.reset_registry()
-        _restore_graphql_registry(snapshot)
-
-        self.assertEqual(
-            GraphQL._group_page_type_registry,
-            {"Project": group_page_type},
-        )
-
     def test_public_bulk_data_change_notifications_is_importable(self):
         """Bulk notification batching is exposed only through the API module."""
         import general_manager
@@ -1761,8 +1741,13 @@ class GraphQLTests(TestCase):
         class ProjectHour(GraphQLType):
             task_id: int
 
-        GraphQL.create_graphql_output_type(ProjectHour)
+        generated = GraphQL.create_graphql_output_type(ProjectHour)
+        GraphQL._group_type_registry["ProjectHour"] = generated
+        GraphQL._group_page_type_registry["ProjectHour"] = generated
         GraphQL.reset_registry()
+
+        assert GraphQL._group_type_registry == {}
+        assert GraphQL._group_page_type_registry == {}
 
         assert GraphQL.graphql_output_type_registry == {}
         assert get_registered_graphql_types()[-1] is ProjectHour
@@ -2468,11 +2453,6 @@ class GraphQLTests(TestCase):
                 patch.object(
                     GraphQL,
                     "_get_or_create_page_type",
-                    return_value=ManagerPage,
-                ),
-                patch.object(
-                    GraphQL,
-                    "_get_or_create_group_page_type",
                     return_value=ManagerPage,
                 ),
                 patch.object(
