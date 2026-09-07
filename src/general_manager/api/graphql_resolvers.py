@@ -902,26 +902,23 @@ def resolve_with_read_permission(
 ) -> ResolverValueT | None | Awaitable[ResolverValueT | None]:
     """Resolve a field after checking read permission.
 
-    Only subscription permission evaluation is offloaded to a worker thread;
-    query and mutation resolution remains synchronous.
+    Subscription permission checks and value evaluation run together in a
+    worker thread so lazy ORM reads are safe. Query and mutation resolution
+    remains synchronous.
     """
     user = info.context.user
     operation = getattr(getattr(info, "operation", None), "operation", None)
-    if operation is not OperationType.SUBSCRIPTION:
+
+    def resolve_value() -> ResolverValueT | None:
         if not check_read_permission_for_user(instance, user, field_name):
             return None
         return value_factory()
 
+    if operation is not OperationType.SUBSCRIPTION:
+        return resolve_value()
+
     async def resolve_subscription_value() -> ResolverValueT | None:
-        allowed = await asyncio.to_thread(
-            check_read_permission_for_user,
-            instance,
-            user,
-            field_name,
-        )
-        if not allowed:
-            return None
-        return value_factory()
+        return await asyncio.to_thread(resolve_value)
 
     return resolve_subscription_value()
 

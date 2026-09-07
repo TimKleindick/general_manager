@@ -616,7 +616,7 @@ def test_generated_file_resolver_preserves_field_read_permission() -> None:
         del ResolverGraphManager.Permission
 
 
-def test_generated_file_subscription_resolver_offloads_only_permission() -> None:
+def test_generated_file_subscription_resolver_offloads_permission_and_value() -> None:
     permission_threads: list[bool] = []
     value_threads: list[bool] = []
     sentinel = object()
@@ -634,8 +634,9 @@ def test_generated_file_subscription_resolver_offloads_only_permission() -> None
             return True
 
     def stored_value(*_args: object, **_kwargs: object) -> object:
-        asyncio.get_running_loop()
-        value_threads.append(True)
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        value_threads.append(False)
         return sentinel
 
     ResolverGraphManager.Permission = AllowPermission  # type: ignore[assignment]
@@ -666,7 +667,7 @@ def test_generated_file_subscription_resolver_offloads_only_permission() -> None
 
         assert asyncio.run(resolve()) is sentinel
         assert permission_threads == [False]
-        assert value_threads == [True]
+        assert value_threads == [False]
     finally:
         GraphQL.graphql_type_registry = old_types
         GraphQL.manager_registry = old_managers
