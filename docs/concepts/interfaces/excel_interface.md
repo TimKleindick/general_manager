@@ -73,6 +73,16 @@ schemas. Use the same resolved workbook path and field declarations in every
 worker. A shared Django cache improves read consistency, but it cannot reconcile
 separate local copies of the workbook.
 
+Workers check a small fingerprint marker before fetching a shared snapshot.
+When that fingerprint matches the local mirror, field reads and manager
+construction reuse the parsed rows without deserializing the entire dataset.
+Missing or incomplete cache entries retain the local mirror; synchronization
+still checks the workbook content fingerprint and rebuilds from Excel when
+needed. This does not introduce a polling delay or weaken write-conflict checks.
+Snapshot cache keys use a separate namespace from older versions that did not
+publish fingerprint markers, so each worker version rebuilds its own disposable
+cache during a rolling upgrade.
+
 GeneralManager coordinates its own processes with a persistent
 `<workbook>.gm.lock` sidecar and writes via a temporary sibling file followed by
 atomic replacement. The workbook directory must allow lock-file creation and
