@@ -301,6 +301,57 @@ the model and ordering semantics, the [generated-list how-to](../howto/expose_vi
 shows the setup, and the [cookbook query](../examples/graphql_queries.md#sort-by-a-compound-relation-key)
 provides a directly usable request.
 
+## Explicit grouped-result sums
+
+When a manager or generated relation list has eligible scalar fields, GraphQL
+adds a sibling grouped field with this shape:
+
+```graphql
+<manager>Groups(
+  groupBy: [String!]!
+  filter: <Manager>FilterInput
+  exclude: <Manager>FilterInput
+  orderBy: [<Manager>OrderBy!]
+  page: Int
+  pageSize: Int
+  includeInactive: Boolean
+) -> <Manager>GroupPage
+```
+
+`filter`, `exclude`, and `orderBy` are generated only when the corresponding
+manager options exist. `includeInactive` is available on root manager group
+fields when soft delete is enabled; relation group fields do not expose it.
+`groupBy` accepts generated GraphQL field names, requires at least one eligible
+non-collection field, and is mapped to the Python interface names before the
+bucket is grouped.
+
+The returned page contains `groups` and `pageInfo`. Each group contains typed
+`keys`, paginated original `members`, `count`, and—when at least one eligible
+sum field exists—a typed `sums` object. Numeric fields (`Int`, `Float`, and
+`Decimal`) are added; measurement fields retain their `targetUnit: String`
+argument and existing conversion behavior. Text fields return a nullable
+`String` made by excluding null member values, deduplicating remaining values
+in encounter order, and joining them with `", "`. An all-null text field
+returns null. This is a GraphQL generated-field behavior; the Python
+`GroupManager.sum(field)` method remains numeric-only.
+
+Authorization is applied before grouping. An unreadable grouping key fails the
+query with `Permission denied to read grouping key '<field>'.`; an unreadable
+sum fails that field with `Permission denied to read sum field '<field>'.`.
+Missing `groupBy` raises `groupBy must select at least one grouping key.`;
+unknown keys raise `'<field>' is not an eligible grouping key.`; and ordering
+by a field not selected in `groupBy` raises
+`Grouped orderBy fields must be selected grouping keys.`. Normal filter,
+bucket, and pagination errors retain their existing GraphQL behavior.
+
+The generated `GroupPage`, `Group`, `GroupKeys`, and `GroupSums` types and their
+resolvers are schema output, not stable Python imports. Text sums are available
+from GeneralManager 0.79.2; earlier generated schemas omitted `sums` for
+text-only fields. See the [grouping concept](../concepts/graphql/filters_pagination.md#grouping),
+[GraphQL how-to](../howto/expose_via_graphql.md#query-generated-lists), and
+[cookbook query](../examples/graphql_queries.md#aggregate-unique-text-values-in-groups)
+for the model and a directly usable request.
+
 ## Manager-typed calculation input filters
 
 `GraphQL.create_graphql_interface(manager: type[GeneralManager])` generates a

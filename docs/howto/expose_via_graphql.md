@@ -357,6 +357,25 @@ query ProjectsByDescendingStatus {
 }
 ```
 
+To return distinct text values for each group, select the text field under
+`sums`. This example returns each group's unique project names in their first
+encountered order:
+
+```graphql
+query ProjectNamesByStatus {
+  projectGroups(groupBy: ["status"]) {
+    groups {
+      keys { status }
+      count
+      sums { name }
+    }
+  }
+}
+```
+
+Repeated names are emitted once and joined with `", "`; null names are omitted,
+and a group whose names are all null returns `name: null`.
+
 Invalid `orderBy` enum values are rejected by Graphene. Group ordering may use
 only fields selected in `groupBy`; aggregate ordering is unavailable. Group-page
 pagination slices groups, while member pagination slices the original members.

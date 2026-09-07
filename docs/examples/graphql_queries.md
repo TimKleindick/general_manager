@@ -62,6 +62,31 @@ the Python API. See the [grouped-data concept](../concepts/models_entities.md#gr
 [core API reference](../api/core.md#general_manager.manager.group_manager.GroupManager)
 for the full grouping and error contract.
 
+## Aggregate unique text values in groups
+
+Generated group fields can return a text field under `sums` as a compact,
+stable summary:
+
+```graphql
+query ProjectNamesByStatus {
+  projectGroups(groupBy: ["status"]) {
+    groups {
+      keys { status }
+      count
+      sums { name }
+    }
+  }
+}
+```
+
+For member values `["Alpha", "Alpha", "Beta", null]`, the `name` sum is
+`"Alpha, Beta"`. Values are deduplicated in encounter order, nulls are
+excluded, and an all-null group returns `null`. Numeric sums retain their
+existing addition behavior. See the [grouping concept](../concepts/graphql/filters_pagination.md#grouping),
+[GraphQL how-to](../howto/expose_via_graphql.md#query-generated-lists), and
+[GraphQL API reference](../api/graphql.md#explicit-grouped-result-sums) for
+permissions, arguments, and compatibility details.
+
 ## Nested buckets
 
 ```graphql
