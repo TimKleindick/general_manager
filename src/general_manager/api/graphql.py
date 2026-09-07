@@ -1858,7 +1858,11 @@ class GraphQL:
                     raw_annotations.get("return"), cls.manager_registry
                 )
             raw_origin = get_origin(raw_hint)
-            if relation is not None and cls._is_bucket_collection_field(raw_hint):
+            if (
+                field_name.endswith("_list")
+                and relation is not None
+                and cls._is_bucket_collection_field(raw_hint)
+            ):
                 fields[field_name] = deepcopy(ordinary_field)
                 fields[f"resolve_{field_name}"] = cls._create_relation_list_resolver(
                     field_name, relation
