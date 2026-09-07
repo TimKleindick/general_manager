@@ -91,6 +91,9 @@ that shape and return an empty `groups` list with normal metadata.
 
 Under `sums`, numbers are added and strings are deduplicated in encounter order
 and joined with `", "`. Null values are excluded; an all-null field returns null.
+This text-value behavior is available in GeneralManager 0.79.2 and later and
+applies to generated GraphQL group fields; the Python `GroupManager.sum()` API
+remains numeric-only.
 
 Filters and row authorization run before groups are formed. A denied grouping
 key fails the query before its values are read. Each selected sum verifies its

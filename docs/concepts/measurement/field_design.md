@@ -26,6 +26,32 @@ Use `None` to clear a nullable measurement:
 product.weight = None
 ```
 
+## Logical defaults during model initialization
+
+Pass `default=` to `MeasurementField` when a new model instance should receive
+a measurement automatically:
+
+```python
+def default_weight() -> Measurement:
+    return Measurement(2.6, "kg")
+
+
+weight = MeasurementField(
+    base_unit="kg", default=default_weight, null=True, blank=True
+)
+```
+
+The default is materialized when Django initializes the model and is stored in
+the paired `<field>_value` and `<field>_unit` attributes through the normal
+unit-conversion path. A caller-supplied logical value, including `None`, or a
+caller-supplied backing value/unit suppresses the default. Defaults also apply
+to concrete subclasses that inherit a `MeasurementField`. This is model
+initialization behavior; it does not add a database-side default.
+
+The signal handlers that provide this behavior are tied weakly to live model
+classes, so temporary migration-state models can be collected after they are
+discarded instead of being retained by global signal receivers.
+
 Assignment clears the backing columns immediately. On a non-nullable field,
 Django validation rejects that cleared value later through the normal
 `null=False` validation path. Saving without model validation relies on the
