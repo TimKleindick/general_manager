@@ -256,15 +256,17 @@ class GraphQLHelperTests(SimpleTestCase):
     def test_subscription_denied_field_is_not_evaluated(self) -> None:
         parent = mock.Mock()
         value = mock.PropertyMock(side_effect=AssertionError("denied field was read"))
-        type(parent).name = value
         resolver = create_normal_resolver("name")
 
         async def resolve() -> object:
             return await resolver(parent, _resolver_info(OperationType.SUBSCRIPTION))
 
-        with mock.patch(
-            "general_manager.api.graphql_resolvers.check_read_permission_for_user",
-            return_value=False,
+        with (
+            mock.patch.object(type(parent), "name", value, create=True),
+            mock.patch(
+                "general_manager.api.graphql_resolvers.check_read_permission_for_user",
+                return_value=False,
+            ),
         ):
             assert asyncio.run(resolve()) is None
         value.assert_not_called()
