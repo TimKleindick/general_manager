@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
 from hashlib import sha256
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, cast
 from weakref import WeakKeyDictionary
 
 from django.core.cache import caches
@@ -63,7 +64,8 @@ def mirror_cache_key(interface_cls: Any) -> str:
         field_schema,
     )
     digest = sha256(repr(identity).encode()).hexdigest()
-    return f"general_manager:excel:v1:{digest}"
+    # Older workers publish only a snapshot, without updating its version marker.
+    return f"general_manager:excel:v2:{digest}"
 
 
 class ExcelWorkbookStore:
@@ -83,13 +85,18 @@ class ExcelWorkbookStore:
         """Return the local mirror, refreshing it from shared cache when available."""
         mirror = self._mirrors.setdefault(interface_cls, ExcelMirror())
         try:
-            cached = caches[interface_cls.excel_meta.cache_alias].get(
-                mirror_cache_key(interface_cls)
-            )
+            cache = caches[interface_cls.excel_meta.cache_alias]
+            key = mirror_cache_key(interface_cls)
+            fingerprint = cache.get(f"{key}:fingerprint")
             if (
-                isinstance(cached, ExcelMirror)
-                and cached.fingerprint != mirror.fingerprint
+                not isinstance(fingerprint, WorkbookFingerprint)
+                or fingerprint == mirror.fingerprint
             ):
+                return mirror
+            cached = cache.get(key)
+            # Ignore partial publications or independent cache eviction;
+            # synchronization still checks the authoritative workbook.
+            if isinstance(cached, ExcelMirror) and cached.fingerprint == fingerprint:
                 snapshot = deepcopy(cached)
                 mirror.rows = snapshot.rows
                 mirror.fingerprint = snapshot.fingerprint
@@ -128,9 +135,14 @@ class ExcelWorkbookStore:
         """Publish the current interface mirror to the configured cache."""
         mirror = self._mirrors[interface_cls]
         try:
-            caches[interface_cls.excel_meta.cache_alias].set(
-                mirror_cache_key(interface_cls), deepcopy(mirror), timeout=None
-            )
+            cache = caches[interface_cls.excel_meta.cache_alias]
+            key = mirror_cache_key(interface_cls)
+            # Publish the payload before advertising it. Some backends return
+            # None on success, while others report a failed set with False,
+            # despite the base cache stub declaring a None return type.
+            set_snapshot = cast(Callable[..., bool | None], cache.set)
+            if set_snapshot(key, deepcopy(mirror), timeout=None) is not False:
+                cache.set(f"{key}:fingerprint", mirror.fingerprint, timeout=None)
         except Exception:
             logger.exception("Excel mirror cache write failed; using local snapshot.")
 

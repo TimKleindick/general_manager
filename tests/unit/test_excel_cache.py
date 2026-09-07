@@ -7,7 +7,7 @@ import pytest
 from django.core.cache import cache, caches
 from django.test import override_settings
 
-from general_manager.interface.excel_store import ExcelWorkbookStore
+from general_manager.interface.excel_store import ExcelWorkbookStore, mirror_cache_key
 from tests.unit.test_excel_interface import (
     build_product_manager,
     write_product_workbook,
@@ -77,6 +77,111 @@ def test_unchanged_reads_do_not_parse_workbook(product):
     ):
         assert manager(sku="SKU-1").name == "Alpha"
         assert manager.all().count() == 1
+
+
+@pytest.mark.parametrize("row_count", [1, 30])
+def test_warm_reads_and_iteration_do_not_fetch_full_snapshot(product, row_count):
+    manager, path = product
+    write_product_workbook(
+        path, [[f"SKU-{index}", "Alpha"] for index in range(row_count)]
+    )
+    manager.sync_excel()
+    snapshot_key = mirror_cache_key(manager.Interface)
+
+    with patch.object(cache, "get", wraps=cache.get) as get:
+        rows = list(manager.all())
+        assert len(rows) == row_count
+        assert [row.name for row in rows] == ["Alpha"] * row_count
+        assert [row.name for row in rows] == ["Alpha"] * row_count
+
+    assert sum(call.args[0] == snapshot_key for call in get.call_args_list) == 0
+
+
+def test_store_fetches_full_snapshot_only_when_version_changes(product):
+    manager, path = product
+    manager.sync_excel()
+    store = ExcelWorkbookStore()
+    snapshot_key = mirror_cache_key(manager.Interface)
+
+    with patch.object(cache, "get", wraps=cache.get) as get:
+        first = store.mirror_for(manager.Interface)
+        assert first.rows["SKU-1"].values["name"] == "Alpha"
+        assert store.mirror_for(manager.Interface) is first
+    assert sum(call.args[0] == snapshot_key for call in get.call_args_list) == 1
+
+    set_product_workbook_value(path, "SKU-1", "Beta")
+    manager.sync_excel()
+    with patch.object(cache, "get", wraps=cache.get) as get:
+        assert store.mirror_for(manager.Interface) is first
+        assert first.rows["SKU-1"].values["name"] == "Beta"
+        assert store.mirror_for(manager.Interface) is first
+    assert sum(call.args[0] == snapshot_key for call in get.call_args_list) == 1
+
+
+@pytest.mark.parametrize("missing_part", ["snapshot", "fingerprint"])
+def test_partial_cache_eviction_retains_local_rows_and_retries(product, missing_part):
+    manager, path = product
+    manager.sync_excel()
+    store = ExcelWorkbookStore()
+    mirror = store.mirror_for(manager.Interface)
+    set_product_workbook_value(path, "SKU-1", "Beta")
+    manager.sync_excel()
+    key = mirror_cache_key(manager.Interface)
+    if missing_part == "fingerprint":
+        key = f"{key}:fingerprint"
+    saved = cache.get(key)
+    cache.delete(key)
+
+    assert store.mirror_for(manager.Interface) is mirror
+    assert mirror.rows["SKU-1"].values["name"] == "Alpha"
+    assert ExcelWorkbookStore().mirror_for(manager.Interface).fingerprint is None
+
+    cache.set(key, saved, timeout=None)
+    assert store.mirror_for(manager.Interface) is mirror
+    assert mirror.rows["SKU-1"].values["name"] == "Beta"
+
+
+@pytest.mark.parametrize("stale_part", ["snapshot", "fingerprint"])
+def test_mismatched_marker_and_snapshot_are_not_adopted(product, stale_part):
+    manager, path = product
+    manager.sync_excel()
+    key = mirror_cache_key(manager.Interface)
+    if stale_part == "fingerprint":
+        key = f"{key}:fingerprint"
+    old_value = cache.get(key)
+    set_product_workbook_value(path, "SKU-1", "Beta")
+    manager.sync_excel()
+    new_value = cache.get(key)
+    cache.set(key, old_value, timeout=None)
+    store = ExcelWorkbookStore()
+
+    assert store.mirror_for(manager.Interface).fingerprint is None
+
+    cache.set(key, new_value, timeout=None)
+    assert store.mirror_for(manager.Interface).rows["SKU-1"].values["name"] == "Beta"
+
+
+@pytest.mark.parametrize("failure", [False, ConnectionError("offline")])
+def test_failed_snapshot_publication_does_not_advance_marker(product, failure):
+    manager, path = product
+    manager.sync_excel()
+    key = mirror_cache_key(manager.Interface)
+    old_fingerprint = cache.get(f"{key}:fingerprint")
+    set_product_workbook_value(path, "SKU-1", "Beta")
+    original_set = cache.set
+
+    def fail_snapshot(cache_key, value, *args, **kwargs):
+        if cache_key == key:
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
+        return original_set(cache_key, value, *args, **kwargs)
+
+    with patch.object(cache, "set", side_effect=fail_snapshot):
+        manager.sync_excel()
+    assert cache.get(f"{key}:fingerprint") == old_fingerprint
+    # The workbook remains authoritative even if the shared cache is stale.
+    assert manager(sku="SKU-1").name == "Beta"
 
 
 def test_dummy_cache_supports_reads_and_writes(tmp_path):
