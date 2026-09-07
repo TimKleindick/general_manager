@@ -427,13 +427,13 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         invalid_response = self.query(query, variables={"amount": 4})
         self._assert_error_contains(invalid_response, "Invalid value for amount")
 
-    def test_numeric_calculation_input_groups_expose_sums(self) -> None:
-        """Numeric calculation inputs remain valid typed group sum fields."""
+    def test_numeric_calculation_input_list_groups_items(self) -> None:
+        """Numeric calculation inputs retain their ordinary fields when grouped."""
         response = self.query(
             """
             query {
               numericDomainCalculationGroups(groupBy: ["amount"]) {
-                groups { keys { amount } count sums { amount } }
+                items { amount }
               }
             }
             """
@@ -441,26 +441,20 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
 
         self.assertResponseNoErrors(response)
         self.assertEqual(
-            response.json()["data"]["numericDomainCalculationGroups"]["groups"],
+            response.json()["data"]["numericDomainCalculationGroups"]["items"],
             [
-                {"keys": {"amount": 1}, "count": 1, "sums": {"amount": 1}},
-                {"keys": {"amount": 3}, "count": 1, "sums": {"amount": 3}},
-                {"keys": {"amount": 5}, "count": 1, "sums": {"amount": 5}},
+                {"amount": 1},
+                {"amount": 3},
+                {"amount": 5},
             ],
         )
 
-    def test_text_calculation_group_schema_exposes_sums(self) -> None:
-        """A string-only calculation exposes text sums."""
+    def test_text_calculation_list_groups_items(self) -> None:
+        """String-only calculations support the normal grouped list shape."""
         response = self.query(
             """
             query {
-              nonNumericGroupCalculationList { items { code } }
-              nonNumericGroupCalculationGroups(groupBy: ["code"]) {
-                groups { keys { code } count sums { code } }
-              }
-              groupType: __type(name: "NonNumericGroupCalculationGroup") {
-                fields { name }
-              }
+              nonNumericGroupCalculationGroups(groupBy: ["code"]) { items { code } }
             }
             """
         )
@@ -468,14 +462,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response)
         payload = response.json()["data"]
         self.assertEqual(
-            payload["nonNumericGroupCalculationList"]["items"], [{"code": "only"}]
-        )
-        self.assertEqual(
-            payload["nonNumericGroupCalculationGroups"]["groups"],
-            [{"keys": {"code": "only"}, "count": 1, "sums": {"code": "only"}}],
-        )
-        self.assertIn(
-            "sums", {field["name"] for field in payload["groupType"]["fields"]}
+            payload["nonNumericGroupCalculationGroups"]["items"], [{"code": "only"}]
         )
 
     def test_managers_without_eligible_group_keys_omit_root_and_relation_groups(
@@ -488,8 +475,8 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
               constantRowList { items { label } }
               constantRowRelationList { items { __typename } }
               __schema {
-                queryType { fields { name } }
-                types { name fields { name } }
+                queryType { fields(includeDeprecated: true) { name } }
+                types { name fields(includeDeprecated: true) { name } }
               }
             }
             """

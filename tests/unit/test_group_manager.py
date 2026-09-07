@@ -1,13 +1,14 @@
 # type: ignore
 from datetime import date
 from decimal import Decimal
-from typing import ClassVar
+from typing import Annotated, ClassVar
 from unittest.mock import patch
 from django.test import TestCase
 from general_manager.api.property import GraphQLProperty
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.group_manager import (
     GroupManager,
+    MissingGroupAttributeError,
 )
 from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.bucket.group_bucket import GroupBucketKeysMismatchError
@@ -489,6 +490,60 @@ class GroupManagerCombineValueTests(TestCase):
         result = gm.combine_value("field")
         self.assertEqual(result, Measurement(3, "m"))
 
+    def test_combine_normalizes_optional_decimal_and_annotated_containers(self):
+        cases = (
+            (Decimal("1.5"), Decimal("2.5"), Decimal | None, Decimal("4.0")),
+            ([1], [2, 3], Annotated[list[int], "values"], [1, 2, 3]),
+            (
+                {"x": 1},
+                {"y": 2},
+                Annotated[dict[str, int], "values"],
+                {"x": 1, "y": 2},
+            ),
+            (True, False, bool | None, True),
+        )
+
+        for first, second, value_type, expected in cases:
+            with self.subTest(value_type=value_type):
+                gm = self.helper_make_group_manager([first, second], value_type)
+                self.assertEqual(gm.combine_value("field"), expected)
+
+    def test_combine_normalizes_graphql_property_return_annotation(self):
+        class BasePropertyManager(DummyManager):
+            @GraphQLProperty
+            def values(self) -> Annotated[list[str], "values"] | None:
+                return self._values
+
+            def __init__(self, values):
+                self._values = values
+
+        class PropertyInterface(DummyInterface):
+            @staticmethod
+            def get_graph_ql_properties():
+                return {"values": BasePropertyManager.__dict__["values"]}
+
+        class PropertyManager(BasePropertyManager):
+            Interface = PropertyInterface
+
+        group = GroupManager(
+            PropertyManager,
+            {},
+            ListBucket(
+                [
+                    PropertyManager(["one"]),
+                    PropertyManager(["two"]),
+                ]
+            ),
+        )
+
+        self.assertEqual(group.combine_value("values"), ["one", "two"])
+
+    def test_combine_rejects_ambiguous_union_annotation(self):
+        gm = self.helper_make_group_manager([1, 2.5], int | float)
+
+        with self.assertRaises(MissingGroupAttributeError):
+            gm.combine_value("field")
+
     def test_explicit_group_api_preserves_members_and_sums_decimals(self):
         """Replacing explicit group members or Decimal sums breaks grouped callers."""
         entries = [
@@ -529,7 +584,7 @@ class GroupManagerCombineValueTests(TestCase):
         RelatedManager.Interface = RelatedInterface
         gm = self.helper_make_group_manager(
             [RelatedManager(1), RelatedManager(2)],
-            RelatedManager,
+            RelatedManager | None,
         )
 
         result = gm.combine_value("field")
