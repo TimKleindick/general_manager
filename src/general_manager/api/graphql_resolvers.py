@@ -11,16 +11,24 @@ stable public import path.
 from __future__ import annotations
 
 import asyncio
+from copy import copy
 import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import date, datetime, time
+from decimal import Decimal
+from types import UnionType
 from typing import (
     Awaitable,
+    Annotated,
     Generic,
     TYPE_CHECKING,
     TypeVar,
     TypedDict,
+    Union,
     cast,
+    get_args,
+    get_origin,
 )
 
 from graphql import GraphQLError, OperationType
@@ -28,10 +36,15 @@ from graphql.language.ast import FieldNode, FragmentSpreadNode, InlineFragmentNo
 
 from general_manager.logging import get_logger
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket._materialized_bucket import MaterializedBucket
 from general_manager.bucket.group_bucket import GroupBucket
+from general_manager.bucket._ordering import sort_items
 from general_manager.bucket.request_bucket import RequestBucket
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.group_manager import GroupManager
 from general_manager.measurement.measurement import Measurement
+from general_manager.api.property import GraphQLProperty
+from general_manager.api.graphql_type import GraphQLType
 from general_manager.api.graphql_errors import get_read_permission_filter
 from general_manager.api.graphql_relations import (
     get_graphql_manager_registry,
@@ -73,9 +86,39 @@ ManagerFilterNormalizer = Callable[
 GroupingValidator = Callable[
     [Bucket[GeneralManager], list[str] | None, object, "GraphQLResolveInfo"], None
 ]
+GroupedSorter = Callable[
+    [GroupBucket[GeneralManager], object], GroupBucket[GeneralManager]
+]
 BaseListGetter = Callable[[object, bool], Bucket[GeneralManager] | None]
 Resolver = Callable[..., object]
 logger = get_logger("api.graphql")
+_NO_GROUPED_RELATION_ID_ALIAS = object()
+
+
+class GroupedFieldPermissionError(GraphQLError):
+    """Raised before a grouped projection reads a protected member field."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(f"Permission denied to read grouped field '{field_name}'.")
+
+
+class UnsupportedGroupedFieldError(GraphQLError):
+    """Raised when an entity-only GraphQL field is selected on a group."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(f"{field_name} is not available for grouped results.")
+
+    @classmethod
+    def file_fields(cls) -> "UnsupportedGroupedFieldError":
+        return cls("File fields")
+
+    @classmethod
+    def capabilities(cls) -> "UnsupportedGroupedFieldError":
+        return cls("Capabilities")
+
+    @classmethod
+    def field(cls, field_name: str) -> "UnsupportedGroupedFieldError":
+        return cls(field_name)
 
 
 def _ensure_as_of_compatible(value: object) -> None:
@@ -290,6 +333,61 @@ def apply_sorting(
     if not terms:
         return queryset
     return queryset.sort(*(term.signed_field for term in terms))
+
+
+def apply_grouped_projection_sorting(
+    queryset: GroupBucket[GeneralManager], order_by: object
+) -> GroupBucket[GeneralManager]:
+    """Sort groups by the same flat values exposed by their GraphQL type."""
+    try:
+        terms = order_by_to_sort_terms(order_by)
+    except GraphQLOrderingInputError as exc:
+        raise GraphQLError(str(exc)) from exc
+    if not terms:
+        return queryset
+
+    def relation_identity(
+        group: GroupManager[GeneralManager], relation_field: str
+    ) -> object:
+        alias = grouped_relation_id_alias_value(group, f"{relation_field}_id")
+        if alias is not _NO_GROUPED_RELATION_ID_ALIAS:
+            return alias
+        selected = group._group_by_value.get(relation_field)
+        if isinstance(selected, GeneralManager):
+            return selected.identification.get("id")
+        values = [
+            getattr(member, relation_field)
+            for member in group.members
+            if getattr(member, relation_field) is not None
+        ]
+        if not values or not all(isinstance(value, GeneralManager) for value in values):
+            return None
+        first = cast(GeneralManager, values[0])
+        if all(
+            value.__class__ is first.__class__
+            and value.identification == first.identification
+            for value in cast(list[GeneralManager], values)
+        ):
+            return first.identification.get("id")
+        return None
+
+    def value_for(group: GroupManager[GeneralManager], field_path: str) -> object:
+        root, *rest = field_path.split("__", 1)
+        if rest == ["id"]:
+            return relation_identity(group, root)
+        if rest:
+            # Group ordering types do not expose relation traversal. Retaining
+            # this guard keeps a malformed internal call from reading it.
+            raise GraphQLOrderingInputError.unavailable_field(field_path)
+        relation_id = grouped_relation_id_alias_value(group, root)
+        if relation_id is not _NO_GROUPED_RELATION_ID_ALIAS:
+            return relation_id
+        _validate_grouped_field_projection(group, root)
+        return read_grouped_field_value(group, root)
+
+    sorted_bucket = copy(queryset)
+    sorted_bucket._data = sort_items(queryset, terms, value_for=value_for)
+    return sorted_bucket
 
 
 def apply_query_parameter_plan(
@@ -906,6 +1004,23 @@ def resolve_with_read_permission(
     worker thread so lazy ORM reads are safe. Query and mutation resolution
     remains synchronous.
     """
+    if isinstance(instance, GroupManager):
+        # A group is a projection, not an entity with its own permission
+        # identity.  Check every contributing member before its aggregate is
+        # read; returning a selectively aggregated value would leak protected
+        # data and passing the synthetic group to Permission is invalid.
+        permission_fields = [field_name]
+        relation_field = relation_id_alias_field(instance._manager_class, field_name)
+        if relation_field is not None:
+            permission_fields.append(relation_field)
+        for member in instance.members:
+            if any(
+                not check_read_permission(member, info, permission_field)
+                for permission_field in permission_fields
+            ):
+                raise GroupedFieldPermissionError(field_name)
+        return value_factory()
+
     user = info.context.user
     operation = getattr(getattr(info, "operation", None), "operation", None)
 
@@ -921,6 +1036,204 @@ def resolve_with_read_permission(
         return await asyncio.to_thread(resolve_value)
 
     return resolve_subscription_value()
+
+
+def project_grouped_field_value(
+    instance: GeneralManager | GroupManager[GeneralManager],
+    field_name: str,
+    value: object,
+) -> object:
+    """Adapt a GroupManager aggregate to the declared GraphQL field shape.
+
+    GroupManager deliberately preserves its Python container behaviour for
+    callers outside GraphQL.  A singular GraphQL relation cannot expose a
+    bucket of disagreeing relations, however, and structured/unknown aggregate
+    types have no safe scalar projection.  Keep those decisions at the GraphQL
+    boundary where the declared output shape is available.
+    """
+    if not isinstance(instance, GroupManager):
+        return value
+    if field_name == "id":
+        return value
+
+    _validate_grouped_field_projection(instance, field_name)
+    field_info, annotation = _grouped_field_declaration(instance, field_name)
+    assert annotation is not None
+
+    if _is_singular_grouped_relation(annotation, field_info, field_name):
+        # GroupManager intentionally unions distinct managers for Python use.
+        # A singular GraphQL field has no compatible representation for that
+        # bucket, so a null accurately records disagreement.
+        return None if isinstance(value, Bucket) else value
+    return value
+
+
+def grouped_relation_id_alias_value(
+    instance: GeneralManager | GroupManager[GeneralManager],
+    field_name: str,
+) -> object:
+    """Return a safe grouped singular-relation ID alias, when applicable."""
+    if not isinstance(instance, GroupManager):
+        return _NO_GROUPED_RELATION_ID_ALIAS
+    if field_name in instance._group_by_value:
+        return instance._group_by_value[field_name]
+    relation_field = relation_id_alias_field(instance._manager_class, field_name)
+    if relation_field is None:
+        return _NO_GROUPED_RELATION_ID_ALIAS
+    values = [
+        getattr(member, field_name)
+        for member in instance.members
+        if getattr(member, field_name) is not None
+    ]
+    if not values:
+        return None
+    first_value = values[0]
+    return first_value if all(value == first_value for value in values) else None
+
+
+def _validate_grouped_field_projection(
+    instance: GroupManager[GeneralManager],
+    field_name: str,
+) -> None:
+    """Reject a declared grouped field before its member values are read."""
+    if field_name == "id":
+        return
+    field_info, annotation = _grouped_field_declaration(instance, field_name)
+    if annotation is None or not _is_supported_grouped_annotation(
+        annotation, field_info, field_name
+    ):
+        raise UnsupportedGroupedFieldError.field(field_name)
+
+
+def read_grouped_field_value(
+    instance: GeneralManager | GroupManager[GeneralManager],
+    field_name: str,
+) -> object:
+    """Read a field while bypassing GroupManager's public metadata methods."""
+    if not isinstance(instance, GroupManager):
+        return getattr(instance, field_name)
+    if field_name in instance._group_by_value:
+        return instance._group_by_value[field_name]
+    if field_name not in instance._grouped_data:
+        instance._grouped_data[field_name] = instance.combine_value(field_name)
+    return instance._grouped_data[field_name]
+
+
+def _grouped_field_declaration(
+    instance: GroupManager[GeneralManager],
+    field_name: str,
+) -> tuple[Mapping[str, object] | None, object | None]:
+    attributes = instance._manager_class.Interface.get_attribute_types()
+    field_info = attributes.get(field_name)
+    if field_info is not None:
+        return field_info, field_info.get("type")
+    property_value = instance._manager_class.Interface.get_graph_ql_properties().get(
+        field_name
+    )
+    if isinstance(property_value, GraphQLProperty):
+        return None, property_value.graphql_type_hint
+    for manager_class in instance._manager_class.__mro__:
+        property_value = vars(manager_class).get(field_name)
+        if isinstance(property_value, GraphQLProperty):
+            return None, property_value.graphql_type_hint
+    return None, None
+
+
+def relation_id_alias_field(
+    manager_class: type[GeneralManager],
+    field_name: str,
+) -> str | None:
+    """Resolve ``relation_id`` aliases backed by a declared singular relation."""
+    if not field_name.endswith("_id"):
+        return None
+    relation_field = field_name.removesuffix("_id")
+    field_info = manager_class.Interface.get_attribute_types().get(relation_field)
+    if field_info is None or field_info.get("relation_kind") != "direct":
+        return None
+    annotation = field_info.get("type")
+    if resolve_general_manager_type(annotation, get_graphql_manager_registry()) is None:
+        return None
+    return relation_field
+
+
+def _unwrap_optional_annotation(annotation: object) -> object:
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        annotation_args = get_args(annotation)
+        return (
+            _unwrap_optional_annotation(annotation_args[0])
+            if annotation_args
+            else annotation
+        )
+    if origin not in {UnionType, Union}:
+        return annotation
+    members = [member for member in get_args(annotation) if member is not type(None)]
+    return members[0] if len(members) == 1 else annotation
+
+
+def _is_collection_annotation(annotation: object) -> bool:
+    origin = get_origin(_unwrap_optional_annotation(annotation))
+    return origin in {list, tuple, set, dict} or (
+        isinstance(origin, type) and issubclass(origin, Bucket)
+    )
+
+
+def _is_singular_grouped_relation(
+    annotation: object,
+    field_info: Mapping[str, object] | None,
+    field_name: str,
+) -> bool:
+    if field_info and field_info.get("relation_kind") == "collection":
+        return False
+    if field_name.endswith("_list") or _is_collection_annotation(annotation):
+        return False
+    return (
+        resolve_general_manager_type(annotation, get_graphql_manager_registry())
+        is not None
+    )
+
+
+def _is_supported_grouped_annotation(
+    annotation: object,
+    field_info: Mapping[str, object] | None,
+    field_name: str,
+) -> bool:
+    annotation = _unwrap_optional_annotation(annotation)
+    if _is_singular_grouped_relation(annotation, field_info, field_name):
+        return True
+    if field_info and field_info.get("relation_kind") == "collection":
+        return (
+            resolve_general_manager_type(annotation, get_graphql_manager_registry())
+            is not None
+        )
+    if _is_collection_annotation(annotation):
+        origin = get_origin(annotation)
+        # GroupManager normalises tuple/set annotations to their origin class;
+        # it does not yet preserve their element aggregation shape.  Fail
+        # before member values are read instead of returning a silent null.
+        if origin in {tuple, set}:
+            return False
+        if (
+            resolve_general_manager_type(annotation, get_graphql_manager_registry())
+            is not None
+        ):
+            return True
+        if origin is not list:
+            return False
+        values = get_args(annotation)
+        if len(values) != 1:
+            return False
+        value_type = _unwrap_optional_annotation(values[0])
+        if isinstance(value_type, type) and issubclass(value_type, GraphQLType):
+            return True
+        return isinstance(value_type, type) and issubclass(
+            value_type,
+            (bool, int, float, Decimal, Measurement, str, datetime, date, time),
+        )
+    return isinstance(annotation, type) and issubclass(
+        annotation,
+        (bool, int, float, Decimal, Measurement, str, datetime, date, time),
+    )
 
 
 def can_read_instance_for_user(
@@ -1009,8 +1322,10 @@ def create_measurement_resolver(field_name: str) -> Resolver:
         _ensure_as_of_compatible(self)
 
         def resolve_measurement() -> object:
+            if isinstance(self, GroupManager):
+                _validate_grouped_field_projection(self, field_name)
             return resolve_measurement_output(
-                getattr(self, field_name),
+                read_grouped_field_value(self, field_name),
                 target_unit,
             )
 
@@ -1034,11 +1349,24 @@ def create_normal_resolver(field_name: str) -> Resolver:
 
     def resolver(self: GeneralManager, info: GraphQLResolveInfo) -> object:
         _ensure_as_of_compatible(self)
+
+        def resolve_normal() -> object:
+            if isinstance(self, GroupManager):
+                relation_id = grouped_relation_id_alias_value(self, field_name)
+                if relation_id is not _NO_GROUPED_RELATION_ID_ALIAS:
+                    return relation_id
+                _validate_grouped_field_projection(self, field_name)
+            return project_grouped_field_value(
+                self,
+                field_name,
+                read_grouped_field_value(self, field_name),
+            )
+
         return resolve_with_read_permission(
             self,
             info,
             field_name,
-            lambda: getattr(self, field_name),
+            resolve_normal,
         )
 
     return resolver
@@ -1049,6 +1377,7 @@ def create_list_resolver(
     fallback_manager_class: type[GeneralManager],
     filter_normalizer: ManagerFilterNormalizer | None = None,
     grouping_validator: GroupingValidator | None = None,
+    group_sorter: GroupedSorter | None = None,
 ) -> Resolver:
     """
     Build a resolver for list fields that applies filters, permissions, and pagination.
@@ -1214,13 +1543,14 @@ def create_list_resolver(
                 )
                 planned_source = authorization_preparation.queryset
                 if isinstance(planned_source, RequestBucket):
-                    planned_source, remote_ordering_forwarded = (
-                        _forward_remote_request_controls(
-                            planned_source,
-                            effective_pagination,
-                            order_by,
+                    if group_by is None:
+                        planned_source, remote_ordering_forwarded = (
+                            _forward_remote_request_controls(
+                                planned_source,
+                                effective_pagination,
+                                order_by,
+                            )
                         )
-                    )
                     authorization_preparation.queryset = planned_source
                     request_provenance = _request_pagination_provenance(planned_source)
                 else:
@@ -1254,6 +1584,16 @@ def create_list_resolver(
                     source="list",
                 )
                 qs = authorization_result.queryset
+                if (
+                    group_by is not None
+                    and request_provenance.is_complete
+                    and isinstance(qs, RequestBucket)
+                ):
+                    # GroupBucket derives each group through ``filter``. Seal
+                    # the fully authorised complete response into a generic
+                    # local bucket so those filters neither compile remote
+                    # requests nor validate the remote lookup vocabulary.
+                    qs = MaterializedBucket(manager_class, qs)
         else:
             authorization_result = apply_read_authorization(
                 base_queryset,
@@ -1266,10 +1606,12 @@ def create_list_resolver(
         if grouping_validator is not None:
             grouping_validator(qs, group_by, order_by, info)
         qs_grouped = apply_grouping(qs, group_by)
-        qs_sorted = apply_sorting(
-            qs_grouped,
-            None if remote_ordering_forwarded else order_by,
-        )
+        effective_ordering = None if remote_ordering_forwarded else order_by
+        qs_sorted: Bucket[GeneralManager] | GroupBucket[GeneralManager]
+        if isinstance(qs_grouped, GroupBucket) and group_sorter is not None:
+            qs_sorted = group_sorter(qs_grouped, effective_ordering)
+        else:
+            qs_sorted = apply_sorting(qs_grouped, effective_ordering)
 
         if request_provenance is None or request_provenance.is_complete:
             total_count: int | None = len(qs_sorted)

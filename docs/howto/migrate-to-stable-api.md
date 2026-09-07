@@ -32,27 +32,35 @@ accept ordering metadata (`sort_key`, `reverse`, `sort_keys`, or
 `.sort(*signed_fields)`. New bucket pickles retain that signed ordering; rebuild
 pre-stable ordered constructor calls and serialized tuples through this API.
 
-## Use sibling group fields
+## Use dedicated grouped fields
 
-`groupBy` no longer belongs on entity-list fields. Query the generated sibling
-`<manager>Groups` field, whose result has `keys`, paginated `members`, `count`,
-and eligible numeric and text `sums`:
+Move `groupBy` queries from `…List` to `…Groups`. The response retains the
+`items` / `pageInfo` envelope with a distinct grouped item type:
 
 ```graphql
-projectGroups(groupBy: ["status"], orderBy: [{field: status}]) {
-  groups { keys { status } members { items { owner { id } } } count sums { amount } }
+projectGroups(groupBy: ["status"], orderBy: [{field: amount}]) {
+  items { status amount ownerList { items { id } } }
+  pageInfo { totalCount }
 }
 ```
 
-Groups may order only by selected keys. Permissions apply to group keys and
-sums before values are disclosed, including singular relations under members.
+Move legacy `keys` and `sums` selections directly into `items`. Grouped singular
+relations become `…List` / `…Groups` collections of distinct original managers.
+Bucket collections support recursive grouping. Ordinary lists keep singular
+relations and do not accept `groupBy`. Plain `List[GraphQLType]` properties keep
+their output shape and gain no collection query controls.
+
+Groups can sort eligible aggregate scalars. Permissions apply across contributing
+members before values are read. There is no generated `members` or `count`
+wrapper; retrieve original records through an ordinary filtered list. See the
+[grouping contract](../concepts/graphql/filters_pagination.md#grouping).
 
 ## Check pagination inputs and metadata
 
 Explicit `page` and `pageSize` are positive integers. Supplying either value
 defaults the other to page 1 or size 10. `pageInfo` reports effective values;
 an empty known result has `totalPages: 0`, while an out-of-range positive page
-has an empty `items`/`groups` list. Request-backed pages distinguish fetched
+has an empty `items` list. Request-backed pages distinguish fetched
 rows from an upstream total, which can be unknown.
 
 ## Move search and remote controls to trusted boundaries
