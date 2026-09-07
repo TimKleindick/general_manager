@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.79.4 (2026-09-07)
+
+### Bug Fixes
+
+- Reuse unchanged Excel cache snapshots
+  ([`2d27af5`](https://github.com/TimKleindick/general_manager/commit/2d27af53acbdf9e22d15f92eaf405bd9296d54bf))
+
+
 ## v0.79.3 (2026-09-06)
 
 ### Bug Fixes
