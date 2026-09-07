@@ -508,6 +508,30 @@ class GroupManagerCombineValueTests(TestCase):
                 gm = self.helper_make_group_manager([first, second], value_type)
                 self.assertEqual(gm.combine_value("field"), expected)
 
+    def test_unsupported_parameterized_containers_raise_without_caching(self):
+        for annotation, value in (
+            (tuple[str, ...], ("first",)),
+            (set[str], {"first"}),
+            (Annotated[tuple[str, ...] | None, "unsupported"], None),
+        ):
+            with self.subTest(annotation=annotation):
+                group = self.helper_make_group_manager([value], annotation)
+                with self.assertRaises(MissingGroupAttributeError):
+                    _ = group.field
+                self.assertNotIn("field", group._grouped_data)
+
+    def test_explicit_sum_distinguishes_null_values_from_unknown_fields(self):
+        group = self.helper_make_group_manager([None, None], int | None)
+        self.assertIsNone(group.sum("field"))
+        with self.assertRaises(MissingGroupAttributeError):
+            group.sum("unknown")
+
+    def test_hash_accepts_nested_container_group_values(self):
+        first = GroupManager(DummyManager, {"key": [1, {"a", "b"}]}, ListBucket([]))
+        second = GroupManager(DummyManager, {"key": [1, {"b", "a"}]}, ListBucket([]))
+        self.assertEqual(first, second)
+        self.assertEqual(hash(first), hash(second))
+
     def test_combine_normalizes_graphql_property_return_annotation(self):
         class BasePropertyManager(DummyManager):
             @GraphQLProperty
@@ -566,7 +590,7 @@ class GroupManagerCombineValueTests(TestCase):
         with self.assertRaises(TypeError):
             group.sum("field")
 
-    def test_combine_distinct_managers_preserves_union_bucket(self):
+    def test_combine_managers_preserves_distinct_union_and_shared_identity(self):
         class RelatedInterface:
             def __init__(self, manager_id):
                 self.identification = {"id": manager_id}
@@ -594,6 +618,12 @@ class GroupManagerCombineValueTests(TestCase):
             [manager.identification for manager in result],
             [{"id": 2}, {"id": 1}],
         )
+
+        original = RelatedManager(1)
+        shared_group = self.helper_make_group_manager(
+            [original, RelatedManager(1)], RelatedManager | None
+        )
+        self.assertIs(shared_group.field, original)
 
     def test_iterate_group_manager(self):
         # Test that iterating over GroupManager yields correct items

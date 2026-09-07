@@ -373,8 +373,8 @@ class TestGraphQLGroupingParity(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(ordinary["pageInfo"]["totalCount"], 5)
         self.assertEqual(grouped["pageInfo"]["totalCount"], 2)
-        self.assertEqual(
-            sorted(ordinary["items"], key=lambda item: (item["status"], item["label"])),
+        self.assertCountEqual(
+            ordinary["items"],
             [
                 {
                     "__typename": ordinary["items"][0]["__typename"],

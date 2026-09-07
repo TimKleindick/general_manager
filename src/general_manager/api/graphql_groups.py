@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from datetime import date, datetime, time
 from decimal import Decimal
 from types import UnionType
-from typing import TYPE_CHECKING, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Union, get_args, get_origin
 
 from graphene.utils.str_converters import to_snake_case
 from graphql import GraphQLError
@@ -168,24 +168,33 @@ def _validate_group_request(
     # The bucket and GroupManager read both grouping and ordering attributes.
     # Check those source values before either operation begins. Relation-id
     # aliases additionally require the canonical relation permission.
-    protected_fields = set(group_by)
+    protected_fields = dict.fromkeys(group_by)
     try:
         protected_fields.update(
-            term.field.split("__", 1)[0] for term in order_by_to_sort_terms(order_by)
+            (term.field.split("__", 1)[0], None)
+            for term in order_by_to_sort_terms(order_by)
         )
     except ValueError as exc:
         raise GraphQLError(str(exc)) from exc
+    permission_fields = {}
     for field_name in protected_fields:
-        permission_fields = [field_name]
         relation_field = relation_id_alias_field(queryset._manager_class, field_name)
-        if relation_field is not None:
-            permission_fields.append(relation_field)
-        for member in queryset:
+        permission_fields[field_name] = (
+            (field_name, relation_field)
+            if relation_field is not None
+            else (field_name,)
+        )
+    denied_fields: set[str] = set()
+    for member in queryset:
+        for field_name, checked_fields in permission_fields.items():
             if any(
                 not check_read_permission(member, info, permission_field)
-                for permission_field in permission_fields
+                for permission_field in checked_fields
             ):
-                raise GroupQueryError.denied_key(field_name)
+                denied_fields.add(field_name)
+    for field_name in protected_fields:
+        if field_name in denied_fields:
+            raise GroupQueryError.denied_key(field_name)
 
 
 def _is_collection_type(field_type: object) -> bool:
@@ -206,7 +215,10 @@ def _is_collection_type(field_type: object) -> bool:
 
 def _is_grouped_scalar_annotation(annotation: object) -> bool:
     """Return whether GroupManager can project the annotation as one scalar."""
-    while get_origin(annotation) in {Union, UnionType}:
+    while get_origin(annotation) in {Annotated, Union, UnionType}:
+        if get_origin(annotation) is Annotated:
+            annotation = get_args(annotation)[0]
+            continue
         members = [
             member for member in get_args(annotation) if member is not type(None)
         ]

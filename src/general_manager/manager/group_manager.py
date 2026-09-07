@@ -87,7 +87,26 @@ def _group_value_type(field_type: object) -> type[object] | None:
     origin = get_origin(field_type)
     if isinstance(field_type, type):
         return field_type
-    return origin if isinstance(origin, type) else None
+    if isinstance(origin, type) and issubclass(
+        origin,
+        (
+            GeneralManager,
+            Bucket,
+            list,
+            dict,
+            str,
+            bool,
+            int,
+            float,
+            Decimal,
+            Measurement,
+            datetime,
+            date,
+            time,
+        ),
+    ):
+        return origin
+    return None
 
 
 def group_sum_value_type(field_type: object) -> type[object] | None:

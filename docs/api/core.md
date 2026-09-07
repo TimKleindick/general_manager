@@ -291,7 +291,8 @@ access first returns group-by key values, then lazily aggregates values from the
 group's underlying bucket and caches the result. Cached aggregates are not
 invalidated if the underlying bucket or group-key mapping is mutated later; they
 are stored in the private `_grouped_data` dictionary under the requested
-attribute name.
+attribute name. Unsupported parameterized containers, such as `tuple[str, ...]`
+and `set[str]`, raise `MissingGroupAttributeError` without caching a result.
 Iteration yields keys from `manager_class.Interface.get_attributes()` first in
 that mapping's order, then `GraphQLProperty` values declared directly on the
 manager class in class-`__dict__` order; duplicate names are not filtered.
