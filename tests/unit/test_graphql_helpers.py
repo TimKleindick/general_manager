@@ -699,6 +699,7 @@ class GraphQLHelperTests(SimpleTestCase):
             "_query_fields": GraphQL._query_fields,
             "_subscription_fields": GraphQL._subscription_fields,
             "_page_type_registry": GraphQL._page_type_registry,
+            "_group_type_registry": GraphQL._group_type_registry,
             "_group_page_type_registry": GraphQL._group_page_type_registry,
             "_subscription_payload_registry": GraphQL._subscription_payload_registry,
             "graphql_type_registry": GraphQL.graphql_type_registry,
@@ -714,7 +715,8 @@ class GraphQLHelperTests(SimpleTestCase):
             GraphQL._query_fields = {"name": field}
             GraphQL._subscription_fields = {"sub": field}
             GraphQL._page_type_registry = {"page": object_type}
-            GraphQL._group_page_type_registry = {"groupPage": object_type}
+            GraphQL._group_type_registry = {"manager": object_type}
+            GraphQL._group_page_type_registry = {"group_page": object_type}
             GraphQL._subscription_payload_registry = {"payload": object_type}
             GraphQL.graphql_type_registry = {"manager": object_type}
             GraphQL.graphql_output_type_registry = {"output": object_type}
@@ -731,10 +733,8 @@ class GraphQLHelperTests(SimpleTestCase):
                 (snapshot.query_fields, GraphQL._query_fields),
                 (snapshot.subscription_fields, GraphQL._subscription_fields),
                 (snapshot.page_type_registry, GraphQL._page_type_registry),
-                (
-                    snapshot.group_page_type_registry,
-                    GraphQL._group_page_type_registry,
-                ),
+                (snapshot.group_type_registry, GraphQL._group_type_registry),
+                (snapshot.group_page_type_registry, GraphQL._group_page_type_registry),
                 (
                     snapshot.subscription_payload_registry,
                     GraphQL._subscription_payload_registry,
@@ -766,6 +766,7 @@ class GraphQLHelperTests(SimpleTestCase):
             GraphQL._query_fields = original_values["_query_fields"]
             GraphQL._subscription_fields = original_values["_subscription_fields"]
             GraphQL._page_type_registry = original_values["_page_type_registry"]
+            GraphQL._group_type_registry = original_values["_group_type_registry"]
             GraphQL._group_page_type_registry = original_values[
                 "_group_page_type_registry"
             ]
