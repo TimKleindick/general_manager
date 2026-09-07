@@ -219,27 +219,55 @@ class GraphQLHelperTests(SimpleTestCase):
 
         permission.assert_not_called()
 
-    def test_normal_subscription_resolver_runs_permission_in_worker(self) -> None:
-        parent = SimpleNamespace(
-            name="Visible",
-            _ensure_as_of_compatible=lambda: None,
-        )
+    def test_normal_subscription_resolver_runs_permission_and_value_in_worker(
+        self,
+    ) -> None:
+        calls = []
+
+        class Parent:
+            def _ensure_as_of_compatible(self) -> None:
+                pass
+
+            @property
+            def name(self) -> str:
+                with pytest.raises(RuntimeError, match="no running event loop"):
+                    asyncio.get_running_loop()
+                calls.append("value")
+                return "Visible"
+
         resolver = create_normal_resolver("name")
 
         def permission(*_args: object) -> bool:
             with pytest.raises(RuntimeError, match="no running event loop"):
                 asyncio.get_running_loop()
+            calls.append("permission")
             return True
 
         async def resolve() -> object:
-            value = resolver(parent, _resolver_info(OperationType.SUBSCRIPTION))
-            return await value
+            return await resolver(Parent(), _resolver_info(OperationType.SUBSCRIPTION))
 
         with mock.patch(
             "general_manager.api.graphql_resolvers.check_read_permission_for_user",
             side_effect=permission,
         ):
             assert asyncio.run(resolve()) == "Visible"
+        assert calls == ["permission", "value"]
+
+    def test_subscription_denied_field_is_not_evaluated(self) -> None:
+        parent = mock.Mock()
+        value = mock.PropertyMock(side_effect=AssertionError("denied field was read"))
+        type(parent).name = value
+        resolver = create_normal_resolver("name")
+
+        async def resolve() -> object:
+            return await resolver(parent, _resolver_info(OperationType.SUBSCRIPTION))
+
+        with mock.patch(
+            "general_manager.api.graphql_resolvers.check_read_permission_for_user",
+            return_value=False,
+        ):
+            assert asyncio.run(resolve()) is None
+        value.assert_not_called()
 
     def test_measurement_subscription_resolver_runs_permission_in_worker(self) -> None:
         parent = SimpleNamespace(
