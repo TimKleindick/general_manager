@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.79.5 (2026-09-07)
+
+### Bug Fixes
+
+- Resolve subscription field values off the event loop
+  ([`41eed93`](https://github.com/TimKleindick/general_manager/commit/41eed931a88247c5ec0f28650f2cfc502c18c3da))
+
+### Testing
+
+- Scope denied-field property mock to its assertion
+  ([`c950aea`](https://github.com/TimKleindick/general_manager/commit/c950aea8e4a06205691ee40e7d990844bda41ced))
+
+
 ## v0.79.4 (2026-09-07)
 
 ### Bug Fixes
