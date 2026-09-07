@@ -102,6 +102,10 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
                 return GroupingCommercial.all()
 
             @graph_ql_property(cache="none")
+            def secrets(self) -> Bucket[GroupingCommercial] | None:
+                return self.secret_list
+
+            @graph_ql_property(cache="none")
             def optional_secret_list(self) -> Bucket[GroupingCommercial] | None:
                 return None
 
@@ -480,6 +484,47 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
             [{"commercialList": {"items": [{"name": None}]}}],
         )
         self.assertIn("name", self.commercial.Permission.checks)
+
+    def test_bucket_property_without_list_suffix_has_explicit_grouped_pages(
+        self,
+    ) -> None:
+        self._create_shared_projects()
+        response = self.query(
+            """
+            query {
+              groupingProjectGroups(groupBy: ["name"]) {
+                items {
+                  secretsList { items { name } pageInfo { totalCount } }
+                  secretsGroups(groupBy: ["name"]) { items { name } }
+                }
+              }
+              ordinary: __type(name: "GroupingProjectType") {
+                fields { name type { name kind } }
+              }
+            }
+            """
+        )
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]
+        self.assertEqual(
+            payload["groupingProjectGroups"]["items"],
+            [
+                {
+                    "secretsList": {
+                        "items": [{"name": "Commercial"}],
+                        "pageInfo": {"totalCount": 1},
+                    },
+                    "secretsGroups": {"items": [{"name": "Commercial"}]},
+                }
+            ],
+        )
+        ordinary_fields = {
+            field["name"]: field["type"] for field in payload["ordinary"]["fields"]
+        }
+        self.assertEqual(
+            ordinary_fields["secrets"],
+            {"name": "GroupingCommercialType", "kind": "OBJECT"},
+        )
 
     def test_all_null_optional_property_page_does_not_fall_back_to_all_children(
         self,
