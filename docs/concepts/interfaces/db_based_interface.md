@@ -199,7 +199,7 @@ class Country(GeneralManager):
         name = CharField(max_length=50)
 ```
 
-On startup the interface synchronises `_data` with the table, creating,
+By default, on startup the interface synchronises `_data` with the table, creating,
 updating, or soft-deleting entries as needed (read-only interfaces force
 `Meta.use_soft_delete = True`). Managers expose read operations only; write
 attempts raise exceptions. Each row must include either a unique model field or
@@ -210,6 +210,32 @@ raises `MissingUniqueFieldError`, and missing unique values in a row raise
 or constraints, GeneralManager treats the union of those fields as one
 composite identity for synchronization, so every payload row must include every
 field in that union.
+
+To disable automatic read-only table synchronization in production, add this
+entry to your Django settings (merge it into any existing `GENERAL_MANAGER` dict):
+
+```python
+GENERAL_MANAGER = {
+    "READ_ONLY_SYNC_ON_STARTUP": False,
+}
+```
+
+The default is `True`. Disabling it skips read-only data synchronization during
+both management commands and server startup; existing table data is left intact.
+To synchronize a specific manager manually, run `python manage.py shell` and
+call its configured management capability:
+
+```python
+from your_app.managers import Country
+
+capability = Country.Interface.require_capability("read_only_management")
+capability.sync_data(Country.Interface)
+```
+
+This explicit call works even with automatic sync disabled and also synchronizes
+related read-only dependencies. It creates, updates, and soft-deletes rows to
+match `_data`. Re-enable the setting when you want startup to apply changes to
+`_data` automatically.
 
 `ReadOnlyInterface` itself is a capability shell. The parent manager owns
 `_data`; the nested interface owns the generated Django field declarations. The

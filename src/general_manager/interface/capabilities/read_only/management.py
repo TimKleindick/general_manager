@@ -32,6 +32,7 @@ from general_manager.interface.utils.errors import (
     ReadOnlyRelationLookupError,
 )
 from general_manager.logging import get_logger
+from general_manager.conf import get_setting
 
 from ..base import CapabilityName
 from ..builtin import BaseCapability
@@ -1155,6 +1156,9 @@ class ReadOnlyManagementCapability(BaseCapability):
         returned. The registered hook catches `MissingReadOnlyBindingError`
         only to tolerate binding metadata becoming unavailable between
         registration and startup execution; other sync errors propagate.
+        Automatic synchronization is skipped when `READ_ONLY_SYNC_ON_STARTUP`
+        is disabled in GeneralManager settings. Explicit `sync_data()` calls
+        remain available.
 
         Parameters:
             interface_cls: Interface class used to derive the bound manager and model.
@@ -1188,6 +1192,8 @@ class ReadOnlyManagementCapability(BaseCapability):
             binding is not available (raises MissingReadOnlyBindingError), logs a debug
             message and returns without raising.
             """
+            if not get_setting("READ_ONLY_SYNC_ON_STARTUP", True):
+                return
             try:
                 self.sync_data(interface_cls)
             except MissingReadOnlyBindingError:

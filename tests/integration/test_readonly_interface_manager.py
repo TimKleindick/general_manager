@@ -284,6 +284,16 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
         self.Packaging.Interface._model.all_objects.all().delete()
         self.Packaging._data = list(self.Packaging._default_data)
 
+    @override_settings(GENERAL_MANAGER={"READ_ONLY_SYNC_ON_STARTUP": False})
+    def test_manual_sync_with_automatic_sync_disabled(self):
+        run_registered_startup_hooks(interfaces=[self.Size.Interface])
+        self.assertEqual(self.Size.Interface._model.objects.count(), 0)
+
+        capability = self.Size.Interface.require_capability("read_only_management")
+        capability.sync_data(self.Size.Interface)
+
+        self.assertEqual(self.Size.Interface._model.objects.count(), 3)
+
     def test_foreign_key_lookup_resolves_unique_match(self):
         capability = self.Size.Interface.require_capability(
             "read_only_management",
