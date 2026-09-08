@@ -213,18 +213,22 @@ effective resolver contract is:
   stored-file payload. Measurement conversion and stored-file formatting keep
   their existing behavior.
 - **Denied result:** `null` for that nullable payload field only; sibling fields
-  and the subscription action remain available.
-- **Exceptions:** exceptions raised by the field permission checker propagate
-  through normal GraphQL subscription error handling. No new exception type or
-  error code is introduced.
+  and the subscription action remain available, without accessing the denied
+  field's value.
+- **Exceptions:** exceptions raised by the field permission checker, value
+  access, measurement conversion, or stored-file formatting propagate through
+  normal GraphQL subscription error handling. No new exception type or error
+  code is introduced.
 
-For subscription execution, the permission check runs in an async-safe worker;
-value access and formatting run in GraphQL's execution context after permission
-succeeds. Query and mutation field resolution remains synchronous. This
+For subscription execution, the permission check, value access, and formatting
+run together in an async-safe worker after the event-level object check. This
+allows lazy ORM reads such as uncached foreign keys to other GeneralManagers to
+complete safely. Query and mutation field resolution remains synchronous. This
 behavior is compatible with the existing object-level class-subscription check,
 which runs before an identified event is yielded, and with aggregate `refresh`
-events, whose `item` remains `null`. The generated schema is unchanged; the
-async-safe field authorization behavior is available from GeneralManager 0.73.1.
+events, whose `item` remains `null`. The generated schema is unchanged. The
+async-safe field authorization behavior was introduced in GeneralManager
+0.73.1; subscription value access and formatting joined that worker in 0.79.5.
 See the [subscription concept](../concepts/graphql/subscriptions.md#signals-and-channels),
 [how-to](../howto/expose_via_graphql.md#protect-subscription-payload-fields), and
 [cookbook recipe](../examples/graphql_queries.md#subscribe-to-fields-with-read-permissions).

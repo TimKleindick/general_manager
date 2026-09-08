@@ -425,10 +425,12 @@ With a subscription such as the one in the
 [field-permission recipe](../examples/graphql_queries.md#subscribe-to-fields-with-read-permissions),
 an authenticated non-staff user receives `name` and `internalNote: null`.
 The denial is limited to that field; sibling fields and the event action still
-resolve. Permission evaluation for subscription fields runs in an async-safe
-worker, while value access, measurement conversion, and stored-file formatting
-remain in GraphQL's execution context. Query and mutation field resolution stays
-synchronous. See the [subscription concept](../concepts/graphql/subscriptions.md#signals-and-channels)
+resolve, and the denied field's value is not accessed. Permission evaluation,
+value access, measurement conversion, and stored-file formatting for allowed
+subscription fields run together in an async-safe worker. This also keeps
+uncached foreign-key values to other GeneralManagers safe to load in the
+subscription worker. Query and mutation field resolution stays synchronous. See
+the [subscription concept](../concepts/graphql/subscriptions.md#signals-and-channels)
 and [GraphQL API reference](../api/graphql.md#subscription-field-authorization)
 for the full compatibility and error contract.
 
