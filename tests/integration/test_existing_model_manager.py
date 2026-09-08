@@ -17,6 +17,8 @@ from general_manager.interface import ExistingModelInterface
 from general_manager.interface.capabilities.orm.mutations import (
     OrmMutationCapability,
 )
+from general_manager.interface.capabilities.orm.support import get_support_capability
+from general_manager.interface.capabilities.orm_utils.update_state import track_update
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import AttributeEvaluationError
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
@@ -610,6 +612,84 @@ class ExistingModelMultiDatabaseIntegrationTest(GeneralManagerTransactionTestCas
 
         if cleanup_error is not None:
             raise cleanup_error
+
+    def test_noop_update_compares_row_and_relations_on_configured_alias(self) -> None:
+        first = self.MultiDatabaseOwnerManager.create(
+            name="First", ignore_permission=True
+        )
+        second = self.MultiDatabaseOwnerManager.create(
+            name="Second", ignore_permission=True
+        )
+        record = self.MultiDatabaseManager.create(
+            name="Stable", owners=[first], ignore_permission=True
+        )
+        history = self.MultiDatabaseRecord.history.using("secondary").filter(
+            id=record.id
+        )
+        count = history.count()
+        with self.assertNumQueries(0, using="default"):
+            record.update(name="Stable", owners=[first, first], ignore_permission=True)
+        self.assertEqual(history.count(), count)
+        with self.assertNumQueries(0, using="default"):
+            record.update(owners=[second], ignore_permission=True)
+        self.assertGreater(history.count(), count)
+        self.assertEqual(
+            list(
+                self.MultiDatabaseRecord.objects.using("secondary")
+                .get(pk=record.id)
+                .owners.values_list("pk", flat=True)
+            ),
+            [second.id],
+        )
+
+    def test_split_routing_does_not_use_reader_state_to_skip_writer_changes(
+        self,
+    ) -> None:
+        for alias, name in (("default", "Desired"), ("secondary", "Outdated")):
+            self.MultiDatabaseRecord.objects.using(alias).bulk_create(
+                [self.MultiDatabaseRecord(id=1, name=name)]
+            )
+            self.MultiDatabaseOwner.objects.using(alias).bulk_create(
+                [self.MultiDatabaseOwner(id=1, name="Owner")]
+            )
+        instance = self.MultiDatabaseRecord.objects.using("default").get(pk=1)
+        instance.owners.add(1)
+        interface = self.MultiDatabaseManager.Interface
+        mutation = OrmMutationCapability()
+        support = get_support_capability(interface)
+        with (
+            patch("django.db.router.db_for_write", return_value="secondary"),
+            patch.object(support, "get_database_alias", return_value=None),
+            track_update(instance, {"name": "Desired"}, {}, None),
+        ):
+            mutation.save_with_history(
+                interface, instance, creator_id=None, history_comment=None
+            )
+        self.assertEqual(
+            self.MultiDatabaseRecord.objects.using("secondary").get(pk=1).name,
+            "Desired",
+        )
+        # Keep the source on the reader to exercise relation routing separately.
+        instance = self.MultiDatabaseRecord.objects.using("default").get(pk=1)
+        with (
+            patch("django.db.router.db_for_write", return_value="secondary"),
+            # Reader/writer aliases represent the same logical database.
+            patch("django.db.router.allow_relation", return_value=True),
+        ):
+            mutation.apply_many_to_many(
+                interface,
+                instance,
+                many_to_many_kwargs={"owners_id_list": [1]},
+                history_comment=None,
+            )
+        self.assertEqual(
+            list(
+                self.MultiDatabaseRecord.objects.using("secondary")
+                .get(pk=1)
+                .owners.values_list("pk", flat=True)
+            ),
+            [1],
+        )
 
     def test_create_keeps_history_reason_and_rollback_on_configured_alias(
         self,

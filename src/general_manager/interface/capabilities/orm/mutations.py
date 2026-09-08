@@ -17,6 +17,11 @@ from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
     PayloadNormalizer,
 )
+from general_manager.interface.capabilities.orm_utils.update_state import (
+    changed_many_to_many,
+    is_unchanged_update,
+    track_update,
+)
 from general_manager.interface.utils.database_interface_protocols import (
     SupportsActivation,
 )
@@ -157,6 +162,9 @@ class OrmMutationCapability(BaseCapability):
 
         Performs the save inside an atomic transaction using the interface's configured database alias when available, sets `changed_by_id` on the instance if the attribute exists, runs model validation, and attaches a change reason after a successful save when `history_comment` is provided.
 
+        During an ordinary update, unchanged validated data and relationship
+        memberships skip the save unless a history comment was requested.
+
         Parameters:
             interface_cls (type[OrmInterfaceBase]): The interface class used to resolve support capabilities and configuration.
             instance (models.Model): The Django model instance to validate and save.
@@ -205,6 +213,8 @@ class OrmMutationCapability(BaseCapability):
                 if model_has_field(instance, "changed_by"):
                     object.__setattr__(instance, "changed_by_id", creator_id)
                 instance.full_clean()
+                if is_unchanged_update(instance):
+                    return instance.pk
                 if database_alias:
                     instance.save(using=database_alias)
                 else:
@@ -261,12 +271,15 @@ class OrmMutationCapability(BaseCapability):
 
             This sets each many-to-many relation on `instance` using entries from `many_to_many_kwargs`,
             where each key expectedly ends with the suffix `_id_list` and maps to the corresponding
-            relation name after removing that suffix.
+            relation name after removing that suffix. Unchanged memberships are
+            skipped to avoid redundant history from many-to-many signals.
 
             Returns:
                 models.Model: The same `instance` after its many-to-many relations have been updated.
             """
-            for key, value in many_to_many_kwargs.items():
+            for key, value in changed_many_to_many(
+                instance, many_to_many_kwargs
+            ).items():
                 field_name = key.removesuffix("_id_list")
                 getattr(instance, field_name).set(value)
             return instance
@@ -539,19 +552,27 @@ class OrmUpdateCapability(BaseCapability):
                 discard_orm_instance_cache(interface_instance.__class__, result["id"])
                 return result
             instance = manager.get(pk=interface_instance.pk)
-            instance = mutation.assign_simple_attributes(
-                interface_instance.__class__, instance, normalized_simple
-            )
             database_alias = support.get_database_alias(interface_instance.__class__)
             atomic_context = _mutation_atomic(database_alias)
             with atomic_context:
-                with _without_save_with_history_savepoint():
-                    pk = mutation.save_with_history(
-                        interface_instance.__class__,
-                        instance,
-                        creator_id=creator_id,
-                        history_comment=history_comment,
+                changed_many = changed_many_to_many(instance, normalized_many)
+                with track_update(
+                    instance,
+                    normalized_simple,
+                    changed_many,
+                    history_comment,
+                    database_alias=database_alias,
+                ):
+                    instance = mutation.assign_simple_attributes(
+                        interface_instance.__class__, instance, normalized_simple
                     )
+                    with _without_save_with_history_savepoint():
+                        pk = mutation.save_with_history(
+                            interface_instance.__class__,
+                            instance,
+                            creator_id=creator_id,
+                            history_comment=history_comment,
+                        )
                 mutation.apply_many_to_many(
                     interface_instance.__class__,
                     instance,

@@ -700,11 +700,11 @@ and wraps assignment `TypeError` as `InvalidFieldTypeError`. `save_with_history(
 sets `_history_user` for simple-history when the model does not expose
 `changed_by`, sets `changed_by_id` when the model has that field, runs
 `full_clean()`, saves inside an atomic transaction using the interface database
-alias when configured, returns the saved primary key, and applies
+alias when configured, returns the primary key, and applies
 `history_comment` with simple-history after the save. `apply_many_to_many()`
 expects normalized `<relation>_id_list` entries, strips the suffix to find the
-relation manager, calls `.set(values)`, and applies the history comment again
-after relation updates.
+relation manager, calls `.set(values)` only for changed memberships, and applies
+the history comment again after relation updates.
 
 `OrmCreateCapability.create(interface_cls, **payload)` is the capability-level
 implementation behind manager creation. Positional arguments are accepted only
@@ -729,6 +729,21 @@ it. After rollback, callers should reconstruct any in-place-updated manager from
 its ID. The
 GeneralManager layer consumes that result, refreshes the public manager state,
 and returns the same manager instance from `manager.update(...)`.
+
+For ordinary updates using the base mutation helper, the original concrete
+field values are compared after `full_clean()`. Equal field values and equal
+requested relation sets skip the row save and history insertion. Empty updates
+and implicit actor changes alone are no-ops; a nonempty `history_comment`
+forces an audit entry. Validation and cache invalidation still run. JSON
+comparison preserves value types but ignores dictionary order; measurement
+comparison uses both backing columns. Relationship comparisons use stored
+target keys on the relationship's write database and ignore ordering and
+duplicates. If a row was loaded from a different database than its intended
+writer, the row save is retained because the read copy is not authoritative.
+Uncommitted files and custom writable attributes keep the normal save path.
+Upload-candidate writes keep their dedicated transaction and finalization path.
+The save override signature is unchanged; custom capabilities replacing the
+base save helper remain responsible for their own persistence behavior.
 
 `OrmDeleteCapability.delete()` loads the row with inactive rows included and
 ignores positional arguments. It accepts only the reserved metadata keys

@@ -71,6 +71,20 @@ assert material.description == "Updated description"
 latest_entry = material.history.order_by("-history_date").first()
 ```
 
+Ordinary ORM updates compare the validated data with the stored row. If the
+concrete fields and requested many-to-many memberships are unchanged, the
+update skips the row save and creates no history entry. Empty updates and
+changes to `creator_id` alone also leave the row, audit actor, and automatic
+timestamps unchanged. Permissions and model validation still run; changes made
+by `clean()` are saved. Foreign keys compare their stored identifiers, and
+many-to-many comparisons ignore ordering and duplicate identifiers.
+
+A nonempty `history_comment` explicitly requests a new audit entry, even when
+the field values are identical. Measurement fields compare their backing value
+and unit columns. New file uploads and custom writable attributes retain their
+normal save behavior. Custom mutation capabilities that replace the base save
+implementation control their own persistence behavior.
+
 Unknown write payload keys raise `UnknownFieldError`. Assignments that Django
 rejects with `ValueError` are reported as `InvalidFieldValueError`; assignments
 that raise `TypeError` are reported as `InvalidFieldTypeError`. Loading a missing
