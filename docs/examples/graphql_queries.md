@@ -231,7 +231,11 @@ subscription ProjectChangesWithFieldRules {
 
 For an authenticated non-staff subscriber, `internalNote` resolves to `null`
 while `name` and the event action remain available. The same rule applies to
-normal, measurement, and stored-file payload fields. See the
+normal, measurement, and stored-file payload fields; a denied field is not
+accessed. For an allowed subscription field, permission evaluation, lazy value
+access, measurement conversion, and stored-file formatting run together in an
+async-safe worker, so uncached foreign-key values to other GeneralManagers are
+safe to resolve. Query and mutation field resolution remains synchronous. See the
 [GraphQL how-to](../howto/expose_via_graphql.md#protect-subscription-payload-fields)
 and [API reference](../api/graphql.md#subscription-field-authorization) for
 execution and exception details.
