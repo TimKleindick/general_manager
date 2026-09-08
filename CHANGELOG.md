@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.80.0 (2026-09-08)
+
+### Features
+
+- Make read-only startup synchronization optional
+  ([`3975b3c`](https://github.com/TimKleindick/general_manager/commit/3975b3c85873616afab5c20f092b74217ce9509c))
+
+### Testing
+
+- Use pytest for read-only sync setting coverage
+  ([`49850ec`](https://github.com/TimKleindick/general_manager/commit/49850eca6f2874f4df91af450f57a10766f84ad9))
+
+
 ## v0.79.6 (2026-09-08)
 
 ### Bug Fixes
