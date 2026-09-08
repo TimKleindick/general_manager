@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.79.6 (2026-09-08)
+
+### Bug Fixes
+
+- **orm**: Skip history for unchanged updates
+  ([`6639e4c`](https://github.com/TimKleindick/general_manager/commit/6639e4c86210a89b8876b2ed1a0ea131451c71ca))
+
+
 ## v0.79.5 (2026-09-07)
 
 ### Bug Fixes
