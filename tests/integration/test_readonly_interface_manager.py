@@ -1,3 +1,5 @@
+import pytest
+
 from contextlib import suppress
 
 from django.db import connections, models, transaction as django_transaction
@@ -283,16 +285,6 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
         self.Size.Interface._model.all_objects.all().delete()
         self.Packaging.Interface._model.all_objects.all().delete()
         self.Packaging._data = list(self.Packaging._default_data)
-
-    @override_settings(GENERAL_MANAGER={"READ_ONLY_SYNC_ON_STARTUP": False})
-    def test_manual_sync_with_automatic_sync_disabled(self):
-        run_registered_startup_hooks(interfaces=[self.Size.Interface])
-        self.assertEqual(self.Size.Interface._model.objects.count(), 0)
-
-        capability = self.Size.Interface.require_capability("read_only_management")
-        capability.sync_data(self.Size.Interface)
-
-        self.assertEqual(self.Size.Interface._model.objects.count(), 3)
 
     def test_foreign_key_lookup_resolves_unique_match(self):
         capability = self.Size.Interface.require_capability(
@@ -1167,3 +1159,26 @@ class ReadOnlySecondaryDatabaseRoutingTests(GeneralManagerTransactionTestCase):
             .get(sku="SECONDARY")
         )
         assert product.category.label == "secondary category"
+
+
+@pytest.fixture
+def read_only_size_manager(django_db_setup, django_db_blocker):
+    """Let the dynamic-model harness own database guards and schema cleanup."""
+    with django_db_blocker.unblock():
+        ReadOnlyRelationLookupTests.setUpClass()
+        try:
+            yield ReadOnlyRelationLookupTests.Size
+        finally:
+            ReadOnlyRelationLookupTests.tearDownClass()
+
+
+def test_manual_sync_with_automatic_sync_disabled(settings, read_only_size_manager):
+    settings.GENERAL_MANAGER = {"READ_ONLY_SYNC_ON_STARTUP": False}
+    interface = read_only_size_manager.Interface
+    run_registered_startup_hooks(interfaces=[interface])
+    assert interface._model.objects.count() == 0
+
+    capability = interface.require_capability("read_only_management")
+    capability.sync_data(interface)
+
+    assert interface._model.objects.count() == 3

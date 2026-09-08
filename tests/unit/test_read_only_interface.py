@@ -1,4 +1,6 @@
 # type: ignore
+import pytest
+
 from types import SimpleNamespace
 from typing import ClassVar
 from django.test import SimpleTestCase, TestCase
@@ -1281,31 +1283,36 @@ class SystemCheckHookTests(SimpleTestCase):
         self.assertEqual(results, [[Warning("warn", obj=None)]])
 
 
+@pytest.mark.parametrize(
+    ("config", "enabled"),
+    [
+        ({}, True),
+        ({"READ_ONLY_SYNC_ON_STARTUP": True}, True),
+        ({"READ_ONLY_SYNC_ON_STARTUP": False}, False),
+    ],
+    ids=["default", "enabled", "disabled"],
+)
+def test_startup_sync_setting(settings, config, enabled):
+    """Evaluate the setting at execution time, preserving the enabled default."""
+
+    class ReadyInterface(ReadOnlyInterface):
+        pass
+
+    ReadyInterface._parent_class = DummyManager
+    ReadyInterface._model = DummyModel
+    capability = ReadOnlyManagementCapability()
+    (hook,) = capability.get_startup_hooks(ReadyInterface)
+
+    settings.GENERAL_MANAGER = config
+    with mock.patch.object(capability, "sync_data") as sync:
+        hook()
+    if enabled:
+        sync.assert_called_once_with(ReadyInterface)
+    else:
+        sync.assert_not_called()
+
+
 class ReadOnlyStartupHookTests(SimpleTestCase):
-    def test_startup_sync_setting(self):
-        """Evaluate the setting at execution time, preserving the enabled default."""
-
-        class ReadyInterface(ReadOnlyInterface):
-            pass
-
-        ReadyInterface._parent_class = DummyManager
-        ReadyInterface._model = DummyModel
-        capability = ReadOnlyManagementCapability()
-        (hook,) = capability.get_startup_hooks(ReadyInterface)
-
-        for config, enabled in [
-            ({}, True),
-            ({"READ_ONLY_SYNC_ON_STARTUP": True}, True),
-            ({"READ_ONLY_SYNC_ON_STARTUP": False}, False),
-        ]:
-            with self.subTest(config=config), self.settings(GENERAL_MANAGER=config):
-                with mock.patch.object(capability, "sync_data") as sync:
-                    hook()
-                if enabled:
-                    sync.assert_called_once_with(ReadyInterface)
-                else:
-                    sync.assert_not_called()
-
     def test_hook_not_registered_without_metadata(self):
         """
         Ensure get_startup_hooks returns no hooks when the interface lacks required metadata.

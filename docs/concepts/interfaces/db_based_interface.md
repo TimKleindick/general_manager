@@ -199,7 +199,7 @@ class Country(GeneralManager):
         name = CharField(max_length=50)
 ```
 
-By default, on startup the interface synchronises `_data` with the table, creating,
+By default, on startup the interface synchronizes `_data` with the table, creating,
 updating, or soft-deleting entries as needed (read-only interfaces force
 `Meta.use_soft_delete = True`). Managers expose read operations only; write
 attempts raise exceptions. Each row must include either a unique model field or
@@ -260,7 +260,7 @@ propagate its error; zero or multiple relation matches raise
 
 Read-only `_data` can reference other read-only models. Foreign-key and
 one-to-one values may be lookup dictionaries, including nested dictionaries
-that are flattened into Django-style `__` lookups during synchronisation:
+that are flattened into Django-style `__` lookups during synchronization:
 
 ```python
 class City(GeneralManager):
