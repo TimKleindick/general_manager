@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, cast
 
 import graphene
-from graphql import GraphQLError
+from graphql import GraphQLError, Undefined
 
 from django.db.models import NOT_PROVIDED
 from django.db import models
@@ -309,7 +309,8 @@ def create_write_fields(
             the input fields.
         require_fields: Whether generated fields should mirror interface
             requiredness. Create/delete helper calls use the default ``True``;
-            update mutations set this to ``False`` to support partial updates.
+            update mutations set this to ``False`` to support partial updates
+            and omit model defaults from their GraphQL arguments.
 
     Returns:
         Mapping from attribute name to a Graphene input field instance. Returned
@@ -333,7 +334,9 @@ def create_write_fields(
 
         typ = info["type"]
         req = info["is_required"] if require_fields else False
-        default = info["default"]
+        # GraphQL injects argument defaults before the resolver sees the payload.
+        # Partial updates must preserve omission, including defaults of None.
+        default = info["default"] if require_fields else Undefined
 
         fld: object
         if info.get("orm_field_kind") in {"file", "image"}:

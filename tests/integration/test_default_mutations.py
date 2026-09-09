@@ -309,6 +309,8 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=100)
                 number = IntegerField(null=True, blank=True, editable=False)
+                score = IntegerField(default=7, null=True, blank=True)
+                optional_score = IntegerField(default=None, null=True, blank=True)
                 budget = MeasurementField(
                     base_unit="EUR",
                 )
@@ -339,6 +341,8 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         self.project = self.TestProject.create(
             name="Initial Project",
             number=1,
+            score=42,
+            optional_score=9,
             budget="1000 EUR",
             creator_id=self.user.id,
         )
@@ -399,6 +403,49 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
     def _latest_history_user(self, manager):
         history = manager.history.order_by("-history_date").first()
         return history.history_user
+
+    def test_create_still_uses_model_defaults(self):
+        response = self.query(
+            'mutation { createTestProject(name: "Defaults", budget: "100 EUR") '
+            "{ success TestProject { id } } }"
+        )
+        self.assertResponseNoErrors(response)
+        project_id = response.json()["data"]["createTestProject"]["TestProject"]["id"]
+        stored = self.TestProject.Interface._model.objects.get(pk=project_id)
+        self.assertEqual(stored.score, 7)
+        self.assertIsNone(stored.optional_score)
+
+    def test_update_preserves_omitted_model_default(self):
+        mutations = [
+            'mutation { updateTestProject(id: %s, name: "Renamed") { success } }',
+            "mutation($score: Int) { updateTestProject(id: %s, score: $score) { success } }",
+        ]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                response = self.query(mutation % self.project.id, variables={})
+                self.assertResponseNoErrors(response)
+                stored = self.TestProject.Interface._model.objects.get(
+                    pk=self.project.id
+                )
+                self.assertEqual(stored.score, 42)
+                self.assertEqual(stored.optional_score, 9)
+
+    def test_update_accepts_explicit_null_and_default_values(self):
+        mutation = """
+            mutation($id: Int!, $score: Int) {
+                updateTestProject(id: $id, score: $score) { success }
+            }
+        """
+        for value in (None, 0, 7):
+            with self.subTest(value=value):
+                response = self.query(
+                    mutation, variables={"id": self.project.id, "score": value}
+                )
+                self.assertResponseNoErrors(response)
+                stored = self.TestProject.Interface._model.objects.get(
+                    pk=self.project.id
+                )
+                self.assertEqual(stored.score, value)
 
     def test_update_project(self):
         """
