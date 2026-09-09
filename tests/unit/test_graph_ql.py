@@ -87,6 +87,7 @@ from graphql import (
     GraphQLScalarType,
     GraphQLSchema,
     GraphQLString,
+    Undefined,
     parse,
     specified_directives,
 )
@@ -4413,9 +4414,9 @@ class TestGrapQlMutation(TestCase):
         self.assertFalse(
             mutation_class._meta.arguments["field1"].kwargs.get("required", False)
         )
-        self.assertEqual(
+        self.assertIs(
             mutation_class._meta.arguments["field1"].kwargs["default_value"],
-            "test123",
+            Undefined,
         )
         self.assertIn("success", mutation_class._meta.fields)
         self.assertIn("instance", mutation_class._meta.fields)

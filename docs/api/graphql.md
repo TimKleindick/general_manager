@@ -568,6 +568,11 @@ it registers create/update/delete mutations only for operations supported by the
 manager interface through an overridden base method or an advertised capability.
 Mutation factory results of `None` are skipped.
 
+Generated update mutations change only explicitly supplied fields. Omitted
+arguments (including omitted variables) preserve stored values, even when the
+model field has a default. Explicit `null` is still passed through and must be
+valid for the field. Create mutations continue to use model defaults.
+
 Filter helper inputs are mapping-shaped lookup objects or JSON object strings;
 malformed JSON and decoded non-object JSON normalize to empty filters. Search
 filter helpers additionally accept the list-of-filter-object form used by search
