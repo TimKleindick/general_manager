@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.80.1 (2026-09-09)
+
+### Bug Fixes
+
+- Preserve omitted fields in GraphQL update mutations
+  ([`4e9f73b`](https://github.com/TimKleindick/general_manager/commit/4e9f73bbe9b70ce8008c25141444c09214c5c5e2))
+
+
 ## v0.80.0 (2026-09-08)
 
 ### Features
