@@ -1,6 +1,8 @@
 """Context manager utilities for tracking cache dependencies per thread."""
 
-from collections.abc import Collection, Iterable
+from __future__ import annotations
+
+from collections.abc import Iterable
 import threading
 from types import TracebackType
 
@@ -8,6 +10,12 @@ from general_manager.cache.dependency_index import (
     Dependency,
     filter_type,
     general_manager_name,
+)
+from general_manager.cache._dependency_graph import (
+    DependencyCapture,
+    DependencySnapshot,
+    materialize_dependencies,
+    snapshot_from_dependencies,
 )
 
 _SUPPORTED_OPERATIONS: frozenset[filter_type] = frozenset(
@@ -35,13 +43,19 @@ class _TrackedDependencySet(set[Dependency]):
     """Dependency set returned by DependencyTracker for framework-captured deps."""
 
 
+class _CapturedDependencySet(_TrackedDependencySet):
+    """Private materialization of a trusted immutable dependency graph."""
+
+
 class _DependencyStorage(threading.local):
     """Thread-local dependency tracking stack."""
 
     def __init__(self) -> None:
         """Initialize an inactive dependency stack for one thread."""
         self.dependencies: list[_TrackedDependencySet] = []
+        self.captures: list[DependencyCapture] = []
         self.depth = -1
+        self.generation = 0
         self.stack_version = 0
         self.last_dependency: Dependency | None = None
         self.last_dependency_stack_version = -1
@@ -50,8 +64,13 @@ class _DependencyStorage(threading.local):
 
     def reset(self) -> None:
         """Clear all active dependency scopes for the current thread."""
+        # Capture scopes retain direct references to their old parent builders.
+        # Detaching this stack therefore prevents later ordinary reads from
+        # reaching it while still allowing each scope to finalize its own result.
         self.dependencies.clear()
+        self.captures.clear()
         self.depth = -1
+        self.generation += 1
         self.stack_version += 1
         self.last_dependency = None
         self.last_dependency_stack_version = -1
@@ -62,12 +81,88 @@ class _DependencyStorage(threading.local):
 _dependency_storage = _DependencyStorage()
 
 
+def _clear_duplicate_state(storage: _DependencyStorage) -> None:
+    """Release duplicate-suppression references after the final scope exits."""
+    storage.last_dependency = None
+    storage.last_dependency_stack_version = -1
+    storage.seen_dependencies.clear()
+    storage.seen_dependencies_stack_version = -1
+
+
+class _DependencyCaptureScope:
+    """Private compact dependency capture for one decorated computation."""
+
+    def __init__(self) -> None:
+        self._capture: DependencyCapture | None = None
+        self._parent_capture: DependencyCapture | None = None
+        self._generation = -1
+        self.snapshot: DependencySnapshot | None = None
+
+    def __enter__(self) -> "_DependencyCaptureScope":
+        storage = _dependency_storage
+        self._generation = storage.generation
+        self.snapshot = None
+        capture = DependencyCapture()
+        self._capture = capture
+        self._parent_capture = storage.captures[-1] if storage.captures else None
+        storage.captures.append(capture)
+        storage.stack_version += 1
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        del exc_type, exc_val, exc_tb
+        storage = _dependency_storage
+        capture = self._capture
+        if capture is None:
+            return
+        parent_capture = self._parent_capture
+        self._capture = None
+        self._parent_capture = None
+        snapshot = capture.freeze()
+        self.snapshot = snapshot
+        if (
+            storage.generation == self._generation
+            and storage.captures
+            and storage.captures[-1] is capture
+        ):
+            storage.captures.pop()
+            storage.stack_version += 1
+            storage.last_dependency = None
+            storage.last_dependency_stack_version = -1
+            if not storage.dependencies and not storage.captures:
+                _clear_duplicate_state(storage)
+        if parent_capture is not None:
+            parent_capture.attach(snapshot)
+
+    def _record_argument_dependency(self, dependency: Dependency) -> bool:
+        """Record a decorator-derived argument after this scope was detached."""
+        capture = self._capture
+        storage = _dependency_storage
+        if capture is not None and (
+            storage.generation != self._generation
+            or not storage.captures
+            or storage.captures[-1] is not capture
+        ):
+            capture.add(dependency)
+            return True
+        return False
+
+
 class DependencyTracker:
     """Capture dependencies touched inside a read or cache-computation scope.
 
     Tracking is thread-local, not async task-local; same-thread async tasks share
     tracker state if their execution is interleaved inside one active context.
     """
+
+    def __init__(self) -> None:
+        """Create per-thread scope storage before the tracker can be shared."""
+        self._scope_storage = threading.local()
 
     def __enter__(
         self,
@@ -83,10 +178,18 @@ class DependencyTracker:
             remains a usable snapshot after the context exits; clearing
             thread-local storage does not mutate sets that were already returned.
         """
-        _dependency_storage.depth += 1
-        _dependency_storage.dependencies.append(_TrackedDependencySet())
-        _dependency_storage.stack_version += 1
-        return _dependency_storage.dependencies[_dependency_storage.depth]
+        storage = _dependency_storage
+        scope_storage = self._scope_storage
+        if not hasattr(scope_storage, "scopes"):
+            scope_storage.scopes = []
+        scopes: list[tuple[int, _TrackedDependencySet]] = scope_storage.scopes
+        generation = storage.generation
+        collector = _TrackedDependencySet()
+        scopes.append((generation, collector))
+        storage.dependencies.append(collector)
+        storage.depth = len(storage.dependencies) - 1
+        storage.stack_version += 1
+        return collector
 
     def __exit__(
         self,
@@ -107,16 +210,25 @@ class DependencyTracker:
         `reset_thread_local_storage()` or otherwise without an active context is
         a no-op.
         """
-        if _dependency_storage.depth < 0:
+        storage = _dependency_storage
+        scope_storage = getattr(self, "_scope_storage", None)
+        scopes = getattr(scope_storage, "scopes", None)
+        if not scopes:
             return
-        if _dependency_storage.depth == 0:
-            self.reset_thread_local_storage()
+        generation, collector = scopes.pop()
+        if (
+            generation != storage.generation
+            or not storage.dependencies
+            or storage.dependencies[-1] is not collector
+        ):
             return
-        _dependency_storage.dependencies.pop()
-        _dependency_storage.depth -= 1
-        _dependency_storage.stack_version += 1
-        _dependency_storage.last_dependency = None
-        _dependency_storage.last_dependency_stack_version = -1
+        storage.dependencies.pop()
+        storage.depth = len(storage.dependencies) - 1
+        storage.stack_version += 1
+        storage.last_dependency = None
+        storage.last_dependency_stack_version = -1
+        if not storage.dependencies and not storage.captures:
+            _clear_duplicate_state(storage)
 
     @staticmethod
     def track(
@@ -164,7 +276,7 @@ class DependencyTracker:
     ) -> None:
         """Record an already-validated dependency tuple in active collectors."""
         storage = _dependency_storage
-        if storage.depth < 0:
+        if not storage.dependencies and not storage.captures:
             return
         if storage.last_dependency_stack_version == storage.stack_version:
             last_dependency = storage.last_dependency
@@ -181,11 +293,10 @@ class DependencyTracker:
             storage.seen_dependencies_stack_version = storage.stack_version
         elif dependency in storage.seen_dependencies:
             return
-        if storage.depth == 0:
-            storage.dependencies[0].add(dependency)
-        else:
-            for dep_set in storage.dependencies:
-                dep_set.add(dependency)
+        for dep_set in storage.dependencies:
+            dep_set.add(dependency)
+        if storage.captures:
+            storage.captures[-1].add(dependency)
         storage.last_dependency = dependency
         storage.last_dependency_stack_version = storage.stack_version
         storage.seen_dependencies.add(dependency)
@@ -193,15 +304,42 @@ class DependencyTracker:
     @staticmethod
     def _track_many_validated(dependencies: Iterable[Dependency]) -> None:
         """Record already-validated dependency tuples in active collectors."""
-        if _dependency_storage.depth < 0:
+        storage = _dependency_storage
+        if not storage.dependencies and not storage.captures:
             return
-        reusable_dependencies: Collection[Dependency]
-        if isinstance(dependencies, Collection):
-            reusable_dependencies = dependencies
-        else:
-            reusable_dependencies = tuple(dependencies)
-        for dep_set in _dependency_storage.dependencies:
-            dep_set.update(reusable_dependencies)
+        if type(dependencies) in (tuple, frozenset):
+            if storage.dependencies:
+                for dep_set in storage.dependencies:
+                    dep_set.update(dependencies)
+            if storage.captures:
+                storage.captures[-1].attach(snapshot_from_dependencies(dependencies))
+            return
+        frozen_dependencies = tuple(dependencies)
+        for dep_set in storage.dependencies:
+            dep_set.update(frozen_dependencies)
+        if storage.captures:
+            storage.captures[-1].attach(snapshot_from_dependencies(frozen_dependencies))
+
+    @staticmethod
+    def _capture() -> _DependencyCaptureScope:
+        """Create a private graph capture scope for cache implementations."""
+        return _DependencyCaptureScope()
+
+    @staticmethod
+    def _attach_snapshot(snapshot: DependencySnapshot) -> None:
+        """Attach cached graph metadata without flattening private parents."""
+        storage = _dependency_storage
+        if storage.captures:
+            storage.captures[-1].attach(snapshot)
+        if storage.dependencies:
+            dependencies = materialize_dependencies(snapshot)
+            for dep_set in storage.dependencies:
+                dep_set.update(dependencies)
+
+    @staticmethod
+    def _materialize_snapshot(snapshot: DependencySnapshot) -> set[Dependency]:
+        """Expose one trusted mutable publication set for a snapshot boundary."""
+        return _CapturedDependencySet(materialize_dependencies(snapshot))
 
     @staticmethod
     def _dependencies_are_tracker_captured(dependencies: object) -> bool:
@@ -211,7 +349,7 @@ class DependencyTracker:
     @staticmethod
     def is_active() -> bool:
         """Return whether dependency tracking is active for this execution context."""
-        return _dependency_storage.depth >= 0
+        return bool(_dependency_storage.dependencies or _dependency_storage.captures)
 
     @staticmethod
     def reset_thread_local_storage() -> None:

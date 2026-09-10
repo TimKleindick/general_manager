@@ -158,13 +158,17 @@ class ModelDependencyCollector:
         Returns:
             None
         """
-        if args and isinstance(args[0], GeneralManager):
-            inner_self = args[0]
-            for attr_val in inner_self.__dict__.values():
-                for dependency_tuple in ModelDependencyCollector.collect(attr_val):
-                    dependencies.add(dependency_tuple)
+        for dependency in ModelDependencyCollector._iter_args(args, kwargs):
+            dependencies.add(dependency)
 
-        for dependency_tuple in ModelDependencyCollector.collect(args):
-            dependencies.add(dependency_tuple)
-        for dependency_tuple in ModelDependencyCollector.collect(kwargs):
-            dependencies.add(dependency_tuple)
+    @staticmethod
+    def _iter_args(
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> Iterator[Dependency]:
+        """Yield argument dependencies using the public ``add_args`` order."""
+        if args and isinstance(args[0], GeneralManager):
+            for attr_val in args[0].__dict__.values():
+                yield from ModelDependencyCollector.collect(attr_val)
+        yield from ModelDependencyCollector.collect(args)
+        yield from ModelDependencyCollector.collect(kwargs)

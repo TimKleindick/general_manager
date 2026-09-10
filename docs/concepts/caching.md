@@ -28,6 +28,19 @@ context is entered and the eventual context exit is a no-op. Tracking state is
 thread-local only, not async task-local, so interleaved async work on the same
 thread shares the active tracker state.
 
+Cached calculations use private immutable dependency snapshots. Each calculation
+records its own reads and references the snapshots of cached children. A run hit
+can therefore carry a broad set of dependencies into another cached calculation
+without copying or traversing that whole set. Dependency-cache publication
+materializes the complete set once. Explicit public tracker scopes remain live
+mutable sets, so replay into those scopes materializes dependencies immediately,
+including when callers have cleared or changed their sets.
+
+Run hits preserve the dependency snapshot from the original computation.
+Prewarming an inner run-cached call does not hide its reads or manager-argument
+dependencies from a later dependency-cached parent. Evicting and recomputing the
+child also leaves surviving parents' original dependency snapshots intact.
+
 CRUD methods (`create`, `update`, `delete`) emit invalidation signals. The dependency index compares the recorded dependencies against the before/after state of the changed manager and removes only the affected cache keys.
 During each `@data_change` mutation, GeneralManager opens a dependency-cache
 publish barrier before the mutation and closes it afterwards. Nested mutations
@@ -256,6 +269,12 @@ sparse later entries for each storage family are bounded deep samples, while
 ordinary admissions reuse their calibrated estimate. The estimate targets 5%
 accuracy for representative aggregates, not adversarial object graphs or RSS,
 and eviction keeps a 5% modeled reserve.
+
+The budget accounts for immutable dependency graphs separately from result
+payloads. Nodes and dependency blocks shared by retained run values and
+dependency-cache hits are charged once, with their bookkeeping overhead. A
+shared snapshot stays accounted for until its last retained entry or parent
+reference is released. With the budget disabled, this accounting is skipped.
 
 Read recency is inactive below pressure, where insertion order remains in
 effect. Near the cap it becomes a batched approximate LRU, avoiding global

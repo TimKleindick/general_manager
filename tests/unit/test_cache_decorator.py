@@ -7,6 +7,7 @@ from unittest import mock
 from general_manager.cache.cache_decorator import cached, DependencyTracker
 from general_manager.cache.dependency_cache import (
     DependencyCacheHit,
+    _trusted_dependency_cache_hit,
     dependency_cache_prefetch_value_bundle_key,
     make_dependency_cache_entry,
     make_dependency_cache_prefetch_value_bundle,
@@ -16,9 +17,13 @@ from general_manager.cache.dependency_index import (
     begin_dependency_data_change,
     end_dependency_data_change,
     invalidate_manager_cache,
+    invalidate_manager_cache_for_value_change,
+    record_dependencies,
+    serialize_dependency_identifier,
 )
 from general_manager.cache.dependency_publish import CachePublishAborted
 from general_manager.cache.run_context import CalculationRunContext
+from general_manager.cache.model_dependency_collector import ModelDependencyCollector
 from general_manager.api import as_of, current_as_of_date
 from general_manager.utils._make_cache_key import make_cache_key
 import pickle
@@ -1237,6 +1242,220 @@ class TestCacheDecoratorScopes(SimpleTestCase):
         self.assertEqual(sample(3), 6)
         self.assertEqual(calls, 2)
 
+    def test_run_hit_without_dependency_consumer_skips_leaf_materialization(self):
+        @cached(cache="run")
+        def source() -> int:
+            DependencyTracker.track("Project", "identification", "1")
+            return 1
+
+        with CalculationRunContext():
+            self.assertEqual(source(), 1)
+            with mock.patch(
+                "general_manager.cache.cache_tracker.materialize_dependencies",
+                side_effect=AssertionError("unconsumed run hit must stay compact"),
+            ):
+                self.assertEqual(source(), 1)
+
+    def test_caught_run_child_failure_replays_partial_dependencies(self):
+        @cached(cache="run")
+        def failing_child() -> None:
+            DependencyTracker.track("Project", "identification", "1")
+            raise RuntimeError("expected")
+
+        @cached(cache="run")
+        def parent() -> str:
+            try:
+                failing_child()
+            except RuntimeError:
+                return "fallback"
+            raise AssertionError
+
+        with CalculationRunContext():
+            self.assertEqual(parent(), "fallback")
+            with DependencyTracker() as dependencies:
+                self.assertEqual(parent(), "fallback")
+
+        self.assertEqual(dependencies, {("Project", "identification", "1")})
+
+    def test_argument_collection_error_retains_dependencies_yielded_before_error(self):
+        @cached(cache="run")
+        def child(argument: str) -> str:
+            return argument
+
+        @cached(cache="run")
+        def parent() -> str:
+            try:
+                child("child")
+            except ValueError:
+                return "fallback"
+            raise AssertionError
+
+        def failing_argument_iterator(args, kwargs):
+            del kwargs
+            if args:
+                yield ("Project", "identification", "before-error")
+                raise ValueError
+
+        with (
+            CalculationRunContext(),
+            mock.patch.object(
+                ModelDependencyCollector,
+                "_iter_args",
+                side_effect=failing_argument_iterator,
+            ),
+        ):
+            self.assertEqual(parent(), "fallback")
+            with DependencyTracker() as dependencies:
+                self.assertEqual(parent(), "fallback")
+
+        self.assertEqual(
+            dependencies,
+            {("Project", "identification", "before-error")},
+        )
+
+    def test_reset_keeps_automatic_manager_argument_dependencies(self):
+        class ArgumentManager:
+            def __init__(self, identification: dict[str, int]) -> None:
+                self.identification = identification
+                self._effective_search_date = None
+
+        manager = ArgumentManager({"id": 1})
+        expected_dependency = (
+            "ArgumentManager",
+            "identification",
+            serialize_dependency_identifier({"id": 1}),
+        )
+        for cache_scope in ("run", "dependency"):
+            with (
+                self.subTest(cache=cache_scope),
+                mock.patch(
+                    "general_manager.cache.model_dependency_collector.GeneralManager",
+                    new=ArgumentManager,
+                ),
+                mock.patch(
+                    "general_manager.utils._cache_key_encoder._general_manager_class",
+                    return_value=ArgumentManager,
+                ),
+            ):
+                cache.clear()
+                records: list[set[tuple[str, str, str]]] = []
+
+                def record_dependencies_for_test(_key, dependencies, records=records):
+                    records.append(set(dependencies))
+
+                @cached(cache=cache_scope, record_fn=record_dependencies_for_test)
+                def sample(argument: ArgumentManager) -> int:
+                    DependencyTracker.reset_thread_local_storage()
+                    DependencyTracker.track("Project", "identification", "ignored")
+                    return argument.identification["id"]
+
+                if cache_scope == "run":
+                    with CalculationRunContext():
+                        self.assertEqual(sample(manager), 1)
+                        with DependencyTracker() as observed_dependencies:
+                            self.assertEqual(sample(manager), 1)
+                    self.assertEqual(observed_dependencies, {expected_dependency})
+                else:
+                    self.assertEqual(sample(manager), 1)
+                    self.assertEqual(records, [{expected_dependency}])
+
+    def test_reset_argument_collection_error_keeps_detached_parent_dependencies(self):
+        @cached(cache="run")
+        def child(argument: str) -> str:
+            DependencyTracker.track("Project", "identification", "before-reset")
+            DependencyTracker.reset_thread_local_storage()
+            return argument
+
+        @cached(cache="run")
+        def parent() -> str:
+            try:
+                child("child")
+            except ValueError:
+                return "fallback"
+            raise AssertionError
+
+        def failing_argument_iterator(args, kwargs):
+            del kwargs
+            if args:
+                yield ("Project", "identification", "argument-prefix")
+                raise ValueError
+
+        with (
+            CalculationRunContext(),
+            mock.patch.object(
+                ModelDependencyCollector,
+                "_iter_args",
+                side_effect=failing_argument_iterator,
+            ),
+        ):
+            self.assertEqual(parent(), "fallback")
+            with DependencyTracker() as dependencies:
+                self.assertEqual(parent(), "fallback")
+
+        self.assertEqual(
+            dependencies,
+            {
+                ("Project", "identification", "before-reset"),
+                ("Project", "identification", "argument-prefix"),
+            },
+        )
+
+    def test_detached_arguments_do_not_leak_into_new_generation_trackers(self):
+        argument_dependency = ("Project", "identification", "argument")
+        fresh_dependency = ("Project", "identification", "fresh")
+        for cache_scope in ("run", "dependency"):
+            with self.subTest(cache=cache_scope):
+                cache.clear()
+                fresh_snapshots = []
+                fresh_public_sets = []
+                records = []
+
+                def argument_iterator(
+                    args,
+                    kwargs,
+                    fresh_public_sets=fresh_public_sets,
+                    fresh_snapshots=fresh_snapshots,
+                ):
+                    del args, kwargs
+                    with DependencyTracker._capture() as fresh_capture:
+                        with DependencyTracker() as fresh_public:
+                            DependencyTracker.track(*fresh_dependency)
+                            yield argument_dependency
+                        fresh_public_sets.append(fresh_public)
+                    fresh_snapshots.append(fresh_capture.snapshot)
+
+                def record_dependencies_for_test(_key, dependencies, records=records):
+                    records.append(set(dependencies))
+
+                @cached(cache=cache_scope, record_fn=record_dependencies_for_test)
+                def sample(argument):
+                    DependencyTracker.reset_thread_local_storage()
+                    return argument
+
+                with (
+                    CalculationRunContext(),
+                    mock.patch.object(
+                        ModelDependencyCollector,
+                        "_iter_args",
+                        side_effect=argument_iterator,
+                    ),
+                ):
+                    self.assertEqual(sample("value"), "value")
+                    if cache_scope == "run":
+                        with DependencyTracker() as observed_dependencies:
+                            self.assertEqual(sample("value"), "value")
+                        self.assertEqual(observed_dependencies, {argument_dependency})
+                    else:
+                        self.assertEqual(records, [{argument_dependency}])
+
+                self.assertEqual(fresh_public_sets, [{fresh_dependency}])
+                self.assertEqual(len(fresh_snapshots), 1)
+                self.assertIsNotNone(fresh_snapshots[0])
+                self.assertEqual(
+                    DependencyTracker._materialize_snapshot(fresh_snapshots[0]),
+                    {fresh_dependency},
+                )
+
     def test_timeout_cache_requires_timeout(self):
         with self.assertRaisesRegex(ValueError, 'cache="timeout" requires timeout'):
             cached(cache="timeout")
@@ -1354,6 +1573,151 @@ class TestCacheDecoratorScopes(SimpleTestCase):
         self.assertEqual(outer(), 3)
         self.assertEqual(inner_calls, 2)
         self.assertEqual(outer_calls, 2)
+
+    def test_manager_argument_invalidates_persistent_parent_cold_and_warm(self):
+        class ArgumentManager:
+            def __init__(self, identification: dict[str, int]) -> None:
+                self.identification = identification
+                self._effective_search_date = None
+
+        manager = ArgumentManager({"id": 1})
+        for prewarm in (False, True):
+            with (
+                self.subTest(prewarm=prewarm),
+                mock.patch(
+                    "general_manager.cache.model_dependency_collector.GeneralManager",
+                    new=ArgumentManager,
+                ),
+                mock.patch(
+                    "general_manager.utils._cache_key_encoder._general_manager_class",
+                    return_value=ArgumentManager,
+                ),
+            ):
+                cache.clear()
+                state = {"value": 2}
+                inner_calls = 0
+                parent_calls = 0
+                recorded_dependencies: list[set[tuple[str, str, str]]] = []
+
+                @cached(cache="run")
+                def inner(
+                    argument: ArgumentManager,
+                    state: dict[str, int] = state,
+                ) -> int:
+                    nonlocal inner_calls
+                    inner_calls += 1
+                    return state["value"] + argument.identification["id"]
+
+                def record_parent_dependencies(
+                    key,
+                    dependencies,
+                    recorded_dependencies=recorded_dependencies,
+                ):
+                    dependency_set = set(dependencies)
+                    recorded_dependencies.append(dependency_set)
+                    record_dependencies(key, dependency_set)
+
+                @cached(cache="dependency", record_fn=record_parent_dependencies)
+                def parent() -> int:
+                    nonlocal parent_calls
+                    parent_calls += 1
+                    return inner(manager)
+
+                with CalculationRunContext():
+                    if prewarm:
+                        self.assertEqual(inner(manager), 3)
+                    self.assertEqual(parent(), 3)
+
+                parent_key = make_cache_key(parent, (), {})
+                self.assertEqual(
+                    recorded_dependencies,
+                    [
+                        {
+                            (
+                                "ArgumentManager",
+                                "identification",
+                                serialize_dependency_identifier({"id": 1}),
+                            )
+                        }
+                    ],
+                )
+                self.assertIn(
+                    parent_key,
+                    invalidate_manager_cache_for_value_change(
+                        "ArgumentManager",
+                        None,
+                        None,
+                        identification={"id": 1},
+                    ),
+                )
+                state["value"] = 5
+                self.assertEqual(parent(), 6)
+                self.assertEqual(parent_calls, 2)
+                self.assertEqual(inner_calls, 2)
+
+    def test_persistent_parent_materializes_shared_prefetched_hit_once(self):
+        dependencies = frozenset(
+            {
+                (
+                    "Project",
+                    "identification",
+                    serialize_dependency_identifier({"id": 1}),
+                )
+            }
+        )
+        source_calls = 0
+        recorded_dependencies: list[set[tuple[str, str, str]]] = []
+
+        @cached(cache="dependency")
+        def source() -> int:
+            nonlocal source_calls
+            source_calls += 1
+            return 1
+
+        wrappers = []
+        for index in range(3):
+
+            @cached(cache="run")
+            def wrapper(index: int = index) -> int:
+                return source() + index
+
+            wrappers.append(wrapper)
+
+        @cached(
+            cache="dependency",
+            record_fn=lambda _key, captured: recorded_dependencies.append(
+                set(captured)
+            ),
+        )
+        def parent() -> int:
+            return sum(wrapper() for wrapper in wrappers)
+
+        hit = _trusted_dependency_cache_hit(1, dependencies)
+        source_key = make_cache_key(source, (), {})
+        from general_manager.cache import cache_tracker as tracker_module
+
+        original_materialize = tracker_module.materialize_dependencies
+        materializations = 0
+
+        def count_materializations(snapshot):
+            nonlocal materializations
+            materializations += 1
+            return original_materialize(snapshot)
+
+        with (
+            CalculationRunContext() as context,
+            mock.patch.object(
+                tracker_module,
+                "materialize_dependencies",
+                side_effect=count_materializations,
+            ),
+        ):
+            context.set_dependency_cache_hits({source_key: hit})
+            self.assertEqual(parent(), 6)
+
+        self.assertEqual(source_calls, 0)
+        self.assertEqual(materializations, 1)
+        self.assertEqual(recorded_dependencies, [set(dependencies)])
 
     def test_cached_rejects_declared_async_callables_at_decoration(self):
         """Declared coroutine and async-generator callables cannot be cached."""

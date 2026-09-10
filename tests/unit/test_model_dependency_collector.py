@@ -2,6 +2,7 @@ from django.test import SimpleTestCase
 from unittest.mock import patch
 
 from general_manager.cache.dependency_index import serialize_dependency_identifier
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
 
 
@@ -30,6 +31,16 @@ class FakeBucket:
         self._manager_class = manager_class
         self.filters = filters
         self.excludes = excludes
+
+
+class AddRecordingSet(set[tuple[str, str, str]]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_calls = 0
+
+    def add(self, element: tuple[str, str, str]) -> None:
+        self.add_calls += 1
+        super().add(element)
 
 
 @patch("general_manager.cache.model_dependency_collector.GeneralManager", new=FakeGM)
@@ -141,3 +152,27 @@ class TestModelDependencyCollector(SimpleTestCase):
             ("FakeGM", "identification", serialize_dependency_identifier("root"))
         }
         self.assertEqual(deps_set, expected)
+
+    def test_argument_iterator_can_feed_private_capture(self):
+        gm = FakeGM("root")
+
+        with DependencyTracker._capture() as capture:
+            DependencyTracker._track_many_validated(
+                ModelDependencyCollector._iter_args((gm,), {})
+            )
+
+        assert capture.snapshot is not None
+        self.assertEqual(
+            DependencyTracker._materialize_snapshot(capture.snapshot),
+            {("FakeGM", "identification", serialize_dependency_identifier("root"))},
+        )
+
+    def test_add_args_uses_target_add_for_each_yielded_dependency(self):
+        dependencies = AddRecordingSet()
+        ModelDependencyCollector.add_args(dependencies, (FakeGM("root"),), {})
+
+        self.assertEqual(dependencies.add_calls, 1)
+        self.assertEqual(
+            dependencies,
+            {("FakeGM", "identification", serialize_dependency_identifier("root"))},
+        )

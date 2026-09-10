@@ -65,15 +65,21 @@ with CalculationRunContext():
 ```
 
 Run-cached calls capture manager dependencies and model arguments on a miss.
-Each retained run entry contains the result and its captured dependencies, so a
-later hit can replay them into an enclosing `DependencyTracker`. This keeps an
-outer dependency-cached calculation invalidatable even when its inner run-cached
-calculation was prewarmed earlier in the run.
+Each retained run entry contains the result and an immutable dependency snapshot.
+Nested calculations share child snapshots, so many small results can depend on
+one broad source without each retaining a copy of its complete dependency set.
+A later hit carries those dependencies into an enclosing cached calculation or
+explicit `DependencyTracker`. This keeps an outer dependency-cached calculation
+invalidatable after both cold and prewarmed inner calls, including dependencies
+contributed only by manager arguments.
 
 Use `cache="dependency"` when the result should persist across runs and be
-invalidated by tracked manager dependencies. On a miss, the wrapped callable runs
-inside a `DependencyTracker`; model arguments are also collected after the call.
-The dependency metadata is recorded before the value is stored. If recording
+invalidated by tracked manager dependencies. On a miss, the wrapped callable
+captures dependency snapshots; model arguments are also collected after the call.
+The complete dependency set is materialized once for publication and recorded
+before the value is stored. Explicit `with DependencyTracker() as dependencies`
+scopes still receive mutable sets updated during the call; replay into those
+public scopes materializes dependencies immediately. If recording
 fails, or a data-change generation moves during computation or publication is
 blocked by an active data change, the fresh result is returned but no dependency
 cache entry is published.
@@ -165,10 +171,11 @@ reads. Missing main keys, future-version entries, and malformed legacy
 dependency payloads are omitted from the returned mapping. Backend read errors
 propagate.
 
-`replay_dependency_cache_hit(hit)` forwards each dependency tuple to
-`DependencyTracker.track()`. Malformed dependency tuple values raise `TypeError`,
-and unsupported dependency operations raise `ValueError`, matching the tracker
-contract.
+`replay_dependency_cache_hit(hit)` propagates the hit's dependencies into active
+tracking scopes. Framework-validated hits share immutable metadata with enclosing
+cached calculations. Publicly constructed hits still validate dependency tuple
+values and operations: malformed values raise `TypeError`, and unsupported
+operations raise `ValueError`, matching the tracker contract.
 
 ::: general_manager.cache.dependency_publish.CachePublishAborted
 
@@ -542,6 +549,12 @@ shallow signals and coarse aggregate calibration instead of traversing every
 stored object graph. The first entry and sparse later entries for each storage
 family are bounded deep samples; admissions between samples use the calibrated
 aggregate estimate.
+
+Dependency snapshots are accounted for separately from cached result payloads.
+Shared nodes and immutable dependency blocks are charged once across retained
+run entries and dependency-cache hits. Removing a child entry does not discard
+dependencies still needed by a surviving parent; that parent keeps the snapshot
+used for its original calculation even if the child is recomputed later.
 
 Read recency is inactive below budget pressure, so earlier accesses retain
 insertion order. Near the cap, recency becomes a batched approximate LRU: reads

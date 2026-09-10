@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Protocol, TypeGuard, cast
 
 from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache._dependency_graph import (
+    DependencySnapshot,
+    empty_dependency_snapshot,
+    snapshot_from_dependencies,
+)
 from general_manager.cache.dependency_index import Dependency
 
 DEPENDENCY_CACHE_ENTRY_VERSION = 2
@@ -131,10 +136,40 @@ class DependencyCacheHit:
 
     value: object
     dependencies: frozenset[Dependency]
+    _dependency_root: DependencySnapshot | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        """Freeze caller-supplied metadata before retaining a graph leaf."""
+        dependencies = frozenset(self.dependencies)
+        object.__setattr__(self, "dependencies", dependencies)
+        object.__setattr__(
+            self,
+            "_dependency_root",
+            snapshot_from_dependencies(dependencies) if dependencies else None,
+        )
+
+    @property
+    def dependency_root(self) -> DependencySnapshot:
+        """Return this hit's immutable dependency leaf."""
+        return self._dependency_root or empty_dependency_snapshot()
 
 
 class _TrustedDependencyCacheHit(DependencyCacheHit):
     """Cache hit whose dependencies were captured by DependencyTracker."""
+
+    __slots__ = ()
+
+
+def _trusted_dependency_cache_hit(
+    value: object,
+    dependencies: frozenset[Dependency],
+) -> DependencyCacheHit:
+    """Build an in-process hit whose frozen graph may be attached directly."""
+    return _TrustedDependencyCacheHit(value=value, dependencies=dependencies)
 
 
 class DependencyCacheBackend(Protocol):
@@ -482,7 +517,7 @@ def replay_dependency_cache_hit(hit: DependencyCacheHit) -> None:
             tuple uses an unsupported operation.
     """
     if isinstance(hit, _TrustedDependencyCacheHit):
-        DependencyTracker._track_many_validated(hit.dependencies)
+        DependencyTracker._attach_snapshot(hit.dependency_root)
         return
     for class_name, operation, identifier in hit.dependencies:
         DependencyTracker.track(class_name, operation, identifier)
