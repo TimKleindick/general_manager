@@ -154,12 +154,18 @@ Create mutations omit manager constructor input fields such as `id`; update and
 delete mutations always require `id` so the resolver can locate the existing
 manager instance. Update mutations make every generated write field optional,
 filter out omitted Graphene `NOT_PROVIDED` values, and forward an explicit
-history comment as the manager `history_comment`. With Graphene's default
-camel-casing, clients send `historyComment`; Python-side tests and helpers use
-`history_comment`. Delete mutations also accept optional history-comment metadata
-and forward it to `delete()`. Explicit GraphQL `null` is forwarded as
-`history_comment=None`; when the history comment argument is omitted, the
-resolver does not send a `history_comment` keyword at all.
+history comment as the manager `history_comment`. Create fields retain their
+interface/model defaults, so omitting a value on create lets the model default
+apply. Update fields deliberately have no GraphQL argument default: omitting a
+field, including a nullable variable that was not supplied, removes it from the
+manager payload and preserves the stored value even when the model field has a
+default. An explicit `null` is different: it is forwarded as `None` and clears a
+nullable field or fails validation when the field does not accept null. With
+Graphene's default camel-casing, clients send `historyComment`; Python-side
+tests and helpers use `history_comment`. Delete mutations also accept optional
+history-comment metadata and forward it to `delete()`. Explicit GraphQL `null`
+is forwarded as `history_comment=None`; when the history comment argument is
+omitted, the resolver does not send a `history_comment` keyword at all.
 
 For relation inputs, the GraphQL schema exposes the canonical manager-facing
 field names and normalizes them before calling the ORM mutation layer. A direct

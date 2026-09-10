@@ -139,6 +139,40 @@ contracts, see the [GraphQL concept guide](../concepts/graphql/schema_autogen.md
 the [task guide](../howto/expose_via_graphql.md#declare-manager-relations), and
 the [API reference](../api/graphql.md#relation-annotation-compatibility).
 
+## Update only the fields you supply
+
+Generated update mutations require an ID but make editable fields optional.
+Omit a field when the stored value should stay unchanged, even if the model
+declares a default for that field:
+
+```graphql
+mutation RenameProject($id: ID!) {
+  updateProject(id: $id, name: "Renamed") {
+    success
+    project { id name score }
+  }
+}
+```
+
+The omission rule also applies to nullable variables that are not present in
+the variables object:
+
+```graphql
+mutation UpdateOptionalScore($id: ID!, $score: Int) {
+  updateProject(id: $id, score: $score) {
+    success
+    project { id score }
+  }
+}
+```
+
+Use `{"id": "42"}` to preserve `score`, or
+`{"id": "42", "score": null}` to explicitly clear a nullable score. A
+concrete `score` value is written as supplied. Create mutations continue to
+apply model defaults when their fields are omitted. See the [GraphQL how-to](../howto/expose_via_graphql.md#partially-update-a-generated-manager),
+the [mutation concept](../concepts/graphql/schema_autogen.md#mutations), and
+the [API reference](../api/graphql.md#generated-crud-mutation-contract).
+
 ## Sort by a compound relation key
 
 Generated list fields accept typed `orderBy` terms. This request sorts

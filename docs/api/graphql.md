@@ -86,6 +86,56 @@ bootstrap plumbing rather than the application-facing registration API: define
 `GraphQLType` subclasses and import their module before startup schema
 construction.
 
+## Generated CRUD mutation contract
+
+`GraphQL.create_graphql_mutation(generalManagerClass: type[GeneralManager]) -> None`
+registers the supported generated fields `create<ManagerName>`,
+`update<ManagerName>`, and `delete<ManagerName>`. Its parameter is the
+`GeneralManager` subclass whose `Interface` supplies the capability and field
+metadata. The method returns `None`; a manager without an `Interface` produces
+no registry changes, and a mutation factory returning `None` skips only that
+operation.
+
+The generated update field has the following schematic shape, with one optional
+argument for each editable, non-derived interface field:
+
+```text
+update<ManagerName>(
+  id: ID!
+  <editableField>: <GraphQLType>
+  historyComment: String
+): Update<ManagerName>
+```
+
+The payload contains `success: Boolean` and the nullable manager-named field
+containing the updated object. `id` is required so the existing manager can be
+located; all generated write fields are optional for partial updates. Create
+fields retain their interface/model defaults, but update fields use no GraphQL
+argument defaults. Therefore, an omitted update argument—including a nullable
+variable that is declared but absent from the variables object—is not included
+in the manager payload and preserves the stored value, even when the model
+field has a default. An explicitly supplied `null` is included as `None` and
+must be valid for the field; a concrete value, including the model-default
+value, is written normally.
+
+GraphQL input coercion rejects an omitted `id`, a null `id`, null values for
+non-null fields, and values with the wrong scalar type before the resolver
+runs. Resolver and manager failures use the shared generated-mutation error
+mapper: validation errors remain structured `BAD_USER_INPUT`, permission
+failures use `PERMISSION_DENIED`, explicit `GraphQLError` and `PublicGraphQLError`
+remain public, and other ordinary exceptions become
+`INTERNAL_SERVER_ERROR` with an opaque `errorId`. A resolver-level missing ID
+raises `MissingManagerIdentifierError` before it can update state. The
+[mutation concept](../concepts/graphql/schema_autogen.md#mutations),
+[partial-update how-to](../howto/expose_via_graphql.md#partially-update-a-generated-manager),
+and [query cookbook](../examples/graphql_queries.md#update-only-the-fields-you-supply)
+show the same contract in conceptual, task-oriented, and runnable forms.
+
+Compatibility: the omission-preserving update behavior is guaranteed from
+GeneralManager 0.80.1. Clients that need to clear or reset a field must send an
+explicit value (including `null` for nullable fields); omitting the field never
+re-applies its model default during an update.
+
 ## Historical queries with `@asOf`
 
 The [Historical Context API reference](historical_context.md) contains the
