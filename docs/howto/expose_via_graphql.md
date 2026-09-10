@@ -211,6 +211,44 @@ schema generation unwraps optional fields and builds list fields before calling
 that mapper; direct calls with annotations such as `Optional[int]`, `list[int]`,
 or `Annotated[int, ...]` fall back to `String`.
 
+## Partially update a generated manager
+
+When an interface supports `update`, GeneralManager generates an
+`update<ManagerName>` mutation. The mutation always requires `id`, while each
+editable field is optional. This makes it safe to change one field without
+re-sending the rest of the object:
+
+```graphql
+mutation RenameProject($id: ID!) {
+  updateProject(id: $id, name: "Renamed") {
+    success
+    project { id name score }
+  }
+}
+```
+
+If `score` has a model default such as `7`, the mutation above preserves the
+project's existing score. The same rule applies when a nullable variable is
+declared but omitted from the variables object:
+
+```graphql
+mutation SetOptionalScore($id: ID!, $score: Int) {
+  updateProject(id: $id, score: $score) {
+    success
+    project { id score }
+  }
+}
+```
+
+With variables `{ "id": "42" }`, `score` is omitted and remains unchanged.
+With `{ "id": "42", "score": null }`, `score` is explicitly cleared when the
+field is nullable. Supplying a concrete value sets it, including a value equal
+to its model default. Create mutations keep their normal model-default
+behavior. See the [mutation concept](../concepts/graphql/schema_autogen.md#mutations),
+the [GraphQL query cookbook](../examples/graphql_queries.md#update-only-the-fields-you-supply),
+and the [API reference](../api/graphql.md#generated-crud-mutation-contract) for
+the complete contract and error behavior.
+
 ## Query generated lists
 
 Generated list fields accept the arguments that the manager metadata supports,
