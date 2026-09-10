@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import RLock, get_ident
 from types import TracebackType
 from typing import TYPE_CHECKING, Optional, TypeVar, cast
@@ -16,6 +16,7 @@ from general_manager.cache.run_context_lru import (
     resolve_run_context_cache_max_bytes,
     run_context_cache_budget,
 )
+from general_manager.cache._dependency_graph import DependencySnapshot
 from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
@@ -75,20 +76,38 @@ class OrmBucketManagersRunCacheEntry:
     dependencies: frozenset["Dependency"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _RunCacheEntry:
     """Decorated run-cache result plus dependencies to replay on a hit."""
 
     value: object
-    dependencies: frozenset["Dependency"]
+    dependency_root: DependencySnapshot
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class _RunCacheKey:
     """Private run-cache storage key retaining the originating snapshot."""
 
     snapshot: str | None
     key: Hashable
+    _cached_hash: int = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        # Eviction must not repeat user hashing or allocate a hash tuple while
+        # removing the canonical stored wrapper from the owner's dictionary.
+        object.__setattr__(self, "_cached_hash", hash((self.snapshot, self.key)))
+
+    def __hash__(self) -> int:
+        return self._cached_hash
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, _RunCacheKey) or type(self) is not type(other):
+            return NotImplemented
+        return (
+            self.snapshot is other.snapshot or self.snapshot == other.snapshot
+        ) and (self.key is other.key or self.key == other.key)
 
 
 class CalculationRunContext:
@@ -180,11 +199,14 @@ class CalculationRunContext:
         key: Hashable,
     ) -> None:
         """Remove one entry selected by the process-wide coordinator."""
-        self._discard_run_cache_touch((namespace, key))
         if namespace == "values":
             self._values.pop(key, None)
-        elif key not in self._dependency_cache_pending_publications:
-            self._dependency_cache_hits.pop(cast(str, key), None)
+        elif (
+            isinstance(key, str)
+            and key not in self._dependency_cache_pending_publications
+        ):
+            self._dependency_cache_hits.pop(key, None)
+        self._discard_run_cache_touch((namespace, key))
 
     def _store_run_value(self, scoped_key: Hashable, value: object) -> None:
         self._flush_run_cache_touches()
@@ -504,7 +526,10 @@ class CalculationRunContext:
                 operations propagate unchanged except `CachePublishAborted`,
                 which is handled by `flush_dependency_cache_publications()`.
         """
-        from general_manager.cache.dependency_cache import DependencyCacheHit
+        from general_manager.cache.dependency_cache import (
+            DependencyCacheHit,
+            _trusted_dependency_cache_hit,
+        )
         from general_manager.cache.dependency_publish import release_compute_lease
 
         previous_entry = self._dependency_cache_pending_publications.get(
@@ -514,13 +539,12 @@ class CalculationRunContext:
             release_compute_lease(previous_entry.lease)
         self._remove_dependency_cache_hit(entry.cache_key)
         self._dependency_cache_pending_publications[entry.cache_key] = entry
-        self._store_dependency_cache_hit(
-            entry.cache_key,
-            DependencyCacheHit(
-                value=entry.result,
-                dependencies=entry.dependencies,
-            ),
+        hit = (
+            _trusted_dependency_cache_hit(entry.result, entry.dependencies)
+            if entry.dependencies_trusted
+            else DependencyCacheHit(value=entry.result, dependencies=entry.dependencies)
         )
+        self._store_dependency_cache_hit(entry.cache_key, hit)
         if (
             len(self._dependency_cache_pending_publications)
             >= self._dependency_cache_publish_batch_size

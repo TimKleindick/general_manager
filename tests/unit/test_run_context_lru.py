@@ -1,6 +1,7 @@
 from collections import OrderedDict, deque
 from collections.abc import Hashable, Iterable, Iterator
 from datetime import date, timedelta
+import gc
 from threading import Event, Thread
 from unittest import mock
 import math
@@ -24,6 +25,14 @@ from general_manager.cache.run_context_lru import (
 )
 from general_manager.cache import run_context_lru
 from general_manager.cache import run_context
+from general_manager.cache._dependency_graph import (
+    DependencySnapshot,
+    snapshot_from_dependencies,
+)
+from general_manager.cache.dependency_cache import (
+    DependencyCacheHit,
+    _trusted_dependency_cache_hit,
+)
 
 HANDOFF_TIMEOUT_SECONDS = 5
 
@@ -65,6 +74,45 @@ class CacheOwner:
         key: Hashable,
     ) -> None:
         self.entries.pop((namespace, key), None)
+
+
+def _canonical_tracked_key(
+    budget: ProcessRunContextCacheBudget,
+    owner: CacheOwner,
+    namespace: RunCacheNamespace,
+    key: Hashable,
+) -> run_context_lru.TrackedKey:
+    with budget._lock:
+        return budget._tracked_key_locked(id(owner), namespace, key)
+
+
+def _canonical_tracked_key_for_id(
+    budget: ProcessRunContextCacheBudget,
+    owner_id: int,
+    namespace: RunCacheNamespace,
+    key: Hashable,
+) -> run_context_lru.TrackedKey:
+    with budget._lock:
+        return budget._tracked_key_locked(owner_id, namespace, key)
+
+
+def _tracked_entry(
+    budget: ProcessRunContextCacheBudget,
+    owner: CacheOwner,
+    namespace: RunCacheNamespace,
+    key: Hashable,
+) -> _TrackedEntry:
+    return budget._entries[_canonical_tracked_key(budget, owner, namespace, key)]
+
+
+def _entry_keys(
+    budget: ProcessRunContextCacheBudget,
+) -> set[tuple[int, RunCacheNamespace, Hashable]]:
+    """Project private canonical coordinator keys back to cache semantics."""
+    return {
+        (owner_id, namespace, entry.key)
+        for (owner_id, namespace, _canonical_key), entry in budget._entries.items()
+    }
 
 
 SEEDED_DUE_STRATUM = cast(run_context_lru.StratumKey, ("values", "list", 1))
@@ -113,7 +161,7 @@ def _assert_seeded_due_stratum_unchanged(
     assert state.admission_count == 255
     assert state.entry_count == 1
     assert state.shallow_total == 100
-    assert set(budget._entries) == {peer_key}
+    assert _entry_keys(budget) == {peer_key}
     assert peer_owner.entries == {("values", "peer"): ["peer"]}
     assert budget.estimated_bytes == 1_000
 
@@ -194,14 +242,18 @@ def _track_exact_bytes(
     key: str,
     exact_bytes: int,
 ) -> None:
+    """Control the complete synthetic charge for recency threshold fixtures."""
     owner.store("values", key, key)
-    with mock.patch.object(
-        run_context_lru,
-        "_admission_signal",
-        return_value=run_context_lru._AdmissionSignal(
-            stratum=None,
-            shallow_bytes=0,
-            exact_bytes=exact_bytes,
+    with (
+        mock.patch.object(run_context_lru, "_CANONICAL_HANDLE_FIXED_BYTES", 0),
+        mock.patch.object(
+            run_context_lru,
+            "_admission_signal",
+            return_value=run_context_lru._AdmissionSignal(
+                stratum=None,
+                shallow_bytes=0,
+                exact_bytes=exact_bytes,
+            ),
         ),
     ):
         budget.track(owner, "values", key, key)
@@ -411,6 +463,7 @@ def test_representative_aggregate_is_within_five_percent(
     exact_total = sum(
         _exhaustive_representative_entry_size(key, value) for key, value in entries
     )
+    exact_total += len(entries) * run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
     budget.register(owner, 1_000_000_000)
@@ -419,7 +472,7 @@ def test_representative_aggregate_is_within_five_percent(
     for key, value in entries:
         owner.store("values", key, value)
         budget.track(owner, "values", key, value)
-        stratum = budget._entries[(id(owner), "values", key)].stratum
+        stratum = _tracked_entry(budget, owner, "values", key).stratum
         if stratum is not None:
             groups.setdefault(stratum, []).append((key, value))
 
@@ -440,12 +493,12 @@ def test_representative_pressure_retains_between_ninety_and_one_hundred_percent(
 ):
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
-    configured_bytes = 2_560
+    configured_bytes = 2_560 + (9 * run_context_lru._CANONICAL_HANDLE_FIXED_BYTES)
     budget.register(owner, configured_bytes)
     first_value = [bytearray(96)]
     owner.store("values", 0, first_value)
     budget.track(owner, "values", 0, first_value)
-    stratum = budget._entries[(id(owner), "values", 0)].stratum
+    stratum = _tracked_entry(budget, owner, "values", 0).stratum
     assert stratum is not None
 
     while len(budget._strata[stratum].samples) < 8:
@@ -484,12 +537,784 @@ def test_run_cache_entry_measurement_includes_captured_dependencies() -> None:
     assert entry_type is not None
     entry = entry_type(
         value=value,
-        dependencies=frozenset({("Project", "all", "{}")}),
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "{}")})
+        ),
     )
 
     assert estimate_cache_entry_size("key", entry, stop_after=None) > (
         estimate_cache_entry_size("key", value, stop_after=None)
     )
+
+
+@pytest.mark.parametrize(
+    ("first_namespace", "first_key", "second_namespace", "second_key"),
+    [
+        ("dependency_hits", "hit", "values", "run"),
+        ("values", "run", "dependency_hits", "hit"),
+    ],
+)
+def test_budget_charges_shared_dependency_container_once_across_namespaces(
+    first_namespace: RunCacheNamespace,
+    first_key: str,
+    second_namespace: RunCacheNamespace,
+    second_key: str,
+) -> None:
+    """Run entries and dependency hits share immutable dependency data by id."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+    dependencies = frozenset({("Project", "identification", "shared")})
+    hit = DependencyCacheHit(value="hit", dependencies=dependencies)
+    entry = run_context._RunCacheEntry(
+        value="run",
+        dependency_root=snapshot_from_dependencies(dependencies),
+    )
+
+    owner.store("dependency_hits", "hit", hit)
+    budget.track(owner, "dependency_hits", "hit", hit)
+    owner.store("values", "run", entry)
+    budget.track(owner, "values", "run", entry)
+
+    ledger = budget._graph_ledger
+    assert set(ledger.dependency_references) == {id(dependencies)}
+    assert ledger.dependency_references[id(dependencies)] == 2
+    assert len(ledger.node_references) == 2
+    assert len(ledger.block_references) == 2
+
+    owner._evict_run_cache_entry(first_namespace, first_key)
+    budget.remove(owner, first_namespace, first_key)
+    assert ledger.dependency_references[id(dependencies)] == 1
+
+    owner._evict_run_cache_entry(second_namespace, second_key)
+    budget.remove(owner, second_namespace, second_key)
+    assert budget.estimated_bytes == 0
+    assert not ledger.node_references
+    assert not ledger.block_references
+    assert not ledger.dependency_references
+
+
+def test_graph_ledger_charges_logical_record_overhead_once() -> None:
+    """Ledger ids/counts contribute to the estimated cache budget."""
+    dependencies = frozenset({("Project", "all", "{}")})
+    root = snapshot_from_dependencies(dependencies)
+    assert root.block is not None
+    ledger = run_context_lru._SharedGraphLedger()
+    expected_leaf_bytes = (
+        run_context_lru._LEDGER_REFERENCE_RECORD_BYTES
+        + run_context_lru._safe_shallow_size(root)
+        + run_context_lru._safe_shallow_size(root.children)
+        + run_context_lru._LEDGER_NODE_RECORD_BYTES
+        + run_context_lru._safe_shallow_size(root.block)
+        + run_context_lru._LEDGER_BLOCK_RECORD_BYTES
+        + run_context_lru._estimate_payload_cache_entry_size(
+            None,
+            dependencies,
+            stop_after=None,
+        )
+        + run_context_lru._LEDGER_DEPENDENCY_RECORD_BYTES
+    )
+
+    assert ledger.retain(root) == expected_leaf_bytes
+    assert ledger.retain(root) == 0
+    parent = DependencySnapshot(None, (root,))
+    assert ledger.retain(parent) == (
+        run_context_lru._LEDGER_REFERENCE_RECORD_BYTES
+        + run_context_lru._safe_shallow_size(parent)
+        + run_context_lru._safe_shallow_size(parent.children)
+        + run_context_lru._LEDGER_NODE_RECORD_BYTES
+    )
+
+
+def test_budget_replacement_retains_new_root_before_releasing_old_root() -> None:
+    """A sole-root refresh never transiently drops shared graph accounting."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+    dependencies = frozenset({("Project", "all", "{}")})
+    first = run_context._RunCacheEntry(
+        value="first",
+        dependency_root=snapshot_from_dependencies(dependencies),
+    )
+    replacement = run_context._RunCacheEntry(
+        value="replacement",
+        dependency_root=snapshot_from_dependencies(dependencies),
+    )
+    owner.store("values", "key", first)
+    budget.track(owner, "values", "key", first)
+
+    events: list[str] = []
+    ledger = budget._graph_ledger
+    commit_retain = ledger.commit_retain
+    commit_release = ledger.commit_release
+
+    def record_commit_retain(
+        prepared: run_context_lru._PreparedGraphRetention,
+    ) -> int | None:
+        events.append("retain")
+        return commit_retain(prepared)
+
+    def record_release(
+        prepared: run_context_lru._PreparedGraphRelease,
+    ) -> int:
+        events.append("release")
+        return commit_release(prepared)
+
+    ledger.commit_retain = record_commit_retain  # type: ignore[method-assign]
+    ledger.commit_release = record_release  # type: ignore[method-assign]
+    owner.store("values", "key", replacement)
+    budget.track(owner, "values", "key", replacement)
+
+    assert events[:2] == ["retain", "release"]
+    assert ledger.dependency_references == {id(dependencies): 1}
+
+
+def test_oversized_graph_candidate_rejects_before_graph_mutation_and_replacement() -> (
+    None
+):
+    """A rejected graph candidate cannot leave a negative or stale charge."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 3_000)
+    small = run_context._RunCacheEntry(
+        value="small",
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "small")})
+        ),
+    )
+    oversized = run_context._RunCacheEntry(
+        value="x" * 10_000,
+        dependency_root=snapshot_from_dependencies(
+            frozenset(("Project", "all", str(index)) for index in range(100))
+        ),
+    )
+
+    owner.store("values", "key", small)
+    budget.track(owner, "values", "key", small)
+    owner.store("values", "key", oversized)
+    budget.track(owner, "values", "key", oversized)
+
+    assert owner.entries == {}
+    assert not budget._entries
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+    assert not budget._entry_attempt_generations
+
+
+@pytest.mark.parametrize("estimator_error", [False, True])
+def test_rebuild_does_not_resurrect_or_release_reentrant_replacement_graph(
+    estimator_error: bool,
+) -> None:
+    """A rebuild estimator may replace a key while the coordinator RLock is held."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, None)
+    old_dependencies = frozenset({("Project", "all", "old")})
+    new_dependencies = frozenset({("Project", "all", "new")})
+    old = run_context._RunCacheEntry(
+        value=["old"],
+        dependency_root=snapshot_from_dependencies(old_dependencies),
+    )
+    replacement = run_context._RunCacheEntry(
+        value="new",
+        dependency_root=snapshot_from_dependencies(new_dependencies),
+    )
+    owner.store("values", "key", old)
+    estimate_payload = run_context_lru._estimate_payload_cache_entry_size
+
+    def reentrant_estimator(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        if key is None:
+            return estimate_payload(key, value, stop_after=stop_after)
+        assert key == "key"
+        assert value is old
+        assert stop_after == 100_000
+        owner.store("values", "key", replacement)
+        budget.track(owner, "values", "key", replacement)
+        if estimator_error:
+            raise RuntimeError("rebuild estimation failed")  # noqa: TRY003
+        return MIN_TRACKED_ENTRY_BYTES
+
+    with mock.patch.object(
+        run_context_lru,
+        "_estimate_payload_cache_entry_size",
+        side_effect=reentrant_estimator,
+    ):
+        if estimator_error:
+            with pytest.raises(RuntimeError, match="rebuild estimation failed"):
+                budget.register(owner, 100_000)
+        else:
+            budget.register(owner, 100_000)
+
+    tracked = _tracked_entry(budget, owner, "values", "key")
+    assert tracked.dependency_root is replacement.dependency_root
+    assert budget._graph_ledger.dependency_references == {id(new_dependencies): 1}
+    assert id(old_dependencies) not in budget._graph_ledger.dependency_references
+
+
+@pytest.mark.parametrize("transition", ["disable", "clear", "replace"])
+@pytest.mark.parametrize("estimator_error", [False, True])
+def test_graph_prepare_reentrant_transition_never_commits_stale_normal_admission(
+    transition: str,
+    estimator_error: bool,
+) -> None:
+    """Graph sizing may reset, clear, or replace an exact scalar admission."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+    old_dependencies = frozenset({("Project", "all", "old")})
+    new_dependencies = frozenset({("Project", "all", "new")})
+    old = run_context._RunCacheEntry(
+        value="old",
+        dependency_root=snapshot_from_dependencies(old_dependencies),
+    )
+    replacement = run_context._RunCacheEntry(
+        value="replacement",
+        dependency_root=snapshot_from_dependencies(new_dependencies),
+    )
+    owner.store("values", "key", old)
+    estimate_payload = run_context_lru._estimate_payload_cache_entry_size
+    triggered = False
+
+    def reentrant_estimator(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal triggered
+        if key is None and not triggered:
+            triggered = True
+            if transition == "disable":
+                budget.register(owner, None)
+            elif transition == "clear":
+                budget.clear_context(owner)
+            else:
+                owner.store("values", "key", replacement)
+                budget.track(owner, "values", "key", replacement)
+            if estimator_error:
+                raise RuntimeError("graph preparation failed")  # noqa: TRY003
+        return estimate_payload(key, value, stop_after=stop_after)
+
+    with mock.patch.object(
+        run_context_lru,
+        "_estimate_payload_cache_entry_size",
+        side_effect=reentrant_estimator,
+    ):
+        if estimator_error:
+            with pytest.raises(RuntimeError, match="graph preparation failed"):
+                budget.track(owner, "values", "key", old)
+        else:
+            budget.track(owner, "values", "key", old)
+
+    if transition == "replace":
+        tracked = _tracked_entry(budget, owner, "values", "key")
+        assert tracked.dependency_root is replacement.dependency_root
+        assert budget._graph_ledger.dependency_references == {id(new_dependencies): 1}
+        assert id(old_dependencies) not in budget._graph_ledger.dependency_references
+    else:
+        assert not budget._entries
+        assert budget.estimated_bytes == 0
+        assert not budget._graph_ledger.root_references
+        assert not budget._graph_ledger.node_references
+
+    budget.clear_context(owner)
+    assert budget.estimated_bytes == 0
+    assert not budget._graph_ledger.root_references
+
+
+@pytest.mark.parametrize("transition", ["disable", "clear", "replace"])
+@pytest.mark.parametrize("estimator_error", [False, True])
+def test_graph_prepare_reentrant_transition_never_commits_stale_rebuild(
+    transition: str,
+    estimator_error: bool,
+) -> None:
+    """The rebuild snapshot receives the same graph-preparation protection."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, None)
+    old_dependencies = frozenset({("Project", "all", "old")})
+    new_dependencies = frozenset({("Project", "all", "new")})
+    old = run_context._RunCacheEntry(
+        value="old",
+        dependency_root=snapshot_from_dependencies(old_dependencies),
+    )
+    replacement = run_context._RunCacheEntry(
+        value="replacement",
+        dependency_root=snapshot_from_dependencies(new_dependencies),
+    )
+    owner.store("values", "key", old)
+    estimate_payload = run_context_lru._estimate_payload_cache_entry_size
+    triggered = False
+
+    def reentrant_estimator(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal triggered
+        if key is None and not triggered:
+            triggered = True
+            if transition == "disable":
+                budget.register(owner, None)
+            elif transition == "clear":
+                budget.clear_context(owner)
+            else:
+                owner.store("values", "key", replacement)
+                budget.track(owner, "values", "key", replacement)
+            if estimator_error:
+                raise RuntimeError("graph preparation failed")  # noqa: TRY003
+        return estimate_payload(key, value, stop_after=stop_after)
+
+    with mock.patch.object(
+        run_context_lru,
+        "_estimate_payload_cache_entry_size",
+        side_effect=reentrant_estimator,
+    ):
+        if estimator_error:
+            with pytest.raises(RuntimeError, match="graph preparation failed"):
+                budget.register(owner, 100_000)
+        else:
+            budget.register(owner, 100_000)
+
+    if transition == "replace":
+        tracked = _tracked_entry(budget, owner, "values", "key")
+        assert tracked.dependency_root is replacement.dependency_root
+        assert budget._graph_ledger.dependency_references == {id(new_dependencies): 1}
+    else:
+        assert not budget._entries
+        assert budget.estimated_bytes == 0
+        assert not budget._graph_ledger.root_references
+
+    budget.clear_context(owner)
+    assert budget.estimated_bytes == 0
+
+
+def test_graph_prepare_retries_after_other_key_changes_shared_membership() -> None:
+    """A candidate retries when a reentrant key changes its shared graph cost."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+    dependencies = frozenset({("Project", "all", "shared")})
+    first = run_context._RunCacheEntry(
+        value="first",
+        dependency_root=snapshot_from_dependencies(dependencies),
+    )
+    other = run_context._RunCacheEntry(
+        value="other",
+        dependency_root=snapshot_from_dependencies(dependencies),
+    )
+    owner.store("values", "first", first)
+    estimate_payload = run_context_lru._estimate_payload_cache_entry_size
+    triggered = False
+
+    def reentrant_estimator(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal triggered
+        if key is None and not triggered:
+            triggered = True
+            owner.store("values", "other", other)
+            budget.track(owner, "values", "other", other)
+        return estimate_payload(key, value, stop_after=stop_after)
+
+    with mock.patch.object(
+        run_context_lru,
+        "_estimate_payload_cache_entry_size",
+        side_effect=reentrant_estimator,
+    ):
+        budget.track(owner, "values", "first", first)
+
+    assert _entry_keys(budget) == {
+        (id(owner), "values", "first"),
+        (id(owner), "values", "other"),
+    }
+    assert budget._graph_ledger.dependency_references == {id(dependencies): 2}
+    expected = run_context_lru._SharedGraphLedger()
+    expected.retain(other.dependency_root)
+    expected.retain(first.dependency_root)
+    assert budget._graph_ledger.total_bytes == expected.total_bytes
+
+
+def test_graph_prepare_real_gc_finalizer_cannot_commit_against_reset_ledger() -> None:
+    """A GC finalizer during dependency sizing cannot retain stale graph state."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+    dependencies = frozenset(
+        ("Project", "all", f"dependency-{index}") for index in range(16)
+    )
+    entry = run_context._RunCacheEntry(
+        value="value",
+        dependency_root=snapshot_from_dependencies(dependencies),
+    )
+    owner.store("values", "key", entry)
+    finalized = False
+
+    class ReentrantFinalizer:
+        def __init__(self) -> None:
+            self.cycle = self
+
+        def __del__(self) -> None:
+            nonlocal finalized
+            frame = sys._getframe()
+            while frame is not None:
+                if frame.f_code.co_name == "prepare_retain":
+                    finalized = True
+                    budget.register(owner, None)
+                    return
+                frame = frame.f_back
+
+    gc.disable()
+    try:
+        finalizer = ReentrantFinalizer()
+        del finalizer
+        estimate_payload = run_context_lru._estimate_payload_cache_entry_size
+        collected = False
+
+        def collecting_estimator(
+            key: object,
+            value: object,
+            *,
+            stop_after: int | None,
+        ) -> int:
+            nonlocal collected
+            if key is None and not collected:
+                collected = True
+                gc.collect()
+            return estimate_payload(key, value, stop_after=stop_after)
+
+        with mock.patch.object(
+            run_context_lru,
+            "_estimate_payload_cache_entry_size",
+            side_effect=collecting_estimator,
+        ):
+            budget.track(owner, "values", "key", entry)
+    finally:
+        gc.enable()
+        gc.collect()
+
+    assert finalized
+    assert not budget._entries
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+    budget.clear_context(owner)
+
+
+@pytest.mark.parametrize("replacement_limit", [50_000, 200_000])
+@pytest.mark.parametrize("estimator_error", [False, True])
+@pytest.mark.parametrize("rebuild", [False, True])
+def test_graph_prepare_positive_limit_change_keeps_exact_entry_accounted(
+    replacement_limit: int,
+    estimator_error: bool,
+    rebuild: bool,
+) -> None:
+    """A finite limit change retries or rejects graph work without stranding it."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    if rebuild:
+        budget.register(owner, None)
+    else:
+        budget.register(owner, 100_000)
+    dependencies = frozenset({("Project", "all", "dependency")})
+    entry = run_context._RunCacheEntry(
+        value="value",
+        dependency_root=snapshot_from_dependencies(dependencies),
+    )
+    owner.store("values", "key", entry)
+    estimate_payload = run_context_lru._estimate_payload_cache_entry_size
+    changed_limit = False
+
+    def reentrant_estimator(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal changed_limit
+        if key is None and not changed_limit:
+            changed_limit = True
+            budget.register(owner, replacement_limit)
+            if estimator_error:
+                raise RuntimeError("graph sizing failed after limit change")  # noqa: TRY003
+        return estimate_payload(key, value, stop_after=stop_after)
+
+    with mock.patch.object(
+        run_context_lru,
+        "_estimate_payload_cache_entry_size",
+        side_effect=reentrant_estimator,
+    ):
+        if estimator_error:
+            with pytest.raises(
+                RuntimeError, match="graph sizing failed after limit change"
+            ):
+                if rebuild:
+                    budget.register(owner, 100_000)
+                else:
+                    budget.track(owner, "values", "key", entry)
+        elif rebuild:
+            budget.register(owner, 100_000)
+        else:
+            budget.track(owner, "values", "key", entry)
+
+    tracked_key = _canonical_tracked_key(budget, owner, "values", "key")
+    assert budget._max_bytes == replacement_limit
+    if estimator_error:
+        assert ("values", "key") not in owner.entries
+        assert tracked_key not in budget._entries
+    else:
+        assert ("values", "key") in owner.entries
+        assert tracked_key in budget._entries
+        assert budget.estimated_bytes > 0
+    assert tracked_key not in budget._entry_attempt_generations
+
+
+def test_rebuild_positive_limit_change_reconciles_later_owners_and_entries() -> None:
+    """A finite cap change during one graph prepare restarts the whole rebuild."""
+    budget = ProcessRunContextCacheBudget()
+    first_owner = CacheOwner()
+    second_owner = CacheOwner()
+    budget.register(first_owner, None)
+    budget.register(second_owner, None)
+    entries = (
+        (first_owner, "first", "one"),
+        (first_owner, "second", "two"),
+        (second_owner, "third", "three"),
+    )
+    for owner, key, identifier in entries:
+        owner.store(
+            "values",
+            key,
+            run_context._RunCacheEntry(
+                value=key,
+                dependency_root=snapshot_from_dependencies(
+                    frozenset({("Project", "all", identifier)})
+                ),
+            ),
+        )
+
+    estimate_payload = run_context_lru._estimate_payload_cache_entry_size
+    changed_limit = False
+
+    def reentrant_estimator(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal changed_limit
+        if key is None and not changed_limit:
+            changed_limit = True
+            budget.register(first_owner, 200_000)
+        return estimate_payload(key, value, stop_after=stop_after)
+
+    with mock.patch.object(
+        run_context_lru,
+        "_estimate_payload_cache_entry_size",
+        side_effect=reentrant_estimator,
+    ):
+        budget.register(first_owner, 100_000)
+
+    assert budget._max_bytes == 200_000
+    assert changed_limit
+    for owner, key, _identifier in entries:
+        assert ("values", key) in owner.entries
+        assert _canonical_tracked_key(budget, owner, "values", key) in budget._entries
+        assert (
+            _canonical_tracked_key(budget, owner, "values", key)
+            not in budget._entry_attempt_generations
+        )
+
+
+@pytest.mark.parametrize(
+    "hit_factory",
+    [
+        lambda: DependencyCacheHit(value="payload", dependencies=frozenset()),
+        lambda: _trusted_dependency_cache_hit("payload", frozenset()),
+    ],
+)
+def test_empty_dependency_hit_metadata_is_bounded_through_rebuild_and_clear(
+    hit_factory: Callable[[], DependencyCacheHit],
+) -> None:
+    """Empty public and trusted hits retain their wrapper and empty metadata."""
+    sample = hit_factory()
+    signal = run_context_lru._admission_signal("dependency_hits", "x" * 64, sample)
+    assert signal.dependency_root is None
+    assert signal.fixed_bytes == sys.getsizeof(sample) + sys.getsizeof(
+        sample.dependencies
+    )
+    assert estimate_cache_entry_size("x" * 64, sample, stop_after=None) > (
+        estimate_cache_entry_size("x" * 64, sample.value, stop_after=None)
+    )
+
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, None)
+    for index in range(1_000):
+        key = f"{index:064d}"
+        owner.store("dependency_hits", key, hit_factory())
+
+    budget.register(owner, 100_000)
+    retained = tuple(owner.entries.items())
+    retained_metadata = sum(
+        sys.getsizeof(key) + sys.getsizeof(hit) + sys.getsizeof(hit.dependencies)
+        for (_namespace, key), hit in retained
+    )
+    assert retained_metadata <= 100_000
+    assert budget.estimated_bytes <= 95_000
+    assert budget._graph_ledger.total_bytes == 0
+
+    budget.clear_context(owner)
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+
+
+@pytest.mark.parametrize("mutation", ["replace", "clear_and_repopulate"])
+def test_rebuild_snapshot_does_not_reintroduce_later_reentrant_replacement(
+    mutation: str,
+) -> None:
+    """A rebuild snapshot stops when a callback changes a later entry's owner."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, None)
+    first = run_context._RunCacheEntry(
+        value=["first"],
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "first")})
+        ),
+    )
+    stale_later = run_context._RunCacheEntry(
+        value="stale",
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "stale")})
+        ),
+    )
+    replacement_dependencies = frozenset({("Project", "all", "replacement")})
+    replacement = run_context._RunCacheEntry(
+        value="replacement",
+        dependency_root=snapshot_from_dependencies(replacement_dependencies),
+    )
+    untouched_dependencies = frozenset({("Project", "all", "untouched")})
+    untouched = run_context._RunCacheEntry(
+        value="untouched",
+        dependency_root=snapshot_from_dependencies(untouched_dependencies),
+    )
+    owner.store("values", "first", first)
+    owner.store("values", "later", stale_later)
+    owner.store("values", "untouched", untouched)
+    estimate_payload = run_context_lru._estimate_payload_cache_entry_size
+    mutated = False
+
+    def reentrant_estimator(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal mutated
+        if key is None or mutated:
+            return estimate_payload(key, value, stop_after=stop_after)
+        assert key == "first"
+        assert value is first
+        mutated = True
+        if mutation == "replace":
+            owner.store("values", "later", replacement)
+            budget.track(owner, "values", "later", replacement)
+        else:
+            budget.clear_context(owner)
+            owner.store("values", "first", first)
+            owner.store("values", "later", replacement)
+            owner.store("values", "untouched", untouched)
+            budget.register(owner, 100_000)
+        return estimate_payload(key, value, stop_after=stop_after)
+
+    with mock.patch.object(
+        run_context_lru,
+        "_estimate_payload_cache_entry_size",
+        side_effect=reentrant_estimator,
+    ):
+        budget.register(owner, 100_000)
+
+    tracked_later = _tracked_entry(budget, owner, "values", "later")
+    assert tracked_later.dependency_root is replacement.dependency_root
+    tracked_untouched = _tracked_entry(budget, owner, "values", "untouched")
+    assert tracked_untouched.dependency_root is untouched.dependency_root
+    assert budget._graph_ledger.dependency_references == {
+        id(replacement_dependencies): 1,
+        id(first.dependency_root.block.dependencies): 1,
+        id(untouched_dependencies): 1,
+    }
+
+
+@pytest.mark.parametrize("transition", ["clear", "none", "zero"])
+def test_graph_ledger_releases_records_for_context_lifecycle(
+    transition: str,
+) -> None:
+    """Every finite-budget removal path drops retained graph ledger records."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    dependencies = frozenset({("Project", "all", transition)})
+    entry = run_context._RunCacheEntry(
+        value="value",
+        dependency_root=snapshot_from_dependencies(dependencies),
+    )
+    budget.register(owner, 100_000)
+    owner.store("values", "key", entry)
+    budget.track(owner, "values", "key", entry)
+    assert budget._graph_ledger.total_bytes > 0
+
+    if transition == "clear":
+        budget.clear_context(owner)
+    elif transition == "none":
+        budget.register(owner, None)
+    else:
+        budget.register(owner, 0)
+
+    ledger = budget._graph_ledger
+    assert budget.estimated_bytes == 0
+    assert ledger.total_bytes == 0
+    assert not ledger.root_references
+    assert not ledger.node_references
+    assert not ledger.block_references
+    assert not ledger.dependency_references
+
+
+def test_graph_ledger_rebuilds_then_releases_dead_owner_records() -> None:
+    """Rebuild and weak-owner cleanup do not leave graph ids behind."""
+    import gc
+
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    dependencies = frozenset({("Project", "all", "rebuild")})
+    entry = run_context._RunCacheEntry(
+        value="value",
+        dependency_root=snapshot_from_dependencies(dependencies),
+    )
+    budget.register(owner, None)
+    owner.store("values", "key", entry)
+    budget.register(owner, 100_000)
+    assert budget._graph_ledger.dependency_references == {id(dependencies): 1}
+    owner_reference = ref(owner)
+
+    del owner
+    gc.collect()
+
+    ledger = budget._graph_ledger
+    assert owner_reference() is None
+    assert budget.estimated_bytes == 0
+    assert ledger.total_bytes == 0
+    assert not ledger.root_references
+    assert not ledger.node_references
+    assert not ledger.block_references
+    assert not ledger.dependency_references
 
 
 @pytest.mark.parametrize(
@@ -532,7 +1357,7 @@ def test_reserve_eviction_keeps_equality_and_evicts_one_byte_above_target(
 @pytest.mark.parametrize(
     ("estimated_bytes", "expected_reason"),
     [
-        (960, "run cache entry evicted by process-wide LRU budget"),
+        (832, "run cache entry evicted by process-wide LRU budget"),
         (1_001, "run cache entry skipped because it exceeds the process budget"),
     ],
 )
@@ -612,7 +1437,7 @@ def test_empty_stratum_retains_only_calibration_metadata() -> None:
     value = [bytearray(96)]
     owner.store("values", "key", value)
     budget.track(owner, "values", "key", value)
-    tracked = budget._entries[(id(owner), "values", "key")]
+    tracked = _tracked_entry(budget, owner, "values", "key")
     assert tracked.stratum is not None
     sample = tuple(budget._strata[tracked.stratum].samples)
 
@@ -810,6 +1635,7 @@ def test_reused_calibration_keeps_representative_aggregate_within_five_percent()
     exact_total = sum(
         _exhaustive_representative_entry_size(key, value) for key, value in entries
     )
+    exact_total += len(entries) * run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
     assert math.ceil(exact_total * 0.95) <= budget.estimated_bytes
     assert budget.estimated_bytes <= math.ceil(exact_total * 1.05)
 
@@ -950,7 +1776,9 @@ def test_atomic_admission_never_calibrates() -> None:
         budget.track(owner, "values", "key", "value")
 
     assert owner.entries == {("values", "key"): "value"}
-    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+    assert budget.estimated_bytes == (
+        MIN_TRACKED_ENTRY_BYTES + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
 
 def test_ordinary_calibrated_admission_publishes_without_attempt_token() -> None:
@@ -1026,12 +1854,14 @@ def test_replacement_changes_calibrated_stratum_accounting() -> None:
         owner.store("values", "key", large)
         budget.track(owner, "values", "key", large)
 
-    entry = budget._entries[(id(owner), "values", "key")]
+    entry = _tracked_entry(budget, owner, "values", "key")
     assert (
         entry.stratum
         == run_context_lru._admission_signal("values", "key", large).stratum
     )
-    assert budget.estimated_bytes == 2_048
+    assert budget.estimated_bytes == (
+        2_048 + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
 
 def test_refresh_updates_shallow_signal_without_extra_calibration() -> None:
@@ -1048,11 +1878,11 @@ def test_refresh_updates_shallow_signal_without_extra_calibration() -> None:
         return_value=1_024,
     ) as estimator:
         budget.track(owner, "values", "key", initial)
-        initial_shallow = budget._entries[(id(owner), "values", "key")].shallow_bytes
+        initial_shallow = _tracked_entry(budget, owner, "values", "key").shallow_bytes
         owner.store("values", "key", refreshed)
         budget.refresh(owner, "values", "key", refreshed)
 
-    refreshed_entry = budget._entries[(id(owner), "values", "key")]
+    refreshed_entry = _tracked_entry(budget, owner, "values", "key")
     assert estimator.call_count == 1
     assert refreshed_entry.shallow_bytes > initial_shallow
     assert budget._strata[cast(tuple, refreshed_entry.stratum)].admission_count == 2
@@ -1081,7 +1911,10 @@ def test_first_blocked_estimate_is_not_published_early() -> None:
         worker.start()
         try:
             assert estimator_started.wait(timeout=HANDOFF_TIMEOUT_SECONDS)
-            assert (id(owner), "values", "key") not in budget._entries
+            assert (
+                _canonical_tracked_key(budget, owner, "values", "key")
+                not in budget._entries
+            )
             assert budget.estimated_bytes == 0
         finally:
             allow_estimator.set()
@@ -1153,7 +1986,7 @@ def test_due_estimator_failure_preserves_seeded_stratum_and_peer() -> None:
     peer_owner = CacheOwner()
     pending_owner = CacheOwner()
     state, peer_key = _seed_due_stratum_with_peer(budget, peer_owner, pending_owner)
-    lifecycle_generation = budget._owner_lifecycle_generations.get(id(pending_owner))
+    lifecycle_generation = budget._owner_lifecycle_generations[id(pending_owner)]
     configuration_generation = budget._configuration_generation
     value = ["pending"]
     pending_owner.store("values", "pending", value)
@@ -1182,7 +2015,7 @@ def test_due_estimator_failure_preserves_seeded_stratum_and_peer() -> None:
     assert active_lifecycle_generations == [
         budget._owner_lifecycle_generations[id(pending_owner)]
     ]
-    assert active_lifecycle_generations[0] != (lifecycle_generation or 0)
+    assert active_lifecycle_generations[0] == lifecycle_generation
 
 
 def test_due_sample_configuration_retry_failure_preserves_seeded_stratum() -> None:
@@ -1368,14 +2201,17 @@ def test_concurrent_due_samples_preserve_seeded_window_and_count_both_entries() 
     assert state.shallow_total == 100 + sum(
         signal.shallow_bytes for signal in signals.values()
     )
-    assert set(budget._entries) == {
+    assert _entry_keys(budget) == {
         peer_key,
         (id(first_owner), "values", 1),
         (id(second_owner), "values", 2),
     }
     assert not budget._entry_attempt_generations
     assert budget._configuration_generation == configuration_generation
-    assert budget.estimated_bytes == state.modeled_bytes()
+    assert (
+        budget.estimated_bytes
+        == state.modeled_bytes() + 2 * run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
 
 def test_stale_blocked_estimate_cannot_replace_newer_same_key_sample() -> None:
@@ -1411,7 +2247,7 @@ def test_stale_blocked_estimate_cannot_replace_newer_same_key_sample() -> None:
 
     assert not worker.is_alive()
     assert owner.entries[("values", "key")] is new
-    entry = budget._entries[(id(owner), "values", "key")]
+    entry = _tracked_entry(budget, owner, "values", "key")
     assert (
         entry.shallow_bytes
         == run_context_lru._admission_signal("values", "key", new).shallow_bytes
@@ -1516,7 +2352,7 @@ def test_stale_configuration_sample_never_enters_new_generation_window() -> None
             worker.join(timeout=HANDOFF_TIMEOUT_SECONDS)
 
     assert not worker.is_alive()
-    entry = budget._entries[(id(owner), "values", "key")]
+    entry = _tracked_entry(budget, owner, "values", "key")
     assert list(budget._strata[cast(tuple, entry.stratum)].samples) == [
         (entry.shallow_bytes, 1_024)
     ]
@@ -2578,7 +3414,9 @@ def test_track_retries_estimation_after_limit_change() -> None:
         raise worker_errors[0]
     assert stop_after_values == [old_limit, new_limit]
     assert owner.entries[("values", "key")] == ["value"]
-    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+    assert budget.estimated_bytes == (
+        MIN_TRACKED_ENTRY_BYTES + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
 
 def test_track_abandons_admission_during_continuous_limit_changes() -> None:
@@ -2628,7 +3466,7 @@ def test_track_discards_current_entry_after_estimator_exception() -> None:
     budget.track(owner, "values", "key", "old")
     new_value = ["new"]
     owner.store("values", "key", new_value)
-    tracked_key = (id(owner), "values", "key")
+    tracked_key = _canonical_tracked_key(budget, owner, "values", "key")
 
     with (
         mock.patch.object(
@@ -2696,10 +3534,12 @@ def test_failed_track_does_not_evict_newer_same_key_replacement() -> None:
     assert len(worker_errors) == 1
     assert isinstance(worker_errors[0], RuntimeError)
     assert owner.entries[("values", "key")] == "new"
-    assert budget._entries[(id(owner), "values", "key")].exact_bytes == (
+    assert _tracked_entry(budget, owner, "values", "key").exact_bytes == (
         MIN_TRACKED_ENTRY_BYTES
     )
-    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+    assert budget.estimated_bytes == (
+        MIN_TRACKED_ENTRY_BYTES + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
 
 @pytest.mark.parametrize("mutation", ["remove", "clear_context"])
@@ -2873,10 +3713,12 @@ def test_track_keeps_latest_same_key_replacement_accounting() -> None:
         raise worker_errors[0]
     assert owner.entries[("values", "key")] == "new"
     assert (
-        budget._entries[(id(owner), "values", "key")].exact_bytes
+        _tracked_entry(budget, owner, "values", "key").exact_bytes
         == MIN_TRACKED_ENTRY_BYTES
     )
-    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+    assert budget.estimated_bytes == (
+        MIN_TRACKED_ENTRY_BYTES + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
 
 def test_track_admits_distinct_entry_after_other_entry_is_tracked() -> None:
@@ -2931,7 +3773,10 @@ def test_track_admits_distinct_entry_after_other_entry_is_tracked() -> None:
     if worker_errors:
         raise worker_errors[0]
     assert owner.entries == {("values", "a"): a_value, ("values", "b"): "B"}
-    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES * 2
+    assert (
+        budget.estimated_bytes
+        == (MIN_TRACKED_ENTRY_BYTES + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES) * 2
+    )
 
 
 def test_track_rejects_pre_clear_attempt_after_owner_lifecycle_restarts() -> None:
@@ -2989,10 +3834,12 @@ def test_track_rejects_pre_clear_attempt_after_owner_lifecycle_restarts() -> Non
         raise worker_errors[0]
     assert owner.entries[("values", "key")] == "new"
     assert (
-        budget._entries[(id(owner), "values", "key")].exact_bytes
+        _tracked_entry(budget, owner, "values", "key").exact_bytes
         == MIN_TRACKED_ENTRY_BYTES
     )
-    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+    assert budget.estimated_bytes == (
+        MIN_TRACKED_ENTRY_BYTES + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
 
 def test_track_does_not_admit_entry_evicted_while_estimation_is_blocked() -> None:
@@ -3056,8 +3903,10 @@ def test_track_does_not_admit_entry_evicted_while_estimation_is_blocked() -> Non
     if worker_errors:
         raise worker_errors[0]
     assert ("values", 0) not in owner.entries
-    assert (id(owner), "values", 0) not in budget._entries
-    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+    assert _canonical_tracked_key(budget, owner, "values", 0) not in budget._entries
+    assert budget.estimated_bytes == (
+        MIN_TRACKED_ENTRY_BYTES + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
 
 def test_register_only_advances_configuration_generation_for_limit_changes() -> None:
@@ -3083,7 +3932,7 @@ def test_successful_admissions_do_not_leave_attempt_tokens() -> None:
         budget.register(owner, 10_000)
         owner.store("values", key, "value")
         budget.track(owner, "values", key, "value")
-        tracked_key = (id(owner), "values", key)
+        tracked_key = _canonical_tracked_key(budget, owner, "values", key)
         assert tracked_key not in budget._entry_attempt_generations
 
         budget.register(owner, None)
@@ -3151,16 +4000,21 @@ def test_disabling_budget_rejects_pre_disable_estimate_after_reenable() -> None:
     if worker_errors:
         raise worker_errors[0]
     assert estimator_calls == 2
-    entry = budget._entries[(id(owner), "values", "key")]
+    entry = _tracked_entry(budget, owner, "values", "key")
     assert entry.stratum is not None
-    assert budget.estimated_bytes == MIN_TRACKED_ENTRY_BYTES
+    assert budget.estimated_bytes == (
+        MIN_TRACKED_ENTRY_BYTES + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
 
 def test_budget_evicts_oldest_entry_across_owners() -> None:
     budget = ProcessRunContextCacheBudget()
     first = CacheOwner()
     second = CacheOwner()
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
     budget.register(first, entry_size * 3)
     budget.register(second, entry_size * 3)
 
@@ -3179,7 +4033,10 @@ def test_budget_evicts_oldest_entry_across_owners() -> None:
 def test_budget_touch_refreshes_recency() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
     budget.register(owner, entry_size * 3)
     for key, value in (("a", "A"), ("b", "B")):
         owner.store("values", key, value)
@@ -3196,7 +4053,10 @@ def test_budget_touch_refreshes_recency() -> None:
 def test_budget_touch_many_preserves_latest_access_order() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
     budget.register(owner, entry_size * 4)
     for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
         owner.store("values", key, value)
@@ -3420,7 +4280,7 @@ def test_touch_many_rejects_stale_recency_generation_after_aba() -> None:
         mode_generation=stale_generation,
     )
 
-    assert tuple(entry[2] for entry in budget._entries) == ("first", "second")
+    assert tuple(entry.key for entry in budget._entries.values()) == ("first", "second")
 
 
 def test_touch_many_rejects_current_generation_when_recency_is_disabled() -> None:
@@ -3441,7 +4301,7 @@ def test_touch_many_rejects_current_generation_when_recency_is_disabled() -> Non
         mode_generation=disabled_generation,
     )
 
-    assert tuple(entry[2] for entry in budget._entries) == ("first", "second")
+    assert tuple(entry.key for entry in budget._entries.values()) == ("first", "second")
 
 
 def test_recency_reentrant_callback_keeps_newest_generation() -> None:
@@ -3680,6 +4540,7 @@ def test_rebuild_exception_publishes_enabled_mode_after_partial_eviction() -> No
 
     with (
         mock.patch.object(run_context_lru, "_admission_signal", admission_signal),
+        mock.patch.object(run_context_lru, "_CANONICAL_HANDLE_FIXED_BYTES", 0),
         pytest.raises(RuntimeError, match="rebuild eviction failed"),
     ):
         budget.register(late, 1_000)
@@ -3763,7 +4624,9 @@ def test_budget_stale_owner_finalizer_preserves_replacement_mru() -> None:
     replacement_owner = CacheOwner()
     replacement_reference = ref(replacement_owner)
     owner_id = id(stale_owner)
-    tracked_key = (owner_id, "values", "replacement")
+    tracked_key = _canonical_tracked_key_for_id(
+        budget, owner_id, "values", "replacement"
+    )
     entry_size = estimate_cache_entry_size("replacement", "R", stop_after=None)
     replacement_owner.store("values", "replacement", "R")
     budget._owner_references = {owner_id: replacement_reference}
@@ -3866,7 +4729,10 @@ def test_budget_clear_context_preserves_other_owner_accounting() -> None:
 
     budget.clear_context(first)
 
-    assert budget.estimated_bytes == second_size
+    assert (
+        budget.estimated_bytes
+        == second_size + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
     assert ("values", "b") in second.entries
 
 
@@ -3894,7 +4760,10 @@ def test_budget_rebuilds_live_owners_when_limit_changes() -> None:
     budget.register(first, None)
     first.store("values", "a", "A")
     budget.track(first, "values", "a", "A")
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
     budget.register(second, entry_size * 2)
     second.store("values", "b", "B")
@@ -3910,7 +4779,10 @@ def test_budget_rebuild_eviction_does_not_mutate_live_owner_iteration() -> None:
     budget.register(owner, None)
     for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
         owner.store("values", key, value)
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
 
     budget.register(owner, entry_size * 3)
 
@@ -3923,7 +4795,10 @@ def test_budget_rebuild_eviction_does_not_mutate_live_owner_iteration() -> None:
 def test_budget_lowering_finite_limit_preserves_single_owner_lru_order() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
     budget.register(owner, entry_size * 4)
     for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
         owner.store("values", key, value)
@@ -3941,7 +4816,10 @@ def test_budget_lowering_finite_limit_preserves_cross_owner_lru_order() -> None:
     budget = ProcessRunContextCacheBudget()
     first = CacheOwner()
     second = CacheOwner()
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
     budget.register(first, entry_size * 4)
     budget.register(second, entry_size * 4)
     first.store("values", "a", "A")
@@ -3962,7 +4840,10 @@ def test_budget_lowering_finite_limit_preserves_cross_owner_lru_order() -> None:
 def test_budget_new_empty_owner_enforces_lower_finite_limit() -> None:
     budget = ProcessRunContextCacheBudget()
     owner = CacheOwner()
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
     budget.register(owner, entry_size * 4)
     for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
         owner.store("values", key, value)
@@ -3986,7 +4867,10 @@ def test_budget_stale_dead_owner_cleanup_preserves_replacement_accounting() -> N
     entry_size = estimate_cache_entry_size("replacement", "R", stop_after=None)
     replacement_owner.store("values", "replacement", "R")
     budget._owner_references = {owner_id: replacement_reference}
-    budget._entries[(owner_id, "values", "replacement")] = _TrackedEntry(
+    tracked_key = _canonical_tracked_key_for_id(
+        budget, owner_id, "values", "replacement"
+    )
+    budget._entries[tracked_key] = _TrackedEntry(
         owner=replacement_reference,
         namespace="values",
         key="replacement",
@@ -4005,7 +4889,10 @@ def test_budget_stale_dead_owner_cleanup_preserves_replacement_accounting() -> N
 
 def test_budget_reentrant_eviction_honors_raised_limit() -> None:
     budget = ProcessRunContextCacheBudget()
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
     owner = LimitRaisingCacheOwner(budget, entry_size * 3)
     budget.register(owner, entry_size * 4)
     for key, value in (("a", "A"), ("b", "B"), ("c", "C")):
@@ -4024,7 +4911,10 @@ def test_budget_registers_prepopulated_owner_when_finite_limit_changes() -> None
     budget = ProcessRunContextCacheBudget()
     first = CacheOwner()
     second = CacheOwner()
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
     budget.register(first, entry_size * 4)
     first.store("values", "a", "A")
     budget.track(first, "values", "a", "A")
@@ -4043,7 +4933,10 @@ def test_budget_registers_prepopulated_owner_when_finite_limit_is_unchanged() ->
     budget = ProcessRunContextCacheBudget()
     first = CacheOwner()
     second = CacheOwner()
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + run_context_lru._CANONICAL_HANDLE_FIXED_BYTES
+    )
     budget.register(first, entry_size * 3)
     first.store("values", "a", "A")
     budget.track(first, "values", "a", "A")
@@ -4056,3 +4949,1076 @@ def test_budget_registers_prepopulated_owner_when_finite_limit_is_unchanged() ->
     assert ("values", "b") in second.entries
     assert ("values", "c") in second.entries
     assert budget.estimated_bytes == entry_size * 2
+
+
+@pytest.mark.parametrize(
+    ("preparation", "operation"),
+    [
+        ("entry", "first_admission"),
+        ("stratum", "first_admission"),
+        ("metadata", "final_sampled_removal"),
+    ],
+)
+@pytest.mark.parametrize("action", ["replace", "disable"])
+def test_same_key_reentry_during_publication_preparation_keeps_current_accounting(
+    preparation: str,
+    operation: str,
+    action: str,
+) -> None:
+    """Reentrant preparation cannot publish stale or partially charged state."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_000_000)
+    candidate_root = snapshot_from_dependencies(
+        frozenset({("Project", "all", "candidate")})
+    )
+    candidate = run_context._RunCacheEntry(
+        value=["candidate"] if operation == "first_admission" else ("candidate",),
+        dependency_root=candidate_root,
+    )
+    replacement = run_context._RunCacheEntry(
+        value=["replacement"] if operation == "first_admission" else ("replacement",),
+        dependency_root=candidate_root,
+    )
+
+    if operation == "final_sampled_removal":
+        old = run_context._RunCacheEntry(
+            value=["old"],
+            dependency_root=snapshot_from_dependencies(
+                frozenset({("Project", "all", "old")})
+            ),
+        )
+        owner.store("values", "key", old)
+        budget.track(owner, "values", "key", old)
+
+    owner.store("values", "key", candidate)
+    if preparation == "entry":
+        constructor_name = "_TrackedEntry"
+    elif preparation == "stratum":
+        constructor_name = "_StratumState"
+    else:
+        constructor_name = "_CalibrationMetadata"
+    original_constructor = getattr(run_context_lru, constructor_name)
+    reentered = False
+
+    def reentrant_constructor(*args: object, **kwargs: object) -> object:
+        nonlocal reentered
+        if not reentered:
+            reentered = True
+            if action == "disable":
+                budget.register(owner, None)
+            else:
+                owner.store("values", "key", replacement)
+                budget.track(owner, "values", "key", replacement)
+        return original_constructor(*args, **kwargs)
+
+    with mock.patch.object(
+        run_context_lru,
+        constructor_name,
+        side_effect=reentrant_constructor,
+    ):
+        budget.track(owner, "values", "key", candidate)
+
+    assert reentered
+    tracked_key = _canonical_tracked_key(budget, owner, "values", "key")
+    if action == "replace":
+        assert owner.entries[("values", "key")] is replacement
+        tracked = budget._entries[tracked_key]
+        assert tracked.dependency_root is replacement.dependency_root
+        assert budget.estimated_bytes >= 0
+        assert budget._graph_ledger.total_bytes >= 0
+        assert not budget._entry_attempt_generations
+    else:
+        assert not budget._entries
+        assert budget.estimated_bytes == 0
+        assert budget._graph_ledger.total_bytes == 0
+        assert not budget._entry_attempt_generations
+
+    budget.clear_context(owner)
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+    owner.entries.clear()
+
+
+def test_same_key_replacement_during_admission_signal_wins_over_outer_attempt() -> None:
+    """The owner/key attempt exists before signal construction can reenter."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_000_000)
+    old = run_context._RunCacheEntry(
+        value="old",
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "old")})
+        ),
+    )
+    replacement = run_context._RunCacheEntry(
+        value="replacement",
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "replacement")})
+        ),
+    )
+    owner.store("values", "key", old)
+    original_signal = run_context_lru._admission_signal
+    reentered = False
+
+    def reentrant_signal(
+        namespace: RunCacheNamespace,
+        key: object,
+        value: object,
+    ) -> run_context_lru._AdmissionSignal:
+        nonlocal reentered
+        if not reentered:
+            reentered = True
+            owner.store("values", "key", replacement)
+            budget.track(owner, "values", "key", replacement)
+        return original_signal(namespace, key, value)
+
+    with mock.patch.object(
+        run_context_lru,
+        "_admission_signal",
+        side_effect=reentrant_signal,
+    ):
+        budget.track(owner, "values", "key", old)
+
+    assert reentered
+    assert owner.entries[("values", "key")] is replacement
+    tracked = _tracked_entry(budget, owner, "values", "key")
+    assert tracked.dependency_root is replacement.dependency_root
+    assert budget.estimated_bytes >= 0
+    assert budget._graph_ledger.total_bytes >= 0
+    assert not budget._entry_attempt_generations
+
+    budget.clear_context(owner)
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+    owner.entries.clear()
+
+
+@pytest.mark.parametrize("rebuild", [False, True])
+@pytest.mark.parametrize("estimator_error", [False, True])
+def test_graph_sizing_zero_cap_cleans_candidate_and_attempt(
+    rebuild: bool,
+    estimator_error: bool,
+) -> None:
+    """A zero-cap transition during graph sizing cannot strand a resident."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, None if rebuild else 100_000)
+    candidate = run_context._RunCacheEntry(
+        value=["candidate"],
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "candidate")})
+        ),
+    )
+    owner.store("values", "key", candidate)
+    original_estimator = run_context_lru._estimate_payload_cache_entry_size
+    transitioned = False
+
+    def zero_during_graph_sizing(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal transitioned
+        if key is None and not transitioned:
+            transitioned = True
+            budget.register(owner, 0)
+            if estimator_error:
+                raise RuntimeError("graph sizing failed after zero transition")  # noqa: TRY003
+        return original_estimator(key, value, stop_after=stop_after)
+
+    with mock.patch.object(
+        run_context_lru,
+        "_estimate_payload_cache_entry_size",
+        side_effect=zero_during_graph_sizing,
+    ):
+        if estimator_error:
+            with pytest.raises(
+                RuntimeError, match="graph sizing failed after zero transition"
+            ):
+                if rebuild:
+                    budget.register(owner, 100_000)
+                else:
+                    budget.track(owner, "values", "key", candidate)
+        elif rebuild:
+            budget.register(owner, 100_000)
+        else:
+            budget.track(owner, "values", "key", candidate)
+
+    assert transitioned
+    assert not owner.entries
+    assert not budget._entries
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+    assert not budget._entry_attempt_generations
+    budget.clear_context(owner)
+
+
+@pytest.mark.parametrize("requested_limit", [100_000, 200_000])
+def test_populated_owner_enrollment_retries_later_entries_after_limit_change(
+    requested_limit: int,
+) -> None:
+    """Owner enrollment restarts after a cap change during its first graph size."""
+    budget = ProcessRunContextCacheBudget()
+    existing_owner = CacheOwner()
+    incoming_owner = CacheOwner()
+    budget.register(existing_owner, 100_000)
+    roots = {
+        key: snapshot_from_dependencies(frozenset({("Project", "all", key)}))
+        for key in ("first", "later")
+    }
+    values = {
+        key: run_context._RunCacheEntry(value=[key], dependency_root=roots[key])
+        for key in roots
+    }
+    for key, value in values.items():
+        incoming_owner.store("values", key, value)
+    original_estimator = run_context_lru._estimate_payload_cache_entry_size
+    changed_limit = False
+
+    def change_limit_during_graph_sizing(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal changed_limit
+        if key is None and not changed_limit:
+            changed_limit = True
+            budget.register(existing_owner, 300_000)
+        return original_estimator(key, value, stop_after=stop_after)
+
+    with mock.patch.object(
+        run_context_lru,
+        "_estimate_payload_cache_entry_size",
+        side_effect=change_limit_during_graph_sizing,
+    ):
+        budget.register(incoming_owner, requested_limit)
+
+    assert changed_limit
+    assert budget._max_bytes == 300_000
+    for key, value in values.items():
+        assert incoming_owner.entries[("values", key)] is value
+        tracked = _tracked_entry(budget, incoming_owner, "values", key)
+        assert tracked.dependency_root is value.dependency_root
+    assert not budget._entry_attempt_generations
+    budget.clear_context(incoming_owner)
+    budget.clear_context(existing_owner)
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+
+
+def test_rebuild_sizing_error_cleans_multiple_resident_owners() -> None:
+    """A rebuild sizing failure evicts every resident left without accounting."""
+    budget = ProcessRunContextCacheBudget()
+    owners = (CacheOwner(), CacheOwner())
+    for owner in owners:
+        budget.register(owner, None)
+        for key in ("first", "later"):
+            owner.store(
+                "values",
+                key,
+                run_context._RunCacheEntry(
+                    value=[key],
+                    dependency_root=snapshot_from_dependencies(
+                        frozenset({("Project", "all", key)})
+                    ),
+                ),
+            )
+    original_estimator = run_context_lru._estimate_payload_cache_entry_size
+    failed = False
+
+    def failing_estimator(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal failed
+        if key is None and not failed:
+            failed = True
+            raise RuntimeError("rebuild graph sizing failed")  # noqa: TRY003
+        return original_estimator(key, value, stop_after=stop_after)
+
+    with (
+        mock.patch.object(
+            run_context_lru,
+            "_estimate_payload_cache_entry_size",
+            side_effect=failing_estimator,
+        ),
+        pytest.raises(RuntimeError, match="rebuild graph sizing failed"),
+    ):
+        budget.register(owners[0], 100_000)
+
+    assert failed
+    assert all(not owner.entries for owner in owners)
+    assert not budget._entries
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+    assert not budget._entry_attempt_generations
+    for owner in owners:
+        budget.clear_context(owner)
+
+
+def test_public_estimate_counts_dependencies_inside_nested_hit_payload() -> None:
+    """One outer unwrap leaves nested framework hits as ordinary payloads."""
+    dependencies = frozenset(("Project", "all", str(index)) for index in range(1_000))
+    inner = DependencyCacheHit(value="payload", dependencies=dependencies)
+    empty_inner = DependencyCacheHit(value="payload", dependencies=frozenset())
+    nested = DependencyCacheHit(value=inner, dependencies=frozenset())
+    empty_nested = DependencyCacheHit(value=empty_inner, dependencies=frozenset())
+
+    nested_estimate = estimate_cache_entry_size("key", nested, stop_after=None)
+    empty_nested_estimate = estimate_cache_entry_size(
+        "key", empty_nested, stop_after=None
+    )
+    dependency_estimate = estimate_cache_entry_size(None, dependencies, stop_after=None)
+
+    assert nested_estimate > empty_nested_estimate
+    assert nested_estimate >= dependency_estimate
+
+
+def test_history_iterator_reentry_does_not_raise_or_leak_accounting() -> None:
+    """History trimming tolerates a budget transition during iterator setup."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_000_000)
+    old = run_context._RunCacheEntry(
+        value=["old"],
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "old")})
+        ),
+    )
+    owner.store("values", "key", old)
+    budget.track(owner, "values", "key", old)
+    history = OrderedDict(
+        (
+            ("values", "opaque", index),
+            run_context_lru._CalibrationMetadata(
+                admission_count=index + 1,
+                samples=((64, 320),),
+            ),
+        )
+        for index in range(run_context_lru.RUN_CONTEXT_CALIBRATION_HISTORY_LIMIT)
+    )
+    reentered = False
+
+    class ReentrantHistory(OrderedDict[object, object]):
+        def __iter__(self) -> Iterator[object]:
+            nonlocal reentered
+            source = super().__iter__()
+            if not reentered:
+                reentered = True
+                budget.register(owner, None)
+            return source
+
+    budget._calibration_history = ReentrantHistory(history)
+    budget.clear_context(owner)
+
+    assert reentered
+    assert not budget._entries
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+    assert not budget._entry_attempt_generations
+    owner.entries.clear()
+
+
+def test_owner_clear_snapshots_keys_before_reentrant_budget_disable() -> None:
+    """Owner cleanup tolerates disabling the budget during key snapshotting."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_000_000)
+    for key in ("first", "second"):
+        owner.store("values", key, key)
+        budget.track(owner, "values", key, key)
+
+    builtin_tuple = tuple
+    reentered = False
+
+    def tuple_with_reentry(iterable: Iterable[object] = ()) -> tuple[object, ...]:
+        nonlocal reentered
+        iterator = iter(iterable)
+        try:
+            first = next(iterator)
+        except StopIteration:
+            return ()
+        generator_code = getattr(iterable, "gi_code", None)
+        if (
+            not reentered
+            and generator_code is not None
+            and generator_code.co_name == "<genexpr>"
+        ):
+            reentered = True
+            budget.register(owner, None)
+        return builtin_tuple((first, *iterator))
+
+    with mock.patch.object(
+        run_context_lru,
+        "tuple",
+        side_effect=tuple_with_reentry,
+        create=True,
+    ):
+        budget.clear_context(owner)
+
+    assert reentered
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+    assert not budget._entries
+    assert not budget._entry_attempt_generations
+    owner.entries.clear()
+
+
+def test_mru_removal_preparation_consumes_only_bounded_reverse_iterator() -> None:
+    """Removing the MRU entry inspects at most its immediate predecessor."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_000_000)
+    for key in ("first", "middle", "last"):
+        owner.store("values", key, key)
+        budget.track(owner, "values", key, key)
+
+    batches: list[list[object]] = []
+
+    class BoundedReverseEntries(OrderedDict[object, object]):
+        def __reversed__(self) -> Iterator[object]:
+            source = super().__reversed__()
+            batch: list[object] = []
+            batches.append(batch)
+            for index, tracked_key in enumerate(source):
+                batch.append(tracked_key)
+                if index >= 2:
+                    raise AssertionError("MRU removal iterated the full entries map")  # noqa: TRY003
+                yield tracked_key
+
+    last_key = _canonical_tracked_key(budget, owner, "values", "last")
+    middle_key = _canonical_tracked_key(budget, owner, "values", "middle")
+    budget._entries = BoundedReverseEntries(budget._entries)
+    owner._evict_run_cache_entry("values", "last")
+    budget.remove(owner, "values", "last")
+
+    assert batches == [
+        [
+            last_key,
+            middle_key,
+        ]
+    ]
+    budget.clear_context(owner)
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+
+
+def test_mru_removal_retries_after_reentrant_recency_change() -> None:
+    """A recency callback during reverse setup leaves the peer resident."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_000_000)
+    for key in ("other", "key"):
+        owner.store("values", key, key)
+        budget.track(owner, "values", key, key)
+
+    touched = False
+
+    class ReentrantReverseEntries(OrderedDict[object, object]):
+        def __reversed__(self) -> Iterator[object]:
+            nonlocal touched
+            source = super().__reversed__()
+            if not touched:
+                touched = True
+                budget.touch(owner, "values", "other")
+            return source
+
+    budget._entries = ReentrantReverseEntries(budget._entries)
+    owner._evict_run_cache_entry("values", "key")
+    budget.remove(owner, "values", "key")
+
+    other_tracked_key = _canonical_tracked_key(budget, owner, "values", "other")
+    assert touched
+    assert _entry_keys(budget) == {(id(owner), "values", "other")}
+    assert budget._mru_key == other_tracked_key
+    assert owner.entries == {("values", "other"): "other"}
+    assert budget.estimated_bytes >= 0
+    assert budget._graph_ledger.total_bytes >= 0
+
+    budget.clear_context(owner)
+    assert budget.estimated_bytes == 0
+    assert budget._graph_ledger.total_bytes == 0
+    owner.entries.clear()
+
+
+def test_rebuild_does_not_overwrite_reentrant_finite_rebuild_ledger() -> None:
+    """An outer reset cannot replace a ledger rebuilt by its constructor callback."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, None)
+    candidate = run_context._RunCacheEntry(
+        value=["candidate"],
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "candidate")})
+        ),
+    )
+    owner.store("values", "key", candidate)
+    original_ledger = run_context_lru._SharedGraphLedger
+    reentered = False
+
+    def reentrant_ledger() -> run_context_lru._SharedGraphLedger:
+        nonlocal reentered
+        if not reentered:
+            reentered = True
+            budget.register(owner, None)
+            budget.register(owner, 900_000)
+        return original_ledger()
+
+    with mock.patch.object(
+        run_context_lru,
+        "_SharedGraphLedger",
+        side_effect=reentrant_ledger,
+    ):
+        budget.register(owner, 100_000)
+
+    assert reentered
+    tracked = _tracked_entry(budget, owner, "values", "key")
+    assert tracked.dependency_root is candidate.dependency_root
+    assert budget._graph_ledger.root_references
+    assert budget.estimated_bytes >= budget._graph_ledger.total_bytes
+    budget.clear_context(owner)
+    owner.entries.clear()
+
+
+def test_failed_refresh_cleanup_preserves_reentrant_replacement_storage() -> None:
+    """A removal callback cannot make failed cleanup evict a newer value."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 1_000_000)
+    old = run_context._RunCacheEntry(
+        value=["old"],
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "old")})
+        ),
+    )
+    candidate = run_context._RunCacheEntry(
+        value=["candidate"],
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "candidate")})
+        ),
+    )
+    replacement = run_context._RunCacheEntry(
+        value=["replacement"],
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "replacement")})
+        ),
+    )
+    owner.store("values", "key", old)
+    budget.track(owner, "values", "key", old)
+    owner.store("values", "key", candidate)
+    original_prepare = budget._prepare_entry_removal_locked
+    original_estimator = run_context_lru._estimate_payload_cache_entry_size
+    reentered = False
+    failed = False
+
+    def reentrant_prepare(
+        tracked_key: run_context_lru.TrackedKey,
+        entry: run_context_lru._TrackedEntry,
+    ) -> run_context_lru._PreparedEntryRemoval:
+        nonlocal reentered
+        prepared = original_prepare(tracked_key, entry)
+        if not reentered:
+            reentered = True
+            owner.store("values", "key", replacement)
+            budget.track(owner, "values", "key", replacement)
+        return prepared
+
+    def failing_estimator(
+        key: object,
+        value: object,
+        *,
+        stop_after: int | None,
+    ) -> int:
+        nonlocal failed
+        if key is None and not failed:
+            failed = True
+            raise RuntimeError("candidate sizing failed")  # noqa: TRY003
+        return original_estimator(key, value, stop_after=stop_after)
+
+    with (
+        mock.patch.object(
+            budget,
+            "_prepare_entry_removal_locked",
+            side_effect=reentrant_prepare,
+        ),
+        mock.patch.object(
+            run_context_lru,
+            "_estimate_payload_cache_entry_size",
+            side_effect=failing_estimator,
+        ),
+        pytest.raises(RuntimeError, match="candidate sizing failed"),
+    ):
+        budget.track(owner, "values", "key", candidate)
+
+    assert reentered
+    assert owner.entries[("values", "key")] is replacement
+    tracked = _tracked_entry(budget, owner, "values", "key")
+    assert tracked.dependency_root is replacement.dependency_root
+    assert not budget._entry_attempt_generations
+    budget.clear_context(owner)
+    owner.entries.clear()
+
+
+def test_enrollment_discards_obsolete_snapshot_before_installing_attempts() -> None:
+    """A token-allocation callback cannot admit the value captured before it."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, None)
+    candidate = run_context._RunCacheEntry(
+        value=["candidate"],
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "candidate")})
+        ),
+    )
+    replacement = run_context._RunCacheEntry(
+        value=["replacement"],
+        dependency_root=snapshot_from_dependencies(
+            frozenset({("Project", "all", "replacement")})
+        ),
+    )
+    owner.store("values", "key", candidate)
+    budget._owner_lifecycle_generation_locked(id(owner))
+    original_next_generation = budget._next_admission_generation_locked
+    reentered = False
+
+    def reentrant_generation() -> int:
+        nonlocal reentered
+        if not reentered:
+            reentered = True
+            owner.store("values", "key", replacement)
+            budget.track(owner, "values", "key", replacement)
+        return original_next_generation()
+
+    with mock.patch.object(
+        budget,
+        "_next_admission_generation_locked",
+        side_effect=reentrant_generation,
+    ):
+        budget.register(owner, 100_000)
+
+    assert reentered
+    assert owner.entries[("values", "key")] is replacement
+    tracked = _tracked_entry(budget, owner, "values", "key")
+    assert tracked.dependency_root is replacement.dependency_root
+    assert not budget._entry_attempt_generations
+    budget.clear_context(owner)
+    owner.entries.clear()
+
+
+def test_reentrant_key_resolution_reconciles_fresh_owner_storage() -> None:
+    """A pre-token hash callback cannot strand an already stored value."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    peer = CacheOwner()
+    budget.register(owner, 100_000)
+    budget.register(peer, 100_000)
+    peer.store("values", "peer", "peer")
+
+    class ReentrantKey:
+        armed = False
+
+        def __hash__(self) -> int:
+            if self.armed:
+                self.armed = False
+                budget.track(peer, "values", "peer", "peer")
+            return 17
+
+        def __eq__(self, other: object) -> bool:
+            return self is other
+
+    key = ReentrantKey()
+    owner.store("values", key, "candidate")
+    key.armed = True
+    budget.track(owner, "values", key, "candidate")
+
+    assert _tracked_entry(budget, owner, "values", key).key is key
+    assert _tracked_entry(budget, peer, "values", "peer").key == "peer"
+    assert not budget._entry_attempt_generations
+    budget.clear_context(owner)
+    budget.clear_context(peer)
+
+
+def test_reentrant_key_resolution_at_zero_evicts_fresh_current_storage() -> None:
+    """A hash callback changing to zero reconciles rather than stranding data."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+
+    class ReentrantKey:
+        armed = False
+
+        def __hash__(self) -> int:
+            if self.armed:
+                self.armed = False
+                budget.register(owner, 0)
+            return 19
+
+        def __eq__(self, other: object) -> bool:
+            return self is other
+
+    key = ReentrantKey()
+    owner.store("values", key, "candidate")
+    key.armed = True
+    budget.track(owner, "values", key, "candidate")
+
+    assert owner.entries == {}
+    assert not budget._entries
+    assert not budget._entry_attempt_generations
+
+
+def test_reentrant_key_resolution_disabling_budget_discards_handle() -> None:
+    """A disabled coordinator retains neither accounting nor raw-key handles."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+
+    class ReentrantKey:
+        armed = False
+
+        def __hash__(self) -> int:
+            if self.armed:
+                self.armed = False
+                budget.register(owner, None)
+            return 29
+
+        def __eq__(self, other: object) -> bool:
+            return self is other
+
+    key = ReentrantKey()
+    owner.store("values", key, "candidate")
+    key.armed = True
+    budget.track(owner, "values", key, "candidate")
+
+    assert budget._max_bytes is None
+    assert not budget._entries
+    assert not budget._canonical_handles
+    assert not budget._canonical_keys
+
+
+def test_reentrant_equal_key_removal_preserves_newer_replacement() -> None:
+    """Removal resolves equality before it can touch a replacement's entry."""
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+
+    class EqualKey:
+        armed = False
+
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def __hash__(self) -> int:
+            return 23
+
+        def __eq__(self, other: object) -> bool:
+            if self.armed:
+                self.armed = False
+                owner.store("values", replacement_key, "replacement")
+                budget.track(owner, "values", replacement_key, "replacement")
+            return isinstance(other, EqualKey)
+
+    stored_key = EqualKey("stored")
+    replacement_key = EqualKey("replacement")
+    owner.store("values", stored_key, "old")
+    budget.track(owner, "values", stored_key, "old")
+    owner.entries.pop(("values", stored_key))
+    stored_key.armed = True
+
+    budget.remove(owner, "values", replacement_key)
+
+    assert owner.entries[("values", replacement_key)] == "replacement"
+    assert (
+        _tracked_entry(budget, owner, "values", replacement_key).key is replacement_key
+    )
+    assert not budget._entry_attempt_generations
+    budget.clear_context(owner)
+
+
+def test_canonical_keys_preserve_equality_and_bound_eviction_metadata() -> None:
+    class CollidingKey:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def __hash__(self) -> int:
+            return 17
+
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, CollidingKey) and self.name == other.name
+
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 3_000)
+    first = run_context._RunCacheKey(None, CollidingKey("same"))
+    equivalent = run_context._RunCacheKey(None, CollidingKey("same"))
+    owner.store("values", first, "old")
+    budget.track(owner, "values", first, "old")
+    original_handle = next(iter(budget._entries))
+    owner.store("values", equivalent, "replacement")
+    budget.track(owner, "values", equivalent, "replacement")
+
+    assert list(budget._entries) == [original_handle]
+    assert owner.entries[("values", first)] == "replacement"
+
+    for number in range(32):
+        key = run_context._RunCacheKey(None, CollidingKey(str(number)))
+        owner.store("values", key, "value")
+        budget.track(owner, "values", key, "value")
+        assert len(budget._entries) == len(owner.entries)
+        assert set(budget._canonical_handles) == {
+            tracked_key[2] for tracked_key in budget._entries
+        }
+    assert len(owner.entries) < 32
+    handles_before_misses = set(budget._canonical_handles)
+    for number in range(32):
+        budget.touch(
+            owner,
+            "values",
+            run_context._RunCacheKey(None, CollidingKey(f"miss-{number}")),
+        )
+    assert set(budget._canonical_handles) == handles_before_misses
+
+    budget.clear_context(owner)
+    assert not budget._canonical_handles
+    assert not budget._canonical_keys
+    assert budget.estimated_bytes == 0
+
+
+def test_canonical_publication_does_not_invoke_public_key_hooks() -> None:
+    committing = False
+
+    class GuardedKey:
+        def __hash__(self) -> int:
+            assert not committing, "public key hashed during accounting commit"
+            return 17
+
+        def __eq__(self, other: object) -> bool:
+            assert not committing, "public key compared during accounting commit"
+            return self is other
+
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+    key = run_context._RunCacheKey(None, GuardedKey())
+    value = run_context._RunCacheEntry(
+        "value", snapshot_from_dependencies(frozenset({("Project", "all", "1")}))
+    )
+    owner.store("values", key, value)
+    commit_retain = budget._graph_ledger.commit_retain
+
+    def guarded_commit(*args: object, **kwargs: object) -> object:
+        nonlocal committing
+        retained = commit_retain(*args, **kwargs)
+        committing = True
+        return retained
+
+    try:
+        with mock.patch.object(budget._graph_ledger, "commit_retain", guarded_commit):
+            budget.track(owner, "values", key, value)
+    finally:
+        committing = False
+
+    assert len(budget._entries) == 1
+    assert budget._graph_ledger.root_references == {id(value.dependency_root): 1}
+    assert not budget._entry_attempt_generations
+    budget.clear_context(owner)
+    assert budget.estimated_bytes == 0
+
+
+def test_removal_survives_unrelated_admission_during_key_resolution() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    peer = CacheOwner()
+    budget.register(owner, 100_000)
+    budget.register(peer, 100_000)
+    owner.store("values", "key", "old")
+    budget.track(owner, "values", "key", "old")
+    owner.entries.pop(("values", "key"))
+
+    class ReentrantKey:
+        def __hash__(self) -> int:
+            peer.store("values", "peer", "value")
+            budget.track(peer, "values", "peer", "value")
+            return hash("key")
+
+        def __eq__(self, other: object) -> bool:
+            return other == "key"
+
+    budget.remove(owner, "values", ReentrantKey())
+
+    assert not owner.entries
+    assert len(budget._entries) == 1
+    assert next(iter(budget._entries.values())).owner() is peer
+    assert len(budget._canonical_handles) == 1
+    budget.clear_context(peer)
+    budget.clear_context(owner)
+    assert budget.estimated_bytes == 0
+
+
+def test_oversized_admission_sizing_preserves_reentrant_replacement() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+    key = run_context._RunCacheKey(None, "key")
+    root = snapshot_from_dependencies(frozenset({("Project", "all", "1")}))
+    candidate = run_context._RunCacheEntry([bytearray(200_000)], root)
+    replacement = run_context._RunCacheEntry("replacement", root)
+    owner.store("values", key, candidate)
+    original = budget._prepared_modeled_entry_bytes
+    fired = False
+
+    def sizing(publication: run_context_lru._PreparedPublication) -> int:
+        nonlocal fired
+        if not fired:
+            fired = True
+            owner.store("values", key, replacement)
+            budget.track(owner, "values", key, replacement)
+        return original(publication)
+
+    with mock.patch.object(budget, "_prepared_modeled_entry_bytes", sizing):
+        budget.track(owner, "values", key, candidate)
+
+    assert fired
+    assert owner.entries[("values", key)] is replacement
+    assert len(budget._entries) == len(budget._canonical_handles) == 1
+    assert budget._graph_ledger.root_references == {id(root): 1}
+    assert budget.estimated_bytes > 0
+    assert not budget._entry_attempt_generations
+    budget.clear_context(owner)
+    assert budget.estimated_bytes == 0
+
+
+def test_non_reflexive_key_identity_has_one_accounting_entry() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, 100_000)
+    key = float("nan")
+    for value in range(4):
+        owner.store("values", key, value)
+        budget.track(owner, "values", key, value)
+        budget.touch(owner, "values", key)
+        assert len(owner.entries) == len(budget._entries) == 1
+        assert len(budget._canonical_handles) == 1
+    owner.entries.pop(("values", key))
+    budget.remove(owner, "values", key)
+    assert not budget._entries
+    assert not budget._canonical_handles
+    assert budget.estimated_bytes == 0
+
+
+def test_enrollment_clear_during_handle_creation_releases_provisional_key() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    budget.register(owner, None)
+    key = run_context._RunCacheKey(None, "candidate")
+    owner.store("values", key, "candidate")
+    original = run_context_lru._CanonicalHandle
+    fired = False
+
+    def construct(*args: object) -> run_context_lru._CanonicalHandle:
+        nonlocal fired
+        if not fired:
+            fired = True
+            owner.entries.clear()
+            budget.clear_context(owner)
+        return original(*args)
+
+    with mock.patch.object(run_context_lru, "_CanonicalHandle", construct):
+        budget.register(owner, 100_000)
+
+    assert fired
+    assert not owner.entries
+    assert not budget._entries
+    assert not budget._entry_attempt_generations
+    assert not budget._canonical_handles
+    assert not budget._canonical_keys
+    assert id(owner) not in budget._owner_references
+    assert budget.estimated_bytes == 0
+
+
+def test_enrollment_repeated_handle_callbacks_leave_no_orphan() -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    peer = CacheOwner()
+    budget.register(peer, 100_000)
+    key = run_context._RunCacheKey(None, "candidate")
+    owner.store("values", key, "candidate")
+    original = run_context_lru._CanonicalHandle
+    calls = 0
+    owner_reference = ref(owner)
+
+    def construct(*args: object) -> run_context_lru._CanonicalHandle:
+        nonlocal calls
+        calls += 1
+        current_owner = owner_reference()
+        assert current_owner is not None
+        current_owner.entries.clear()
+        budget.clear_context(current_owner)
+        return original(*args)
+
+    with mock.patch.object(run_context_lru, "_CanonicalHandle", construct):
+        budget.register(owner, 100_000)
+
+    assert calls > 0
+    assert not owner.entries
+    assert not budget._entries
+    assert not budget._entry_attempt_generations
+    assert not budget._canonical_handles
+    assert not budget._canonical_keys
+    assert budget.estimated_bytes == 0
+    reference = ref(owner)
+    del owner
+    gc.collect()
+    assert reference() is None
+    assert not budget._canonical_handles
+
+
+@pytest.mark.parametrize("replacement_on_cleanup", [False, True])
+def test_enrollment_retry_exhaustion_rejects_unaccounted_resident(
+    replacement_on_cleanup: bool,
+) -> None:
+    budget = ProcessRunContextCacheBudget()
+    owner = CacheOwner()
+    peer = CacheOwner()
+    budget.register(peer, 100_000)
+    armed = False
+    calls = 0
+
+    class Key:
+        def __hash__(self) -> int:
+            nonlocal calls, armed
+            if armed and calls < 4:
+                calls += 1
+                peer.store("values", "peer", "peer")
+                budget.track(peer, "values", "peer", "peer")
+            elif armed and replacement_on_cleanup:
+                armed = False
+                owner.store("values", key, "replacement")
+                budget.track(owner, "values", key, "replacement")
+            return 31
+
+        def __eq__(self, other: object) -> bool:
+            return self is other
+
+    key = Key()
+    owner.store("values", key, [bytearray(200_000)])
+    armed = True
+    budget.register(owner, 100_000)
+
+    assert calls == 4
+    if replacement_on_cleanup:
+        assert owner.entries[("values", key)] == "replacement"
+        assert len(budget._entries) == len(budget._canonical_handles) == 2
+        assert {entry.owner() for entry in budget._entries.values()} == {owner, peer}
+    else:
+        assert not owner.entries
+        assert len(budget._entries) == len(budget._canonical_handles) == 1
+        assert next(iter(budget._entries.values())).owner() is peer
+    assert not budget._entry_attempt_generations
+    budget.clear_context(owner)
+    budget.clear_context(peer)
+    assert budget.estimated_bytes == 0

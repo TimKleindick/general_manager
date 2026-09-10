@@ -107,6 +107,24 @@ PERF_CEILINGS: dict[str, int] = {
     # Calculation run-cache invalidation workloads.
     "RUN_CACHE_MIXED_500_DISCARD_CALLS": 24,
     "RUN_CACHE_MIXED_500_KEY_INSPECTIONS": 51_000,
+    # Shared run-cache dependency graph workloads for issue #501. Exact counts
+    # matched in three complete recordings each on Python 3.12, 3.13, and 3.14.
+    "RUN_GRAPH_FANOUT_16X24_DIRECT_VISITS": 40,
+    "RUN_GRAPH_FANOUT_16X24_PLAIN_HIT_VISITS": 0,
+    "RUN_GRAPH_FANOUT_16X24_MATERIALIZE_VISITS": 40,
+    "RUN_GRAPH_FANOUT_16X24_NODES": 25,
+    "RUN_GRAPH_FANOUT_16X24_EDGES": 24,
+    "RUN_GRAPH_FANOUT_16X24_MEMBERSHIPS": 40,
+    "RUN_GRAPH_DIAMOND_12_COLD_CALLS": 25,
+    "RUN_GRAPH_DIAMOND_12_WARM_CALLS": 0,
+    "RUN_GRAPH_DIAMOND_12_NODES": 25,
+    "RUN_GRAPH_DIAMOND_12_EDGES": 46,
+    "RUN_GRAPH_DIAMOND_12_MATERIALIZE_VISITS": 25,
+    "RUN_GRAPH_MIXED_12_MATERIALIZE_VISITS": 28,
+    # Transactional preparation and commit each check the retained root once;
+    # neither phase traverses its children or re-estimates its dependencies.
+    "RUN_GRAPH_LEDGER_RETAIN_NODE_LOOKUPS": 2,
+    "RUN_GRAPH_LEDGER_RETAIN_DEPENDENCY_LOOKUPS": 0,
     # Calculation bucket combination workloads.
     "CALC_STATIC_5X10_COLD_A_YIELDS": 5,
     "CALC_STATIC_5X10_COLD_B_YIELDS": 50,

@@ -97,7 +97,6 @@ class TestDependencyTracker(TestCase):
         """Report active tracking only while at least one context is open."""
         DependencyTracker.reset_thread_local_storage()
         self.assertFalse(DependencyTracker.is_active())
-
         with DependencyTracker() as dependencies:
             self.assertTrue(DependencyTracker.is_active())
             DependencyTracker.track("Example", "identification", '{"id": 1}')
@@ -109,6 +108,159 @@ class TestDependencyTracker(TestCase):
 
         self.assertEqual(dependencies, {("Example", "identification", '{"id": 1}')})
         self.assertFalse(DependencyTracker.is_active())
+
+    def test_private_capture_attaches_partial_child_after_caught_exception(self):
+        def fail_after_tracking() -> None:
+            DependencyTracker.track("Project", "identification", "1")
+            raise RuntimeError
+
+        with DependencyTracker._capture() as parent:
+            try:
+                with DependencyTracker._capture():
+                    fail_after_tracking()
+            except RuntimeError:
+                pass
+
+        assert parent.snapshot is not None
+        self.assertEqual(
+            DependencyTracker._materialize_snapshot(parent.snapshot),
+            {("Project", "identification", "1")},
+        )
+
+    def test_private_capture_does_not_backfill_late_public_tracker(self):
+        with DependencyTracker._capture() as capture:
+            DependencyTracker.track("Project", "identification", "before")
+            with DependencyTracker() as public_dependencies:
+                DependencyTracker.track("Project", "identification", "after")
+
+        assert capture.snapshot is not None
+        self.assertEqual(
+            public_dependencies,
+            {("Project", "identification", "after")},
+        )
+        self.assertEqual(
+            DependencyTracker._materialize_snapshot(capture.snapshot),
+            {
+                ("Project", "identification", "before"),
+                ("Project", "identification", "after"),
+            },
+        )
+
+    def test_reset_detaches_old_private_scopes_without_leaking_to_new_scope(self):
+        with DependencyTracker._capture() as stale_parent:
+            with DependencyTracker._capture() as stale_child:
+                DependencyTracker.track("Project", "identification", "stale")
+                DependencyTracker.reset_thread_local_storage()
+                DependencyTracker.track("Project", "identification", "ignored")
+                with DependencyTracker._capture() as fresh_capture:
+                    DependencyTracker.track("Project", "identification", "fresh")
+
+        assert stale_child.snapshot is not None
+        assert stale_parent.snapshot is not None
+        self.assertEqual(
+            DependencyTracker._materialize_snapshot(stale_child.snapshot),
+            {("Project", "identification", "stale")},
+        )
+        self.assertEqual(
+            DependencyTracker._materialize_snapshot(stale_parent.snapshot),
+            {("Project", "identification", "stale")},
+        )
+        assert fresh_capture.snapshot is not None
+        self.assertEqual(
+            DependencyTracker._materialize_snapshot(fresh_capture.snapshot),
+            {("Project", "identification", "fresh")},
+        )
+
+    def test_final_scope_releases_duplicate_suppression_dependencies(self):
+        with DependencyTracker():
+            DependencyTracker.track("Project", "identification", "1")
+
+        self.assertEqual(
+            cache_tracker_module._dependency_storage.seen_dependencies, set()
+        )
+
+    def test_tracker_instance_can_reenter_without_losing_outer_scope(self):
+        tracker = DependencyTracker()
+        with tracker as outer_dependencies:
+            DependencyTracker.track("Project", "identification", "outer")
+            with tracker as inner_dependencies:
+                DependencyTracker.track("Project", "identification", "inner")
+            self.assertTrue(DependencyTracker.is_active())
+            DependencyTracker.track("Project", "identification", "after")
+
+        self.assertEqual(
+            outer_dependencies,
+            {
+                ("Project", "identification", "outer"),
+                ("Project", "identification", "inner"),
+                ("Project", "identification", "after"),
+            },
+        )
+        self.assertEqual(
+            inner_dependencies,
+            {("Project", "identification", "inner")},
+        )
+
+    def test_tracker_instance_keeps_scope_tokens_thread_local(self):
+        tracker = DependencyTracker()
+        start_together = threading.Barrier(2)
+        results: dict[str, set[tuple[str, str, str]]] = {}
+
+        def track_in_thread(name: str) -> None:
+            with tracker as dependencies:
+                DependencyTracker.track("Project", "identification", name)
+                start_together.wait(timeout=2)
+                DependencyTracker.track("Project", "identification", f"{name}-end")
+            results[name] = set(dependencies)
+
+        threads = [
+            threading.Thread(target=track_in_thread, args=("first",)),
+            threading.Thread(target=track_in_thread, args=("second",)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(
+            results["first"],
+            {
+                ("Project", "identification", "first"),
+                ("Project", "identification", "first-end"),
+            },
+        )
+        self.assertEqual(
+            results["second"],
+            {
+                ("Project", "identification", "second"),
+                ("Project", "identification", "second-end"),
+            },
+        )
+
+    def test_private_bulk_replay_retains_shared_immutable_container(self):
+        dependencies = frozenset({("Project", "identification", "1")})
+
+        with DependencyTracker._capture() as first:
+            DependencyTracker._track_many_validated(dependencies)
+        with DependencyTracker._capture() as second:
+            DependencyTracker._track_many_validated(dependencies)
+
+        assert first.snapshot is not None
+        assert second.snapshot is not None
+        assert first.snapshot.block is not None
+        assert second.snapshot.block is not None
+        self.assertIs(first.snapshot.block.dependencies, dependencies)
+        self.assertIs(second.snapshot.block.dependencies, dependencies)
+
+    def test_mutable_bulk_replay_ignores_direct_read_duplicate_markers(self):
+        dependency = ("Project", "identification", "1")
+        with DependencyTracker() as dependencies:
+            DependencyTracker.track(*dependency)
+            dependencies.clear()
+            DependencyTracker._track_many_validated({dependency})
+
+        self.assertEqual(dependencies, {dependency})
 
     def test_dependency_tracker_rejects_invalid_track_values(self):
         """Reject malformed dependency tuple values before tracking."""

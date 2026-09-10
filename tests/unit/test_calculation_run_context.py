@@ -12,6 +12,7 @@ from general_manager.api import as_of
 from general_manager.as_of import as_of_cache_fingerprint
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.cache_decorator import cached
+from general_manager.cache._dependency_graph import snapshot_from_dependencies
 from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.dependency_index import Dependency
 from general_manager.cache.dependency_publish import (
@@ -27,6 +28,7 @@ from general_manager.cache.run_context import (
     ensure_calculation_run_context,
 )
 from general_manager.cache.run_context_lru import (
+    _CANONICAL_HANDLE_FIXED_BYTES,
     MIN_TRACKED_ENTRY_BYTES,
     ProcessRunContextCacheBudget,
     estimate_cache_entry_size,
@@ -255,7 +257,10 @@ def test_estimator_exception_does_not_retain_untracked_run_value() -> None:
 
 
 def test_run_context_budget_evicts_lru_value_across_contexts() -> None:
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
     with override_settings(
         GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
     ):
@@ -273,7 +278,10 @@ def test_run_context_budget_evicts_lru_value_across_contexts() -> None:
 
 
 def test_run_context_budget_allows_one_batch_of_recency_staleness() -> None:
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
     with override_settings(
         GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
     ):
@@ -290,7 +298,10 @@ def test_run_context_budget_allows_one_batch_of_recency_staleness() -> None:
 
 
 def test_same_owner_write_flushes_partial_recency_batch_before_eviction() -> None:
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
     with override_settings(
         GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
     ):
@@ -538,7 +549,9 @@ def test_extracted_owner_touch_batch_rejects_delayed_aba_generation() -> None:
         assert not worker.is_alive()
         if worker_errors:
             raise worker_errors[0]
-        assert tuple(entry[2] for entry in run_context_cache_budget._entries) == (
+        assert tuple(
+            entry.key for entry in run_context_cache_budget._entries.values()
+        ) == (
             run_context._RunCacheKey(None, "first"),
             run_context._RunCacheKey(None, "second"),
         )
@@ -600,7 +613,9 @@ def test_foreign_immediate_touch_rejects_delayed_aba_generation() -> None:
         assert not worker.is_alive()
         if worker_errors:
             raise worker_errors[0]
-        assert tuple(entry[2] for entry in run_context_cache_budget._entries) == (
+        assert tuple(
+            entry.key for entry in run_context_cache_budget._entries.values()
+        ) == (
             run_context._RunCacheKey(None, "first"),
             run_context._RunCacheKey(None, "second"),
         )
@@ -804,7 +819,10 @@ def test_run_context_does_not_publish_a_removed_pending_touch() -> None:
 
 
 def test_run_context_flushes_earlier_touches_before_refresh() -> None:
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
     with (
         override_settings(
             GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
@@ -919,7 +937,10 @@ def test_reused_run_context_refreshes_cached_budget_enabled_state() -> None:
 def test_active_run_context_refreshes_cached_state_when_another_enables_budget() -> (
     None
 ):
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
     with override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": None}):
         with CalculationRunContext() as first:
             first.set("a", "A")
@@ -940,7 +961,10 @@ def test_active_run_context_refreshes_cached_state_when_another_enables_budget()
 
 
 def test_foreign_thread_touch_bypasses_owner_local_batch() -> None:
-    entry_size = estimate_cache_entry_size("a", "A", stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("a", "A", stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
     worker_started = Event()
     allow_worker_touch = Event()
     worker_errors: list[BaseException] = []
@@ -1191,11 +1215,17 @@ def test_run_context_budget_keeps_historical_namespaces_independent() -> None:
         second_fingerprint = as_of_cache_fingerprint()
     assert first_fingerprint is not None
     assert second_fingerprint is not None
-    first_size = estimate_cache_entry_size(
-        run_context._RunCacheKey(first_fingerprint, "key"), "A", stop_after=None
+    first_size = (
+        estimate_cache_entry_size(
+            run_context._RunCacheKey(first_fingerprint, "key"), "A", stop_after=None
+        )
+        + _CANONICAL_HANDLE_FIXED_BYTES
     )
-    second_size = estimate_cache_entry_size(
-        run_context._RunCacheKey(second_fingerprint, "key"), "B", stop_after=None
+    second_size = (
+        estimate_cache_entry_size(
+            run_context._RunCacheKey(second_fingerprint, "key"), "B", stop_after=None
+        )
+        + _CANONICAL_HANDLE_FIXED_BYTES
     )
 
     with (
@@ -1286,7 +1316,10 @@ def test_dependency_cache_hits_share_lru_recency() -> None:
     first = DependencyCacheHit(value="A", dependencies=frozenset())
     second = DependencyCacheHit(value="B", dependencies=frozenset())
     third = DependencyCacheHit(value="C", dependencies=frozenset())
-    entry_size = estimate_cache_entry_size("cache-a", first, stop_after=None)
+    entry_size = (
+        estimate_cache_entry_size("cache-a", first, stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
     with (
         override_settings(
             GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": entry_size * 3}
@@ -1306,9 +1339,18 @@ def test_dependency_cache_hits_share_lru_recency() -> None:
 def test_run_values_and_dependency_hits_share_global_lru_across_contexts() -> None:
     first_hit = DependencyCacheHit(value="A", dependencies=frozenset())
     second_hit = DependencyCacheHit(value="B", dependencies=frozenset())
-    hit_size = estimate_cache_entry_size("cache-a", first_hit, stop_after=None)
-    value_size = estimate_cache_entry_size("ordinary", "value", stop_after=None)
-    two_entry_budget = (hit_size + max(hit_size, value_size)) * 100 // 95 + 1
+    hit_size = (
+        estimate_cache_entry_size("cache-a", first_hit, stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
+    ordinary_size = (
+        estimate_cache_entry_size("ordinary", "value", stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
+    # Retain the initial hit and two ordinary entries, then leave room for
+    # exactly the two hits after their recency order changes.
+    modeled_capacity = max(hit_size * 2, hit_size + ordinary_size * 2)
+    two_entry_budget = modeled_capacity * 100 // 95 + 1
     with (
         override_settings(
             GENERAL_MANAGER={
@@ -1320,11 +1362,13 @@ def test_run_values_and_dependency_hits_share_global_lru_across_contexts() -> No
     ):
         second_context.set_dependency_cache_hits({"cache-a": first_hit})
         first_context.set("ordinary", "value")
+        first_context.set("padding", "value")
         assert second_context.get_dependency_cache_hit("cache-a") == first_hit
 
         second_context.set_dependency_cache_hits({"cache-b": second_hit})
 
         assert first_context.get("ordinary") is None
+        assert first_context.get("padding") is None
         assert second_context.get_dependency_cache_hit("cache-a") == first_hit
         assert second_context.get_dependency_cache_hit("cache-b") == second_hit
 
@@ -1346,11 +1390,20 @@ def test_run_cache_eviction_recomputes_without_replaying_evicted_dependencies() 
         return "pressure"
 
     with (
-        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 1_200}),
-        CalculationRunContext(),
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 100_000}),
+        CalculationRunContext() as context,
     ):
         assert cached_value() == "old"
+        assert cached_value() == "old"
+        assert calls == 1
+        cached_key = next(iter(context._values))
+        # Fit the retained entry plus the coordinator's reserve. The next
+        # admission must evict it, rather than reject it on its first miss.
+        fitting_budget = run_context_cache_budget.estimated_bytes * 100 // 95 + 1
+        run_context_cache_budget.register(context, fitting_budget)
+        assert cached_key in context._values
         assert pressure() == "pressure"
+        assert cached_key not in context._values
 
         state.update(dependency="NewManager", value="new")
         with DependencyTracker() as dependencies:
@@ -1358,6 +1411,131 @@ def test_run_cache_eviction_recomputes_without_replaying_evicted_dependencies() 
 
     assert calls == 2
     assert dependencies == {("NewManager", "all", "{}")}
+
+
+def test_parent_retains_old_child_snapshot_after_child_eviction_and_recompute() -> None:
+    """Evicting a child result does not change a surviving parent's snapshot."""
+    import gc
+    from weakref import ref
+
+    class ChildResult:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+    state = {"dependency": "OldManager", "label": "old"}
+
+    @cached
+    def child() -> ChildResult:
+        DependencyTracker.track(state["dependency"], "all", "{}")
+        return ChildResult(state["label"])
+
+    @cached
+    def parent() -> str:
+        return child().label
+
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 100_000}),
+        CalculationRunContext() as context,
+    ):
+        old_result = child()
+        old_result_reference = ref(old_result)
+        assert parent() == "old"
+        child_key = next(
+            key
+            for key, entry in context._values.items()
+            if isinstance(entry, run_context._RunCacheEntry)
+            and entry.value is old_result
+        )
+        child_root = context._values[child_key].dependency_root
+
+        # Lower the cap to trigger the 5% reserve and evict the older child.
+        # Its small parent keeps the shared root accounted for.
+        run_context_cache_budget.register(
+            context, run_context_cache_budget.estimated_bytes
+        )
+        assert child_key not in context._values
+        assert id(child_root) in run_context_cache_budget._graph_ledger.node_references
+        del old_result
+        gc.collect()
+        assert old_result_reference() is None
+
+        run_context_cache_budget.register(context, 100_000)
+        state.update(dependency="NewManager", label="new")
+        assert child().label == "new"
+        with DependencyTracker() as dependencies:
+            assert parent() == "old"
+
+        assert dependencies == {("OldManager", "all", "{}")}
+
+
+@pytest.mark.parametrize("publish_fails", [False, True])
+def test_pending_hit_and_run_snapshot_share_graph_through_unpin_transition(
+    publish_fails: bool,
+) -> None:
+    """Pinning a publication never drops graph data still used by a run entry."""
+    entry = make_pending_publication("cache-a")
+    shared_dependencies = entry.dependencies
+    run_entry = run_context._RunCacheEntry(
+        value="run",
+        dependency_root=snapshot_from_dependencies(shared_dependencies),
+    )
+    publisher = mock.patch(
+        "general_manager.cache.dependency_publish.publish_dependency_cache_entries",
+        side_effect=PublishFailed if publish_fails else None,
+    )
+    with (
+        override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 100_000}),
+        publisher,
+        mock.patch("general_manager.cache.dependency_publish.release_compute_lease"),
+        CalculationRunContext() as context,
+    ):
+        context.buffer_dependency_cache_publication(entry)
+        context.set("run", run_entry)
+        ledger = run_context_cache_budget._graph_ledger
+        assert ledger.dependency_references == {id(shared_dependencies): 1}
+
+        if publish_fails:
+            with pytest.raises(PublishFailed):
+                context.flush_dependency_cache_publications()
+        else:
+            context.flush_dependency_cache_publications()
+
+        assert context._dependency_cache_pending_publications == {}
+        assert ledger.dependency_references == {id(shared_dependencies): 2}
+
+        context._remove_run_value(context._scoped_key("run"))
+        assert ledger.dependency_references == {id(shared_dependencies): 1}
+        context._remove_dependency_cache_hit(entry.cache_key)
+        assert run_context_cache_budget.estimated_bytes == 0
+        assert ledger.total_bytes == 0
+        assert not ledger.root_references
+        assert not ledger.node_references
+        assert not ledger.block_references
+        assert not ledger.dependency_references
+
+
+def test_final_context_exit_releases_graph_ledger_records() -> None:
+    """Normal run exit clears graph records instead of retaining an arena."""
+    with override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 100_000}):
+        with CalculationRunContext() as context:
+            context.set(
+                "run",
+                run_context._RunCacheEntry(
+                    value="value",
+                    dependency_root=snapshot_from_dependencies(
+                        frozenset({("Project", "all", "exit")})
+                    ),
+                ),
+            )
+            assert run_context_cache_budget._graph_ledger.total_bytes > 0
+
+    ledger = run_context_cache_budget._graph_ledger
+    assert run_context_cache_budget.estimated_bytes == 0
+    assert ledger.total_bytes == 0
+    assert not ledger.root_references
+    assert not ledger.node_references
+    assert not ledger.block_references
+    assert not ledger.dependency_references
 
 
 def test_pending_dependency_publication_hit_is_pinned_until_flush() -> None:
@@ -1408,10 +1586,13 @@ def test_publish_failure_tracks_unpinned_hit_under_finite_budget() -> None:
         value=entry.result,
         dependencies=entry.dependencies,
     )
-    entry_size = estimate_cache_entry_size(
-        entry.cache_key,
-        expected_hit,
-        stop_after=None,
+    entry_size = (
+        estimate_cache_entry_size(
+            entry.cache_key,
+            expected_hit,
+            stop_after=None,
+        )
+        + _CANONICAL_HANDLE_FIXED_BYTES
     )
     with (
         override_settings(
@@ -1730,7 +1911,10 @@ def test_replacing_pending_hit_stays_pinned_under_finite_budget() -> None:
         ),
     )
     pressure = DependencyCacheHit(value="pressure", dependencies=frozenset())
-    pressure_size = estimate_cache_entry_size("pressure", pressure, stop_after=None)
+    pressure_size = (
+        estimate_cache_entry_size("pressure", pressure, stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
     with (
         override_settings(
             GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": pressure_size * 2}
@@ -1776,7 +1960,10 @@ def test_failed_prior_lease_release_preserves_pinned_pending_replacement_state()
         ),
     )
     pressure = DependencyCacheHit(value="pressure", dependencies=frozenset())
-    pressure_size = estimate_cache_entry_size("pressure", pressure, stop_after=None)
+    pressure_size = (
+        estimate_cache_entry_size("pressure", pressure, stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
+    )
     with (
         override_settings(
             GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": pressure_size * 2}
@@ -2106,8 +2293,9 @@ def test_run_context_reweighs_mutated_orm_index() -> None:
 
     Row._meta = SimpleNamespace(concrete_model=Row)
     row = Row()
-    empty_index_size = estimate_cache_entry_size(
-        ("orm_model_row_index", Row), {}, stop_after=None
+    empty_index_size = (
+        estimate_cache_entry_size(("orm_model_row_index", Row), {}, stop_after=None)
+        + _CANONICAL_HANDLE_FIXED_BYTES
     )
 
     with (
@@ -2132,10 +2320,13 @@ def test_run_context_retains_reweighed_orm_index_that_fits_budget() -> None:
 
     Row._meta = SimpleNamespace(concrete_model=Row)
     row = Row()
-    index_size = estimate_cache_entry_size(
-        ("orm_model_row_index", Row),
-        {(7, "default"): row},
-        stop_after=None,
+    index_size = (
+        estimate_cache_entry_size(
+            ("orm_model_row_index", Row),
+            {(7, "default"): row},
+            stop_after=None,
+        )
+        + _CANONICAL_HANDLE_FIXED_BYTES
     )
 
     with (
@@ -2378,3 +2569,96 @@ def test_group_by_loads_once_and_groups_rows() -> None:
     assert first is second
     assert [row.value for row in first[1]] == [10, 11]
     assert [row.value for row in first[2]] == [20]
+
+
+def test_framework_key_eviction_does_not_repeat_public_key_hooks() -> None:
+    blocked = False
+
+    class Key:
+        def __hash__(self) -> int:
+            assert not blocked, "public key hashed during eviction"
+            return 17
+
+        def __eq__(self, other: object) -> bool:
+            assert not blocked, "public key compared during eviction"
+            return self is other
+
+    context = run_context.CalculationRunContext()
+    key = run_context._RunCacheKey(None, Key())
+    context._values[key] = "value"
+    blocked = True
+    context._evict_run_cache_entry("values", key)
+    assert not context._values
+
+
+def test_framework_key_cached_hash_preserves_dictionary_equality() -> None:
+    first = run_context._RunCacheKey(None, ("key", 1))
+    equivalent = run_context._RunCacheKey(None, tuple(["key", 1]))
+    assert first == equivalent
+    assert hash(first) == hash(equivalent)
+    assert first != run_context._RunCacheKey("snapshot", ("key", 1))
+    nan = float("nan")
+    nan_first = run_context._RunCacheKey(None, nan)
+    nan_equivalent = run_context._RunCacheKey(None, nan)
+    assert nan_first == nan_equivalent
+    assert hash(nan_first) == hash(nan_equivalent)
+    values = {nan_first: "first"}
+    values[nan_equivalent] = "second"
+    assert len(values) == 1
+
+
+@override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 100_000})
+def test_oversized_eviction_preserves_replacement_from_touch_cleanup() -> None:
+    budget = ProcessRunContextCacheBudget()
+    with mock.patch.object(run_context, "run_context_cache_budget", budget):
+        context = CalculationRunContext()
+        original = context._discard_run_cache_touch
+        fired = False
+
+        def discard(pending_key: PendingRunCacheTouch) -> None:
+            nonlocal fired
+            if not fired:
+                fired = True
+                context.set("candidate", "replacement")
+            original(pending_key)
+
+        with mock.patch.object(context, "_discard_run_cache_touch", discard):
+            context.set("candidate", [bytearray(200_000)])
+
+        assert fired
+        assert context.get("candidate") == "replacement"
+        assert len(context._values) == len(budget._entries) == 1
+        assert len(budget._canonical_handles) == 1
+        assert not budget._entry_attempt_generations
+        budget.clear_context(context)
+        assert budget.estimated_bytes == 0
+
+
+@override_settings(GENERAL_MANAGER={"RUN_CONTEXT_CACHE_MAX_BYTES": 100_000})
+def test_hit_eviction_preserves_replacement_from_touch_cleanup() -> None:
+    budget = ProcessRunContextCacheBudget()
+    with mock.patch.object(run_context, "run_context_cache_budget", budget):
+        context = CalculationRunContext()
+        first = DependencyCacheHit(value="first", dependencies=frozenset())
+        replacement = DependencyCacheHit(value="replacement", dependencies=frozenset())
+        context.set_dependency_cache_hits({"candidate": first})
+        budget.remove(context, "dependency_hits", "candidate")
+        original = context._discard_run_cache_touch
+        fired = False
+
+        def discard(pending_key: PendingRunCacheTouch) -> None:
+            nonlocal fired
+            if not fired:
+                fired = True
+                context.set_dependency_cache_hits({"candidate": replacement})
+            original(pending_key)
+
+        with mock.patch.object(context, "_discard_run_cache_touch", discard):
+            context._evict_run_cache_entry("dependency_hits", "candidate")
+
+        assert fired
+        assert context._dependency_cache_hits["candidate"] is replacement
+        assert len(budget._entries) == len(budget._canonical_handles) == 1
+        assert not budget._entry_attempt_generations
+        budget.clear_context(context)
+        assert budget.estimated_bytes == 0

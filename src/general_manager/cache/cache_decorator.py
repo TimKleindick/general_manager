@@ -1,6 +1,6 @@
 """Helpers for caching GeneralManager computations with dependency tracking."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from functools import partial, wraps
 from hashlib import sha256
 import inspect
@@ -8,7 +8,10 @@ from typing import Literal, ParamSpec, Protocol, TypeVar, cast, overload
 
 from django.core.cache import cache as django_cache
 
-from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.cache_tracker import (
+    DependencyTracker,
+    _DependencyCaptureScope,
+)
 from general_manager.cache.dependency_cache import (
     DependencyCacheHit,
     dependency_cache_prefetch_bundle_key,
@@ -170,7 +173,26 @@ def _reject_awaitable_cache_result(result: object) -> None:
 
 def _replay_run_cache_entry_dependencies(entry: _RunCacheEntry) -> None:
     """Replay a decorated run-cache entry into every active dependency tracker."""
-    for class_name, operation, identifier in entry.dependencies:
+    DependencyTracker._attach_snapshot(entry.dependency_root)
+
+
+def _track_model_arguments(
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    capture: _DependencyCaptureScope,
+) -> None:
+    """Track model argument dependencies as they are discovered.
+
+    Collector iteration can raise while serializing a later argument.  Recording
+    each earlier value immediately preserves the same partial-dependency
+    behavior as ordinary source reads.
+    """
+    for class_name, operation, identifier in ModelDependencyCollector._iter_args(
+        args, kwargs
+    ):
+        dependency = (class_name, operation, identifier)
+        if capture._record_argument_dependency(dependency):
+            continue
         DependencyTracker._track_validated(class_name, operation, identifier)
 
 
@@ -418,15 +440,16 @@ def cached(
                             _replay_run_cache_entry_dependencies(cached_run_value)
                             return cast(R, cached_run_value.value)
                         return cast(R, cached_run_value)
-                    with DependencyTracker() as dependencies:
+                    with DependencyTracker._capture() as capture:
                         result = decorated_func(*args, **kwargs)
-                        ModelDependencyCollector.add_args(dependencies, args, kwargs)
+                        _track_model_arguments(args, kwargs, capture)
                     _reject_awaitable_cache_result(result)
+                    assert capture.snapshot is not None
                     active_context.set(
                         key,
                         _RunCacheEntry(
                             value=result,
-                            dependencies=frozenset(dependencies),
+                            dependency_root=capture.snapshot,
                         ),
                     )
                     return result
@@ -437,15 +460,16 @@ def cached(
                             _replay_run_cache_entry_dependencies(cached_run_value)
                             return cast(R, cached_run_value.value)
                         return cast(R, cached_run_value)
-                    with DependencyTracker() as dependencies:
+                    with DependencyTracker._capture() as capture:
                         result = decorated_func(*args, **kwargs)
-                        ModelDependencyCollector.add_args(dependencies, args, kwargs)
+                        _track_model_arguments(args, kwargs, capture)
                     _reject_awaitable_cache_result(result)
+                    assert capture.snapshot is not None
                     context.set(
                         key,
                         _RunCacheEntry(
                             value=result,
-                            dependencies=frozenset(dependencies),
+                            dependency_root=capture.snapshot,
                         ),
                     )
                     return result
@@ -566,10 +590,12 @@ def cached(
                     return return_cached_hit(cached_hit, "cache hit")
 
                 started_generation = get_dependency_generation()
-                with DependencyTracker() as dependencies:
+                with DependencyTracker._capture() as capture:
                     result = decorated_func(*args, **kwargs)
-                    ModelDependencyCollector.add_args(dependencies, args, kwargs)
+                    _track_model_arguments(args, kwargs, capture)
                 _reject_awaitable_cache_result(result)
+                assert capture.snapshot is not None
+                dependencies = DependencyTracker._materialize_snapshot(capture.snapshot)
 
                 def record_many(
                     entries: Iterable[tuple[str, Iterable[Dependency]]],

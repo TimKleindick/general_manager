@@ -55,6 +55,12 @@ def expensive_summary(self) -> int:
     return self.project.derivative_list.filter(date=self.date).count()
 ```
 
+Dependency-cached calculations can call run-cached properties that were already
+evaluated earlier in the run. Their captured reads and manager arguments still
+contribute to the parent's invalidation metadata. Nested run calculations share
+immutable dependency snapshots, avoiding a copy of a broad source's complete
+dependency set for every small result.
+
 Disable caching for cheap or intentionally volatile values:
 
 ```python
@@ -120,6 +126,10 @@ when a run context is created. Pending dependency-cache publications remain
 pinned until they are flushed or discarded. The estimate is taken at insertion
 time, so this setting is a cache-retention guardrail rather than a hard process
 RSS limit. Give each worker process its own capacity allowance.
+
+The estimate counts shared dependency snapshots once across retained run values
+and dependency-cache hits. A parent's dependency snapshot survives eviction of
+its child result, preserving invalidation when the child is later recomputed.
 
 ## Step 3: Verify invalidation
 

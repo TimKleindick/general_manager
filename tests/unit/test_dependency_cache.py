@@ -246,6 +246,26 @@ class DependencyCacheEntryTests(SimpleTestCase):
         self.assertEqual(hit.value, "ready")
         self.assertEqual(hit.dependencies, frozenset(dependencies))
 
+    def test_trusted_hit_attaches_its_immutable_leaf_to_private_capture(self) -> None:
+        cache_backend = PickleCache()
+        dependencies = frozenset({("Project", "identification", '{"id": 1}')})
+        cache_backend.set(
+            "cache-a",
+            make_dependency_cache_entry(
+                "ready",
+                dependencies,
+                trusted_dependencies=True,
+            ),
+            None,
+        )
+        hit = read_dependency_cache_hit(cache_backend, "cache-a")
+
+        assert isinstance(hit, DependencyCacheHit)
+        with DependencyTracker._capture() as capture:
+            replay_dependency_cache_hit(hit)
+
+        assert capture.snapshot is hit.dependency_root
+
     def test_legacy_combined_payload_version_is_treated_as_cache_miss(
         self,
     ) -> None:
