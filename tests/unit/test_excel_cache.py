@@ -1,5 +1,6 @@
 """Excel snapshots must be reusable across workers and disposable like any cache."""
 
+import os
 from dataclasses import replace
 from unittest.mock import patch
 
@@ -494,3 +495,119 @@ def test_database_cache_can_share_excel_snapshot(tmp_path):
         finally:
             with connection.cursor() as cursor:
                 cursor.execute("DROP TABLE excel_test_cache")
+
+
+def test_workbook_lock_reuses_resolved_path_across_stores(tmp_path):
+    path = tmp_path / "report.xlsx"
+    lock = ExcelWorkbookStore().lock_for(str(path))
+    with lock:
+        nested = ExcelWorkbookStore().lock_for(str(tmp_path / "." / path.name))
+        assert nested is lock
+        with nested.acquire(timeout=0):
+            assert lock.lock_counter == 2
+    assert not lock.is_locked
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="Requires Unix fork")
+@pytest.mark.parametrize("hold_guard", [False, True])
+def test_fork_resets_workbook_lock_cache_and_guard(tmp_path, hold_guard):
+    assert (
+        _run_worker(
+            """
+import os
+import signal
+import sys
+import traceback
+from general_manager.interface import excel_store
+
+store = excel_store.ExcelWorkbookStore()
+parent_lock = store.lock_for(sys.argv[1])
+# Populate FileLock's state before forking, as a prefork worker parent may do.
+with parent_lock:
+    pass
+parent_guard = excel_store._locks_guard
+if sys.argv[2] == 'True':
+    parent_guard.acquire()
+pid = os.fork()
+if pid == 0:
+    signal.alarm(5)
+    try:
+        child_lock = store.lock_for(sys.argv[1])
+        assert child_lock is not parent_lock
+        assert child_lock.lock_file == parent_lock.lock_file
+        with child_lock.acquire(timeout=0):
+            nested = excel_store.ExcelWorkbookStore().lock_for(sys.argv[1])
+            assert nested is child_lock
+            with nested.acquire(timeout=0):
+                assert child_lock.lock_counter == 2
+    except BaseException:
+        traceback.print_exc()
+        os._exit(1)
+    os._exit(0)
+if sys.argv[2] == 'True':
+    parent_guard.release()
+_, status = os.waitpid(pid, 0)
+assert os.waitstatus_to_exitcode(status) == 0, status
+assert store.lock_for(sys.argv[1]) is parent_lock
+print('passed')
+""",
+            tmp_path / "report.xlsx",
+            hold_guard,
+        )
+        == "passed"
+    )
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="Requires Unix fork")
+def test_forked_workbook_lock_contends_until_parent_releases(tmp_path):
+    assert (
+        _run_worker(
+            """
+import os
+import signal
+import sys
+import traceback
+from filelock import Timeout
+from general_manager.interface.excel_store import ExcelWorkbookStore
+
+store = ExcelWorkbookStore()
+parent_lock = store.lock_for(sys.argv[1])
+ready_read, ready_write = os.pipe()
+resume_read, resume_write = os.pipe()
+with parent_lock:
+    pid = os.fork()
+    if pid == 0:
+        signal.alarm(5)
+        os.close(ready_read)
+        os.close(resume_write)
+        try:
+            child_lock = store.lock_for(sys.argv[1])
+            try:
+                with child_lock.acquire(timeout=0):
+                    raise AssertionError('Child bypassed parent lock')
+            except Timeout:
+                pass
+            os.write(ready_write, b'1')
+            assert os.read(resume_read, 1) == b'1'
+            with child_lock.acquire(timeout=1):
+                assert child_lock.is_locked
+        except BaseException:
+            traceback.print_exc()
+            os._exit(1)
+        os._exit(0)
+    os.close(ready_write)
+    os.close(resume_read)
+    ready = os.read(ready_read, 1)
+if ready:
+    os.write(resume_write, b'1')
+os.close(ready_read)
+os.close(resume_write)
+_, status = os.waitpid(pid, 0)
+assert ready == b'1'
+assert os.waitstatus_to_exitcode(status) == 0, status
+print('passed')
+""",
+            tmp_path / "report.xlsx",
+        )
+        == "passed"
+    )

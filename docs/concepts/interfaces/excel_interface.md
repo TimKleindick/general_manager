@@ -85,9 +85,12 @@ cache during a rolling upgrade.
 
 GeneralManager coordinates its own processes with a persistent
 `<workbook>.gm.lock` sidecar and writes via a temporary sibling file followed by
-atomic replacement. The workbook directory must allow lock-file creation and
-temporary writes. Desktop Excel and other external programs do not honor the
-sidecar lock, so fingerprint checks detect many—but not every—overlapping save.
+atomic replacement. Lock objects are reused within each process for nested access;
+forked workers receive fresh lock objects and a fresh cache guard while still
+coordinating through the same sidecar file. The workbook directory must allow
+lock-file creation and temporary writes. Desktop Excel and other external programs
+do not honor the sidecar lock, so fingerprint checks detect many—but not
+every—overlapping save.
 Coordinate human edits with application writes when lost updates are
 unacceptable. `openpyxl` reads the values last saved by Excel and does not
 calculate formulas.
