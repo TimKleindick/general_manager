@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.80.3 (2026-09-11)
+
+### Bug Fixes
+
+- Reset Excel workbook lock cache after fork
+  ([`dbbdac5`](https://github.com/TimKleindick/general_manager/commit/dbbdac5708fa99ba82df085a7f69003cde659c95))
+
+### Testing
+
+- Cover Excel workbook lock reset callback
+  ([`e7ec6c9`](https://github.com/TimKleindick/general_manager/commit/e7ec6c9f268acb9e0ead9102acac8ba21e32ac71))
+
+
 ## v0.80.2 (2026-09-11)
 
 ### Bug Fixes
