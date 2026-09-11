@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
@@ -21,6 +22,17 @@ from general_manager.logging import get_logger
 logger = get_logger("interface.excel")
 _locks: dict[str, FileLock] = {}
 _locks_guard = Lock()
+
+
+def _reset_locks_after_fork() -> None:
+    """Discard inherited lock state without acquiring the parent's thread guard."""
+    global _locks, _locks_guard
+    _locks = {}
+    _locks_guard = Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_locks_after_fork)
 
 
 @dataclass(slots=True)
