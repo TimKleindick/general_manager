@@ -765,6 +765,8 @@ Adapter behavior:
   5000 milliseconds (five seconds). Configure it with
   `MeilisearchBackend(task_timeout_in_ms=20_000)` to wait up to 20 seconds.
   This option is forwarded as the client’s `timeout_in_ms` argument.
+  Preconfigured clients with the legacy `wait_for_task(task_uid)` signature
+  remain supported, but use their own timeout behavior.
   Clients without `wait_for_task()` fall
   back to polling `get_task()` every 0.1 seconds with exponential backoff capped
   at one second. Polling stops on `succeeded`, `failed`, or `canceled`; unknown
