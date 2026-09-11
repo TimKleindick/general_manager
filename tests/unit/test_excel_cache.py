@@ -497,6 +497,43 @@ def test_database_cache_can_share_excel_snapshot(tmp_path):
                 cursor.execute("DROP TABLE excel_test_cache")
 
 
+def test_reset_workbook_locks_preserves_inherited_state(monkeypatch, tmp_path):
+    """Replace inherited coordination state without mutating or entering it."""
+    from threading import Lock
+
+    from general_manager.interface import excel_store
+
+    inherited_locks = {}
+    inherited_guard = Lock()
+    monkeypatch.setattr(excel_store, "_locks", inherited_locks)
+    monkeypatch.setattr(excel_store, "_locks_guard", inherited_guard)
+    store = ExcelWorkbookStore()
+    workbook = str(tmp_path / "report.xlsx")
+    inherited_lock = store.lock_for(workbook)
+
+    # Fail immediately if the callback tries to enter the inherited guard.
+    with patch.object(excel_store, "_locks_guard") as guarded:
+        guarded.__enter__.side_effect = AssertionError("Inherited guard entered")
+        excel_store._reset_locks_after_fork()
+        guarded.__enter__.assert_not_called()
+
+    # The temporary patch restored the original guard; reset with a real held
+    # guard as well, checking that the replacement is independently usable.
+    with inherited_guard:
+        excel_store._reset_locks_after_fork()
+        assert inherited_guard.locked()
+        assert excel_store._locks_guard is not inherited_guard
+        assert not excel_store._locks_guard.locked()
+        assert excel_store._locks == {}
+        assert excel_store._locks is not inherited_locks
+        fresh_lock = store.lock_for(workbook)
+        assert fresh_lock is not inherited_lock
+        assert fresh_lock.lock_file == inherited_lock.lock_file
+        assert inherited_locks == {inherited_lock.lock_file: inherited_lock}
+        with fresh_lock.acquire(timeout=0):
+            assert store.lock_for(workbook) is fresh_lock
+
+
 def test_workbook_lock_reuses_resolved_path_across_stores(tmp_path):
     path = tmp_path / "report.xlsx"
     lock = ExcelWorkbookStore().lock_for(str(path))
