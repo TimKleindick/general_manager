@@ -62,6 +62,7 @@ class DependencyCapture:
     __slots__ = ("_child_ids", "_children", "_dependencies")
 
     def __init__(self) -> None:
+        """Start an empty per-calculation builder."""
         self._dependencies: set[Dependency] = set()
         self._children: list[DependencySnapshot] = []
         self._child_ids: set[int] = set()
@@ -69,10 +70,6 @@ class DependencyCapture:
     def add(self, dependency: Dependency) -> None:
         """Record one direct dependency in this calculation frame."""
         self._dependencies.add(dependency)
-
-    def add_many(self, dependencies: Iterable[Dependency]) -> None:
-        """Record direct dependencies without flattening child snapshots."""
-        self._dependencies.update(dependencies)
 
     def attach(self, snapshot: DependencySnapshot) -> None:
         """Attach a child snapshot once, using node identity for deduplication."""

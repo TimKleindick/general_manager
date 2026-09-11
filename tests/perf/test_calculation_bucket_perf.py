@@ -493,6 +493,14 @@ def _count_dependency_tuple_sets(monkeypatch: pytest.MonkeyPatch) -> Counter:
         DependencyTupleCountingSet,
         raising=False,
     )
+    # Prove the hook observes real capture and materialization work.
+    probe = dependency_graph.DependencyCapture()
+    probe.add(("InstrumentationProbe", "all", ""))
+    dependency_graph.materialize_dependencies(probe.freeze())
+    assert counter.value == 2, (
+        "Dependency set instrumentation is inactive or incomplete"
+    )
+    counter.reset()
     return counter
 
 
