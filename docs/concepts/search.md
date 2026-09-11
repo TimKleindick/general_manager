@@ -761,7 +761,11 @@ Adapter behavior:
   `delete(index, [])` is a no-op and does not access Meilisearch;
   `delete(index, [""])` treats the empty string as a real document id and
   deletes its normalized value.
-- Clients exposing `wait_for_task()` use that method. Clients without it fall
+- Clients exposing `wait_for_task()` use that method with a default timeout of
+  5000 milliseconds (five seconds). Configure it with
+  `MeilisearchBackend(task_timeout_in_ms=20_000)` to wait up to 20 seconds.
+  This option is forwarded as the client’s `timeout_in_ms` argument.
+  Clients without `wait_for_task()` fall
   back to polling `get_task()` every 0.1 seconds with exponential backoff capped
   at one second. Polling stops on `succeeded`, `failed`, or `canceled`; unknown
   or missing statuses keep polling until the five-second timeout raises

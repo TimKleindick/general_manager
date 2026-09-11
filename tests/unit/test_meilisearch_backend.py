@@ -125,6 +125,7 @@ class _FakeClient:
             waited (list[int]): List of task UIDs for which wait/get calls were recorded.
         """
         self.index = index
+        self.timeouts: list[int] = []
         self.waited: list[int] = []
 
     def get_or_create_index(
@@ -154,7 +155,7 @@ class _FakeClient:
         """
         return {"taskUid": 4}
 
-    def wait_for_task(self, task_uid: int) -> dict[str, object]:
+    def wait_for_task(self, task_uid: int, *, timeout_in_ms: int) -> dict[str, object]:
         """
         Record the given task UID in the instance's waited list and return a succeeded status.
 
@@ -165,6 +166,7 @@ class _FakeClient:
             dict[str, object]: A mapping with key "status" set to "succeeded".
         """
         self.waited.append(task_uid)
+        self.timeouts.append(timeout_in_ms)
         return {"status": "succeeded"}
 
     def get_task(self, task_uid: int) -> dict[str, object]:
@@ -181,7 +183,7 @@ class _FakeClient:
 
 
 class _FailingClient(_FakeClient):
-    def wait_for_task(self, task_uid: int) -> dict[str, object]:
+    def wait_for_task(self, task_uid: int, *, timeout_in_ms: int) -> dict[str, object]:
         """
         Record the given task UID in the client's waited list and return a failed task payload.
 
@@ -219,6 +221,23 @@ def test_meilisearch_backend_waits_for_tasks() -> None:
     assert index.added[0]["id"] != raw_id
     backend.delete("test-index", [raw_id])
     assert index.deleted[0][0] == index.added[0]["id"]
+
+
+@pytest.mark.parametrize("timeout", [None, 20_000])
+def test_meilisearch_backend_forwards_task_timeout(timeout: int | None) -> None:
+    """Forward the default or configured timeout to every client task wait."""
+    client = _FakeClient(_FakeIndex())
+    backend = (
+        MeilisearchBackend(client=client)
+        if timeout is None
+        else MeilisearchBackend(client=client, task_timeout_in_ms=timeout)
+    )
+
+    backend.ensure_index("test-index", {})
+    backend.delete("test-index", ["document-id"])
+
+    assert client.waited == [1, 3]
+    assert client.timeouts == [5000 if timeout is None else timeout] * 2
 
 
 def test_meilisearch_backend_extract_task_uid() -> None:
@@ -411,7 +430,9 @@ def test_meilisearch_backend_create_index_uses_id_primary_key(
             self.created.append(payload)
             return {"taskUid": 4}
 
-        def wait_for_task(self, task_uid: int) -> dict[str, object]:
+        def wait_for_task(
+            self, task_uid: int, *, timeout_in_ms: int
+        ) -> dict[str, object]:
             self.waited.append(task_uid)
             return {"status": "succeeded"}
 

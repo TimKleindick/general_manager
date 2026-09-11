@@ -83,7 +83,7 @@ class _MeilisearchClientWithGetOrCreate(_MeilisearchClient, Protocol):
 class _MeilisearchClientWithWait(_MeilisearchClient, Protocol):
     """Client variant exposing server-side task waiting."""
 
-    def wait_for_task(self, task_uid: object) -> object: ...
+    def wait_for_task(self, task_uid: object, *, timeout_in_ms: int) -> object: ...
 
 
 class _MeilisearchClientWithGetTask(_MeilisearchClient, Protocol):
@@ -111,6 +111,7 @@ class MeilisearchBackend:
         url: str = "http://127.0.0.1:7700",
         api_key: str | None = None,
         client: _MeilisearchClient | None = None,
+        task_timeout_in_ms: int = 5000,
     ) -> None:
         """
         Initialize the backend with a provided Meilisearch client or a new one.
@@ -124,6 +125,9 @@ class MeilisearchBackend:
                 `meilisearch` package and instantiates a client with `url` and
                 `api_key`; if the package is not available, raises
                 SearchBackendClientMissingError("Meilisearch").
+            task_timeout_in_ms: Timeout in milliseconds forwarded to the client
+                `wait_for_task` method. Defaults to 5000 (five seconds). Does not
+                affect fallback polling for clients exposing only `get_task`.
 
         Raises:
             SearchBackendClientMissingError: The `meilisearch` package is not
@@ -137,6 +141,7 @@ class MeilisearchBackend:
             client_factory = cast(_MeilisearchModule, meilisearch_module).Client
             client = client_factory(url, api_key)
         self._client = client
+        self._task_timeout_in_ms = task_timeout_in_ms
 
     def ensure_index(self, index_name: str, settings: Mapping[str, object]) -> None:
         """
@@ -550,7 +555,7 @@ class MeilisearchBackend:
             return
         if hasattr(self._client, "wait_for_task"):
             result = cast(_MeilisearchClientWithWait, self._client).wait_for_task(
-                task_uid
+                task_uid, timeout_in_ms=self._task_timeout_in_ms
             )
             self._raise_for_failed_task(result)
             return
