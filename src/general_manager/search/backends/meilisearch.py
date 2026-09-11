@@ -6,6 +6,7 @@ import hashlib
 import time
 from collections.abc import Callable, Iterable
 from importlib import import_module
+from inspect import signature
 from typing import Mapping, Protocol, Sequence, cast
 
 from general_manager.search.backend import (
@@ -127,7 +128,8 @@ class MeilisearchBackend:
                 SearchBackendClientMissingError("Meilisearch").
             task_timeout_in_ms: Timeout in milliseconds forwarded to the client
                 `wait_for_task` method. Defaults to 5000 (five seconds). Does not
-                affect fallback polling for clients exposing only `get_task`.
+                affect fallback polling for clients exposing only `get_task`
+                or legacy clients whose wait method does not accept the timeout.
 
         Raises:
             SearchBackendClientMissingError: The `meilisearch` package is not
@@ -554,9 +556,24 @@ class MeilisearchBackend:
         if task_uid is None:
             return
         if hasattr(self._client, "wait_for_task"):
-            result = cast(_MeilisearchClientWithWait, self._client).wait_for_task(
-                task_uid, timeout_in_ms=self._task_timeout_in_ms
-            )
+            wait_for_task = cast(_MeilisearchClientWithWait, self._client).wait_for_task
+            supports_timeout = True
+            try:
+                wait_signature = signature(wait_for_task)
+            except (TypeError, ValueError):
+                # Uninspectable clients retain the standard Meilisearch call.
+                pass
+            else:
+                try:
+                    wait_signature.bind(
+                        task_uid, timeout_in_ms=self._task_timeout_in_ms
+                    )
+                except TypeError:
+                    supports_timeout = False
+            if supports_timeout:
+                result = wait_for_task(task_uid, timeout_in_ms=self._task_timeout_in_ms)
+            else:
+                result = cast(Callable[[object], object], wait_for_task)(task_uid)
             self._raise_for_failed_task(result)
             return
         if hasattr(self._client, "get_task"):

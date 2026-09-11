@@ -240,6 +240,49 @@ def test_meilisearch_backend_forwards_task_timeout(timeout: int | None) -> None:
     assert client.timeouts == [5000 if timeout is None else timeout] * 2
 
 
+@pytest.mark.parametrize("status", ["succeeded", "failed", "canceled"])
+def test_meilisearch_backend_legacy_wait_for_task(status: str) -> None:
+    """Legacy clients still wait once and have their completion status checked."""
+
+    class LegacyClient:
+        def __init__(self) -> None:
+            self.waited: list[int] = []
+
+        def wait_for_task(self, task_uid: int) -> dict[str, object]:
+            self.waited.append(task_uid)
+            return {"status": status}
+
+    client = LegacyClient()
+    backend = MeilisearchBackend(client=client, task_timeout_in_ms=20_000)
+
+    if status == "succeeded":
+        backend._wait_for_task({"taskUid": 0})
+    else:
+        with pytest.raises(MeilisearchTaskFailedError):
+            backend._wait_for_task({"taskUid": 0})
+    assert client.waited == [0]
+
+
+def test_meilisearch_backend_wait_type_error_is_not_retried() -> None:
+    """A TypeError inside a timeout-capable client propagates without a retry."""
+
+    class Client:
+        def __init__(self) -> None:
+            self.timeouts: list[object] = []
+
+        def wait_for_task(self, task_uid: int, **kwargs: object) -> object:
+            self.timeouts.append(kwargs["timeout_in_ms"])
+            message = "client failure"
+            raise TypeError(message)
+
+    client = Client()
+    backend = MeilisearchBackend(client=client, task_timeout_in_ms=20_000)
+
+    with pytest.raises(TypeError, match="client failure"):
+        backend._wait_for_task({"taskUid": 1})
+    assert client.timeouts == [20_000]
+
+
 def test_meilisearch_backend_extract_task_uid() -> None:
     """Extract task UIDs from mapping and object task payloads."""
     backend = MeilisearchBackend(client=_FakeClient(_FakeIndex()))
