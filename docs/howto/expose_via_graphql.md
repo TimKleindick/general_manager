@@ -318,51 +318,62 @@ query SortedProjects($order: [ProjectOrderBy!]) {
 }
 ```
 
-Every manager also receives a sibling `<manager>Groups` field, and every
-generated relation list receives a matching `…Groups` sibling. A group page has
-`groups` and `pageInfo`; each group exposes typed `keys`, ordinary paginated
-`members`, and `count`. Managers with eligible numeric or text fields also expose
-typed `sums`; groups for managers without those fields omit `sums` entirely.
-Under `sums`, numbers are added and strings are deduplicated in encounter order
-and joined with `", "`. Null values are excluded; an all-null field returns null.
-
-Supply at least one `groupBy` field name. Filtering and row authorization run
-before grouping. A grouping key that is unreadable for any authorized member
-fails the query, while an unreadable sum produces a normal GraphQL field error
-without materializing that sum.
-
-For example, this groups projects by the related commercial identity while
-keeping each original project and its singular relation inside `members`:
-
-```graphql
-query ProjectsByCommercial {
-  projectGroups(groupBy: ["commercials_id"]) {
-    groups {
-      keys { commercialsId }
-      members { items { commercials { id name } } }
-      count
-    }
-  }
-}
-```
+Use a dedicated grouped field with a required `groupBy` argument:
 
 ```graphql
 query ProjectsByDescendingStatus {
   projectGroups(groupBy: ["status"], orderBy: [{field: status, direction: DESC}]) {
-    groups { keys { status } count }
-    pageInfo {
-      totalCount
-    }
+    items { status name }
+    pageInfo { totalCount }
   }
 }
 ```
 
-Invalid `orderBy` enum values are rejected by Graphene. Group ordering may use
-only fields selected in `groupBy`; aggregate ordering is unavailable. Group-page
-pagination slices groups, while member pagination slices the original members.
-If no rows match, a paginated grouped query returns an empty `groups` list with
-`totalCount: 0`; negative `page` or `pageSize` values still raise the normal
-input error.
+Ordinary `projectList` returns original records and does not accept `groupBy`.
+Grouped items expose flat key and aggregate fields. Numbers sum, distinct text
+values join, booleans use `any`, and dates/times use their maximum. Null values
+are excluded; an all-null scalar returns null. A group's `id` is null unless
+selected as a key. Relation ID aliases retain a shared non-null ID or return
+null when references differ.
+
+A grouped singular relation is exposed as a collection of distinct original
+managers, with both list and grouping operations:
+
+```graphql
+query ProjectsByCommercial {
+  projectGroups(groupBy: ["commercials_id"]) {
+    items {
+      commercialsId
+      commercialsList {
+        items { id name }
+        pageInfo { totalCount }
+      }
+      commercialsGroups(groupBy: ["name"]) {
+        items { name }
+        pageInfo { totalCount }
+      }
+    }
+    pageInfo { totalCount }
+  }
+}
+```
+
+Bucket-backed collections support the same pair recursively. Every nested
+collection has independent filtering, exclusion, ordering and pagination scoped
+to its parent. Plain `List[GraphQLType]` properties remain output lists with no
+query controls; use a CalculationInterface and bucket for queryable calculated
+collections.
+
+Filtering and row authorization precede grouping. Grouping keys and ordering
+fields must be readable, and aggregate fields check all contributing members.
+Sorting supports eligible aggregate scalars before pagination. `totalCount`
+counts groups. Empty results have `items: []` and `totalCount: 0`; nonpositive
+pagination inputs are rejected. Incomplete remote pages cannot be grouped as
+complete data. See the [grouping contract](../concepts/graphql/filters_pagination.md#grouping).
+
+Legacy wrapper fields are no longer generated: select keys and aggregates
+directly under `items`. Retrieve original records and their count through the
+ordinary list endpoint.
 
 ## Class-wide subscription permission checks
 

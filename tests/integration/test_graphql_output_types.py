@@ -215,6 +215,7 @@ def _restore_graphql_registry(snapshot: GraphQLRegistry) -> None:
     GraphQL._query_fields = snapshot.query_fields
     GraphQL._subscription_fields = snapshot.subscription_fields
     GraphQL._page_type_registry = snapshot.page_type_registry
+    GraphQL._group_type_registry = snapshot.group_type_registry
     GraphQL._group_page_type_registry = snapshot.group_page_type_registry
     GraphQL._subscription_payload_registry = snapshot.subscription_payload_registry
     GraphQL.graphql_type_registry = snapshot.graphql_type_registry

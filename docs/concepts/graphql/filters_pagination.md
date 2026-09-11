@@ -9,8 +9,9 @@ Before executing a query, the resolver calls `get_read_permission_filter()`. Per
 ## Query arguments
 
 Each generated list field accepts `filter`, `exclude`, `orderBy`, `page`, and
-`pageSize` arguments when the corresponding generated options exist. Explicit
-group fields additionally accept `groupBy`. Python-side helpers use the names
+`pageSize` arguments when the corresponding generated options exist. Separate
+`…Groups` fields require `groupBy` and use the same page envelope.
+Python-side helpers use the names
 `order_by`, `group_by`, and `page_size`; Graphene exposes them as camelCase by
 default. Top-level list queries and generated relation-list fields always
 include nullable `page` and `pageSize`. They include nullable `filter` and `exclude` only
@@ -81,23 +82,85 @@ one, so fetched row count must not be presented as a global total.
 
 ## Grouping
 
-Generated entity and relation lists do not accept `groupBy`. Use their sibling
-`<manager>Groups` or `…Groups` field instead. Group fields require at least one
-`groupBy` key and return a page with `groups` and `pageInfo`. Each group exposes
-typed `keys`, paginated original `members`, and `count`. Managers with eligible
-numeric or text fields also expose typed `sums`; it is absent when no such fields
-exist. Keys that were not selected resolve as null. Empty group pages retain
-that shape and return an empty `groups` list with normal metadata.
+Generated `…List` fields return original records. Their `…Groups` siblings
+require `groupBy` and return `items` / `pageInfo` with a distinct grouped item
+type. The contract is the same for Database, Excel and Calculation managers.
 
-Under `sums`, numbers are added and strings are deduplicated in encounter order
-and joined with `", "`. Null values are excluded; an all-null field returns null.
+```graphql
+projectGroups(groupBy: ["status"], orderBy: [{field: amount, direction: DESC}]) {
+  items {
+    status
+    amount
+    customerList(orderBy: [{field: name}], page: 1, pageSize: 5) {
+      items { id name country }
+      pageInfo { totalCount }
+    }
+    customerGroups(groupBy: ["country"]) {
+      items { country name }
+      pageInfo { totalCount }
+    }
+  }
+  pageInfo { totalCount }
+}
+```
 
-Filters and row authorization run before groups are formed. A denied grouping
-key fails the query before its values are read. Each selected sum verifies its
-field permission across the group's members before aggregation; a denied field
-returns a GraphQL field error. Group `orderBy` accepts only selected grouping
-keys, so aggregate ordering is unavailable. Group pagination slices groups and
-member pagination slices the original member managers.
+The example assumes `Project` has `status`, `amount`, and a `customer` relation,
+and `Customer` has `name` and `country`. Supply at least one nonblank eligible
+field name; Python names and GraphQL camelCase names are accepted. Collection
+fields cannot be grouping keys.
+
+Selected keys retain their values. Other fields aggregate as follows:
+
+| Field type | Grouped value |
+| --- | --- |
+| Numbers, Decimal, Measurement | Sum of non-null values |
+| Strings | Distinct values joined by `", "` in encounter order |
+| Booleans | Whether any non-null value is true |
+| Dates and times | Maximum non-null value |
+| Singular manager relation | Distinct original managers via `…List` and `…Groups` |
+| Bucket collection | Distinct original managers via `…List` and `…Groups` |
+| Entity `id` | Null unless selected as a grouping key |
+| Singular relation ID alias | Shared non-null ID, or null when references differ |
+
+All-null scalar fields return null. Related collections with no members return
+empty pages. Each nested list or grouping has its own filters, ordering and
+pagination, scoped to its parent's members. Bucket-backed collections support
+further grouping at any nesting depth. Repeated references to the same manager
+identity contribute one related record, so a customer is not counted once per
+project.
+
+If a singular relation already has a corresponding declared `…List` field,
+that collection keeps its name. The singular relation uses `…RelationList` and
+`…RelationGroups` on grouped items, so both sources remain accessible.
+
+Primitive list properties and `List[GraphQLType]` concatenate original member
+lists. These remain plain output lists: they gain no query arguments or grouping
+companions. Expose a CalculationInterface and bucket when a calculated
+collection needs querying. Unsupported aggregate types produce field errors
+before their getters run. Declared GraphQL nullability still applies; groups
+have no synthetic entity identity.
+
+Filters, exclusions and row authorization run before grouping. Grouping and
+ordering fields require permission before values are read, including the
+canonical relation for a foreign-key ID alias. Selected aggregate fields check
+all contributing members. Group ordering supports eligible aggregate scalars
+and runs before pagination. `totalCount` counts groups; each nested page counts
+its own results. Empty results return `items: []` with normal metadata. Partial
+remote request pages cannot be grouped as a complete set. Complete request
+responses are grouped locally from the authorized records: group ordering and
+pagination are not forwarded upstream, and grouping keys need no corresponding
+upstream filter declaration.
+
+Legacy `keys`, `sums`, `members` and `count` wrappers are not generated. Select
+keys and aggregate fields directly under `items`; query an ordinary filtered
+`…List` for original records and their count. Aggregate filtering (`having`) is
+not provided: `filter` and `exclude` always constrain source records.
+
+Grouping must inspect the complete authorized source before it can paginate
+groups. Nested related collections materialize and deduplicate their original
+managers. Small page sizes limit returned results, but do not limit this grouping
+work; selecting many nested group fields can therefore cost substantially more
+than an ordinary record list.
 
 ## Sorting
 
@@ -115,8 +178,8 @@ Invalid GraphQL enum values and null list elements are rejected by Graphene
 before the resolver runs. When `orderBy` is omitted, `null`, or an empty list,
 sorting is skipped.
 
-For an explicit group field, sorting runs on grouped keys after grouping. Ordinary
-lists always sort individual records.
+Grouped endpoints sort eligible aggregate scalar values after grouping.
+Ordinary list endpoints sort individual records.
 
 Typed variables use a list declaration such as `$order: [ProjectOrderBy!]`;
 add an outer `!` only when the variable itself must be non-null.

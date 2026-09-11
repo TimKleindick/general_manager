@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Any, ClassVar
+from types import SimpleNamespace
+
+from graphql import GraphQLError
+
+from general_manager.api.graphql import GraphQL
 
 from django.contrib.auth import get_user_model
 from django.db.models import CharField
@@ -413,7 +418,85 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(self.transport.execution_count, 1)
 
-    def test_partial_request_page_rejects_global_grouping(self) -> None:
+    def test_remote_group_order_and_pagination_stay_local(self) -> None:
+        """Group controls must not page or order the upstream source records."""
+        response = self.query(
+            """
+            query {
+              paged: remoteRequestSortItemGroups(
+                groupBy: ["rootKey"]
+                orderBy: [{field: rootKey, direction: DESC}]
+                page: 2
+                pageSize: 1
+              ) {
+                items { rootKey }
+                pageInfo { totalCount currentPage totalPages pageSize }
+              }
+              ordered: remoteRequestSortItemGroups(
+                groupBy: ["id"]
+                orderBy: [{field: rootKey, direction: DESC}]
+              ) { items { rootKey } }
+            }
+            """
+        )
+
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]
+        self.assertEqual(
+            payload["paged"],
+            {
+                "items": [{"rootKey": "Beta"}],
+                "pageInfo": {
+                    "totalCount": 3,
+                    "currentPage": 2,
+                    "totalPages": 3,
+                    "pageSize": 1,
+                },
+            },
+        )
+        self.assertEqual(
+            payload["ordered"]["items"],
+            [{"rootKey": "Zed"}, {"rootKey": "Beta"}, {"rootKey": "Alpha"}],
+        )
+        self.assertEqual(len(self.remote_transport.requests), 2)
+        for request in self.remote_transport.requests:
+            body = request.body or {}
+            self.assertIsNone(body.get("page"))
+            self.assertIsNone(body.get("page_size"))
+            self.assertFalse(body.get("ordering"))
+
+    def test_request_group_key_needs_no_upstream_filter_declaration(self) -> None:
+        """Internal group membership uses local values, not remote filter support."""
+        for record, amount in zip(self.transport.payload, (2, 2, 3), strict=True):
+            record["optionalAmount"] = amount
+        response = self.query(
+            """
+            query {
+              requestSortItemGroups(
+                groupBy: ["optionalAmount"]
+                orderBy: [{field: optionalAmount}]
+              ) {
+                items { optionalAmount rootKey }
+                pageInfo { totalCount }
+              }
+            }
+            """
+        )
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["requestSortItemGroups"],
+            {
+                "items": [
+                    {"optionalAmount": "2", "rootKey": "Able, Beta"},
+                    {"optionalAmount": "3", "rootKey": "Zed"},
+                ],
+                "pageInfo": {"totalCount": 2},
+            },
+        )
+        self.assertEqual(self.transport.execution_count, 1)
+
+    def test_partial_request_list_rejects_global_grouping(self) -> None:
+        """Grouped endpoints cannot aggregate only an upstream page."""
         project_id = self.transport.payload[0]["projectId"]
         self.transport.payload = [
             {"identifier": 3, "rootKey": "Third", "projectId": project_id},
@@ -427,7 +510,39 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
             """
             query {
               requestSortItemGroups(groupBy: ["rootKey"]) {
-                groups { keys { rootKey } }
+                items { rootKey }
+                pageInfo { totalCount }
+              }
+            }
+            """
+        )
+
+        self.assertResponseHasErrors(response)
+        self.assertIn("global grouping", response.json()["errors"][0]["message"])
+
+    def test_grouped_relation_rejects_partial_request_before_union(self) -> None:
+        """Materializing related records must not discard incomplete provenance."""
+        self.transport.result_page = 2
+        self.transport.result_page_size = 2
+        self.transport.result_total_count = 4
+        source = self.request_sort_item.all()
+        group = SimpleNamespace(members=[SimpleNamespace(remote_list=source)])
+
+        with self.assertRaisesMessage(GraphQLError, "incomplete response"):
+            GraphQL._grouped_relation_bucket(
+                group, "remote_list", self.request_sort_item
+            )
+
+        self.assertEqual(self.transport.execution_count, 1)
+
+    def test_request_list_rejects_unknown_group_key_before_transport(self) -> None:
+        """Group-key validation precedes fetching the source."""
+        self.transport.payload = []
+        response = self.query(
+            """
+            query {
+              requestSortItemGroups(groupBy: ["unknownKey"]) {
+                items { rootKey }
               }
             }
             """
@@ -435,11 +550,11 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
 
         self.assertResponseHasErrors(response)
         self.assertIn(
-            "global grouping",
-            response.json()["errors"][0]["message"],
+            "not an eligible grouping key", response.json()["errors"][0]["message"]
         )
+        self.assertEqual(self.transport.execution_count, 0)
 
-    def test_empty_request_source_rejects_unknown_group_key_before_transport(
+    def test_empty_request_list_rejects_unknown_group_key_before_transport(
         self,
     ) -> None:
         """Invalid group keys cannot trigger a request fetch on an empty source."""
@@ -449,7 +564,7 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
             """
             query {
               requestSortItemGroups(groupBy: ["unknownKey"]) {
-                groups { count }
+                items { rootKey }
               }
             }
             """
@@ -461,75 +576,6 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
             response.json()["errors"][0]["message"],
         )
         self.assertEqual(self.transport.execution_count, 0)
-
-    def test_request_groups_sum_optional_numeric_fields_and_keep_all_null_none(
-        self,
-    ) -> None:
-        """Generated grouped sums unwrap Optional[T] without admitting unions or bools."""
-        project_id = self.transport.payload[0]["projectId"]
-        self.transport.payload = [
-            {
-                "identifier": 1,
-                "rootKey": "mixed",
-                "projectId": project_id,
-                "optionalAmount": 2,
-                "decimalAmount": "1.5",
-                "distance": "1",
-            },
-            {
-                "identifier": 2,
-                "rootKey": "mixed",
-                "projectId": project_id,
-                "optionalAmount": None,
-                "decimalAmount": "2.5",
-                "distance": None,
-            },
-            {
-                "identifier": 3,
-                "rootKey": "nulls",
-                "projectId": project_id,
-                "optionalAmount": None,
-                "decimalAmount": None,
-                "distance": None,
-            },
-        ]
-
-        response = self.query(
-            """
-            query {
-              requestSortItemGroups(groupBy: ["rootKey"]) {
-                groups {
-                  keys { rootKey }
-                  sums {
-                    optionalAmount
-                    decimalAmount
-                    distance(targetUnit: "centimeter") { value unit }
-                  }
-                }
-              }
-            }
-            """
-        )
-
-        self.assertResponseNoErrors(response)
-        groups = response.json()["data"]["requestSortItemGroups"]["groups"]
-        sums_by_key = {group["keys"]["rootKey"]: group["sums"] for group in groups}
-        self.assertEqual(
-            sums_by_key["mixed"],
-            {
-                "optionalAmount": 2,
-                "decimalAmount": 4.0,
-                "distance": {"value": 100.0, "unit": "centimeter"},
-            },
-        )
-        self.assertEqual(
-            sums_by_key["nulls"],
-            {
-                "optionalAmount": None,
-                "decimalAmount": None,
-                "distance": None,
-            },
-        )
 
     def test_remote_request_forwards_order_and_page_once(self) -> None:
         response = self.query(

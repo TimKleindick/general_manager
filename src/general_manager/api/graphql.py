@@ -39,7 +39,10 @@ from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils.module_loading import import_string
 
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket._materialized_bucket import MaterializedBucket
 from general_manager.bucket.group_bucket import GroupBucket
+from general_manager.bucket.request_bucket import RequestBucket
+from general_manager.bucket.indexing import freeze_bucket_index_value
 from general_manager.cache.dependency_index import (
     Dependency,
 )
@@ -49,6 +52,7 @@ from general_manager.conf import get_setting
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.group_manager import GroupManager
 from general_manager.measurement.measurement import Measurement
 from general_manager.permission.graphql_capabilities import (
     GraphQLPermissionCapability,
@@ -113,6 +117,7 @@ from general_manager.api.graphql_resolvers import (
     create_list_resolver as _create_list_resolver_fn,
     create_resolver as _create_resolver_fn,
     resolve_with_read_permission as _resolve_with_read_permission_fn,
+    UnsupportedGroupedFieldError,
 )
 from general_manager.api.graphql_ordering import (
     OrderingTypes,
@@ -122,8 +127,6 @@ from general_manager.api.graphql_ordering import (
 )
 from general_manager.api.graphql_groups import (
     create_group_resolver as _create_group_resolver_fn,
-    create_group_types as _create_group_types_fn,
-    create_member_resolver as _create_member_resolver_fn,
     eligible_group_key_fields as _eligible_group_key_fields_fn,
     group_sortable_field_paths as _group_sortable_field_paths_fn,
 )
@@ -370,6 +373,7 @@ class GraphQL:
     _query_fields: ClassVar[GraphQLFieldMap] = {}
     _subscription_fields: ClassVar[GraphQLFieldMap] = {}
     _page_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
+    _group_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     _group_page_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     _subscription_payload_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     graphql_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
@@ -419,6 +423,7 @@ class GraphQL:
         cls._query_fields = {}
         cls._subscription_fields = {}
         cls._page_type_registry = {}
+        cls._group_type_registry = {}
         cls._group_page_type_registry = {}
         cls._subscription_payload_registry = {}
         cls.graphql_type_registry = {}
@@ -459,6 +464,7 @@ class GraphQL:
             query_fields=dict(cls._query_fields),
             subscription_fields=dict(cls._subscription_fields),
             page_type_registry=dict(cls._page_type_registry),
+            group_type_registry=dict(cls._group_type_registry),
             group_page_type_registry=dict(cls._group_page_type_registry),
             subscription_payload_registry=dict(cls._subscription_payload_registry),
             graphql_type_registry=dict(cls.graphql_type_registry),
@@ -841,6 +847,8 @@ class GraphQL:
                     _field_name: str = field_name,
                     _manager_name: str = generalManagerClass.__name__,
                 ) -> object:
+                    if isinstance(manager_instance, GroupManager):
+                        raise UnsupportedGroupedFieldError.file_fields()
                     return cls._resolve_with_read_permission(
                         manager_instance,
                         info,
@@ -862,59 +870,16 @@ class GraphQL:
             if (
                 field_name.endswith("_list")
                 and resolved_manager_type is not None
-                and _eligible_group_key_fields_fn(resolved_manager_type)
+                and cls._is_bucket_collection_field(field_type, field_info)
             ):
-                relation_manager_type = resolved_manager_type
-                group_field_name = f"{field_name.removesuffix('_list')}_groups"
-                group_arguments = cls._group_list_arguments(
-                    relation_manager_type,
-                    include_inactive=False,
-                    scope="RelationGroups",
+                fields[resolver_name] = cls._create_relation_list_resolver(
+                    field_name, resolved_manager_type
                 )
-                group_arguments["group_by"] = graphene.Argument(
-                    graphene.List(graphene.NonNull(graphene.String)),
-                    required=True,
+                cls._add_relation_group_field(
+                    fields,
+                    field_name,
+                    resolved_manager_type,
                 )
-                member_arguments = cls._group_list_arguments(
-                    relation_manager_type,
-                    include_inactive=False,
-                    scope="GroupMembers",
-                )
-                fields[group_field_name] = graphene.Field(
-                    cls._get_or_create_group_page_type(
-                        relation_manager_type,
-                        member_arguments=member_arguments,
-                    ),
-                    **group_arguments,
-                )
-
-                def relation_group_base_getter(
-                    instance: object,
-                    _include_inactive: bool,
-                    *,
-                    _field_name: str = field_name,
-                ) -> Bucket[GeneralManager]:
-                    return cast(
-                        Bucket[GeneralManager],
-                        getattr(instance, _field_name),
-                    )
-
-                relation_group_page_resolver = _create_group_resolver_fn(
-                    relation_group_base_getter,
-                    relation_manager_type,
-                    filter_normalizer=_normalize_filter_input_fn,
-                )
-
-                def relation_group_resolver(
-                    manager_instance: GeneralManager,
-                    info: GraphQLResolveInfo,
-                    *,
-                    _resolver: GraphQLResolver = relation_group_page_resolver,
-                    **kwargs: object,
-                ) -> object:
-                    return _resolver(manager_instance, info, **kwargs)
-
-                fields[f"resolve_{group_field_name}"] = relation_group_resolver
 
         output_classes = {
             output_class.__name__: output_class
@@ -927,6 +892,40 @@ class GraphQL:
             attr_value,
         ) in generalManagerClass.Interface.get_graph_ql_properties().items():
             raw_hint = attr_value.graphql_type_hint
+
+            property_relation_manager = resolve_general_manager_type(
+                raw_hint,
+                cls.manager_registry,
+            )
+            property_page_hint = raw_hint
+            if get_origin(property_page_hint) in {Union, UnionType}:
+                non_none_hints = [
+                    hint
+                    for hint in get_args(property_page_hint)
+                    if hint is not type(None)
+                ]
+                if len(non_none_hints) == 1:
+                    property_page_hint = non_none_hints[0]
+            property_origin = get_origin(property_page_hint)
+            if (
+                attr_name.endswith("_list")
+                and property_relation_manager is not None
+                and safe_issubclass(property_origin, Bucket)
+            ):
+                fields[attr_name] = cls._map_field_to_graphene_read(
+                    property_relation_manager,
+                    attr_name,
+                )
+                fields[f"resolve_{attr_name}"] = cls._create_relation_list_resolver(
+                    attr_name,
+                    property_relation_manager,
+                )
+                cls._add_relation_group_field(
+                    fields,
+                    attr_name,
+                    property_relation_manager,
+                )
+                continue
 
             if _contains_measurement(raw_hint):
                 mapped = map_graphql_output_annotation(
@@ -1036,6 +1035,8 @@ class GraphQL:
                 info: GraphQLResolveInfo,
             ) -> dict[str, GeneralManager]:
                 del info
+                if isinstance(manager_instance, GroupManager):
+                    raise UnsupportedGroupedFieldError.capabilities()
                 return {"instance": manager_instance}
 
             fields["resolve_capabilities"] = resolve_capabilities
@@ -1352,9 +1353,9 @@ class GraphQL:
         `target_unit` argument. `GeneralManager` relations map to a single
         Graphene field, while relation fields whose name ends with `_list` map to
         a paginated list field with typed `order_by`, `page`, and `page_size`,
-        plus generated relation filter/exclude inputs when available. Explicit
-        sibling ``*_groups`` fields provide grouped results. Other types map through the scalar base
-        mapper and may use `field_info["graphql_scalar"]` for supported scalar
+        plus generated relation filter/exclude inputs when available. Optional
+        ``groupBy`` preserves the normal list result type. Other types map
+        through the scalar base mapper and may use `field_info["graphql_scalar"]` for supported scalar
         overrides such as `"bigint"`.
 
         Parameters:
@@ -1394,7 +1395,6 @@ class GraphQL:
                     attributes["order_by"] = graphene.Argument(
                         graphene.List(graphene.NonNull(ordering_types.input_type))
                     )
-
                 page_type = GraphQL._get_or_create_page_type(
                     field_type.__name__ + "Page",
                     lambda: GraphQL.graphql_type_registry[field_type.__name__],
@@ -1500,6 +1500,189 @@ class GraphQL:
         )
 
     @staticmethod
+    def _relation_list_base_getter(
+        field_name: str,
+        relation_manager_type: type[GeneralManager],
+    ) -> GraphQLListGetter:
+        """Build a relation source getter without any global fallback."""
+
+        def getter(
+            instance: object,
+            _include_inactive: bool,
+        ) -> Bucket[GeneralManager]:
+            if isinstance(instance, GroupManager):
+                return GraphQL._grouped_relation_bucket(
+                    instance,
+                    field_name,
+                    relation_manager_type,
+                )
+            value = getattr(instance, field_name)
+            return GraphQL._as_relation_bucket(value, relation_manager_type)
+
+        return getter
+
+    @staticmethod
+    def _is_bucket_collection_field(
+        annotation: object,
+        field_info: Mapping[str, object] | None = None,
+    ) -> bool:
+        """Recognise bucket collections without turning plain typed lists into pages."""
+        if field_info and field_info.get("relation_kind") == "collection":
+            return True
+        while get_origin(annotation) in {Union, UnionType}:
+            members = [
+                member for member in get_args(annotation) if member is not type(None)
+            ]
+            if len(members) != 1:
+                return False
+            annotation = members[0]
+        return safe_issubclass(get_origin(annotation), Bucket)
+
+    @classmethod
+    def _create_relation_list_resolver(
+        cls,
+        field_name: str,
+        relation_manager_type: type[GeneralManager],
+    ) -> GraphQLResolver:
+        """Create an ordinary relation page resolver scoped to its parent."""
+        resolver = _create_list_resolver_fn(
+            cls._relation_list_base_getter(field_name, relation_manager_type),
+            relation_manager_type,
+            _normalize_filter_input_fn,
+        )
+
+        def relation_resolver(
+            manager_instance: GeneralManager,
+            info: GraphQLResolveInfo,
+            **kwargs: object,
+        ) -> object:
+            # Guard the owning relation before its bucket getter runs; the
+            # nested list resolver still applies per-related-row permissions.
+            return cls._resolve_with_read_permission(
+                manager_instance,
+                info,
+                field_name,
+                lambda: resolver(manager_instance, info, **kwargs),
+            )
+
+        return relation_resolver
+
+    @staticmethod
+    def _as_relation_bucket(
+        value: object,
+        relation_manager_type: type[GeneralManager],
+    ) -> Bucket[GeneralManager]:
+        """Return a fixed relation source instead of falling back to all rows."""
+        ensure = getattr(value, "_ensure_as_of_compatible", None)
+        if callable(ensure):
+            ensure()
+        if isinstance(value, Bucket):
+            return cast(Bucket[GeneralManager], value)
+        if isinstance(value, relation_manager_type):
+            return MaterializedBucket(relation_manager_type, (value,))
+        return MaterializedBucket(relation_manager_type, ())
+
+    @staticmethod
+    def _grouped_relation_bucket(
+        group: GroupManager[GeneralManager],
+        field_name: str,
+        relation_manager_type: type[GeneralManager],
+    ) -> Bucket[GeneralManager]:
+        """Collect distinct original relation records from a grouped parent."""
+        ensure_group = getattr(group, "_ensure_as_of_compatible", None)
+        if callable(ensure_group):
+            ensure_group()
+        values: list[GeneralManager] = []
+        seen: set[object] = set()
+        for member in group.members:
+            ensure_member = getattr(member, "_ensure_as_of_compatible", None)
+            if callable(ensure_member):
+                ensure_member()
+            value = getattr(member, field_name)
+            ensure_value = getattr(value, "_ensure_as_of_compatible", None)
+            if callable(ensure_value):
+                ensure_value()
+            if isinstance(value, RequestBucket) and not value.response_is_complete:
+                message = (
+                    "Request source cannot aggregate a grouped relation from an "
+                    "incomplete response."
+                )
+                raise GraphQLError(message)
+            candidates: Iterable[object]
+            if isinstance(value, Bucket):
+                candidates = value
+            elif value is None:
+                candidates = ()
+            else:
+                candidates = (value,)
+            for candidate in candidates:
+                if not isinstance(candidate, relation_manager_type):
+                    continue
+                identity = (
+                    candidate.__class__,
+                    freeze_bucket_index_value(candidate.identification),
+                )
+                if identity not in seen:
+                    seen.add(identity)
+                    values.append(candidate)
+        return MaterializedBucket(relation_manager_type, values)
+
+    @classmethod
+    def _add_relation_group_field(
+        cls,
+        fields: GraphQLFieldMap,
+        field_name: str,
+        relation_manager_type: type[GeneralManager],
+        *,
+        source_field_name: str | None = None,
+        lazy_page: bool = False,
+    ) -> None:
+        """Add the dedicated group page beside an ordinary bucket collection."""
+        if not _eligible_group_key_fields_fn(relation_manager_type):
+            return
+        group_field_name = f"{field_name.removesuffix('_list')}_groups"
+        if group_field_name in fields:
+            message = (
+                f"Relation group field '{group_field_name}' collides with an "
+                "existing GraphQL field."
+            )
+            raise ValueError(message)
+        page_type: object
+        if lazy_page:
+
+            def group_page_factory() -> type[graphene.ObjectType]:
+                return cls._get_or_create_group_page_type(relation_manager_type)
+
+            page_type = group_page_factory
+        else:
+            page_type = cls._get_or_create_group_page_type(relation_manager_type)
+        fields[group_field_name] = graphene.Field(
+            page_type,
+            **cls._group_list_arguments(relation_manager_type, scope="RelationGroups"),
+        )
+        resolver = _create_group_resolver_fn(
+            cls._relation_list_base_getter(
+                source_field_name or field_name, relation_manager_type
+            ),
+            relation_manager_type,
+            filter_normalizer=_normalize_filter_input_fn,
+        )
+
+        def group_resolver(
+            manager_instance: GeneralManager,
+            info: GraphQLResolveInfo,
+            **kwargs: object,
+        ) -> object:
+            return cls._resolve_with_read_permission(
+                manager_instance,
+                info,
+                source_field_name or field_name,
+                lambda: resolver(manager_instance, info, **kwargs),
+            )
+
+        fields[f"resolve_{group_field_name}"] = group_resolver
+
+    @staticmethod
     def _apply_pagination(
         queryset: Bucket[GeneralManager] | GroupBucket[GeneralManager],
         page: int | None,
@@ -1563,14 +1746,279 @@ class GraphQL:
         return cls._page_type_registry[page_type_name]
 
     @classmethod
-    def _group_list_arguments(
+    def _get_or_create_group_page_type(
+        cls, general_manager_class: type[GeneralManager]
+    ) -> type[graphene.ObjectType]:
+        """Return the page wrapper whose items are the flat grouped type."""
+        name = general_manager_class.__name__
+        cached = cls._group_page_type_registry.get(name)
+        if cached is not None:
+            return cached
+        page_type = type(
+            f"{name}GroupPage",
+            (graphene.ObjectType,),
+            {
+                "items": graphene.List(
+                    lambda: cls._get_or_create_group_type(general_manager_class),
+                    required=True,
+                ),
+                "pageInfo": graphene.Field(PageInfo, required=True),
+            },
+        )
+        cls._group_page_type_registry[name] = page_type
+        return page_type
+
+    @classmethod
+    def _get_or_create_group_type(
+        cls, general_manager_class: type[GeneralManager]
+    ) -> type[graphene.ObjectType]:
+        """Create the recursive flat aggregate output for one manager class."""
+        name = general_manager_class.__name__
+        cached = cls._group_type_registry.get(name)
+        if cached is not None:
+            return cached
+
+        fields: GraphQLFieldMap = {}
+        reserved_relation_names = set(
+            general_manager_class.Interface.get_attribute_types()
+        ) | set(general_manager_class.Interface.get_graph_ql_properties())
+        for (
+            field_name,
+            field_info,
+        ) in general_manager_class.Interface.get_attribute_types().items():
+            if field_name in fields:
+                message = (
+                    f"Grouped output field '{field_name}' collides with a "
+                    "generated relation field."
+                )
+                raise ValueError(message)
+            field_type = field_info["type"]
+            if field_info.get("orm_field_kind") in {"file", "image"}:
+                fields[field_name] = cls._map_field_to_graphene_read(
+                    field_type, field_name, field_info
+                )
+
+                def resolve_group_file(
+                    _group: GroupManager[GeneralManager], _info: GraphQLResolveInfo
+                ) -> object:
+                    raise UnsupportedGroupedFieldError.file_fields()
+
+                fields[f"resolve_{field_name}"] = resolve_group_file
+                continue
+            related = resolve_general_manager_type(field_type, cls.manager_registry)
+            if related is not None and cls._is_bucket_collection_field(
+                field_type, field_info
+            ):
+                fields[field_name] = cls._map_field_to_graphene_read(
+                    related, field_name, field_info
+                )
+                fields[f"resolve_{field_name}"] = cls._create_relation_list_resolver(
+                    field_name, related
+                )
+                cls._add_relation_group_field(fields, field_name, related)
+                continue
+            if related is not None:
+                cls._add_grouped_singular_relation_fields(
+                    fields,
+                    field_name,
+                    related,
+                    reserved_relation_names=reserved_relation_names,
+                )
+                continue
+            fields[field_name] = cls._map_field_to_graphene_read(
+                related or field_type, field_name, field_info
+            )
+            fields[f"resolve_{field_name}"] = cls._create_resolver(
+                field_name, related or field_type
+            )
+
+        # GraphQLProperty values use the same projection resolver as interface
+        # attributes. Plain typed lists remain plain GraphQL lists, so they do
+        # not acquire list controls or a grouping sibling.
+        output_classes = {
+            output_class.__name__: output_class
+            for output_class in get_registered_graphql_types()
+        }
+        for (
+            field_name,
+            property_value,
+        ) in general_manager_class.Interface.get_graph_ql_properties().items():
+            if field_name in fields:
+                continue
+            raw_hint = property_value.graphql_type_hint
+            ordinary_field = cls.graphql_type_registry[
+                general_manager_class.__name__
+            ]._meta.fields.get(field_name)
+            relation = resolve_general_manager_type(raw_hint, cls.manager_registry)
+            if relation is None:
+                raw_annotations = getattr(
+                    getattr(property_value, "_raw_fget", None), "__annotations__", {}
+                )
+                relation = resolve_general_manager_type(
+                    raw_annotations.get("return"), cls.manager_registry
+                )
+            raw_origin = get_origin(raw_hint)
+            if (
+                field_name.endswith("_list")
+                and relation is not None
+                and cls._is_bucket_collection_field(raw_hint)
+            ):
+                fields[field_name] = deepcopy(ordinary_field)
+                fields[f"resolve_{field_name}"] = cls._create_relation_list_resolver(
+                    field_name, relation
+                )
+                cls._add_relation_group_field(fields, field_name, relation)
+                continue
+            if relation is not None:
+                cls._add_grouped_singular_relation_fields(
+                    fields,
+                    field_name,
+                    relation,
+                    reserved_relation_names=reserved_relation_names,
+                )
+                continue
+            if _contains_measurement(raw_hint):
+                mapped = map_graphql_output_annotation(
+                    raw_hint,
+                    owner_name=general_manager_class.__name__,
+                    field_name=field_name,
+                    manager_registry=cls.manager_registry,
+                    manager_type_registry=cls.graphql_type_registry,
+                    output_class_registry=output_classes,
+                    output_type_registry=cls.graphql_output_type_registry,
+                    measurement_type=MeasurementType,
+                    scalar_mapper=cls._map_field_to_graphene_base_type,
+                )
+                mapped_field = cast(graphene.Field, mapped.field)
+                mapped_type = mapped_field.type
+                if isinstance(mapped_type, graphene.NonNull):
+                    mapped_type = mapped_type.of_type
+                fields[field_name] = (
+                    deepcopy(ordinary_field)
+                    if ordinary_field is not None
+                    else graphene.Field(mapped_type, target_unit=graphene.String())
+                )
+                fields[f"resolve_{field_name}"] = cls._create_resolver(
+                    field_name, cast(type, mapped.resolver_type)
+                )
+                continue
+            if _contains_graphql_output_type(raw_hint, output_classes):
+                mapped = map_graphql_output_annotation(
+                    raw_hint,
+                    owner_name=general_manager_class.__name__,
+                    field_name=field_name,
+                    manager_registry=cls.manager_registry,
+                    manager_type_registry=cls.graphql_type_registry,
+                    output_class_registry=output_classes,
+                    output_type_registry=cls.graphql_output_type_registry,
+                    measurement_type=MeasurementType,
+                    scalar_mapper=cls._map_field_to_graphene_base_type,
+                )
+                fields[field_name] = (
+                    deepcopy(ordinary_field)
+                    if ordinary_field is not None
+                    else mapped.field
+                )
+                fields[f"resolve_{field_name}"] = cls._create_resolver(
+                    field_name, cast(type, mapped.resolver_type)
+                )
+                continue
+            if raw_origin in {list, tuple, set}:
+                arguments = get_args(raw_hint)
+                element = arguments[0] if arguments else str
+                element_manager = resolve_general_manager_type(
+                    element, cls.manager_registry
+                )
+                if element_manager is not None:
+                    fields[field_name] = (
+                        deepcopy(ordinary_field)
+                        if ordinary_field is not None
+                        else graphene.List(
+                            lambda item=element_manager: cls.graphql_type_registry[
+                                item.__name__
+                            ]
+                        )
+                    )
+                else:
+                    fields[field_name] = (
+                        deepcopy(ordinary_field)
+                        if ordinary_field is not None
+                        else graphene.List(
+                            cls._map_field_to_graphene_base_type(cast(type, element))
+                        )
+                    )
+                fields[f"resolve_{field_name}"] = cls._create_normal_resolver(
+                    field_name
+                )
+                continue
+            fields[field_name] = (
+                deepcopy(ordinary_field)
+                if ordinary_field is not None
+                else cls._map_field_to_graphene_read(raw_hint, field_name)
+            )
+            fields[f"resolve_{field_name}"] = cls._create_resolver(
+                field_name, cast(type, raw_hint)
+            )
+
+        group_type = type(f"{name}GroupType", (graphene.ObjectType,), fields)
+        cls._group_type_registry[name] = group_type
+        return group_type
+
+    @classmethod
+    def _add_grouped_singular_relation_fields(
+        cls,
+        fields: GraphQLFieldMap,
+        field_name: str,
+        relation_manager_type: type[GeneralManager],
+        *,
+        reserved_relation_names: set[str],
+    ) -> None:
+        """Represent a grouped direct relation as scoped list and groups pages."""
+        list_name = f"{field_name}_list"
+        group_field_name = f"{list_name.removesuffix('_list')}_groups"
+        if (
+            list_name in fields
+            or list_name in reserved_relation_names
+            or group_field_name in fields
+            or group_field_name in reserved_relation_names
+        ):
+            list_name = f"{field_name}_relation_list"
+            group_field_name = f"{field_name}_relation_groups"
+        if (
+            list_name in fields
+            or list_name in reserved_relation_names
+            or group_field_name in fields
+            or group_field_name in reserved_relation_names
+        ):
+            message = (
+                f"Grouped relation field '{field_name}' collides with generated "
+                "list fields."
+            )
+            raise ValueError(message)
+        fields[list_name] = cls._map_field_to_graphene_read(
+            relation_manager_type, list_name
+        )
+        fields[f"resolve_{list_name}"] = cls._create_relation_list_resolver(
+            field_name, relation_manager_type
+        )
+        cls._add_relation_group_field(
+            fields,
+            list_name,
+            relation_manager_type,
+            source_field_name=field_name,
+            lazy_page=True,
+        )
+
+    @classmethod
+    def _list_arguments(
         cls,
         general_manager_class: type[GeneralManager],
         *,
         include_inactive: bool,
         scope: str,
+        include_ordering: bool = True,
     ) -> GraphQLFieldMap:
-        """Build ordinary list controls shared by grouped pages and members."""
+        """Build pagination, filtering, and ordering controls for a list field."""
         arguments: GraphQLFieldMap = {
             "page": graphene.Int(),
             "page_size": graphene.Int(),
@@ -1579,65 +2027,54 @@ class GraphQL:
         if filter_options:
             arguments["filter"] = graphene.Argument(filter_options)
             arguments["exclude"] = graphene.Argument(filter_options)
-        ordering_types = (
-            cls._group_ordering_types(general_manager_class, scope=scope)
-            if scope in {"Groups", "RelationGroups"}
-            else cls._ordering_types(general_manager_class, scope=scope)
-        )
-        if ordering_types:
-            arguments["order_by"] = graphene.Argument(
-                graphene.List(graphene.NonNull(ordering_types.input_type))
-            )
+        if include_ordering:
+            ordering_types = cls._ordering_types(general_manager_class, scope=scope)
+            if ordering_types:
+                arguments["order_by"] = graphene.Argument(
+                    graphene.List(graphene.NonNull(ordering_types.input_type))
+                )
         if include_inactive:
             arguments["include_inactive"] = graphene.Boolean()
         return arguments
 
-    @staticmethod
-    def _group_ordering_types(
+    @classmethod
+    def _group_list_arguments(
+        cls,
         general_manager_class: type[GeneralManager],
         *,
+        include_inactive: bool = False,
         scope: str,
+    ) -> GraphQLFieldMap:
+        """Build controls for a dedicated group page and aggregate ordering."""
+        arguments = cls._list_arguments(
+            general_manager_class,
+            include_inactive=include_inactive,
+            scope=scope,
+            include_ordering=False,
+        )
+        ordering_types = cls._group_ordering_types(general_manager_class, scope=scope)
+        if ordering_types is None:
+            arguments.pop("order_by", None)
+        else:
+            arguments["order_by"] = graphene.Argument(
+                graphene.List(graphene.NonNull(ordering_types.input_type))
+            )
+        arguments["group_by"] = graphene.Argument(
+            graphene.List(graphene.NonNull(graphene.String)), required=True
+        )
+        return arguments
+
+    @staticmethod
+    def _group_ordering_types(
+        general_manager_class: type[GeneralManager], *, scope: str
     ) -> OrderingTypes | None:
-        """Build order inputs from the same eligible keys accepted by groupBy."""
         return create_ordering_types(
             general_manager_class,
             scope=scope,
             field_paths=_group_sortable_field_paths_fn(
-                general_manager_class,
-                GraphQL.manager_registry,
+                general_manager_class, GraphQL.manager_registry
             ),
         )
-
-    @classmethod
-    def _get_or_create_group_page_type(
-        cls,
-        general_manager_class: type[GeneralManager],
-        *,
-        member_arguments: Mapping[str, object],
-    ) -> type[graphene.ObjectType]:
-        """Generate the typed explicit grouping result for one manager."""
-        cached = cls._group_page_type_registry.get(general_manager_class.__name__)
-        if cached is not None:
-            return cached
-        member_page_type = cls._get_or_create_page_type(
-            general_manager_class.__name__ + "Page",
-            lambda: cls.graphql_type_registry[general_manager_class.__name__],
-        )
-        member_resolver = _create_member_resolver_fn(
-            general_manager_class,
-            filter_normalizer=_normalize_filter_input_fn,
-        )
-        generated = _create_group_types_fn(
-            general_manager_class,
-            member_page_type=member_page_type,
-            map_field=cls._map_field_to_graphene_read,
-            member_resolver=member_resolver,
-            member_arguments=member_arguments,
-        )
-        cls._group_page_type_registry[general_manager_class.__name__] = (
-            generated.page_type
-        )
-        return generated.page_type
 
     @classmethod
     def _build_identification_arguments(
@@ -1713,7 +2150,7 @@ class GraphQL:
             generalManagerClass.Interface,
         )
         supports_include_inactive = is_soft_delete_enabled(interface_cls)
-        attributes = cls._group_list_arguments(
+        attributes = cls._list_arguments(
             generalManagerClass,
             include_inactive=supports_include_inactive,
             scope="",
@@ -1744,27 +2181,13 @@ class GraphQL:
 
         if _eligible_group_key_fields_fn(generalManagerClass):
             group_field_name = f"{manager_field_name}_groups"
-            group_arguments = cls._group_list_arguments(
-                generalManagerClass,
-                include_inactive=supports_include_inactive,
-                scope="Groups",
-            )
-            group_arguments["group_by"] = graphene.Argument(
-                graphene.List(graphene.NonNull(graphene.String)),
-                required=True,
-            )
-            member_arguments = cls._group_list_arguments(
-                generalManagerClass,
-                include_inactive=False,
-                scope="GroupMembers",
-            )
-            group_page_type = cls._get_or_create_group_page_type(
-                generalManagerClass,
-                member_arguments=member_arguments,
-            )
             cls._query_fields[group_field_name] = graphene.Field(
-                group_page_type,
-                **group_arguments,
+                cls._get_or_create_group_page_type(generalManagerClass),
+                **cls._group_list_arguments(
+                    generalManagerClass,
+                    include_inactive=supports_include_inactive,
+                    scope="Groups",
+                ),
             )
             cls._query_fields[f"resolve_{group_field_name}"] = (
                 _create_group_resolver_fn(
