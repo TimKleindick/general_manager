@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.80.4 (2026-09-11)
+
+### Bug Fixes
+
+- Make Meilisearch task wait timeout configurable
+  ([`4fc8d16`](https://github.com/TimKleindick/general_manager/commit/4fc8d16f02a24b209144b005f3243ec8fc3e4f39))
+
+- Preserve legacy Meilisearch task wait clients
+  ([`1bf9bf7`](https://github.com/TimKleindick/general_manager/commit/1bf9bf77ec2f2b3c1015153b7b345573f31da8dc))
+
+### Testing
+
+- Cover Meilisearch task wait compatibility fallbacks
+  ([`abe167e`](https://github.com/TimKleindick/general_manager/commit/abe167e9e121914983732cedf6a24f175d66daa6))
+
+
 ## v0.80.3 (2026-09-11)
 
 ### Bug Fixes
