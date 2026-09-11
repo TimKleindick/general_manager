@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.80.2 (2026-09-11)
+
+### Bug Fixes
+
+- Address cache dependency review feedback
+  ([`5e0f7a8`](https://github.com/TimKleindick/general_manager/commit/5e0f7a80a2ae2998be54dd5880c43eded425e605))
+
+- Share run-cache dependency snapshots and accounting
+  ([`ea5901d`](https://github.com/TimKleindick/general_manager/commit/ea5901d56f1eb79274bfd93ca49bf0890f6b5d49))
+
+
 ## v0.80.1 (2026-09-09)
 
 ### Bug Fixes
