@@ -283,6 +283,48 @@ def test_meilisearch_backend_wait_type_error_is_not_retried() -> None:
     assert client.timeouts == [20_000]
 
 
+@pytest.mark.parametrize("signature_error", [TypeError, ValueError])
+@pytest.mark.parametrize("status", ["succeeded", "failed", "canceled"])
+def test_meilisearch_backend_uninspectable_wait_for_task(
+    monkeypatch: pytest.MonkeyPatch,
+    signature_error: type[Exception],
+    status: str,
+) -> None:
+    """Uninspectable clients receive the timeout and retain completion checks."""
+    calls: list[tuple[int, int]] = []
+
+    class Client:
+        def wait_for_task(
+            self, task_uid: int, *, timeout_in_ms: int
+        ) -> dict[str, object]:
+            calls.append((task_uid, timeout_in_ms))
+            return {"status": status}
+
+    def unavailable_signature(callable_object: object) -> object:
+        raise signature_error
+
+    monkeypatch.setattr(meili_module, "signature", unavailable_signature)
+    backend = MeilisearchBackend(client=Client(), task_timeout_in_ms=20_000)
+
+    if status == "succeeded":
+        backend._wait_for_task({"taskUid": 7})
+    else:
+        with pytest.raises(MeilisearchTaskFailedError):
+            backend._wait_for_task({"taskUid": 7})
+    assert calls == [(7, 20_000)]
+
+
+def test_meilisearch_backend_skips_wait_without_task_uid() -> None:
+    """Already-complete payloads do not call either client wait API."""
+    client = _FakeClient(_FakeIndex())
+    backend = MeilisearchBackend(client=client)
+
+    backend._wait_for_task({"status": "succeeded"})
+
+    assert client.waited == []
+    assert client.timeouts == []
+
+
 def test_meilisearch_backend_extract_task_uid() -> None:
     """Extract task UIDs from mapping and object task payloads."""
     backend = MeilisearchBackend(client=_FakeClient(_FakeIndex()))
