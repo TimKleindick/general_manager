@@ -54,7 +54,6 @@ class _DependencyStorage(threading.local):
         """Initialize an inactive dependency stack for one thread."""
         self.dependencies: list[_TrackedDependencySet] = []
         self.captures: list[DependencyCapture] = []
-        self.depth = -1
         self.generation = 0
         self.stack_version = 0
         self.last_dependency: Dependency | None = None
@@ -69,7 +68,6 @@ class _DependencyStorage(threading.local):
         # reaching it while still allowing each scope to finalize its own result.
         self.dependencies.clear()
         self.captures.clear()
-        self.depth = -1
         self.generation += 1
         self.stack_version += 1
         self.last_dependency = None
@@ -93,6 +91,7 @@ class _DependencyCaptureScope:
     """Private compact dependency capture for one decorated computation."""
 
     def __init__(self) -> None:
+        """Create an unentered capture scope."""
         self._capture: DependencyCapture | None = None
         self._parent_capture: DependencyCapture | None = None
         self._generation = -1
@@ -187,7 +186,6 @@ class DependencyTracker:
         collector = _TrackedDependencySet()
         scopes.append((generation, collector))
         storage.dependencies.append(collector)
-        storage.depth = len(storage.dependencies) - 1
         storage.stack_version += 1
         return collector
 
@@ -223,7 +221,6 @@ class DependencyTracker:
         ):
             return
         storage.dependencies.pop()
-        storage.depth = len(storage.dependencies) - 1
         storage.stack_version += 1
         storage.last_dependency = None
         storage.last_dependency_stack_version = -1
