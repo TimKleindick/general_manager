@@ -25,7 +25,7 @@ from general_manager.search.async_tasks import (
     dispatch_index_manager_batch,
 )
 from general_manager.search.indexer import SearchDeleteTarget, capture_delete_targets
-from general_manager.search.config import IndexConfig, SearchChange
+from general_manager.search.config import IndexConfig, SearchChange, SearchConfigSpec
 from general_manager.search.reconciliation import (
     DirtySearchIndex,
     acknowledge_search_index_dirty,
@@ -45,6 +45,21 @@ _DirectAction = Literal["create", "update", "delete"]
 type SearchInvalidationKey = tuple[str, str, str, str]
 type SearchRuleKey = tuple[str, int]
 _SYNTHETIC_CONFIG_FAILURE_RULE_ORDINAL = -1
+
+
+def _get_search_config_for_change(
+    manager_class: type[GeneralManager],
+    database_alias: str,
+) -> SearchConfigSpec | None:
+    """Reuse immutable manager search configuration during one create-many batch."""
+    from general_manager.manager.bulk_create import current_create_many_batch
+
+    batch = current_create_many_batch(database_alias)
+    if batch is None:
+        return get_search_config(manager_class)
+    if manager_class not in batch.search_configs:
+        batch.search_configs[manager_class] = get_search_config(manager_class)
+    return cast(SearchConfigSpec | None, batch.search_configs[manager_class])
 
 
 class InvalidSearchInvalidationSettingError(ValueError):
@@ -427,7 +442,7 @@ def resolve_search_invalidation_phase(
                 )
             )
         try:
-            config = get_search_config(owner_class)
+            config = _get_search_config_for_change(owner_class, change.database_alias)
             if config is None:
                 continue
             configured_indexes = tuple(config.indexes)
@@ -600,9 +615,11 @@ def _manager_class(
     return None
 
 
-def _index_names(manager_class: type[GeneralManager]) -> tuple[str, ...]:
+def _index_names(
+    manager_class: type[GeneralManager], database_alias: str
+) -> tuple[str, ...]:
     """Return each configured index name once in declaration order."""
-    config = get_search_config(manager_class)
+    config = _get_search_config_for_change(manager_class, database_alias)
     if config is None:
         return ()
     return tuple(dict.fromkeys(index.name for index in config.indexes))
@@ -925,8 +942,19 @@ def schedule_search_invalidation_work(
     work: SearchScheduledWork,
     *,
     source_database_alias: str,
+    source_manager_class: type[GeneralManager] | None = None,
 ) -> None:
     """Schedule one bounded, generation-fenced lifecycle invalidation event."""
+    from general_manager.manager.bulk_create import current_create_many_batch
+
+    batch = current_create_many_batch(source_database_alias)
+    if (
+        batch is not None
+        and batch.manager_class is source_manager_class
+        and not batch.flushing_search_work
+    ):
+        batch.search_work.append(work)
+        return
     if (
         not work.upserts.targets
         and not work.upserts.dirty_fallbacks
@@ -1084,7 +1112,7 @@ def _direct_work(
 ) -> tuple[SearchInvalidationPlan, tuple[SearchDeleteTarget, ...]]:
     """Build direct exact-index work while retaining immutable metadata only."""
     try:
-        index_names = _index_names(manager_class)
+        index_names = _index_names(manager_class, database_alias)
     except Exception as exc:  # noqa: BLE001 - user config hooks are open-ended
         logger.warning(
             "search configuration resolution failed",
@@ -1218,6 +1246,7 @@ def _handle_search_post_change(
         schedule_search_invalidation_work(
             work,
             source_database_alias=database_alias,
+            source_manager_class=manager_class,
         )
     finally:
         record_data_change_phase("search", perf_counter() - started, database_alias)
