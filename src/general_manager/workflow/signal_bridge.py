@@ -7,12 +7,13 @@ from datetime import datetime
 from time import perf_counter
 from typing import TypedDict, cast
 
-from django.db import DEFAULT_DB_ALIAS
+from django.db import DEFAULT_DB_ALIAS, transaction
 
 from general_manager.cache.data_change_context import record_data_change_phase
 from general_manager.cache.signals import post_data_change
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.workflow.event_registry import (
+    DatabaseEventRegistry,
     EventRegistry,
     WorkflowEvent,
     get_event_registry,
@@ -152,7 +153,33 @@ def _handle_post_data_change(
         )
         if event is None:
             return
-        get_event_registry().publish(event)
+        registry = get_event_registry()
+        from general_manager.manager.bulk_create import (
+            current_create_many_batch,
+            enclosing_create_many_batch,
+            validate_create_many_workflow,
+        )
+
+        batch = current_create_many_batch(database_alias)
+        event_manager_class = (
+            event_instance.__class__
+            if isinstance(event_instance, GeneralManager)
+            else None
+        )
+        if isinstance(registry, DatabaseEventRegistry):
+            if enclosing_create_many_batch() is not None:
+                validate_create_many_workflow(database_alias, registry)
+            registry.publish(event)
+        elif (
+            batch is not None
+            and batch.manager_class is event_manager_class
+            and batch.committed
+        ):
+            batch.workflow_callbacks.append(lambda: registry.publish(event))
+        elif enclosing_create_many_batch(database_alias) is not None:
+            transaction.on_commit(lambda: registry.publish(event), using=database_alias)
+        else:
+            registry.publish(event)
     finally:
         record_data_change_phase("workflow", perf_counter() - started, database_alias)
 

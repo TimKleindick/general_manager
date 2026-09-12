@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
 from functools import wraps
 from time import perf_counter
@@ -101,7 +101,7 @@ def data_change(
     )
 
     @wraps(decorator_source)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+    def perform_change(*args: P.args, **kwargs: P.kwargs) -> R:
         """
         Emit pre_data_change and post_data_change signals around the wrapped function call.
 
@@ -124,6 +124,12 @@ def data_change(
         )
         from general_manager.cache.run_context import current_calculation_run_context
         from general_manager.interface.orm_interface import OrmInterfaceBase
+        from general_manager.manager.bulk_create import (
+            CreateManyUnsupportedError,
+            current_create_many_batch,
+            enclosing_create_many_batch,
+            validate_create_many_history,
+        )
 
         action = decorator_source.__name__
         if action == "create":
@@ -140,6 +146,13 @@ def data_change(
         database_alias = DEFAULT_DB_ALIAS
         if is_orm_backed:
             database_alias = getattr(interface, "database", None) or DEFAULT_DB_ALIAS
+        batch_envelope = enclosing_create_many_batch()
+        if batch_envelope is not None and (
+            not is_orm_backed or database_alias != batch_envelope.database_alias
+        ):
+            raise CreateManyUnsupportedError.routing()
+        if batch_envelope is not None:
+            validate_create_many_history(getattr(interface, "_model", None))
         change_context: dict[str, object] = {}
         signal_kwargs = {
             **kwargs,
@@ -159,11 +172,16 @@ def data_change(
             context.clear_bucket_projections()
             context.clear_trusted_orm_managers()
         try:
-            transaction_context = (
-                transaction.atomic(using=database_alias)
-                if is_orm_backed
-                else nullcontext()
-            )
+            transaction_context: AbstractContextManager[None]
+            if not is_orm_backed:
+                transaction_context = nullcontext()
+            elif current_create_many_batch(database_alias) is None:
+                transaction_context = transaction.atomic(using=database_alias)
+            else:
+                transaction_context = transaction.atomic(
+                    using=database_alias,
+                    savepoint=False,
+                )
             caller_in_atomic_block = (
                 _caller_in_atomic_block(database_alias) if is_orm_backed else False
             )
@@ -321,5 +339,12 @@ def data_change(
                     enqueue_graphql_recipe_warmup(cache_keys)
                 except Exception:
                     logger.exception("GraphQL warm-up requeue failed.")
+
+    @wraps(decorator_source)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        from general_manager.manager.bulk_create import create_many_signal_scope
+
+        with create_many_signal_scope():
+            return perform_change(*args, **kwargs)
 
     return wrapper
