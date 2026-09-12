@@ -18,6 +18,23 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
     "graph_ql_property": ("general_manager.api.property", "graph_ql_property"),
     "graph_ql_mutation": ("general_manager.api.mutation", "graph_ql_mutation"),
     "GeneralManager": ("general_manager.manager.general_manager", "GeneralManager"),
+    "CreateManyBatchResult": (
+        "general_manager.manager.bulk_create",
+        "CreateManyBatchResult",
+    ),
+    "CreateManyError": ("general_manager.manager.bulk_create", "CreateManyError"),
+    "CreateManyInvalidBatchSizeError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyInvalidBatchSizeError",
+    ),
+    "CreateManyPostCommitError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyPostCommitError",
+    ),
+    "CreateManyUnsupportedError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyUnsupportedError",
+    ),
     "Input": ("general_manager.manager.input", "Input"),
     "FieldConfig": ("general_manager.search.config", "FieldConfig"),
     "IndexConfig": ("general_manager.search.config", "IndexConfig"),
@@ -703,6 +720,23 @@ BUCKET_EXPORTS: LazyExportMap = {
 
 MANAGER_EXPORTS: LazyExportMap = {
     "GeneralManager": ("general_manager.manager.general_manager", "GeneralManager"),
+    "CreateManyBatchResult": (
+        "general_manager.manager.bulk_create",
+        "CreateManyBatchResult",
+    ),
+    "CreateManyError": ("general_manager.manager.bulk_create", "CreateManyError"),
+    "CreateManyInvalidBatchSizeError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyInvalidBatchSizeError",
+    ),
+    "CreateManyPostCommitError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyPostCommitError",
+    ),
+    "CreateManyUnsupportedError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyUnsupportedError",
+    ),
     "TrustedOrmHydrationNotSupportedError": (
         "general_manager.manager.general_manager",
         "TrustedOrmHydrationNotSupportedError",

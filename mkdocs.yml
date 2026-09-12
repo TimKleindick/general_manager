@@ -137,6 +137,7 @@ nav:
       - howto/expose_via_graphql.md
       - howto/historical_queries.md
       - howto/bulk_data_change_notifications.md
+      - howto/create_many.md
       - howto/install_llm_chat.md
       - howto/run_chat_evals.md
       - howto/orm_atomic_writes.md
@@ -167,6 +168,7 @@ nav:
       - examples/graphql_preferred_item_order.md
       - examples/historical_queries.md
       - examples/bulk_data_change_notifications.md
+      - examples/create_many.md
       - examples/graphql_error_handling.md
       - examples/graphql_file_upload.md
       - examples/rule_validation.md

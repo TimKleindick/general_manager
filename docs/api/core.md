@@ -42,6 +42,29 @@ rolls back, discard an in-place-updated manager and reconstruct it from its ID;
 materialized values on that Python object may reflect the failed transaction.
 The [ORM transaction guide](../howto/orm_atomic_writes.md) shows the pattern.
 
+`GeneralManager.create_many(records, *, creator_id=None, history_comment=None,
+ignore_permission=False, batch_size=1000)` returns an iterator of
+`CreateManyBatchResult` values for writable ORM-backed managers. Iteration writes
+one atomic batch at a time through the canonical create path. It never eagerly
+collects the entire input. Results contain `start_index`, exclusive `end_index`,
+`ids` (a tuple), cumulative `successful_count`, `committed_successful_count`,
+`pending_successful_count`, `database_alias`, and `committed`.
+`input_range` returns the half-open range; `durable` aliases `committed`. Results
+inside a caller-owned transaction remain provisional until that transaction
+commits. See the [bulk creation guide](../howto/create_many.md) for supported
+combinations, memory bounds, error handling, and transaction semantics.
+
+`CreateManyError` retains the original exception as `cause`, the optional
+`failure_index`, `batch_start_index`, `batch_end_index`, `successful_count`,
+`committed_successful_count`, `pending_successful_count`, `database_alias`, and
+commit metadata. `CreateManyPostCommitError` additionally
+carries `ids` for a batch that persisted before dispatch failed; retrying that
+batch can create duplicates. `CreateManyUnsupportedError` rejects unsupported
+create/interface combinations. `CreateManyInvalidBatchSizeError` is a `ValueError`
+for nonpositive/noninteger batch sizes (including booleans). These types and
+`CreateManyBatchResult` are
+available from `general_manager` and `general_manager.manager`.
+
 `GeneralManager.filter(**lookups)` and `exclude(**lookups)` forward lookup
 expressions to the interface and return `Bucket[Self]`. Lookup values may be
 manager instances or lists/tuples containing manager instances; those values are

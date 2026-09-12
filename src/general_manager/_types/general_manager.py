@@ -5,6 +5,11 @@ from __future__ import annotations
 __all__ = [
     "AdditiveManagerPermission",
     "CalculationInterface",
+    "CreateManyBatchResult",
+    "CreateManyError",
+    "CreateManyInvalidBatchSizeError",
+    "CreateManyPostCommitError",
+    "CreateManyUnsupportedError",
     "DatabaseInterface",
     "ExcelCharField",
     "ExcelDecimalField",
@@ -45,6 +50,11 @@ __all__ = [
 from general_manager.permission.manager_based_permission import (
     AdditiveManagerPermission,
 )
+from general_manager.manager.bulk_create import CreateManyBatchResult
+from general_manager.manager.bulk_create import CreateManyError
+from general_manager.manager.bulk_create import CreateManyInvalidBatchSizeError
+from general_manager.manager.bulk_create import CreateManyPostCommitError
+from general_manager.manager.bulk_create import CreateManyUnsupportedError
 from general_manager.interface.interfaces.calculation import CalculationInterface
 from general_manager.interface.interfaces.database import DatabaseInterface
 from general_manager.interface.excel import ExcelCharField
