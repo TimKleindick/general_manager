@@ -214,12 +214,22 @@ def emit_remote_invalidation(
         captured_identification = (
             deepcopy(event_identification) if event_identification is not None else None
         )
-        transaction.on_commit(
-            lambda: _publish_remote_invalidation(
+        from general_manager.manager.bulk_create import current_create_many_batch
+
+        batch = current_create_many_batch(database_alias)
+
+        def callback() -> None:
+            _publish_remote_invalidation(
                 config,
                 action,
                 captured_identification,
-            ),
+            )
+
+        if batch is not None and batch.manager_class is sender:
+            batch.notification_callbacks.append(callback)
+            return
+        transaction.on_commit(
+            callback,
             using=database_alias,
         )
     finally:

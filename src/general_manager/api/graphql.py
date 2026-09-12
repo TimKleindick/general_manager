@@ -2271,12 +2271,22 @@ class GraphQL:
                 if identification is not None
                 else event_instance.identification
             )
-            transaction.on_commit(
-                lambda: cls._publish_data_change(
+            from general_manager.manager.bulk_create import current_create_many_batch
+
+            batch = current_create_many_batch(database_alias)
+
+            def callback() -> None:
+                cls._publish_data_change(
                     manager_class,
                     action,
                     event_identification,
-                ),
+                )
+
+            if batch is not None and batch.manager_class is manager_class:
+                batch.notification_callbacks.append(callback)
+                return
+            transaction.on_commit(
+                callback,
                 using=database_alias,
             )
         finally:
