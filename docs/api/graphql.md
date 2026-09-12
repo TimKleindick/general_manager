@@ -335,9 +335,11 @@ in encounter order, and joining them with `", "`. An all-null text field
 returns null. This is a GraphQL generated-field behavior; the Python
 `GroupManager.sum(field)` method remains numeric-only.
 
-Authorization is applied before grouping. An unreadable grouping key fails the
-query with `Permission denied to read grouping key '<field>'.`; an unreadable
-sum fails that field with `Permission denied to read sum field '<field>'.`.
+Row and grouping-key authorization are applied before grouping. An unreadable
+grouping key fails the query with `Permission denied to read grouping key '<field>'.`.
+Each selected sum field is authorized separately for each group before aggregation;
+an unreadable sum fails that field with
+`Permission denied to read sum field '<field>'.`.
 Missing `groupBy` raises `groupBy must select at least one grouping key.`;
 unknown keys raise `'<field>' is not an eligible grouping key.`; and ordering
 by a field not selected in `groupBy` raises
