@@ -1689,6 +1689,11 @@ def generic_cache_invalidation(
         old_relevant_values (dict[str, object]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
         database_alias (str): Database alias used to attribute invalidation timing.
     """
+    from general_manager.manager.bulk_create import current_create_many_batch
+
+    batch = current_create_many_batch(database_alias)
+    if batch is not None and batch.manager_class is sender and batch.bulk_sql_active:
+        return
     started = perf_counter()
     try:
         invalidated_cache_keys = _invalidate_manager_cache_for_instance_change(

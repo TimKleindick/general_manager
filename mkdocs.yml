@@ -138,6 +138,7 @@ nav:
       - howto/historical_queries.md
       - howto/bulk_data_change_notifications.md
       - howto/create_many.md
+      - howto/benchmark_bulk_imports.md
       - howto/install_llm_chat.md
       - howto/run_chat_evals.md
       - howto/orm_atomic_writes.md

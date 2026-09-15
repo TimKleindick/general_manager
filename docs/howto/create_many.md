@@ -97,12 +97,122 @@ ones. `committed_successful_count` counts known committed records and
 `pending_successful_count` counts results awaiting an outer transaction outcome.
 These are snapshots, not a guarantee that a caller's outer transaction committed.
 
+## Opt into bulk SQL
+
+The default remains the canonical path. Managers can declare that their create
+validation and observers are safe to evaluate for a whole batch:
+
+```python
+class Product(GeneralManager):
+    class BulkCreate:
+        enabled = True
+        local_rules = True
+        local_permissions = True
+        local_search = True
+
+    # Define Interface, Permission, and SearchConfig as usual.
+```
+
+These declarations do not disable checks. Every record still passes its create
+permission gate, normalization, scalar validation, and configured local rules.
+They declare that application predicates and search target resolvers are pure
+and do not depend on earlier records having been inserted. They must not mutate the input,
+install receivers, perform nested writes, or produce external effects. Do not
+opt in a rule or permission that
+queries a running total, allocates a sequence by reading existing rows, or needs
+per-record database visibility.
+Python field defaults and validators must follow the same locality contract;
+leave SQL disabled when they depend on earlier inserts or changing database state.
+
+Use `bulk_create_eligibility(Product)` to inspect selection before importing.
+Its immutable `BulkCreateEligibility` result contains `eligible` and `reasons`.
+Ineligible managers retain canonical persistence. Dynamic custom receivers and
+unsupported model behavior must not be bypassed to force SQL batching.
+
+The SQL path is deliberately conservative:
+
+| Surface | SQL eligibility |
+| --- | --- |
+| Persistence | Canonical ORM capabilities, constructors, model save/clean methods, and ordinary model managers |
+| Database | Default database, no custom routers, and backend support for returning bulk-inserted IDs |
+| Fields | Supported built-in scalar and foreign-key fields; no files or many-to-many fields |
+| Validation | Local rules and permissions; simple field/composite uniqueness; unsupported constraint, collation, or custom-field behavior falls back |
+| History | Default database-aware history configuration without custom attribution, timestamps, persistence, or history receivers |
+| Observers | Known framework receivers and public batch refresh registrations; arbitrary row or transaction-lifecycle receivers fall back |
+
+Eligibility is checked again after consuming each batch, so a receiver connected
+between yielded batches cannot silently lose its events. Database constraints
+remain authoritative under concurrent inserts. A database failure that cannot
+be associated with one row retains the batch range and original exception;
+`failure_index` may be `None`.
+
+SQL imports accept concrete field assignments. A payload assigning model methods
+or other non-field attributes raises an indexed `CreateManyUnsupportedError`;
+disable `BulkCreate.enabled` to retain canonical attribute-assignment behavior.
+Database-generated defaults, custom collations, and foreign keys using
+`to_field` or `limit_choices_to` currently require the canonical fallback.
+An import started inside another import's callback also uses the canonical path
+to preserve the enclosing mutation's savepoint and per-row callback semantics.
+
+Dependency-cache invalidation is conservative at the SQL batch boundary. It may
+evict more cached queries than an individual-row change would, but it runs before
+observers read the new rows. Related search rules are selected once per changed
+manager class in each batch; target resolution still runs for every record.
+
+## Application refresh receivers
+
+`connect_batch_refresh_receiver` provides a public registration point for
+application cache invalidation. It returns a `BatchRefreshDisconnect` handle;
+call its `disconnect()` method to remove only that registration.
+
+```python
+from django.core.cache import cache
+from general_manager import connect_batch_refresh_receiver
+
+
+def refresh_products(sender, ids, action, database_alias):
+    if sender is Product:
+        # A generation bump invalidates application-owned derived cache keys.
+        cache.add("products:generation", 0, timeout=None)
+        cache.incr("products:generation")
+
+
+registration = connect_batch_refresh_receiver(refresh_products, on_commit=True)
+```
+
+The callback receives the manager class, a tuple of IDs, the mutation action,
+and the database alias. By default it runs once for an eligible bulk SQL batch,
+inside the transaction before iteration returns. Ordinary mutations and canonical fallback
+retain per-record timing. This callback is a refresh/invalidation notification;
+it does not replace audit rows or per-record workflow events. A rollback may
+leave a conservative extra cache invalidation, so callbacks must not interpret
+this phase as proof of durable persistence.
+
+Use `on_commit=True` when registering an external refresh callback. Django then
+delays it until the owning transaction commits and discards it on rollback.
+Failures follow the existing post-commit error contract. Existing arbitrary
+row-level signal receivers retain their semantics through canonical fallback.
+
+The shared-cache example uses commit timing deliberately: an applied-only
+generation bump can let another connection rebuild old committed data before
+the import commits. Cache readers should capture the generation before querying
+and store results under that captured generation. During write transactions,
+applications must bypass their own shared derived cache or use a transaction-local
+cache; never publish uncommitted derived values into shared storage. Framework
+cache guarantees do not automatically extend to application-owned caches.
+
+Applications can register separate applied and commit callbacks when they need
+both transaction-local invalidation and shared-cache refresh. Invalidations must
+be safe to repeat, and the commit callback must still advance the shared
+generation. This timing API does not itself implement a cache publication barrier.
+
 ## Supported create behavior
 
-The initial implementation uses canonical per-record persistence within each
-batch. It shares work that can be batched without skipping validation; it does
-not replace model saves with Django `bulk_create()`. Managers may still be
-constructed for framework signals, search, and workflow hooks. Returned results
+The canonical fallback uses per-record persistence within each batch. Eligible
+opted-in managers use SQL bulk insertion for source records and their history.
+The SQL path validates before insertion and obtains IDs from the database's
+returned rows. Framework consumers that need a manager receive one backed by
+the persisted row, without a per-record database readback. Returned results
 contain IDs rather than retained manager objects.
 
 Writable ORM interfaces, ordinary foreign-key normalization, business rules,
@@ -135,7 +245,11 @@ coalesced after commit. Search invalidation retains all related targets and its
 existing dirty-index recovery behavior. Audit history and workflow events remain
 per-record; they are not replaced by one aggregate event.
 
-## Reproduce the benchmark
+## Original canonical-batch benchmark
+
+The following measurements describe the original canonical batching in PR #507.
+For the PostgreSQL/Redis SQL bulk comparison, see
+[Benchmark bulk imports](benchmark_bulk_imports.md).
 
 Run `scripts/benchmark_create_many.py` from the repository with the development
 dependencies installed. It creates and destroys a Django test database; use a

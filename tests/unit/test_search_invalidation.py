@@ -197,6 +197,88 @@ def test_create_after_resolves_class_source_and_selected_indexes() -> None:
     assert plan.dirty_fallbacks == ()
 
 
+def test_batch_indexes_sources_once_without_losing_per_record_targets() -> None:
+    from general_manager.manager.bulk_create import create_many_batch_context
+
+    configure(
+        Owner,
+        SearchInvalidationRule(
+            source=Source,
+            resolve=lambda event, owner: (
+                owner(id=event.instance.identification["id"] + 10),
+            ),
+        ),
+        SearchInvalidationRule(source=SecondOwner),
+    )
+    configure(SecondOwner, SearchInvalidationRule(source=Owner))
+    GeneralManagerMeta.all_classes = [Source, Owner, SecondOwner]
+    with (
+        patch.object(
+            invalidation, "_source_class", wraps=invalidation._source_class
+        ) as source_lookup,
+        create_many_batch_context(
+            "default", caller_owns_transaction=False, manager_class=SourceChild
+        ),
+    ):
+        for pk in (1, 2, 3):
+            plan = finalize_search_invalidation_capture(
+                resolve_search_invalidation_phase(
+                    change("create", "after", SourceChild(id=pk))
+                )
+            )
+            assert target_ids(plan) == [pk + 10, pk + 10]
+        assert source_lookup.call_count == 3
+
+
+def test_batch_source_index_rebuilds_between_batches_and_keeps_bad_sources() -> None:
+    from general_manager.manager.bulk_create import create_many_batch_context
+
+    configure(Owner, SearchInvalidationRule(source="missing_bulk_search_source.Nope"))
+    GeneralManagerMeta.all_classes = [Owner]
+    with create_many_batch_context(
+        "default", caller_owns_transaction=False, manager_class=Source
+    ):
+        for pk in (1, 2):
+            plan = finalize_search_invalidation_capture(
+                resolve_search_invalidation_phase(
+                    change("create", "after", Source(id=pk))
+                )
+            )
+            assert plan.targets == ()
+            assert len(plan.dirty_fallbacks) == 2
+    configure(
+        Owner,
+        SearchInvalidationRule(source=Source, resolve=lambda _, owner: (owner(id=7),)),
+    )
+    with create_many_batch_context(
+        "default", caller_owns_transaction=False, manager_class=Source
+    ):
+        plan = finalize_search_invalidation_capture(
+            resolve_search_invalidation_phase(change("create", "after", Source(id=3)))
+        )
+        assert target_ids(plan) == [7, 7]
+        assert plan.dirty_fallbacks == ()
+
+
+def test_batch_keeps_malformed_indexes_on_unrelated_source() -> None:
+    from general_manager.manager.bulk_create import create_many_batch_context
+
+    configure(Owner, SearchInvalidationRule(source=SecondOwner, indexes=123))
+    GeneralManagerMeta.all_classes = [Owner]
+    event = change("create", "after", Source(id=1))
+    ordinary = finalize_search_invalidation_capture(
+        resolve_search_invalidation_phase(event)
+    )
+    with create_many_batch_context(
+        "default", caller_owns_transaction=False, manager_class=Source
+    ):
+        batched = finalize_search_invalidation_capture(
+            resolve_search_invalidation_phase(event)
+        )
+    assert len(ordinary.dirty_fallbacks) == 2
+    assert batched == ordinary
+
+
 def test_relation_metadata_does_not_suppress_normal_resolution() -> None:
     calls: list[str] = []
 

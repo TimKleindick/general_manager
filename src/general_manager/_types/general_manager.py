@@ -4,6 +4,8 @@ from __future__ import annotations
 
 __all__ = [
     "AdditiveManagerPermission",
+    "BatchRefreshDisconnect",
+    "BulkCreateEligibility",
     "CalculationInterface",
     "CreateManyBatchResult",
     "CreateManyError",
@@ -35,8 +37,10 @@ __all__ = [
     "SearchConfigSpec",
     "SearchIndexer",
     "SearchInvalidationRule",
+    "bulk_create_eligibility",
     "configure_search_backend",
     "configure_search_backend_from_settings",
+    "connect_batch_refresh_receiver",
     "get_logger",
     "get_search_backend",
     "graph_ql_mutation",
@@ -50,12 +54,14 @@ __all__ = [
 from general_manager.permission.manager_based_permission import (
     AdditiveManagerPermission,
 )
+from general_manager.cache.batch_refresh import BatchRefreshDisconnect
+from general_manager.interface.capabilities.orm.bulk import BulkCreateEligibility
+from general_manager.interface.interfaces.calculation import CalculationInterface
 from general_manager.manager.bulk_create import CreateManyBatchResult
 from general_manager.manager.bulk_create import CreateManyError
 from general_manager.manager.bulk_create import CreateManyInvalidBatchSizeError
 from general_manager.manager.bulk_create import CreateManyPostCommitError
 from general_manager.manager.bulk_create import CreateManyUnsupportedError
-from general_manager.interface.interfaces.calculation import CalculationInterface
 from general_manager.interface.interfaces.database import DatabaseInterface
 from general_manager.interface.excel import ExcelCharField
 from general_manager.interface.excel import ExcelDecimalField
@@ -83,10 +89,12 @@ from general_manager.search.config import SearchConfigProtocol
 from general_manager.search.config import SearchConfigSpec
 from general_manager.search.indexer import SearchIndexer
 from general_manager.search.config import SearchInvalidationRule
+from general_manager.interface.capabilities.orm.bulk import bulk_create_eligibility
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.backend_registry import (
     configure_search_backend_from_settings,
 )
+from general_manager.cache.batch_refresh import connect_batch_refresh_receiver
 from general_manager.logging import get_logger
 from general_manager.search.backend_registry import get_search_backend
 from general_manager.api.mutation import graph_ql_mutation

@@ -286,6 +286,16 @@ class CreateManyBatchContext:
     notification_callbacks: list[Callable[[], None]] = field(default_factory=list)
     search_work: list[object] = field(default_factory=list)
     search_configs: dict[type[object], object | None] = field(default_factory=dict)
+    # Search invalidation uses this only inside one batch; retaining it here
+    # avoids a global cache that could outlive dynamic manager declarations.
+    search_rule_index: dict[type[object], object] = field(default_factory=dict)
+    # Set only while the opt-in SQL path publishes its persisted rows.  Public
+    # batch-refresh registrations use it to coalesce their callbacks without
+    # changing the timing of canonical create_many receivers.
+    bulk_sql_active: bool = False
+    batch_refresh_callbacks: dict[int, tuple[object, bool, str, list[object]]] = field(
+        default_factory=dict
+    )
     history_actors: dict[int, AbstractBaseUser] = field(default_factory=dict)
     flushing_search_work: bool = False
     notifications_registered: bool = False

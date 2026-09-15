@@ -45,7 +45,8 @@ The [ORM transaction guide](../howto/orm_atomic_writes.md) shows the pattern.
 `GeneralManager.create_many(records, *, creator_id=None, history_comment=None,
 ignore_permission=False, batch_size=1000)` returns an iterator of
 `CreateManyBatchResult` values for writable ORM-backed managers. Iteration writes
-one atomic batch at a time through the canonical create path. It never eagerly
+one atomic batch at a time through the canonical create path or an explicitly
+eligible bulk SQL path. It never eagerly
 collects the entire input. Results contain `start_index`, exclusive `end_index`,
 `ids` (a tuple), cumulative `successful_count`, `committed_successful_count`,
 `pending_successful_count`, `database_alias`, and `committed`.
@@ -53,6 +54,14 @@ collects the entire input. Results contain `start_index`, exclusive `end_index`,
 inside a caller-owned transaction remain provisional until that transaction
 commits. See the [bulk creation guide](../howto/create_many.md) for supported
 combinations, memory bounds, error handling, and transaction semantics.
+
+`bulk_create_eligibility(ManagerClass)` returns a `BulkCreateEligibility` snapshot
+with `eligible` and fallback `reasons`. SQL batching requires explicit manager
+`BulkCreate` declarations and compatible validation, models, and receivers.
+`connect_batch_refresh_receiver(callback, on_commit=False)` registers an
+application-owned cache/refresh callback and returns a `BatchRefreshDisconnect`
+handle. These helpers are exported from `general_manager`; the refresh helper
+and its handle are also available from `general_manager.cache`.
 
 `CreateManyError` retains the original exception as `cause`, the optional
 `failure_index`, `batch_start_index`, `batch_end_index`, `successful_count`,
