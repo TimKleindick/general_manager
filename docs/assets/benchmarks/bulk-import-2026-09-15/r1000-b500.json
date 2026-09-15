@@ -1,0 +1,1125 @@
+{
+  "configuration": {
+    "batch_size": 500,
+    "channel_capacity": 1010,
+    "channel_expiry_environment_variable": "GENERAL_MANAGER_BENCHMARK_CHANNEL_EXPIRY",
+    "channel_expiry_seconds": 60,
+    "existing_rows": 100000,
+    "modes": {
+      "baseline_create_many": "current public create_many fallback; it is not an optimized result",
+      "baseline_repeated": "repeated public GeneralManager.create",
+      "optimized_bulk_sql": "emitted only after every fixture proves eligibility, a bulk QuerySet insert, and zero canonical create calls outside the timing window"
+    },
+    "optimized_bulk_sql_required": true,
+    "permissions": "public ManagerBasedPermission evaluated for every measured row",
+    "redis_count_definition": "one INFO commandstats/stats snapshot before and after per unique Redis server run_id; two observer commands subtracted per server",
+    "refresh_receiver": "public connect_batch_refresh_receiver: cache callback in transaction; Channels callback on_commit",
+    "repeats": 3,
+    "rows": 1000,
+    "search_limitation": "external search dispatch is no-op; direct and related plan formation remains active",
+    "selected_paths": [
+      "baseline_repeated",
+      "baseline_create_many",
+      "optimized_bulk_sql"
+    ]
+  },
+  "environment": {
+    "cache_redis_url": "redis://127.0.0.1:56497/15",
+    "channel_redis_url": "redis://127.0.0.1:56497/14",
+    "database_vendor": "postgresql",
+    "database_version": [
+      18,
+      6
+    ],
+    "django": "5.2.16",
+    "general_manager_package_path": "/Users/tim/.codex/worktrees/bb54/general_manager/src/general_manager/__init__.py",
+    "loaded_general_manager_python_tree_sha256": "1f76286d0b98d1d374ea7c2720332f1dacb7b9021d909b3e84fa07dca163d7c1",
+    "loaded_general_manager_sha256": "0c5e4e7deb0674ca57def6383f5865a3dd6f84409106bb3111e9afe477ed4754",
+    "loaded_source_commit": "working-tree-final",
+    "python": "3.12.4"
+  },
+  "results": {
+    "baseline_create_many": {
+      "elapsed": [
+        {
+          "metrics": {
+            "elapsed_seconds": 12.359648082987405,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 11.964699917007238,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 12.209905083058402,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ],
+      "memory": [
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": 3553158,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": 3172094,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": 3554819,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ],
+      "profile": [
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": "/private/tmp/gm-throughput-final-r1000-b500.profile.baseline_create_many.repeat-0.pstats",
+            "profile_primitive_calls": 29492289,
+            "profile_total_calls": 30665455,
+            "profile_total_seconds": 20.672907992000017,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": "/private/tmp/gm-throughput-final-r1000-b500.profile.baseline_create_many.repeat-1.pstats",
+            "profile_primitive_calls": 29493666,
+            "profile_total_calls": 30667200,
+            "profile_total_seconds": 19.72829979599998,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": "/private/tmp/gm-throughput-final-r1000-b500.profile.baseline_create_many.repeat-2.pstats",
+            "profile_primitive_calls": 29497361,
+            "profile_total_calls": 30670854,
+            "profile_total_seconds": 19.73282555400003,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ],
+      "sql_redis": [
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": {
+              "client|setinfo": 2000,
+              "del": 4008,
+              "eval": 1000,
+              "exec": 1004,
+              "expire": 1000,
+              "get": 32006,
+              "mget": 6,
+              "multi": 1004,
+              "select": 1000,
+              "set": 8006,
+              "zadd": 1000,
+              "zcount": 1000,
+              "zrange": 1000,
+              "zremrangebyscore": 2000
+            },
+            "redis_commands": 56034,
+            "sql_commands": 15026
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": {
+              "client|setinfo": 2000,
+              "del": 4008,
+              "eval": 1000,
+              "exec": 1004,
+              "expire": 1000,
+              "get": 32006,
+              "mget": 6,
+              "multi": 1004,
+              "select": 1000,
+              "set": 8006,
+              "zadd": 1000,
+              "zcount": 1000,
+              "zrange": 1000,
+              "zremrangebyscore": 2000
+            },
+            "redis_commands": 56034,
+            "sql_commands": 15026
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": {
+              "client|setinfo": 2000,
+              "del": 4008,
+              "eval": 1000,
+              "exec": 1004,
+              "expire": 1000,
+              "get": 32006,
+              "mget": 6,
+              "multi": 1004,
+              "select": 1000,
+              "set": 8006,
+              "zadd": 1000,
+              "zcount": 1000,
+              "zrange": 1000,
+              "zremrangebyscore": 2000
+            },
+            "redis_commands": 56034,
+            "sql_commands": 15026
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ]
+    },
+    "baseline_repeated": {
+      "elapsed": [
+        {
+          "metrics": {
+            "elapsed_seconds": 14.659455624991097,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 14.122047666925937,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 14.1721456249943,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ],
+      "memory": [
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": 1744338,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": 1738751,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": 1733974,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ],
+      "profile": [
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": "/private/tmp/gm-throughput-final-r1000-b500.profile.baseline_repeated.repeat-0.pstats",
+            "profile_primitive_calls": 36539337,
+            "profile_total_calls": 38006936,
+            "profile_total_seconds": 24.641076980999994,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": "/private/tmp/gm-throughput-final-r1000-b500.profile.baseline_repeated.repeat-1.pstats",
+            "profile_primitive_calls": 36580470,
+            "profile_total_calls": 38047985,
+            "profile_total_seconds": 24.716114022999985,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": "/private/tmp/gm-throughput-final-r1000-b500.profile.baseline_repeated.repeat-2.pstats",
+            "profile_primitive_calls": 36579380,
+            "profile_total_calls": 38046907,
+            "profile_total_seconds": 24.712166216000004,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ],
+      "sql_redis": [
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": {
+              "client|setinfo": 2000,
+              "del": 4008,
+              "eval": 1000,
+              "exec": 1004,
+              "expire": 1000,
+              "get": 32006,
+              "mget": 6,
+              "multi": 1004,
+              "select": 1000,
+              "set": 8006,
+              "zadd": 1000,
+              "zcount": 1000,
+              "zrange": 1000,
+              "zremrangebyscore": 2000
+            },
+            "redis_commands": 56034,
+            "sql_commands": 25006
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": {
+              "client|setinfo": 2000,
+              "del": 4008,
+              "eval": 1000,
+              "exec": 1004,
+              "expire": 1000,
+              "get": 32006,
+              "mget": 6,
+              "multi": 1004,
+              "select": 1000,
+              "set": 8006,
+              "zadd": 1000,
+              "zcount": 1000,
+              "zrange": 1000,
+              "zremrangebyscore": 2000
+            },
+            "redis_commands": 56034,
+            "sql_commands": 25006
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": {
+              "client|setinfo": 2000,
+              "del": 4008,
+              "eval": 1000,
+              "exec": 1004,
+              "expire": 1000,
+              "get": 32006,
+              "mget": 6,
+              "multi": 1004,
+              "select": 1000,
+              "set": 8006,
+              "zadd": 1000,
+              "zcount": 1000,
+              "zrange": 1000,
+              "zremrangebyscore": 2000
+            },
+            "redis_commands": 56034,
+            "sql_commands": 25006
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 1000,
+            "external_notifications": 1000,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 1000,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ]
+    },
+    "optimized_bulk_sql": {
+      "elapsed": [
+        {
+          "metrics": {
+            "elapsed_seconds": 0.5249740830622613,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 0.5210929589811713,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 0.5250831670127809,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ],
+      "memory": [
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": 2453972,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": 2470581,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": 2460685,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ],
+      "profile": [
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": "/private/tmp/gm-throughput-final-r1000-b500.profile.optimized_bulk_sql.repeat-0.pstats",
+            "profile_primitive_calls": 2734761,
+            "profile_total_calls": 2788298,
+            "profile_total_seconds": 1.1610583670000008,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": "/private/tmp/gm-throughput-final-r1000-b500.profile.optimized_bulk_sql.repeat-1.pstats",
+            "profile_primitive_calls": 2734761,
+            "profile_total_calls": 2788292,
+            "profile_total_seconds": 1.0920389869999996,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": "/private/tmp/gm-throughput-final-r1000-b500.profile.optimized_bulk_sql.repeat-2.pstats",
+            "profile_primitive_calls": 2734761,
+            "profile_total_calls": 2788292,
+            "profile_total_seconds": 1.1025739980000016,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ],
+      "sql_redis": [
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": {
+              "client|setinfo": 4,
+              "del": 16,
+              "eval": 2,
+              "exec": 6,
+              "expire": 2,
+              "get": 27,
+              "mget": 6,
+              "multi": 6,
+              "select": 2,
+              "set": 22,
+              "zadd": 2,
+              "zcount": 2,
+              "zrange": 2,
+              "zremrangebyscore": 4
+            },
+            "redis_commands": 103,
+            "sql_commands": 1042
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": {
+              "client|setinfo": 4,
+              "del": 16,
+              "eval": 2,
+              "exec": 6,
+              "expire": 2,
+              "get": 27,
+              "mget": 6,
+              "multi": 6,
+              "select": 2,
+              "set": 22,
+              "zadd": 2,
+              "zcount": 2,
+              "zrange": 2,
+              "zremrangebyscore": 4
+            },
+            "redis_commands": 103,
+            "sql_commands": 1042
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": null,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": {
+              "client|setinfo": 4,
+              "del": 16,
+              "eval": 2,
+              "exec": 6,
+              "expire": 2,
+              "get": 27,
+              "mget": 6,
+              "multi": 6,
+              "select": 2,
+              "set": 22,
+              "zadd": 2,
+              "zcount": 2,
+              "zrange": 2,
+              "zremrangebyscore": 4
+            },
+            "redis_commands": 103,
+            "sql_commands": 1042
+          },
+          "semantics": {
+            "applied_cache_identifiers": 1000,
+            "applied_cache_refreshes": 2,
+            "external_notifications": 2,
+            "history_rows": 1000,
+            "notification_delivered": true,
+            "permission_checks": 1000,
+            "related_search_plans": 2,
+            "rows_created": 1000,
+            "workflow_events": 1000
+          }
+        }
+      ]
+    }
+  },
+  "summary": {
+    "baseline_create_many": {
+      "elapsed": {
+        "elapsed_seconds": 12.178084361017682
+      },
+      "memory": {
+        "peak_python_bytes": 3426690.3333333335
+      },
+      "profile": {
+        "profile_primitive_calls": 29494438.666666668,
+        "profile_total_calls": 30667836.333333332,
+        "profile_total_seconds": 20.044677780666674
+      },
+      "sql_redis": {
+        "redis_commands": 56034.0,
+        "sql_commands": 15026.0
+      }
+    },
+    "baseline_repeated": {
+      "elapsed": {
+        "elapsed_seconds": 14.317882972303778
+      },
+      "memory": {
+        "peak_python_bytes": 1739021.0
+      },
+      "profile": {
+        "profile_primitive_calls": 36566395.666666664,
+        "profile_total_calls": 38033942.666666664,
+        "profile_total_seconds": 24.689785739999994
+      },
+      "sql_redis": {
+        "redis_commands": 56034.0,
+        "sql_commands": 25006.0
+      }
+    },
+    "optimized_bulk_sql": {
+      "elapsed": {
+        "elapsed_seconds": 0.5237167363520712
+      },
+      "memory": {
+        "peak_python_bytes": 2461746.0
+      },
+      "profile": {
+        "profile_primitive_calls": 2734761.0,
+        "profile_total_calls": 2788294.0,
+        "profile_total_seconds": 1.118557117333334
+      },
+      "sql_redis": {
+        "redis_commands": 103.0,
+        "sql_commands": 1042.0
+      }
+    }
+  }
+}

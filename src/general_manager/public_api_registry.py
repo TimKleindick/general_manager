@@ -13,6 +13,22 @@ LazyExportMap = Mapping[str, str | tuple[str, str]]
 
 
 GENERAL_MANAGER_EXPORTS: LazyExportMap = {
+    "BulkCreateEligibility": (
+        "general_manager.interface.capabilities.orm.bulk",
+        "BulkCreateEligibility",
+    ),
+    "bulk_create_eligibility": (
+        "general_manager.interface.capabilities.orm.bulk",
+        "bulk_create_eligibility",
+    ),
+    "BatchRefreshDisconnect": (
+        "general_manager.cache.batch_refresh",
+        "BatchRefreshDisconnect",
+    ),
+    "connect_batch_refresh_receiver": (
+        "general_manager.cache.batch_refresh",
+        "connect_batch_refresh_receiver",
+    ),
     "GraphQL": ("general_manager.api.graphql", "GraphQL"),
     "GraphQLType": ("general_manager.api.graphql_type", "GraphQLType"),
     "graph_ql_property": ("general_manager.api.property", "graph_ql_property"),
@@ -631,6 +647,14 @@ INTERFACE_EXPORTS: LazyExportMap = {
 
 
 CACHE_EXPORTS: LazyExportMap = {
+    "BatchRefreshDisconnect": (
+        "general_manager.cache.batch_refresh",
+        "BatchRefreshDisconnect",
+    ),
+    "connect_batch_refresh_receiver": (
+        "general_manager.cache.batch_refresh",
+        "connect_batch_refresh_receiver",
+    ),
     "cached": ("general_manager.cache.cache_decorator", "cached"),
     "CacheBackend": ("general_manager.cache.cache_decorator", "CacheBackend"),
     "Dependency": ("general_manager.cache.dependency_index", "Dependency"),

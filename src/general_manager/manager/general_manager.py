@@ -36,6 +36,7 @@ from general_manager.manager.bulk_create import (
     CreateManyPostCommitError,
     CreateManyUnsupportedError,
     create_many_batch_context,
+    enclosing_create_many_batch,
     validate_create_many_record,
     validate_create_many_transaction,
     validate_create_many_workflow,
@@ -367,9 +368,9 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """
         Build a manager around an ORM-loaded row without public input validation.
 
-        This private path is only for framework-owned Django ORM rows. It must
-        not be used for GraphQL, mutation, import, factory, or other external
-        payloads. Managers that use the base constructor hydrate through the
+        This private path is only for framework-owned Django ORM rows, including
+        validated bulk rows after successful persistence. It must not receive
+        unvalidated external payloads. Managers that use the base constructor hydrate through the
         interface's trusted ORM hook and bypass public Interface input
         validation. Managers with a custom ``__init__`` are reconstructed with
         ``cls(instance.pk)`` or ``cls(instance.pk, search_date=search_date)`` so
@@ -751,6 +752,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
         validate_create_many_workflow(database_alias, get_event_registry())
 
+        from general_manager.interface.capabilities.orm.bulk import (
+            BulkCreateRecordError,
+            bulk_create_eligibility,
+            create_many_with_bulk_sql,
+            publish_bulk_created_rows,
+        )
+
         def _iterate() -> Iterator[CreateManyBatchResult]:
             successful_count = 0
             committed_successful_count = 0
@@ -823,6 +831,16 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                     for offset, record in enumerate(batch):
                         failure_index = batch_start_index + offset
                         validate_create_many_record(record)
+                    # The iterator is intentionally lazy.  Re-check opt-in
+                    # safety after source consumption so a receiver/config
+                    # installed between yielded batches cannot be bypassed.
+                    bulk_eligibility = bulk_create_eligibility(cls)
+                    # Nested imports keep the ordinary mutation/savepoint path;
+                    # the enclosing signal scope belongs to their caller.
+                    use_bulk_sql = (
+                        bulk_eligibility.eligible
+                        and enclosing_create_many_batch() is None
+                    )
                     with transaction.atomic(using=database_alias):
                         transaction.on_commit(
                             lambda marker=committed_before_callbacks: marker.__setitem__(
@@ -836,18 +854,101 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                             manager_class=cls,
                         ) as context:
                             batch_context = context
-                            for offset, record in enumerate(batch):
-                                failure_index = batch_start_index + offset
-                                created = cls.create(
-                                    creator_id=creator_id,
-                                    history_comment=history_comment,
-                                    ignore_permission=ignore_permission,
-                                    **record,
+                            if use_bulk_sql:
+                                from general_manager.cache.dependency_index import (
+                                    begin_dependency_data_change,
+                                    drain_invalidated_cache_keys_for_graphql_rewarm,
+                                    end_dependency_data_change,
+                                    is_dependency_data_change_active,
                                 )
-                                ids.append(
-                                    _create_many_identifier(created, cls.__name__)
+                                from general_manager.cache.run_context import (
+                                    current_calculation_run_context,
                                 )
+                                from general_manager.cache.batch_refresh import (
+                                    flush_batch_refresh_callbacks,
+                                )
+                                from general_manager.manager.bulk_create import (
+                                    create_many_signal_scope,
+                                )
+
+                                run_context = current_calculation_run_context()
+                                bulk_succeeded = False
+                                with create_many_signal_scope():
+                                    begin_dependency_data_change()
+                                    try:
+                                        if run_context is not None:
+                                            run_context.clear_orm_bucket_results()
+                                            run_context.clear_bucket_indexes()
+                                            run_context.clear_bucket_projections()
+                                            run_context.clear_trusted_orm_managers()
+                                        context.bulk_sql_active = True
+                                        try:
+                                            persisted_rows = create_many_with_bulk_sql(
+                                                cls,
+                                                batch,
+                                                creator_id=creator_id,
+                                                history_comment=history_comment,
+                                                ignore_permission=ignore_permission,
+                                                database_alias=database_alias,
+                                            )
+                                        except BulkCreateRecordError as error:
+                                            failure_index = (
+                                                batch_start_index + error.index
+                                            )
+                                            raise error.cause from error
+                                        ids.extend(row.pk for row in persisted_rows)
+                                        failure_index = None
+                                        publish_bulk_created_rows(
+                                            cls,
+                                            persisted_rows,
+                                            records=batch,
+                                            creator_id=creator_id,
+                                            history_comment=history_comment,
+                                            ignore_permission=ignore_permission,
+                                            database_alias=database_alias,
+                                        )
+                                        flush_batch_refresh_callbacks(context)
+                                        bulk_succeeded = True
+                                    finally:
+                                        context.bulk_sql_active = False
+                                        if run_context is not None:
+                                            run_context.clear_orm_bucket_results()
+                                            run_context.clear_bucket_indexes()
+                                            run_context.clear_bucket_projections()
+                                            run_context.clear_trusted_orm_managers()
+                                        end_dependency_data_change()
+                                        cache_keys = (
+                                            drain_invalidated_cache_keys_for_graphql_rewarm()
+                                            if not is_dependency_data_change_active()
+                                            else ()
+                                        )
+                                        if bulk_succeeded and cache_keys:
+                                            from general_manager.api.graphql_warmup import (
+                                                enqueue_graphql_recipe_warmup,
+                                            )
+
+                                            try:
+                                                enqueue_graphql_recipe_warmup(
+                                                    cache_keys
+                                                )
+                                            except Exception:
+                                                logger.exception(
+                                                    "GraphQL warm-up requeue failed."
+                                                )
                                 validate_create_many_transaction(database_alias)
+                            else:
+                                for offset, record in enumerate(batch):
+                                    failure_index = batch_start_index + offset
+                                    created = cls.create(
+                                        creator_id=creator_id,
+                                        history_comment=history_comment,
+                                        ignore_permission=ignore_permission,
+                                        **record,
+                                    )
+                                    ids.append(
+                                        _create_many_identifier(created, cls.__name__)
+                                    )
+                                    validate_create_many_transaction(database_alias)
                             failure_index = None
                             _flush_create_many_search_work(context)
                             if not context.committed:
