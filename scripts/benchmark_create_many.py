@@ -377,11 +377,13 @@ def main() -> None:
             repeats=options.repeats,
         )
     finally:
-        if created_models:
-            with connection.schema_editor() as editor:
-                drop_test_models(editor, reversed(created_models))
-        GeneralManagerMeta.all_classes = manager_classes_before
-        runner.teardown_databases(old_config)
+        try:
+            if created_models:
+                with connection.schema_editor() as editor:
+                    drop_test_models(editor, reversed(created_models))
+        finally:
+            GeneralManagerMeta.all_classes = manager_classes_before
+            runner.teardown_databases(old_config)
 
 
 if __name__ == "__main__":

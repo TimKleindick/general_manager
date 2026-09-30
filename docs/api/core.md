@@ -60,7 +60,11 @@ with `eligible` and fallback `reasons`. SQL batching requires explicit manager
 `BulkCreate` declarations and compatible validation, models, and receivers.
 `connect_batch_refresh_receiver(callback, on_commit=False)` registers an
 application-owned cache/refresh callback and returns a `BatchRefreshDisconnect`
-handle. These helpers are exported from `general_manager`; the refresh helper
+handle. By default callbacks run inside the mutation transaction; use
+`on_commit=True` for external I/O so dispatch waits for the outermost transaction
+on the mutation's database alias and is discarded on rollback. An eligible SQL
+batch invokes the callback once with all identifiers; canonical row-by-row
+creation retains per-row callbacks. These helpers are exported from `general_manager`; the refresh helper
 and its handle are also available from `general_manager.cache`.
 
 `CreateManyError` retains the original exception as `cause`, the optional

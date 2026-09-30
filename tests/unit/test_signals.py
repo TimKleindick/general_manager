@@ -847,3 +847,45 @@ class DataChangeSignalTests(TestCase):
 
         dependency_index.end_dependency_data_change()
         self.assertFalse(is_dependency_data_change_active())
+
+
+def test_creation_payload_collisions_preserve_lifecycle_and_audit_metadata():
+    class PayloadManager:
+        @classmethod
+        @data_change
+        def create(cls, **kwargs):
+            instance = cls()
+            instance.payload = kwargs
+            instance.identification = {"id": 17}
+            return instance
+
+    payload = dict.fromkeys(
+        (
+            "sender",
+            "signal",
+            "instance",
+            "action",
+            "previous_instance",
+            "identification",
+            "old_relevant_values",
+            "change_context",
+            "database_alias",
+        ),
+        "application value",
+    )
+    payload["creator_id"] = 42
+    with (
+        capture_signal(pre_data_change) as before,
+        capture_signal(post_data_change) as after,
+    ):
+        result = PayloadManager.create(**payload)
+    assert result.payload == payload
+    assert before[0]["instance"] is None
+    for event in (before[0], after[0]):
+        assert event["sender"] is PayloadManager
+        assert event["action"] == "create"
+        assert event["creator_id"] == 42
+        assert event["database_alias"] == "default"
+        assert isinstance(event["change_context"], dict)
+    assert after[0]["instance"] is result
+    assert after[0]["identification"] == {"id": 17}

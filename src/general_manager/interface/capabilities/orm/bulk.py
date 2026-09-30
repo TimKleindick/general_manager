@@ -823,5 +823,20 @@ def publish_bulk_created_rows(
             ignore_permission=ignore_permission,
             change_context=change_context,
             database_alias=database_alias,
-            **record,
+            **{
+                key: value
+                for key, value in record.items()
+                if key
+                not in {
+                    "sender",
+                    "signal",
+                    "instance",
+                    "previous_instance",
+                    "identification",
+                    "action",
+                    "old_relevant_values",
+                    "change_context",
+                    "database_alias",
+                }
+            },
         )
