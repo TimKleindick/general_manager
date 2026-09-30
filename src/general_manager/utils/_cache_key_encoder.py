@@ -88,7 +88,9 @@ def _encode_time(value: time) -> list[object]:
     ]
 
 
-def _encode_manager(value: object, active_ids: set[int]) -> list[object]:
+def _encode_manager(
+    value: object, active_ids: set[int], *, frozen: bool = False
+) -> object:
     manager = cast("GeneralManager", value)
     manager_type = type(manager)
     missing = object()
@@ -99,18 +101,74 @@ def _encode_manager(value: object, active_ids: set[int]) -> list[object]:
         )
 
         search_date = _legacy_effective_search_date(manager)
-    snapshot: object = (
+    snapshot: list[object] = (
         ["none"]
         if not isinstance(search_date, datetime)
         else ["as_of", search_date_cache_fingerprint(search_date)]
     )
+    module = type.__getattribute__(manager_type, "__module__")
+    qualname = type.__getattribute__(manager_type, "__qualname__")
+    identification = manager.identification
+    if frozen:
+        if type(module) is not str or type(qualname) is not str:
+            # Unusual mutable class metadata must be frozen only after identity
+            # conversion, matching the generic path's side effects and errors.
+            return freeze_encoded_cache_key_value(
+                [
+                    "manager",
+                    module,
+                    qualname,
+                    encode_cache_key_value(identification, active_ids),
+                    snapshot,
+                ]
+            )
+        return (
+            "manager",
+            module,
+            qualname,
+            _freeze_manager_identification(identification, active_ids),
+            tuple(snapshot),
+        )
     return [
         "manager",
-        type.__getattribute__(manager_type, "__module__"),
-        type.__getattribute__(manager_type, "__qualname__"),
-        encode_cache_key_value(manager.identification, active_ids),
+        module,
+        qualname,
+        encode_cache_key_value(identification, active_ids),
         snapshot,
     ]
+
+
+def _freeze_manager_identification(value: object, active_ids: set[int]) -> object:
+    # Only exact builtins bypass the generic encoder: subclasses can customize
+    # iteration or conversion. Read the current identity on every call.
+    if type(value) is dict and len(value) == 1:
+        key, item = next(iter(value.items()))
+        if type(key) is str:
+            item_type = type(item)
+            encoded: tuple[object, ...] | None = None
+            if item_type is int:
+                encoded = ("int", str(item))
+            elif item_type is str:
+                encoded = ("str", item)
+            elif item_type is bool:
+                encoded = ("bool", item)
+            elif item is None:
+                encoded = ("none",)
+            if encoded is not None:
+                return ("mapping", ((("str", key), encoded),))
+    return freeze_encoded_cache_key_value(encode_cache_key_value(value, active_ids))
+
+
+def encode_frozen_manager_cache_key_value(value: object) -> object:
+    """Encode a known manager directly into the existing immutable key format."""
+    # Multiple inheritance can give a manager a scalar identity. Preserve the
+    # generic encoder's scalar-before-manager dispatch, including its errors.
+    if isinstance(
+        value,
+        (int, float, Decimal, str, bytes, UUID, date, time, timedelta, Measurement),
+    ):
+        return freeze_encoded_cache_key_value(encode_cache_key_value(value))
+    return _encode_manager(value, {id(value)}, frozen=True)
 
 
 @lru_cache(maxsize=1)
