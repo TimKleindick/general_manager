@@ -6,7 +6,7 @@ from collections.abc import Callable
 from functools import lru_cache
 from typing import TypeAlias, TypeGuard, cast
 import pint
-from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, getcontext, localcontext
 from operator import lt, le, gt, ge
 from pint.facets.plain import PlainQuantity
 from pint.util import UnitsContainer
@@ -58,6 +58,15 @@ def _canonical_unit_string(unit: str) -> str:
     return str(parsed_unit)
 
 
+@lru_cache(maxsize=512)
+def _default_quantity_unit(unit: str) -> pint.Unit:
+    """Cache the legacy unit round trip for the default Pint formatter only."""
+
+    # Pint's display can round fractional exponents. Retain that round trip
+    # without relying on a public label cached under a previous formatter.
+    return _parse_unit(str(_parse_unit(unit)))
+
+
 def _format_decimal(value: Decimal) -> Decimal:
     """
     Normalise decimals so integers have no fractional component.
@@ -81,6 +90,13 @@ def _format_decimal(value: Decimal) -> Decimal:
 
 def _decimal_precision(*values: Decimal, extra_digits: int = 0) -> int:
     """Return enough local precision to retain all supplied Decimal coefficients."""
+
+    if len(values) == 1:
+        value = values[0]
+        if not value.is_finite():
+            return max(28, extra_digits)
+        # For one coefficient, adjusted - exponent + 1 is its digit count.
+        return max(28, len(value.as_tuple().digits)) + extra_digits
 
     finite_values = [value for value in values if value.is_finite()]
     coefficient_digits = sum(len(value.as_tuple().digits) for value in finite_values)
@@ -734,7 +750,7 @@ class Measurement:
     version and are not a stable GeneralManager API contract.
     """
 
-    __quantity: MeasurementQuantity | None
+    __quantity: MeasurementQuantity | pint.Unit | None
     __magnitude: Decimal
     __unit: str
     __quantity_exposed: bool
@@ -744,8 +760,9 @@ class Measurement:
         Create a Measurement from a numeric value and a unit label.
 
         Converts the provided numeric-like value to a Decimal through
-        ``Decimal(str(value))`` and constructs the internal quantity using the
-        given Pint unit expression. ``unit`` may be ``"dimensionless"`` or an
+        ``Decimal(str(value))`` and validates the given Pint unit expression.
+        Ordinary values defer the internal Pint quantity until it is needed.
+        ``unit`` may be ``"dimensionless"`` or an
         empty string for dimensionless measurements. Discrete item quantities
         should use ``"count"``, which belongs to its own unit family rather than
         Pint's plain dimensionless family. Invalid units are reported by Pint and
@@ -784,6 +801,29 @@ class Measurement:
                 value = Decimal(str(value))
             except (InvalidOperation, TypeError, ValueError) as error:
                 raise InvalidMeasurementInitializationError() from error
+        self.__set_value(value, unit)
+
+    def __set_value(self, value: Decimal, unit: str) -> None:
+        """Validate scalar parts eagerly and defer ordinary Pint allocations."""
+
+        # Normalization is idempotent for normal values and zeros without clamp.
+        # Subnormals can change again as their coefficient (and local precision)
+        # shrinks; preserve the original Pint/Decimal pipeline for those cases.
+        if (
+            not getcontext().clamp
+            and (value.is_normal() or value.is_zero())
+            and not ureg.formatter.default_format
+        ):
+            magnitude = _decimal_from_magnitude(value)
+            canonical_unit = _canonical_unit_string(unit)
+            # Keep immutable internal units separate from the public label,
+            # which may have been cached under a different Pint formatter.
+            self.__quantity = _default_quantity_unit(unit)
+            self.__magnitude = magnitude
+            self.__unit = canonical_unit
+            self.__quantity_exposed = False
+            return
+        # Custom formatters must retain the eager unit reparse and its errors.
         self.__set_quantity(_build_quantity(value, unit), _canonical_unit_string(unit))
 
     @classmethod
@@ -828,10 +868,13 @@ class Measurement:
 
     def __current_quantity(self) -> MeasurementQuantity:
         quantity = self.__quantity
-        if quantity is None:
+        if not isinstance(quantity, PlainQuantity):
             quantity = cast(
                 MeasurementQuantity,
-                ureg.Quantity(self.__magnitude, _parse_unit(self.__unit)),
+                ureg.Quantity(
+                    self.__magnitude,
+                    quantity if quantity is not None else _parse_unit(self.__unit),
+                ),
             )
             self.__quantity = quantity
         return quantity
@@ -867,7 +910,7 @@ class Measurement:
         """
         value = Decimal(state["magnitude"])
         unit = state["unit"]
-        self.__set_quantity(_build_quantity(value, unit), _canonical_unit_string(unit))
+        self.__set_value(value, unit)
 
     def deconstruct(self) -> tuple[str, list[object], dict[str, object]]:
         """Describe this value for Django migration serialization.
