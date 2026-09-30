@@ -85,8 +85,12 @@ python scripts/benchmark_bulk_throughput.py \
 
 The [raw frozen report](../assets/benchmarks/bulk-import-2026-09-15/frozen-baseline.json)
 includes source digests and every metric repetition. The harness records both the
-manager module digest and a digest of the entire loaded Python package; append
-mode refuses to combine different source trees or workloads.
+manager module digest, a digest of the entire loaded Python package, and a
+separate fingerprint of the benchmark script and its settings. Append mode
+refuses to combine different source trees, harness versions, or workloads;
+older reports without a harness fingerprint cannot be extended by this version.
+Redis endpoints in new reports omit user information and redact credential
+query parameters.
 In current-source reports, the legacy JSON labels `baseline_repeated` and
 `baseline_create_many` mean repeated `create()` and disabled-SQL `create_many()`
 on that same source tree. Only the frozen report loads the archived package.

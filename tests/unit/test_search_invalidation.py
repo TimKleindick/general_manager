@@ -1810,3 +1810,19 @@ def test_direct_work_contains_config_failure_recovery_failure() -> None:
     assert plan == SearchInvalidationPlan()
     assert deletes == ()
     assert warning.call_count == 2
+
+
+def test_cached_source_error_does_not_accumulate_traceback_frames() -> None:
+    import traceback
+
+    error = ValueError("invalid cached source")
+    owner = invalidation._CandidateOwner(Owner, {0: error})
+    rule = SearchInvalidationRule(source=Source)
+    depths = []
+    for _ in range(20):
+        try:
+            owner.source_for(0, rule)
+        except ValueError as caught:
+            assert str(caught) == "invalid cached source"
+            depths.append(len(traceback.extract_tb(caught.__traceback__)))
+    assert len(set(depths)) == 1

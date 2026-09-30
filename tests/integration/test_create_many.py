@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import ClassVar
+from unittest.mock import patch
 
 from django.db import transaction
-from django.db.models import CharField
+from django.db.models import CharField, Model
 
 from general_manager.cache.signals import post_data_change
 from general_manager.interface import DatabaseInterface
@@ -16,7 +17,6 @@ from general_manager.manager.bulk_create import (
     CreateManyUnsupportedError,
 )
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
@@ -29,7 +29,7 @@ class CreateManyIntegrationTests(GeneralManagerTransactionTestCase):
     """Exercise the public iterator contract against a generated ORM model."""
 
     Project: ClassVar[type[GeneralManager]]
-    ProjectModel: ClassVar[type[object]]
+    ProjectModel: ClassVar[type[Model]]
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -46,7 +46,6 @@ class CreateManyIntegrationTests(GeneralManagerTransactionTestCase):
         cls.Project = Project
         cls.ProjectModel = Project.Interface._model
         cls.general_manager_classes = [Project]
-        GeneralManagerMeta.all_classes = cls.general_manager_classes
         super().setUpClass()
 
     def test_iterator_is_lazy_bounded_and_returns_immutable_progress(self) -> None:
@@ -163,3 +162,62 @@ class CreateManyIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertEqual(error.committed_successful_count, 1)
         self.assertEqual(error.pending_successful_count, 0)
         self.assertTrue(self.ProjectModel.objects.filter(name="post-commit").exists())
+
+    def test_process_control_exceptions_are_not_wrapped(self) -> None:
+        for exception_type in (KeyboardInterrupt, SystemExit, GeneratorExit):
+            with self.subTest(exception_type=exception_type):
+
+                def records(
+                    error_type: type[BaseException] = exception_type,
+                ) -> Iterator[dict[str, object]]:
+                    raise error_type
+                    yield {}  # pragma: no cover
+
+                with self.assertRaises(exception_type):
+                    next(self.Project.create_many(records(), ignore_permission=True))
+
+                results = self.Project.create_many(
+                    [{"name": "interrupted"}], ignore_permission=True
+                )
+                with patch.object(self.Project, "create", side_effect=exception_type):
+                    with self.assertRaises(exception_type):
+                        next(results)
+                self.assertFalse(
+                    self.ProjectModel.objects.filter(name="interrupted").exists()
+                )
+
+    def test_post_commit_process_control_exceptions_preserve_committed_rows(
+        self,
+    ) -> None:
+        for exception_type in (KeyboardInterrupt, SystemExit, GeneratorExit):
+            with self.subTest(exception_type=exception_type):
+                name = f"committed-{exception_type.__name__}"
+                with patch(
+                    "general_manager.manager.general_manager._flush_create_many_notifications",
+                    side_effect=exception_type,
+                ):
+                    with self.assertRaises(exception_type):
+                        list(
+                            self.Project.create_many(
+                                [{"name": name}], ignore_permission=True
+                            )
+                        )
+                self.assertTrue(self.ProjectModel.objects.filter(name=name).exists())
+
+    def test_record_creation_controls_keep_canonical_duplicate_keyword_error(
+        self,
+    ) -> None:
+        for control in ("creator_id", "history_comment", "ignore_permission"):
+            with self.subTest(control=control):
+                with self.assertRaises(CreateManyError) as raised:
+                    list(
+                        self.Project.create_many(
+                            [{"name": "control-collision", control: None}],
+                            ignore_permission=True,
+                        )
+                    )
+                self.assertIsInstance(raised.exception.cause, TypeError)
+                self.assertEqual(raised.exception.failure_index, 0)
+                self.assertFalse(
+                    self.ProjectModel.objects.filter(name="control-collision").exists()
+                )

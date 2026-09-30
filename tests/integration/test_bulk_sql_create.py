@@ -6,11 +6,11 @@ from typing import ClassVar
 from unittest.mock import patch
 
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
-from django.db.models import CharField, IntegerField
+from django.db.models import CharField, IntegerField, Model
 from django.db.models import NOT_PROVIDED
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext
-from django.db import connection
+from django.db import connection, transaction
 
 from general_manager.cache.batch_refresh import connect_batch_refresh_receiver
 from general_manager.interface import DatabaseInterface
@@ -21,7 +21,6 @@ from general_manager.manager.bulk_create import (
     CreateManyUnsupportedError,
 )
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
@@ -30,13 +29,15 @@ class BulkSqlCreateIntegrationTests(GeneralManagerTransactionTestCase):
     """Exercise the narrow generated-model SQL path on SQLite."""
 
     Item: ClassVar[type[GeneralManager]]
-    ItemModel: ClassVar[type[object]]
+    ItemModel: ClassVar[type[Model]]
 
     @classmethod
     def setUpClass(cls) -> None:
         class Item(GeneralManager):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=100, unique=True)
+                action = CharField(max_length=100, default="", blank=True)
+                signal = CharField(max_length=100, default="", blank=True)
                 note = CharField(max_length=100, default="default note")
                 group = CharField(max_length=100, null=True, blank=True, default=None)
                 sequence = IntegerField(default=0)
@@ -58,7 +59,6 @@ class BulkSqlCreateIntegrationTests(GeneralManagerTransactionTestCase):
         cls.Item = Item
         cls.ItemModel = Item.Interface._model
         cls.general_manager_classes = [Item]
-        GeneralManagerMeta.all_classes = cls.general_manager_classes
         super().setUpClass()
 
     def test_opted_in_generated_manager_uses_bulk_source_and_history_rows(self) -> None:
@@ -361,3 +361,130 @@ class BulkSqlCreateIntegrationTests(GeneralManagerTransactionTestCase):
                         "custom history attribution or timestamp hook",
                         eligibility.reasons,
                     )
+
+    def test_graphql_rewarm_waits_for_commit_and_is_discarded_on_rollback(self) -> None:
+        from general_manager.cache.dependency_index import (
+            record_invalidated_cache_keys_for_graphql_rewarm,
+        )
+
+        def invalidate(*args: object) -> None:
+            record_invalidated_cache_keys_for_graphql_rewarm(("recipe-key",))
+
+        for rollback in (False, True):
+            with self.subTest(rollback=rollback):
+                registration = connect_batch_refresh_receiver(invalidate)
+                try:
+                    with patch(
+                        "general_manager.api.graphql_warmup.enqueue_graphql_recipe_warmup"
+                    ) as enqueue:
+                        with transaction.atomic():
+                            list(
+                                self.Item.create_many(
+                                    [{"name": f"warmup-{rollback}"}],
+                                    ignore_permission=True,
+                                )
+                            )
+                            enqueue.assert_not_called()
+                            if rollback:
+                                transaction.set_rollback(True)
+                        if rollback:
+                            enqueue.assert_not_called()
+                        else:
+                            enqueue.assert_called_once_with(("recipe-key",))
+                finally:
+                    registration.disconnect()
+
+    def test_signal_named_fields_are_persisted_without_overriding_metadata(
+        self,
+    ) -> None:
+        from general_manager.cache.signals import post_data_change
+
+        events = []
+
+        def capture(sender, **kwargs):
+            if sender is self.Item:
+                events.append(kwargs)
+
+        post_data_change.connect(capture, weak=False)
+        try:
+            self.Item.create(
+                name="canonical-collision",
+                action="application",
+                signal="value",
+                ignore_permission=True,
+            )
+        finally:
+            post_data_change.disconnect(capture)
+        self.assertEqual(events[0]["action"], "create")
+        list(
+            self.Item.create_many(
+                [
+                    {
+                        "name": "bulk-collision",
+                        "action": "application",
+                        "signal": "value",
+                    }
+                ],
+                ignore_permission=True,
+            )
+        )
+        self.assertEqual(
+            self.ItemModel.objects.get(name="bulk-collision").action, "application"
+        )
+        self.assertEqual(
+            self.ItemModel.objects.get(name="bulk-collision").signal, "value"
+        )
+
+    def test_sql_process_control_exceptions_roll_back_the_batch(self) -> None:
+        from django.db.models.query import QuerySet
+
+        original_bulk_create = QuerySet.bulk_create
+        for exception_type in (KeyboardInterrupt, SystemExit, GeneratorExit):
+            with self.subTest(exception_type=exception_type):
+
+                def interrupt_after_insert(
+                    queryset, *args, error_type=exception_type, **kwargs
+                ):
+                    original_bulk_create(queryset, *args, **kwargs)
+                    raise error_type
+
+                with patch.object(QuerySet, "bulk_create", interrupt_after_insert):
+                    with self.assertRaises(exception_type):
+                        list(
+                            self.Item.create_many(
+                                [{"name": "interrupted-sql"}], ignore_permission=True
+                            )
+                        )
+                self.assertFalse(
+                    self.ItemModel.objects.filter(name="interrupted-sql").exists()
+                )
+                self.assertEqual(self.ItemModel.history.count(), 0)
+
+    def test_graphql_rewarm_dispatch_failure_does_not_fail_committed_batch(
+        self,
+    ) -> None:
+        from general_manager.cache.dependency_index import (
+            record_invalidated_cache_keys_for_graphql_rewarm,
+        )
+
+        def invalidate(*args: object) -> None:
+            record_invalidated_cache_keys_for_graphql_rewarm(("recipe-key",))
+
+        registration = connect_batch_refresh_receiver(invalidate)
+        try:
+            with patch(
+                "general_manager.api.graphql_warmup.enqueue_graphql_recipe_warmup",
+                side_effect=RuntimeError("broker unavailable"),
+            ) as enqueue:
+                results = list(
+                    self.Item.create_many(
+                        [{"name": "warmup-dispatch-error"}], ignore_permission=True
+                    )
+                )
+                enqueue.assert_called_once_with(("recipe-key",))
+            self.assertTrue(results[0].committed)
+            self.assertTrue(
+                self.ItemModel.objects.filter(name="warmup-dispatch-error").exists()
+            )
+        finally:
+            registration.disconnect()

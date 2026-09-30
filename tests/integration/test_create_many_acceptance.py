@@ -40,7 +40,6 @@ from general_manager.manager.bulk_create import (
     CreateManyUnsupportedError,
 )
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.base_permission import PermissionCheckError
 from general_manager.rule.rule import Rule
 from general_manager.search.config import IndexConfig, SearchInvalidationRule
@@ -166,7 +165,6 @@ class CreateManyAcceptanceIntegrationTests(GeneralManagerTransactionTestCase):
             UploadItem,
             ReadOnlyItem,
         ]
-        GeneralManagerMeta.all_classes = cls.general_manager_classes
         super().setUpClass()
 
     def setUp(self) -> None:

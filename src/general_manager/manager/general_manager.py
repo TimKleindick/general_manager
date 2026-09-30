@@ -806,7 +806,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                         batch.append(next(source))
                 except StopIteration:
                     pass
-                except BaseException as error:
+                except Exception as error:
                     raise CreateManyError(
                         failure_index=batch_start_index + len(batch),
                         batch_start_index=batch_start_index,
@@ -927,14 +927,20 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                                                 enqueue_graphql_recipe_warmup,
                                             )
 
-                                            try:
-                                                enqueue_graphql_recipe_warmup(
-                                                    cache_keys
-                                                )
-                                            except Exception:
-                                                logger.exception(
-                                                    "GraphQL warm-up requeue failed."
-                                                )
+                                            def rewarm_after_commit(
+                                                keys: tuple[str, ...] = cache_keys,
+                                            ) -> None:
+                                                try:
+                                                    enqueue_graphql_recipe_warmup(keys)
+                                                except Exception:
+                                                    logger.exception(
+                                                        "GraphQL warm-up requeue failed."
+                                                    )
+
+                                            transaction.on_commit(
+                                                rewarm_after_commit,
+                                                using=database_alias,
+                                            )
                                 validate_create_many_transaction(database_alias)
                             else:
                                 for offset, record in enumerate(batch):
@@ -954,7 +960,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                             if not context.committed:
                                 _register_create_many_notifications(context)
                             validate_create_many_transaction(database_alias)
-                except BaseException as error:
+                except Exception as error:
                     if committed_before_callbacks["value"]:
                         raise CreateManyPostCommitError(
                             ids=tuple(ids),
@@ -988,7 +994,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                         for callback in batch_context.workflow_callbacks:
                             callback()
                         _flush_create_many_notifications(batch_context)
-                    except BaseException as error:
+                    except Exception as error:
                         raise CreateManyPostCommitError(
                             ids=tuple(ids),
                             failure_index=None,

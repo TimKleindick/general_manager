@@ -53,6 +53,7 @@ from time import perf_counter
 from typing import Any, ClassVar, Literal, cast
 from unittest.mock import patch
 from uuid import uuid4
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -240,6 +241,49 @@ def _loaded_package_tree_hash(general_manager: Any) -> str:
         digest.update(len(contents).to_bytes(8, byteorder="big"))
         digest.update(contents)
     return digest.hexdigest()
+
+
+def _harness_source_hash() -> str:
+    """Identify the harness and its settings independently of the loaded package."""
+    script_path = Path(__file__).resolve()
+    digest = hashlib.sha256()
+    for path in (
+        script_path,
+        script_path.with_name("benchmark_bulk_throughput_settings.py"),
+    ):
+        contents = path.read_bytes()
+        digest.update(path.name.encode())
+        digest.update(len(contents).to_bytes(8, byteorder="big"))
+        digest.update(contents)
+    return digest.hexdigest()
+
+
+def _redact_redis_url(url: str) -> str:
+    """Retain endpoint identity without serializing Redis authentication secrets."""
+    parts = urlsplit(url)
+    query = urlencode(
+        [
+            (
+                key,
+                "REDACTED"
+                if any(
+                    secret in key.lower()
+                    for secret in (
+                        "password",
+                        "username",
+                        "token",
+                        "credential",
+                        "secret",
+                    )
+                )
+                else value,
+            )
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        ]
+    )
+    return urlunsplit(
+        (parts.scheme, parts.netloc.rsplit("@", 1)[-1], parts.path, query, "")
+    )
 
 
 def main() -> None:
@@ -494,8 +538,11 @@ def main() -> None:
                 "loaded_source_commit": os.environ.get(
                     "GENERAL_MANAGER_BENCHMARK_SOURCE_COMMIT"
                 ),
-                "cache_redis_url": settings.BENCHMARK_REDIS_URL,
-                "channel_redis_url": settings.BENCHMARK_CHANNEL_REDIS_URL,
+                "benchmark_harness_sha256": _harness_source_hash(),
+                "cache_redis_url": _redact_redis_url(settings.BENCHMARK_REDIS_URL),
+                "channel_redis_url": _redact_redis_url(
+                    settings.BENCHMARK_CHANNEL_REDIS_URL
+                ),
             },
             "configuration": {
                 "rows": options.rows,
@@ -557,11 +604,13 @@ def main() -> None:
         _write_json(report_path, report)
         print(f"report={report_path}")
     finally:
-        if created_models:
-            with connection.schema_editor() as editor:
-                drop_test_models(editor, reversed(created_models))
-        GeneralManagerMeta.all_classes = managers_before
-        runner.teardown_databases(old_config)
+        try:
+            if created_models:
+                with connection.schema_editor() as editor:
+                    drop_test_models(editor, reversed(created_models))
+        finally:
+            GeneralManagerMeta.all_classes = managers_before
+            runner.teardown_databases(old_config)
 
 
 def _validate_append_compatibility(
@@ -597,6 +646,7 @@ def _validate_append_compatibility(
         "loaded_general_manager_sha256",
         "loaded_general_manager_python_tree_sha256",
         "loaded_source_commit",
+        "benchmark_harness_sha256",
         "cache_redis_url",
         "channel_redis_url",
     )

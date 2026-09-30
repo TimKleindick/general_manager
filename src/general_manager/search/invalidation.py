@@ -82,7 +82,7 @@ class _CandidateOwner:
             return _source_class(rule.source)
         source = self.sources[ordinal]
         if isinstance(source, Exception):
-            raise source
+            raise source.with_traceback(None)
         return source
 
 

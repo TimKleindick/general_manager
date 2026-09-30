@@ -155,7 +155,20 @@ def data_change(
             validate_create_many_history(getattr(interface, "_model", None))
         change_context: dict[str, object] = {}
         signal_kwargs = {
-            **kwargs,
+            **{
+                key: value
+                for key, value in kwargs.items()
+                if key
+                not in {
+                    "sender",
+                    "signal",
+                    "instance",
+                    "action",
+                    "previous_instance",
+                    "identification",
+                    "old_relevant_values",
+                }
+            },
             "change_context": change_context,
             "database_alias": database_alias,
         }
