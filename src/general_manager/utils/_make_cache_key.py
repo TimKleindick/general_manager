@@ -9,7 +9,7 @@ from general_manager.as_of import as_of_cache_fingerprint
 from general_manager.utils._cache_key_encoder import (
     canonical_cache_key_json,
     encode_cache_key_value,
-    freeze_encoded_cache_key_value,
+    encode_frozen_manager_cache_key_value,
     is_general_manager,
 )
 
@@ -118,7 +118,7 @@ def _single_manager_arg_fast_key(
 ) -> str | None:
     if not is_general_manager(value):
         return None
-    encoded_manager = freeze_encoded_cache_key_value(encode_cache_key_value(value))
+    encoded_manager = encode_frozen_manager_cache_key_value(value)
     return _single_manager_arg_cache_key(
         parameter_name,
         func.__module__,
