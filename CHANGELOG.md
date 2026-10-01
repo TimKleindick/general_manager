@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.80.8 (2026-10-01)
+
+### Performance Improvements
+
+- Accelerate integer-zero measurements and defer Decimal precision work
+  ([`9e72a58`](https://github.com/TimKleindick/general_manager/commit/9e72a582c9a8b5f8853857bb9f904edfe92e5abf))
+
+
 ## v0.80.7 (2026-10-01)
 
 ### Performance Improvements
