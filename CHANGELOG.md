@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.80.6 (2026-10-01)
+
+### Performance Improvements
+
+- Reduce manager cache-key encoding overhead
+  ([`b436384`](https://github.com/TimKleindick/general_manager/commit/b436384551868d91b623d6c03259c14443903d85))
+
+
 ## v0.80.5 (2026-10-01)
 
 ### Documentation
