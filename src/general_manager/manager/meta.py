@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from functools import wraps
 import threading
 from _thread import RLock as RLockType
@@ -781,6 +781,17 @@ class GeneralManagerMeta(type):
                 ) -> None:
                     self._attr_name = descriptor_attr_name
                     self._class = descriptor_class
+                    # Keep a live view: validation can be reset after installation.
+                    # Custom metaclasses retain their observable dictionary lookups.
+                    self._standard_class_dict: Mapping[str, object] | None = (
+                        vars(descriptor_class)
+                        if (
+                            type(descriptor_class) is GeneralManagerMeta
+                            and _STANDARD_MANAGER_META_DICT.get("__getattribute__")
+                            is _STANDARD_MANAGER_META_GETATTRIBUTE
+                        )
+                        else None
+                    )
                     # Excel values can change outside this manager instance.
                     self._cache_values = (
                         getattr(descriptor_class.Interface, "_interface_type", None)
@@ -826,9 +837,17 @@ class GeneralManagerMeta(type):
                     """
                     if instance is None:
                         return self._class.Interface.get_field_type(self._attr_name)
-                    GeneralManagerMeta.ensure_rule_templates_validated_after_readiness(
-                        self._class
-                    )
+                    class_dict = self._standard_class_dict
+                    if (
+                        class_dict is None
+                        or type(self._class) is not GeneralManagerMeta
+                        or _STANDARD_MANAGER_META_DICT.get("__getattribute__")
+                        is not _STANDARD_MANAGER_META_GETATTRIBUTE
+                        or class_dict.get("_gm_rule_templates_validated") is not True
+                    ):
+                        GeneralManagerMeta.ensure_rule_templates_validated_after_readiness(
+                            self._class
+                        )
                     try:
                         ensure_as_of_compatible = object.__getattribute__(
                             instance, "_ensure_as_of_compatible"
@@ -939,6 +958,10 @@ class GeneralManagerMeta(type):
             setattr(new_class, attr_name, descriptor_method(attr_name, new_class))
         type.__setattr__(new_class, "_gm_attributes_initialized", True)
 
+
+# In-place metaclass customization must retain observable dictionary lookups.
+_STANDARD_MANAGER_META_GETATTRIBUTE = GeneralManagerMeta.__getattribute__
+_STANDARD_MANAGER_META_DICT = vars(GeneralManagerMeta)
 
 _CAPABILITY_BUILDER: "ManifestCapabilityBuilder | None" = None
 

@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
-from types import SimpleNamespace
+from types import FrameType, SimpleNamespace
 from typing import ClassVar
 
 from django.apps import apps
@@ -1975,6 +1975,196 @@ class LateManagerRuleTemplateValidationTests(SimpleTestCase):
                 False,
             )
         )
+
+    def test_ready_descriptor_does_not_reenter_rule_validation_on_cache_hits(
+        self,
+    ) -> None:
+        class ReadyDescriptorManager(GeneralManager):
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        manager = ReadyDescriptorManager(value=7)
+        self.assertEqual(manager.value, 7)
+        readiness_code = (
+            GeneralManagerMeta.ensure_rule_templates_validated_after_readiness.__code__
+        )
+        readiness_calls = 0
+
+        def observe(frame: FrameType, event: str, _argument: object) -> None:
+            nonlocal readiness_calls
+            if event == "call" and frame.f_code is readiness_code:
+                readiness_calls += 1
+
+        previous_profiler = sys.getprofile()
+        try:
+            sys.setprofile(observe)
+            values = [manager.value for _ in range(3)]
+        finally:
+            sys.setprofile(previous_profiler)
+        self.assertEqual(values, [7, 7, 7])
+        self.assertEqual(readiness_calls, 0)
+
+    def test_cached_descriptor_observes_reset_validation_status_before_cache_hit(
+        self,
+    ) -> None:
+        class ResetDescriptorManager(GeneralManager):
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        manager = ResetDescriptorManager(value=7)
+        self.assertEqual(manager.value, 7)
+        invalid_rule = Rule(
+            lambda item: item.value > 0,
+            custom_error_message="Value: {value.amount}",
+        )
+        ResetDescriptorManager.Interface.rules = [invalid_rule]
+        type.__setattr__(ResetDescriptorManager, "_gm_rule_templates_validated", False)
+        with self.assertRaises(InvalidErrorTemplateError):
+            _ = manager.value
+        ResetDescriptorManager.Interface.rules = []
+        self.assertEqual(manager.value, 7)
+        self.assertIs(
+            vars(ResetDescriptorManager)["_gm_rule_templates_validated"], True
+        )
+
+    def test_cached_descriptor_keeps_custom_metaclass_dictionary_reads(self) -> None:
+        dictionary_reads: list[str] = []
+
+        class ObservedMeta(GeneralManagerMeta):
+            def __getattribute__(cls, name: str) -> object:
+                if name == "__dict__":
+                    dictionary_reads.append(name)
+                return super().__getattribute__(name)
+
+        class ObservedManager(GeneralManager, metaclass=ObservedMeta):
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        manager = ObservedManager(value=7)
+        self.assertEqual(manager.value, 7)
+        dictionary_reads.clear()
+        self.assertEqual(manager.value, 7)
+        self.assertEqual(dictionary_reads, ["__dict__"])
+
+    def test_cached_descriptor_observes_a_changed_metaclass(self) -> None:
+        dictionary_reads: list[str] = []
+
+        class ChangedMeta(GeneralManagerMeta):
+            def __getattribute__(cls, name: str) -> object:
+                if name == "__dict__":
+                    dictionary_reads.append(name)
+                return super().__getattribute__(name)
+
+        class ChangedManager(GeneralManager):
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        manager = ChangedManager(value=7)
+        self.assertEqual(manager.value, 7)
+        type.__setattr__(ChangedManager, "__class__", ChangedMeta)
+        dictionary_reads.clear()
+        self.assertEqual(manager.value, 7)
+        self.assertEqual(dictionary_reads, ["__dict__"])
+
+    def test_cached_descriptor_evaluates_non_boolean_validation_flag_once(self) -> None:
+        class FlagManager(GeneralManager):
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        manager = FlagManager(value=7)
+        self.assertEqual(manager.value, 7)
+        evaluations: list[bool] = []
+
+        class Flag:
+            def __bool__(self) -> bool:
+                evaluations.append(True)
+                return True
+
+        type.__setattr__(FlagManager, "_gm_rule_templates_validated", Flag())
+        self.assertEqual(manager.value, 7)
+        self.assertEqual(evaluations, [True])
+
+    def test_cached_descriptor_preserves_replaced_metaclass_lookup_errors(self) -> None:
+        class ReplacedLookupManager(GeneralManager):
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        manager = ReplacedLookupManager(value=7)
+        self.assertEqual(manager.value, 7)
+        original = GeneralManagerMeta.__getattribute__
+
+        def replaced_lookup(cls: type, name: str) -> object:
+            if name == "__dict__":
+                message = "observed dictionary lookup"
+                raise RuntimeError(message)
+            return original(cls, name)
+
+        try:
+            GeneralManagerMeta.__getattribute__ = replaced_lookup
+            with self.assertRaisesRegex(RuntimeError, "observed dictionary lookup"):
+                _ = manager.value
+        finally:
+            GeneralManagerMeta.__getattribute__ = original
+
+    def test_descriptor_does_not_bind_replacement_lookup_on_the_metaclass(self) -> None:
+        class LookupDescriptorManager(GeneralManager):
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        manager = LookupDescriptorManager(value=7)
+        self.assertEqual(manager.value, 7)
+        original = GeneralManagerMeta.__getattribute__
+        original_ready = apps.ready
+
+        class Lookup:
+            def __get__(self, instance: type | None, owner: type) -> object:
+                if instance is None:
+                    message = "unbound lookup observed"
+                    raise RuntimeError(message)
+                return lambda name: original(instance, name)
+
+        try:
+            GeneralManagerMeta.__getattribute__ = Lookup()
+            apps.ready = False
+            self.assertEqual(manager.value, 7)
+            GeneralManagerMeta.create_at_properties_for_attributes(
+                LookupDescriptorManager._attributes, LookupDescriptorManager
+            )
+            self.assertEqual(manager.value, 7)
+        finally:
+            GeneralManagerMeta.__getattribute__ = original
+            apps.ready = original_ready
+
+    def test_cached_descriptor_preserves_validation_flag_errors(self) -> None:
+        class FlagErrorManager(GeneralManager):
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        manager = FlagErrorManager(value=7)
+        self.assertEqual(manager.value, 7)
+
+        class Flag:
+            def __bool__(self) -> bool:
+                message = "observed flag evaluation"
+                raise RuntimeError(message)
+
+        type.__setattr__(FlagErrorManager, "_gm_rule_templates_validated", Flag())
+        with self.assertRaisesRegex(RuntimeError, "observed flag evaluation"):
+            _ = manager.value
+
+    def test_cached_descriptor_revalidates_after_flag_deletion(self) -> None:
+        class DeletedFlagManager(GeneralManager):
+            class Interface(CalculationInterface):
+                value = GMInput(int)
+
+        manager = DeletedFlagManager(value=7)
+        self.assertEqual(manager.value, 7)
+        DeletedFlagManager.Interface.rules = [
+            Rule(lambda item: item.value > 0, custom_error_message="{value.amount}")
+        ]
+        type.__delattr__(DeletedFlagManager, "_gm_rule_templates_validated")
+        with self.assertRaises(InvalidErrorTemplateError):
+            _ = manager.value
 
     def test_rule_validation_can_reenter_lazy_field_access_without_deadlock(
         self,
