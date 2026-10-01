@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.80.7 (2026-10-01)
+
+### Performance Improvements
+
+- Skip redundant Decimal normalization for canonical values
+  ([`17e9428`](https://github.com/TimKleindick/general_manager/commit/17e94282d7d19564c7a370d48d6bac3c46688505))
+
+
 ## v0.80.6 (2026-10-01)
 
 ### Performance Improvements
