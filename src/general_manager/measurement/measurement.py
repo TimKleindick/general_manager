@@ -87,7 +87,6 @@ def _format_decimal(value: Decimal) -> Decimal:
     if type(value) is Decimal:
         parts = value.as_tuple()
         exponent = parts.exponent
-        precision = max(28, len(parts.digits)) if isinstance(exponent, int) else 28
         if isinstance(exponent, int):
             context = getcontext()
             # These representations already match normalize/quantize at the
@@ -102,6 +101,9 @@ def _format_decimal(value: Decimal) -> Decimal:
                 # Keep the distinct result object (also observable in pickles)
                 # without applying context rounding or discarding signed zero.
                 return value.copy_sign(value)
+            precision = max(28, len(parts.digits))
+        else:
+            precision = 28
     else:
         # Preserve Decimal subclass methods and their observable side effects.
         precision = None
@@ -817,6 +819,24 @@ class Measurement:
             InvalidMeasurementInitializationError: If `value` cannot be converted to a Decimal or is a bool.
             pint.errors.PintError: If `unit` is not parseable by Pint.
         """
+        if type(value) is int and value == 0 and type(self) is Measurement:
+            context = getcontext()
+            # An exact integer zero needs no rounding or coefficient inspection.
+            # Built-in contexts always include exponent zero; precision, rounding,
+            # flags and traps cannot change this exact value without clamp.
+            # Keep formatter reparsing and clamped contexts on the original path.
+            if (
+                type(context) is Context
+                and not context.clamp
+                and not ureg.formatter.default_format
+            ):
+                magnitude = Decimal(0)
+                canonical_unit = _canonical_unit_string(unit)
+                self.__quantity = _default_quantity_unit(unit)
+                self.__magnitude = magnitude
+                self.__unit = canonical_unit
+                self.__quantity_exposed = False
+                return
         if isinstance(value, bool):
             raise InvalidMeasurementInitializationError()
         if not isinstance(value, (Decimal, float, int)):
