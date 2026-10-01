@@ -2,6 +2,38 @@
 
 <!-- version list -->
 
+## v0.80.5 (2026-10-01)
+
+### Documentation
+
+- Clarify grouped sum authorization timing
+  ([`dcd5491`](https://github.com/TimKleindick/general_manager/commit/dcd5491aa752bf3412fc65818299f41cfc7190bc))
+
+- Document async subscription field resolution
+  ([`41a1c55`](https://github.com/TimKleindick/general_manager/commit/41a1c55061d3ead1fe1f9e8e1b53d592042034eb))
+
+- Document GraphQL partial update semantics
+  ([`08873d4`](https://github.com/TimKleindick/general_manager/commit/08873d4d3b75f933499878289bed297efd63331d))
+
+- Document GraphQL text sums and measurement defaults
+  ([`9975a39`](https://github.com/TimKleindick/general_manager/commit/9975a394feaf992ab19e39a70450b0eeb2125148))
+
+### Performance Improvements
+
+- Short-circuit validated descriptor readiness
+  ([`38297fb`](https://github.com/TimKleindick/general_manager/commit/38297fbf5361bb3cd93dc4e7bf12e280d2ad8810))
+
+### Refactoring
+
+- Reduce Measurement construction overhead
+  ([`35c27dc`](https://github.com/TimKleindick/general_manager/commit/35c27dce4c3469655f976082bdacba3ffc4ad10a))
+
+### Testing
+
+- Remove standalone Measurement benchmark
+  ([`1760acc`](https://github.com/TimKleindick/general_manager/commit/1760acc3e3f944a038d4fcd2c1f01e185ae2d8a5))
+
+
 ## v0.80.4 (2026-09-11)
 
 ### Bug Fixes
