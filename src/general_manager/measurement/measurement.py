@@ -6,7 +6,14 @@ from collections.abc import Callable
 from functools import lru_cache
 from typing import TypeAlias, TypeGuard, cast
 import pint
-from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, getcontext, localcontext
+from decimal import (
+    Context,
+    Decimal,
+    InvalidOperation,
+    ROUND_HALF_EVEN,
+    getcontext,
+    localcontext,
+)
 from operator import lt, le, gt, ge
 from pint.facets.plain import PlainQuantity
 from pint.util import UnitsContainer
@@ -77,8 +84,29 @@ def _format_decimal(value: Decimal) -> Decimal:
     Returns:
         Decimal: Normalised decimal with insignificant trailing zeros removed.
     """
+    if type(value) is Decimal:
+        parts = value.as_tuple()
+        exponent = parts.exponent
+        precision = max(28, len(parts.digits)) if isinstance(exponent, int) else 28
+        if isinstance(exponent, int):
+            context = getcontext()
+            # These representations already match normalize/quantize at the
+            # coefficient precision below. Exponent limits and clamp still
+            # require the Decimal pipeline, even for an unchanged coefficient.
+            if (
+                type(context) is Context
+                and not context.clamp
+                and context.Emin <= value.adjusted() <= context.Emax
+                and (exponent == 0 or (exponent < 0 and parts.digits[-1] != 0))
+            ):
+                # Keep the distinct result object (also observable in pickles)
+                # without applying context rounding or discarding signed zero.
+                return value.copy_sign(value)
+    else:
+        # Preserve Decimal subclass methods and their observable side effects.
+        precision = None
     with localcontext() as context:
-        context.prec = _decimal_precision(value)
+        context.prec = _decimal_precision(value) if precision is None else precision
         normalized = value.normalize(context=context)
         if normalized == normalized.to_integral_value(context=context):
             try:
