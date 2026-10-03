@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 __all__ = [
+    "CreateManyBatchResult",
+    "CreateManyError",
+    "CreateManyInvalidBatchSizeError",
+    "CreateManyPostCommitError",
+    "CreateManyUnsupportedError",
     "DateRangeDomain",
     "GeneralManager",
     "GeneralManagerMeta",
@@ -15,6 +20,11 @@ __all__ = [
     "graph_ql_property",
 ]
 
+from general_manager.manager.bulk_create import CreateManyBatchResult
+from general_manager.manager.bulk_create import CreateManyError
+from general_manager.manager.bulk_create import CreateManyInvalidBatchSizeError
+from general_manager.manager.bulk_create import CreateManyPostCommitError
+from general_manager.manager.bulk_create import CreateManyUnsupportedError
 from general_manager.manager.input import DateRangeDomain
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta

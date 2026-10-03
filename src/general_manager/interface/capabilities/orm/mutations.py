@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.contrib.auth import get_user_model
-from django.db import DEFAULT_DB_ALIAS, models, transaction
+from django.db import DEFAULT_DB_ALIAS, models, router, transaction
 from django.db.models import NOT_PROVIDED
 
 from general_manager.cache.data_change_context import owns_data_change_transaction
@@ -198,6 +198,17 @@ class OrmMutationCapability(BaseCapability):
             """
             support = get_support_capability(interface_cls)
             database_alias = support.get_database_alias(interface_cls)
+            from general_manager.manager.bulk_create import (
+                CreateManyUnsupportedError,
+                enclosing_create_many_batch,
+            )
+
+            batch = enclosing_create_many_batch()
+            if (
+                batch is not None
+                and (database_alias or DEFAULT_DB_ALIAS) != batch.database_alias
+            ):
+                raise CreateManyUnsupportedError.routing()
             if database_alias:
                 instance._state.db = database_alias
             atomic_context = _mutation_atomic(
@@ -215,6 +226,12 @@ class OrmMutationCapability(BaseCapability):
                 instance.full_clean()
                 if is_unchanged_update(instance):
                     return instance.pk
+                if batch is not None and database_alias is None:
+                    if (
+                        router.db_for_write(type(instance), instance=instance)
+                        != batch.database_alias
+                    ):
+                        raise CreateManyUnsupportedError.routing()
                 if database_alias:
                     instance.save(using=database_alias)
                 else:
@@ -277,11 +294,24 @@ class OrmMutationCapability(BaseCapability):
             Returns:
                 models.Model: The same `instance` after its many-to-many relations have been updated.
             """
+            from general_manager.manager.bulk_create import (
+                CreateManyUnsupportedError,
+                enclosing_create_many_batch,
+            )
+
+            batch = enclosing_create_many_batch(instance._state.db or DEFAULT_DB_ALIAS)
+            if batch is not None:
+                for key in many_to_many_kwargs:
+                    relation = getattr(instance, key.removesuffix("_id_list"))
+                    if (
+                        router.db_for_write(relation.through, instance=instance)
+                        != batch.database_alias
+                    ):
+                        raise CreateManyUnsupportedError.routing()
             for key, value in changed_many_to_many(
                 instance, many_to_many_kwargs
             ).items():
-                field_name = key.removesuffix("_id_list")
-                getattr(instance, field_name).set(value)
+                getattr(instance, key.removesuffix("_id_list")).set(value)
             return instance
 
         result = call_with_observability(
@@ -356,6 +386,13 @@ class OrmCreateCapability(BaseCapability):
             normalized_simple, normalized_many = _normalize_payload(
                 interface_cls, local_kwargs
             )
+            from general_manager.manager.bulk_create import (
+                enclosing_create_many_batch,
+                validate_create_many_record,
+            )
+
+            if enclosing_create_many_batch() is not None:
+                validate_create_many_record(normalized_simple)
             mutation = _mutation_capability_for(interface_cls)
             if has_upload_candidates(normalized_simple):
                 prepared = prepare_upload_claims(
@@ -495,6 +532,13 @@ class OrmUpdateCapability(BaseCapability):
             normalized_simple, normalized_many = _normalize_payload(
                 interface_instance.__class__, local_kwargs
             )
+            from general_manager.manager.bulk_create import (
+                enclosing_create_many_batch,
+                validate_create_many_record,
+            )
+
+            if enclosing_create_many_batch() is not None:
+                validate_create_many_record(normalized_simple)
             support = get_support_capability(interface_instance.__class__)
             manager = support.get_manager(
                 interface_instance.__class__,
@@ -680,6 +724,21 @@ class OrmDeleteCapability(BaseCapability):
                 f"{history_comment} (deleted)" if history_comment else "Deleted"
             )
             database_alias = support.get_database_alias(interface_instance.__class__)
+            from general_manager.manager.bulk_create import (
+                CreateManyUnsupportedError,
+                enclosing_create_many_batch,
+            )
+
+            batch = enclosing_create_many_batch()
+            if (
+                batch is not None
+                and (
+                    database_alias
+                    or router.db_for_write(type(instance), instance=instance)
+                )
+                != batch.database_alias
+            ):
+                raise CreateManyUnsupportedError.routing()
             _assign_history_actor(
                 instance,
                 creator_id=creator_id,
@@ -847,11 +906,24 @@ def _assign_history_actor(
         object.__setattr__(instance, "_history_user", None)
         return
 
+    from general_manager.manager.bulk_create import current_create_many_batch
+
+    alias = database_alias or DEFAULT_DB_ALIAS
+    batch = current_create_many_batch(alias)
+    if batch is not None:
+        cached = batch.history_actors.get(creator_id)
+        if cached is not None:
+            object.__setattr__(instance, "_history_user", cached)
+            return
+
     user_model = get_user_model()
     manager = user_model._default_manager
     if database_alias:
         manager = manager.db_manager(database_alias)
-    object.__setattr__(instance, "_history_user", manager.get(pk=creator_id))
+    actor = manager.get(pk=creator_id)
+    if batch is not None:
+        batch.history_actors[creator_id] = actor
+    object.__setattr__(instance, "_history_user", actor)
 
 
 def _mutation_capability_for(

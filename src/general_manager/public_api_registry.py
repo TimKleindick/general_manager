@@ -13,11 +13,44 @@ LazyExportMap = Mapping[str, str | tuple[str, str]]
 
 
 GENERAL_MANAGER_EXPORTS: LazyExportMap = {
+    "BulkCreateEligibility": (
+        "general_manager.interface.capabilities.orm.bulk",
+        "BulkCreateEligibility",
+    ),
+    "bulk_create_eligibility": (
+        "general_manager.interface.capabilities.orm.bulk",
+        "bulk_create_eligibility",
+    ),
+    "BatchRefreshDisconnect": (
+        "general_manager.cache.batch_refresh",
+        "BatchRefreshDisconnect",
+    ),
+    "connect_batch_refresh_receiver": (
+        "general_manager.cache.batch_refresh",
+        "connect_batch_refresh_receiver",
+    ),
     "GraphQL": ("general_manager.api.graphql", "GraphQL"),
     "GraphQLType": ("general_manager.api.graphql_type", "GraphQLType"),
     "graph_ql_property": ("general_manager.api.property", "graph_ql_property"),
     "graph_ql_mutation": ("general_manager.api.mutation", "graph_ql_mutation"),
     "GeneralManager": ("general_manager.manager.general_manager", "GeneralManager"),
+    "CreateManyBatchResult": (
+        "general_manager.manager.bulk_create",
+        "CreateManyBatchResult",
+    ),
+    "CreateManyError": ("general_manager.manager.bulk_create", "CreateManyError"),
+    "CreateManyInvalidBatchSizeError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyInvalidBatchSizeError",
+    ),
+    "CreateManyPostCommitError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyPostCommitError",
+    ),
+    "CreateManyUnsupportedError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyUnsupportedError",
+    ),
     "Input": ("general_manager.manager.input", "Input"),
     "FieldConfig": ("general_manager.search.config", "FieldConfig"),
     "IndexConfig": ("general_manager.search.config", "IndexConfig"),
@@ -614,6 +647,14 @@ INTERFACE_EXPORTS: LazyExportMap = {
 
 
 CACHE_EXPORTS: LazyExportMap = {
+    "BatchRefreshDisconnect": (
+        "general_manager.cache.batch_refresh",
+        "BatchRefreshDisconnect",
+    ),
+    "connect_batch_refresh_receiver": (
+        "general_manager.cache.batch_refresh",
+        "connect_batch_refresh_receiver",
+    ),
     "cached": ("general_manager.cache.cache_decorator", "cached"),
     "CacheBackend": ("general_manager.cache.cache_decorator", "CacheBackend"),
     "Dependency": ("general_manager.cache.dependency_index", "Dependency"),
@@ -703,6 +744,23 @@ BUCKET_EXPORTS: LazyExportMap = {
 
 MANAGER_EXPORTS: LazyExportMap = {
     "GeneralManager": ("general_manager.manager.general_manager", "GeneralManager"),
+    "CreateManyBatchResult": (
+        "general_manager.manager.bulk_create",
+        "CreateManyBatchResult",
+    ),
+    "CreateManyError": ("general_manager.manager.bulk_create", "CreateManyError"),
+    "CreateManyInvalidBatchSizeError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyInvalidBatchSizeError",
+    ),
+    "CreateManyPostCommitError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyPostCommitError",
+    ),
+    "CreateManyUnsupportedError": (
+        "general_manager.manager.bulk_create",
+        "CreateManyUnsupportedError",
+    ),
     "TrustedOrmHydrationNotSupportedError": (
         "general_manager.manager.general_manager",
         "TrustedOrmHydrationNotSupportedError",
