@@ -5,8 +5,9 @@ from dataclasses import asdict
 import hashlib
 from io import BytesIO
 import json
+import os
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 from types import SimpleNamespace
 from typing import ClassVar
 from uuid import UUID
@@ -187,7 +188,11 @@ class SynchronizedFinalStorage(FileSystemStorage):
         content: object,
         max_length: int | None = None,
     ) -> str:
-        if name == self.final_key:
+        if name == self.final_key or (
+            self.final_key is not None
+            and Path(name).parent == Path(self.final_key).parent
+            and Path(name).name.startswith(".gm-upload-")
+        ):
             self.final_barrier.wait(timeout=5)
         return super().save(name, content, max_length=max_length)  # type: ignore[arg-type]
 
@@ -196,6 +201,7 @@ class CrashBeforeKeyStorage(FileSystemStorage):
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
         self.crash_before: set[str] = set()
+        self.crash_materialization = False
 
     def save(
         self,
@@ -203,6 +209,9 @@ class CrashBeforeKeyStorage(FileSystemStorage):
         content: object,
         max_length: int | None = None,
     ) -> str:
+        if self.crash_materialization and Path(name).name.startswith(".gm-upload-"):
+            self.crash_materialization = False
+            raise OSError
         if name in self.crash_before:
             self.crash_before.remove(name)
             raise OSError
@@ -1219,6 +1228,219 @@ def test_proxy_concurrent_same_intent_materializes_one_requested_key(
     assert [path.name for path in (tmp_path / "files").iterdir()] == ["report.txt"]
 
 
+def test_proxy_materialization_does_not_expose_an_incomplete_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    payload = b"new payload"
+    stage_key = "gm-staging/intent.bin"
+    final_key = "files/report.txt"
+    version = adapter.save_stage(stage_key, [payload], content_type="text/plain")
+    opened = Event()
+    release_writer = Event()
+    original_open = os.open
+
+    def pause_after_create(path: str, flags: int, mode: int = 0o777) -> int:
+        fd = original_open(path, flags, mode)
+        if Path(path).parent == tmp_path / "files" and not opened.is_set():
+            opened.set()
+            if not release_writer.wait(timeout=5):
+                os.close(fd)
+                pytest.fail("writer was not released")
+        return fd
+
+    monkeypatch.setattr(os, "open", pause_after_create)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        result = executor.submit(
+            adapter.materialize,
+            stage_key,
+            version,
+            final_key,
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+        try:
+            assert opened.wait(timeout=5)
+            assert not adapter.storage.exists(final_key)
+            # A separate adapter must be able to finish while this writer is
+            # paused, without a timeout or process-local serialization.
+            retry = _filesystem_adapter(tmp_path)
+            assert (
+                retry.materialize(
+                    stage_key,
+                    version,
+                    final_key,
+                    intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+                )
+                == final_key
+            )
+        finally:
+            release_writer.set()
+        assert result.result(timeout=5) == final_key
+
+    assert (tmp_path / final_key).read_bytes() == payload
+    assert list((tmp_path / "files").iterdir()) == [tmp_path / final_key]
+
+
+def test_proxy_materialization_preserves_a_conflicting_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    final_key = "files/report.txt"
+    version = adapter.save_stage(
+        "gm-staging/intent.bin", [b"new payload"], content_type="text/plain"
+    )
+    original_link = os.link
+
+    def publish_competitor(source: str, destination: str) -> None:
+        Path(destination).write_bytes(b"unrelated")
+        original_link(source, destination)
+
+    monkeypatch.setattr(os, "link", publish_competitor)
+    with pytest.raises(UploadTransferConflictError):
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            final_key,
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+
+    assert (tmp_path / final_key).read_bytes() == b"unrelated"
+    assert list((tmp_path / "files").iterdir()) == [tmp_path / final_key]
+    assert not adapter.storage.exists(_intent_marker("gm-upload-complete", final_key))
+
+
+def test_proxy_materialization_cleans_up_failed_publication_and_can_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    payload = b"new payload"
+    final_key = "files/report.txt"
+    version = adapter.save_stage(
+        "gm-staging/intent.bin", [payload], content_type="text/plain"
+    )
+
+    def fail_link(source: str, destination: str) -> None:
+        del source, destination
+        raise OSError
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "link", fail_link)
+        with pytest.raises(UploadStorageError) as captured:
+            adapter.materialize(
+                "gm-staging/intent.bin",
+                version,
+                final_key,
+                intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+            )
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert list((tmp_path / "files").iterdir()) == []
+    assert not adapter.storage.exists(_intent_marker("gm-upload-complete", final_key))
+    assert (
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            final_key,
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+        == final_key
+    )
+    assert (tmp_path / final_key).read_bytes() == payload
+
+
+def test_proxy_materialization_keeps_storage_file_permissions(tmp_path: Path) -> None:
+    storage = FileSystemStorage(location=tmp_path, file_permissions_mode=0o640)
+    adapter = ProxyUploadAdapter(storage)
+    version = adapter.save_stage(
+        "gm-staging/intent.bin", [b"payload"], content_type="text/plain"
+    )
+    final_key = adapter.materialize(
+        "gm-staging/intent.bin",
+        version,
+        "files/report.txt",
+        intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+    )
+
+    assert (tmp_path / final_key).stat().st_mode & 0o777 == 0o640
+
+
+def test_proxy_materialization_cleans_up_an_interrupted_private_save(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    version = adapter.save_stage(
+        "gm-staging/intent.bin", [b"payload"], content_type="text/plain"
+    )
+    original_chmod = os.chmod
+    failure = OSError("simulated permission-setting failure")
+
+    def fail_after_write(path: str, mode: int) -> None:
+        if Path(path).name.startswith(".gm-upload-"):
+            assert Path(path).read_bytes() == b"payload"
+            raise failure
+        original_chmod(path, mode)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "chmod", fail_after_write)
+        with pytest.raises(UploadStorageError) as captured:
+            adapter.materialize(
+                "gm-staging/intent.bin",
+                version,
+                "files/report.txt",
+                intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+            )
+
+    assert captured.value.__cause__ is failure
+    assert list((tmp_path / "files").iterdir()) == []
+    assert (
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            "files/report.txt",
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+        == "files/report.txt"
+    )
+    assert (tmp_path / "files/report.txt").read_bytes() == b"payload"
+
+
+def test_proxy_materialization_preserves_an_existing_private_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _filesystem_adapter(tmp_path)
+    version = adapter.save_stage(
+        "gm-staging/intent.bin", [b"payload"], content_type="text/plain"
+    )
+    occupied_id = UUID("11111111-1111-4111-8111-111111111111")
+    available_id = UUID("22222222-2222-4222-8222-222222222222")
+    occupied_key = f"files/.gm-upload-{occupied_id.hex}"
+    adapter.storage.save(occupied_key, ContentFile(b"another invocation"))
+    candidates = iter([occupied_id, available_id])
+    monkeypatch.setattr(adapters_module, "uuid4", lambda: next(candidates))
+
+    assert (
+        adapter.materialize(
+            "gm-staging/intent.bin",
+            version,
+            "files/report.txt",
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+        )
+        == "files/report.txt"
+    )
+
+    assert (tmp_path / occupied_key).read_bytes() == b"another invocation"
+    assert (tmp_path / "files/report.txt").read_bytes() == b"payload"
+    assert sorted(path.name for path in (tmp_path / "files").iterdir()) == [
+        f".gm-upload-{occupied_id.hex}",
+        "report.txt",
+    ]
+
+
 def test_proxy_retry_resumes_after_claim_before_data_crash(tmp_path: Path) -> None:
     storage = CrashBeforeKeyStorage(location=tmp_path, base_url="/media/")
     adapter = ProxyUploadAdapter(storage)
@@ -1231,7 +1453,7 @@ def test_proxy_retry_resumes_after_claim_before_data_crash(tmp_path: Path) -> No
     intent_id = UUID("9c90741f-72ce-4f34-886c-297bc019db16")
     claim_key = _intent_marker("gm-upload-meta", final_key)
     completed_key = _intent_marker("gm-upload-complete", final_key)
-    storage.crash_before.add(final_key)
+    storage.crash_materialization = True
 
     with pytest.raises(UploadStorageError) as captured:
         adapter.materialize(
