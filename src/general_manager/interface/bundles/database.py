@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from general_manager.interface.capabilities.orm.create_many import (
+    OrmCreateManyCapability,
+)
 from general_manager.interface.capabilities.configuration import (
     CapabilitySet,
     InterfaceCapabilityConfig,
@@ -51,6 +54,7 @@ ORM_WRITABLE_CAPABILITIES: CapabilitySet = CapabilitySet(
         *ORM_PERSISTENCE_CAPABILITIES.entries,
         InterfaceCapabilityConfig(OrmMutationCapability),
         InterfaceCapabilityConfig(OrmCreateCapability),
+        InterfaceCapabilityConfig(OrmCreateManyCapability),
         InterfaceCapabilityConfig(OrmUpdateCapability),
         InterfaceCapabilityConfig(OrmDeleteCapability),
     ),

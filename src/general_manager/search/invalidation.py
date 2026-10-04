@@ -25,7 +25,12 @@ from general_manager.search.async_tasks import (
     dispatch_index_manager_batch,
 )
 from general_manager.search.indexer import SearchDeleteTarget, capture_delete_targets
-from general_manager.search.config import IndexConfig, SearchChange
+from general_manager.search.config import (
+    IndexConfig,
+    SearchChange,
+    SearchConfigSpec,
+    SearchInvalidationRule,
+)
 from general_manager.search.reconciliation import (
     DirtySearchIndex,
     acknowledge_search_index_dirty,
@@ -45,6 +50,101 @@ _DirectAction = Literal["create", "update", "delete"]
 type SearchInvalidationKey = tuple[str, str, str, str]
 type SearchRuleKey = tuple[str, int]
 _SYNTHETIC_CONFIG_FAILURE_RULE_ORDINAL = -1
+
+
+def _get_search_config_for_change(
+    manager_class: type[GeneralManager],
+    database_alias: str,
+) -> SearchConfigSpec | None:
+    """Reuse immutable manager search configuration during one create-many batch."""
+    from general_manager.manager.bulk_create import current_create_many_batch
+
+    batch = current_create_many_batch(database_alias)
+    if batch is None:
+        return get_search_config(manager_class)
+    if manager_class not in batch.search_configs:
+        batch.search_configs[manager_class] = get_search_config(manager_class)
+    return cast(SearchConfigSpec | None, batch.search_configs[manager_class])
+
+
+@dataclass(frozen=True)
+class _CandidateOwner:
+    """Relevant immutable rule declarations for one changed manager class."""
+
+    owner_class: type[GeneralManager]
+    sources: Mapping[int, type[GeneralManager] | Exception] | None = None
+
+    def source_for(
+        self, ordinal: int, rule: SearchInvalidationRule
+    ) -> type[GeneralManager]:
+        """Resolve an ordinary declaration or replay a captured source error."""
+        if self.sources is None:
+            return _source_class(rule.source)
+        source = self.sources[ordinal]
+        if isinstance(source, Exception):
+            raise source.with_traceback(None)
+        return source
+
+
+def _candidate_owners_for_source(
+    source: type[GeneralManager], database_alias: str
+) -> tuple[_CandidateOwner, ...]:
+    """Index batch declarations once while retaining malformed-rule recovery."""
+    from general_manager.manager.bulk_create import current_create_many_batch
+
+    batch = current_create_many_batch(database_alias)
+    if batch is not None and source in batch.search_rule_index:
+        return cast(tuple[_CandidateOwner, ...], batch.search_rule_index[source])
+    candidates: list[_CandidateOwner] = []
+    for owner in tuple(GeneralManagerMeta.all_classes):
+        if not isinstance(owner, type) or not issubclass(owner, GeneralManager):
+            continue
+        if batch is None:
+            candidates.append(_CandidateOwner(owner))
+            continue
+        try:
+            config = _get_search_config_for_change(owner, database_alias)
+            if config is None:
+                continue
+            tuple(config.indexes)
+            rules = tuple(config.invalidation_rules)
+            # Extensible declarations retain their ordinary accessor/error order.
+            if any(type(rule) is not SearchInvalidationRule for rule in rules):
+                candidates.append(_CandidateOwner(owner))
+                continue
+            sources: dict[int, type[GeneralManager] | Exception] = {}
+            for ordinal, rule in enumerate(rules):
+                try:
+                    # Declaration errors precede source matching in the ordinary
+                    # resolver and must still trigger dirty-index recovery.
+                    _selected_index_names((), rule.indexes)
+                    rule_source = _source_class(rule.source)
+                except Exception as error:  # noqa: BLE001 - preserve dirty fallback
+                    sources[ordinal] = error
+                else:
+                    if issubclass(source, rule_source):
+                        sources[ordinal] = rule_source
+            if sources:
+                candidates.append(_CandidateOwner(owner, sources))
+        except Exception:  # noqa: BLE001 - ordinary resolver logs and recovers
+            candidates.append(_CandidateOwner(owner))
+    result = tuple(candidates)
+    if batch is not None:
+        batch.search_rule_index[source] = result
+    return result
+
+
+def create_search_requires_instance(
+    manager: type[GeneralManager], database_alias: str
+) -> bool:
+    """Avoid hydrating rows when neither direct nor related search consumes them."""
+    try:
+        config = _get_search_config_for_change(manager, database_alias)
+        return bool(config and config.indexes) or bool(
+            _candidate_owners_for_source(manager, database_alias)
+        )
+    except Exception:  # noqa: BLE001 - let ordinary dispatch preserve recovery
+        return True
 
 
 class InvalidSearchInvalidationSettingError(ValueError):
@@ -410,11 +510,10 @@ def resolve_search_invalidation_phase(
         max_targets = 0
         setting_error = exc
 
-    for owner_class in tuple(GeneralManagerMeta.all_classes):
-        if not isinstance(owner_class, type) or not issubclass(
-            owner_class, GeneralManager
-        ):
-            continue
+    for candidate in _candidate_owners_for_source(
+        type(change.instance), change.database_alias
+    ):
+        owner_class = candidate.owner_class
         owner_path = _owner_path(owner_class)
         synthetic_key = (owner_path, _SYNTHETIC_CONFIG_FAILURE_RULE_ORDINAL)
         prior_synthetic = previous_by_key.get(synthetic_key)
@@ -427,7 +526,7 @@ def resolve_search_invalidation_phase(
                 )
             )
         try:
-            config = get_search_config(owner_class)
+            config = _get_search_config_for_change(owner_class, change.database_alias)
             if config is None:
                 continue
             configured_indexes = tuple(config.indexes)
@@ -477,7 +576,12 @@ def resolve_search_invalidation_phase(
             phase=change.phase,
         )
 
-        for ordinal, rule in enumerate(rules):
+        selected_rules = (
+            enumerate(rules)
+            if candidate.sources is None
+            else ((ordinal, rules[ordinal]) for ordinal in candidate.sources)
+        )
+        for ordinal, rule in selected_rules:
             key = (owner_path, ordinal)
             prior = previous_by_key.get(key)
             index_names = (
@@ -488,7 +592,7 @@ def resolve_search_invalidation_phase(
                     configured_index_names,
                     rule.indexes,
                 )
-                source_class = _source_class(rule.source)
+                source_class = candidate.source_for(ordinal, rule)
                 if not issubclass(type(change.instance), source_class):
                     continue
             except Exception as exc:  # noqa: BLE001 - declarations are user-owned
@@ -600,9 +704,11 @@ def _manager_class(
     return None
 
 
-def _index_names(manager_class: type[GeneralManager]) -> tuple[str, ...]:
+def _index_names(
+    manager_class: type[GeneralManager], database_alias: str
+) -> tuple[str, ...]:
     """Return each configured index name once in declaration order."""
-    config = get_search_config(manager_class)
+    config = _get_search_config_for_change(manager_class, database_alias)
     if config is None:
         return ()
     return tuple(dict.fromkeys(index.name for index in config.indexes))
@@ -925,8 +1031,19 @@ def schedule_search_invalidation_work(
     work: SearchScheduledWork,
     *,
     source_database_alias: str,
+    source_manager_class: type[GeneralManager] | None = None,
 ) -> None:
     """Schedule one bounded, generation-fenced lifecycle invalidation event."""
+    from general_manager.manager.bulk_create import current_create_many_batch
+
+    batch = current_create_many_batch(source_database_alias)
+    if (
+        batch is not None
+        and batch.manager_class is source_manager_class
+        and not batch.flushing_search_work
+    ):
+        batch.search_work.append(work)
+        return
     if (
         not work.upserts.targets
         and not work.upserts.dirty_fallbacks
@@ -1084,7 +1201,7 @@ def _direct_work(
 ) -> tuple[SearchInvalidationPlan, tuple[SearchDeleteTarget, ...]]:
     """Build direct exact-index work while retaining immutable metadata only."""
     try:
-        index_names = _index_names(manager_class)
+        index_names = _index_names(manager_class, database_alias)
     except Exception as exc:  # noqa: BLE001 - user config hooks are open-ended
         logger.warning(
             "search configuration resolution failed",
@@ -1218,6 +1335,7 @@ def _handle_search_post_change(
         schedule_search_invalidation_work(
             work,
             source_database_alias=database_alias,
+            source_manager_class=manager_class,
         )
     finally:
         record_data_change_phase("search", perf_counter() - started, database_alias)

@@ -89,3 +89,49 @@ handler, startup-hook, system-check, or registry errors.
 - Follow the [custom interface type how-to](../../howto/create_custom_interface_type.md) to build your own interface shell.
 - Follow the [custom capability how-to](../../howto/create_custom_capability.md) to implement new behaviour that interfaces can compose.
 - Browse the [custom capability examples](../../examples/custom_capability_examples.md) for ready-made snippets.
+
+## Optional bounded creation
+
+`GeneralManager.create_many()` delegates to `InterfaceBase.create_many()`, which
+resolves the optional `create_many` handler through the same registry as other
+operations. The central manager contains no batch transaction or SQL strategy.
+Writable ORM bundles configure `OrmCreateManyCapability`, and their concrete
+manifest plans require it alongside `create` so normal handler overrides apply.
+The operation remains optional for other interface families: read-only, calculation,
+Excel and request bundles do not provide batch writes by default. An absent or
+non-callable handler raises `CreateManyUnsupportedError` before consuming input.
+
+A custom interface can install or replace its configured handler with
+`InterfaceCapabilityConfig`. Writable ORM managers also support replacement
+through `capability_overrides["create_many"]`, like their other required
+capabilities. Request-backed interfaces rebuild their overrides from configured
+entries during declaration normalization; replace that configured entry rather
+than relying on a separate override mapping. The structural method
+contract is `CreateManyCapability` in `general_manager.interface.capabilities.base`:
+`create_many(interface_cls, records, *, manager_class, creator_id=None,
+history_comment=None, ignore_permission=False, batch_size=1000)` returns an
+`Iterator[CreateManyBatchResult]`. Direct interface calls use the owning manager;
+the manager entry point explicitly supplies the calling manager class.
+
+Handlers own these guarantees:
+
+- Consume at most one batch before writing it and yield progress before consuming
+  the next batch. Unsupported configurations must fail before consuming input.
+- Keep each batch atomic, including required history/outbox records; report
+  durable versus caller-transaction-pending progress accurately. A backend that
+  cannot provide that contract must reject, not silently loop over remote writes.
+- Preserve per-record permissions, normalization, rules, lifecycle and
+  observability hooks, or select a semantically equivalent safe fallback.
+- Reject historical mutation both at invocation and when deferred work advances.
+- Return complete backend identifiers in `ids`; ORM uses scalar primary keys,
+  while another backend may use full identification mappings. Use
+  `database_alias=None` when no Django database owns the transaction.
+- Distinguish write failure from post-commit effects using `CreateManyError` and
+  `CreateManyPostCommitError`. Unknown failure attribution is `None`, never a
+  guessed row index.
+
+`OrmCreateManyCapability` owns the existing routing, savepoint, history, upload
+and workflow safeguards. Its SQL eligibility check rejects custom observability
+handlers, preserving their canonical per-record success and error hooks.
+Batch cache refresh callbacks receive complete identification snapshots across
+backends; their mapping contract is independent of ORM `id` conventions.

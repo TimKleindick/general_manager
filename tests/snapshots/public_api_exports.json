@@ -4,9 +4,37 @@
       "general_manager.permission.manager_based_permission",
       "AdditiveManagerPermission"
     ],
+    "BatchRefreshDisconnect": [
+      "general_manager.cache.batch_refresh",
+      "BatchRefreshDisconnect"
+    ],
+    "BulkCreateEligibility": [
+      "general_manager.interface.capabilities.orm.bulk",
+      "BulkCreateEligibility"
+    ],
     "CalculationInterface": [
       "general_manager.interface.interfaces.calculation",
       "CalculationInterface"
+    ],
+    "CreateManyBatchResult": [
+      "general_manager.manager.bulk_create",
+      "CreateManyBatchResult"
+    ],
+    "CreateManyError": [
+      "general_manager.manager.bulk_create",
+      "CreateManyError"
+    ],
+    "CreateManyInvalidBatchSizeError": [
+      "general_manager.manager.bulk_create",
+      "CreateManyInvalidBatchSizeError"
+    ],
+    "CreateManyPostCommitError": [
+      "general_manager.manager.bulk_create",
+      "CreateManyPostCommitError"
+    ],
+    "CreateManyUnsupportedError": [
+      "general_manager.manager.bulk_create",
+      "CreateManyUnsupportedError"
     ],
     "DatabaseInterface": [
       "general_manager.interface.interfaces.database",
@@ -108,6 +136,10 @@
       "general_manager.search.config",
       "SearchInvalidationRule"
     ],
+    "bulk_create_eligibility": [
+      "general_manager.interface.capabilities.orm.bulk",
+      "bulk_create_eligibility"
+    ],
     "configure_search_backend": [
       "general_manager.search.backend_registry",
       "configure_search_backend"
@@ -115,6 +147,10 @@
     "configure_search_backend_from_settings": [
       "general_manager.search.backend_registry",
       "configure_search_backend_from_settings"
+    ],
+    "connect_batch_refresh_receiver": [
+      "general_manager.cache.batch_refresh",
+      "connect_batch_refresh_receiver"
     ],
     "get_logger": [
       "general_manager.logging",
@@ -462,6 +498,10 @@
     ]
   },
   "general_manager.cache": {
+    "BatchRefreshDisconnect": [
+      "general_manager.cache.batch_refresh",
+      "BatchRefreshDisconnect"
+    ],
     "CacheBackend": [
       "general_manager.cache.cache_decorator",
       "CacheBackend"
@@ -481,6 +521,10 @@
     "cached": [
       "general_manager.cache.cache_decorator",
       "cached"
+    ],
+    "connect_batch_refresh_receiver": [
+      "general_manager.cache.batch_refresh",
+      "connect_batch_refresh_receiver"
     ],
     "current_calculation_run_context": [
       "general_manager.cache.run_context",
@@ -806,6 +850,26 @@
     ]
   },
   "general_manager.manager": {
+    "CreateManyBatchResult": [
+      "general_manager.manager.bulk_create",
+      "CreateManyBatchResult"
+    ],
+    "CreateManyError": [
+      "general_manager.manager.bulk_create",
+      "CreateManyError"
+    ],
+    "CreateManyInvalidBatchSizeError": [
+      "general_manager.manager.bulk_create",
+      "CreateManyInvalidBatchSizeError"
+    ],
+    "CreateManyPostCommitError": [
+      "general_manager.manager.bulk_create",
+      "CreateManyPostCommitError"
+    ],
+    "CreateManyUnsupportedError": [
+      "general_manager.manager.bulk_create",
+      "CreateManyUnsupportedError"
+    ],
     "DateRangeDomain": [
       "general_manager.manager.input",
       "DateRangeDomain"

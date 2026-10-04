@@ -1,0 +1,288 @@
+{
+  "configuration": {
+    "batch_size": 1000,
+    "channel_capacity": 5010,
+    "channel_expiry_environment_variable": "GENERAL_MANAGER_BENCHMARK_CHANNEL_EXPIRY",
+    "channel_expiry_seconds": 3600,
+    "existing_rows": 100000,
+    "modes": {
+      "baseline_create_many": "current public create_many fallback; it is not an optimized result",
+      "baseline_repeated": "repeated public GeneralManager.create",
+      "optimized_bulk_sql": "emitted only after every fixture proves eligibility, a bulk QuerySet insert, and zero canonical create calls outside the timing window"
+    },
+    "optimized_bulk_sql_required": true,
+    "permissions": "public ManagerBasedPermission evaluated for every measured row",
+    "redis_count_definition": "one INFO commandstats/stats snapshot before and after per unique Redis server run_id; two observer commands subtracted per server",
+    "refresh_receiver": "public connect_batch_refresh_receiver: cache callback in transaction; Channels callback on_commit",
+    "repeats": 3,
+    "rows": 5000,
+    "search_limitation": "external search dispatch is no-op; direct and related plan formation remains active",
+    "selected_paths": [
+      "baseline_repeated",
+      "baseline_create_many",
+      "optimized_bulk_sql"
+    ]
+  },
+  "environment": {
+    "cache_redis_url": "redis://127.0.0.1:56497/15",
+    "channel_redis_url": "redis://127.0.0.1:56497/14",
+    "database_vendor": "postgresql",
+    "database_version": [
+      18,
+      6
+    ],
+    "django": "5.2.16",
+    "general_manager_package_path": "/Users/tim/.codex/worktrees/bb54/general_manager/src/general_manager/__init__.py",
+    "loaded_general_manager_python_tree_sha256": "1f76286d0b98d1d374ea7c2720332f1dacb7b9021d909b3e84fa07dca163d7c1",
+    "loaded_general_manager_sha256": "0c5e4e7deb0674ca57def6383f5865a3dd6f84409106bb3111e9afe477ed4754",
+    "loaded_source_commit": "working-tree-final",
+    "python": "3.12.4"
+  },
+  "results": {
+    "baseline_create_many": {
+      "elapsed": [
+        {
+          "metrics": {
+            "elapsed_seconds": 61.28372299997136,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 5000,
+            "applied_cache_refreshes": 5000,
+            "external_notifications": 5000,
+            "history_rows": 5000,
+            "notification_delivered": true,
+            "permission_checks": 5000,
+            "related_search_plans": 5,
+            "rows_created": 5000,
+            "workflow_events": 5000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 61.70585120806936,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 5000,
+            "applied_cache_refreshes": 5000,
+            "external_notifications": 5000,
+            "history_rows": 5000,
+            "notification_delivered": true,
+            "permission_checks": 5000,
+            "related_search_plans": 5,
+            "rows_created": 5000,
+            "workflow_events": 5000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 61.73943291709293,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 5000,
+            "applied_cache_refreshes": 5000,
+            "external_notifications": 5000,
+            "history_rows": 5000,
+            "notification_delivered": true,
+            "permission_checks": 5000,
+            "related_search_plans": 5,
+            "rows_created": 5000,
+            "workflow_events": 5000
+          }
+        }
+      ]
+    },
+    "baseline_repeated": {
+      "elapsed": [
+        {
+          "metrics": {
+            "elapsed_seconds": 72.83744645793922,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 5000,
+            "applied_cache_refreshes": 5000,
+            "external_notifications": 5000,
+            "history_rows": 5000,
+            "notification_delivered": true,
+            "permission_checks": 5000,
+            "related_search_plans": 5000,
+            "rows_created": 5000,
+            "workflow_events": 5000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 73.32643383299,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 5000,
+            "applied_cache_refreshes": 5000,
+            "external_notifications": 5000,
+            "history_rows": 5000,
+            "notification_delivered": true,
+            "permission_checks": 5000,
+            "related_search_plans": 5000,
+            "rows_created": 5000,
+            "workflow_events": 5000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 73.1314567499794,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 5000,
+            "applied_cache_refreshes": 5000,
+            "external_notifications": 5000,
+            "history_rows": 5000,
+            "notification_delivered": true,
+            "permission_checks": 5000,
+            "related_search_plans": 5000,
+            "rows_created": 5000,
+            "workflow_events": 5000
+          }
+        }
+      ]
+    },
+    "optimized_bulk_sql": {
+      "elapsed": [
+        {
+          "metrics": {
+            "elapsed_seconds": 2.5654014999745414,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 5000,
+            "applied_cache_refreshes": 5,
+            "external_notifications": 5,
+            "history_rows": 5000,
+            "notification_delivered": true,
+            "permission_checks": 5000,
+            "related_search_plans": 5,
+            "rows_created": 5000,
+            "workflow_events": 5000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 2.5484801658894867,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 5000,
+            "applied_cache_refreshes": 5,
+            "external_notifications": 5,
+            "history_rows": 5000,
+            "notification_delivered": true,
+            "permission_checks": 5000,
+            "related_search_plans": 5,
+            "rows_created": 5000,
+            "workflow_events": 5000
+          }
+        },
+        {
+          "metrics": {
+            "elapsed_seconds": 2.5488644579891115,
+            "peak_python_bytes": null,
+            "profile_path": null,
+            "profile_primitive_calls": null,
+            "profile_total_calls": null,
+            "profile_total_seconds": null,
+            "redis_command_breakdown": null,
+            "redis_commands": null,
+            "sql_commands": null
+          },
+          "semantics": {
+            "applied_cache_identifiers": 5000,
+            "applied_cache_refreshes": 5,
+            "external_notifications": 5,
+            "history_rows": 5000,
+            "notification_delivered": true,
+            "permission_checks": 5000,
+            "related_search_plans": 5,
+            "rows_created": 5000,
+            "workflow_events": 5000
+          }
+        }
+      ]
+    }
+  },
+  "summary": {
+    "baseline_create_many": {
+      "elapsed": {
+        "elapsed_seconds": 61.57633570837788
+      }
+    },
+    "baseline_repeated": {
+      "elapsed": {
+        "elapsed_seconds": 73.09844568030287
+      }
+    },
+    "optimized_bulk_sql": {
+      "elapsed": {
+        "elapsed_seconds": 2.5542487079510465
+      }
+    }
+  }
+}

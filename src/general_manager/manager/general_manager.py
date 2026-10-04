@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 from json.encoder import encode_basestring_ascii
 from typing import TYPE_CHECKING, ClassVar, Iterator, Protocol, Self, Type, cast
@@ -25,6 +25,7 @@ from general_manager.manager.meta import (
     InvalidManagerStateError,
     _validate_rule_templates_before_public_use,
 )
+from general_manager.manager.bulk_create import CreateManyBatchResult
 
 
 class UnsupportedUnionOperandError(TypeError):
@@ -285,9 +286,9 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """
         Build a manager around an ORM-loaded row without public input validation.
 
-        This private path is only for framework-owned Django ORM rows. It must
-        not be used for GraphQL, mutation, import, factory, or other external
-        payloads. Managers that use the base constructor hydrate through the
+        This private path is only for framework-owned Django ORM rows, including
+        validated bulk rows after successful persistence. It must not receive
+        unvalidated external payloads. Managers that use the base constructor hydrate through the
         interface's trusted ORM hook and bypass public Interface input
         validation. Managers with a custom ``__init__`` are reconstructed with
         ``cls(instance.pk)`` or ``cls(instance.pk, search_date=search_date)`` so
@@ -601,6 +602,30 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             },
         )
         return cls(**identification)
+
+    @classmethod
+    def create_many(
+        cls,
+        records: Iterable[Mapping[str, object]],
+        *,
+        creator_id: int | None = None,
+        history_comment: str | None = None,
+        ignore_permission: bool = False,
+        batch_size: int = 1000,
+    ) -> Iterator[CreateManyBatchResult]:
+        """Delegate bounded creation to the interface's optional batch capability.
+
+        The capability owns persistence, atomicity, lifecycle and progress.
+        Unsupported interfaces reject the call before consuming input.
+        """
+        return cls.Interface.create_many(
+            records,
+            manager_class=cls,
+            creator_id=creator_id,
+            history_comment=history_comment,
+            ignore_permission=ignore_permission,
+            batch_size=batch_size,
+        )
 
     @_validate_rule_templates_before_public_use
     @data_change
