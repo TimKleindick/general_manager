@@ -170,7 +170,7 @@ from django.core.cache import cache
 from general_manager import connect_batch_refresh_receiver
 
 
-def refresh_products(sender, ids, action, database_alias):
+def refresh_products(sender, identifications, action, database_alias):
     if sender is Product:
         # A generation bump invalidates application-owned derived cache keys.
         cache.add("products:generation", 0, timeout=None)
@@ -180,10 +180,15 @@ def refresh_products(sender, ids, action, database_alias):
 registration = connect_batch_refresh_receiver(refresh_products, on_commit=True)
 ```
 
-The callback receives the manager class, a tuple of IDs, the mutation action,
-and the database alias. By default it runs once for an eligible bulk SQL batch,
-inside the transaction before iteration returns. Ordinary mutations and canonical fallback
-retain per-record timing. This callback is a refresh/invalidation notification;
+The callback receives the manager class, a tuple of full identification mappings,
+the mutation action, and the database alias. Each mapping is a read-only snapshot
+taken when the mutation signal arrives. ORM identities look like `{"id": 42}`;
+request-backed identities may instead contain several keys, such as
+`{"tenant": "acme", "code": "widget"}`. All keys are preserved, including when
+callbacks wait until commit. A missing identification mapping raises `TypeError`
+rather than delivering an unusable `None` identifier. By default it runs once for
+an eligible bulk SQL batch, inside the transaction before iteration returns.
+Ordinary mutations and canonical fallback retain per-record timing. This callback is a refresh/invalidation notification;
 it does not replace audit rows or per-record workflow events. A rollback may
 leave a conservative extra cache invalidation, so callbacks must not interpret
 this phase as proof of durable persistence.

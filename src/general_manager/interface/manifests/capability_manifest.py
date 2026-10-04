@@ -142,7 +142,7 @@ def _plan(
 
 CAPABILITY_MANIFEST = CapabilityManifest(
     plans={
-        InterfaceBase: _plan(required=()),
+        InterfaceBase: _plan(required=(), optional=names("create_many")),
         OrmInterfaceBase: _plan(
             required=names(
                 "orm_support",
@@ -160,6 +160,7 @@ CAPABILITY_MANIFEST = CapabilityManifest(
             required=names(
                 "orm_mutation",
                 "create",
+                "create_many",
                 "update",
                 "delete",
                 "history",
@@ -173,6 +174,7 @@ CAPABILITY_MANIFEST = CapabilityManifest(
             required=names(
                 "orm_mutation",
                 "create",
+                "create_many",
                 "update",
                 "delete",
                 "history",

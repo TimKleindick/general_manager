@@ -22,6 +22,13 @@ Interfaces (see `general_manager.interface`) implement the actual persistence or
 
 Interfaces expose an `.identification` structure used by managers to rehydrate objects after operations.
 
+Optional operations follow the same boundary: `GeneralManager.create_many()`
+delegates to the interface's `create_many` capability. The backend handler owns
+batch transactions, lifecycle and error/progress semantics. Writable ORM bundles
+provide this handler; other backends can supply their own atomic implementation
+or reject unsupported batches before consuming input. See the
+[capability contract](interfaces/capability-first.md#optional-bounded-creation).
+
 ## Buckets
 
 Buckets (`general_manager.bucket`) behave like querysets tailored for managers. They allow filtering, slicing, sorting, combining (`|`), and grouping (`group_by`). Buckets keep type information, so type checkers know which manager they hold. Operations on buckets defer actual evaluation to the interface layer, so chaining filters is efficient.

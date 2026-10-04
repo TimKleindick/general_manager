@@ -59,6 +59,7 @@ def test_database_interface_default_capabilities() -> None:
             "history",
             "validation",
             "create",
+            "create_many",
             "update",
             "delete",
             "query",

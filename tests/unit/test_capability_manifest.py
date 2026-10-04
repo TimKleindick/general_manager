@@ -183,6 +183,7 @@ def test_database_capability_bundle_entries_are_ordered():
         "observability",
         "orm_mutation",
         "create",
+        "create_many",
         "update",
         "delete",
     )
@@ -201,6 +202,7 @@ def test_database_capability_bundle_entries_are_ordered():
         "observability",
         "orm_mutation",
         "create",
+        "create_many",
         "update",
         "delete",
         "existing_model_resolution",

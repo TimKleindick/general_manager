@@ -22,7 +22,7 @@ class CreateManyBatchResult:
     successful_count: int
     committed_successful_count: int
     pending_successful_count: int
-    database_alias: str
+    database_alias: str | None
     committed: bool
 
     @property
@@ -49,7 +49,7 @@ class CreateManyError(RuntimeError):
         successful_count: int,
         committed_successful_count: int,
         pending_successful_count: int,
-        database_alias: str,
+        database_alias: str | None,
         committed: bool,
     ) -> None:
         self.failure_index = failure_index
@@ -88,7 +88,7 @@ class CreateManyPostCommitError(CreateManyError):
         successful_count: int,
         committed_successful_count: int,
         pending_successful_count: int,
-        database_alias: str,
+        database_alias: str | None,
         committed: bool,
     ) -> None:
         self.ids = ids
@@ -106,7 +106,12 @@ class CreateManyPostCommitError(CreateManyError):
 
 
 class CreateManyUnsupportedError(TypeError):
-    """The manager cannot provide the ORM transaction contract of ``create_many``."""
+    """The selected interface cannot provide the requested batch contract."""
+
+    @classmethod
+    def missing_capability(cls, interface_name: str) -> "CreateManyUnsupportedError":
+        """Build a backend-independent error for missing batch support."""
+        return cls(f"{interface_name} does not provide a create_many capability.")
 
     @classmethod
     def custom_create(cls, manager_name: str) -> "CreateManyUnsupportedError":
@@ -293,9 +298,9 @@ class CreateManyBatchContext:
     # batch-refresh registrations use it to coalesce their callbacks without
     # changing the timing of canonical create_many receivers.
     bulk_sql_active: bool = False
-    batch_refresh_callbacks: dict[int, tuple[object, bool, str, list[object]]] = field(
-        default_factory=dict
-    )
+    batch_refresh_callbacks: dict[
+        int, tuple[object, bool, str, list[Mapping[str, object]]]
+    ] = field(default_factory=dict)
     history_actors: dict[int, AbstractBaseUser] = field(default_factory=dict)
     flushing_search_work: bool = False
     notifications_registered: bool = False
