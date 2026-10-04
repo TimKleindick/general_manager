@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.81.2 (2026-10-04)
+
+### Bug Fixes
+
+- Distinguish PyPI upload acceptance from release visibility
+  ([`1006f5b`](https://github.com/TimKleindick/general_manager/commit/1006f5b73b2f232f7b2f61f95ca099ac89152734))
+
+
 ## v0.81.1 (2026-10-04)
 
 ### Bug Fixes
