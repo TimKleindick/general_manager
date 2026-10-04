@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.81.1 (2026-10-04)
+
+### Bug Fixes
+
+- Publish complete filesystem uploads atomically
+  ([`48d7202`](https://github.com/TimKleindick/general_manager/commit/48d7202336ba3bee44465dbbfb18c9d9348d2e06))
+
+### Testing
+
+- Restrict upload test file permissions and remove verification workflow
+  ([`a7135e8`](https://github.com/TimKleindick/general_manager/commit/a7135e88e1114bfd965361e9080ce22632d22690))
+
+- Verify MariaDB 3.13 upload race fix in three CI jobs
+  ([`606d829`](https://github.com/TimKleindick/general_manager/commit/606d8293358cf1bf3fddc6e980aadbef02c21e57))
+
+
 ## v0.81.0 (2026-10-04)
 
 ### Bug Fixes
