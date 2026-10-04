@@ -1241,8 +1241,8 @@ def test_proxy_materialization_does_not_expose_an_incomplete_file(
     release_writer = Event()
     original_open = os.open
 
-    def pause_after_create(path: str, flags: int, mode: int = 0o777) -> int:
-        fd = original_open(path, flags, mode)
+    def pause_after_create(path: str, flags: int, mode: int = 0o600) -> int:
+        fd = original_open(path, flags, mode & 0o600)
         if Path(path).parent == tmp_path / "files" and not opened.is_set():
             opened.set()
             if not release_writer.wait(timeout=5):
