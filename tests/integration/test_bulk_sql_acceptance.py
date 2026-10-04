@@ -743,7 +743,8 @@ class BulkSqlAcceptanceIntegrationTests(GeneralManagerTransactionTestCase):
             outcome for outcome in outcomes if isinstance(outcome, CreateManyError)
         ]
         self.assertEqual(len(errors), 1)
-        self.assertEqual(errors[0].failure_index, 0)
+        # The database conflict occurs after row validation, so no row is attributed.
+        self.assertIsNone(errors[0].failure_index)
         self.assertIsInstance(errors[0].cause, IntegrityError)
         self.assertEqual(
             self.ItemModel.objects.filter(name="concurrent-sql").count(), 1
