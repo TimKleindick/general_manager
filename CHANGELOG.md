@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.81.0 (2026-10-04)
+
+### Bug Fixes
+
+- Preserve batch contracts through interface capabilities
+  ([`37c465b`](https://github.com/TimKleindick/general_manager/commit/37c465b2812d44d7a302be3917bcc8ff8cc3cdb7))
+
+- Preserve bulk creation lifecycle and benchmark safety
+  ([`cbc8184`](https://github.com/TimKleindick/general_manager/commit/cbc8184e910a62b8ef98759b9fb76bae89e6a6ca))
+
+### Features
+
+- Add bounded atomic bulk creation
+  ([`ee81a37`](https://github.com/TimKleindick/general_manager/commit/ee81a37fa2ca98b115fc4ff383cbb38b05ef6b28))
+
+- Add opt-in SQL bulk imports and batch refreshes
+  ([`1792b14`](https://github.com/TimKleindick/general_manager/commit/1792b1443bd8047a542c3f63d943357f8ef75097))
+
+### Testing
+
+- Align concurrent batch conflict attribution contract
+  ([`d4f6e86`](https://github.com/TimKleindick/general_manager/commit/d4f6e8699d0a0b1630265d23b628e359b8ba83cb))
+
+
 ## v0.80.8 (2026-10-01)
 
 ### Performance Improvements
