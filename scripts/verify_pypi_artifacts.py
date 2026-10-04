@@ -5,10 +5,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import stat
+import sys
 from collections.abc import Sequence
+from email.message import Message
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -75,23 +79,42 @@ def _local_checksums(dist_dir: Path) -> dict[str, str]:
     return {artifact.name: _sha256(artifact) for artifact in (wheel, sdist)}
 
 
-def _remote_checksums(project: str, version: str) -> dict[str, str]:
+def _response_details(status: int, headers: Message) -> str:
+    details = [f"HTTP {status}"]
+    for name in ("Age", "X-Cache", "X-PyPI-Last-Serial", "Retry-After"):
+        if value := headers.get(name):
+            details.append(f"{name}={value}")
+    return "; ".join(details)
+
+
+def _remote_checksums(
+    project: str, version: str, *, timeout: float = 30
+) -> tuple[dict[str, str], str]:
+    # Use the canonical package name without relying on a redirect.
+    normalized_project = re.sub(r"[-_.]+", "-", project).lower()
     endpoint = (
-        f"https://pypi.org/pypi/{quote(project, safe='')}/"
+        f"https://pypi.org/pypi/{quote(normalized_project, safe='')}/"
         f"{quote(version, safe='')}/json"
     )
     request = Request(  # noqa: S310 - the endpoint has a fixed HTTPS PyPI host.
-        endpoint, headers={"Accept": "application/json"}
+        # Request revalidation; this is not a guarantee of immediate visibility.
+        endpoint,
+        headers={"Accept": "application/json", "Cache-Control": "no-cache"},
     )
     try:
         with urlopen(  # noqa: S310 - the request has a fixed HTTPS PyPI host.
-            request, timeout=30
+            request, timeout=timeout
         ) as response:
+            details = _response_details(response.status, response.headers)
+            print(f"PyPI query {endpoint}: {details}", file=sys.stderr)
             payload = response.read()
     except HTTPError as exc:
+        details = _response_details(exc.code, exc.headers)
+        exc.close()
+        print(f"PyPI query {endpoint}: {details}", file=sys.stderr)
         if exc.code == 404:
-            return {}
-        message = f"Could not query PyPI for {project} {version}: HTTP {exc.code}"
+            return {}, details
+        message = f"Could not query PyPI for {project} {version}: {details}"
         raise VerificationError(message) from exc
     except (OSError, URLError) as exc:
         message = f"Could not query PyPI for {project} {version}: {exc}"
@@ -125,7 +148,7 @@ def _remote_checksums(project: str, version: str) -> dict[str, str]:
             message = f"PyPI returned conflicting SHA-256 values for {filename}"
             raise VerificationError(message)
         checksums[filename] = normalized
-    return checksums
+    return checksums, details
 
 
 def verify_artifacts(
@@ -134,30 +157,71 @@ def verify_artifacts(
     dist_dir: Path,
     *,
     require_all: bool = False,
+    wait_seconds: float = 0,
 ) -> None:
-    """Verify matching PyPI files and optionally require every local artifact."""
-    local = _local_checksums(dist_dir)
-    remote = _remote_checksums(project, version)
+    """Verify hashes, optionally waiting for a complete public release file set.
 
-    unexpected = sorted(remote.keys() - local.keys())
-    if unexpected:
-        message = f"Unexpected PyPI artifacts: {', '.join(unexpected)}"
+    Only missing files may be polled. The monotonic deadline bounds polling and
+    result acceptance; urllib's socket timeout is not a total request deadline.
+    """
+    if not math.isfinite(wait_seconds) or wait_seconds < 0:
+        message = "wait_seconds must be a finite non-negative number"
         raise VerificationError(message)
+    if wait_seconds and not require_all:
+        message = "A visibility wait requires --require-all"
+        raise VerificationError(message)
+    local = _local_checksums(dist_dir)
+    deadline = monotonic() + wait_seconds if wait_seconds else None
+    missing = sorted(local)
+    details = "no response received"
+    while True:
+        remaining = 30.0 if deadline is None else deadline - monotonic()
+        if remaining <= 0:
+            break
+        remote, details = _remote_checksums(
+            project, version, timeout=min(30, remaining)
+        )
 
-    for filename, local_checksum in local.items():
-        remote_checksum = remote.get(filename)
-        if remote_checksum is not None and remote_checksum != local_checksum:
-            message = (
-                f"{filename} has PyPI SHA-256 {remote_checksum}, "
-                f"not local SHA-256 {local_checksum}"
-            )
+        unexpected = sorted(remote.keys() - local.keys())
+        if unexpected:
+            message = f"Unexpected PyPI artifacts: {', '.join(unexpected)}"
             raise VerificationError(message)
 
-    if require_all:
+        # Validate every visible file before considering a retry for missing ones.
+        for filename, local_checksum in local.items():
+            remote_checksum = remote.get(filename)
+            if remote_checksum is not None and remote_checksum != local_checksum:
+                message = (
+                    f"{filename} has PyPI SHA-256 {remote_checksum}, "
+                    f"not local SHA-256 {local_checksum}"
+                )
+                raise VerificationError(message)
+
         missing = sorted(local.keys() - remote.keys())
-        if missing:
+        if deadline is not None and monotonic() >= deadline:
+            break
+        if not require_all or not missing:
+            print(
+                f"Verified {len(remote)} PyPI artifacts for {project} {version}",
+                file=sys.stderr,
+            )
+            return
+        if deadline is None:
             message = f"Local artifacts missing from PyPI: {', '.join(missing)}"
             raise VerificationError(message)
+        print(
+            f"Waiting for PyPI visibility: {', '.join(missing)} ({details})",
+            file=sys.stderr,
+        )
+        sleep(min(5, max(0, deadline - monotonic())))
+
+    message = (
+        f"PyPI visibility deadline exceeded after {wait_seconds:g}s for "
+        f"{project} {version}; last response: {details}; "
+        f"Local artifacts missing from PyPI: {', '.join(missing) or 'none (response too late)'}. "
+        "Public availability was not verified in time; this does not establish an upload failure."
+    )
+    raise VerificationError(message)
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -166,6 +230,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("version")
     parser.add_argument("dist_dir", type=Path)
     parser.add_argument("--require-all", action="store_true")
+    parser.add_argument(
+        "--wait-seconds",
+        type=float,
+        default=0,
+        help="Poll missing files every 5s up to this visibility budget (requires --require-all)",
+    )
     return parser.parse_args(argv)
 
 
@@ -177,6 +247,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.version,
         args.dist_dir,
         require_all=args.require_all,
+        wait_seconds=args.wait_seconds,
     )
 
 
