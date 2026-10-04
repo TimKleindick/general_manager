@@ -91,6 +91,16 @@ durable cleanup lease and re-verifies moved inode/checksum identities, but
 portable POSIX filesystems have no atomic compare-and-unlink primitive. If
 another process can mutate that namespace, keep `DELETE_REPLACED_FILES=False`.
 
+Reserve `.gm-upload-*` names exclusively for GeneralManager. Local filesystem
+finalization writes a private sibling with that prefix before
+atomically linking the complete file to its final name. Concurrent retries never
+read a partially written final file, and an occupied final name is never
+overwritten. The filesystem must support hard links; publication failures return
+`UPLOAD_STORAGE_ERROR`. Private siblings are removed after publication or a
+write/publication error; a terminated process or a cleanup I/O failure can leave
+a sibling for offline cleanup. Custom filesystem storage must preserve these
+private names when saving; storage that rewrites them needs a custom adapter.
+
 `TERMINAL_RETENTION_SECONDS` is a minimum age, not permission to discard live
 download metadata. A `CONSUMED` intent is retained beyond that age for as long as
 the current model row still references its `final_key`; cleanup deletes it only

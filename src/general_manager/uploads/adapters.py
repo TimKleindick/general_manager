@@ -16,7 +16,7 @@ import time
 from types import MappingProxyType
 from typing import IO, ClassVar, Protocol, TypeVar, cast, runtime_checkable
 from urllib.parse import urlsplit, urlunsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from django.core.files import File
 from django.core.files.base import ContentFile
@@ -512,7 +512,7 @@ class ProxyUploadAdapter:
             if checksum != version.checksum_sha256 or size != version.size:
                 raise UploadStorageChangedError()
             raw.seek(0)
-            actual_key = self._storage_save(
+            actual_key = self._save_materialized(
                 final_key,
                 File(cast(BufferedIOBase, raw), name=final_key),
             )
@@ -526,6 +526,41 @@ class ProxyUploadAdapter:
                 )
         self._acquire_marker(completed_key, completed_identity)
         return final_key
+
+    def _save_materialized(self, key: str, content: File) -> str:
+        storage = self.storage
+        if not isinstance(storage, FileSystemStorage):
+            return self._storage_save(key, content)
+
+        # Exclusive creation reserves a name before Django writes its bytes.
+        # Publish a completed sibling inode instead so concurrent retries never
+        # checksum a partially written destination. link() cannot overwrite it.
+        temporary_key = os.path.join(os.path.dirname(key), f".gm-upload-{uuid4().hex}")
+        while self._storage_exists(temporary_key):
+            temporary_key = os.path.join(
+                os.path.dirname(key), f".gm-upload-{uuid4().hex}"
+            )
+        try:
+            saved_key = self._storage_save(temporary_key, content)
+        except UploadStorageError:
+            # This UUID name is private to this invocation in the reserved
+            # namespace. Django may have created it before a write/chmod error.
+            with suppress(UploadStorageError):
+                self._storage_delete(temporary_key)
+            raise
+        try:
+            os.link(storage.path(saved_key), storage.path(key))
+        except FileExistsError:
+            # The caller removes our private copy and verifies the winner.
+            return saved_key
+        except OSError as exc:
+            self._storage_delete(saved_key)
+            raise _exception(
+                UploadStorageError,
+                "The filesystem backend could not publish the completed object.",
+            ) from exc
+        self._storage_delete(saved_key)
+        return key
 
     def open_stage(self, stage_key: str, version: ObjectVersion) -> IO[bytes]:
         opened = self._storage_open(stage_key)
