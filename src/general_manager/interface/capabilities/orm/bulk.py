@@ -28,6 +28,9 @@ from simple_history.signals import (
     pre_create_historical_record,
 )
 
+from general_manager.interface.capabilities.core.observability import (
+    LoggingObservabilityCapability,
+)
 from general_manager.interface.capabilities.orm.mutations import (
     OrmCreateCapability,
     OrmMutationCapability,
@@ -266,6 +269,7 @@ def bulk_create_eligibility(manager: type["GeneralManager"]) -> BulkCreateEligib
         "orm_mutation": OrmMutationCapability,
         "validation": OrmValidationCapability,
         "orm_support": OrmPersistenceSupportCapability,
+        "observability": LoggingObservabilityCapability,
     }
     for name, expected in expected_handlers.items():
         if type(interface.get_capability_handler(cast(Any, name))) is not expected:

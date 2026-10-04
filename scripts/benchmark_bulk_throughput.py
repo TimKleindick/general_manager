@@ -1034,7 +1034,13 @@ def _run_isolated_pass(
             {
                 "type": "gm.throughput.refresh",
                 "cache_key": cache_key,
-                "identifiers": tuple(identifiers),
+                # Frozen baselines may expose the former scalar-ID callback API.
+                "identifiers": tuple(
+                    dict(identity)
+                    if isinstance(identity, Mapping)
+                    else {"id": identity}
+                    for identity in identifiers
+                ),
             },
         )
 
@@ -1049,12 +1055,12 @@ def _run_isolated_pass(
         if sender is not manager or action != "create":
             return
         values = identification or getattr(instance, "identification", {})
-        identifier = values.get("id") if isinstance(values, Mapping) else None
-        apply_cache_refresh(sender, (identifier,), action, database_alias)
+        identity = dict(values)
+        apply_cache_refresh(sender, (identity,), action, database_alias)
         from django.db import transaction
 
         transaction.on_commit(
-            lambda: publish_notification(sender, (identifier,), action, database_alias),
+            lambda: publish_notification(sender, (identity,), action, database_alias),
             using=database_alias,
         )
 

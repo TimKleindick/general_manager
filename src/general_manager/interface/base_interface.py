@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from abc import ABC
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import wraps
 import inspect
@@ -31,7 +31,11 @@ from general_manager.as_of import (
 )
 from general_manager.utils._args_to_kwargs import args_to_kwargs
 from general_manager.api.property import GraphQLProperty
-from general_manager.interface.capabilities.base import Capability, CapabilityName
+from general_manager.interface.capabilities.base import (
+    Capability,
+    CapabilityName,
+    CreateManyCapability,
+)
 from general_manager.interface.capabilities.configuration import (
     CapabilityConfigEntry,
     InterfaceCapabilityConfig,
@@ -42,6 +46,7 @@ from general_manager.interface.infrastructure.startup_hooks import register_star
 from general_manager.interface.infrastructure.system_checks import register_system_check
 
 if TYPE_CHECKING:
+    from general_manager.manager.bulk_create import CreateManyBatchResult
     from general_manager.manager.input import Input
     from general_manager.manager.general_manager import GeneralManager
     from general_manager.bucket.base_bucket import Bucket
@@ -333,7 +338,7 @@ class InterfaceBase(ABC):
         This method resets per-subclass capability registries and configuration to a clean default, merges configured capability overrides into the class's capability_overrides mapping, and clears the flag that marks configured capabilities as applied. Keyword arguments are forwarded to the superclass implementation.
         """
         super().__init_subclass__(**kwargs)
-        for mutation_name in ("create", "update", "delete"):
+        for mutation_name in ("create", "create_many", "update", "delete"):
             _guard_declared_mutation(cls, mutation_name)
         cls._input_parsing_plan = None
         cls._input_dependency_order = None
@@ -1161,6 +1166,50 @@ class InterfaceBase(ABC):
             payload={"args": args, "kwargs": kwargs},
             func=_invoke,
             observer=observer,
+        )
+
+    @classmethod
+    def create_many(
+        cls,
+        records: Iterable[Mapping[str, object]],
+        *,
+        manager_class: type[GeneralManager] | None = None,
+        creator_id: int | None = None,
+        history_comment: str | None = None,
+        ignore_permission: bool = False,
+        batch_size: int = 1000,
+    ) -> Iterator[CreateManyBatchResult]:
+        """Dispatch to an optional backend-owned batch capability.
+
+        Without a callable handler this raises CreateManyUnsupportedError before
+        touching records. The handler owns lazy iteration, atomicity, permission,
+        identity, lifecycle and observability guarantees; see CreateManyCapability.
+        A direct interface call uses its owning manager unless explicitly supplied.
+        """
+        from general_manager.manager.bulk_create import (
+            CreateManyInvalidBatchSizeError,
+            CreateManyUnsupportedError,
+        )
+
+        reject_historical_mutation()
+        if (
+            isinstance(batch_size, bool)
+            or not isinstance(batch_size, int)
+            or batch_size <= 0
+        ):
+            raise CreateManyInvalidBatchSizeError
+        handler = cls.get_capability_handler("create_many")
+        if not callable(getattr(handler, "create_many", None)):
+            raise CreateManyUnsupportedError.missing_capability(cls.__name__)
+        owner = manager_class if manager_class is not None else cls._parent_class
+        return cast(CreateManyCapability, handler).create_many(
+            cls,
+            records,
+            manager_class=owner,
+            creator_id=creator_id,
+            history_comment=history_comment,
+            ignore_permission=ignore_permission,
+            batch_size=batch_size,
         )
 
     def update(self, *args: object, **kwargs: object) -> object:

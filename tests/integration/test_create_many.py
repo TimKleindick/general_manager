@@ -193,7 +193,7 @@ class CreateManyIntegrationTests(GeneralManagerTransactionTestCase):
             with self.subTest(exception_type=exception_type):
                 name = f"committed-{exception_type.__name__}"
                 with patch(
-                    "general_manager.manager.general_manager._flush_create_many_notifications",
+                    "general_manager.interface.capabilities.orm.create_many._flush_create_many_notifications",
                     side_effect=exception_type,
                 ):
                     with self.assertRaises(exception_type):

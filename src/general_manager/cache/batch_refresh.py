@@ -7,8 +7,10 @@ having to disconnect framework receivers in order to make an import efficient.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 from weakref import WeakSet
 
@@ -22,7 +24,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 BatchRefreshCallback = Callable[
-    [type["GeneralManager"], tuple[object, ...], str, str], None
+    [type["GeneralManager"], tuple[Mapping[str, object], ...], str, str], None
 ]
 _registered_receivers: WeakSet[Callable[..., None]] = WeakSet()
 
@@ -53,12 +55,14 @@ def connect_batch_refresh_receiver(
     ``create_many`` batch until its transaction is durable.  A bulk SQL batch
     records all identifiers and invokes a registered callback once; canonical
     row-by-row batches deliberately retain their ordinary per-row timing.
+    Identifications are full, read-only mapping snapshots, including composite
+    keys. Missing identification mappings are rejected instead of losing keys.
     """
 
     def receiver(
         sender: type["GeneralManager"],
         *,
-        identification: dict[str, object] | None = None,
+        identification: Mapping[str, object] | None = None,
         instance: object | None = None,
         action: str | None = None,
         database_alias: str = "default",
@@ -72,14 +76,13 @@ def connect_batch_refresh_receiver(
         identification_value = identification
         if identification_value is None and instance is not None:
             identification_value = getattr(instance, "identification", None)
-        identifier = (
-            identification_value.get("id")
-            if isinstance(identification_value, dict)
-            else None
-        )
+        if not isinstance(identification_value, Mapping):
+            message = "Batch refresh requires an identification mapping."
+            raise TypeError(message)
+        identification_snapshot = MappingProxyType(deepcopy(dict(identification_value)))
 
         def invoke() -> None:
-            callback(sender, (identifier,), action, database_alias)
+            callback(sender, (identification_snapshot,), action, database_alias)
 
         # The SQL path has already performed the publication barrier and asks
         # us to aggregate.  Canonical batches keep their legacy receiver timing.
@@ -91,7 +94,7 @@ def connect_batch_refresh_receiver(
             registration = batch.batch_refresh_callbacks.setdefault(
                 id(receiver), (callback, on_commit, action, [])
             )
-            registration[3].append(identifier)
+            registration[3].append(identification_snapshot)
             return
 
         if on_commit:
@@ -115,7 +118,7 @@ def flush_batch_refresh_callbacks(context: "CreateManyBatchContext") -> None:
 
         def invoke(
             callback: BatchRefreshCallback = callback,
-            frozen_ids: tuple[object, ...] = frozen_ids,
+            frozen_ids: tuple[Mapping[str, object], ...] = frozen_ids,
             action: str = action,
         ) -> None:
             callback(sender, frozen_ids, action, database_alias)

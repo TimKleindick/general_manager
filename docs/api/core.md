@@ -44,12 +44,14 @@ The [ORM transaction guide](../howto/orm_atomic_writes.md) shows the pattern.
 
 `GeneralManager.create_many(records, *, creator_id=None, history_comment=None,
 ignore_permission=False, batch_size=1000)` returns an iterator of
-`CreateManyBatchResult` values for writable ORM-backed managers. Iteration writes
+`CreateManyBatchResult` values through the interface's optional `create_many`
+capability. Built-in support is provided by writable ORM-backed managers. Their iteration writes
 one atomic batch at a time through the canonical create path or an explicitly
 eligible bulk SQL path. It never eagerly
 collects the entire input. Results contain `start_index`, exclusive `end_index`,
-`ids` (a tuple), cumulative `successful_count`, `committed_successful_count`,
+`ids` (a tuple of backend-defined identifiers; ORM primary keys by default), cumulative `successful_count`, `committed_successful_count`,
 `pending_successful_count`, `database_alias`, and `committed`.
+`database_alias` is `None` for a custom backend without a Django transaction.
 `input_range` returns the half-open range; `durable` aliases `committed`. Results
 inside a caller-owned transaction remain provisional until that transaction
 commits. See the [bulk creation guide](../howto/create_many.md) for supported
@@ -63,7 +65,8 @@ application-owned cache/refresh callback and returns a `BatchRefreshDisconnect`
 handle. By default callbacks run inside the mutation transaction; use
 `on_commit=True` for external I/O so dispatch waits for the outermost transaction
 on the mutation's database alias and is discarded on rollback. An eligible SQL
-batch invokes the callback once with all identifiers; canonical row-by-row
+batch invokes the callback once with a tuple of complete, copied, read-only
+identification mappings (including composite keys); canonical row-by-row
 creation retains per-row callbacks. These helpers are exported from `general_manager`; the refresh helper
 and its handle are also available from `general_manager.cache`.
 

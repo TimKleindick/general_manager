@@ -483,7 +483,14 @@ class BulkSqlAcceptanceIntegrationTests(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(
             calls,
-            [(self.Item, sql_results[0].ids, "create", "default")],
+            [
+                (
+                    self.Item,
+                    tuple({"id": pk} for pk in sql_results[0].ids),
+                    "create",
+                    "default",
+                )
+            ],
         )
 
         handle.disconnect()
@@ -504,7 +511,10 @@ class BulkSqlAcceptanceIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertFalse(bulk_create_eligibility(self.CanonicalItem).eligible)
         self.assertEqual(
             canonical_calls,
-            [(canonical_results[0].ids[0],), (canonical_results[0].ids[1],)],
+            [
+                ({"id": canonical_results[0].ids[0]},),
+                ({"id": canonical_results[0].ids[1]},),
+            ],
         )
 
     def test_refresh_callback_observes_fresh_cache_and_disconnects(self) -> None:
@@ -531,7 +541,7 @@ class BulkSqlAcceptanceIntegrationTests(GeneralManagerTransactionTestCase):
                 ignore_permission=True,
             )
         )
-        self.assertEqual(calls, [(result[0].ids, 3, 3)])
+        self.assertEqual(calls, [(tuple({"id": pk} for pk in result[0].ids), 3, 3)])
         handle.disconnect()
         list(
             self.Item.create_many(
@@ -820,13 +830,15 @@ class BulkSqlAcceptanceIntegrationTests(GeneralManagerTransactionTestCase):
                     )
                 )
 
-        self.assertEqual(refresh_calls, [(results[0].ids[0],), (results[1].ids[0],)])
+        self.assertEqual(
+            refresh_calls, [({"id": results[0].ids[0]},), ({"id": results[1].ids[0]},)]
+        )
         self.assertEqual(len(nested_refresh_calls), 1)
         self.assertEqual(nested_callback_counts, [3])
         self.assertEqual(callback_counts, [2, 3])
         self.assertEqual(
             external_refresh_calls,
-            [(results[0].ids[0],), (results[1].ids[0],)],
+            [({"id": results[0].ids[0]},), ({"id": results[1].ids[0]},)],
         )
         self.assertEqual(self.ItemModel.objects.count(), 3)
         self.assertFalse(
@@ -835,7 +847,7 @@ class BulkSqlAcceptanceIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertEqual(len(publish_calls), 2)
         self.assertEqual(
             {call[2]["id"] for call in publish_calls},
-            set(refresh_calls[0] + refresh_calls[1]),
+            {identity["id"] for identity in refresh_calls[0] + refresh_calls[1]},
         )
         self.assertEqual(len(events), 2)
         self.assertEqual(
@@ -947,17 +959,19 @@ class BulkSqlAcceptanceIntegrationTests(GeneralManagerTransactionTestCase):
                         )
                     )
 
-        self.assertEqual(refresh_calls, [(results[0].ids[0],), (results[1].ids[0],)])
+        self.assertEqual(
+            refresh_calls, [({"id": results[0].ids[0]},), ({"id": results[1].ids[0]},)]
+        )
         self.assertEqual(len(nested_refresh_calls), 2)
         self.assertEqual(
-            set(nested_refresh_calls),
-            {(nested_ids[0],), (nested_ids[1],)},
+            {identity["id"] for call in nested_refresh_calls for identity in call},
+            set(nested_ids),
         )
         self.assertEqual(nested_callback_counts, [3, 4])
         self.assertEqual(callback_counts, [2, 3])
         self.assertEqual(
             external_refresh_calls,
-            [(results[0].ids[0],), (results[1].ids[0],)],
+            [({"id": results[0].ids[0]},), ({"id": results[1].ids[0]},)],
         )
         self.assertEqual(self.ItemModel.objects.count(), 3)
         self.assertFalse(
@@ -974,7 +988,7 @@ class BulkSqlAcceptanceIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertEqual(len(publish_calls), 2)
         self.assertEqual(
             {call[2]["id"] for call in publish_calls},
-            set(refresh_calls[0] + refresh_calls[1]),
+            {identity["id"] for identity in refresh_calls[0] + refresh_calls[1]},
         )
         self.assertEqual(len(events), 2)
         self.assertEqual(
