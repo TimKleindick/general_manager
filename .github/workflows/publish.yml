@@ -299,9 +299,11 @@ jobs:
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
 
       - id: verify_pypi_after
-        name: Verify every published PyPI artifact hash
+        name: Verify public PyPI availability and artifact hashes
+        timeout-minutes: 2
         env:
           EXPECTED_VERSION: ${{ needs.artifact.outputs.version }}
         run: >-
           python scripts/verify_pypi_artifacts.py
           GeneralManager "$EXPECTED_VERSION" validated-dist --require-all
+          --wait-seconds 60

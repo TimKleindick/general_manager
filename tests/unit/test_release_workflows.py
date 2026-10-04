@@ -683,7 +683,10 @@ fi"""
     assert str(post_upload["run"]).strip() == (
         "python scripts/verify_pypi_artifacts.py "
         'GeneralManager "$EXPECTED_VERSION" validated-dist --require-all'
+        " --wait-seconds 60"
     )
+    assert post_upload["timeout-minutes"] == "2"
+    assert not post_upload.get("continue-on-error", False)
     assert "twine upload dist/*" not in commands
     assert "semantic-release changelog" not in commands
     assert "git describe --tags" not in commands
