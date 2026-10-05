@@ -69,6 +69,16 @@ and then deletes under this explicit exclusivity contract. Deployments that
 cannot reserve the namespace must leave `DELETE_REPLACED_FILES=False` or provide
 a custom adapter with an atomic exact-delete primitive.
 
+For the built-in local filesystem finalization path, also reserve
+`.gm-upload-*` names for GeneralManager. It writes a private sibling, then
+hard-links the completed inode to the final key, so concurrent retries never
+observe a partially written final file and an occupied final key is never
+overwritten. The filesystem must support hard links; publication failures are
+reported as `UPLOAD_STORAGE_ERROR`. Private siblings are cleaned after
+publication or a write/publication error, but a terminated process or cleanup
+I/O failure can leave one for offline cleanup. Custom filesystem storage must
+preserve these private names when saving or use a custom adapter.
+
 If another update or deletion wins before finalization completes, reconciliation
 marks the intent `SUPERSEDED` and removes only objects it can prove belong to
 that intent. A replacement also invalidates previously issued local download

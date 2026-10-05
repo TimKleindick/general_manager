@@ -38,6 +38,27 @@ can therefore cause a one-time cold cache, especially for historical entries;
 allow normal traffic or re-register warm-up recipes through the configured
 warm-up jobs to repopulate it.
 
+## Batch refresh receivers
+
+`connect_batch_refresh_receiver(callback: BatchRefreshCallback, *,
+on_commit=False) -> BatchRefreshDisconnect` registers an application-owned
+refresh callback for `create`, `update`, and `delete` notifications. The
+callback has the signature
+`(sender: type[GeneralManager], identifications: tuple[Mapping[str, object], ...],
+action: str, database_alias: str) -> None`. Registration returns an immutable
+`BatchRefreshDisconnect` handle; calling `disconnect()` (or calling the handle)
+removes only that registration and returns `None`.
+
+Each identification is a deep-copied, read-only mapping snapshot. Missing or
+non-mapping identification data raises `TypeError` when the receiver is invoked.
+Eligible SQL `create_many()` batches invoke a registered callback once with all
+identifications in input order; ordinary mutations and canonical row-by-row
+batches retain per-record timing. With `on_commit=True`, invocation is deferred
+to the owning transaction's commit and discarded on rollback. Callback failures
+follow the timing contract: they propagate during immediate dispatch or through
+the existing post-commit error path. This is a cache/refresh notification only;
+it does not replace audit history or per-record workflow events.
+
 ::: general_manager.cache.cache_decorator.cached
 
 ::: general_manager.cache.cache_decorator.UnsupportedDependencyCacheBackendError

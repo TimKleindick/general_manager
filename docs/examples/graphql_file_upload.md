@@ -147,3 +147,9 @@ limit without considering client memory.
 See the [concept page](../concepts/graphql/file_uploads.md), the
 [S3 task guide](../howto/graphql_file_uploads_s3.md), and the
 [API reference](../api/graphql.md#file-uploads).
+
+For local filesystem deployments, reserve both `gm-upload-old-claims/` and
+`.gm-upload-*` names for GeneralManager and use a filesystem that supports hard
+links. The [local-storage guide](../howto/graphql_file_uploads.md) explains the
+cleanup and publication guarantees; a custom storage backend must preserve
+private sibling names or provide its own adapter contract.

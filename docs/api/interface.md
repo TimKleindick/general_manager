@@ -85,6 +85,17 @@ the capability-level result mapping, while `update()`, `delete()`, and
 return `Bucket` instances from `filter()`, `exclude()`, and `all()`; manager
 classes preserve or narrow those bucket types. Missing capabilities raise
 `NotImplementedError`.
+`create_many(records, *, manager_class=None, creator_id=None,
+history_comment=None, ignore_permission=False, batch_size=1000)` resolves the
+optional `create_many` capability and returns a lazy
+`Iterator[CreateManyBatchResult]`. It rejects historical mutation and invalid
+batch sizes before consuming `records`; a missing or non-callable handler raises
+`CreateManyUnsupportedError` before consumption. Direct interface calls use the
+owning manager when `manager_class` is omitted. A handler must provide bounded,
+atomic batches, accurate committed/provisional progress, complete backend
+identifiers, and the documented `CreateManyError`/
+`CreateManyPostCommitError` distinction; backends without that contract must
+reject the operation rather than silently fall back to non-atomic writes.
 `get_attribute_types()` and `get_attributes()` require a read capability and do
 not synthesize fallbacks from `input_fields`; `get_field_type()` delegates to the
 read capability when present and otherwise falls back only to declared inputs.
@@ -250,6 +261,8 @@ interface is bound to a parent manager can raise `AttributeError`.
 ::: general_manager.interface.capabilities.base.CapabilityName
 
 ::: general_manager.interface.capabilities.base.Capability
+
+::: general_manager.interface.capabilities.base.CreateManyCapability
 
 ::: general_manager.interface.capabilities.builtin.BaseCapability
 

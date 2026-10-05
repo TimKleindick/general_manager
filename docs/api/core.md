@@ -55,11 +55,15 @@ collects the entire input. Results contain `start_index`, exclusive `end_index`,
 `input_range` returns the half-open range; `durable` aliases `committed`. Results
 inside a caller-owned transaction remain provisional until that transaction
 commits. See the [bulk creation guide](../howto/create_many.md) for supported
-combinations, memory bounds, error handling, and transaction semantics.
+combinations, memory bounds, error handling, and transaction semantics. The
+direct `InterfaceBase.create_many()` entry point and its replaceable capability
+contract are documented in the [Interface API reference](interface.md).
 
-`bulk_create_eligibility(ManagerClass)` returns a `BulkCreateEligibility` snapshot
-with `eligible` and fallback `reasons`. SQL batching requires explicit manager
-`BulkCreate` declarations and compatible validation, models, and receivers.
+`bulk_create_eligibility(manager_class: type[GeneralManager])` returns an
+immutable `BulkCreateEligibility(eligible: bool, reasons: tuple[str, ...])`
+snapshot without consuming records. SQL batching requires explicit manager
+`BulkCreate` declarations and compatible validation, models, and receivers;
+ineligible managers retain canonical persistence.
 `connect_batch_refresh_receiver(callback, on_commit=False)` registers an
 application-owned cache/refresh callback and returns a `BatchRefreshDisconnect`
 handle. By default callbacks run inside the mutation transaction; use
