@@ -478,6 +478,16 @@ class GroupManagerCombineValueTests(TestCase):
         gm = self.helper_make_group_manager([True, False], bool)
         self.assertTrue(gm.combine_value("field"))
 
+    def test_combine_nullable_bools_ignores_nulls_and_preserves_all_null(self):
+        for values, expected in (
+            ([None, False, True], True),
+            ([None, False], False),
+            ([None, None], None),
+        ):
+            with self.subTest(values=values):
+                gm = self.helper_make_group_manager(values, bool | None)
+                self.assertIs(gm.field, expected)
+
     def test_combine_dates_max(self):
         dates = [date(2020, 1, 1), date(2021, 1, 1)]
         gm = self.helper_make_group_manager(dates, date)

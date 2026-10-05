@@ -452,7 +452,9 @@ exposes grouping keys and eligible aggregate fields directly. Numeric fields
 `targetUnit: String` argument and existing conversion behavior. Text fields
 return a nullable `String` made by excluding null member values, deduplicating remaining values
 in encounter order, and joining them with `", "`. An all-null text field
-returns null. The Python `GroupManager.sum(field)` method remains numeric-only.
+returns null. Nullable `Boolean` fields use `any()` over non-null member values;
+an all-null Boolean field returns `null`. The Python `GroupManager.sum(field)`
+method remains numeric-only.
 Entity `id` values are null unless selected as grouping keys. Singular manager
 relations and bucket collections expose distinct original related managers
 through nested `…List` and `…Groups` pages, each with independent query controls.
