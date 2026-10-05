@@ -536,9 +536,11 @@ final key. It never overwrites an occupied final key, and concurrent retries do
 not read a partially written final file. The filesystem must support hard links.
 An occupied final key with different content raises `UploadTransferConflictError`
 (`UPLOAD_TRANSFER_CONFLICT`); other filesystem publication errors raise
-`UploadStorageError` and cross the GraphQL/HTTP boundary as
-`UPLOAD_STORAGE_ERROR`. Custom filesystem storage must preserve private sibling
-names; storage that rewrites them requires a custom adapter.
+`UploadStorageError` (`UPLOAD_STORAGE_ERROR`). During post-commit finalization,
+these error codes are recorded in `finalization_error_code`, and clients observe
+`StoredFile.status` as `FAILED`. They do not propagate as GraphQL/HTTP error
+responses for the committed mutation. Custom filesystem storage must preserve
+private sibling names; storage that rewrites them requires a custom adapter.
 
 ::: general_manager.uploads.config.FileUploadPolicy
 

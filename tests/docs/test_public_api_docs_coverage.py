@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from importlib import import_module
+from inspect import signature
 from pathlib import Path
 
 
@@ -110,6 +111,22 @@ def test_every_public_export_is_mentioned_in_documentation() -> None:
             missing[module_name] = missing_names
 
     assert missing == {}
+
+
+def test_bulk_create_eligibility_documented_parameter_accepts_keyword_calls() -> None:
+    from general_manager import GeneralManager, bulk_create_eligibility
+
+    reference = (DOCS_ROOT / "api" / "core.md").read_text(encoding="utf-8")
+    documented_signature = re.search(
+        r"`bulk_create_eligibility\((\w+): type\[GeneralManager\]\)`", reference
+    )
+    assert documented_signature is not None
+    arguments = {documented_signature.group(1): GeneralManager}
+
+    signature(bulk_create_eligibility).bind(**arguments)
+    assert bulk_create_eligibility(**arguments) == bulk_create_eligibility(
+        GeneralManager
+    )
 
 
 def test_file_upload_docs_are_navigable_and_cover_every_setting() -> None:

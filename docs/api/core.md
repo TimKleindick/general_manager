@@ -59,16 +59,17 @@ combinations, memory bounds, error handling, and transaction semantics. The
 direct `InterfaceBase.create_many()` entry point and its replaceable capability
 contract are documented in the [Interface API reference](interface.md).
 
-`bulk_create_eligibility(manager_class: type[GeneralManager])` returns an
+`bulk_create_eligibility(manager: type[GeneralManager])` returns an
 immutable `BulkCreateEligibility(eligible: bool, reasons: tuple[str, ...])`
 snapshot without consuming records. SQL batching requires explicit manager
 `BulkCreate` declarations and compatible validation, models, and receivers;
 ineligible managers retain canonical persistence.
 `connect_batch_refresh_receiver(callback, on_commit=False)` registers an
 application-owned cache/refresh callback and returns a `BatchRefreshDisconnect`
-handle. By default callbacks run inside the mutation transaction; use
-`on_commit=True` for external I/O so dispatch waits for the outermost transaction
-on the mutation's database alias and is discarded on rollback. An eligible SQL
+handle. By default callbacks run during mutation dispatch. With
+`on_commit=True`, dispatch waits for the outermost active transaction on the
+mutation's database alias and is discarded on rollback. With no active
+transaction and autocommit enabled, dispatch is immediate. An eligible SQL
 batch invokes the callback once with a tuple of complete, copied, read-only
 identification mappings (including composite keys); canonical row-by-row
 creation retains per-row callbacks. These helpers are exported from `general_manager`; the refresh helper
