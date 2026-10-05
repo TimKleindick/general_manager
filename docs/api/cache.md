@@ -54,7 +54,10 @@ non-mapping identification data raises `TypeError` when the receiver is invoked.
 Eligible SQL `create_many()` batches invoke a registered callback once with all
 identifications in input order; ordinary mutations and canonical row-by-row
 batches retain per-record timing. With `on_commit=True`, invocation is deferred
-to the owning transaction's commit and discarded on rollback. Callback failures
+to the owning transaction's commit when a transaction is active and discarded on
+rollback. If no transaction is active and autocommit is enabled, it runs
+immediately and cannot be discarded by a rollback. Django raises an error if
+autocommit is disabled outside an `atomic()` block. Callback failures
 follow the timing contract: they propagate during immediate dispatch or through
 the existing post-commit error path. This is a cache/refresh notification only;
 it does not replace audit history or per-record workflow events.

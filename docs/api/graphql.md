@@ -533,10 +533,12 @@ an adapter with a backend-native atomic exact-delete operation.
 The built-in `FileSystemStorage` materialization path reserves `.gm-upload-*`
 names, writes a private sibling completely, and hard-links that inode to the
 final key. It never overwrites an occupied final key, and concurrent retries do
-not read a partially written final file. The filesystem must support hard links;
-publication failures raise `UploadStorageError` and cross the GraphQL/HTTP
-boundary as `UPLOAD_STORAGE_ERROR`. Custom filesystem storage must preserve
-private sibling names; storage that rewrites them requires a custom adapter.
+not read a partially written final file. The filesystem must support hard links.
+An occupied final key with different content raises `UploadTransferConflictError`
+(`UPLOAD_TRANSFER_CONFLICT`); other filesystem publication errors raise
+`UploadStorageError` and cross the GraphQL/HTTP boundary as
+`UPLOAD_STORAGE_ERROR`. Custom filesystem storage must preserve private sibling
+names; storage that rewrites them requires a custom adapter.
 
 ::: general_manager.uploads.config.FileUploadPolicy
 
