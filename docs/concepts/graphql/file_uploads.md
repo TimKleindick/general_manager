@@ -73,8 +73,10 @@ For the built-in local filesystem finalization path, also reserve
 `.gm-upload-*` names for GeneralManager. It writes a private sibling, then
 hard-links the completed inode to the final key, so concurrent retries never
 observe a partially written final file and an occupied final key is never
-overwritten. The filesystem must support hard links; publication failures are
-reported as `UPLOAD_STORAGE_ERROR`. Private siblings are cleaned after
+overwritten. The filesystem must support hard links. An occupied final key with
+different content raises `UploadTransferConflictError`
+(`UPLOAD_TRANSFER_CONFLICT`); other filesystem publication errors raise
+`UploadStorageError` (`UPLOAD_STORAGE_ERROR`). Private siblings are cleaned after
 publication or a write/publication error, but a terminated process or cleanup
 I/O failure can leave one for offline cleanup. Custom filesystem storage must
 preserve these private names when saving or use a custom adapter.
