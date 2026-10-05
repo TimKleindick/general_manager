@@ -97,25 +97,30 @@ for the full grouping and error contract.
 
 ## Aggregate unique text values in groups
 
-Generated group fields can return a text field under `sums` as a compact,
-stable summary:
+Generated group fields can return a text field directly under `items` as a
+compact, stable summary:
 
 ```graphql
 query ProjectNamesByStatus {
-  projectGroups(groupBy: ["status"]) {
-    groups {
-      keys { status }
-      count
-      sums { name }
+  projectGroups(
+    groupBy: ["status"]
+    orderBy: [{field: name, direction: ASC}]
+  ) {
+    items {
+      status
+      name
     }
+    pageInfo { totalCount }
   }
 }
 ```
 
-For member values `["Alpha", "Alpha", "Beta", null]`, the `name` sum is
+For member values `["Alpha", "Alpha", "Beta", null]`, the `name` aggregate is
 `"Alpha, Beta"`. Values are deduplicated in encounter order, nulls are
 excluded, and an all-null group returns `null`. Numeric sums retain their
-existing addition behavior. See the [grouping concept](../concepts/graphql/filters_pagination.md#grouping),
+existing addition behavior. `orderBy` sorts the aggregated `name` values even
+though `name` is not selected in `groupBy`; `totalCount` counts groups. See the
+[grouping concept](../concepts/graphql/filters_pagination.md#grouping),
 [GraphQL how-to](../howto/expose_via_graphql.md#query-generated-lists), and
 [GraphQL API reference](../api/graphql.md#explicit-grouped-result-sums) for
 permissions, arguments, and compatibility details.
