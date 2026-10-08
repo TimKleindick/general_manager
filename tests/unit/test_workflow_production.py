@@ -6,7 +6,8 @@ from unittest.mock import patch
 import pytest
 from django.conf import settings
 from django.core.management import call_command
-from django.test import TestCase, override_settings
+from django.db import transaction
+from django.test import TestCase, TransactionTestCase, override_settings
 
 from general_manager.workflow.backends.celery import CeleryWorkflowEngine
 from general_manager.workflow.engine import (
@@ -43,6 +44,123 @@ def _handler(payload: dict[str, object]) -> dict[str, object]:
 
 
 NON_CALLABLE_HANDLER = object()
+
+
+@override_settings(
+    GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}
+)
+class WorkflowProductionEngineTransactionTests(TransactionTestCase):
+    def test_async_start_captures_input_before_outer_commit(self) -> None:
+        engine = CeleryWorkflowEngine()
+        workflow = WorkflowDefinition(
+            workflow_id="wf-input-snapshot", metadata={"handler_path": "builtins.dict"}
+        )
+        payload: dict[str, object] = {"value": 1, "removed": True}
+        expected = dict(payload)
+
+        with patch(
+            "general_manager.workflow.backends.celery.execute_workflow_handler.delay"
+        ) as delay:
+            with transaction.atomic():
+                execution = engine.start(workflow, payload)
+                assert execution.state == "pending"
+                assert execution.input_data == expected
+                delay.assert_not_called()
+
+                payload["value"] = 2
+                payload["added"] = True
+                del payload["removed"]
+                assert engine.status(execution.execution_id).input_data == expected
+                delay.assert_not_called()
+
+            delay.assert_called_once()
+            execution_id, handler_path, task_payload = delay.call_args.args
+
+        execute_workflow_handler.run(execution_id, handler_path, task_payload)
+        stored = engine.status(execution.execution_id)
+        assert stored.state == "completed"
+        assert stored.input_data == expected
+        assert stored.output_data == expected
+        assert task_payload == expected
+
+    def test_async_starts_capture_separate_inputs_from_same_mapping(self) -> None:
+        engine = CeleryWorkflowEngine()
+        workflow = WorkflowDefinition(
+            workflow_id="wf-separate-inputs", metadata={"handler_path": "builtins.dict"}
+        )
+        payload: dict[str, object] = {"value": 1}
+
+        with patch(
+            "general_manager.workflow.backends.celery.execute_workflow_handler.delay"
+        ) as delay:
+            with transaction.atomic():
+                first = engine.start(workflow, payload)
+                payload["value"] = 2
+                second = engine.start(workflow, payload)
+                payload["value"] = 3
+                delay.assert_not_called()
+
+            assert delay.call_count == 2
+            published = [call.args for call in delay.call_args_list]
+
+        for execution_id, handler_path, task_payload in published:
+            execute_workflow_handler.run(execution_id, handler_path, task_payload)
+        first_stored = engine.status(first.execution_id)
+        second_stored = engine.status(second.execution_id)
+        assert first_stored.input_data == first_stored.output_data == {"value": 1}
+        assert second_stored.input_data == second_stored.output_data == {"value": 2}
+
+    def test_async_start_does_not_publish_after_outer_rollback(self) -> None:
+        engine = CeleryWorkflowEngine()
+        workflow = WorkflowDefinition(
+            workflow_id="wf-input-rollback", metadata={"handler_path": "builtins.dict"}
+        )
+        payload: dict[str, object] = {"value": 1}
+
+        with patch(
+            "general_manager.workflow.backends.celery.execute_workflow_handler.delay"
+        ) as delay:
+            with transaction.atomic():
+                execution = engine.start(workflow, payload)
+                payload["value"] = 2
+                delay.assert_not_called()
+                transaction.set_rollback(True)
+
+            delay.assert_not_called()
+
+        assert not WorkflowExecutionRecord.objects.filter(
+            execution_id=execution.execution_id
+        ).exists()
+
+    def test_async_start_drops_dispatch_for_rolled_back_savepoint(self) -> None:
+        engine = CeleryWorkflowEngine()
+        workflow = WorkflowDefinition(
+            workflow_id="wf-savepoint-input", metadata={"handler_path": "builtins.dict"}
+        )
+        payload: dict[str, object] = {"value": 1}
+
+        with patch(
+            "general_manager.workflow.backends.celery.execute_workflow_handler.delay"
+        ) as delay:
+            with transaction.atomic():
+                kept = engine.start(workflow, payload)
+                with transaction.atomic():
+                    payload["value"] = 2
+                    rolled_back = engine.start(workflow, payload)
+                    transaction.set_rollback(True)
+                payload["value"] = 3
+                delay.assert_not_called()
+                assert not WorkflowExecutionRecord.objects.filter(
+                    execution_id=rolled_back.execution_id
+                ).exists()
+
+            delay.assert_called_once()
+            execution_id, handler_path, task_payload = delay.call_args.args
+
+        assert execution_id == kept.execution_id
+        execute_workflow_handler.run(execution_id, handler_path, task_payload)
+        stored = engine.status(kept.execution_id)
+        assert stored.input_data == stored.output_data == {"value": 1}
 
 
 class WorkflowProductionRegistryTests(TestCase):
