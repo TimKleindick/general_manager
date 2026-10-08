@@ -1,7 +1,5 @@
-"""Independent GraphQL schema inspection checks against frozen v27."""
+"""Regression checks for non-contract GraphQL metadata."""
 
-import importlib.util
-from pathlib import Path
 from threading import RLock
 from types import SimpleNamespace
 
@@ -9,6 +7,7 @@ import pytest
 from graphql import assert_valid_schema, build_schema, graphql_sync
 
 from general_manager.api.graphql import GraphQL
+from general_manager.chat.graphql_contract import manager_schema
 from general_manager.chat.schema_inspection import (
     inspect_manager_schema,
     SchemaInspectionError,
@@ -16,18 +15,6 @@ from general_manager.chat.schema_inspection import (
 from tests.unit.test_schema_inspection import exposed_schema as _exposed_schema
 
 exposed_schema = _exposed_schema
-
-
-def baseline_contract():
-    path = Path(
-        "/Users/tim/Documents/Codex/2026-10-03/task-4/verification/v26-working-source/src/general_manager/chat/graphql_contract.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "reviewer_baseline_v26_contract", path
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 @pytest.mark.parametrize("metadata_location", ["schema", "hidden_type"])
@@ -45,10 +32,9 @@ def test_non_contract_metadata_must_not_break_schema_capture(
         root_value={"partList": {"items": [{"code": "P01"}]}},
     )
     assert execution.errors is None
-    baseline = baseline_contract().manager_schema("Part")
-    assert baseline["types"]["Part"]["fields"]["code"]["type"] == "String!"
-    assert "Other" not in baseline["types"]
-    print("VALID_EXECUTABLE_SCHEMA_AND_V26_INSPECTION_PASS", metadata_location)
+    full = manager_schema("Part")
+    assert full["types"]["Part"]["fields"]["code"]["type"] == "String!"
+    assert "Other" not in full["types"]
     observed = inspect_manager_schema("Part")
     assert observed["schema_view"] == "overview"
     assert observed["output_fields"]["code"]["type"] == "String!"
