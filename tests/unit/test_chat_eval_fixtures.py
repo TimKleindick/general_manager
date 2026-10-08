@@ -33,7 +33,7 @@ def test_toy_fixture_supports_numeric_filter_pagination_and_total_count() -> Non
 
     result = query(
         manager="MaterialManager",
-        filters={"density__gt": 7},
+        filters={"density_Gt": 7},
         fields=["name", "density"],
         limit=1,
     )
@@ -42,6 +42,7 @@ def test_toy_fixture_supports_numeric_filter_pagination_and_total_count() -> Non
         "data": [{"name": "Steel", "density": 7.8}],
         "total_count": 2,
         "has_more": True,
+        "complete": False,
     }
 
 
@@ -50,12 +51,12 @@ def test_toy_fixture_supports_nested_relation_filters_and_paths() -> None:
 
     parts = query(
         manager="PartManager",
-        filters={"material__name__icontains": "alu"},
+        filters={"material_Name_Icontains": "alu"},
         fields=["name", {"material": ["name"]}],
     )
     projects = query(
         manager="ProjectManager",
-        filters={"parts__material__name__icontains": "cob"},
+        filters={"parts_Material_Name_Icontains": "cob"},
         fields=["name", {"parts": ["name", {"material": ["name"]}]}],
     )
     path = execute_chat_tool(
@@ -81,11 +82,11 @@ def test_toy_fixture_returns_empty_page_for_unmatched_exact_filter() -> None:
 
     result = query(
         manager="ProjectManager",
-        filters={"parts__name": "Bolt"},
+        filters={"parts_Name": "Bolt"},
         fields=["name"],
     )
 
-    assert result == {"data": [], "total_count": 0, "has_more": False}
+    assert result == {"data": [], "total_count": 0, "has_more": False, "complete": True}
 
 
 def test_large_fixture_rejects_non_positive_manager_count() -> None:
@@ -144,7 +145,7 @@ def test_large_fixture_supports_chained_query_and_path_lookup() -> None:
             "pageInfo": {"totalCount": 1},
         }
     }
-    assert path == ["next_item", "next_item"]
+    assert path == ["nextItem", "nextItem"]
 
 
 def test_large_fixture_clamps_chain_length_to_manager_count() -> None:
@@ -164,5 +165,5 @@ def test_large_fixture_clamps_chain_length_to_manager_count() -> None:
         None,
     )
 
-    assert result == {"data": [], "total_count": 0, "has_more": False}
-    assert path == ["next_item", "next_item"]
+    assert result == {"data": [], "total_count": 0, "has_more": False, "complete": True}
+    assert path == ["nextItem", "nextItem"]

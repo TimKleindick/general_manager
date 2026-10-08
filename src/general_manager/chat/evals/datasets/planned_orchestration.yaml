@@ -33,15 +33,14 @@
                   requirements: [{requirement_id: materials, kind: query, description: "materials", operation: null}]
                   completion_criteria: [materials]
                   routing_features: [has_dependency]
-        simple_executor:
+        executor:
           - {task_id: task_1, tool: query, args: {manager: PartManager, fields: [name]}}
           - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1"]}}
-        complex_executor:
           - {task_id: task_2, tool: query, args: {manager: MaterialManager, fields: [name]}}
           - {task_id: task_2, text: {action: complete, evidence_ids: ["task_2:query:1"]}}
         synthesizer:
           - text: {answer: "Bolt and Steel", evidence_ids: ["task_1:query:1", "task_2:query:1"]}
-        fallback_executor: []
+        fallback: []
 
 - name: one_edge_dependency
   description: "A dependent root waits for one earlier root."
@@ -64,15 +63,14 @@
               tasks:
                 - {task_id: task_1, objective: parts, depends_on: [], requirements: [{requirement_id: parent, kind: query, description: parent, operation: null}], completion_criteria: [parent], routing_features: []}
                 - {task_id: task_2, objective: materials, depends_on: [task_1], requirements: [{requirement_id: dependent, kind: query, description: dependent, operation: null}], completion_criteria: [dependent], routing_features: [has_dependency]}
-        simple_executor:
+        executor:
           - {task_id: task_1, tool: query, args: {manager: PartManager}}
           - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1"]}}
-        complex_executor:
           - {task_id: task_2, tool: query, args: {manager: MaterialManager}}
           - {task_id: task_2, text: {action: complete, evidence_ids: ["task_2:query:1"]}}
         synthesizer:
           - text: {answer: "parent dependent", evidence_ids: ["task_1:query:1", "task_2:query:1"]}
-        fallback_executor: []
+        fallback: []
 
 - name: dynamic_child_creation
   description: "A root creates a bounded child and receives its evidence."
@@ -92,8 +90,7 @@
               intent: read
               tasks:
                 - {task_id: task_1, objective: "child evidence", depends_on: [], requirements: [{requirement_id: dependent, kind: query, description: dependent, operation: null}], completion_criteria: [dependent], routing_features: []}
-        simple_executor: []
-        complex_executor:
+        executor:
           - task_id: task_1
             text:
               action: spawn_children
@@ -104,7 +101,7 @@
           - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:child:task_1_child:query:1"]}}
         synthesizer:
           - text: {answer: dependent, evidence_ids: ["task_1:child:task_1_child:query:1"]}
-        fallback_executor: []
+        fallback: []
 
 - name: deterministic_calculation
   description: "A calculation uses only resolved query evidence."
@@ -117,21 +114,20 @@
       terminal_reason: null
       tool_sequence: [query]
       answer_tokens: [average]
-      tool_results: {PartManager: {status: success, data: [{value: 4}]}}
+      tool_results: {PartManager: {status: success, data: [{value: 4}], total_count: 1, has_more: false, complete: true}}
       scripts:
         planner:
           - text:
               intent: read
               tasks:
-                - {task_id: task_1, objective: parts, depends_on: [], requirements: [{requirement_id: source, kind: query, description: source, operation: null}, {requirement_id: average, kind: calculation, description: average, operation: average}], completion_criteria: [source, average], routing_features: [requires_calculation]}
-        simple_executor: []
-        complex_executor:
+                - {task_id: task_1, objective: parts, depends_on: [], requirements: [{requirement_id: source, kind: query, description: source, operation: null}, {requirement_id: average, kind: calculation, description: average, operation: average, binding: {source_requirement_ids: [source], value_path: [value], group_by: [], unit_path: null}}], completion_criteria: [source, average], routing_features: [requires_calculation]}
+        executor:
           - {task_id: task_1, tool: query, args: {manager: PartManager}}
           - {task_id: task_1, text: {action: calculate, requirement_id: average, operation: average, operands: [{evidence_id: "task_1:query:1", path: [data, 0, value]}]}}
           - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1", "task_1:calculation:2"]}}
         synthesizer:
           - text: {answer: "average is 4", evidence_ids: ["task_1:query:1", "task_1:calculation:2"]}
-        fallback_executor: []
+        fallback: []
 
 - name: partial_independent_answer
   description: "Keep independent grounded evidence when another root is unresolved."
@@ -164,14 +160,13 @@
                   requirements: [{requirement_id: missing, kind: query, description: "missing", operation: null}]
                   completion_criteria: [missing]
                   routing_features: []
-        simple_executor: []
-        complex_executor:
+        executor:
           - {task_id: task_2, text: {action: block, reason: manager_unresolved}}
           - {task_id: task_1, tool: query, args: {manager: PartManager, fields: [name]}}
           - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1"]}}
         synthesizer:
           - text: {answer: "Bolt is available; the other category is unresolved.", evidence_ids: ["task_1:query:1"]}
-        fallback_executor: []
+        fallback: []
 
 - name: budget_exhaustion
   description: "Unfinished work reaches the hard round budget."
@@ -201,12 +196,11 @@
                     - {requirement_id: q04, kind: query, description: q04, operation: null}
                   completion_criteria: [q01, q02, q03, q04]
                   routing_features: [multiple_queries]
-        simple_executor: []
-        complex_executor:
+        executor:
           - task_id: task_1
             repeat_tool: {count: 3, tool: query, args: {manager: PartManager}}
         synthesizer: []
-        fallback_executor: []
+        fallback: []
 
 - name: deadline_exhaustion
   description: "Evidence-stage deadline produces the public deadline reason."
@@ -226,11 +220,10 @@
               intent: read
               tasks:
                 - {task_id: task_1, objective: parts, depends_on: [], requirements: [{requirement_id: q, kind: query, description: q, operation: null}], completion_criteria: [q], routing_features: []}
-        simple_executor:
+        executor:
           - {task_id: task_1, sleep_seconds: 0.2, text: {action: block, reason: manager_unresolved}}
-        complex_executor: []
         synthesizer: []
-        fallback_executor: []
+        fallback: []
 
 - name: duplicate_rejection
   description: "Canonical duplicate calls return cached results without re-execution."
@@ -250,25 +243,24 @@
               intent: read
               tasks:
                 - {task_id: task_1, objective: parts, depends_on: [], requirements: [{requirement_id: q, kind: query, description: q, operation: null}], completion_criteria: [q], routing_features: []}
-        simple_executor:
+        executor:
           - {task_id: task_1, tool: query, args: {manager: PartManager, fields: [name]}}
           - {task_id: task_1, tool: query, args: {fields: [name], manager: PartManager}}
-        complex_executor:
           - {task_id: task_1, text: {action: complete, evidence_ids: ["task_1:query:1"]}}
         synthesizer:
           - text: {answer: cached, evidence_ids: ["task_1:query:1"]}
-        fallback_executor: []
+        fallback: []
 
 - name: two_pass_no_progress
-  description: "Two resolver passes with no progress terminate manager resolution."
+  description: "Historical case ID: repeated failed discovery stops an error cycle, not valid work lacking evidence."
   tier: 1
-  tags: [planned, no_progress]
+  tags: [planned, error_cycle]
   conversation: [{user: "Resolve an unknown manager twice."}]
   expectations:
     planned:
       coverage: {resolved: 0, total: 1}
       terminal_reason: manager_unresolved
-      tool_sequence: [search_managers, search_managers, search_managers, search_managers]
+      tool_sequence: [search_managers, search_managers]
       answer_tokens: []
       tool_results: {search_managers: {status: error, code: unresolved}}
       scripts:
@@ -277,14 +269,11 @@
               intent: read
               tasks:
                 - {task_id: task_1, objective: unknown, depends_on: [], requirements: [{requirement_id: q, kind: query, description: q, operation: null}], completion_criteria: [q], routing_features: []}
-        simple_executor: []
-        complex_executor:
+        executor:
           - {task_id: task_1, tool: search_managers, args: {query: unknown}}
           - {task_id: task_1, tool: search_managers, args: {query: unknown}}
         synthesizer: []
-        fallback_executor:
-          - {task_id: task_1, tool: search_managers, args: {query: unknown}}
-          - {task_id: task_1, tool: search_managers, args: {query: unknown}}
+        fallback: []
 
 - name: mutation_fallback
   description: "A write intent returns to the unchanged legacy evaluation turn."
@@ -301,10 +290,9 @@
       scripts:
         planner:
           - text: {intent: mutation, tasks: []}
-        simple_executor: []
-        complex_executor: []
+        executor: []
         synthesizer: []
-        fallback_executor: []
+        fallback: []
 
 - name: legacy_stability
   description: "The explicit legacy strategy keeps the established eval result shape."

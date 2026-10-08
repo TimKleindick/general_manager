@@ -2,40 +2,45 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from collections.abc import Collection, Mapping
+import json
 from math import isfinite
 from typing import NoReturn, cast
 
-from general_manager.chat.planned.models import (
+from general_manager.chat.planned.contract import (
     CALCULATION_OPERATIONS,
-    EvidenceRequirement,
-    PlanIntent,
-    PlannedTask,
+    COMPLETION_CRITERIA_RULE,
+    DEPENDENCY_RULE,
+    MAX_ROOT_DEPENDENCY_DEPTH as MAX_ROOT_DEPENDENCY_DEPTH,
+    MAX_ROOT_TASKS as MAX_ROOT_TASKS,
+    PLAN_FIELDS,
+    PLAN_INTENTS,
+    REQUIREMENT_FIELDS,
     REQUIREMENT_KINDS,
     ROUTING_FEATURE_VALUES,
+    ROUTING_FEATURES_RULE,
+    TASK_FIELDS,
+    expected_routing_features,
+)
+from general_manager.chat.planned.models import (
+    EvidenceRequirement,
+    CalculationBinding,
+    SchemaBinding,
+    PlannedTask,
+    RequirementKind,
     RoutingFeature,
     ValidatedPlan,
 )
 
 
-MAX_ROOT_TASKS = 6
 MAX_CHILDREN_PER_ROOT = 2
-MAX_ROOT_DEPENDENCY_DEPTH = 1
-
-_PLAN_KEYS = frozenset(("intent", "tasks"))
-_TASK_KEYS = frozenset(
-    (
-        "task_id",
-        "objective",
-        "depends_on",
-        "requirements",
-        "completion_criteria",
-        "routing_features",
-    )
-)
-_REQUIREMENT_KEYS = frozenset(("requirement_id", "kind", "description", "operation"))
+_PLAN_KEYS = frozenset(PLAN_FIELDS)
+_TASK_KEYS = frozenset(TASK_FIELDS)
+_REQUIREMENT_KEYS = frozenset(REQUIREMENT_FIELDS)
 _CHILDREN_KEYS = frozenset(("children",))
-_INTENTS = frozenset(("read", "mutation"))
+_INTENTS = frozenset(PLAN_INTENTS)
 
 
 class PlanValidationError(ValueError):
@@ -44,199 +49,346 @@ class PlanValidationError(ValueError):
     reason = "invalid_plan"
     code = "invalid_plan"
 
-    def __init__(self, detail: str) -> None:
-        self.detail = detail
+    def __init__(
+        self, detail: str, *, path: str = "$", expected: str | None = None
+    ) -> None:
+        self.path = path
+        self.expected = detail if expected is None else expected
+        self.detail = f"{path}: expected {self.expected}. {detail}"
         super().__init__(self.reason)
 
 
-def _invalid(detail: str) -> NoReturn:
-    raise PlanValidationError(detail)
+def _invalid(detail: str, *, path: str = "$", expected: str | None = None) -> NoReturn:
+    raise PlanValidationError(detail, path=path, expected=expected)
 
 
-def _ensure_json_compatible(value: object, active: set[int] | None = None) -> None:
+def _field_path(path: str, field: str) -> str:
+    return f"{path}.{field}" if field.isidentifier() else f"{path}[{json.dumps(field)}]"
+
+
+def _ensure_json_compatible(
+    value: object, active: set[int] | None = None, path: str = "$"
+) -> None:
     """Reject Python values that cannot be represented by strict JSON."""
     if value is None or isinstance(value, (bool, int, str)):
         return
     if isinstance(value, float):
         if not isfinite(value):
-            _invalid("payload contains a non-finite number.")
+            _invalid("Non-finite number.", path=path, expected="a finite JSON number")
         return
     if active is None:
         active = set()
-    if isinstance(value, Mapping):
+    if isinstance(value, (Mapping, list)):
         identity = id(value)
         if identity in active:
-            _invalid("payload contains a cyclic object.")
+            _invalid("Cyclic value.", path=path, expected="an acyclic JSON value")
         active.add(identity)
         try:
-            for key, item in value.items():
-                if not isinstance(key, str):
-                    _invalid("payload object keys must be strings.")
-                _ensure_json_compatible(item, active)
+            if isinstance(value, Mapping):
+                for key, item in value.items():
+                    if not isinstance(key, str):
+                        _invalid(
+                            "Non-string object key.",
+                            path=path,
+                            expected="string object keys",
+                        )
+                    _ensure_json_compatible(item, active, _field_path(path, key))
+            else:
+                for index, item in enumerate(value):
+                    _ensure_json_compatible(item, active, f"{path}[{index}]")
         finally:
             active.remove(identity)
         return
-    if isinstance(value, list):
-        identity = id(value)
-        if identity in active:
-            _invalid("payload contains a cyclic object.")
-        active.add(identity)
-        try:
-            for item in value:
-                _ensure_json_compatible(item, active)
-        finally:
-            active.remove(identity)
-        return
-    _invalid("payload must contain only JSON-compatible values.")
+    _invalid("Non-JSON value.", path=path, expected="only JSON-compatible values")
 
 
-def _mapping(value: object, label: str) -> Mapping[str, object]:
+def _mapping(value: object, path: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
-        _invalid(f"{label} must be an object.")
+        _invalid("Not an object.", path=path, expected="a JSON object")
     return cast(Mapping[str, object], value)
 
 
 def _exact_keys(
-    value: Mapping[str, object], expected: frozenset[str], label: str
+    value: Mapping[str, object], expected: frozenset[str], path: str
 ) -> None:
     actual = frozenset(value)
-    if actual != expected:
-        missing = sorted(expected - actual)
-        unknown = sorted(actual - expected)
-        detail = f"{label} has invalid fields"
-        if missing:
-            detail += f"; missing {', '.join(missing)}"
-        if unknown:
-            detail += f"; unknown {', '.join(unknown)}"
-        _invalid(f"{detail}.")
+    missing = sorted(expected - actual)
+    unknown = sorted(actual - expected)
+    if missing:
+        _invalid(
+            "Missing required field.",
+            path=_field_path(path, missing[0]),
+            expected="a required field; exact object fields are "
+            + ", ".join(sorted(expected)),
+        )
+    if unknown:
+        _invalid(
+            "Unknown field.",
+            path=_field_path(path, unknown[0]),
+            expected="no extra fields; exact object fields are "
+            + ", ".join(sorted(expected)),
+        )
 
 
-def _required_text(value: object, label: str) -> str:
+def _required_text(value: object, path: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        _invalid(f"{label} must be a non-empty string.")
+        _invalid("Invalid text.", path=path, expected="a non-empty string")
     return value
 
 
-def _string_list(value: object, label: str) -> tuple[str, ...]:
+def _string_list(value: object, path: str) -> tuple[str, ...]:
     if not isinstance(value, list):
-        _invalid(f"{label} must be an array.")
-    result: list[str] = []
-    for item in value:
-        result.append(_required_text(item, label))
+        _invalid(
+            "Not an array.",
+            path=path,
+            expected="an array of distinct non-empty strings",
+        )
+    result = tuple(
+        _required_text(item, f"{path}[{index}]") for index, item in enumerate(value)
+    )
     if len(result) != len(set(result)):
-        _invalid(f"{label} must not contain duplicates.")
-    return tuple(result)
+        _invalid("Duplicate value.", path=path, expected="distinct non-empty strings")
+    return result
 
 
-def _string_tuple(value: object, label: str) -> tuple[str, ...]:
+def _string_tuple(value: object, path: str) -> tuple[str, ...]:
     if not isinstance(value, tuple):
-        _invalid(f"{label} must be a tuple.")
-    result: list[str] = []
-    for item in value:
-        result.append(_required_text(item, label))
+        _invalid(
+            "Not a tuple.", path=path, expected="a tuple of distinct non-empty strings"
+        )
+    result = tuple(
+        _required_text(item, f"{path}[{index}]") for index, item in enumerate(value)
+    )
     if len(result) != len(set(result)):
-        _invalid(f"{label} must not contain duplicates.")
-    return tuple(result)
+        _invalid("Duplicate value.", path=path, expected="distinct non-empty strings")
+    return result
 
 
 def _validate_requirement_record(
-    value: object,
-    seen_requirement_ids: set[str],
+    value: object, seen_requirement_ids: set[str], path: str = "$"
 ) -> EvidenceRequirement:
     if not isinstance(value, EvidenceRequirement):
-        _invalid("requirements must contain EvidenceRequirement records.")
-    requirement_id = _required_text(value.requirement_id, "requirement_id")
+        _invalid(
+            "Invalid requirement record.",
+            path=path,
+            expected="an EvidenceRequirement record",
+        )
+    requirement_id = _required_text(value.requirement_id, f"{path}.requirement_id")
     if requirement_id in seen_requirement_ids:
-        _invalid(f"duplicate requirement_id {requirement_id!r}.")
+        _invalid(
+            "Duplicate requirement ID.",
+            path=f"{path}.requirement_id",
+            expected="an ID unique within this task",
+        )
     seen_requirement_ids.add(requirement_id)
     if not isinstance(value.kind, str) or value.kind not in REQUIREMENT_KINDS:
-        _invalid("requirement kind is not supported.")
-    _required_text(value.description, "description")
+        _invalid(
+            "Unsupported kind.",
+            path=f"{path}.kind",
+            expected="one of " + ", ".join(sorted(REQUIREMENT_KINDS)),
+        )
+    _required_text(value.description, f"{path}.description")
     operation = value.operation
-    if operation is not None and not isinstance(operation, str):
-        _invalid("requirement operation must be a string or null.")
     if value.kind == "calculation":
-        if operation not in CALCULATION_OPERATIONS:
-            _invalid("calculation operation is not supported.")
+        if not isinstance(operation, str) or operation not in CALCULATION_OPERATIONS:
+            _invalid(
+                "Unsupported calculation operation.",
+                path=f"{path}.operation",
+                expected="one of " + ", ".join(CALCULATION_OPERATIONS),
+            )
     elif operation is not None:
-        _invalid("only calculation requirements may define operation.")
+        _invalid(
+            "Only calculation requirements define an operation.",
+            path=f"{path}.operation",
+            expected="null for kind " + value.kind,
+        )
+    if value.schema is not None:
+        if value.kind != "schema" or not isinstance(value.schema, SchemaBinding):
+            _invalid(
+                "Only schema requirements define a schema binding.",
+                path=f"{path}.schema",
+                expected="a SchemaBinding on kind schema",
+            )
+        try:
+            SchemaBinding.from_mapping(value.schema.as_mapping())
+        except ValueError:
+            _invalid(
+                "Invalid schema binding.",
+                path=f"{path}.schema",
+                expected="an exact manager/view/type/snapshot binding",
+            )
     return value
 
 
-def _expected_routing_features(
-    depends_on: tuple[str, ...],
-    requirements: tuple[EvidenceRequirement, ...],
-) -> tuple[RoutingFeature, ...]:
-    expected: list[RoutingFeature] = []
-    if depends_on:
-        expected.append("has_dependency")
-    if any(requirement.kind == "calculation" for requirement in requirements):
-        expected.append("requires_calculation")
-    if sum(requirement.kind == "query" for requirement in requirements) > 1:
-        expected.append("multiple_queries")
-    return tuple(expected)
-
-
-def _validate_task_record(value: object) -> PlannedTask:
+def _validate_task_record(value: object, path: str = "$") -> PlannedTask:
     """Validate a runtime task record before using it as trusted graph state."""
     if not isinstance(value, PlannedTask):
-        _invalid("existing tasks must be planned task records.")
-    _required_text(value.task_id, "task_id")
-    _required_text(value.objective, "objective")
-    depends_on = _string_tuple(value.depends_on, "depends_on")
+        _invalid("Invalid task record.", path=path, expected="a PlannedTask record")
+    _required_text(value.task_id, f"{path}.task_id")
+    _required_text(value.objective, f"{path}.objective")
+    depends_on = _string_tuple(value.depends_on, f"{path}.depends_on")
     if value.task_id in depends_on:
-        _invalid(f"task {value.task_id!r} cannot depend on itself.")
+        _invalid(
+            "A task cannot depend on itself.",
+            path=f"{path}.depends_on[{depends_on.index(value.task_id)}]",
+            expected="another task ID",
+        )
     if not isinstance(value.requirements, tuple):
-        _invalid("requirements must be a tuple.")
+        _invalid(
+            "Invalid requirements.",
+            path=f"{path}.requirements",
+            expected="a tuple of EvidenceRequirement records",
+        )
     seen_requirement_ids: set[str] = set()
     requirements = tuple(
-        _validate_requirement_record(item, seen_requirement_ids)
-        for item in value.requirements
+        _validate_requirement_record(
+            item, seen_requirement_ids, f"{path}.requirements[{index}]"
+        )
+        for index, item in enumerate(value.requirements)
     )
+    earlier: dict[str, EvidenceRequirement] = {}
+    for index, requirement in enumerate(requirements):
+        binding = requirement.binding
+        if binding is not None:
+            sources = [earlier.get(source) for source in binding.source_requirement_ids]
+            query_binding = binding.value_path is not None
+            valid = requirement.kind == "calculation" and all(
+                source is not None for source in sources
+            )
+            if binding.conversion is not None:
+                valid = (
+                    valid
+                    and requirement.operation == "sum_products"
+                    and len(sources) == 1
+                    and sources[0] is not None
+                    and sources[0].kind == "query"
+                    and all(
+                        earlier.get(source) is not None
+                        and earlier[source].kind == "schema"
+                        for source in binding.conversion.schema_requirement_ids
+                    )
+                )
+            elif requirement.operation == "sum_products":
+                valid = False
+            elif query_binding:
+                valid = (
+                    valid
+                    and len(sources) == 1
+                    and all(
+                        source is not None and source.kind == "query"
+                        for source in sources
+                    )
+                )
+                valid = valid and requirement.operation in {
+                    "count",
+                    "sum",
+                    "average",
+                    "minimum",
+                    "maximum",
+                }
+                valid = valid and (
+                    not binding.value_path
+                    and not binding.group_by
+                    and not binding.utc_year_by
+                    if requirement.operation == "count"
+                    else bool(binding.value_path)
+                )
+            else:
+                valid = valid and all(
+                    source is not None and source.kind == "calculation"
+                    for source in sources
+                )
+            if not valid:
+                _invalid(
+                    "Invalid calculation source graph.",
+                    path=f"{path}.requirements[{index}].binding",
+                    expected="earlier compatible query or calculation requirements in this task",
+                )
+        earlier[requirement.requirement_id] = requirement
     completion_criteria = _string_tuple(
-        value.completion_criteria, "completion_criteria"
+        value.completion_criteria, f"{path}.completion_criteria"
     )
-    requirement_ids = {requirement.requirement_id for requirement in requirements}
-    if (
-        len(completion_criteria) != len(requirements)
-        or set(completion_criteria) != requirement_ids
+    requirement_ids = [requirement.requirement_id for requirement in requirements]
+    if len(completion_criteria) != len(requirements) or set(completion_criteria) != set(
+        requirement_ids
     ):
-        _invalid("completion_criteria must list every requirement exactly once.")
-    routing_features = _string_tuple(value.routing_features, "routing_features")
-    if any(feature not in ROUTING_FEATURE_VALUES for feature in routing_features):
-        _invalid("routing_features contains an unsupported feature.")
-    if set(routing_features) != set(
-        _expected_routing_features(depends_on, requirements)
-    ):
-        _invalid("routing_features must match task structure.")
+        _invalid(
+            COMPLETION_CRITERIA_RULE,
+            path=f"{path}.completion_criteria",
+            expected="exactly this task's own requirement IDs "
+            + json.dumps(requirement_ids),
+        )
+    routing_features = _string_tuple(value.routing_features, f"{path}.routing_features")
+    expected = expected_routing_features(
+        depends_on, (requirement.kind for requirement in requirements)
+    )
+    if any(
+        feature not in ROUTING_FEATURE_VALUES for feature in routing_features
+    ) or set(routing_features) != set(expected):
+        _invalid(
+            ROUTING_FEATURES_RULE,
+            path=f"{path}.routing_features",
+            expected="exactly " + json.dumps(expected),
+        )
     if value.parent_id is not None:
-        _required_text(value.parent_id, "parent_id")
+        _required_text(value.parent_id, f"{path}.parent_id")
         if value.parent_id == value.task_id:
-            _invalid("a task cannot own itself.")
+            _invalid(
+                "A task cannot own itself.",
+                path=f"{path}.parent_id",
+                expected="another task ID",
+            )
     return value
 
 
 def _parse_requirement(
-    value: object,
-    seen_requirement_ids: set[str],
+    value: object, seen_requirement_ids: set[str], path: str
 ) -> EvidenceRequirement:
-    mapping = _mapping(value, "requirement")
-    _exact_keys(mapping, _REQUIREMENT_KEYS, "requirement")
-    requirement_id = _required_text(mapping["requirement_id"], "requirement_id")
-    kind = mapping["kind"]
-    if not isinstance(kind, str) or kind not in REQUIREMENT_KINDS:
-        _invalid("requirement kind is not supported.")
-    description = _required_text(mapping["description"], "description")
-    operation = mapping["operation"]
-    if operation is not None and not isinstance(operation, str):
-        _invalid("requirement operation must be a string or null.")
-    parsed = EvidenceRequirement(
-        requirement_id=requirement_id,
-        kind=kind,
-        description=description,
-        operation=operation,
+    mapping = _mapping(value, path)
+    _exact_keys(
+        mapping,
+        _REQUIREMENT_KEYS | {"binding"}
+        if mapping.get("kind") == "calculation"
+        else _REQUIREMENT_KEYS | {"schema"}
+        if mapping.get("kind") == "schema" and "schema" in mapping
+        else _REQUIREMENT_KEYS,
+        path,
     )
-    return _validate_requirement_record(parsed, seen_requirement_ids)
+    try:
+        binding = (
+            CalculationBinding.from_mapping(mapping["binding"])
+            if mapping.get("kind") == "calculation" and mapping["binding"] is not None
+            else None
+        )
+    except ValueError:
+        _invalid(
+            "Invalid calculation binding.",
+            path=f"{path}.binding",
+            expected="a structured source/field/group binding",
+        )
+    try:
+        schema = (
+            SchemaBinding.from_mapping(mapping["schema"])
+            if "schema" in mapping
+            else None
+        )
+    except ValueError:
+        _invalid(
+            "Invalid schema binding.",
+            path=f"{path}.schema",
+            expected="an exact manager/view/type/snapshot binding",
+        )
+    # Runtime validation below checks every field before trusting these annotations.
+    parsed = EvidenceRequirement(
+        requirement_id=cast(str, mapping["requirement_id"]),
+        kind=cast("RequirementKind", mapping["kind"]),
+        description=cast(str, mapping["description"]),
+        operation=cast("str | None", mapping["operation"]),
+        binding=binding,
+        binding_required=mapping.get("kind") == "calculation",
+        schema=schema,
+    )
+    return _validate_requirement_record(parsed, seen_requirement_ids, path)
 
 
 def _parse_task(
@@ -244,22 +396,30 @@ def _parse_task(
     *,
     parent_id: str | None,
     seen_requirement_ids: set[str],
+    path: str = "$",
 ) -> PlannedTask:
-    mapping = _mapping(value, "task")
-    _exact_keys(mapping, _TASK_KEYS, "task")
-    task_id = _required_text(mapping["task_id"], "task_id")
-    objective = _required_text(mapping["objective"], "objective")
-    depends_on = _string_list(mapping["depends_on"], "depends_on")
+    mapping = _mapping(value, path)
+    _exact_keys(mapping, _TASK_KEYS, path)
+    task_id = _required_text(mapping["task_id"], f"{path}.task_id")
+    objective = _required_text(mapping["objective"], f"{path}.objective")
+    depends_on = _string_list(mapping["depends_on"], f"{path}.depends_on")
     raw_requirements = mapping["requirements"]
     if not isinstance(raw_requirements, list):
-        _invalid("requirements must be an array.")
+        _invalid(
+            "Invalid requirements.",
+            path=f"{path}.requirements",
+            expected="an array of requirements",
+        )
     requirements = tuple(
-        _parse_requirement(item, seen_requirement_ids) for item in raw_requirements
+        _parse_requirement(item, seen_requirement_ids, f"{path}.requirements[{index}]")
+        for index, item in enumerate(raw_requirements)
     )
     completion_criteria = _string_list(
-        mapping["completion_criteria"], "completion_criteria"
+        mapping["completion_criteria"], f"{path}.completion_criteria"
     )
-    routing_features = _string_list(mapping["routing_features"], "routing_features")
+    routing_features = _string_list(
+        mapping["routing_features"], f"{path}.routing_features"
+    )
     parsed = PlannedTask(
         task_id=task_id,
         objective=objective,
@@ -271,73 +431,77 @@ def _parse_task(
         ),
         parent_id=parent_id,
     )
-    return _validate_task_record(parsed)
+    return _validate_task_record(parsed, path)
 
 
 def _validate_root_graph(tasks: tuple[PlannedTask, ...]) -> None:
-    task_ids = {task.task_id for task in tasks}
-    for index, task in enumerate(tasks):
-        if task.task_id in task.depends_on:
-            _invalid(f"task {task.task_id!r} cannot depend on itself.")
-        for dependency in task.depends_on:
-            if dependency not in task_ids:
-                _invalid(f"task {task.task_id!r} has an unknown dependency.")
-            if dependency not in {candidate.task_id for candidate in tasks[:index]}:
-                _invalid(f"task {task.task_id!r} must depend on an earlier root.")
-
     depths: dict[str, int] = {}
-    visiting: set[str] = set()
-
-    def depth(task_id: str) -> int:
-        if task_id in visiting:
-            _invalid("root task dependencies must be acyclic.")
-        if task_id in depths:
-            return depths[task_id]
-        visiting.add(task_id)
-        task = next(task for task in tasks if task.task_id == task_id)
-        task_depth = 0
-        if task.depends_on:
-            task_depth = 1 + max(depth(dependency) for dependency in task.depends_on)
-        visiting.remove(task_id)
-        depths[task_id] = task_depth
-        return task_depth
-
-    for task in tasks:
-        if depth(task.task_id) > MAX_ROOT_DEPENDENCY_DEPTH:
-            _invalid("root dependency depth exceeds one edge.")
+    for index, task in enumerate(tasks):
+        # Requiring earlier roots also rejects every possible root cycle.
+        for dependency_index, dependency in enumerate(task.depends_on):
+            if dependency not in depths:
+                _invalid(
+                    DEPENDENCY_RULE,
+                    path=f"$.tasks[{index}].depends_on[{dependency_index}]",
+                    expected="an earlier root task ID from " + json.dumps(list(depths)),
+                )
+        depth = (
+            1 + max(depths[dependency] for dependency in task.depends_on)
+            if task.depends_on
+            else 0
+        )
+        if depth > MAX_ROOT_DEPENDENCY_DEPTH:
+            _invalid(
+                DEPENDENCY_RULE,
+                path=f"$.tasks[{index}].depends_on",
+                expected=f"root dependency depth at most {MAX_ROOT_DEPENDENCY_DEPTH} edge",
+            )
+        depths[task.task_id] = depth
 
 
 def validate_plan(payload: object) -> ValidatedPlan:
     """Validate one complete JSON plan before any application data access."""
     _ensure_json_compatible(payload)
-    mapping = _mapping(payload, "plan")
-    _exact_keys(mapping, _PLAN_KEYS, "plan")
+    mapping = _mapping(payload, "$")
+    _exact_keys(mapping, _PLAN_KEYS, "$")
     intent = mapping["intent"]
     if not isinstance(intent, str) or intent not in _INTENTS:
-        _invalid("plan intent must be read or mutation.")
+        _invalid(
+            "Unsupported intent.",
+            path="$.intent",
+            expected="one of " + ", ".join(PLAN_INTENTS),
+        )
     raw_tasks = mapping["tasks"]
     if not isinstance(raw_tasks, list):
-        _invalid("tasks must be an array.")
+        _invalid("Invalid tasks.", path="$.tasks", expected="an array of tasks")
     if intent == "read" and not 1 <= len(raw_tasks) <= MAX_ROOT_TASKS:
-        _invalid("read plans must contain one to six root tasks.")
+        _invalid(
+            "Invalid read task count.",
+            path="$.tasks",
+            expected=f"1..{MAX_ROOT_TASKS} root tasks",
+        )
     if intent == "mutation" and raw_tasks:
-        _invalid("mutation plans must contain zero tasks.")
-
+        _invalid("Mutation plans cannot contain tasks.", path="$.tasks", expected="[]")
     seen_task_ids: set[str] = set()
     tasks: list[PlannedTask] = []
-    for raw_task in raw_tasks:
+    for index, raw_task in enumerate(raw_tasks):
         parsed = _parse_task(
             raw_task,
             parent_id=None,
             seen_requirement_ids=set(),
+            path=f"$.tasks[{index}]",
         )
         if parsed.task_id in seen_task_ids:
-            _invalid(f"duplicate task_id {parsed.task_id!r}.")
+            _invalid(
+                "Duplicate task ID.",
+                path=f"$.tasks[{index}].task_id",
+                expected="a globally unique task_id",
+            )
         seen_task_ids.add(parsed.task_id)
         tasks.append(parsed)
     validated_tasks = tuple(tasks)
     _validate_root_graph(validated_tasks)
-    return ValidatedPlan(intent=cast(PlanIntent, intent), tasks=validated_tasks)
+    return ValidatedPlan(intent=intent, tasks=validated_tasks)
 
 
 def _validate_child_graph(
@@ -440,11 +604,12 @@ def validate_dynamic_children(
 
     seen_ids = {task.task_id for task in records}
     children: list[PlannedTask] = []
-    for raw_child in raw_children:
+    for index, raw_child in enumerate(raw_children):
         child = _parse_task(
             raw_child,
             parent_id=parent.task_id,
             seen_requirement_ids=set(),
+            path=f"$.children[{index}]",
         )
         if child.task_id in seen_ids:
             _invalid(f"duplicate task_id {child.task_id!r}.")
@@ -453,3 +618,31 @@ def validate_dynamic_children(
     validated_children = tuple(children)
     _validate_dynamic_graph((*records, *validated_children))
     return validated_children
+
+
+def bind_calculation_requirement(
+    task: PlannedTask, requirement_id: str, binding: CalculationBinding
+) -> PlannedTask:
+    """Finalize a deferred field binding without replacing an existing contract."""
+    target = next(
+        (
+            req
+            for req in task.requirements
+            if req.requirement_id == requirement_id and req.kind == "calculation"
+        ),
+        None,
+    )
+    if target is None or not target.binding_required or target.binding is not None:
+        _invalid(
+            "Calculation binding is not deferred.",
+            path="$.requirement_id",
+            expected="an unbound calculation requirement in this task",
+        )
+    updated = replace(
+        task,
+        requirements=tuple(
+            replace(req, binding=binding) if req is target else req
+            for req in task.requirements
+        ),
+    )
+    return _validate_task_record(updated)

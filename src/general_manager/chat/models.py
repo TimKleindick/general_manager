@@ -408,6 +408,7 @@ def _tool_result_groups(messages: list[ChatMessage]) -> dict[Any, ChatMessage]:
 def provider_messages_from_context(messages: list[ChatMessage]) -> list[Any]:
     """Serialize persisted rows without creating orphan provider tool messages."""
     from general_manager.chat.providers.base import Message, ToolCallEvent
+    from general_manager.chat.planned.schema_projection import with_historical_schema
 
     result_groups, complete_declarations = _complete_tool_exchange_groups(messages)
     provider_messages: list[Message] = []
@@ -472,8 +473,31 @@ def provider_messages_from_context(messages: list[ChatMessage]) -> list[Any]:
                         ),
                     )
                 )
+            provider_messages[-1] = with_historical_schema(
+                provider_messages[-1],
+                tool_name=getattr(message, "tool_name", None),
+                tool_result=getattr(message, "tool_result", None),
+                binding={
+                    "conversation_id": str(getattr(message, "conversation_id", "")),
+                    "message_id": str(message.pk),
+                    "tool_args": getattr(message, "tool_args", None),
+                },
+            )
             continue
-        provider_messages.append(Message(role=message.role, content=message.content))
+        metadata = getattr(message, "tool_result", None)
+        provider_messages.append(
+            Message(
+                role=message.role,
+                content=message.content,
+                clarification_metadata=(
+                    metadata
+                    if message.role == "assistant"
+                    and isinstance(metadata, dict)
+                    and set(metadata) == {"gm_clarification"}
+                    else None
+                ),
+            )
+        )
     return provider_messages
 
 

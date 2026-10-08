@@ -1065,16 +1065,16 @@ class ChatViewHelperTests(SimpleTestCase):
         assert returned is conversation
         assert events == []
 
-    def test_execute_message_request_default_strategy_skips_planned_preparation(
+    def test_default_http_read_always_uses_planned_preparation(
         self,
     ) -> None:
-        """Selecting planned code for the default path would alter legacy events."""
+        """The old disabled flag cannot bypass the Planned read boundary."""
         request = self.factory.post(
             "/chat/", data=b"{}", content_type="application/json"
         )
         conversation = object()
-        legacy_events = [
-            {"type": "text_chunk", "content": "legacy answer"},
+        planned_events = [
+            {"type": "text_chunk", "content": "planned answer"},
             {"type": "done", "usage": {"input_tokens": 1, "output_tokens": 2}},
         ]
         with (
@@ -1096,20 +1096,27 @@ class ChatViewHelperTests(SimpleTestCase):
             ),
             patch(
                 "general_manager.chat.views.prepare_planned_turn",
-                new_callable=AsyncMock,
+                new=AsyncMock(return_value=SimpleNamespace(mutation_plan=None)),
             ) as prepare,
             patch(
+                "general_manager.chat.views.iter_planned_read_events",
+                new=_iter_events_from(planned_events),
+            ),
+            patch(
+                "general_manager.chat.views._planned_catalog_summary", return_value={}
+            ),
+            patch(
                 "general_manager.chat.views._iter_provider_turn_events",
-                new=_iter_events_from(legacy_events),
+                side_effect=AssertionError("legacy read"),
             ),
         ):
             _conversation, events = async_to_sync(_execute_message_request)(
                 request, transport="http"
             )
 
-        assert events == legacy_events
+        assert events == planned_events
         assert "orchestration" not in events[-1]
-        prepare.assert_not_awaited()
+        prepare.assert_awaited_once()
 
     def test_execute_message_request_streams_planned_read_events(self) -> None:
         """Replacing the neutral iterator with the legacy loop loses task metadata."""
@@ -1247,6 +1254,12 @@ class ChatViewHelperTests(SimpleTestCase):
             },
         ]
         with (
+            patch(
+                "general_manager.chat.views._build_messages",
+                new=AsyncMock(
+                    return_value=[Message(role="user", content="create a part")]
+                ),
+            ),
             patch(
                 "general_manager.chat.views._prepare_message_request",
                 new=AsyncMock(

@@ -10,6 +10,7 @@ from general_manager.chat.system_prompt import build_system_prompt
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.utils.path_mapping import PathMap
+from tests.utils.chat_schema import install_registered_schema
 from tests.utils.simple_manager_interface import BaseTestInterface
 
 
@@ -18,9 +19,8 @@ def test_system_prompt_requires_query_after_successful_path_for_record_questions
 ):
     prompt = build_system_prompt()
 
-    assert "If find_path returns a non-empty path for a record question" in prompt
-    assert "call query on the destination manager" in prompt
-    assert "do not say there is no path" in prompt
+    assert "find_path returns executable selections from the starting manager" in prompt
+    assert "Do not reverse the path" in prompt
 
 
 class ChatSystemPromptTests(SimpleTestCase):
@@ -72,6 +72,7 @@ class ChatSystemPromptTests(SimpleTestCase):
 
             code = graphene.String()
 
+        PartType._meta.fields["material"] = graphene.Field(MaterialType)
         GraphQL.graphql_type_registry = {
             "PartManager": PartType,
             "MaterialManager": MaterialType,
@@ -82,6 +83,7 @@ class ChatSystemPromptTests(SimpleTestCase):
             "MaterialManager": MaterialManager,
             "SecretManager": SecretManager,
         }
+        install_registered_schema()
 
     def tearDown(self) -> None:
         clear_schema_index_cache()
@@ -214,11 +216,12 @@ class ChatSystemPromptTests(SimpleTestCase):
 
                 name = graphene.String()
 
-            BulkType.__name__ = f"BulkType{index:03d}"
+            BulkType._meta.__dict__["name"] = f"BulkType{index:03d}"
             GraphQL.graphql_type_registry[manager_name] = BulkType
             GraphQL.manager_registry[manager_name] = GraphQL.manager_registry[
                 "PartManager"
             ]
+        install_registered_schema()
         clear_schema_index_cache()
 
         prompt = build_system_prompt()

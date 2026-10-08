@@ -311,6 +311,63 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
             {"id": 3, "root_key": "Zed"},
         ]
 
+    def test_chat_schema_details_and_queries_share_request_interface_contract(
+        self,
+    ) -> None:
+        from general_manager.api.graphql import GraphQL
+        from general_manager.chat.tools import (
+            ScopeChatContext,
+            execute_chat_tool,
+            get_manager_schema,
+        )
+
+        context = ScopeChatContext.from_scope({"user": self.user})
+        managers = [
+            self.request_sort_item,
+            GraphQL.manager_registry["RemoteRequestSortItem"],
+        ]
+        for manager in managers:
+            old = getattr(manager, "chat_exposed", False)
+            manager.chat_exposed = True
+            try:
+                overview = execute_chat_tool(
+                    "get_manager_schema", {"manager": manager.__name__}, context
+                )
+                full = get_manager_schema(manager.__name__)
+                names = [
+                    name
+                    for name, info in overview["type_manifest"].items()
+                    if info["kind"] in {"input", "enum"}
+                ]
+                detail = execute_chat_tool(
+                    "get_manager_schema",
+                    {
+                        "manager": manager.__name__,
+                        "view": "detail",
+                        "types": names,
+                        "snapshot": overview["snapshot"],
+                    },
+                    context,
+                )
+                self.assertEqual(
+                    detail["types"],
+                    {name: full["types"][name] for name in sorted(names)},
+                )
+                self.assertIn("rootKey", overview["output_fields"])
+                result = execute_chat_tool(
+                    "query",
+                    {
+                        "manager": manager.__name__,
+                        "root": overview["roots"][0],
+                        "fields": ["rootKey"],
+                    },
+                    context,
+                )
+                self.assertNotEqual(result.get("status"), "error", result)
+                self.assertTrue(result["data"])
+            finally:
+                manager.chat_exposed = old
+
     def test_generated_request_list_hydrates_relation_and_sorts_compound_keys(
         self,
     ) -> None:

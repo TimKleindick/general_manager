@@ -79,6 +79,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[file-upload-image]"
           pip install pytest pytest-django meilisearch==0.40.0
+          pip install -r requirements/chat-eval.txt
           pip install "${{ inputs.database-driver }}"
 
       - name: Run ${{ inputs.database-label }} backend test suite

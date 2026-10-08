@@ -9,6 +9,7 @@ import pytest
 from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
     InvalidProviderRoundTimeoutError,
+    ProviderRoundResult,
     complete_provider_round,
 )
 from general_manager.chat.providers.base import (
@@ -61,16 +62,77 @@ def test_provider_round_aggregates_text_and_usage() -> None:
     assert result.usage == TokenUsage(input_tokens=3, output_tokens=4)
 
 
-def test_provider_round_allows_at_most_one_tool_call() -> None:
+def test_provider_round_preserves_order_of_multiple_tool_calls() -> None:
+    calls = (
+        ToolCallEvent("one", "schema", {"manager": "PartManager"}),
+        ToolCallEvent("two", "query", {"fields": ["id"]}),
+        ToolCallEvent("three", "query", {"fields": ["name"]}),
+    )
+    usage = TokenUsage(2, 3)
+    result = asyncio.run(
+        complete_provider_round(_Provider([*calls, DoneEvent(usage)]), [], [], 1.0)
+    )
+
+    assert result.tool_calls == calls
+    assert result.tool_call == calls[0]
+    assert result.text == ""
+    assert result.usage == usage
+
+
+def test_provider_round_result_keeps_legacy_positional_and_keyword_calls() -> None:
+    call = ToolCallEvent("one", "query", {})
+    usage = TokenUsage(2, 3)
+    legacy = ProviderRoundResult("", call, usage)
+    keyword = ProviderRoundResult(text="", tool_call=call, usage=usage)
+    batch = ProviderRoundResult("", None, usage, (call,))
+    assert legacy == keyword == batch
+    assert legacy.tool_calls == (call,)
+    assert ProviderRoundResult("answer", None, usage).tool_calls == ()
+
+
+def test_provider_round_rejects_duplicate_call_ids() -> None:
     provider = _Provider(
         [
-            ToolCallEvent("one", "schema", {}),
-            ToolCallEvent("two", "query", {}),
+            ToolCallEvent("same", "schema", {}),
+            ToolCallEvent("same", "query", {}),
             DoneEvent(TokenUsage()),
         ]
     )
 
     with pytest.raises(InvalidProviderRoundError):
+        asyncio.run(complete_provider_round(provider, [], [], 1.0))
+
+
+def test_provider_round_snapshots_arguments_before_later_provider_mutation() -> None:
+    arguments = {"fields": ["id"]}
+
+    class MutatingProvider:
+        async def complete(self, _messages, _tools):
+            yield ToolCallEvent("first", "query", arguments)
+            arguments["fields"].append("unrequested")
+            yield ToolCallEvent("second", "query", arguments)
+            arguments["fields"].append("later")
+            yield DoneEvent(TokenUsage())
+
+    result = asyncio.run(complete_provider_round(MutatingProvider(), [], [], 1.0))
+    assert [call.args for call in result.tool_calls] == [
+        {"fields": ["id"]},
+        {"fields": ["id", "unrequested"]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad", [{"value": object()}, {"value": float("nan")}, {1: "key"}]
+)
+def test_provider_round_rejects_non_json_arguments_before_execution(bad) -> None:
+    provider = _Provider(
+        [
+            ToolCallEvent("one", "schema", {}),
+            ToolCallEvent("two", "query", bad),
+            DoneEvent(TokenUsage()),
+        ]
+    )
+    with pytest.raises(InvalidProviderRoundError, match="JSON"):
         asyncio.run(complete_provider_round(provider, [], [], 1.0))
 
 

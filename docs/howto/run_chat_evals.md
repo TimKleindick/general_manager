@@ -145,10 +145,9 @@ GENERAL_MANAGER["CHAT"].update(
             "catalog": "myproject.chat.catalog.catalog",
             "roles": {
                 "planner": "strong_local",
-                "simple_executor": "fast_local",
-                "complex_executor": "strong_local",
+                "executor": "strong_local",
                 "synthesizer": "strong_local",
-                "fallback_executor": "strong_local",
+                "fallback": "strong_local",
             },
             "max_concurrent_tasks": 3,
             "evidence_timeout_seconds": 90,
@@ -181,18 +180,19 @@ environment first; public requests must never select profiles or trust groups.
 Add deterministic fake-provider cases for graph validation, manager resolution,
 round exhaustion, 90-second evidence and 30-second synthesis deadlines,
 calculation evidence, partial coverage, and every stable terminal reason. Run
-those cases together with the existing legacy WebSocket, SSE, and HTTP tests.
-Then enable `GENERAL_MANAGER["CHAT"]["planned"]["enabled"]` for the
-non-production environment and inspect the allowlisted audit events: role,
+those cases together with the existing mutation WebSocket, SSE, and HTTP tests.
+Planned is the default for every new read. In the non-production environment,
+inspect the allowlisted audit events: role,
 match-source category, hashed canonical call identity, progress, budgets,
 latency, usage/cost, evidence counts, coverage, and terminal reason. Do not
 add raw results, profile names, trust groups, plans, hidden manager metadata,
 credentials, or provider exceptions to an audit sink.
 
-Production rollout is an application-owned settings change and requires no
-migration. If an evaluation or operational check regresses, disable planned
-mode; the next request uses the compatible legacy strategy. Mutation requests
-already use that legacy safety path, including its authentication, mutation
+Migrate explicit role maps to `planner`, `executor`, `synthesizer`, and `fallback`
+before rollout. `planned.enabled=False` is deprecated and does not restore the
+previous read loop. If operational checks regress, roll back the application
+release or disable chat with the global `CHAT.enabled` switch. Mutation requests
+retain their safety path, including authentication, mutation
 allow-listing, confirmation, persistence, and transport behavior. See the
 [planned-chat cookbook](../examples/planned_chat_orchestration.md) for a
 client-visible event sequence and the [Chat API reference](../api/chat.md#planned-read-orchestration)
