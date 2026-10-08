@@ -1,7 +1,5 @@
 """Targeted hidden-enum variant of the irrelevant-copy regression."""
 
-import importlib.util
-from pathlib import Path
 from threading import RLock
 from types import SimpleNamespace
 
@@ -18,6 +16,7 @@ from graphql import (
 )
 
 from general_manager.api.graphql import GraphQL
+from general_manager.chat.graphql_contract import manager_schema
 from general_manager.chat.schema_inspection import inspect_manager_schema
 from tests.unit.test_schema_inspection import exposed_schema as _exposed_schema
 
@@ -68,18 +67,8 @@ def test_hidden_manager_enum_internal_value_does_not_break_visible_schema(
     assert private_result.data["otherList"]["items"][0]["state"] == (
         "OPEN" if internal_value == "enum_value" else "opaque"
     )
-    path = Path(
-        "/Users/tim/Documents/Codex/2026-10-03/task-4/verification/v26-working-source/src/general_manager/chat/graphql_contract.py"
-    )
-    spec = importlib.util.spec_from_file_location("reviewer_enum_baseline_v26", path)
-    baseline = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(baseline)
-    old = baseline.manager_schema("Part")
-    assert "Other" not in old["types"] and "InternalState" not in old["types"]
-    print(
-        "VALID_GRAPHQL_QUERIES_AND_V26_PASS; hidden type absent from visible contract",
-        internal_value,
-    )
+    full = manager_schema("Part")
+    assert "Other" not in full["types"] and "InternalState" not in full["types"]
     observed = inspect_manager_schema("Part")
     assert observed["schema_view"] == "overview"
     assert "InternalState" not in observed["type_manifest"]
